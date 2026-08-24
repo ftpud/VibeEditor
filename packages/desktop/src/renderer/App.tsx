@@ -1,9 +1,10 @@
 import Editor from "@monaco-editor/react";
-import { ChevronDown, ChevronRight, File, Folder, FolderOpen, LogOut, RefreshCw, Save, X } from "lucide-react";
+import { ChevronDown, ChevronRight, File, Folder, FolderOpen, LogOut, RefreshCw, Save, SquareTerminal, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { FileTreeNode } from "@remote-ide/protocol";
 import { CoreClient } from "./client";
 import { initialLayout, type EditorTab, type LayoutModel } from "./model";
+import { TerminalPanel } from "./TerminalPanel";
 
 type ConnectionStatus = "idle" | "connecting" | "connected" | "failed" | "disconnected" | "workspace-error";
 const languageByExtension: Record<string, string> = {
@@ -26,23 +27,94 @@ export function App() {
   const [tree, setTree] = useState<FileTreeNode[]>([]);
   const [layout, setLayout] = useState<LayoutModel>(initialLayout);
   const [explorerWidth, setExplorerWidth] = useState(260);
+  const [terminalHeight, setTerminalHeight] = useState(240);
   const clientRef = useRef<CoreClient>();
   const didAutoConnect = useRef(false);
+  const layoutRef = useRef(layout);
+  const treeRefreshTimer = useRef<ReturnType<typeof setTimeout>>();
+  const selfWriteUntil = useRef(new Map<string, number>());
+  const terminalWriters = useRef(new Map<string, (data: string) => void>());
+  const terminalBuffers = useRef(new Map<string, string>());
   const group = layout.editorGroups[0]!;
   const activeTab = group.tabs.find((tab) => tab.id === group.activeTabId);
   const hasDirtyTabs = group.tabs.some((tab) => tab.dirty);
 
   useEffect(() => { window.desktop?.setDirtyState(hasDirtyTabs); }, [hasDirtyTabs]);
-  useEffect(() => () => clientRef.current?.disconnect(), []);
+  useEffect(() => { layoutRef.current = layout; }, [layout]);
+  useEffect(() => () => {
+    clientRef.current?.disconnect();
+    if (treeRefreshTimer.current) clearTimeout(treeRefreshTimer.current);
+  }, []);
 
   const updateGroup = useCallback((update: (tabs: EditorTab[], active?: string) => { tabs: EditorTab[]; activeTabId?: string }) => {
     setLayout((current) => ({ ...current, editorGroups: current.editorGroups.map((item, index) => index === 0 ? { ...item, ...update(item.tabs, item.activeTabId) } : item) }));
+  }, []);
+
+  const updateTerminalGroup = useCallback((update: (group: LayoutModel["terminalGroup"]) => LayoutModel["terminalGroup"]) => {
+    setLayout((current) => ({ ...current, terminalGroup: update(current.terminalGroup) }));
+  }, []);
+
+  const registerTerminalWriter = useCallback((terminalId: string, writer?: (data: string) => void) => {
+    if (!writer) { terminalWriters.current.delete(terminalId); return; }
+    terminalWriters.current.set(terminalId, writer);
+    const buffered = terminalBuffers.current.get(terminalId);
+    if (buffered) { writer(buffered); terminalBuffers.current.delete(terminalId); }
   }, []);
 
   const connect = async () => {
     setStatus("connecting"); setStatusMessage("Connecting...");
     const client = new CoreClient();
     client.onDisconnected = (message) => { setStatus("disconnected"); setStatusMessage(message); };
+    client.onServerEvent = (event) => {
+      if (event.type === "terminal.output") {
+        const writer = terminalWriters.current.get(event.payload.terminalId);
+        if (writer) writer(event.payload.data);
+        else terminalBuffers.current.set(event.payload.terminalId, (terminalBuffers.current.get(event.payload.terminalId) ?? "") + event.payload.data);
+        return;
+      }
+      if (event.type === "terminal.exit") {
+        const writer = terminalWriters.current.get(event.payload.terminalId);
+        writer?.(`\r\n[process exited with code ${event.payload.exitCode}]\r\n`);
+        updateTerminalGroup((current) => ({ ...current, tabs: current.tabs.map((tab) => tab.terminalId === event.payload.terminalId ? { ...tab, exited: true } : tab) }));
+        return;
+      }
+      if (treeRefreshTimer.current) clearTimeout(treeRefreshTimer.current);
+      treeRefreshTimer.current = setTimeout(() => {
+        void client.request("filesystem.listTree", {})
+          .then((result) => setTree(result.tree))
+          .catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : "Automatic refresh failed"));
+      }, 150);
+
+      const { path, kind } = event.payload;
+      const openTab = layoutRef.current.editorGroups[0]?.tabs.find((tab) => tab.path === path);
+      if (!openTab) return;
+      if (kind === "unlink") {
+        updateGroup((tabs, active) => ({
+          tabs: tabs.map((tab) => tab.path === path ? { ...tab, error: "File was deleted outside the editor" } : tab),
+          activeTabId: active
+        }));
+        return;
+      }
+      if (kind !== "change" || (selfWriteUntil.current.get(path) ?? 0) > Date.now()) return;
+      if (openTab.dirty) {
+        updateGroup((tabs, active) => ({
+          tabs: tabs.map((tab) => tab.path === path ? { ...tab, error: "File changed outside the editor; your unsaved changes were preserved" } : tab),
+          activeTabId: active
+        }));
+        return;
+      }
+      void client.request("filesystem.readFile", { path }).then((result) => {
+        updateGroup((tabs, active) => ({
+          tabs: tabs.map((tab) => tab.path !== path || tab.dirty ? tab : { ...tab, content: result.content, savedContent: result.content, error: undefined }),
+          activeTabId: active
+        }));
+      }).catch((error: unknown) => {
+        updateGroup((tabs, active) => ({
+          tabs: tabs.map((tab) => tab.path === path ? { ...tab, error: error instanceof Error ? error.message : "Automatic reload failed" } : tab),
+          activeTabId: active
+        }));
+      });
+    };
     try {
       await client.connect(host.trim(), Number(port));
       try {
@@ -97,9 +169,11 @@ export function App() {
     const current = layout.editorGroups[0]?.tabs.find((tab) => tab.id === layout.editorGroups[0]?.activeTabId);
     if (!current || current.loading || current.error || !current.dirty) return;
     try {
+      selfWriteUntil.current.set(current.path, Date.now() + 1500);
       await clientRef.current!.request("filesystem.writeFile", { path: current.path, content: current.content });
       updateGroup((tabs, active) => ({ tabs: tabs.map((tab) => tab.id === current.id ? { ...tab, dirty: false, savedContent: tab.content, error: undefined } : tab), activeTabId: active }));
     } catch (error) {
+      selfWriteUntil.current.delete(current.path);
       updateGroup((tabs, active) => ({ tabs: tabs.map((tab) => tab.id === current.id ? { ...tab, error: error instanceof Error ? error.message : "Save failed" } : tab), activeTabId: active }));
     }
   }, [layout, updateGroup]);
@@ -121,6 +195,46 @@ export function App() {
     window.addEventListener("pointermove", move); window.addEventListener("pointerup", end);
   };
 
+  const createTerminal = async () => {
+    const client = clientRef.current;
+    if (!client) return;
+    try {
+      const result = await client.request("terminal.create", { cols: 80, rows: 24 });
+      updateTerminalGroup((current) => {
+        const id = crypto.randomUUID();
+        const tab = { id, terminalId: result.terminalId, title: `Terminal ${current.tabs.length + 1}`, exited: false };
+        return { ...current, tabs: [...current.tabs, tab], activeTabId: id };
+      });
+      setLayout((current) => current.panels.some((panel) => panel.type === "terminal") ? current : { ...current, panels: [...current.panels, { id: "terminal", type: "terminal" }] });
+    } catch (error) {
+      setStatusMessage(error instanceof Error ? error.message : "Could not create terminal");
+    }
+  };
+
+  const closeTerminal = (tab: LayoutModel["terminalGroup"]["tabs"][number]) => {
+    if (!tab.exited) void clientRef.current?.request("terminal.close", { terminalId: tab.terminalId }).catch(() => undefined);
+    terminalBuffers.current.delete(tab.terminalId);
+    setLayout((current) => {
+      const index = current.terminalGroup.tabs.findIndex((item) => item.id === tab.id);
+      const tabs = current.terminalGroup.tabs.filter((item) => item.id !== tab.id);
+      const activeTabId = current.terminalGroup.activeTabId === tab.id ? tabs[Math.min(index, tabs.length - 1)]?.id : current.terminalGroup.activeTabId;
+      return {
+        ...current,
+        panels: tabs.length ? current.panels : current.panels.filter((panel) => panel.type !== "terminal"),
+        terminalGroup: { ...current.terminalGroup, tabs, activeTabId }
+      };
+    });
+  };
+
+  const beginTerminalResize = (event: React.PointerEvent) => {
+    event.currentTarget.setPointerCapture(event.pointerId);
+    const startY = event.clientY;
+    const startHeight = terminalHeight;
+    const move = (moveEvent: PointerEvent) => setTerminalHeight(Math.max(130, Math.min(520, startHeight + startY - moveEvent.clientY)));
+    const end = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", end); };
+    window.addEventListener("pointermove", move); window.addEventListener("pointerup", end);
+  };
+
   if (status !== "connected") return <ConnectionScreen {...{ host, port, status, statusMessage, setHost, setPort, connect }} />;
 
   return <div className="ide-shell">
@@ -131,7 +245,7 @@ export function App() {
     </aside>
     <div className="resize-handle" onPointerDown={beginResize} />
     <main className="workbench">
-      <div className="titlebar-actions"><span className="connection-dot" />{host}:{port}<button title="Disconnect" onClick={disconnect}><LogOut size={15} /></button></div>
+      <div className="titlebar-actions"><span className="connection-dot" />{host}:{port}<button title="New terminal" onClick={() => void createTerminal()}><SquareTerminal size={15} /></button><button title="Disconnect" onClick={disconnect}><LogOut size={15} /></button></div>
       <div className="tabs" role="tablist">
         {group.tabs.map((tab) => <button className={`tab ${tab.id === group.activeTabId ? "active" : ""}`} key={tab.id} onClick={() => updateGroup((tabs) => ({ tabs, activeTabId: tab.id }))}>
           <File size={14} /><span>{tab.title}</span>{tab.dirty && <span className="dirty" title="Unsaved changes" />}<span className="close" title={`Close ${tab.title}`} onClick={(event) => { event.stopPropagation(); closeTab(tab); }}><X size={13} /></span>
@@ -144,6 +258,7 @@ export function App() {
           <Editor path={activeTab.path} language={languageByExtension[activeTab.path.split(".").pop()?.toLowerCase() ?? ""] ?? "plaintext"} value={activeTab.content} theme="vs-dark" options={{ automaticLayout: true, minimap: { enabled: false }, fontSize: 13, scrollBeyondLastLine: false, padding: { top: 10 } }} onChange={(value) => updateGroup((tabs, active) => ({ tabs: tabs.map((tab) => tab.id === activeTab.id ? { ...tab, content: value ?? "", dirty: (value ?? "") !== tab.savedContent, error: undefined } : tab), activeTabId: active }))} />
         </>}
       </div>
+      {layout.panels.some((panel) => panel.type === "terminal") && <TerminalPanel client={clientRef.current!} group={layout.terminalGroup} height={terminalHeight} onActivate={(id) => updateTerminalGroup((current) => ({ ...current, activeTabId: id }))} onCreate={() => void createTerminal()} onClose={closeTerminal} onResizeStart={beginTerminalResize} registerWriter={registerTerminalWriter} />}
     </main>
   </div>;
 }

@@ -2,8 +2,8 @@
 
 A minimal remote IDE split into two independently running processes:
 
-- `core`: a Node.js WebSocket backend that exposes a selected remote workspace.
-- `desktop`: an Electron + React application with an Explorer, file tabs, and Monaco Editor.
+- `core`: a Node.js WebSocket backend that exposes a selected remote workspace and PTY processes.
+- `desktop`: an Electron + React application with an Explorer, file tabs, Monaco Editor, and terminal panel.
 - `protocol`: shared TypeScript request, response, error, and DTO definitions.
 
 ## Requirements
@@ -63,11 +63,15 @@ The renderer uses the browser's native WebSocket API. This keeps the POC transpo
 
 The UI state separates layout panels, editor groups, and file tabs in `model.ts`. The POC renders one explorer panel and one editor group, while the model can be extended with more groups and tab content types later. Files are read on demand and are not mirrored locally.
 
+The backend watches the configured workspace and broadcasts typed change events. The desktop refreshes Explorer automatically and reloads externally changed files that are open and clean. If an open file has unsaved edits, its buffer is preserved and an external-change warning is shown instead. Files deleted outside the editor remain open with a deletion warning.
+
+The terminal button in the top-right toolbar creates a PTY shell in a resizable panel below the editor. The plus button creates additional terminal tabs. Each tab has an independent shell, terminal size, scrollback buffer, and lifecycle. Closing a terminal tab kills its remote process, and disconnecting closes every terminal owned by that client session.
+
 ## POC limits and security
 
-There is deliberately no authentication or TLS. **Do not expose the core backend to the public internet.** Run it only on localhost, a trusted LAN, or through a protected tunnel. Anyone who can reach the port can read and modify existing files inside the backend's configured workspace.
+There is deliberately no authentication or TLS. **Do not expose the core backend to the public internet.** Run it only on localhost, a trusted LAN, or through a protected tunnel. Anyone who can reach the port can read and modify files in the configured workspace and execute shell commands with the backend process's operating-system permissions.
 
-This POC does not include terminals, process execution, language servers, Git, search, plugins, collaboration, file watching, docking, or filesystem mutation beyond writing existing files. `ProcessManager` is an intentionally empty boundary for future terminal/process work.
+This POC does not include language servers, Git integration, search, plugins, collaboration, docking, or filesystem mutation beyond writing existing files.
 
 ## Manual end-to-end check
 
@@ -78,3 +82,4 @@ This POC does not include terminals, process execution, language servers, Git, s
 5. Close and reopen the file to confirm the backend saved it.
 6. Drag the divider to resize Explorer and use its refresh button to reload the tree.
 7. Modify a file and close its tab or the application to verify the unsaved-change warning.
+8. Use the terminal toolbar button to open the bottom panel, create multiple terminal tabs, run commands, resize the panel, and close each tab.

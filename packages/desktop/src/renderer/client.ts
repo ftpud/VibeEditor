@@ -1,4 +1,4 @@
-import type { ProtocolOperations, Request, RequestType, Response } from "@remote-ide/protocol";
+import type { ProtocolOperations, Request, RequestType, Response, ServerEvent } from "@remote-ide/protocol";
 
 type Pending = { resolve(value: unknown): void; reject(error: Error): void };
 
@@ -6,6 +6,7 @@ export class CoreClient {
   private socket?: WebSocket;
   private pending = new Map<string, Pending>();
   onDisconnected?: (message: string) => void;
+  onServerEvent?: (event: ServerEvent) => void;
 
   connect(host: string, port: number): Promise<void> {
     return new Promise((resolve, reject) => {
@@ -35,8 +36,13 @@ export class CoreClient {
   disconnect(): void { this.socket?.close(); this.socket = undefined; }
 
   private handleMessage(data: string): void {
-    let response: Response;
-    try { response = JSON.parse(data) as Response; } catch { return; }
+    let message: Response | ServerEvent;
+    try { message = JSON.parse(data) as Response | ServerEvent; } catch { return; }
+    if ("type" in message) {
+      this.onServerEvent?.(message);
+      return;
+    }
+    const response = message;
     const pending = this.pending.get(response.id);
     if (!pending) return;
     this.pending.delete(response.id);

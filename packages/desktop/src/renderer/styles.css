@@ -48,4 +48,18 @@ button { color: inherit; }
 .empty-editor, .editor-error { height: 100%; display: grid; place-items: center; color: #777; }
 .editor-error { color: #f0a7a7; padding: 24px; text-align: center; }
 .inline-error { position: absolute; z-index: 2; top: 8px; right: 20px; max-width: 55%; padding: 7px 9px; border: 1px solid #6d3333; border-radius: 3px; background: #321f1f; color: #f2b5b5; }
+.terminal-panel { min-height: 130px; max-height: 520px; flex: 0 0 auto; position: relative; display: flex; flex-direction: column; border-top: 1px solid #333; background: #181818; }
+.terminal-resize-handle { position: absolute; z-index: 5; top: -3px; left: 0; right: 0; height: 6px; cursor: row-resize; }
+.terminal-resize-handle:hover { background: #4da5e8; }
+.terminal-tabs { height: 30px; flex: 0 0 30px; display: flex; align-items: stretch; border-bottom: 1px solid #292929; overflow-x: auto; overflow-y: hidden; }
+.terminal-tab { min-width: 105px; max-width: 180px; display: flex; align-items: center; gap: 6px; padding: 0 6px 0 10px; border: 0; border-right: 1px solid #292929; background: #181818; color: #999; cursor: pointer; }
+.terminal-tab.active { color: #eee; background: #1e1e1e; border-top: 1px solid #4da5e8; }
+.terminal-tab > span:first-child { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.terminal-action { width: 30px; flex: 0 0 30px; display: grid; place-items: center; border: 0; background: transparent; color: #aaa; cursor: pointer; }
+.terminal-action:hover { background: #333; color: white; }
+.terminal-content { min-height: 0; flex: 1; position: relative; padding: 5px 7px; }
+.terminal-instance { position: absolute; inset: 5px 7px; visibility: hidden; }
+.terminal-instance.active { visibility: visible; }
+.terminal-instance .xterm { height: 100%; }
+.terminal-instance .xterm-viewport { scrollbar-width: thin; }
 @media (max-width: 800px) { .explorer { min-width: 160px; } .titlebar-actions { font-size: 0; } }
