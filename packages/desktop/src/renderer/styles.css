@@ -114,6 +114,12 @@ button { color: inherit; }
 .markdown-preview code { padding: 2px 5px; border-radius: 3px; background: #2b2d30; color: #e0b77c; font-family: Menlo, Monaco, Consolas, monospace; font-size: .9em; }
 .markdown-preview pre { padding: 12px 14px; overflow: auto; border: 1px solid #3d4045; border-radius: 4px; background: #17181a; }
 .markdown-preview pre code { padding: 0; background: transparent; color: #d4d4d4; }
+.markdown-shell-block { max-width: 920px; margin: 1em auto; overflow: hidden; border: 1px solid #3d4045; border-radius: 4px; background: #17181a; }
+.markdown-shell-block > header { height: 30px; padding: 0 5px 0 10px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid #3d4045; background: #292b2f; color: #989ba1; font: 10px Menlo, Monaco, Consolas, monospace; text-transform: uppercase; }
+.markdown-shell-block > header button { width: 27px; height: 25px; display: grid; place-items: center; border: 0; border-radius: 3px; background: transparent; color: #68b871; cursor: pointer; }
+.markdown-shell-block > header button:hover:not(:disabled) { background: #3a3c41; color: #86d18f; }
+.markdown-shell-block > header button:disabled { opacity: .35; cursor: default; }
+.markdown-shell-block > pre { margin: 0; border: 0; border-radius: 0; }
 .markdown-preview blockquote { padding: 2px 14px; border-left: 3px solid #579dff; color: #aeb1b6; }
 .markdown-preview table { width: 100%; border-collapse: collapse; }
 .markdown-preview th, .markdown-preview td { padding: 6px 9px; border: 1px solid #44474c; text-align: left; }

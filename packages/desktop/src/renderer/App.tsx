@@ -1,6 +1,6 @@
 import Editor, { DiffEditor, type Monaco } from "@monaco-editor/react";
 import { ArrowUpRight, Braces, Bug, CaseSensitive, ChevronDown, ChevronRight, CircleAlert, Coffee, Columns2, Eye, File, FileCode2, FileJson, FileText, Folder, FolderOpen, GitBranch, GitCompareArrows, Hash, ListTree, LogOut, Package, Pencil, Play, RefreshCw, Save, Search, Square, SquareTerminal, X } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
+import { isValidElement, useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
 import type { FileTreeNode, GitStatusEntry, JavaBreakpoint, JavaDebugState, JavaDiagnostic, JavaLspLocation, JavaMainClass, JavaProjectNode, JavaProjectOptions, JavaTypeSuggestion, SearchResult, WorkspaceOptions } from "@remote-ide/protocol";
 import type { editor } from "monaco-editor";
 import ReactMarkdown from "react-markdown";
@@ -64,6 +64,7 @@ export function App() {
   const selfWriteUntil = useRef(new Map<string, number>());
   const terminalWriters = useRef(new Map<string, (data: string) => void>());
   const terminalBuffers = useRef(new Map<string, string>());
+  const markdownBlockTerminals = useRef(new Map<string, string>());
   const monacoEditorRef = useRef<editor.IStandaloneCodeEditor>();
   const monacoRef = useRef<Monaco>();
   const breakpointDecorationsRef = useRef<string[]>([]);
@@ -267,6 +268,7 @@ export function App() {
     setWorkspaceOptionsReady(false);
     setJavaOptions(undefined); setJavaTree([]); setJavaRunning(false); setJavaLog("");
     setLayout(initialLayout); setTree([]); setStatus("idle"); setStatusMessage("");
+    markdownBlockTerminals.current.clear();
   };
 
   const persistedFileTabs = group.tabs.filter((tab) => tab.type === "file");
@@ -360,7 +362,7 @@ export function App() {
     window.addEventListener("pointermove", move); window.addEventListener("pointerup", end);
   };
 
-  const createTerminal = async () => {
+  const createTerminal = async (command?: string): Promise<string | undefined> => {
     const client = clientRef.current;
     if (!client) return;
     try {
@@ -371,9 +373,35 @@ export function App() {
         return { ...current, tabs: [...current.tabs, tab], activeTabId: id };
       });
       setLayout((current) => ({ ...current, panels: [...current.panels.filter((panel) => !["terminal", "java", "problems"].includes(panel.type)), { id: "terminal", type: "terminal" }] }));
+      if (command) await client.request("terminal.input", { terminalId: result.terminalId, data: `${command.replace(/\s+$/, "")}\n` });
+      return result.terminalId;
     } catch (error) {
       setStatusMessage(error instanceof Error ? error.message : "Could not create terminal");
+      return undefined;
     }
+  };
+
+  const runMarkdownCommand = async (blockId: string, command: string) => {
+    const terminalId = markdownBlockTerminals.current.get(blockId);
+    const existing = terminalId ? layoutRef.current.terminalGroup.tabs.find((tab) => tab.terminalId === terminalId && !tab.exited) : undefined;
+    if (existing && clientRef.current) {
+      updateTerminalGroup((current) => ({ ...current, activeTabId: existing.id }));
+      setLayout((current) => ({ ...current, panels: [...current.panels.filter((panel) => !["terminal", "java", "problems"].includes(panel.type)), { id: "terminal", type: "terminal" }] }));
+      try { await clientRef.current.request("terminal.input", { terminalId: existing.terminalId, data: `${command.replace(/\s+$/, "")}\n` }); return; }
+      catch { markdownBlockTerminals.current.delete(blockId); }
+    }
+    const created = await createTerminal(command);
+    if (created) markdownBlockTerminals.current.set(blockId, created);
+  };
+
+  const renderMarkdownPre = ({ children, node }: { children?: ReactNode; node?: { position?: { start?: { line?: number } } } }) => {
+    const child = Array.isArray(children) ? children[0] : children;
+    if (!isValidElement<{ className?: string; children?: ReactNode }>(child)) return <pre>{children}</pre>;
+    const language = child.props.className?.match(/language-([\w-]+)/)?.[1]?.toLowerCase();
+    if (!language || !["sh", "shell", "bash", "zsh"].includes(language)) return <pre>{children}</pre>;
+    const command = String(child.props.children ?? "").replace(/\n$/, "");
+    const blockId = `${activeTab?.path ?? "markdown"}:${node?.position?.start?.line ?? command}`;
+    return <div className="markdown-shell-block"><header><span>{language}</span><button title="Run in block terminal" disabled={!command.trim()} onClick={() => void runMarkdownCommand(blockId, command)}><Play size={14} /></button></header><pre>{children}</pre></div>;
   };
 
   const toggleTerminalPanel = () => {
@@ -390,6 +418,7 @@ export function App() {
   const closeTerminal = (tab: LayoutModel["terminalGroup"]["tabs"][number]) => {
     if (!tab.exited) void clientRef.current?.request("terminal.close", { terminalId: tab.terminalId }).catch(() => undefined);
     terminalBuffers.current.delete(tab.terminalId);
+    for (const [blockId, terminalId] of markdownBlockTerminals.current) if (terminalId === tab.terminalId) markdownBlockTerminals.current.delete(blockId);
     setLayout((current) => {
       const index = current.terminalGroup.tabs.findIndex((item) => item.id === tab.id);
       const tabs = current.terminalGroup.tabs.filter((item) => item.id !== tab.id);
@@ -654,7 +683,7 @@ export function App() {
         <div className="editor-area">
           {!activeTab ? <div className="empty-editor">Open a file from Project</div> : activeTab.loading ? <div className="empty-editor">Loading {activeTab.title}...</div> : activeTab.error && !activeTab.content ? <div className="editor-error">{activeTab.error}</div> : <>
             {activeTab.error && <div className="inline-error">{activeTab.error}</div>}
-            {activeTab.type === "diff" ? <DiffEditor original={activeTab.originalContent ?? ""} modified={activeTab.content} language={languageByExtension[activeTab.path.split(".").pop()?.toLowerCase() ?? ""] ?? "plaintext"} theme="vs-dark" options={{ automaticLayout: true, readOnly: true, originalEditable: false, renderSideBySide: activeTab.diffMode !== "unified", minimap: { enabled: false }, fontSize: 13, scrollBeyondLastLine: false }} /> : activeTab.markdownMode === "preview" ? <div className="markdown-preview"><ReactMarkdown remarkPlugins={[remarkGfm]}>{activeTab.content}</ReactMarkdown></div> : <Editor path={activeTab.path} language={languageByExtension[activeTab.path.split(".").pop()?.toLowerCase() ?? ""] ?? "plaintext"} value={activeTab.content} theme="vs-dark" onMount={mountEditor} options={{ automaticLayout: true, minimap: { enabled: false }, glyphMargin: /\.java$/i.test(activeTab.path), fontSize: 13, scrollBeyondLastLine: false, padding: { top: 10 } }} onChange={(value) => updateGroup((tabs, active) => ({ tabs: tabs.map((tab) => tab.id === activeTab.id ? { ...tab, content: value ?? "", dirty: (value ?? "") !== tab.savedContent, error: undefined } : tab), activeTabId: active }))} />}
+            {activeTab.type === "diff" ? <DiffEditor original={activeTab.originalContent ?? ""} modified={activeTab.content} language={languageByExtension[activeTab.path.split(".").pop()?.toLowerCase() ?? ""] ?? "plaintext"} theme="vs-dark" options={{ automaticLayout: true, readOnly: true, originalEditable: false, renderSideBySide: activeTab.diffMode !== "unified", minimap: { enabled: false }, fontSize: 13, scrollBeyondLastLine: false }} /> : activeTab.markdownMode === "preview" ? <div className="markdown-preview"><ReactMarkdown remarkPlugins={[remarkGfm]} components={{ pre: renderMarkdownPre }}>{activeTab.content}</ReactMarkdown></div> : <Editor path={activeTab.path} language={languageByExtension[activeTab.path.split(".").pop()?.toLowerCase() ?? ""] ?? "plaintext"} value={activeTab.content} theme="vs-dark" onMount={mountEditor} options={{ automaticLayout: true, minimap: { enabled: false }, glyphMargin: /\.java$/i.test(activeTab.path), fontSize: 13, scrollBeyondLastLine: false, padding: { top: 10 } }} onChange={(value) => updateGroup((tabs, active) => ({ tabs: tabs.map((tab) => tab.id === activeTab.id ? { ...tab, content: value ?? "", dirty: (value ?? "") !== tab.savedContent, error: undefined } : tab), activeTabId: active }))} />}
           </>}
         </div>
       </main>
