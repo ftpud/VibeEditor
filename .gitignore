@@ -1,0 +1,10 @@
+node_modules/
+dist/
+dist-electron/
+dist-renderer/
+coverage/
+*.log
+.DS_Store
+.env
+.env.local
+.env.*.local

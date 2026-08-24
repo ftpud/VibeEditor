@@ -1,0 +1,16 @@
+{
+  "name": "remote-ide-poc",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": ["packages/*"],
+  "scripts": {
+    "core": "npm run start -w @remote-ide/core --",
+    "desktop": "npm run start -w @remote-ide/desktop --",
+    "dev:core": "npm run dev -w @remote-ide/core --",
+    "dev:desktop": "npm run dev -w @remote-ide/desktop --",
+    "build": "npm run build -w @remote-ide/protocol && npm run build -w @remote-ide/core && npm run build -w @remote-ide/desktop",
+    "typecheck": "npm run build -w @remote-ide/protocol && npm run typecheck -w @remote-ide/core && npm run typecheck -w @remote-ide/desktop",
+    "test": "npm run test --workspaces --if-present"
+  },
+  "engines": { "node": ">=20" }
+}
