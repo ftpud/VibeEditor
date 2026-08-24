@@ -1,7 +1,7 @@
 import Editor, { DiffEditor } from "@monaco-editor/react";
-import { ArrowUpRight, Braces, CaseSensitive, ChevronDown, ChevronRight, Coffee, Columns2, Eye, File, FileCode2, FileJson, FileText, Folder, FolderOpen, GitBranch, GitCompareArrows, Hash, ListTree, LogOut, Package, Pencil, Play, RefreshCw, Save, Search, Square, SquareTerminal, X } from "lucide-react";
+import { ArrowUpRight, Braces, Bug, CaseSensitive, ChevronDown, ChevronRight, Coffee, Columns2, Eye, File, FileCode2, FileJson, FileText, Folder, FolderOpen, GitBranch, GitCompareArrows, Hash, ListTree, LogOut, Package, Pencil, Play, RefreshCw, Save, Search, Square, SquareTerminal, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
-import type { FileTreeNode, GitStatusEntry, JavaMainClass, JavaProjectNode, JavaProjectOptions, SearchResult, WorkspaceOptions } from "@remote-ide/protocol";
+import type { FileTreeNode, GitStatusEntry, JavaBreakpoint, JavaDebugState, JavaMainClass, JavaProjectNode, JavaProjectOptions, SearchResult, WorkspaceOptions } from "@remote-ide/protocol";
 import type { editor } from "monaco-editor";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -41,6 +41,8 @@ export function App() {
   const [javaTree, setJavaTree] = useState<JavaProjectNode[]>([]);
   const [javaLog, setJavaLog] = useState("");
   const [javaRunning, setJavaRunning] = useState(false);
+  const [javaDebugState, setJavaDebugState] = useState<JavaDebugState>({ status: "stopped", variables: [] });
+  const [javaBreakpoints, setJavaBreakpoints] = useState<JavaBreakpoint[]>([]);
   const [javaPanelHeight, setJavaPanelHeight] = useState(240);
   const [showRunConfigurationDialog, setShowRunConfigurationDialog] = useState(false);
   const [treeContextMenu, setTreeContextMenu] = useState<{ x: number; y: number; node: FileTreeNode }>();
@@ -56,6 +58,7 @@ export function App() {
   const terminalWriters = useRef(new Map<string, (data: string) => void>());
   const terminalBuffers = useRef(new Map<string, string>());
   const monacoEditorRef = useRef<editor.IStandaloneCodeEditor>();
+  const breakpointDecorationsRef = useRef<string[]>([]);
   const javaOptionsRef = useRef<JavaProjectOptions>();
   const group = layout.editorGroups[0]!;
   const activeTab = group.tabs.find((tab) => tab.id === group.activeTabId);
@@ -147,6 +150,11 @@ export function App() {
       if (event.type === "java.exit") {
         setJavaRunning(false);
         setJavaLog((current) => `${current}\nProcess exited${event.payload.exitCode === null ? "" : ` with code ${event.payload.exitCode}`}${event.payload.signal ? ` (${event.payload.signal})` : ""}.\n`);
+        return;
+      }
+      if (event.type === "java.debug.state") {
+        setJavaDebugState(event.payload);
+        if (event.payload.status === "paused") setLayout((current) => ({ ...current, panels: [...current.panels.filter((panel) => panel.type !== "terminal" && panel.type !== "java"), { id: "java", type: "java" }] }));
         return;
       }
       if (gitRefreshTimer.current) clearTimeout(gitRefreshTimer.current);
@@ -405,6 +413,28 @@ export function App() {
     try { await clientRef.current!.request("java.stop", {}); } catch { /* Process may have already exited. */ }
   };
 
+  const debugJava = async () => {
+    setLayout((current) => ({ ...current, panels: [...current.panels.filter((panel) => panel.type !== "terminal" && panel.type !== "java"), { id: "java", type: "java" }] }));
+    setJavaRunning(true);
+    try { await clientRef.current!.request("java.debug.start", { breakpoints: javaBreakpoints }); }
+    catch (error) { setJavaRunning(false); setJavaDebugState({ status: "stopped", variables: [] }); setJavaLog((current) => `${current}${error instanceof Error ? error.message : "Debugger failed"}\n`); }
+  };
+
+  const toggleBreakpoint = (filePath: string, content: string, line: number) => {
+    const packageName = content.match(/^\s*package\s+([A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*)\s*;/m)?.[1];
+    const simpleName = filePath.split("/").pop()?.replace(/\.java$/i, "") ?? "";
+    const className = packageName ? `${packageName}.${simpleName}` : simpleName;
+    setJavaBreakpoints((current) => current.some((item) => item.path === filePath && item.line === line)
+      ? current.filter((item) => item.path !== filePath || item.line !== line)
+      : [...current, { path: filePath, line, className }]);
+  };
+
+  useEffect(() => {
+    const instance = monacoEditorRef.current;
+    if (!instance || activeTab?.type !== "file" || !/\.java$/i.test(activeTab.path)) return;
+    breakpointDecorationsRef.current = instance.deltaDecorations(breakpointDecorationsRef.current, javaBreakpoints.filter((item) => item.path === activeTab.path).map((item) => ({ range: { startLineNumber: item.line, startColumn: 1, endLineNumber: item.line, endColumn: 1 }, options: { isWholeLine: false, glyphMarginClassName: "java-breakpoint", glyphMarginHoverMessage: { value: `Breakpoint at line ${item.line}` } } })));
+  }, [activeTab?.path, javaBreakpoints]);
+
   const selectRunConfiguration = async (id: string) => {
     try {
       const result = await clientRef.current!.request("java.selectRunConfiguration", { id });
@@ -462,6 +492,7 @@ export function App() {
         <div className="titlebar-actions">
           {javaOptions && <div className="top-java-run">
             <button title="Run selected Java configuration" disabled={javaRunning || !javaOptions.selectedRunConfigurationId} onClick={() => void runJavaAction("java.run")}><Play size={14} /></button>
+            <button title="Debug selected Java configuration" disabled={javaRunning || !javaOptions.selectedRunConfigurationId} onClick={() => void debugJava()}><Bug size={14} /></button>
             <button title="Stop Java process" disabled={!javaRunning} onClick={() => void stopJava()}><Square size={13} /></button>
             <select aria-label="Java run configuration" value={javaOptions.selectedRunConfigurationId ?? ""} onChange={(event) => event.target.value === "__create__" ? setShowRunConfigurationDialog(true) : void selectRunConfiguration(event.target.value)}><option value="" disabled>Select run configuration</option>{javaOptions.runConfigurations.map((configuration) => <option key={configuration.id} value={configuration.id}>{configuration.name}</option>)}<option value="__create__">Create new...</option></select>
           </div>}
@@ -485,13 +516,13 @@ export function App() {
         <div className="editor-area">
           {!activeTab ? <div className="empty-editor">Open a file from Project</div> : activeTab.loading ? <div className="empty-editor">Loading {activeTab.title}...</div> : activeTab.error && !activeTab.content ? <div className="editor-error">{activeTab.error}</div> : <>
             {activeTab.error && <div className="inline-error">{activeTab.error}</div>}
-            {activeTab.type === "diff" ? <DiffEditor original={activeTab.originalContent ?? ""} modified={activeTab.content} language={languageByExtension[activeTab.path.split(".").pop()?.toLowerCase() ?? ""] ?? "plaintext"} theme="vs-dark" options={{ automaticLayout: true, readOnly: true, originalEditable: false, renderSideBySide: activeTab.diffMode !== "unified", minimap: { enabled: false }, fontSize: 13, scrollBeyondLastLine: false }} /> : activeTab.markdownMode === "preview" ? <div className="markdown-preview"><ReactMarkdown remarkPlugins={[remarkGfm]}>{activeTab.content}</ReactMarkdown></div> : <Editor path={activeTab.path} language={languageByExtension[activeTab.path.split(".").pop()?.toLowerCase() ?? ""] ?? "plaintext"} value={activeTab.content} theme="vs-dark" onMount={(instance) => { monacoEditorRef.current = instance; }} options={{ automaticLayout: true, minimap: { enabled: false }, fontSize: 13, scrollBeyondLastLine: false, padding: { top: 10 } }} onChange={(value) => updateGroup((tabs, active) => ({ tabs: tabs.map((tab) => tab.id === activeTab.id ? { ...tab, content: value ?? "", dirty: (value ?? "") !== tab.savedContent, error: undefined } : tab), activeTabId: active }))} />}
+            {activeTab.type === "diff" ? <DiffEditor original={activeTab.originalContent ?? ""} modified={activeTab.content} language={languageByExtension[activeTab.path.split(".").pop()?.toLowerCase() ?? ""] ?? "plaintext"} theme="vs-dark" options={{ automaticLayout: true, readOnly: true, originalEditable: false, renderSideBySide: activeTab.diffMode !== "unified", minimap: { enabled: false }, fontSize: 13, scrollBeyondLastLine: false }} /> : activeTab.markdownMode === "preview" ? <div className="markdown-preview"><ReactMarkdown remarkPlugins={[remarkGfm]}>{activeTab.content}</ReactMarkdown></div> : <Editor path={activeTab.path} language={languageByExtension[activeTab.path.split(".").pop()?.toLowerCase() ?? ""] ?? "plaintext"} value={activeTab.content} theme="vs-dark" onMount={(instance) => { monacoEditorRef.current = instance; instance.onMouseDown((event) => { const line = event.target.position?.lineNumber ?? event.target.range?.startLineNumber; if (/\.java$/i.test(activeTab.path) && (event.target.type === 2 || event.target.type === 3) && line) toggleBreakpoint(activeTab.path, activeTab.content, line); }); }} options={{ automaticLayout: true, minimap: { enabled: false }, glyphMargin: /\.java$/i.test(activeTab.path), fontSize: 13, scrollBeyondLastLine: false, padding: { top: 10 } }} onChange={(value) => updateGroup((tabs, active) => ({ tabs: tabs.map((tab) => tab.id === activeTab.id ? { ...tab, content: value ?? "", dirty: (value ?? "") !== tab.savedContent, error: undefined } : tab), activeTabId: active }))} />}
           </>}
         </div>
       </main>
     </div>
     {layout.panels.some((panel) => panel.type === "terminal") && <TerminalPanel client={clientRef.current!} group={layout.terminalGroup} height={terminalHeight} onActivate={(id) => updateTerminalGroup((current) => ({ ...current, activeTabId: id }))} onCreate={() => void createTerminal()} onClose={closeTerminal} onResizeStart={beginTerminalResize} registerWriter={registerTerminalWriter} />}
-    {layout.panels.some((panel) => panel.type === "java") && javaOptions && <JavaPanel height={javaPanelHeight} log={javaLog} running={javaRunning} options={javaOptions} onBuild={() => void runJavaAction("java.build")} onRun={() => void runJavaAction("java.run")} onStop={() => void stopJava()} onClear={() => setJavaLog("")} onResizeStart={beginJavaResize} />}
+    {layout.panels.some((panel) => panel.type === "java") && javaOptions && <JavaPanel height={javaPanelHeight} log={javaLog} running={javaRunning} options={javaOptions} debugState={javaDebugState} onBuild={() => void runJavaAction("java.build")} onRun={() => void runJavaAction("java.run")} onDebug={() => void debugJava()} onStop={() => void stopJava()} onDebugCommand={(command) => void clientRef.current!.request("java.debug.command", { command })} onClear={() => setJavaLog("")} onResizeStart={beginJavaResize} />}
     <footer className="bottom-tool-bar">
       <button className={`bottom-tool-button ${layout.panels.some((panel) => panel.type === "terminal") ? "active" : ""}`} onClick={toggleTerminalPanel}><SquareTerminal size={14} /><span>Terminal</span>{layout.terminalGroup.tabs.length > 0 && <span className="bottom-tool-count">{layout.terminalGroup.tabs.length}</span>}</button>
       {javaOptions && <button className={`bottom-tool-button ${layout.panels.some((panel) => panel.type === "java") ? "active" : ""}`} onClick={toggleJavaPanel}><Coffee size={14} /><span>Java</span>{javaRunning && <span className="running-indicator" />}</button>}

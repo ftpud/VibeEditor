@@ -31,6 +31,15 @@ export type JavaProjectOptions = {
 
 export type JavaRunConfiguration = { id: string; name: string; mainClass: string };
 export type JavaMainClass = { className: string; path: string };
+export type JavaBreakpoint = { path: string; line: number; className: string };
+export type JavaDebugVariable = { name: string; value: string };
+export type JavaDebugState = {
+  status: "starting" | "running" | "paused" | "stopped";
+  className?: string;
+  method?: string;
+  line?: number;
+  variables: JavaDebugVariable[];
+};
 
 export type JavaProjectNode = {
   name: string;
@@ -130,6 +139,14 @@ export type ProtocolOperations = {
     payload: Record<string, never>;
     result: Record<string, never>;
   };
+  "java.debug.start": {
+    payload: { breakpoints: JavaBreakpoint[] };
+    result: Record<string, never>;
+  };
+  "java.debug.command": {
+    payload: { command: "continue" | "stepInto" | "stepOver" | "stepOut" };
+    result: Record<string, never>;
+  };
 };
 
 export type RequestType = keyof ProtocolOperations;
@@ -182,8 +199,9 @@ export type GitChangedEvent = { type: "git.changed"; payload: Record<string, nev
 
 export type JavaOutputEvent = { type: "java.output"; payload: { data: string } };
 export type JavaExitEvent = { type: "java.exit"; payload: { exitCode: number | null; signal: string | null } };
+export type JavaDebugStateEvent = { type: "java.debug.state"; payload: JavaDebugState };
 
-export type ServerEvent = FilesystemChangedEvent | TerminalOutputEvent | TerminalExitEvent | GitChangedEvent | JavaOutputEvent | JavaExitEvent;
+export type ServerEvent = FilesystemChangedEvent | TerminalOutputEvent | TerminalExitEvent | GitChangedEvent | JavaOutputEvent | JavaExitEvent | JavaDebugStateEvent;
 
 export const requestTypes: RequestType[] = [
   "workspace.open",
@@ -207,5 +225,7 @@ export const requestTypes: RequestType[] = [
   "java.selectRunConfiguration",
   "java.build",
   "java.run",
-  "java.stop"
+  "java.stop",
+  "java.debug.start",
+  "java.debug.command"
 ];

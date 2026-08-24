@@ -1,19 +1,25 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import crypto from "node:crypto";
-import { readdir, stat } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, stat } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { XMLParser } from "fast-xml-parser";
-import type { JavaMainClass, JavaProjectNode, JavaProjectOptions } from "@remote-ide/protocol";
+import type { JavaBreakpoint, JavaDebugState, JavaMainClass, JavaProjectNode, JavaProjectOptions } from "@remote-ide/protocol";
 import { CoreError } from "./errors.js";
 import { WorkspaceFileSystem } from "./filesystem.js";
 import { WorkspaceStateStore } from "./workspace-state.js";
 
 type JavaProcessEvent =
   | { type: "output"; data: string }
-  | { type: "exit"; exitCode: number | null; signal: string | null };
+  | { type: "exit"; exitCode: number | null; signal: string | null }
+  | { type: "debug"; state: JavaDebugState };
 
 export class JavaProjectService {
   private process?: ChildProcessWithoutNullStreams;
+  private debugging = false;
+  private debugBuffer = "";
+  private debugLocation?: { className: string; method: string; line: number };
+  private awaitingDebugLocals = false;
 
   constructor(
     private readonly filesystem: WorkspaceFileSystem,
@@ -117,9 +123,47 @@ export class JavaProjectService {
     await this.start(["exec:java", `-Dexec.mainClass=${configuration.mainClass}`], "Run");
   }
 
+  async debug(breakpoints: JavaBreakpoint[]): Promise<void> {
+    const options = await this.requireOptions();
+    const configuration = options.runConfigurations.find((item) => item.id === options.selectedRunConfigurationId);
+    if (!configuration) throw new CoreError("JAVA_PROCESS_FAILED", "Select a Java run configuration first");
+    if (this.process) throw new CoreError("JAVA_PROCESS_FAILED", "A Java build, run, or debug process is already active");
+    this.onProcessEvent({ type: "debug", state: { status: "starting", variables: [] } });
+    await this.runAndWait(options.mavenExecutable, ["-f", options.pomPath, "package", "-DskipTests"], "Debug build");
+    const classpath = await this.buildDebugClasspath(options);
+    const child = spawn("jdb", ["-classpath", classpath, configuration.mainClass], { cwd: this.filesystem.getWorkspace(), env: process.env, stdio: "pipe" });
+    this.process = child;
+    this.debugging = true;
+    this.debugBuffer = "";
+    child.stdout.on("data", (data: Buffer) => this.consumeDebugOutput(data.toString()));
+    child.stderr.on("data", (data: Buffer) => this.onProcessEvent({ type: "output", data: data.toString() }));
+    child.on("error", (error) => this.onProcessEvent({ type: "output", data: `Debugger failed to start: ${error.message}\n` }));
+    child.on("close", (exitCode, signal) => {
+      this.process = undefined; this.debugging = false;
+      this.onProcessEvent({ type: "debug", state: { status: "stopped", variables: [] } });
+      this.onProcessEvent({ type: "exit", exitCode, signal });
+    });
+    for (const breakpoint of breakpoints) child.stdin.write(`stop at ${breakpoint.className}:${breakpoint.line}\n`);
+    child.stdin.write("run\n");
+    this.onProcessEvent({ type: "debug", state: { status: "running", variables: [] } });
+  }
+
+  debugCommand(command: "continue" | "stepInto" | "stepOver" | "stepOut"): void {
+    if (!this.process || !this.debugging) throw new CoreError("JAVA_PROCESS_FAILED", "No Java debugger is active");
+    const jdbCommand = { continue: "cont", stepInto: "step", stepOver: "next", stepOut: "step up" }[command];
+    this.process.stdin.write(`${jdbCommand}\n`);
+    this.onProcessEvent({ type: "debug", state: { status: "running", variables: [] } });
+  }
+
   stop(): void {
     if (!this.process) return;
-    this.process.kill("SIGTERM");
+    const child = this.process;
+    if (this.debugging) {
+      child.stdin.write("exit\n");
+      setTimeout(() => { if (this.process === child) child.kill("SIGKILL"); }, 1_000).unref();
+      return;
+    }
+    child.kill("SIGTERM");
   }
 
   close(): void { this.stop(); }
@@ -142,6 +186,52 @@ export class JavaProjectService {
       this.process = undefined;
       throw new CoreError("JAVA_PROCESS_FAILED", `${label} failed: ${error instanceof Error ? error.message : String(error)}`);
     }
+  }
+
+  private runAndWait(command: string, args: string[], label: string): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const child = spawn(command, args, { cwd: this.filesystem.getWorkspace(), env: process.env, stdio: "pipe" });
+      this.process = child;
+      child.stdout.on("data", (data: Buffer) => this.onProcessEvent({ type: "output", data: data.toString() }));
+      child.stderr.on("data", (data: Buffer) => this.onProcessEvent({ type: "output", data: data.toString() }));
+      child.on("error", (error) => { this.process = undefined; reject(new CoreError("JAVA_PROCESS_FAILED", `${label} failed: ${error.message}`)); });
+      child.on("close", (code) => {
+        this.process = undefined;
+        if (code === 0) resolve(); else reject(new CoreError("JAVA_PROCESS_FAILED", `${label} exited with code ${code}`));
+      });
+    });
+  }
+
+  private async buildDebugClasspath(options: JavaProjectOptions): Promise<string> {
+    const temporaryDirectory = await mkdtemp(path.join(os.tmpdir(), "vibe-jdb-"));
+    const classpathFile = path.join(temporaryDirectory, "classpath.txt");
+    try {
+      await this.runAndWait(options.mavenExecutable, ["-q", "-f", options.pomPath, "dependency:build-classpath", `-Dmdep.outputFile=${classpathFile}`], "Resolve debug classpath");
+      const dependencies = (await readFile(classpathFile, "utf8")).trim();
+      const workspace = this.filesystem.getWorkspace();
+      const outputs = [options.outputPath, options.testOutputPath].map((output) => path.resolve(workspace, output));
+      return [...outputs, ...(dependencies ? dependencies.split(path.delimiter) : [])].join(path.delimiter);
+    } finally {
+      await rm(temporaryDirectory, { recursive: true, force: true });
+    }
+  }
+
+  private consumeDebugOutput(data: string): void {
+    this.onProcessEvent({ type: "output", data });
+    this.debugBuffer = (this.debugBuffer + data).slice(-20_000);
+    const stopped = this.debugBuffer.match(/(?:Breakpoint hit:|Step completed:)\s+"[^"]+",\s+([\w$]+(?:\.[\w$]+)*)\.([\w$<>]+)\([^)]*\),\s+line=(\d+)/);
+    if (stopped) {
+      this.debugLocation = { className: stopped[1]!, method: stopped[2]!, line: Number(stopped[3]) };
+      this.awaitingDebugLocals = true;
+      this.debugBuffer = "";
+      this.process?.stdin.write("locals\n");
+      return;
+    }
+    if (!this.awaitingDebugLocals || !/[\w$]+\[\d+\]\s*$/.test(this.debugBuffer) || !this.debugLocation) return;
+    const variables = [...this.debugBuffer.matchAll(/^\s*([A-Za-z_$][\w$]*)\s+=\s+(.+)$/gm)].slice(-100).map((match) => ({ name: match[1]!, value: match[2]!.trim() }));
+    this.onProcessEvent({ type: "debug", state: { status: "paused", ...this.debugLocation, variables } });
+    this.awaitingDebugLocals = false;
+    this.debugBuffer = "";
   }
 
   private async requireOptions(): Promise<JavaProjectOptions> {

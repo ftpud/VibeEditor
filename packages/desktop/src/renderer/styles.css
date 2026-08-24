@@ -77,7 +77,8 @@ button { color: inherit; }
 .titlebar-actions { justify-content: flex-end; gap: 6px; background: #2b2d30; border-bottom: 1px solid #393b40; }
 .top-java-run { min-width: 0; display: flex; align-items: center; gap: 3px; }
 .top-java-run button:first-child { color: #68b871; }
-.top-java-run button:nth-child(2) { color: #d66c75; }
+.top-java-run button:nth-child(2) { color: #d7b56d; }
+.top-java-run button:nth-child(3) { color: #d66c75; }
 .top-java-run button:disabled { opacity: .35; cursor: default; }
 .top-java-run select { width: min(240px, 28vw); min-width: 120px; height: 25px; padding: 0 24px 0 8px; border: 1px solid #4b4d52; border-radius: 3px; outline: none; background: #313338; color: #d7d9dc; font: inherit; }
 .top-java-run select:focus { border-color: #4b79a6; }
@@ -142,12 +143,29 @@ button { color: inherit; }
 .java-actions button:disabled { opacity: .35; cursor: default; }
 .java-actions button:nth-child(1) { color: #d7b56d; }
 .java-actions button:nth-child(2) { color: #68b871; }
-.java-actions button:nth-child(3) { color: #d66c75; }
+.java-actions button:nth-child(3) { color: #d7b56d; }
+.java-actions button:nth-child(4) { color: #d66c75; }
 .java-log-wrap { min-width: 0; flex: 1; display: flex; flex-direction: column; }
 .java-log-wrap header { height: 29px; flex: 0 0 29px; padding: 0 9px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid #393b40; background: #2b2d30; color: #bfc1c5; font-size: 11px; }
 .java-log-wrap header span:last-child { color: #7f8288; }
 .java-log-wrap header span.running { color: #75bd7e; }
 .java-log-wrap pre { min-height: 0; flex: 1; margin: 0; padding: 8px 10px; overflow: auto; color: #c9cbd0; font-family: Menlo, Monaco, Consolas, monospace; font-size: 11px; line-height: 1.45; white-space: pre-wrap; }
+.java-breakpoint { cursor: pointer; }
+.java-breakpoint::after { content: ""; width: 11px; height: 11px; position: absolute; top: 5px; left: 5px; border-radius: 50%; background: #d84f57; box-shadow: 0 0 0 1px #8f3037; }
+.debug-view { width: min(380px, 38vw); min-width: 250px; display: flex; flex-direction: column; border-left: 1px solid #393b40; background: #25262a; }
+.debug-view > header { height: 29px; flex: 0 0 29px; padding: 0 9px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid #393b40; color: #c8cace; font-size: 11px; text-transform: capitalize; }
+.debug-controls { height: 34px; padding: 2px 6px; display: flex; gap: 2px; border-bottom: 1px solid #393b40; }
+.debug-controls button { width: 28px; height: 28px; display: grid; place-items: center; border: 0; border-radius: 3px; background: transparent; color: #b7bac0; cursor: pointer; }
+.debug-controls button:hover:not(:disabled) { background: #3a3c41; color: white; }
+.debug-controls button:disabled { opacity: .35; cursor: default; }
+.debug-location { padding: 8px 9px; overflow: hidden; border-bottom: 1px solid #393b40; color: #d6d8dc; font: 11px Menlo, Monaco, Consolas, monospace; text-overflow: ellipsis; white-space: nowrap; }
+.debug-location span { color: #8faed0; }
+.debug-section-title { height: 25px; padding: 0 9px; display: flex; align-items: center; border-bottom: 1px solid #393b40; color: #aeb1b6; font-size: 11px; font-weight: 600; }
+.debug-variables { min-height: 0; flex: 1; overflow: auto; }
+.debug-variable { min-height: 24px; padding: 3px 9px; display: grid; grid-template-columns: minmax(80px, .7fr) minmax(100px, 1fr); gap: 10px; align-items: center; border-bottom: 1px solid #313338; font-size: 11px; }
+.debug-variable > span { overflow: hidden; color: #c5c7cb; text-overflow: ellipsis; }
+.debug-variable code { overflow: hidden; color: #a9c47f; text-overflow: ellipsis; white-space: nowrap; }
+.debug-empty { padding: 12px 9px; color: #7f8288; font-size: 11px; }
 .bottom-tool-bar { height: 27px; flex: 0 0 27px; display: flex; align-items: stretch; border-top: 1px solid #393b40; background: #2b2d30; }
 .bottom-tool-button { min-width: 92px; padding: 0 10px; display: flex; align-items: center; gap: 6px; border: 0; border-bottom: 2px solid transparent; background: transparent; color: #a8aaaf; cursor: pointer; }
 .bottom-tool-button:hover { background: #34363a; color: #e0e1e3; }

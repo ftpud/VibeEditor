@@ -57,8 +57,8 @@ export async function createServer(host: string, port: number, workspacePath: st
     const git = new GitService(workspace);
     const java = new JavaProjectService(filesystem, workspaceState, (event) => {
       if (socket.readyState !== WebSocket.OPEN) return;
-      const message: ServerEvent = event.type === "output"
-        ? { type: "java.output", payload: { data: event.data } }
+      const message: ServerEvent = event.type === "output" ? { type: "java.output", payload: { data: event.data } }
+        : event.type === "debug" ? { type: "java.debug.state", payload: event.state }
         : { type: "java.exit", payload: { exitCode: event.exitCode, signal: event.signal } };
       socket.send(JSON.stringify(message));
     });
@@ -177,5 +177,7 @@ async function handleRequest(filesystem: WorkspaceFileSystem, search: WorkspaceS
     case "java.build": await java.build(); return {};
     case "java.run": await java.run(); return {};
     case "java.stop": java.stop(); return {};
+    case "java.debug.start": await java.debug(request.payload.breakpoints); return {};
+    case "java.debug.command": java.debugCommand(request.payload.command); return {};
   }
 }
