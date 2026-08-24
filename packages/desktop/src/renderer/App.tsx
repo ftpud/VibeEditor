@@ -1,10 +1,14 @@
-import Editor from "@monaco-editor/react";
-import { Braces, ChevronDown, ChevronRight, Coffee, File, FileCode2, FileJson, FileText, Folder, FolderOpen, GitBranch, Hash, LogOut, RefreshCw, Save, SquareTerminal, X } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import type { FileTreeNode, GitStatusEntry } from "@remote-ide/protocol";
+import Editor, { DiffEditor } from "@monaco-editor/react";
+import { ArrowUpRight, Braces, CaseSensitive, ChevronDown, ChevronRight, Coffee, Columns2, Eye, File, FileCode2, FileJson, FileText, Folder, FolderOpen, GitBranch, GitCompareArrows, Hash, ListTree, LogOut, Package, Pencil, Play, RefreshCw, Save, Search, Square, SquareTerminal, X } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
+import type { FileTreeNode, GitStatusEntry, JavaMainClass, JavaProjectNode, JavaProjectOptions, SearchResult, WorkspaceOptions } from "@remote-ide/protocol";
+import type { editor } from "monaco-editor";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { CoreClient } from "./client";
 import { initialLayout, type EditorTab, type LayoutModel } from "./model";
 import { TerminalPanel } from "./TerminalPanel";
+import { JavaPanel } from "./JavaPanel";
 
 type ConnectionStatus = "idle" | "connecting" | "connected" | "failed" | "disconnected" | "workspace-error";
 const languageByExtension: Record<string, string> = {
@@ -28,28 +32,51 @@ export function App() {
   const [layout, setLayout] = useState<LayoutModel>(initialLayout);
   const [explorerWidth, setExplorerWidth] = useState(260);
   const [terminalHeight, setTerminalHeight] = useState(240);
-  const [sideView, setSideView] = useState<"project" | "git">("project");
+  const [sideView, setSideView] = useState<"project" | "git" | "java">("project");
   const [gitBranch, setGitBranch] = useState("HEAD");
   const [gitEntries, setGitEntries] = useState<GitStatusEntry[]>([]);
   const [gitError, setGitError] = useState("");
+  const [workspaceOptionsReady, setWorkspaceOptionsReady] = useState(false);
+  const [javaOptions, setJavaOptions] = useState<JavaProjectOptions>();
+  const [javaTree, setJavaTree] = useState<JavaProjectNode[]>([]);
+  const [javaLog, setJavaLog] = useState("");
+  const [javaRunning, setJavaRunning] = useState(false);
+  const [javaPanelHeight, setJavaPanelHeight] = useState(240);
+  const [showRunConfigurationDialog, setShowRunConfigurationDialog] = useState(false);
+  const [treeContextMenu, setTreeContextMenu] = useState<{ x: number; y: number; node: FileTreeNode }>();
+  const [searchScope, setSearchScope] = useState<string>();
+  const [pendingNavigation, setPendingNavigation] = useState<{ result: SearchResult; matchLength: number }>();
   const clientRef = useRef<CoreClient>();
   const didAutoConnect = useRef(false);
   const layoutRef = useRef(layout);
   const treeRefreshTimer = useRef<ReturnType<typeof setTimeout>>();
   const gitRefreshTimer = useRef<ReturnType<typeof setTimeout>>();
+  const javaRefreshTimer = useRef<ReturnType<typeof setTimeout>>();
   const selfWriteUntil = useRef(new Map<string, number>());
   const terminalWriters = useRef(new Map<string, (data: string) => void>());
   const terminalBuffers = useRef(new Map<string, string>());
+  const monacoEditorRef = useRef<editor.IStandaloneCodeEditor>();
+  const javaOptionsRef = useRef<JavaProjectOptions>();
   const group = layout.editorGroups[0]!;
   const activeTab = group.tabs.find((tab) => tab.id === group.activeTabId);
   const hasDirtyTabs = group.tabs.some((tab) => tab.dirty);
 
   useEffect(() => { window.desktop?.setDirtyState(hasDirtyTabs); }, [hasDirtyTabs]);
   useEffect(() => { layoutRef.current = layout; }, [layout]);
+  useEffect(() => { javaOptionsRef.current = javaOptions; }, [javaOptions]);
+  useEffect(() => {
+    if (!pendingNavigation || activeTab?.path !== pendingNavigation.result.path || !monacoEditorRef.current) return;
+    const { result, matchLength } = pendingNavigation;
+    monacoEditorRef.current.setSelection({ startLineNumber: result.line, startColumn: result.column, endLineNumber: result.line, endColumn: result.column + matchLength });
+    monacoEditorRef.current.revealLineInCenter(result.line);
+    monacoEditorRef.current.focus();
+    setPendingNavigation(undefined);
+  }, [activeTab?.path, pendingNavigation]);
   useEffect(() => () => {
     clientRef.current?.disconnect();
     if (treeRefreshTimer.current) clearTimeout(treeRefreshTimer.current);
     if (gitRefreshTimer.current) clearTimeout(gitRefreshTimer.current);
+    if (javaRefreshTimer.current) clearTimeout(javaRefreshTimer.current);
   }, []);
 
   const updateGroup = useCallback((update: (tabs: EditorTab[], active?: string) => { tabs: EditorTab[]; activeTabId?: string }) => {
@@ -77,7 +104,26 @@ export function App() {
     }
   }, []);
 
+  const restoreWorkspaceOptions = useCallback(async (options: WorkspaceOptions, client: CoreClient) => {
+    const tabs = await Promise.all(options.openFiles.map(async (filePath): Promise<EditorTab> => {
+      const title = filePath.split("/").pop() ?? filePath;
+      try {
+        const result = await client.request("filesystem.readFile", { path: filePath });
+        return { id: crypto.randomUUID(), type: "file", title, path: filePath, dirty: false, content: result.content, savedContent: result.content, loading: false, markdownMode: /\.md$/i.test(filePath) ? "preview" : undefined };
+      } catch (error) {
+        return { id: crypto.randomUUID(), type: "file", title, path: filePath, dirty: false, content: "", savedContent: "", loading: false, markdownMode: /\.md$/i.test(filePath) ? "preview" : undefined, error: error instanceof Error ? error.message : "Could not restore file" };
+      }
+    }));
+    const activeTabId = tabs.find((tab) => tab.path === options.activeFile)?.id ?? tabs[0]?.id;
+    setLayout((current) => ({
+      ...current,
+      editorGroups: current.editorGroups.map((item, index) => index === 0 ? { ...item, tabs, activeTabId } : item)
+    }));
+    setWorkspaceOptionsReady(true);
+  }, []);
+
   const connect = async () => {
+    setWorkspaceOptionsReady(false);
     setStatus("connecting"); setStatusMessage("Connecting...");
     const client = new CoreClient();
     client.onDisconnected = (message) => { setStatus("disconnected"); setStatusMessage(message); };
@@ -94,9 +140,31 @@ export function App() {
         updateTerminalGroup((current) => ({ ...current, tabs: current.tabs.map((tab) => tab.terminalId === event.payload.terminalId ? { ...tab, exited: true } : tab) }));
         return;
       }
+      if (event.type === "java.output") {
+        setJavaLog((current) => (current + event.payload.data).slice(-1_000_000));
+        return;
+      }
+      if (event.type === "java.exit") {
+        setJavaRunning(false);
+        setJavaLog((current) => `${current}\nProcess exited${event.payload.exitCode === null ? "" : ` with code ${event.payload.exitCode}`}${event.payload.signal ? ` (${event.payload.signal})` : ""}.\n`);
+        return;
+      }
       if (gitRefreshTimer.current) clearTimeout(gitRefreshTimer.current);
       gitRefreshTimer.current = setTimeout(() => { void refreshGit(client); }, 200);
-      if (event.type === "git.changed") return;
+      const refreshDiffs = (changedPath?: string) => {
+        const diffTabs = layoutRef.current.editorGroups[0]?.tabs.filter((tab) => tab.type === "diff" && (!changedPath || tab.path === changedPath)) ?? [];
+        for (const tab of diffTabs) void client.request("git.diff", { path: tab.path }).then((result) => {
+          updateGroup((tabs, active) => ({ tabs: tabs.map((item) => item.id === tab.id ? { ...item, originalContent: result.originalContent, content: result.modifiedContent, error: undefined } : item), activeTabId: active }));
+        }).catch(() => undefined);
+      };
+      if (event.type === "git.changed") { refreshDiffs(); return; }
+      refreshDiffs(event.payload.path);
+      if (javaOptionsRef.current && (event.payload.path.endsWith(".java") || event.payload.kind === "addDir" || event.payload.kind === "unlinkDir")) {
+        if (javaRefreshTimer.current) clearTimeout(javaRefreshTimer.current);
+        javaRefreshTimer.current = setTimeout(() => {
+          void client.request("java.getProjectTree", {}).then((result) => setJavaTree(result.tree)).catch(() => undefined);
+        }, 200);
+      }
       if (treeRefreshTimer.current) clearTimeout(treeRefreshTimer.current);
       treeRefreshTimer.current = setTimeout(() => {
         void client.request("filesystem.listTree", {})
@@ -139,6 +207,11 @@ export function App() {
       try {
         const result = await client.request("workspace.open", {});
         clientRef.current = client;
+        setJavaOptions(result.options.javaProject);
+        if (result.options.javaProject) {
+          try { setJavaTree((await client.request("java.getProjectTree", {})).tree); } catch { setJavaTree([]); }
+        } else setJavaTree([]);
+        await restoreWorkspaceOptions(result.options, client);
         setTree(result.tree); setStatus("connected"); setStatusMessage("");
         void refreshGit(client);
         localStorage.setItem("connection", JSON.stringify({ host, port }));
@@ -159,19 +232,45 @@ export function App() {
   const disconnect = () => {
     if (hasDirtyTabs && !window.confirm("Disconnect and discard unsaved changes?")) return;
     clientRef.current?.disconnect(); clientRef.current = undefined;
+    setWorkspaceOptionsReady(false);
+    setJavaOptions(undefined); setJavaTree([]); setJavaRunning(false); setJavaLog("");
     setLayout(initialLayout); setTree([]); setStatus("idle"); setStatusMessage("");
   };
 
+  const persistedFileTabs = group.tabs.filter((tab) => tab.type === "file");
+  const persistedActiveTab = activeTab?.type === "file" ? activeTab : undefined;
+  const workspaceOptionsSignature = `${persistedFileTabs.map((tab) => tab.path).join("\0")}\n${persistedActiveTab?.path ?? ""}\n${JSON.stringify(javaOptions)}`;
+  useEffect(() => {
+    if (status !== "connected" || !workspaceOptionsReady || !clientRef.current) return;
+    const options: WorkspaceOptions = { openFiles: persistedFileTabs.map((tab) => tab.path), ...(persistedActiveTab ? { activeFile: persistedActiveTab.path } : {}), ...(javaOptions ? { javaProject: javaOptions } : {}) };
+    void clientRef.current.request("workspace.saveOptions", { options }).catch((error: unknown) => {
+      setStatusMessage(error instanceof Error ? error.message : "Could not save workspace options");
+    });
+  }, [status, workspaceOptionsReady, workspaceOptionsSignature]);
+
   const openFile = async (node: FileTreeNode) => {
-    const existing = group.tabs.find((tab) => tab.path === node.path);
+    const existing = group.tabs.find((tab) => tab.type === "file" && tab.path === node.path);
     if (existing) { updateGroup((tabs) => ({ tabs, activeTabId: existing.id })); return; }
-    const tab: EditorTab = { id: crypto.randomUUID(), type: "file", title: node.name, path: node.path, dirty: false, content: "", savedContent: "", loading: true };
+    const tab: EditorTab = { id: crypto.randomUUID(), type: "file", title: node.name, path: node.path, dirty: false, content: "", savedContent: "", loading: true, markdownMode: /\.md$/i.test(node.path) ? "preview" : undefined };
     updateGroup((tabs) => ({ tabs: [...tabs, tab], activeTabId: tab.id }));
     try {
       const result = await clientRef.current!.request("filesystem.readFile", { path: node.path });
       updateGroup((tabs, active) => ({ tabs: tabs.map((item) => item.id === tab.id ? { ...item, content: result.content, savedContent: result.content, loading: false } : item), activeTabId: active }));
     } catch (error) {
       updateGroup((tabs, active) => ({ tabs: tabs.map((item) => item.id === tab.id ? { ...item, loading: false, error: error instanceof Error ? error.message : "Read failed" } : item), activeTabId: active }));
+    }
+  };
+
+  const openDiff = async (entry: GitStatusEntry) => {
+    const existing = group.tabs.find((tab) => tab.type === "diff" && tab.path === entry.path);
+    if (existing) { updateGroup((tabs) => ({ tabs, activeTabId: existing.id })); return; }
+    const tab: EditorTab = { id: crypto.randomUUID(), type: "diff", title: `${entry.path.split("/").pop() ?? entry.path} (Diff)`, path: entry.path, dirty: false, content: "", savedContent: "", originalContent: "", diffMode: "split", loading: true };
+    updateGroup((tabs) => ({ tabs: [...tabs, tab], activeTabId: tab.id }));
+    try {
+      const result = await clientRef.current!.request("git.diff", { path: entry.path });
+      updateGroup((tabs, active) => ({ tabs: tabs.map((item) => item.id === tab.id ? { ...item, originalContent: result.originalContent, content: result.modifiedContent, savedContent: result.modifiedContent, loading: false } : item), activeTabId: active }));
+    } catch (error) {
+      updateGroup((tabs, active) => ({ tabs: tabs.map((item) => item.id === tab.id ? { ...item, loading: false, error: error instanceof Error ? error.message : "Could not load diff" } : item), activeTabId: active }));
     }
   };
 
@@ -187,7 +286,7 @@ export function App() {
 
   const saveActive = useCallback(async () => {
     const current = layout.editorGroups[0]?.tabs.find((tab) => tab.id === layout.editorGroups[0]?.activeTabId);
-    if (!current || current.loading || current.error || !current.dirty) return;
+    if (!current || current.type !== "file" || current.loading || current.error || !current.dirty) return;
     try {
       selfWriteUntil.current.set(current.path, Date.now() + 1500);
       await clientRef.current!.request("filesystem.writeFile", { path: current.path, content: current.content });
@@ -225,7 +324,7 @@ export function App() {
         const tab = { id, terminalId: result.terminalId, title: `Terminal ${current.tabs.length + 1}`, exited: false };
         return { ...current, tabs: [...current.tabs, tab], activeTabId: id };
       });
-      setLayout((current) => current.panels.some((panel) => panel.type === "terminal") ? current : { ...current, panels: [...current.panels, { id: "terminal", type: "terminal" }] });
+      setLayout((current) => ({ ...current, panels: [...current.panels.filter((panel) => panel.type !== "terminal" && panel.type !== "java"), { id: "terminal", type: "terminal" }] }));
     } catch (error) {
       setStatusMessage(error instanceof Error ? error.message : "Could not create terminal");
     }
@@ -236,7 +335,7 @@ export function App() {
     if (visible) {
       setLayout((current) => ({ ...current, panels: current.panels.filter((panel) => panel.type !== "terminal") }));
     } else if (layout.terminalGroup.tabs.length > 0) {
-      setLayout((current) => ({ ...current, panels: [...current.panels, { id: "terminal", type: "terminal" }] }));
+      setLayout((current) => ({ ...current, panels: [...current.panels.filter((panel) => panel.type !== "java"), { id: "terminal", type: "terminal" }] }));
     } else {
       void createTerminal();
     }
@@ -266,6 +365,74 @@ export function App() {
     window.addEventListener("pointermove", move); window.addEventListener("pointerup", end);
   };
 
+  const refreshJavaTree = async () => {
+    try { setJavaTree((await clientRef.current!.request("java.getProjectTree", {})).tree); }
+    catch (error) { setStatusMessage(error instanceof Error ? error.message : "Could not refresh Java project"); }
+  };
+
+  const loadMavenProject = async (pomPath: string) => {
+    setTreeContextMenu(undefined);
+    try {
+      const result = await clientRef.current!.request("java.loadMavenProject", { pomPath });
+      setJavaOptions(result.options); javaOptionsRef.current = result.options; setJavaTree(result.tree); setSideView("java");
+    } catch (error) { setStatusMessage(error instanceof Error ? error.message : "Could not load Maven project"); }
+  };
+
+  const addJavaSourceRoot = async (sourcePath: string) => {
+    setTreeContextMenu(undefined);
+    try {
+      const result = await clientRef.current!.request("java.addSourceRoot", { path: sourcePath });
+      setJavaOptions(result.options); javaOptionsRef.current = result.options; setJavaTree(result.tree); setSideView("java");
+    } catch (error) { setStatusMessage(error instanceof Error ? error.message : "Could not add source root"); }
+  };
+
+  const toggleJavaPanel = () => {
+    const visible = layout.panels.some((panel) => panel.type === "java");
+    setLayout((current) => ({
+      ...current,
+      panels: visible ? current.panels.filter((panel) => panel.type !== "java") : [...current.panels.filter((panel) => panel.type !== "terminal" && panel.type !== "java"), { id: "java", type: "java" }]
+    }));
+  };
+
+  const runJavaAction = async (action: "java.build" | "java.run") => {
+    setLayout((current) => ({ ...current, panels: [...current.panels.filter((panel) => panel.type !== "terminal" && panel.type !== "java"), { id: "java", type: "java" }] }));
+    setJavaRunning(true);
+    try { await clientRef.current!.request(action, {}); }
+    catch (error) { setJavaRunning(false); setJavaLog((current) => `${current}${error instanceof Error ? error.message : "Java process failed"}\n`); }
+  };
+
+  const stopJava = async () => {
+    try { await clientRef.current!.request("java.stop", {}); } catch { /* Process may have already exited. */ }
+  };
+
+  const selectRunConfiguration = async (id: string) => {
+    try {
+      const result = await clientRef.current!.request("java.selectRunConfiguration", { id });
+      setJavaOptions(result.options); javaOptionsRef.current = result.options;
+    } catch (error) { setStatusMessage(error instanceof Error ? error.message : "Could not select run configuration"); }
+  };
+
+  const beginJavaResize = (event: React.PointerEvent) => {
+    event.currentTarget.setPointerCapture(event.pointerId);
+    const startY = event.clientY;
+    const startHeight = javaPanelHeight;
+    const move = (moveEvent: PointerEvent) => setJavaPanelHeight(Math.max(140, Math.min(520, startHeight + startY - moveEvent.clientY)));
+    const end = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", end); };
+    window.addEventListener("pointermove", move); window.addEventListener("pointerup", end);
+  };
+
+  const openSearchForNode = (node: FileTreeNode) => {
+    const scope = node.type === "directory" ? node.path : node.path.split("/").slice(0, -1).join("/");
+    setTreeContextMenu(undefined);
+    setSearchScope(scope);
+  };
+
+  const navigateToSearchResult = async (result: SearchResult, matchLength: number) => {
+    await openFile({ name: result.path.split("/").pop() ?? result.path, path: result.path, type: "file" });
+    setPendingNavigation({ result, matchLength });
+    setSearchScope(undefined);
+  };
+
   if (status !== "connected") return <ConnectionScreen {...{ host, port, status, statusMessage, setHost, setPort, connect }} />;
 
   return <div className="ide-shell">
@@ -273,39 +440,71 @@ export function App() {
       <nav className="tool-stripe" aria-label="Tool windows">
         <button className={`tool-stripe-button ${sideView === "project" ? "active" : ""}`} title="Project" onClick={() => setSideView("project")}><Folder size={15} /><span>Project</span></button>
         <button className={`tool-stripe-button ${sideView === "git" ? "active" : ""}`} title="Git changes" onClick={() => { setSideView("git"); void refreshGit(); }}><GitBranch size={15} /><span>Git</span>{gitEntries.length > 0 && <span className="tool-badge">{gitEntries.length > 99 ? "99+" : gitEntries.length}</span>}</button>
+        {javaOptions && <button className={`tool-stripe-button ${sideView === "java" ? "active" : ""}`} title="Java project" onClick={() => { setSideView("java"); void refreshJavaTree(); }}><Coffee size={15} /><span>Java</span></button>}
       </nav>
       <aside className="explorer" style={{ width: explorerWidth }}>
         {sideView === "project" ? <>
           <header className="panel-header"><span>Project</span><button title="Synchronize files" onClick={() => void refreshTree()}><RefreshCw size={14} /></button></header>
-          <div className="workspace-name"><ChevronDown size={13} />REMOTE WORKSPACE</div>
-          <div className="tree"><Tree nodes={tree} activePath={activeTab?.path} onOpen={openFile} /></div>
-        </> : <>
+          <div className="workspace-name" onContextMenu={(event) => { event.preventDefault(); setTreeContextMenu({ x: Math.min(event.clientX, window.innerWidth - 220), y: Math.min(event.clientY, window.innerHeight - 110), node: { name: "REMOTE WORKSPACE", path: "", type: "directory" } }); }}><ChevronDown size={13} />REMOTE WORKSPACE</div>
+          <div className="tree"><Tree nodes={tree} activePath={activeTab?.path} onOpen={openFile} onContextMenu={(event, node) => { event.preventDefault(); setTreeContextMenu({ x: Math.min(event.clientX, window.innerWidth - 220), y: Math.min(event.clientY, window.innerHeight - 110), node }); }} /></div>
+        </> : sideView === "git" ? <>
           <header className="panel-header"><span>Git Changes</span><button title="Refresh Git status" onClick={() => void refreshGit()}><RefreshCw size={14} /></button></header>
           <div className="git-branch"><GitBranch size={13} /><span>{gitBranch}</span></div>
-          <GitChangesView entries={gitEntries} error={gitError} activePath={activeTab?.path} onOpen={openFile} />
+          <GitChangesView entries={gitEntries} error={gitError} activePath={activeTab?.type === "diff" ? activeTab.path : undefined} onOpenDiff={openDiff} />
+        </> : <>
+          <header className="panel-header"><span>Java Project</span><button title="Refresh Java project" onClick={() => void refreshJavaTree()}><RefreshCw size={14} /></button></header>
+          <div className="java-project-meta"><Coffee size={13} /><span>{javaOptions?.pomPath}</span></div>
+          <div className="tree java-tree"><JavaProjectTree nodes={javaTree} activePath={activeTab?.path} onOpen={openFile} /></div>
         </>}
       </aside>
       <div className="resize-handle" onPointerDown={beginResize} />
       <main className="workbench">
-        <div className="titlebar-actions"><span className="connection-dot" />{host}:{port}<button title="Disconnect" onClick={disconnect}><LogOut size={15} /></button></div>
+        <div className="titlebar-actions">
+          {javaOptions && <div className="top-java-run">
+            <button title="Run selected Java configuration" disabled={javaRunning || !javaOptions.selectedRunConfigurationId} onClick={() => void runJavaAction("java.run")}><Play size={14} /></button>
+            <button title="Stop Java process" disabled={!javaRunning} onClick={() => void stopJava()}><Square size={13} /></button>
+            <select aria-label="Java run configuration" value={javaOptions.selectedRunConfigurationId ?? ""} onChange={(event) => event.target.value === "__create__" ? setShowRunConfigurationDialog(true) : void selectRunConfiguration(event.target.value)}><option value="" disabled>Select run configuration</option>{javaOptions.runConfigurations.map((configuration) => <option key={configuration.id} value={configuration.id}>{configuration.name}</option>)}<option value="__create__">Create new...</option></select>
+          </div>}
+          <span className="connection-dot" />{host}:{port}<button title="Disconnect" onClick={disconnect}><LogOut size={15} /></button>
+        </div>
         <div className="tabs" role="tablist">
           {group.tabs.map((tab) => <button className={`tab ${tab.id === group.activeTabId ? "active" : ""}`} key={tab.id} onClick={() => updateGroup((tabs) => ({ tabs, activeTabId: tab.id }))}>
-            <File size={14} /><span>{tab.title}</span>{tab.dirty && <span className="dirty" title="Unsaved changes" />}<span className="close" title={`Close ${tab.title}`} onClick={(event) => { event.stopPropagation(); closeTab(tab); }}><X size={13} /></span>
+            {tab.type === "diff" ? <GitCompareArrows size={14} /> : <File size={14} />}<span>{tab.title}</span>{tab.dirty && <span className="dirty" title="Unsaved changes" />}<span className="close" title={`Close ${tab.title}`} onClick={(event) => { event.stopPropagation(); closeTab(tab); }}><X size={13} /></span>
           </button>)}
-          <div className="tab-spacer" /><button className="save-button" title="Save active file" disabled={!activeTab?.dirty} onClick={() => void saveActive()}><Save size={15} /></button>
+          <div className="tab-spacer" />
+          {activeTab?.type === "diff" && <div className="editor-mode-switch" aria-label="Diff layout">
+            <button className={activeTab.diffMode !== "unified" ? "active" : ""} title="Side-by-side diff" onClick={() => updateGroup((tabs, active) => ({ tabs: tabs.map((tab) => tab.id === activeTab.id ? { ...tab, diffMode: "split" } : tab), activeTabId: active }))}><Columns2 size={14} /></button>
+            <button className={activeTab.diffMode === "unified" ? "active" : ""} title="Unified diff" onClick={() => updateGroup((tabs, active) => ({ tabs: tabs.map((tab) => tab.id === activeTab.id ? { ...tab, diffMode: "unified" } : tab), activeTabId: active }))}><ListTree size={14} /></button>
+          </div>}
+          {activeTab?.type === "file" && /\.md$/i.test(activeTab.path) && <div className="editor-mode-switch" aria-label="Markdown mode">
+            <button className={activeTab.markdownMode !== "preview" ? "active" : ""} title="Edit Markdown" onClick={() => updateGroup((tabs, active) => ({ tabs: tabs.map((tab) => tab.id === activeTab.id ? { ...tab, markdownMode: "edit" } : tab), activeTabId: active }))}><Pencil size={14} /></button>
+            <button className={activeTab.markdownMode === "preview" ? "active" : ""} title="Preview Markdown" onClick={() => updateGroup((tabs, active) => ({ tabs: tabs.map((tab) => tab.id === activeTab.id ? { ...tab, markdownMode: "preview" } : tab), activeTabId: active }))}><Eye size={14} /></button>
+          </div>}
+          <button className="save-button" title="Save active file" disabled={activeTab?.type !== "file" || !activeTab.dirty} onClick={() => void saveActive()}><Save size={15} /></button>
         </div>
         <div className="editor-area">
           {!activeTab ? <div className="empty-editor">Open a file from Project</div> : activeTab.loading ? <div className="empty-editor">Loading {activeTab.title}...</div> : activeTab.error && !activeTab.content ? <div className="editor-error">{activeTab.error}</div> : <>
             {activeTab.error && <div className="inline-error">{activeTab.error}</div>}
-            <Editor path={activeTab.path} language={languageByExtension[activeTab.path.split(".").pop()?.toLowerCase() ?? ""] ?? "plaintext"} value={activeTab.content} theme="vs-dark" options={{ automaticLayout: true, minimap: { enabled: false }, fontSize: 13, scrollBeyondLastLine: false, padding: { top: 10 } }} onChange={(value) => updateGroup((tabs, active) => ({ tabs: tabs.map((tab) => tab.id === activeTab.id ? { ...tab, content: value ?? "", dirty: (value ?? "") !== tab.savedContent, error: undefined } : tab), activeTabId: active }))} />
+            {activeTab.type === "diff" ? <DiffEditor original={activeTab.originalContent ?? ""} modified={activeTab.content} language={languageByExtension[activeTab.path.split(".").pop()?.toLowerCase() ?? ""] ?? "plaintext"} theme="vs-dark" options={{ automaticLayout: true, readOnly: true, originalEditable: false, renderSideBySide: activeTab.diffMode !== "unified", minimap: { enabled: false }, fontSize: 13, scrollBeyondLastLine: false }} /> : activeTab.markdownMode === "preview" ? <div className="markdown-preview"><ReactMarkdown remarkPlugins={[remarkGfm]}>{activeTab.content}</ReactMarkdown></div> : <Editor path={activeTab.path} language={languageByExtension[activeTab.path.split(".").pop()?.toLowerCase() ?? ""] ?? "plaintext"} value={activeTab.content} theme="vs-dark" onMount={(instance) => { monacoEditorRef.current = instance; }} options={{ automaticLayout: true, minimap: { enabled: false }, fontSize: 13, scrollBeyondLastLine: false, padding: { top: 10 } }} onChange={(value) => updateGroup((tabs, active) => ({ tabs: tabs.map((tab) => tab.id === activeTab.id ? { ...tab, content: value ?? "", dirty: (value ?? "") !== tab.savedContent, error: undefined } : tab), activeTabId: active }))} />}
           </>}
         </div>
       </main>
     </div>
     {layout.panels.some((panel) => panel.type === "terminal") && <TerminalPanel client={clientRef.current!} group={layout.terminalGroup} height={terminalHeight} onActivate={(id) => updateTerminalGroup((current) => ({ ...current, activeTabId: id }))} onCreate={() => void createTerminal()} onClose={closeTerminal} onResizeStart={beginTerminalResize} registerWriter={registerTerminalWriter} />}
+    {layout.panels.some((panel) => panel.type === "java") && javaOptions && <JavaPanel height={javaPanelHeight} log={javaLog} running={javaRunning} options={javaOptions} onBuild={() => void runJavaAction("java.build")} onRun={() => void runJavaAction("java.run")} onStop={() => void stopJava()} onClear={() => setJavaLog("")} onResizeStart={beginJavaResize} />}
     <footer className="bottom-tool-bar">
       <button className={`bottom-tool-button ${layout.panels.some((panel) => panel.type === "terminal") ? "active" : ""}`} onClick={toggleTerminalPanel}><SquareTerminal size={14} /><span>Terminal</span>{layout.terminalGroup.tabs.length > 0 && <span className="bottom-tool-count">{layout.terminalGroup.tabs.length}</span>}</button>
+      {javaOptions && <button className={`bottom-tool-button ${layout.panels.some((panel) => panel.type === "java") ? "active" : ""}`} onClick={toggleJavaPanel}><Coffee size={14} /><span>Java</span>{javaRunning && <span className="running-indicator" />}</button>}
     </footer>
+    {treeContextMenu && <div className="context-menu-layer" onMouseDown={() => setTreeContextMenu(undefined)}>
+      <div className="context-menu" style={{ left: treeContextMenu.x, top: treeContextMenu.y }} onMouseDown={(event) => event.stopPropagation()}>
+        <button onClick={() => openSearchForNode(treeContextMenu.node)}><Search size={14} /><span>Find in Files</span></button>
+        {treeContextMenu.node.type === "file" && treeContextMenu.node.name === "pom.xml" && <button onClick={() => void loadMavenProject(treeContextMenu.node.path)}><Package size={14} /><span>Load as Maven Project</span></button>}
+        {javaOptions && treeContextMenu.node.type === "directory" && treeContextMenu.node.path && <button onClick={() => void addJavaSourceRoot(treeContextMenu.node.path)}><Coffee size={14} /><span>Mark as Sources Root</span></button>}
+      </div>
+    </div>}
+    {searchScope !== undefined && <FindInFilesDialog client={clientRef.current!} scope={searchScope} onClose={() => setSearchScope(undefined)} onNavigate={(result, matchLength) => void navigateToSearchResult(result, matchLength)} />}
+    {showRunConfigurationDialog && <RunConfigurationDialog client={clientRef.current!} onClose={() => setShowRunConfigurationDialog(false)} onSaved={(options) => { setJavaOptions(options); javaOptionsRef.current = options; setShowRunConfigurationDialog(false); }} />}
   </div>;
 }
 
@@ -320,16 +519,34 @@ function ConnectionScreen(props: { host: string; port: string; status: Connectio
   </form></main>;
 }
 
-function Tree({ nodes, activePath, onOpen }: { nodes: FileTreeNode[]; activePath?: string; onOpen(node: FileTreeNode): void }) {
+function Tree({ nodes, activePath, onOpen, onContextMenu }: { nodes: FileTreeNode[]; activePath?: string; onOpen(node: FileTreeNode): void; onContextMenu(event: ReactMouseEvent, node: FileTreeNode): void }) {
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   return <>{nodes.map((node) => node.type === "directory" ? <div key={node.path}>
-    <button className="tree-row" onClick={() => setExpanded((current) => { const next = new Set(current); next.has(node.path) ? next.delete(node.path) : next.add(node.path); return next; })}>
+    <button className="tree-row" onContextMenu={(event) => onContextMenu(event, node)} onClick={() => setExpanded((current) => { const next = new Set(current); next.has(node.path) ? next.delete(node.path) : next.add(node.path); return next; })}>
       {expanded.has(node.path) ? <ChevronDown size={14} /> : <ChevronRight size={14} />}{expanded.has(node.path) ? <FolderOpen size={15} /> : <Folder size={15} />}<span>{node.name}</span>
-    </button>{expanded.has(node.path) && <div className="tree-children"><Tree nodes={node.children ?? []} activePath={activePath} onOpen={onOpen} /></div>}
-  </div> : <FileTreeRow key={node.path} node={node} selected={activePath === node.path} onOpen={onOpen} />)}</>;
+    </button>{expanded.has(node.path) && <div className="tree-children"><Tree nodes={node.children ?? []} activePath={activePath} onOpen={onOpen} onContextMenu={onContextMenu} /></div>}
+  </div> : <FileTreeRow key={node.path} node={node} selected={activePath === node.path} onOpen={onOpen} onContextMenu={onContextMenu} />)}</>;
 }
 
-function GitChangesView({ entries, error, activePath, onOpen }: { entries: GitStatusEntry[]; error: string; activePath?: string; onOpen(node: FileTreeNode): void }) {
+function JavaProjectTree({ nodes, activePath, onOpen }: { nodes: JavaProjectNode[]; activePath?: string; onOpen(node: FileTreeNode): void }) {
+  const [expanded, setExpanded] = useState<Set<string>>(() => new Set(nodes.filter((node) => node.type === "sourceRoot").map((node) => node.path)));
+  useEffect(() => setExpanded((current) => new Set([...current, ...nodes.filter((node) => node.type === "sourceRoot").map((node) => node.path)])), [nodes]);
+  const render = (items: JavaProjectNode[], depth: number): ReactNode => items.map((node) => {
+    if (node.type === "file") return <button key={node.path} className={`tree-row java-file-row ${activePath === node.path ? "selected" : ""}`} style={{ paddingLeft: 11 + depth * 13 }} onClick={() => onOpen({ name: node.name, path: node.path, type: "file" })}>
+      <Coffee size={14} color="#d58b59" /><span>{node.name}</span>
+    </button>;
+    const open = expanded.has(node.path);
+    return <div key={node.path}>
+      <button className={`tree-row ${node.type === "sourceRoot" ? "java-source-root" : ""}`} style={{ paddingLeft: 7 + depth * 13 }} onClick={() => setExpanded((current) => { const next = new Set(current); open ? next.delete(node.path) : next.add(node.path); return next; })}>
+        {open ? <ChevronDown size={13} /> : <ChevronRight size={13} />}{node.type === "sourceRoot" ? <FolderOpen size={14} color="#6ea8fe" /> : <Package size={14} color="#b5a36a" />}<span>{node.name}</span>
+      </button>
+      {open && render(node.children ?? [], depth + 1)}
+    </div>;
+  });
+  return <>{render(nodes, 0)}</>;
+}
+
+function GitChangesView({ entries, error, activePath, onOpenDiff }: { entries: GitStatusEntry[]; error: string; activePath?: string; onOpenDiff(entry: GitStatusEntry): void }) {
   if (error) return <div className="git-empty error">{error}</div>;
   if (entries.length === 0) return <div className="git-empty">No local changes</div>;
   const groups = [
@@ -338,16 +555,16 @@ function GitChangesView({ entries, error, activePath, onOpen }: { entries: GitSt
     { title: "Staged", entries: entries.filter((entry) => entry.indexStatus !== " " && entry.indexStatus !== "?" && entry.indexStatus !== "U" && !["AA", "DD"].includes(entry.indexStatus + entry.worktreeStatus)) },
     { title: "Changes", entries: entries.filter((entry) => entry.indexStatus === " " && entry.worktreeStatus !== " " && entry.worktreeStatus !== "?" && entry.worktreeStatus !== "U") }
   ].filter((group) => group.entries.length > 0);
-  return <div className="git-changes">{groups.map((group) => <GitChangeGroup key={group.title} title={group.title} entries={group.entries} activePath={activePath} onOpen={onOpen} />)}</div>;
+  return <div className="git-changes">{groups.map((group) => <GitChangeGroup key={group.title} title={group.title} entries={group.entries} activePath={activePath} onOpenDiff={onOpenDiff} />)}</div>;
 }
 
-function GitChangeGroup({ title, entries, activePath, onOpen }: { title: string; entries: GitStatusEntry[]; activePath?: string; onOpen(node: FileTreeNode): void }) {
+function GitChangeGroup({ title, entries, activePath, onOpenDiff }: { title: string; entries: GitStatusEntry[]; activePath?: string; onOpenDiff(entry: GitStatusEntry): void }) {
   const [expanded, setExpanded] = useState(true);
   return <section className={`git-group git-group-${title.toLowerCase()}`}>
     <button className="git-group-title" aria-expanded={expanded} onClick={() => setExpanded((current) => !current)}>
       {expanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />}<span>{title}</span><span className="git-count">{entries.length}</span>
     </button>
-    {expanded && <GitStatusTree entries={entries} activePath={activePath} onOpen={onOpen} />}
+    {expanded && <GitStatusTree entries={entries} activePath={activePath} onOpenDiff={onOpenDiff} />}
   </section>;
 }
 
@@ -355,7 +572,7 @@ type GitTreeNode =
   | { type: "directory"; name: string; path: string; children: GitTreeNode[] }
   | { type: "file"; name: string; path: string; entry: GitStatusEntry };
 
-function GitStatusTree({ entries, activePath, onOpen }: { entries: GitStatusEntry[]; activePath?: string; onOpen(node: FileTreeNode): void }) {
+function GitStatusTree({ entries, activePath, onOpenDiff }: { entries: GitStatusEntry[]; activePath?: string; onOpenDiff(entry: GitStatusEntry): void }) {
   const nodes = useMemo(() => buildGitTree(entries), [entries]);
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set(collectGitDirectories(nodes)));
   useEffect(() => setExpanded((current) => new Set([...current, ...collectGitDirectories(nodes)])), [nodes]);
@@ -374,7 +591,7 @@ function GitStatusTree({ entries, activePath, onOpen }: { entries: GitStatusEntr
     const deleted = entry.indexStatus === "D" || entry.worktreeStatus === "D";
     const status = entry.indexStatus === "?" ? "U" : `${entry.indexStatus}${entry.worktreeStatus}`.trim();
     const kind = entry.indexStatus === "U" || entry.worktreeStatus === "U" ? "conflict" : entry.indexStatus === "?" ? "untracked" : deleted ? "deleted" : entry.indexStatus === "A" ? "added" : "modified";
-    return <button key={node.path} disabled={deleted} className={`git-file-row ${activePath === entry.path ? "selected" : ""}`} style={{ paddingLeft: 27 + depth * 13 }} title={entry.originalPath ? `${entry.originalPath} -> ${entry.path}` : entry.path} onClick={() => onOpen({ name: node.name, path: entry.path, type: "file" })}>
+    return <button key={node.path} className={`git-file-row ${activePath === entry.path ? "selected" : ""}`} style={{ paddingLeft: 27 + depth * 13 }} title={entry.originalPath ? `${entry.originalPath} -> ${entry.path}` : entry.path} onClick={() => onOpenDiff(entry)}>
       <FileCode2 size={14} /><span className="git-file-name">{node.name}</span><span className={`git-status ${kind}`}>{status}</span>
     </button>;
   });
@@ -414,7 +631,7 @@ function collectGitDirectories(nodes: GitTreeNode[]): string[] {
   return nodes.flatMap((node) => node.type === "directory" ? [node.path, ...collectGitDirectories(node.children)] : []);
 }
 
-function FileTreeRow({ node, selected, onOpen }: { node: FileTreeNode; selected: boolean; onOpen(node: FileTreeNode): void }) {
+function FileTreeRow({ node, selected, onOpen, onContextMenu }: { node: FileTreeNode; selected: boolean; onOpen(node: FileTreeNode): void; onContextMenu(event: ReactMouseEvent, node: FileTreeNode): void }) {
   const extension = node.name.split(".").pop()?.toLowerCase() ?? "";
   const appearance: Record<string, { color: string; Icon: typeof File }> = {
     ts: { color: "#5e9fd6", Icon: FileCode2 }, tsx: { color: "#5e9fd6", Icon: FileCode2 },
@@ -425,7 +642,136 @@ function FileTreeRow({ node, selected, onOpen }: { node: FileTreeNode; selected:
     yaml: { color: "#ca6b75", Icon: Braces }, yml: { color: "#ca6b75", Icon: Braces }
   };
   const { color, Icon } = appearance[extension] ?? { color: "#9aa0a8", Icon: File };
-  return <button className={`tree-row file-row ${selected ? "selected" : ""}`} onClick={() => void onOpen(node)}>
+  return <button className={`tree-row file-row ${selected ? "selected" : ""}`} onContextMenu={(event) => onContextMenu(event, node)} onClick={() => void onOpen(node)}>
     <span className="tree-indent" /><Icon className="file-kind-icon" color={color} size={14} /><span>{node.name}</span>
   </button>;
+}
+
+function RunConfigurationDialog({ client, onClose, onSaved }: { client: CoreClient; onClose(): void; onSaved(options: JavaProjectOptions): void }) {
+  const [classes, setClasses] = useState<JavaMainClass[]>([]);
+  const [mainClass, setMainClass] = useState("");
+  const [name, setName] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  useEffect(() => {
+    let current = true;
+    void client.request("java.listMainClasses", {}).then((result) => {
+      if (!current) return;
+      setClasses(result.classes);
+      const first = result.classes[0]?.className ?? "";
+      setMainClass(first); setName(first.split(".").pop() ?? first);
+    }).catch((loadError: unknown) => { if (current) setError(loadError instanceof Error ? loadError.message : "Could not discover main classes"); })
+      .finally(() => { if (current) setLoading(false); });
+    return () => { current = false; };
+  }, [client]);
+  useEffect(() => {
+    const listener = (event: KeyboardEvent) => { if (event.key === "Escape") onClose(); };
+    window.addEventListener("keydown", listener); return () => window.removeEventListener("keydown", listener);
+  }, [onClose]);
+
+  const save = async () => {
+    if (!name.trim() || !mainClass) return;
+    setSaving(true); setError("");
+    try { onSaved((await client.request("java.addRunConfiguration", { name: name.trim(), mainClass })).options); }
+    catch (saveError) { setError(saveError instanceof Error ? saveError.message : "Could not save run configuration"); setSaving(false); }
+  };
+
+  return <div className="dialog-overlay" onMouseDown={onClose}>
+    <section className="run-config-dialog" role="dialog" aria-modal="true" aria-label="Add Java run configuration" onMouseDown={(event) => event.stopPropagation()}>
+      <header><div><h2>Add Run Configuration</h2><span>Java Application</span></div><button title="Close" onClick={onClose}><X size={15} /></button></header>
+      <form onSubmit={(event) => { event.preventDefault(); void save(); }}>
+        <label>Profile name<input autoFocus value={name} onChange={(event) => setName(event.target.value)} maxLength={100} placeholder="Application" /></label>
+        <label>Main class<select value={mainClass} disabled={loading || classes.length === 0} onChange={(event) => { setMainClass(event.target.value); if (!name.trim()) setName(event.target.value.split(".").pop() ?? event.target.value); }}><option value="" disabled>{loading ? "Discovering classes..." : "Select main class"}</option>{classes.map((item) => <option key={item.className} value={item.className}>{item.className}</option>)}</select></label>
+        {classes.length === 0 && !loading && !error && <div className="run-config-empty">No classes with a public static void main method were found in configured source roots.</div>}
+        {error && <div className="find-error">{error}</div>}
+        <footer><button type="button" onClick={onClose}>Cancel</button><button className="primary" disabled={saving || !name.trim() || !mainClass}>{saving ? "Saving..." : "Add"}</button></footer>
+      </form>
+    </section>
+  </div>;
+}
+
+function FindInFilesDialog({ client, scope, onClose, onNavigate }: { client: CoreClient; scope: string; onClose(): void; onNavigate(result: SearchResult, matchLength: number): void }) {
+  const [query, setQuery] = useState("");
+  const [matchCase, setMatchCase] = useState(false);
+  const [matches, setMatches] = useState<SearchResult[]>([]);
+  const [selected, setSelected] = useState<SearchResult>();
+  const [previewContent, setPreviewContent] = useState("");
+  const [previewError, setPreviewError] = useState("");
+  const [truncated, setTruncated] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const inputRef = useRef<HTMLInputElement>(null);
+  const previewEditorRef = useRef<editor.IStandaloneCodeEditor>();
+  const searchVersion = useRef(0);
+  useEffect(() => { inputRef.current?.focus(); }, []);
+  useEffect(() => {
+    const listener = (event: KeyboardEvent) => { if (event.key === "Escape") onClose(); };
+    window.addEventListener("keydown", listener); return () => window.removeEventListener("keydown", listener);
+  }, [onClose]);
+
+  useEffect(() => {
+    const version = ++searchVersion.current;
+    if (!query.trim()) { setMatches([]); setSelected(undefined); setLoading(false); setError(""); return; }
+    const timer = setTimeout(() => {
+      setLoading(true); setError("");
+      void client.request("filesystem.search", { query, path: scope, matchCase }).then((result) => {
+        if (version !== searchVersion.current) return;
+        setMatches(result.matches); setSelected(result.matches[0]); setTruncated(result.truncated);
+      }).catch((searchError: unknown) => {
+        if (version !== searchVersion.current) return;
+        setMatches([]); setSelected(undefined); setError(searchError instanceof Error ? searchError.message : "Search failed");
+      }).finally(() => { if (version === searchVersion.current) setLoading(false); });
+    }, 600);
+    return () => clearTimeout(timer);
+  }, [client, matchCase, query, scope]);
+
+  useEffect(() => {
+    if (!selected) { setPreviewContent(""); setPreviewError(""); return; }
+    let current = true;
+    setPreviewError("");
+    void client.request("filesystem.readFile", { path: selected.path }).then((result) => {
+      if (current) setPreviewContent(result.content);
+    }).catch((readError: unknown) => {
+      if (current) { setPreviewContent(""); setPreviewError(readError instanceof Error ? readError.message : "Could not load preview"); }
+    });
+    return () => { current = false; };
+  }, [client, selected]);
+
+  useEffect(() => {
+    if (!selected || !previewEditorRef.current) return;
+    previewEditorRef.current.setSelection({ startLineNumber: selected.line, startColumn: selected.column, endLineNumber: selected.line, endColumn: selected.column + query.length });
+    previewEditorRef.current.revealLineInCenter(selected.line);
+  }, [previewContent, query.length, selected]);
+
+  return <div className="dialog-overlay" onMouseDown={onClose}>
+    <section className="find-dialog" role="dialog" aria-modal="true" aria-label="Find in Files" onMouseDown={(event) => event.stopPropagation()}>
+      <header><div><h2>Find in Files</h2><span>{scope || "Remote workspace"}</span></div><button title="Close" onClick={onClose}><X size={15} /></button></header>
+      <div className="find-controls">
+        <input ref={inputRef} value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Text to find" maxLength={200} />
+        <label className="match-case" title="Match case"><input type="checkbox" checked={matchCase} onChange={(event) => setMatchCase(event.target.checked)} /><CaseSensitive size={17} /></label>
+        <span className="find-progress">{loading ? "Searching..." : query ? `${matches.length} matches` : ""}</span>
+      </div>
+      {error && <div className="find-error">{error}</div>}
+      <div className="find-split">
+        <section className="find-results-pane">
+          <div className="find-pane-header"><Search size={13} /><span>Occurrences</span>{truncated && <span>First 500</span>}</div>
+          <div className="find-results">
+            {!loading && !error && matches.length === 0 && query && <div className="find-empty">No matches</div>}
+            {matches.map((match, index) => <button className={selected === match ? "selected" : ""} key={`${match.path}:${match.line}:${index}`} title={match.path} onClick={() => setSelected(match)} onDoubleClick={() => onNavigate(match, query.length)}>
+              <code>{match.preview || " "}</code>
+              <span className="find-result-file">{match.path.split("/").pop()}</span>
+              <span className="find-location">{match.line}:{match.column}</span>
+            </button>)}
+          </div>
+        </section>
+        <section className="find-preview-pane">
+          <div className="find-pane-header"><FileCode2 size={13} /><span>Preview</span>{selected && <span className="find-preview-file">{selected.path.split("/").pop()}</span>}{selected && <button title="Open in editor" onClick={() => onNavigate(selected, query.length)}><ArrowUpRight size={14} /></button>}</div>
+          <div className="find-preview-editor">
+            {previewError ? <div className="find-empty">{previewError}</div> : selected ? <Editor value={previewContent} language={languageByExtension[selected.path.split(".").pop()?.toLowerCase() ?? ""] ?? "plaintext"} theme="vs-dark" onMount={(instance) => { previewEditorRef.current = instance; }} options={{ readOnly: true, automaticLayout: true, minimap: { enabled: false }, fontSize: 12, lineNumbersMinChars: 3, scrollBeyondLastLine: false, padding: { top: 6 }, renderLineHighlight: "all" }} /> : <div className="find-empty">Select a result</div>}
+          </div>
+        </section>
+      </div>
+    </section>
+  </div>;
 }

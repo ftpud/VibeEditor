@@ -1,7 +1,7 @@
-export type Panel = { id: string; type: "explorer" | "editor" | "terminal" };
+export type Panel = { id: string; type: "explorer" | "editor" | "terminal" | "java" };
 export type EditorTab = {
   id: string;
-  type: "file";
+  type: "file" | "diff";
   title: string;
   path: string;
   dirty: boolean;
@@ -9,6 +9,9 @@ export type EditorTab = {
   savedContent: string;
   loading: boolean;
   error?: string;
+  originalContent?: string;
+  diffMode?: "split" | "unified";
+  markdownMode?: "edit" | "preview";
 };
 export type EditorGroup = { id: string; tabs: EditorTab[]; activeTabId?: string };
 export type TerminalTab = { id: string; terminalId: string; title: string; exited: boolean };

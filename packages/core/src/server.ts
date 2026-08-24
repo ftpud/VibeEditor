@@ -7,11 +7,15 @@ import { CoreError } from "./errors.js";
 import { WorkspaceFileSystem } from "./filesystem.js";
 import { PtyProcessManager } from "./process-manager.js";
 import { GitService } from "./git.js";
+import { WorkspaceStateStore } from "./workspace-state.js";
+import { WorkspaceSearch } from "./search.js";
+import { JavaProjectService } from "./java.js";
 
 export async function createServer(host: string, port: number, workspacePath: string): Promise<WebSocketServer> {
   const validation = new WorkspaceFileSystem();
   await validation.open(workspacePath);
   const workspace = validation.getWorkspace();
+  const workspaceState = new WorkspaceStateStore(workspace, process.env.REMOTE_IDE_STATE_DIR);
   const watcher = chokidar.watch(workspace, {
     ignoreInitial: true,
     ignored: (watchPath) => path.relative(workspace, watchPath).split(path.sep).some((part) => part === ".git" || part === "node_modules"),
@@ -49,7 +53,15 @@ export async function createServer(host: string, port: number, workspacePath: st
   server.on("listening", () => console.log(`[core] listening on ws://${host}:${port}`));
   server.on("connection", (socket, request) => {
     const filesystem = new WorkspaceFileSystem();
+    const search = new WorkspaceSearch(filesystem);
     const git = new GitService(workspace);
+    const java = new JavaProjectService(filesystem, workspaceState, (event) => {
+      if (socket.readyState !== WebSocket.OPEN) return;
+      const message: ServerEvent = event.type === "output"
+        ? { type: "java.output", payload: { data: event.data } }
+        : { type: "java.exit", payload: { exitCode: event.exitCode, signal: event.signal } };
+      socket.send(JSON.stringify(message));
+    });
     const processManager = new PtyProcessManager(workspace, (event) => {
       if (socket.readyState !== WebSocket.OPEN) return;
       const message: ServerEvent = event.type === "output"
@@ -65,7 +77,7 @@ export async function createServer(host: string, port: number, workspacePath: st
         const parsed = parseRequest(data);
         id = parsed.id;
         console.log(`[core] request ${parsed.id}: ${parsed.type}`);
-        const result = await handleRequest(filesystem, processManager, git, workspacePath, parsed);
+        const result = await handleRequest(filesystem, search, processManager, git, java, workspaceState, workspacePath, parsed);
         if (parsed.type === "workspace.open") activeSessions.add(socket);
         socket.send(JSON.stringify({ id, ok: true, result }));
       } catch (error) {
@@ -77,6 +89,7 @@ export async function createServer(host: string, port: number, workspacePath: st
     socket.on("close", () => {
       activeSessions.delete(socket);
       processManager.closeAll();
+      java.close();
       console.log(`[core] disconnected: ${client}`);
     });
     socket.on("error", (error) => console.error(`[core] socket error: ${error.message}`));
@@ -95,12 +108,16 @@ function parseRequest(data: RawData): Request {
   return value as Request;
 }
 
-async function handleRequest(filesystem: WorkspaceFileSystem, processManager: PtyProcessManager, git: GitService, workspacePath: string, request: Request): Promise<unknown> {
+async function handleRequest(filesystem: WorkspaceFileSystem, search: WorkspaceSearch, processManager: PtyProcessManager, git: GitService, java: JavaProjectService, workspaceState: WorkspaceStateStore, workspacePath: string, request: Request): Promise<unknown> {
   if (request.type !== "workspace.open") filesystem.getWorkspace();
   switch (request.type) {
     case "workspace.open": {
       const tree = await filesystem.open(workspacePath);
-      return { workspace: filesystem.getWorkspace(), tree };
+      return { workspace: filesystem.getWorkspace(), tree, options: await workspaceState.load() };
+    }
+    case "workspace.saveOptions": {
+      await workspaceState.save(request.payload.options);
+      return {};
     }
     case "filesystem.listTree": return { tree: await filesystem.listTree() };
     case "filesystem.readFile": {
@@ -110,6 +127,10 @@ async function handleRequest(filesystem: WorkspaceFileSystem, processManager: Pt
     case "filesystem.writeFile": {
       if (typeof request.payload.path !== "string" || typeof request.payload.content !== "string") throw new CoreError("INVALID_REQUEST", "path and content must be strings");
       return { path: request.payload.path, bytesWritten: await filesystem.write(request.payload.path, request.payload.content) };
+    }
+    case "filesystem.search": {
+      if (typeof request.payload.query !== "string" || typeof request.payload.path !== "string" || typeof request.payload.matchCase !== "boolean") throw new CoreError("INVALID_REQUEST", "query, path, and matchCase are required");
+      return search.search(request.payload.query, request.payload.path, request.payload.matchCase);
     }
     case "terminal.create": {
       return { terminalId: processManager.create(request.payload.cols, request.payload.rows) };
@@ -130,5 +151,31 @@ async function handleRequest(filesystem: WorkspaceFileSystem, processManager: Pt
       return {};
     }
     case "git.status": return git.status();
+    case "git.diff": {
+      if (typeof request.payload.path !== "string") throw new CoreError("INVALID_REQUEST", "path must be a string");
+      return git.diff(request.payload.path, filesystem);
+    }
+    case "java.loadMavenProject": {
+      if (typeof request.payload.pomPath !== "string") throw new CoreError("INVALID_REQUEST", "pomPath must be a string");
+      return java.loadMavenProject(request.payload.pomPath);
+    }
+    case "java.getOptions": return { options: await java.getOptions() };
+    case "java.addSourceRoot": {
+      if (typeof request.payload.path !== "string") throw new CoreError("INVALID_REQUEST", "path must be a string");
+      return java.addSourceRoot(request.payload.path);
+    }
+    case "java.getProjectTree": return { tree: await java.getProjectTree() };
+    case "java.listMainClasses": return { classes: await java.listMainClasses() };
+    case "java.addRunConfiguration": {
+      if (typeof request.payload.name !== "string" || typeof request.payload.mainClass !== "string") throw new CoreError("INVALID_REQUEST", "name and mainClass must be strings");
+      return { options: await java.addRunConfiguration(request.payload.name, request.payload.mainClass) };
+    }
+    case "java.selectRunConfiguration": {
+      if (typeof request.payload.id !== "string") throw new CoreError("INVALID_REQUEST", "id must be a string");
+      return { options: await java.selectRunConfiguration(request.payload.id) };
+    }
+    case "java.build": await java.build(); return {};
+    case "java.run": await java.run(); return {};
+    case "java.stop": java.stop(); return {};
   }
 }

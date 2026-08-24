@@ -13,6 +13,7 @@
   "dependencies": {
     "@remote-ide/protocol": "0.1.0",
     "chokidar": "^4.0.3",
+    "fast-xml-parser": "^5.2.5",
     "node-pty": "^1.1.0",
     "ws": "^8.18.0"
   },

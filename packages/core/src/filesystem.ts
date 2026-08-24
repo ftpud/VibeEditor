@@ -82,7 +82,7 @@ export class WorkspaceFileSystem {
     return resolved;
   }
 
-  private async resolveExisting(relativePath: string): Promise<string> {
+  async resolveExisting(relativePath: string): Promise<string> {
     const candidate = this.validateRelative(relativePath);
     try {
       const resolved = await realpath(candidate);

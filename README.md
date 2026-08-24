@@ -65,7 +65,25 @@ The UI state separates layout panels, editor groups, and file tabs in `model.ts`
 
 The backend watches the configured workspace and broadcasts typed change events. The desktop refreshes Explorer automatically and reloads externally changed files that are open and clean. If an open file has unsaved edits, its buffer is preserved and an external-change warning is shown instead. Files deleted outside the editor remain open with a deletion warning.
 
-The Git tool-window button switches the left sidebar from Project to Git Changes. It shows the current branch and groups conflicted, untracked, staged, modified, deleted, and renamed paths. Status refreshes on workspace changes and Git index updates, and existing changed files can be opened directly in the editor. Git integration is read-only; staging, reverting, committing, and diff views are not included.
+The Git tool-window button switches the left sidebar from Project to Git Changes. It shows the current branch and groups conflicted, untracked, staged, modified, deleted, and renamed paths. Status refreshes on workspace changes and Git index updates. Git integration is read-only; staging, reverting, and committing are not included.
+
+Selecting a file in Git Changes opens a separate read-only diff tab comparing `HEAD` with the current workspace content. The tab toolbar switches Monaco between side-by-side and unified layouts. New files use an empty original side, and deleted files use an empty modified side. Diff tabs refresh when their file or Git index changes and are intentionally not included in restored editable-file sessions.
+
+Markdown file tabs include Edit and Preview controls. Preview mode renders GitHub-flavored Markdown with tables, task lists, code blocks, links, and responsive images. Raw HTML is not rendered.
+
+## Java and Maven
+
+Right-click a `pom.xml` in Project and select **Load as Maven Project**. Core parses the POM, records Maven metadata in the persisted workspace JSON, detects existing main/test Java source directories, and enables the Java tool windows. The saved options include the POM path, Maven executable, source roots, and main/test output paths.
+
+Right-click a folder after Maven loading and select **Mark as Sources Root** to add generated or nonstandard Java sources. The Java sidebar presents source roots as compact Java package trees rather than filesystem folders. Selecting a Java class opens it in the regular editor.
+
+The full-width Java bottom tool window contains Build, Run, Stop, and Clear controls plus streamed process output. Use the plus button beside the run-configuration selector to create a profile. Core discovers classes containing `public static void main`, and the dialog lets you select one and assign a profile name. Profiles and the selected profile persist with the workspace; Maven re-import preserves them.
+
+Build runs `mvn -f <pom> package -DskipTests`; Run executes `mvn -f <pom> exec:java -Dexec.mainClass=<selected-class>`. The Maven Exec Plugin must be available to the project. Only one Java build or run process is active per client session, and disconnecting stops it. Maven and an appropriate JDK must be installed on the backend machine and available to the backend process.
+
+Core persists the ordered open-file list and active file for each canonical workspace. State is stored outside the project under `~/.remote-ide/workspaces`, keyed by a hash of the workspace path, so it does not create Git changes. Reconnecting reloads the saved tabs and restores the active tab. Set `REMOTE_IDE_STATE_DIR` on the backend to use a different state directory.
+
+Right-click a file or directory in Project and select **Find in Files** to search recursively from that scope. Right-clicking a file searches its containing directory; right-clicking the workspace root searches the whole workspace. Search supports optional case matching, skips binary and oversized files, and returns at most 500 matches. Selecting a result opens the file and moves Monaco to its exact line and column.
 
 The terminal button in the top-right toolbar creates a PTY shell in a resizable panel below the editor. The plus button creates additional terminal tabs. Each tab has an independent shell, terminal size, scrollback buffer, and lifecycle. Closing a terminal tab kills its remote process, and disconnecting closes every terminal owned by that client session.
 

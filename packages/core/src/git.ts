@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import type { GitStatusEntry } from "@remote-ide/protocol";
 import { CoreError } from "./errors.js";
+import { WorkspaceFileSystem } from "./filesystem.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -20,6 +21,26 @@ export class GitService {
       if (message.includes("not a git repository")) throw new CoreError("GIT_NOT_REPOSITORY", "Workspace is not a Git repository");
       throw new CoreError("GIT_FAILED", `Could not read Git status: ${message}`);
     }
+  }
+
+  async diff(filePath: string, filesystem: WorkspaceFileSystem): Promise<{ path: string; originalContent: string; modifiedContent: string }> {
+    const status = await this.status();
+    const entry = status.entries.find((item) => item.path === filePath);
+    if (!entry) throw new CoreError("GIT_FAILED", `Path has no Git changes: ${filePath}`);
+    const headPath = entry.originalPath ?? entry.path;
+    let originalContent = "";
+    let modifiedContent = "";
+    try {
+      const result = await execFileAsync("git", ["-C", this.workspace, "show", `HEAD:${headPath}`], { encoding: "utf8", maxBuffer: 3 * 1024 * 1024 });
+      originalContent = result.stdout;
+    } catch {
+      // New files and repositories without HEAD have no original content.
+    }
+    try { modifiedContent = await filesystem.read(entry.path); }
+    catch (error) {
+      if (!(error instanceof CoreError) || error.code !== "FILE_NOT_FOUND") throw error;
+    }
+    return { path: entry.path, originalContent, modifiedContent };
   }
 }
 
