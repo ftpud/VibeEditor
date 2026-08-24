@@ -65,6 +65,8 @@ The UI state separates layout panels, editor groups, and file tabs in `model.ts`
 
 The backend watches the configured workspace and broadcasts typed change events. The desktop refreshes Explorer automatically and reloads externally changed files that are open and clean. If an open file has unsaved edits, its buffer is preserved and an external-change warning is shown instead. Files deleted outside the editor remain open with a deletion warning.
 
+The Git tool-window button switches the left sidebar from Project to Git Changes. It shows the current branch and groups conflicted, untracked, staged, modified, deleted, and renamed paths. Status refreshes on workspace changes and Git index updates, and existing changed files can be opened directly in the editor. Git integration is read-only; staging, reverting, committing, and diff views are not included.
+
 The terminal button in the top-right toolbar creates a PTY shell in a resizable panel below the editor. The plus button creates additional terminal tabs. Each tab has an independent shell, terminal size, scrollback buffer, and lifecycle. Closing a terminal tab kills its remote process, and disconnecting closes every terminal owned by that client session.
 
 ## POC limits and security

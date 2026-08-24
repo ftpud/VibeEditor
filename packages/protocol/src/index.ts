@@ -5,6 +5,13 @@ export type FileTreeNode = {
   children?: FileTreeNode[];
 };
 
+export type GitStatusEntry = {
+  path: string;
+  originalPath?: string;
+  indexStatus: string;
+  worktreeStatus: string;
+};
+
 export type ProtocolOperations = {
   "workspace.open": {
     payload: Record<string, never>;
@@ -38,6 +45,10 @@ export type ProtocolOperations = {
     payload: { terminalId: string };
     result: Record<string, never>;
   };
+  "git.status": {
+    payload: Record<string, never>;
+    result: { branch: string; entries: GitStatusEntry[] };
+  };
 };
 
 export type RequestType = keyof ProtocolOperations;
@@ -56,7 +67,9 @@ export type ErrorCode =
   | "BINARY_FILE"
   | "READ_FAILED"
   | "WRITE_FAILED"
-  | "TERMINAL_FAILED";
+  | "TERMINAL_FAILED"
+  | "GIT_NOT_REPOSITORY"
+  | "GIT_FAILED";
 
 export type ProtocolError = { code: ErrorCode; message: string };
 
@@ -81,7 +94,9 @@ export type TerminalExitEvent = {
   payload: { terminalId: string; exitCode: number };
 };
 
-export type ServerEvent = FilesystemChangedEvent | TerminalOutputEvent | TerminalExitEvent;
+export type GitChangedEvent = { type: "git.changed"; payload: Record<string, never> };
+
+export type ServerEvent = FilesystemChangedEvent | TerminalOutputEvent | TerminalExitEvent | GitChangedEvent;
 
 export const requestTypes: RequestType[] = [
   "workspace.open",
@@ -91,5 +106,6 @@ export const requestTypes: RequestType[] = [
   "terminal.create",
   "terminal.input",
   "terminal.resize",
-  "terminal.close"
+  "terminal.close",
+  "git.status"
 ];

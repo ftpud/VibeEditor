@@ -6,6 +6,7 @@ import { requestTypes, type FileChangeKind, type Request, type RequestType, type
 import { CoreError } from "./errors.js";
 import { WorkspaceFileSystem } from "./filesystem.js";
 import { PtyProcessManager } from "./process-manager.js";
+import { GitService } from "./git.js";
 
 export async function createServer(host: string, port: number, workspacePath: string): Promise<WebSocketServer> {
   const validation = new WorkspaceFileSystem();
@@ -22,6 +23,11 @@ export async function createServer(host: string, port: number, workspacePath: st
   });
   const server = new WebSocketServer({ host, port });
   const activeSessions = new Set<WebSocket>();
+  const gitIndexWatcher = chokidar.watch(path.join(workspace, ".git", "index"), { ignoreInitial: true });
+  gitIndexWatcher.on("change", () => {
+    const encoded = JSON.stringify({ type: "git.changed", payload: {} } satisfies ServerEvent);
+    for (const socket of activeSessions) if (socket.readyState === WebSocket.OPEN) socket.send(encoded);
+  });
   const broadcastChange = (kind: FileChangeKind, absolutePath: string) => {
     const relativePath = absolutePath.slice(workspace.length + 1).split("\\").join("/");
     if (!relativePath) return;
@@ -39,10 +45,11 @@ export async function createServer(host: string, port: number, workspacePath: st
     .on("addDir", (directory) => broadcastChange("addDir", directory))
     .on("unlinkDir", (directory) => broadcastChange("unlinkDir", directory))
     .on("error", (error) => console.error(`[core] watcher error: ${String(error)}`));
-  server.on("close", () => { void watcher.close(); });
+  server.on("close", () => { void watcher.close(); void gitIndexWatcher.close(); });
   server.on("listening", () => console.log(`[core] listening on ws://${host}:${port}`));
   server.on("connection", (socket, request) => {
     const filesystem = new WorkspaceFileSystem();
+    const git = new GitService(workspace);
     const processManager = new PtyProcessManager(workspace, (event) => {
       if (socket.readyState !== WebSocket.OPEN) return;
       const message: ServerEvent = event.type === "output"
@@ -58,7 +65,7 @@ export async function createServer(host: string, port: number, workspacePath: st
         const parsed = parseRequest(data);
         id = parsed.id;
         console.log(`[core] request ${parsed.id}: ${parsed.type}`);
-        const result = await handleRequest(filesystem, processManager, workspacePath, parsed);
+        const result = await handleRequest(filesystem, processManager, git, workspacePath, parsed);
         if (parsed.type === "workspace.open") activeSessions.add(socket);
         socket.send(JSON.stringify({ id, ok: true, result }));
       } catch (error) {
@@ -88,7 +95,7 @@ function parseRequest(data: RawData): Request {
   return value as Request;
 }
 
-async function handleRequest(filesystem: WorkspaceFileSystem, processManager: PtyProcessManager, workspacePath: string, request: Request): Promise<unknown> {
+async function handleRequest(filesystem: WorkspaceFileSystem, processManager: PtyProcessManager, git: GitService, workspacePath: string, request: Request): Promise<unknown> {
   if (request.type !== "workspace.open") filesystem.getWorkspace();
   switch (request.type) {
     case "workspace.open": {
@@ -122,5 +129,6 @@ async function handleRequest(filesystem: WorkspaceFileSystem, processManager: Pt
       processManager.close(request.payload.terminalId);
       return {};
     }
+    case "git.status": return git.status();
   }
 }

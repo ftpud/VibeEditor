@@ -47,7 +47,7 @@ function TerminalView({ client, tab, active, registerWriter }: { client: CoreCli
       fontSize: 12,
       lineHeight: 1.2,
       scrollback: 5000,
-      theme: { background: "#181818", foreground: "#d4d4d4", cursor: "#d4d4d4", selectionBackground: "#4d4d4d" }
+      theme: { background: "#1e1f22", foreground: "#d4d4d4", cursor: "#d4d4d4", selectionBackground: "#4d5157" }
     });
     const fit = new FitAddon();
     terminal.loadAddon(fit);
