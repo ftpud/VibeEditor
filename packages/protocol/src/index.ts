@@ -14,12 +14,23 @@ export type GitStatusEntry = {
 export type GitBranch = { name: string; current: boolean; remote: boolean };
 export type GitCommit = { hash: string; shortHash: string; author: string; date: string; subject: string };
 export type GitCommitFile = { path: string; status: string; originalPath?: string };
+export type GitDiffHunk = { originalStart: number; originalLines: number; modifiedStart: number; modifiedLines: number };
 
 export type WorkspaceOptions = {
   openFiles: string[];
   activeFile?: string;
   javaProject?: JavaProjectOptions;
+  terminal?: WorkspaceTerminalOptions;
 };
+export type WorkspaceTerminalOptions = { tabs: { title: string }[]; activeTabIndex?: number; panelOpen: boolean };
+export type WorkspaceTask = { id: string; name: string; branch: string };
+export type AiStatus = "idle" | "in_progress" | "user_prompt" | "done" | "error";
+export type AiMessage = { id: string; role: "user" | "assistant" | "activity" | "error"; text: string; timestamp: string };
+export type AiSession = { threadId?: string; model: string; reasoning: string; status: AiStatus; messages: AiMessage[] };
+export type AiModel = { id: string; name: string; defaultReasoning: string; reasoningLevels: string[] };
+export type AiTaskSummary = { status: AiStatus; preview: string };
+export type UsefulFileScope = "global" | "local";
+export type UsefulFile = { scope: UsefulFileScope; name: string };
 
 export type JavaProjectOptions = {
   type: "maven";
@@ -67,6 +78,19 @@ export type ProtocolOperations = {
     payload: { options: WorkspaceOptions };
     result: Record<string, never>;
   };
+  "tasks.list": { payload: Record<string, never>; result: { tasks: WorkspaceTask[]; selectedTaskId?: string } };
+  "tasks.create": { payload: { branch: string }; result: { task: WorkspaceTask } };
+  "tasks.switch": { payload: { taskId?: string }; result: { workspace: string; tree: FileTreeNode[]; options: WorkspaceOptions; tasks: WorkspaceTask[]; selectedTaskId?: string } };
+  "ai.get": { payload: Record<string, never>; result: { session: AiSession } };
+  "ai.models": { payload: Record<string, never>; result: { models: AiModel[] } };
+  "ai.send": { payload: { prompt: string; model: string; reasoning: string }; result: { session: AiSession } };
+  "ai.statuses": { payload: Record<string, never>; result: { root: AiTaskSummary; tasks: Record<string, AiTaskSummary> } };
+  "useful.list": { payload: Record<string, never>; result: { files: UsefulFile[] } };
+  "useful.read": { payload: { scope: UsefulFileScope; name: string }; result: { content: string } };
+  "useful.create": { payload: { scope: UsefulFileScope; name: string }; result: Record<string, never> };
+  "useful.write": { payload: { scope: UsefulFileScope; name: string; content: string }; result: Record<string, never> };
+  "useful.rename": { payload: { scope: UsefulFileScope; name: string; newName: string }; result: Record<string, never> };
+  "useful.delete": { payload: { scope: UsefulFileScope; name: string }; result: Record<string, never> };
   "filesystem.listTree": {
     payload: Record<string, never>;
     result: { tree: FileTreeNode[] };
@@ -105,7 +129,7 @@ export type ProtocolOperations = {
   };
   "git.diff": {
     payload: { path: string };
-    result: { path: string; originalContent: string; modifiedContent: string };
+    result: { path: string; originalContent: string; modifiedContent: string; hunks: GitDiffHunk[] };
   };
   "git.branches": { payload: Record<string, never>; result: { branches: GitBranch[] } };
   "git.log": { payload: { branch: string; limit?: number }; result: { commits: GitCommit[] } };
@@ -227,12 +251,26 @@ export type GitChangedEvent = { type: "git.changed"; payload: Record<string, nev
 export type JavaOutputEvent = { type: "java.output"; payload: { data: string } };
 export type JavaExitEvent = { type: "java.exit"; payload: { exitCode: number | null; signal: string | null } };
 export type JavaDebugStateEvent = { type: "java.debug.state"; payload: JavaDebugState };
+export type AiChangedEvent = { type: "ai.changed"; payload: { workspace: string } };
 
-export type ServerEvent = FilesystemChangedEvent | TerminalOutputEvent | TerminalExitEvent | GitChangedEvent | JavaOutputEvent | JavaExitEvent | JavaDebugStateEvent;
+export type ServerEvent = FilesystemChangedEvent | TerminalOutputEvent | TerminalExitEvent | GitChangedEvent | JavaOutputEvent | JavaExitEvent | JavaDebugStateEvent | AiChangedEvent;
 
 export const requestTypes: RequestType[] = [
   "workspace.open",
   "workspace.saveOptions",
+  "tasks.list",
+  "tasks.create",
+  "tasks.switch",
+  "ai.get",
+  "ai.models",
+  "ai.send",
+  "ai.statuses",
+  "useful.list",
+  "useful.read",
+  "useful.create",
+  "useful.write",
+  "useful.rename",
+  "useful.delete",
   "filesystem.listTree",
   "filesystem.readFile",
   "filesystem.writeFile",

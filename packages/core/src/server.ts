@@ -11,8 +11,27 @@ import { WorkspaceStateStore } from "./workspace-state.js";
 import { WorkspaceSearch } from "./search.js";
 import { JavaProjectService } from "./java.js";
 import { JdtLanguageService } from "./jdtls.js";
+import { WorkspaceTaskStore } from "./tasks.js";
+import { CodexSessionManager } from "./codex.js";
+import { UsefulFilesStore } from "./useful-files.js";
+
+type SessionServices = {
+  workspacePath: string;
+  filesystem: WorkspaceFileSystem;
+  search: WorkspaceSearch;
+  processManager: PtyProcessManager;
+  git: GitService;
+  java: JavaProjectService;
+  jdt: JdtLanguageService;
+  workspaceState: WorkspaceStateStore;
+};
 
 export async function createServer(host: string, port: number, workspacePath: string): Promise<WebSocketServer> {
+  const rootWorkspace = workspacePath;
+  const tasks = new WorkspaceTaskStore(rootWorkspace);
+  const usefulFiles = new UsefulFilesStore(rootWorkspace);
+  const savedTasks = await tasks.list();
+  if (savedTasks.selectedTaskId) workspacePath = tasks.taskPath(savedTasks.selectedTaskId);
   const validation = new WorkspaceFileSystem();
   await validation.open(workspacePath);
   const workspace = validation.getWorkspace();
@@ -28,6 +47,10 @@ export async function createServer(host: string, port: number, workspacePath: st
   });
   const server = new WebSocketServer({ host, port });
   const activeSessions = new Set<WebSocket>();
+  const codex = new CodexSessionManager((changedWorkspace) => {
+    const encoded = JSON.stringify({ type: "ai.changed", payload: { workspace: changedWorkspace } } satisfies ServerEvent);
+    for (const socket of activeSessions) if (socket.readyState === WebSocket.OPEN) socket.send(encoded);
+  });
   const gitIndexWatcher = chokidar.watch(path.join(workspace, ".git", "index"), { ignoreInitial: true });
   gitIndexWatcher.on("change", () => {
     const encoded = JSON.stringify({ type: "git.changed", payload: {} } satisfies ServerEvent);
@@ -53,24 +76,47 @@ export async function createServer(host: string, port: number, workspacePath: st
   server.on("close", () => { void watcher.close(); void gitIndexWatcher.close(); });
   server.on("listening", () => console.log(`[core] listening on ws://${host}:${port}`));
   server.on("connection", (socket, request) => {
-    const filesystem = new WorkspaceFileSystem();
-    const search = new WorkspaceSearch(filesystem);
-    const git = new GitService(workspace);
-    const java = new JavaProjectService(filesystem, workspaceState, (event) => {
+    const makeServices = async (nextWorkspace: string): Promise<SessionServices> => {
+      const filesystem = new WorkspaceFileSystem();
+      await filesystem.open(nextWorkspace);
+      const workspaceState = new WorkspaceStateStore(nextWorkspace, process.env.REMOTE_IDE_STATE_DIR);
+      const search = new WorkspaceSearch(filesystem);
+      const git = new GitService(nextWorkspace);
+      const java = new JavaProjectService(filesystem, workspaceState, (event) => {
       if (socket.readyState !== WebSocket.OPEN) return;
       const message: ServerEvent = event.type === "output" ? { type: "java.output", payload: { data: event.data } }
         : event.type === "debug" ? { type: "java.debug.state", payload: event.state }
         : { type: "java.exit", payload: { exitCode: event.exitCode, signal: event.signal } };
       socket.send(JSON.stringify(message));
-    });
-    const jdt = new JdtLanguageService(filesystem);
-    const processManager = new PtyProcessManager(workspace, (event) => {
+      });
+      const jdt = new JdtLanguageService(filesystem);
+      const processManager = new PtyProcessManager(nextWorkspace, (event) => {
       if (socket.readyState !== WebSocket.OPEN) return;
       const message: ServerEvent = event.type === "output"
         ? { type: "terminal.output", payload: { terminalId: event.terminalId, data: event.data } }
         : { type: "terminal.exit", payload: { terminalId: event.terminalId, exitCode: event.exitCode } };
       socket.send(JSON.stringify(message));
-    });
+      });
+      return { workspacePath: nextWorkspace, filesystem, search, git, java, jdt, processManager, workspaceState };
+    };
+    let servicesPromise = makeServices(workspace);
+    let switchedWatcher: ReturnType<typeof chokidar.watch> | undefined;
+    const watchSwitchedWorkspace = async (nextWorkspace: string) => {
+      await switchedWatcher?.close();
+      if (nextWorkspace === workspace) { switchedWatcher = undefined; return; }
+      switchedWatcher = chokidar.watch(nextWorkspace, {
+        ignoreInitial: true,
+        ignored: (watchPath) => path.relative(nextWorkspace, watchPath).split(path.sep).some((part) => part === ".git" || part === "node_modules"),
+        awaitWriteFinish: { stabilityThreshold: 150, pollInterval: 50 }
+      });
+      const sendChange = (kind: FileChangeKind, absolutePath: string) => {
+        const relativePath = path.relative(nextWorkspace, absolutePath).split(path.sep).join("/");
+        if (!relativePath || socket.readyState !== WebSocket.OPEN) return;
+        socket.send(JSON.stringify({ type: "filesystem.changed", payload: { path: relativePath, kind } } satisfies ServerEvent));
+      };
+      switchedWatcher.on("add", (file) => sendChange("add", file)).on("change", (file) => sendChange("change", file)).on("unlink", (file) => sendChange("unlink", file)).on("addDir", (directory) => sendChange("addDir", directory)).on("unlinkDir", (directory) => sendChange("unlinkDir", directory));
+      await new Promise<void>((resolve, reject) => { switchedWatcher!.once("ready", resolve); switchedWatcher!.once("error", reject); });
+    };
     const client = request.socket.remoteAddress ?? "unknown";
     console.log(`[core] connected: ${client}`);
     socket.on("message", async (data) => {
@@ -79,7 +125,15 @@ export async function createServer(host: string, port: number, workspacePath: st
         const parsed = parseRequest(data);
         id = parsed.id;
         console.log(`[core] request ${parsed.id}: ${parsed.type}`);
-        const result = await handleRequest(filesystem, search, processManager, git, java, jdt, workspaceState, workspacePath, parsed);
+        let services = await servicesPromise;
+        if (parsed.type === "tasks.switch") {
+          const selected = await tasks.select(parsed.payload.taskId);
+          services.processManager.closeAll(); services.java.close(); services.jdt.close();
+          servicesPromise = makeServices(selected.workspace);
+          services = await servicesPromise;
+          await watchSwitchedWorkspace(selected.workspace);
+        }
+        const result = await handleRequest(services, tasks, codex, usefulFiles, rootWorkspace, parsed);
         if (parsed.type === "workspace.open") activeSessions.add(socket);
         socket.send(JSON.stringify({ id, ok: true, result }));
       } catch (error) {
@@ -90,9 +144,8 @@ export async function createServer(host: string, port: number, workspacePath: st
     });
     socket.on("close", () => {
       activeSessions.delete(socket);
-      processManager.closeAll();
-      java.close();
-      jdt.close();
+      void servicesPromise.then((services) => { services.processManager.closeAll(); services.java.close(); services.jdt.close(); });
+      void switchedWatcher?.close();
       console.log(`[core] disconnected: ${client}`);
     });
     socket.on("error", (error) => console.error(`[core] socket error: ${error.message}`));
@@ -111,7 +164,8 @@ function parseRequest(data: RawData): Request {
   return value as Request;
 }
 
-async function handleRequest(filesystem: WorkspaceFileSystem, search: WorkspaceSearch, processManager: PtyProcessManager, git: GitService, java: JavaProjectService, jdt: JdtLanguageService, workspaceState: WorkspaceStateStore, workspacePath: string, request: Request): Promise<unknown> {
+async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStore, codex: CodexSessionManager, usefulFiles: UsefulFilesStore, rootWorkspace: string, request: Request): Promise<unknown> {
+  const { filesystem, search, processManager, git, java, jdt, workspaceState, workspacePath } = services;
   if (request.type !== "workspace.open") filesystem.getWorkspace();
   switch (request.type) {
     case "workspace.open": {
@@ -122,6 +176,27 @@ async function handleRequest(filesystem: WorkspaceFileSystem, search: WorkspaceS
       await workspaceState.save(request.payload.options);
       return {};
     }
+    case "tasks.list": return tasks.list();
+    case "tasks.create": return { task: await tasks.create(request.payload.branch) };
+    case "tasks.switch": {
+      const registry = await tasks.list();
+      return { workspace: workspacePath, tree: await filesystem.listTree(), options: await workspaceState.load(), ...registry };
+    }
+    case "ai.get": return { session: await codex.get(workspacePath) };
+    case "ai.models": return { models: await codex.models() };
+    case "ai.send": return { session: await codex.send(workspacePath, request.payload.prompt, request.payload.model, request.payload.reasoning) };
+    case "ai.statuses": {
+      const registry = await tasks.list();
+      const summarize = async (target: string) => { const session = await codex.get(target); return { status: session.status, preview: session.messages.slice().reverse().find((message) => message.role === "assistant" || message.role === "activity")?.text.replace(/\s+/g, " ").trim().slice(0, 180) ?? session.messages.at(-1)?.text.replace(/\s+/g, " ").trim().slice(0, 180) ?? "" }; };
+      const entries = await Promise.all(registry.tasks.map(async (task) => [task.id, await summarize(tasks.taskPath(task.id))] as const));
+      return { root: await summarize(rootWorkspace), tasks: Object.fromEntries(entries) };
+    }
+    case "useful.list": return { files: await usefulFiles.list() };
+    case "useful.read": return { content: await usefulFiles.read(request.payload.scope, request.payload.name) };
+    case "useful.create": await usefulFiles.create(request.payload.scope, request.payload.name); return {};
+    case "useful.write": await usefulFiles.write(request.payload.scope, request.payload.name, request.payload.content); return {};
+    case "useful.rename": await usefulFiles.rename(request.payload.scope, request.payload.name, request.payload.newName); return {};
+    case "useful.delete": await usefulFiles.delete(request.payload.scope, request.payload.name); return {};
     case "filesystem.listTree": return { tree: await filesystem.listTree() };
     case "filesystem.readFile": {
       if (typeof request.payload.path !== "string") throw new CoreError("INVALID_REQUEST", "path must be a string");

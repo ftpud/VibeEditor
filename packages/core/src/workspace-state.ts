@@ -52,7 +52,18 @@ export function validateWorkspaceOptions(value: unknown): WorkspaceOptions {
   const openFiles = [...new Set(candidate.openFiles as string[])];
   const activeFile = typeof candidate.activeFile === "string" && openFiles.includes(candidate.activeFile) ? candidate.activeFile : undefined;
   const javaProject = candidate.javaProject === undefined ? undefined : validateJavaProjectOptions(candidate.javaProject);
-  return { openFiles, ...(activeFile ? { activeFile } : {}), ...(javaProject ? { javaProject } : {}) };
+  const terminal = candidate.terminal === undefined ? undefined : validateTerminalOptions(candidate.terminal);
+  return { openFiles, ...(activeFile ? { activeFile } : {}), ...(javaProject ? { javaProject } : {}), ...(terminal ? { terminal } : {}) };
+}
+
+function validateTerminalOptions(value: unknown): NonNullable<WorkspaceOptions["terminal"]> {
+  if (!value || typeof value !== "object") throw new CoreError("INVALID_REQUEST", "Invalid terminal workspace options");
+  const candidate = value as Record<string, unknown>;
+  if (!Array.isArray(candidate.tabs) || candidate.tabs.length > 20 || !candidate.tabs.every((tab) => tab && typeof tab === "object" && typeof (tab as Record<string, unknown>).title === "string" && ((tab as Record<string, unknown>).title as string).length <= 100)) throw new CoreError("INVALID_REQUEST", "Terminal tabs must contain at most 20 valid titles");
+  if (typeof candidate.panelOpen !== "boolean") throw new CoreError("INVALID_REQUEST", "Invalid terminal panel options");
+  const tabs = candidate.tabs.map((tab) => ({ title: ((tab as { title: string }).title.trim() || "Terminal").slice(0, 100) }));
+  const activeTabIndex = Number.isInteger(candidate.activeTabIndex) && (candidate.activeTabIndex as number) >= 0 && (candidate.activeTabIndex as number) < tabs.length ? candidate.activeTabIndex as number : undefined;
+  return { tabs, ...(activeTabIndex !== undefined ? { activeTabIndex } : {}), panelOpen: candidate.panelOpen };
 }
 
 export function validateJavaProjectOptions(value: unknown): JavaProjectOptions {

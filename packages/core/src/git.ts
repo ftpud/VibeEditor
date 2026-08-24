@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import path from "node:path";
-import type { GitBranch, GitCommit, GitCommitFile, GitStatusEntry } from "@remote-ide/protocol";
+import type { GitBranch, GitCommit, GitCommitFile, GitDiffHunk, GitStatusEntry } from "@remote-ide/protocol";
 import { CoreError } from "./errors.js";
 import { WorkspaceFileSystem } from "./filesystem.js";
 
@@ -24,7 +24,7 @@ export class GitService {
     }
   }
 
-  async diff(filePath: string, filesystem: WorkspaceFileSystem): Promise<{ path: string; originalContent: string; modifiedContent: string }> {
+  async diff(filePath: string, filesystem: WorkspaceFileSystem): Promise<{ path: string; originalContent: string; modifiedContent: string; hunks: GitDiffHunk[] }> {
     const status = await this.status();
     const entry = status.entries.find((item) => item.path === filePath);
     if (!entry) throw new CoreError("GIT_FAILED", `Path has no Git changes: ${filePath}`);
@@ -41,7 +41,12 @@ export class GitService {
     catch (error) {
       if (!(error instanceof CoreError) || error.code !== "FILE_NOT_FOUND") throw error;
     }
-    return { path: entry.path, originalContent, modifiedContent };
+    let hunks: GitDiffHunk[] = [];
+    if (entry.indexStatus === "?" && entry.worktreeStatus === "?") hunks = modifiedContent ? [{ originalStart: 0, originalLines: 0, modifiedStart: 1, modifiedLines: modifiedContent.split("\n").length - (modifiedContent.endsWith("\n") ? 1 : 0) }] : [];
+    else {
+      try { hunks = parseDiffHunks(await this.git(["diff", "--unified=0", "HEAD", "--", entry.path])); } catch { /* Repositories without HEAD are treated as new files. */ }
+    }
+    return { path: entry.path, originalContent, modifiedContent, hunks };
   }
 
   async branches(): Promise<GitBranch[]> {
@@ -105,6 +110,10 @@ export class GitService {
   private async show(spec: string): Promise<string> {
     try { return await this.git(["show", spec]); } catch { return ""; }
   }
+}
+
+export function parseDiffHunks(output: string): GitDiffHunk[] {
+  return [...output.matchAll(/^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/gm)].map((match) => ({ originalStart: Number(match[1]), originalLines: Number(match[2] ?? 1), modifiedStart: Number(match[3]), modifiedLines: Number(match[4] ?? 1) }));
 }
 
 function validateHash(hash: string): void { if (!/^[0-9a-f]{7,64}$/i.test(hash)) throw new CoreError("INVALID_REQUEST", "Invalid commit hash"); }

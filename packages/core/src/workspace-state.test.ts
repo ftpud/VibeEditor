@@ -8,8 +8,9 @@ describe("WorkspaceStateStore", () => {
   it("saves and restores workspace options", async () => {
     const stateDirectory = await mkdtemp(path.join(tmpdir(), "remote-ide-state-"));
     const store = new WorkspaceStateStore("/workspace/example", stateDirectory);
-    await store.save({ openFiles: ["src/a.ts", "README.md"], activeFile: "src/a.ts" });
-    await expect(store.load()).resolves.toEqual({ openFiles: ["src/a.ts", "README.md"], activeFile: "src/a.ts" });
+    const terminal = { tabs: [{ title: "Terminal 1" }, { title: "Build" }], activeTabIndex: 1, panelOpen: true };
+    await store.save({ openFiles: ["src/a.ts", "README.md"], activeFile: "src/a.ts", terminal });
+    await expect(store.load()).resolves.toEqual({ openFiles: ["src/a.ts", "README.md"], activeFile: "src/a.ts", terminal });
   });
 
   it("returns empty options when no state exists", async () => {
