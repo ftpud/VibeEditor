@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import type { GitStatusEntry } from "@remote-ide/protocol";
+import path from "node:path";
+import type { GitBranch, GitCommit, GitCommitFile, GitStatusEntry } from "@remote-ide/protocol";
 import { CoreError } from "./errors.js";
 import { WorkspaceFileSystem } from "./filesystem.js";
 
@@ -42,6 +43,91 @@ export class GitService {
     }
     return { path: entry.path, originalContent, modifiedContent };
   }
+
+  async branches(): Promise<GitBranch[]> {
+    const output = await this.git(["for-each-ref", "--format=%(refname:short)%00%(HEAD)%00", "refs/heads", "refs/remotes"]);
+    return output.split("\n").filter(Boolean).map((line) => { const [name, head] = line.split("\0"); return { name: name!, current: head === "*", remote: name!.includes("/") }; }).filter((item) => !item.name.endsWith("/HEAD"));
+  }
+
+  async log(branch: string, limit = 200): Promise<GitCommit[]> {
+    if (!/^[\w./@{}~^:+-]+$/.test(branch)) throw new CoreError("INVALID_REQUEST", "Invalid Git branch");
+    return parseGitLog(await this.git(["log", branch, `--max-count=${Math.max(1, Math.min(500, limit))}`, "--format=%H%x00%h%x00%an%x00%aI%x00%s%x00"]));
+  }
+
+  async commitFiles(hash: string): Promise<GitCommitFile[]> {
+    validateHash(hash);
+    return parseCommitFiles(await this.git(["diff-tree", "--root", "--no-commit-id", "--name-status", "-r", "-z", hash]));
+  }
+
+  async commitDiff(hash: string, filePath: string, originalPath?: string): Promise<{ originalContent: string; modifiedContent: string }> {
+    validateHash(hash); validatePath(filePath); if (originalPath) validatePath(originalPath);
+    const modifiedContent = await this.show(`${hash}:${filePath}`);
+    const originalContent = await this.show(`${hash}^:${originalPath ?? filePath}`);
+    return { originalContent, modifiedContent };
+  }
+
+  async fileHistory(filePath: string, startLine?: number, endLine?: number): Promise<GitCommit[]> {
+    validatePath(filePath);
+    const lineHistory = startLine !== undefined && endLine !== undefined;
+    if (lineHistory && (!Number.isInteger(startLine) || !Number.isInteger(endLine) || startLine! < 1 || endLine! < startLine!)) throw new CoreError("INVALID_REQUEST", "Invalid history line range");
+    const args = lineHistory ? ["log", `-L${startLine},${endLine}:${filePath}`, "--no-patch", "--format=%H%x00%h%x00%an%x00%aI%x00%s%x00"] : ["log", "--follow", "--format=%H%x00%h%x00%an%x00%aI%x00%s%x00", "--", filePath];
+    return parseGitLog(await this.git(args));
+  }
+
+  async compareFiles(ref: string, filePath?: string): Promise<GitCommitFile[]> {
+    validateRef(ref); if (filePath) validatePath(filePath);
+    const compared = parseCommitFiles(await this.git(["diff", "--name-status", "-z", ref, ...(filePath ? ["--", filePath] : [])]));
+    const untracked = (await this.status()).entries.filter((entry) => entry.indexStatus === "?" && entry.worktreeStatus === "?" && (!filePath || entry.path === filePath)).map((entry) => ({ path: entry.path, status: "?" }));
+    return [...compared, ...untracked.filter((entry) => !compared.some((item) => item.path === entry.path))];
+  }
+
+  async compareDiff(ref: string, filePath: string, filesystem: WorkspaceFileSystem, originalPath?: string): Promise<{ originalContent: string; modifiedContent: string }> {
+    validateRef(ref); validatePath(filePath); if (originalPath) validatePath(originalPath);
+    const originalContent = await this.show(`${ref}:${originalPath ?? filePath}`);
+    let modifiedContent = "";
+    try { modifiedContent = await filesystem.read(filePath); } catch (error) { if (!(error instanceof CoreError) || error.code !== "FILE_NOT_FOUND") throw error; }
+    return { originalContent, modifiedContent };
+  }
+
+  async rollback(filePath: string): Promise<void> {
+    validatePath(filePath);
+    const entry = (await this.status()).entries.find((item) => item.path === filePath);
+    if (!entry) throw new CoreError("GIT_FAILED", `Path has no Git changes: ${filePath}`);
+    if (entry.indexStatus === "?" && entry.worktreeStatus === "?") await this.git(["clean", "-f", "--", filePath]);
+    else await this.git(["restore", "--source=HEAD", "--staged", "--worktree", "--", filePath]);
+  }
+
+  private async git(args: string[]): Promise<string> {
+    try { return (await execFileAsync("git", ["-C", this.workspace, ...args], { encoding: "utf8", maxBuffer: 16 * 1024 * 1024 })).stdout; }
+    catch (error) { throw new CoreError("GIT_FAILED", error instanceof Error ? error.message : String(error)); }
+  }
+
+  private async show(spec: string): Promise<string> {
+    try { return await this.git(["show", spec]); } catch { return ""; }
+  }
+}
+
+function validateHash(hash: string): void { if (!/^[0-9a-f]{7,64}$/i.test(hash)) throw new CoreError("INVALID_REQUEST", "Invalid commit hash"); }
+function validateRef(ref: string): void { if (!/^[\w./@{}~^:+-]+$/.test(ref)) throw new CoreError("INVALID_REQUEST", "Invalid Git reference"); }
+function validatePath(filePath: string): void { if (!filePath || path.isAbsolute(filePath) || filePath.split(/[\\/]/).includes("..")) throw new CoreError("INVALID_REQUEST", "Invalid Git path"); }
+
+export function parseGitLog(output: string): GitCommit[] {
+  const fields = output.split("\0"); const commits: GitCommit[] = [];
+  for (let index = 0; index + 4 < fields.length; index += 5) {
+    const hash = fields[index]!.trim(); if (!/^[0-9a-f]{40,64}$/i.test(hash)) continue;
+    commits.push({ hash, shortHash: fields[index + 1]!, author: fields[index + 2]!, date: fields[index + 3]!, subject: fields[index + 4]! });
+  }
+  return commits;
+}
+
+export function parseCommitFiles(output: string): GitCommitFile[] {
+  const fields = output.split("\0").filter(Boolean); const files: GitCommitFile[] = [];
+  for (let index = 0; index < fields.length; index += 2) {
+    const status = fields[index]!; const firstPath = fields[index + 1]; if (!firstPath) break;
+    if (/^[RC]/.test(status)) { const nextPath = fields[index + 2]; if (!nextPath) break; files.push({ status, originalPath: firstPath, path: nextPath }); index += 1; }
+    else files.push({ status, path: firstPath });
+  }
+  return files;
 }
 
 export function parseGitStatus(output: string): { branch: string; entries: GitStatusEntry[] } {

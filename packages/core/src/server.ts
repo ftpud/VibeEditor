@@ -158,6 +158,14 @@ async function handleRequest(filesystem: WorkspaceFileSystem, search: WorkspaceS
       if (typeof request.payload.path !== "string") throw new CoreError("INVALID_REQUEST", "path must be a string");
       return git.diff(request.payload.path, filesystem);
     }
+    case "git.branches": return { branches: await git.branches() };
+    case "git.log": return { commits: await git.log(request.payload.branch, request.payload.limit) };
+    case "git.commitFiles": return { files: await git.commitFiles(request.payload.hash) };
+    case "git.commitDiff": return git.commitDiff(request.payload.hash, request.payload.path, request.payload.originalPath);
+    case "git.fileHistory": return { commits: await git.fileHistory(request.payload.path, request.payload.startLine, request.payload.endLine) };
+    case "git.compareFiles": return { files: await git.compareFiles(request.payload.ref, request.payload.path) };
+    case "git.compareDiff": return git.compareDiff(request.payload.ref, request.payload.path, filesystem, request.payload.originalPath);
+    case "git.rollback": await git.rollback(request.payload.path); return {};
     case "java.loadMavenProject": {
       if (typeof request.payload.pomPath !== "string") throw new CoreError("INVALID_REQUEST", "pomPath must be a string");
       return java.loadMavenProject(request.payload.pomPath);

@@ -1,10 +1,10 @@
 import { execFile } from "node:child_process";
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { access, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
-import { GitService, parseGitStatus } from "./git.js";
+import { GitService, parseCommitFiles, parseGitLog, parseGitStatus } from "./git.js";
 import { WorkspaceFileSystem } from "./filesystem.js";
 
 const execFileAsync = promisify(execFile);
@@ -38,5 +38,36 @@ describe("parseGitStatus", () => {
     const filesystem = new WorkspaceFileSystem();
     await filesystem.open(root);
     await expect(new GitService(root).diff("file.txt", filesystem)).resolves.toEqual({ path: "file.txt", originalContent: "original\n", modifiedContent: "modified\n" });
+  });
+
+  it("rolls back tracked and untracked files", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "remote-ide-git-rollback-"));
+    await execFileAsync("git", ["-C", root, "init"]);
+    await execFileAsync("git", ["-C", root, "config", "user.email", "test@example.com"]);
+    await execFileAsync("git", ["-C", root, "config", "user.name", "Test"]);
+    await writeFile(path.join(root, "tracked.txt"), "original\n");
+    await execFileAsync("git", ["-C", root, "add", "tracked.txt"]);
+    await execFileAsync("git", ["-C", root, "commit", "-m", "initial"]);
+    await writeFile(path.join(root, "tracked.txt"), "changed\n");
+    await writeFile(path.join(root, "new.txt"), "new\n");
+    const service = new GitService(root);
+    await service.rollback("tracked.txt");
+    await service.rollback("new.txt");
+    expect(await readFile(path.join(root, "tracked.txt"), "utf8")).toBe("original\n");
+    await expect(access(path.join(root, "new.txt"))).rejects.toThrow();
+  });
+});
+
+describe("Git history parsing", () => {
+  it("parses null-delimited commit metadata", () => {
+    const hash = "a".repeat(40);
+    expect(parseGitLog([hash, "abc1234", "Ada", "2026-08-25T00:00:00Z", "Initial commit", "\n"].join("\0"))).toEqual([{ hash, shortHash: "abc1234", author: "Ada", date: "2026-08-25T00:00:00Z", subject: "Initial commit" }]);
+  });
+
+  it("parses changed files including renames", () => {
+    expect(parseCommitFiles("M\0src/a.ts\0R100\0src/old.ts\0src/new.ts\0")).toEqual([
+      { status: "M", path: "src/a.ts" },
+      { status: "R100", originalPath: "src/old.ts", path: "src/new.ts" }
+    ]);
   });
 });

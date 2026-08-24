@@ -199,6 +199,55 @@ button { color: inherit; }
 .import-chooser button:hover > code { color: #dfe8f5; }
 .import-chooser button > small { color: #85888e; font-size: 10px; }
 .usage-chooser > div > button { grid-template-columns: 140px minmax(0, 1fr) 64px; }
+.git-log-panel { min-height: 180px; max-height: 650px; flex: 0 0 auto; position: relative; display: grid; grid-template-columns: 210px minmax(260px, 34%) minmax(360px, 1fr); border-top: 1px solid #393b40; background: #1e1f22; }
+.git-log-panel header { height: 30px; padding: 0 8px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid #393b40; background: #2b2d30; color: #c5c7cb; font-size: 11px; font-weight: 600; }
+.git-log-panel header button { width: 25px; height: 24px; display: grid; place-items: center; border: 0; border-radius: 3px; background: transparent; color: #a7aab0; cursor: pointer; }
+.git-log-branches, .git-log-commits { min-width: 0; overflow: hidden; border-right: 1px solid #393b40; }
+.branch-group-title, .branch-row { width: 100%; height: 25px; padding: 0 7px; display: flex; align-items: center; gap: 5px; border: 0; background: transparent; color: #bdc0c5; text-align: left; cursor: pointer; }
+.branch-group-title { font-size: 11px; font-weight: 600; }
+.branch-group-title span, .branch-row span { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.branch-group-title small, .branch-row small { color: #7f8288; font-size: 9px; }
+.branch-row { padding-left: 18px; font-size: 11px; }
+.branch-row:hover, .branch-row.selected { background: #34363a; }
+.git-log-commits > div { height: calc(100% - 30px); overflow: auto; }
+.git-commit-search { width: min(180px, 55%); height: 23px; padding: 0 6px; display: flex; align-items: center; gap: 4px; border: 1px solid #45484e; border-radius: 3px; background: #1e1f22; color: #85888e; }
+.git-commit-search:focus-within { border-color: #3574f0; }
+.git-commit-search input { min-width: 0; width: 100%; border: 0; outline: 0; background: transparent; color: #d3d5d8; font-size: 10px; }
+.git-commit-search input::placeholder { color: #71747a; }
+.git-log-commits > div > button { width: 100%; min-height: 49px; padding: 5px 8px; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 8px; border: 0; border-bottom: 1px solid #2d2f33; background: transparent; color: #c9cbd0; text-align: left; cursor: pointer; }
+.git-log-commits > div > button:hover, .git-log-commits > div > button.selected { background: #34363a; }
+.git-log-commits > div > button.selected { box-shadow: inset 2px 0 #3574f0; }
+.commit-subject { grid-column: 1 / -1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.commit-meta, .git-log-commits time { color: #81848a; font-size: 10px; }
+.git-log-details { min-width: 0; display: grid; grid-template-rows: 30px auto minmax(0, 1fr); }
+.git-log-details header span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.git-log-details header code { color: #85888e; font-size: 10px; }
+.commit-files { max-height: 105px; overflow: auto; border-bottom: 1px solid #393b40; }
+.commit-files > button { width: 100%; height: 25px; padding: 0 8px; display: flex; align-items: center; gap: 6px; border: 0; background: transparent; color: #bec1c6; text-align: left; cursor: pointer; }
+.commit-files > button:hover, .commit-files > button.selected { background: #34363a; }
+.commit-files span { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.commit-files code { color: #d2a85e; font-size: 10px; }
+.commit-diff { min-height: 0; position: relative; }
+.git-log-empty { height: 100%; display: grid; place-items: center; color: #777b81; font-size: 11px; }
+.git-log-error { padding: 7px 9px; background: #4a292c; color: #ed9ba0; font-size: 11px; }
+.git-history-dialog { width: min(1120px, calc(100vw - 40px)); height: min(760px, calc(100vh - 70px)); display: flex; flex-direction: column; border: 1px solid #4a4d52; border-radius: 5px; overflow: hidden; background: #25262a; box-shadow: 0 18px 50px rgba(0,0,0,.55); }
+.git-history-dialog > header { height: 50px; flex: 0 0 50px; padding: 0 8px 0 13px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid #3d3f44; background: #2b2d30; }
+.git-history-dialog h2 { margin: 0; color: #e5e6e8; font-size: 14px; }
+.git-history-dialog header span { display: block; margin-top: 2px; color: #898c92; font-size: 10px; }
+.git-history-dialog header button { width: 28px; height: 28px; display: grid; place-items: center; border: 0; border-radius: 3px; background: transparent; color: #a8aaaf; cursor: pointer; }
+.git-history-content { min-height: 0; flex: 1; display: grid; grid-template-columns: 330px minmax(0, 1fr); }
+.git-history-content > aside { overflow: auto; border-right: 1px solid #393b40; }
+.git-history-content > aside > button { width: 100%; min-height: 54px; padding: 6px 8px; display: grid; grid-template-columns: 16px minmax(0, 1fr); gap: 6px; border: 0; border-bottom: 1px solid #303236; background: transparent; color: #c9cbd0; text-align: left; cursor: pointer; }
+.git-history-content > aside > button:hover, .git-history-content > aside > button.selected { background: #34363a; }
+.git-history-content aside button > span { min-width: 0; }
+.git-history-content strong, .git-history-content small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.git-history-content small, .git-history-content time { color: #85888e; font-size: 10px; font-weight: 400; }
+.git-history-content time { grid-column: 2; }
+.git-history-content > main { min-width: 0; position: relative; }
+.git-compare-dialog .git-history-content { grid-template-columns: 360px minmax(0, 1fr); }
+.floating-window-layer { position: fixed; z-index: 70; inset: 0; pointer-events: none; }
+.floating-window-layer .git-compare-dialog { width: min(1120px, calc(100vw - 40px)); height: min(760px, calc(100vh - 70px)); min-width: 620px; min-height: 360px; position: absolute; resize: both; pointer-events: auto; }
+.floating-window-layer .git-compare-dialog > header { cursor: move; user-select: none; }
 .bottom-tool-bar { height: 27px; flex: 0 0 27px; display: flex; align-items: stretch; border-top: 1px solid #393b40; background: #2b2d30; }
 .bottom-tool-button { min-width: 92px; padding: 0 10px; display: flex; align-items: center; gap: 6px; border: 0; border-bottom: 2px solid transparent; background: transparent; color: #a8aaaf; cursor: pointer; }
 .bottom-tool-button:hover { background: #34363a; color: #e0e1e3; }
@@ -209,6 +258,14 @@ button { color: inherit; }
 .context-menu { position: absolute; width: 210px; padding: 4px; border: 1px solid #4a4d52; border-radius: 4px; background: #2b2d30; box-shadow: 0 8px 24px rgba(0, 0, 0, .42); }
 .context-menu button { width: 100%; height: 27px; padding: 0 8px; display: flex; align-items: center; gap: 8px; border: 0; border-radius: 3px; background: transparent; color: #d5d7da; text-align: left; cursor: pointer; }
 .context-menu button:hover { background: #2e5792; color: white; }
+.context-menu button:disabled { opacity: .4; cursor: default; }
+.context-menu button.danger { color: #e2858b; }
+.context-menu button.danger:hover { background: #6a3035; color: white; }
+.editor-git-menu { width: 220px; }
+.context-submenu-trigger { position: relative; }
+.context-submenu-trigger > button > span { flex: 1; }
+.context-submenu { display: none; position: absolute; top: -4px; left: calc(100% - 2px); }
+.context-submenu-trigger:hover > .context-submenu { display: block; }
 .dialog-overlay { position: fixed; z-index: 60; inset: 0; display: grid; place-items: start center; padding-top: min(12vh, 100px); background: rgba(10, 10, 12, .48); }
 .find-dialog { width: min(880px, calc(100vw - 48px)); height: min(720px, calc(100vh - 100px)); min-height: 430px; display: flex; flex-direction: column; border: 1px solid #4a4d52; border-radius: 6px; background: #2b2d30; box-shadow: 0 18px 50px rgba(0, 0, 0, .55); overflow: hidden; }
 .find-dialog > header { min-height: 51px; padding: 8px 10px 8px 14px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid #3d3f44; }

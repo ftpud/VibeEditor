@@ -1,5 +1,5 @@
 import Editor, { DiffEditor, type Monaco } from "@monaco-editor/react";
-import { ArrowUpRight, Braces, Bug, CaseSensitive, ChevronDown, ChevronRight, CircleAlert, Coffee, Columns2, Eye, File, FileCode2, FileJson, FileText, Folder, FolderOpen, GitBranch, GitCompareArrows, Hash, ListTree, LogOut, Package, Pencil, Play, RefreshCw, Save, Search, Square, SquareTerminal, X } from "lucide-react";
+import { ArrowUpRight, Braces, Bug, CaseSensitive, ChevronDown, ChevronRight, CircleAlert, Coffee, Columns2, Eye, File, FileCode2, FileDiff, FileJson, FileText, Folder, FolderOpen, GitBranch, GitCompareArrows, Hash, ListTree, LogOut, Package, Pencil, Play, RefreshCw, Save, Search, Square, SquareTerminal, X } from "lucide-react";
 import { isValidElement, useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
 import type { FileTreeNode, GitStatusEntry, JavaBreakpoint, JavaDebugState, JavaDiagnostic, JavaLspLocation, JavaMainClass, JavaProjectNode, JavaProjectOptions, JavaTypeSuggestion, SearchResult, WorkspaceOptions } from "@remote-ide/protocol";
 import type { editor } from "monaco-editor";
@@ -10,6 +10,8 @@ import { initialLayout, type EditorTab, type LayoutModel } from "./model";
 import { TerminalPanel } from "./TerminalPanel";
 import { JavaPanel } from "./JavaPanel";
 import { ProblemsPanel } from "./ProblemsPanel";
+import { GitLogPanel } from "./GitLogPanel";
+import { GitHistoryDialog } from "./GitHistoryDialog";
 
 type ConnectionStatus = "idle" | "connecting" | "connected" | "failed" | "disconnected" | "workspace-error";
 const languageByExtension: Record<string, string> = {
@@ -46,12 +48,16 @@ export function App() {
   const [javaBreakpoints, setJavaBreakpoints] = useState<JavaBreakpoint[]>([]);
   const [javaPanelHeight, setJavaPanelHeight] = useState(240);
   const [problemsHeight, setProblemsHeight] = useState(220);
+  const [gitLogHeight, setGitLogHeight] = useState(360);
   const [javaDiagnostics, setJavaDiagnostics] = useState<JavaDiagnostic[]>([]);
   const [javaChecking, setJavaChecking] = useState(false);
   const [importChoices, setImportChoices] = useState<{ suggestions: JavaTypeSuggestion[]; range: { startLineNumber: number; startColumn: number; endLineNumber: number; endColumn: number } }>();
   const [javaUsages, setJavaUsages] = useState<JavaLspLocation[]>();
   const [showRunConfigurationDialog, setShowRunConfigurationDialog] = useState(false);
   const [treeContextMenu, setTreeContextMenu] = useState<{ x: number; y: number; node: FileTreeNode }>();
+  const [editorGitMenu, setEditorGitMenu] = useState<{ x: number; y: number; path: string; startLine?: number; endLine?: number }>();
+  const [gitRollbackMenu, setGitRollbackMenu] = useState<{ x: number; y: number; entry: GitStatusEntry }>();
+  const [gitHistory, setGitHistory] = useState<{ path: string; startLine?: number; endLine?: number }>();
   const [searchScope, setSearchScope] = useState<string>();
   const [pendingNavigation, setPendingNavigation] = useState<{ result: SearchResult; matchLength: number }>();
   const clientRef = useRef<CoreClient>();
@@ -68,6 +74,7 @@ export function App() {
   const monacoEditorRef = useRef<editor.IStandaloneCodeEditor>();
   const monacoRef = useRef<Monaco>();
   const breakpointDecorationsRef = useRef<string[]>([]);
+  const diffRollbackTimer = useRef<ReturnType<typeof setTimeout>>();
   const javaLanguageDisposables = useRef<{ dispose(): void }[]>([]);
   const javaOptionsRef = useRef<JavaProjectOptions>();
   const group = layout.editorGroups[0]!;
@@ -91,6 +98,7 @@ export function App() {
     if (gitRefreshTimer.current) clearTimeout(gitRefreshTimer.current);
     if (javaRefreshTimer.current) clearTimeout(javaRefreshTimer.current);
     if (javaCheckTimer.current) clearTimeout(javaCheckTimer.current);
+    if (diffRollbackTimer.current) clearTimeout(diffRollbackTimer.current);
     for (const disposable of javaLanguageDisposables.current) disposable.dispose();
   }, []);
 
@@ -179,7 +187,7 @@ export function App() {
       }
       if (event.type === "java.debug.state") {
         setJavaDebugState(event.payload);
-        if (event.payload.status === "paused") setLayout((current) => ({ ...current, panels: [...current.panels.filter((panel) => !["terminal", "java", "problems"].includes(panel.type)), { id: "java", type: "java" }] }));
+        if (event.payload.status === "paused") setLayout((current) => ({ ...current, panels: [...current.panels.filter((panel) => !["terminal", "java", "problems", "gitlog"].includes(panel.type)), { id: "java", type: "java" }] }));
         return;
       }
       if (gitRefreshTimer.current) clearTimeout(gitRefreshTimer.current);
@@ -308,6 +316,49 @@ export function App() {
     }
   };
 
+  const activateEditorTab = useCallback(async (tab: EditorTab) => {
+    updateGroup((tabs) => ({ tabs, activeTabId: tab.id }));
+    if (!clientRef.current || tab.loading || tab.dirty) return;
+    try {
+      if (tab.type === "diff") {
+        const result = await clientRef.current.request("git.diff", { path: tab.path });
+        updateGroup((tabs, active) => ({
+          tabs: tabs.map((item) => item.id === tab.id && !item.dirty ? { ...item, originalContent: result.originalContent, content: result.modifiedContent, savedContent: result.modifiedContent, error: undefined } : item),
+          activeTabId: active
+        }));
+        return;
+      }
+      const result = await clientRef.current.request("filesystem.readFile", { path: tab.path });
+      updateGroup((tabs, active) => ({
+        tabs: tabs.map((item) => item.id === tab.id && !item.dirty ? { ...item, content: result.content, savedContent: result.content, error: undefined } : item),
+        activeTabId: active
+      }));
+    } catch (error) {
+      updateGroup((tabs, active) => ({
+        tabs: tabs.map((item) => item.id === tab.id ? { ...item, error: error instanceof Error ? error.message : "Could not refresh file" } : item),
+        activeTabId: active
+      }));
+    }
+  }, [updateGroup]);
+
+  const rollbackFile = async (entry: GitStatusEntry) => {
+    setGitRollbackMenu(undefined);
+    if (!window.confirm(`Rollback all local changes in ${entry.path}? This cannot be undone.`)) return;
+    try {
+      await clientRef.current!.request("git.rollback", { path: entry.path });
+      let restoredContent: string | undefined;
+      try { restoredContent = (await clientRef.current!.request("filesystem.readFile", { path: entry.path })).content; }
+      catch { /* Untracked rollback removes the file. */ }
+      updateGroup((tabs, active) => {
+        const next = tabs
+          .filter((tab) => tab.path !== entry.path || (tab.type === "file" && restoredContent !== undefined))
+          .map((tab) => tab.path === entry.path && tab.type === "file" ? { ...tab, content: restoredContent!, savedContent: restoredContent!, dirty: false, error: undefined } : tab);
+        return { tabs: next, activeTabId: next.some((tab) => tab.id === active) ? active : next.at(-1)?.id };
+      });
+      await Promise.all([refreshGit(), refreshTree()]);
+    } catch (error) { setStatusMessage(error instanceof Error ? error.message : "Could not rollback file"); }
+  };
+
   const closeTab = (tab: EditorTab) => {
     if (tab.dirty && !window.confirm(`Discard unsaved changes in ${tab.title}?`)) return;
     updateGroup((tabs, active) => {
@@ -372,7 +423,7 @@ export function App() {
         const tab = { id, terminalId: result.terminalId, title: `Terminal ${current.tabs.length + 1}`, exited: false };
         return { ...current, tabs: [...current.tabs, tab], activeTabId: id };
       });
-      setLayout((current) => ({ ...current, panels: [...current.panels.filter((panel) => !["terminal", "java", "problems"].includes(panel.type)), { id: "terminal", type: "terminal" }] }));
+      setLayout((current) => ({ ...current, panels: [...current.panels.filter((panel) => !["terminal", "java", "problems", "gitlog"].includes(panel.type)), { id: "terminal", type: "terminal" }] }));
       if (command) await client.request("terminal.input", { terminalId: result.terminalId, data: `${command.replace(/\s+$/, "")}\n` });
       return result.terminalId;
     } catch (error) {
@@ -386,7 +437,7 @@ export function App() {
     const existing = terminalId ? layoutRef.current.terminalGroup.tabs.find((tab) => tab.terminalId === terminalId && !tab.exited) : undefined;
     if (existing && clientRef.current) {
       updateTerminalGroup((current) => ({ ...current, activeTabId: existing.id }));
-      setLayout((current) => ({ ...current, panels: [...current.panels.filter((panel) => !["terminal", "java", "problems"].includes(panel.type)), { id: "terminal", type: "terminal" }] }));
+      setLayout((current) => ({ ...current, panels: [...current.panels.filter((panel) => !["terminal", "java", "problems", "gitlog"].includes(panel.type)), { id: "terminal", type: "terminal" }] }));
       try { await clientRef.current.request("terminal.input", { terminalId: existing.terminalId, data: `${command.replace(/\s+$/, "")}\n` }); return; }
       catch { markdownBlockTerminals.current.delete(blockId); }
     }
@@ -409,7 +460,7 @@ export function App() {
     if (visible) {
       setLayout((current) => ({ ...current, panels: current.panels.filter((panel) => panel.type !== "terminal") }));
     } else if (layout.terminalGroup.tabs.length > 0) {
-      setLayout((current) => ({ ...current, panels: [...current.panels.filter((panel) => !["java", "problems"].includes(panel.type)), { id: "terminal", type: "terminal" }] }));
+      setLayout((current) => ({ ...current, panels: [...current.panels.filter((panel) => !["java", "problems", "gitlog"].includes(panel.type)), { id: "terminal", type: "terminal" }] }));
     } else {
       void createTerminal();
     }
@@ -465,18 +516,23 @@ export function App() {
     const visible = layout.panels.some((panel) => panel.type === "java");
     setLayout((current) => ({
       ...current,
-      panels: visible ? current.panels.filter((panel) => panel.type !== "java") : [...current.panels.filter((panel) => !["terminal", "java", "problems"].includes(panel.type)), { id: "java", type: "java" }]
+      panels: visible ? current.panels.filter((panel) => panel.type !== "java") : [...current.panels.filter((panel) => !["terminal", "java", "problems", "gitlog"].includes(panel.type)), { id: "java", type: "java" }]
     }));
   };
 
   const toggleProblemsPanel = () => {
     const visible = layout.panels.some((panel) => panel.type === "problems");
-    setLayout((current) => ({ ...current, panels: visible ? current.panels.filter((panel) => panel.type !== "problems") : [...current.panels.filter((panel) => !["terminal", "java", "problems"].includes(panel.type)), { id: "problems", type: "problems" }] }));
+    setLayout((current) => ({ ...current, panels: visible ? current.panels.filter((panel) => panel.type !== "problems") : [...current.panels.filter((panel) => !["terminal", "java", "problems", "gitlog"].includes(panel.type)), { id: "problems", type: "problems" }] }));
     if (!visible) void checkJava();
   };
 
+  const toggleGitLogPanel = () => {
+    const visible = layout.panels.some((panel) => panel.type === "gitlog");
+    setLayout((current) => ({ ...current, panels: visible ? current.panels.filter((panel) => panel.type !== "gitlog") : [...current.panels.filter((panel) => !["terminal", "java", "problems", "gitlog"].includes(panel.type)), { id: "gitlog", type: "gitlog" }] }));
+  };
+
   const runJavaAction = async (action: "java.build" | "java.run") => {
-    setLayout((current) => ({ ...current, panels: [...current.panels.filter((panel) => !["terminal", "java", "problems"].includes(panel.type)), { id: "java", type: "java" }] }));
+    setLayout((current) => ({ ...current, panels: [...current.panels.filter((panel) => !["terminal", "java", "problems", "gitlog"].includes(panel.type)), { id: "java", type: "java" }] }));
     setJavaRunning(true);
     try { await clientRef.current!.request(action, {}); }
     catch (error) { setJavaRunning(false); setJavaLog((current) => `${current}${error instanceof Error ? error.message : "Java process failed"}\n`); }
@@ -487,7 +543,7 @@ export function App() {
   };
 
   const debugJava = async () => {
-    setLayout((current) => ({ ...current, panels: [...current.panels.filter((panel) => !["terminal", "java", "problems"].includes(panel.type)), { id: "java", type: "java" }] }));
+    setLayout((current) => ({ ...current, panels: [...current.panels.filter((panel) => !["terminal", "java", "problems", "gitlog"].includes(panel.type)), { id: "java", type: "java" }] }));
     setJavaRunning(true);
     try { await clientRef.current!.request("java.debug.start", { breakpoints: javaBreakpoints }); }
     catch (error) { setJavaRunning(false); setJavaDebugState({ status: "stopped", variables: [] }); setJavaLog((current) => `${current}${error instanceof Error ? error.message : "Debugger failed"}\n`); }
@@ -549,6 +605,14 @@ export function App() {
     window.addEventListener("pointermove", move); window.addEventListener("pointerup", end);
   };
 
+  const beginGitLogResize = (event: React.PointerEvent) => {
+    event.currentTarget.setPointerCapture(event.pointerId);
+    const startY = event.clientY; const startHeight = gitLogHeight;
+    const move = (moveEvent: PointerEvent) => setGitLogHeight(Math.max(180, Math.min(650, startHeight + startY - moveEvent.clientY)));
+    const end = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", end); };
+    window.addEventListener("pointermove", move); window.addEventListener("pointerup", end);
+  };
+
   const openDiagnostic = async (diagnostic: JavaDiagnostic) => {
     await openFile({ name: diagnostic.path.split("/").pop() ?? diagnostic.path, path: diagnostic.path, type: "file" });
     setPendingNavigation({ result: { path: diagnostic.path, line: diagnostic.line, column: diagnostic.column, preview: diagnostic.message }, matchLength: 1 });
@@ -585,8 +649,15 @@ export function App() {
     monacoRef.current = api;
     for (const disposable of javaLanguageDisposables.current) disposable.dispose();
     javaLanguageDisposables.current = [];
-    if (activeTab?.type !== "file" || !/\.java$/i.test(activeTab.path)) return;
+    if (activeTab?.type !== "file") return;
     const filePath = activeTab.path;
+    javaLanguageDisposables.current.push(instance.onContextMenu((event) => {
+      event.event.preventDefault();
+      const selection = instance.getSelection();
+      const hasSelection = Boolean(selection && !selection.isEmpty());
+      setEditorGitMenu({ x: Math.min(event.event.posx, window.innerWidth - 245), y: Math.min(event.event.posy, window.innerHeight - 85), path: filePath, ...(hasSelection ? { startLine: selection!.startLineNumber, endLine: selection!.endLineNumber } : {}) });
+    }));
+    if (!/\.java$/i.test(filePath)) return;
     javaLanguageDisposables.current.push(api.languages.registerCompletionItemProvider("java", {
       triggerCharacters: ["."],
       provideCompletionItems: async (model, position) => {
@@ -618,6 +689,28 @@ export function App() {
     }));
   };
 
+  const mountWorkingDiff = (instance: editor.IStandaloneDiffEditor) => {
+    instance.getModifiedEditor().onDidChangeModelContent(() => {
+      if (diffRollbackTimer.current) clearTimeout(diffRollbackTimer.current);
+      diffRollbackTimer.current = setTimeout(async () => {
+        const current = layoutRef.current.editorGroups[0];
+        const tab = current?.tabs.find((item) => item.id === current.activeTabId);
+        if (!tab || tab.type !== "diff" || !clientRef.current) return;
+        const content = instance.getModifiedEditor().getValue();
+        const untracked = gitEntries.some((entry) => entry.path === tab.path && entry.indexStatus === "?" && entry.worktreeStatus === "?");
+        try {
+          if (untracked && !content) await clientRef.current.request("git.rollback", { path: tab.path });
+          else {
+            selfWriteUntil.current.set(tab.path, Date.now() + 1500);
+            await clientRef.current.request("filesystem.writeFile", { path: tab.path, content });
+          }
+          updateGroup((tabs, active) => ({ tabs: tabs.map((item) => item.id === tab.id ? { ...item, content, savedContent: content, dirty: false } : item), activeTabId: active }));
+          await Promise.all([refreshGit(), refreshTree()]);
+        } catch (error) { setStatusMessage(error instanceof Error ? error.message : "Could not rollback change block"); }
+      }, 200);
+    });
+  };
+
   const openSearchForNode = (node: FileTreeNode) => {
     const scope = node.type === "directory" ? node.path : node.path.split("/").slice(0, -1).join("/");
     setTreeContextMenu(undefined);
@@ -647,7 +740,7 @@ export function App() {
         </> : sideView === "git" ? <>
           <header className="panel-header"><span>Git Changes</span><button title="Refresh Git status" onClick={() => void refreshGit()}><RefreshCw size={14} /></button></header>
           <div className="git-branch"><GitBranch size={13} /><span>{gitBranch}</span></div>
-          <GitChangesView entries={gitEntries} error={gitError} activePath={activeTab?.type === "diff" ? activeTab.path : undefined} onOpenDiff={openDiff} />
+          <GitChangesView entries={gitEntries} error={gitError} activePath={activeTab?.type === "diff" ? activeTab.path : undefined} onOpenDiff={openDiff} onContextMenu={(event, entry) => { event.preventDefault(); setGitRollbackMenu({ x: Math.min(event.clientX, window.innerWidth - 220), y: Math.min(event.clientY, window.innerHeight - 50), entry }); }} />
         </> : <>
           <header className="panel-header"><span>Java Project</span><button title="Refresh Java project" onClick={() => void refreshJavaTree()}><RefreshCw size={14} /></button></header>
           <div className="java-project-meta"><Coffee size={13} /><span>{javaOptions?.pomPath}</span></div>
@@ -666,7 +759,7 @@ export function App() {
           <span className="connection-dot" />{host}:{port}<button title="Disconnect" onClick={disconnect}><LogOut size={15} /></button>
         </div>
         <div className="tabs" role="tablist">
-          {group.tabs.map((tab) => <button className={`tab ${tab.id === group.activeTabId ? "active" : ""}`} key={tab.id} onClick={() => updateGroup((tabs) => ({ tabs, activeTabId: tab.id }))}>
+          {group.tabs.map((tab) => <button className={`tab ${tab.id === group.activeTabId ? "active" : ""}`} key={tab.id} onClick={() => void activateEditorTab(tab)}>
             {tab.type === "diff" ? <GitCompareArrows size={14} /> : <File size={14} />}<span>{tab.title}</span>{tab.dirty && <span className="dirty" title="Unsaved changes" />}<span className="close" title={`Close ${tab.title}`} onClick={(event) => { event.stopPropagation(); closeTab(tab); }}><X size={13} /></span>
           </button>)}
           <div className="tab-spacer" />
@@ -680,10 +773,16 @@ export function App() {
           </div>}
           <button className="save-button" title="Save active file" disabled={activeTab?.type !== "file" || !activeTab.dirty} onClick={() => void saveActive()}><Save size={15} /></button>
         </div>
-        <div className="editor-area">
+        <div className="editor-area" onContextMenu={(event) => {
+          if (activeTab?.type !== "file" || activeTab.markdownMode === "preview") return;
+          event.preventDefault();
+          const selection = monacoEditorRef.current?.getSelection();
+          const hasSelection = Boolean(selection && !selection.isEmpty());
+          setEditorGitMenu({ x: Math.min(event.clientX, window.innerWidth - 245), y: Math.min(event.clientY, window.innerHeight - 85), path: activeTab.path, ...(hasSelection ? { startLine: selection!.startLineNumber, endLine: selection!.endLineNumber } : {}) });
+        }}>
           {!activeTab ? <div className="empty-editor">Open a file from Project</div> : activeTab.loading ? <div className="empty-editor">Loading {activeTab.title}...</div> : activeTab.error && !activeTab.content ? <div className="editor-error">{activeTab.error}</div> : <>
             {activeTab.error && <div className="inline-error">{activeTab.error}</div>}
-            {activeTab.type === "diff" ? <DiffEditor original={activeTab.originalContent ?? ""} modified={activeTab.content} language={languageByExtension[activeTab.path.split(".").pop()?.toLowerCase() ?? ""] ?? "plaintext"} theme="vs-dark" options={{ automaticLayout: true, readOnly: true, originalEditable: false, renderSideBySide: activeTab.diffMode !== "unified", minimap: { enabled: false }, fontSize: 13, scrollBeyondLastLine: false }} /> : activeTab.markdownMode === "preview" ? <div className="markdown-preview"><ReactMarkdown remarkPlugins={[remarkGfm]} components={{ pre: renderMarkdownPre }}>{activeTab.content}</ReactMarkdown></div> : <Editor path={activeTab.path} language={languageByExtension[activeTab.path.split(".").pop()?.toLowerCase() ?? ""] ?? "plaintext"} value={activeTab.content} theme="vs-dark" onMount={mountEditor} options={{ automaticLayout: true, minimap: { enabled: false }, glyphMargin: /\.java$/i.test(activeTab.path), fontSize: 13, scrollBeyondLastLine: false, padding: { top: 10 } }} onChange={(value) => updateGroup((tabs, active) => ({ tabs: tabs.map((tab) => tab.id === activeTab.id ? { ...tab, content: value ?? "", dirty: (value ?? "") !== tab.savedContent, error: undefined } : tab), activeTabId: active }))} />}
+            {activeTab.type === "diff" ? <DiffEditor key={activeTab.path} original={activeTab.originalContent ?? ""} modified={activeTab.content} language={languageByExtension[activeTab.path.split(".").pop()?.toLowerCase() ?? ""] ?? "plaintext"} theme="vs-dark" onMount={mountWorkingDiff} options={{ automaticLayout: true, readOnly: false, originalEditable: false, renderMarginRevertIcon: true, renderSideBySide: activeTab.diffMode !== "unified", minimap: { enabled: false }, fontSize: 13, scrollBeyondLastLine: false }} /> : activeTab.markdownMode === "preview" ? <div className="markdown-preview"><ReactMarkdown remarkPlugins={[remarkGfm]} components={{ pre: renderMarkdownPre }}>{activeTab.content}</ReactMarkdown></div> : <Editor key={activeTab.path} path={activeTab.path} language={languageByExtension[activeTab.path.split(".").pop()?.toLowerCase() ?? ""] ?? "plaintext"} value={activeTab.content} theme="vs-dark" onMount={mountEditor} options={{ automaticLayout: true, contextmenu: false, minimap: { enabled: false }, glyphMargin: /\.java$/i.test(activeTab.path), fontSize: 13, scrollBeyondLastLine: false, padding: { top: 10 } }} onChange={(value) => updateGroup((tabs, active) => ({ tabs: tabs.map((tab) => tab.id === activeTab.id ? { ...tab, content: value ?? "", dirty: (value ?? "") !== tab.savedContent, error: undefined } : tab), activeTabId: active }))} />}
           </>}
         </div>
       </main>
@@ -691,10 +790,12 @@ export function App() {
     {layout.panels.some((panel) => panel.type === "terminal") && <TerminalPanel client={clientRef.current!} group={layout.terminalGroup} height={terminalHeight} onActivate={(id) => updateTerminalGroup((current) => ({ ...current, activeTabId: id }))} onCreate={() => void createTerminal()} onClose={closeTerminal} onResizeStart={beginTerminalResize} registerWriter={registerTerminalWriter} />}
     {layout.panels.some((panel) => panel.type === "java") && javaOptions && <JavaPanel height={javaPanelHeight} log={javaLog} running={javaRunning} options={javaOptions} debugState={javaDebugState} onBuild={() => void runJavaAction("java.build")} onRun={() => void runJavaAction("java.run")} onDebug={() => void debugJava()} onStop={() => void stopJava()} onDebugCommand={(command) => void clientRef.current!.request("java.debug.command", { command })} onClear={() => setJavaLog("")} onResizeStart={beginJavaResize} />}
     {layout.panels.some((panel) => panel.type === "problems") && javaOptions && <ProblemsPanel height={problemsHeight} diagnostics={javaDiagnostics} checking={javaChecking} onRefresh={() => void checkJava()} onOpen={(diagnostic) => void openDiagnostic(diagnostic)} onResizeStart={beginProblemsResize} />}
+    {layout.panels.some((panel) => panel.type === "gitlog") && <GitLogPanel client={clientRef.current!} height={gitLogHeight} onResizeStart={beginGitLogResize} />}
     <footer className="bottom-tool-bar">
       <button className={`bottom-tool-button ${layout.panels.some((panel) => panel.type === "terminal") ? "active" : ""}`} onClick={toggleTerminalPanel}><SquareTerminal size={14} /><span>Terminal</span>{layout.terminalGroup.tabs.length > 0 && <span className="bottom-tool-count">{layout.terminalGroup.tabs.length}</span>}</button>
       {javaOptions && <button className={`bottom-tool-button ${layout.panels.some((panel) => panel.type === "java") ? "active" : ""}`} onClick={toggleJavaPanel}><Coffee size={14} /><span>Java</span>{javaRunning && <span className="running-indicator" />}</button>}
       {javaOptions && <button className={`bottom-tool-button ${layout.panels.some((panel) => panel.type === "problems") ? "active" : ""}`} onClick={toggleProblemsPanel}><CircleAlert size={14} /><span>Problems</span>{javaDiagnostics.length > 0 && <span className="bottom-tool-count">{javaDiagnostics.length}</span>}</button>}
+      <button className={`bottom-tool-button ${layout.panels.some((panel) => panel.type === "gitlog") ? "active" : ""}`} onClick={toggleGitLogPanel}><GitBranch size={14} /><span>Git</span></button>
     </footer>
     {treeContextMenu && <div className="context-menu-layer" onMouseDown={() => setTreeContextMenu(undefined)}>
       <div className="context-menu" style={{ left: treeContextMenu.x, top: treeContextMenu.y }} onMouseDown={(event) => event.stopPropagation()}>
@@ -703,9 +804,12 @@ export function App() {
         {javaOptions && treeContextMenu.node.type === "directory" && treeContextMenu.node.path && <button onClick={() => void addJavaSourceRoot(treeContextMenu.node.path)}><Coffee size={14} /><span>Mark as Sources Root</span></button>}
       </div>
     </div>}
+    {editorGitMenu && <div className="context-menu-layer" onMouseDown={() => setEditorGitMenu(undefined)}><div className="context-menu editor-git-menu" style={{ left: editorGitMenu.x, top: editorGitMenu.y }} onMouseDown={(event) => event.stopPropagation()}><div className="context-submenu-trigger"><button><GitBranch size={14} /><span>Git</span><ChevronRight size={13} /></button><div className="context-menu context-submenu"><button onClick={() => { setGitHistory({ path: editorGitMenu.path }); setEditorGitMenu(undefined); }}><FileDiff size={14} /><span>Show file changes</span></button><button disabled={editorGitMenu.startLine === undefined} onClick={() => { setGitHistory({ path: editorGitMenu.path, startLine: editorGitMenu.startLine, endLine: editorGitMenu.endLine }); setEditorGitMenu(undefined); }}><ListTree size={14} /><span>Show selection changes</span></button></div></div></div></div>}
+    {gitRollbackMenu && <div className="context-menu-layer" onMouseDown={() => setGitRollbackMenu(undefined)}><div className="context-menu" style={{ left: gitRollbackMenu.x, top: gitRollbackMenu.y }} onMouseDown={(event) => event.stopPropagation()}><button className="danger" onClick={() => void rollbackFile(gitRollbackMenu.entry)}><RefreshCw size={14} /><span>Rollback</span></button></div></div>}
     {searchScope !== undefined && <FindInFilesDialog client={clientRef.current!} scope={searchScope} onClose={() => setSearchScope(undefined)} onNavigate={(result, matchLength) => void navigateToSearchResult(result, matchLength)} />}
     {importChoices && <div className="dialog-overlay" onMouseDown={() => setImportChoices(undefined)}><section className="import-chooser" role="dialog" aria-modal="true" aria-label="Choose Java import" onMouseDown={(event) => event.stopPropagation()}><header><span>Import class</span><button title="Close" onClick={() => setImportChoices(undefined)}><X size={15} /></button></header><div>{importChoices.suggestions.map((suggestion) => <button key={suggestion.qualifiedName} onClick={() => applyJavaImport(suggestion)}><span>{suggestion.simpleName}</span><code>{suggestion.qualifiedName}</code><small>{suggestion.source}</small></button>)}</div></section></div>}
     {javaUsages && <div className="dialog-overlay" onMouseDown={() => setJavaUsages(undefined)}><section className="import-chooser usage-chooser" role="dialog" aria-modal="true" aria-label="Java usages" onMouseDown={(event) => event.stopPropagation()}><header><span>Usages ({javaUsages.length})</span><button title="Close" onClick={() => setJavaUsages(undefined)}><X size={15} /></button></header><div>{javaUsages.length === 0 ? <div className="problems-empty">No project usages found</div> : javaUsages.map((location, index) => <button key={`${location.path}:${location.startLine}:${location.startColumn}:${index}`} onClick={() => void openJavaLocation(location)}><span>{location.path.split("/").pop()}</span><code>{location.path}</code><small>{location.startLine}:{location.startColumn}</small></button>)}</div></section></div>}
+    {gitHistory && <GitHistoryDialog client={clientRef.current!} path={gitHistory.path} startLine={gitHistory.startLine} endLine={gitHistory.endLine} onClose={() => setGitHistory(undefined)} />}
     {showRunConfigurationDialog && <RunConfigurationDialog client={clientRef.current!} onClose={() => setShowRunConfigurationDialog(false)} onSaved={(options) => { setJavaOptions(options); javaOptionsRef.current = options; setShowRunConfigurationDialog(false); }} />}
   </div>;
 }
@@ -748,7 +852,7 @@ function JavaProjectTree({ nodes, activePath, onOpen }: { nodes: JavaProjectNode
   return <>{render(nodes, 0)}</>;
 }
 
-function GitChangesView({ entries, error, activePath, onOpenDiff }: { entries: GitStatusEntry[]; error: string; activePath?: string; onOpenDiff(entry: GitStatusEntry): void }) {
+function GitChangesView({ entries, error, activePath, onOpenDiff, onContextMenu }: { entries: GitStatusEntry[]; error: string; activePath?: string; onOpenDiff(entry: GitStatusEntry): void; onContextMenu(event: ReactMouseEvent, entry: GitStatusEntry): void }) {
   if (error) return <div className="git-empty error">{error}</div>;
   if (entries.length === 0) return <div className="git-empty">No local changes</div>;
   const groups = [
@@ -757,16 +861,16 @@ function GitChangesView({ entries, error, activePath, onOpenDiff }: { entries: G
     { title: "Staged", entries: entries.filter((entry) => entry.indexStatus !== " " && entry.indexStatus !== "?" && entry.indexStatus !== "U" && !["AA", "DD"].includes(entry.indexStatus + entry.worktreeStatus)) },
     { title: "Changes", entries: entries.filter((entry) => entry.indexStatus === " " && entry.worktreeStatus !== " " && entry.worktreeStatus !== "?" && entry.worktreeStatus !== "U") }
   ].filter((group) => group.entries.length > 0);
-  return <div className="git-changes">{groups.map((group) => <GitChangeGroup key={group.title} title={group.title} entries={group.entries} activePath={activePath} onOpenDiff={onOpenDiff} />)}</div>;
+  return <div className="git-changes">{groups.map((group) => <GitChangeGroup key={group.title} title={group.title} entries={group.entries} activePath={activePath} onOpenDiff={onOpenDiff} onContextMenu={onContextMenu} />)}</div>;
 }
 
-function GitChangeGroup({ title, entries, activePath, onOpenDiff }: { title: string; entries: GitStatusEntry[]; activePath?: string; onOpenDiff(entry: GitStatusEntry): void }) {
+function GitChangeGroup({ title, entries, activePath, onOpenDiff, onContextMenu }: { title: string; entries: GitStatusEntry[]; activePath?: string; onOpenDiff(entry: GitStatusEntry): void; onContextMenu(event: ReactMouseEvent, entry: GitStatusEntry): void }) {
   const [expanded, setExpanded] = useState(true);
   return <section className={`git-group git-group-${title.toLowerCase()}`}>
     <button className="git-group-title" aria-expanded={expanded} onClick={() => setExpanded((current) => !current)}>
       {expanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />}<span>{title}</span><span className="git-count">{entries.length}</span>
     </button>
-    {expanded && <GitStatusTree entries={entries} activePath={activePath} onOpenDiff={onOpenDiff} />}
+    {expanded && <GitStatusTree entries={entries} activePath={activePath} onOpenDiff={onOpenDiff} onContextMenu={onContextMenu} />}
   </section>;
 }
 
@@ -774,7 +878,7 @@ type GitTreeNode =
   | { type: "directory"; name: string; path: string; children: GitTreeNode[] }
   | { type: "file"; name: string; path: string; entry: GitStatusEntry };
 
-function GitStatusTree({ entries, activePath, onOpenDiff }: { entries: GitStatusEntry[]; activePath?: string; onOpenDiff(entry: GitStatusEntry): void }) {
+function GitStatusTree({ entries, activePath, onOpenDiff, onContextMenu }: { entries: GitStatusEntry[]; activePath?: string; onOpenDiff(entry: GitStatusEntry): void; onContextMenu(event: ReactMouseEvent, entry: GitStatusEntry): void }) {
   const nodes = useMemo(() => buildGitTree(entries), [entries]);
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set(collectGitDirectories(nodes)));
   useEffect(() => setExpanded((current) => new Set([...current, ...collectGitDirectories(nodes)])), [nodes]);
@@ -793,7 +897,7 @@ function GitStatusTree({ entries, activePath, onOpenDiff }: { entries: GitStatus
     const deleted = entry.indexStatus === "D" || entry.worktreeStatus === "D";
     const status = entry.indexStatus === "?" ? "U" : `${entry.indexStatus}${entry.worktreeStatus}`.trim();
     const kind = entry.indexStatus === "U" || entry.worktreeStatus === "U" ? "conflict" : entry.indexStatus === "?" ? "untracked" : deleted ? "deleted" : entry.indexStatus === "A" ? "added" : "modified";
-    return <button key={node.path} className={`git-file-row ${activePath === entry.path ? "selected" : ""}`} style={{ paddingLeft: 27 + depth * 13 }} title={entry.originalPath ? `${entry.originalPath} -> ${entry.path}` : entry.path} onClick={() => onOpenDiff(entry)}>
+    return <button key={node.path} className={`git-file-row ${activePath === entry.path ? "selected" : ""}`} style={{ paddingLeft: 27 + depth * 13 }} title={entry.originalPath ? `${entry.originalPath} -> ${entry.path}` : entry.path} onClick={() => onOpenDiff(entry)} onContextMenu={(event) => onContextMenu(event, entry)}>
       <FileCode2 size={14} /><span className="git-file-name">{node.name}</span><span className={`git-status ${kind}`}>{status}</span>
     </button>;
   });

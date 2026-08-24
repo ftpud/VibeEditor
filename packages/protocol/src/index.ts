@@ -11,6 +11,9 @@ export type GitStatusEntry = {
   indexStatus: string;
   worktreeStatus: string;
 };
+export type GitBranch = { name: string; current: boolean; remote: boolean };
+export type GitCommit = { hash: string; shortHash: string; author: string; date: string; subject: string };
+export type GitCommitFile = { path: string; status: string; originalPath?: string };
 
 export type WorkspaceOptions = {
   openFiles: string[];
@@ -104,6 +107,14 @@ export type ProtocolOperations = {
     payload: { path: string };
     result: { path: string; originalContent: string; modifiedContent: string };
   };
+  "git.branches": { payload: Record<string, never>; result: { branches: GitBranch[] } };
+  "git.log": { payload: { branch: string; limit?: number }; result: { commits: GitCommit[] } };
+  "git.commitFiles": { payload: { hash: string }; result: { files: GitCommitFile[] } };
+  "git.commitDiff": { payload: { hash: string; path: string; originalPath?: string }; result: { originalContent: string; modifiedContent: string } };
+  "git.fileHistory": { payload: { path: string; startLine?: number; endLine?: number }; result: { commits: GitCommit[] } };
+  "git.compareFiles": { payload: { ref: string; path?: string }; result: { files: GitCommitFile[] } };
+  "git.compareDiff": { payload: { ref: string; path: string; originalPath?: string }; result: { originalContent: string; modifiedContent: string } };
+  "git.rollback": { payload: { path: string }; result: Record<string, never> };
   "java.loadMavenProject": {
     payload: { pomPath: string };
     result: { options: JavaProjectOptions; tree: JavaProjectNode[] };
@@ -232,6 +243,14 @@ export const requestTypes: RequestType[] = [
   "terminal.close",
   "git.status",
   "git.diff",
+  "git.branches",
+  "git.log",
+  "git.commitFiles",
+  "git.commitDiff",
+  "git.fileHistory",
+  "git.compareFiles",
+  "git.compareDiff",
+  "git.rollback",
   "java.loadMavenProject",
   "java.getOptions",
   "java.addSourceRoot",
