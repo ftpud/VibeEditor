@@ -1,4 +1,4 @@
-export type Panel = { id: string; type: "explorer" | "editor" | "terminal" | "java" };
+export type Panel = { id: string; type: "explorer" | "editor" | "terminal" | "java" | "problems" };
 export type EditorTab = {
   id: string;
   type: "file" | "diff";

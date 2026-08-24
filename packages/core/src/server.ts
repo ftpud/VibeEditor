@@ -10,6 +10,7 @@ import { GitService } from "./git.js";
 import { WorkspaceStateStore } from "./workspace-state.js";
 import { WorkspaceSearch } from "./search.js";
 import { JavaProjectService } from "./java.js";
+import { JdtLanguageService } from "./jdtls.js";
 
 export async function createServer(host: string, port: number, workspacePath: string): Promise<WebSocketServer> {
   const validation = new WorkspaceFileSystem();
@@ -62,6 +63,7 @@ export async function createServer(host: string, port: number, workspacePath: st
         : { type: "java.exit", payload: { exitCode: event.exitCode, signal: event.signal } };
       socket.send(JSON.stringify(message));
     });
+    const jdt = new JdtLanguageService(filesystem);
     const processManager = new PtyProcessManager(workspace, (event) => {
       if (socket.readyState !== WebSocket.OPEN) return;
       const message: ServerEvent = event.type === "output"
@@ -77,7 +79,7 @@ export async function createServer(host: string, port: number, workspacePath: st
         const parsed = parseRequest(data);
         id = parsed.id;
         console.log(`[core] request ${parsed.id}: ${parsed.type}`);
-        const result = await handleRequest(filesystem, search, processManager, git, java, workspaceState, workspacePath, parsed);
+        const result = await handleRequest(filesystem, search, processManager, git, java, jdt, workspaceState, workspacePath, parsed);
         if (parsed.type === "workspace.open") activeSessions.add(socket);
         socket.send(JSON.stringify({ id, ok: true, result }));
       } catch (error) {
@@ -90,6 +92,7 @@ export async function createServer(host: string, port: number, workspacePath: st
       activeSessions.delete(socket);
       processManager.closeAll();
       java.close();
+      jdt.close();
       console.log(`[core] disconnected: ${client}`);
     });
     socket.on("error", (error) => console.error(`[core] socket error: ${error.message}`));
@@ -108,7 +111,7 @@ function parseRequest(data: RawData): Request {
   return value as Request;
 }
 
-async function handleRequest(filesystem: WorkspaceFileSystem, search: WorkspaceSearch, processManager: PtyProcessManager, git: GitService, java: JavaProjectService, workspaceState: WorkspaceStateStore, workspacePath: string, request: Request): Promise<unknown> {
+async function handleRequest(filesystem: WorkspaceFileSystem, search: WorkspaceSearch, processManager: PtyProcessManager, git: GitService, java: JavaProjectService, jdt: JdtLanguageService, workspaceState: WorkspaceStateStore, workspacePath: string, request: Request): Promise<unknown> {
   if (request.type !== "workspace.open") filesystem.getWorkspace();
   switch (request.type) {
     case "workspace.open": {
@@ -179,5 +182,13 @@ async function handleRequest(filesystem: WorkspaceFileSystem, search: WorkspaceS
     case "java.stop": java.stop(); return {};
     case "java.debug.start": await java.debug(request.payload.breakpoints); return {};
     case "java.debug.command": java.debugCommand(request.payload.command); return {};
+    case "java.check": return { diagnostics: await java.check() };
+    case "java.completeType": {
+      if (typeof request.payload.prefix !== "string") throw new CoreError("INVALID_REQUEST", "prefix must be a string");
+      return { suggestions: await java.completeType(request.payload.prefix) };
+    }
+    case "java.completion": return { items: await jdt.completion(request.payload.path, request.payload.content, request.payload.line, request.payload.column) };
+    case "java.definition": return { locations: await jdt.definition(request.payload.path, request.payload.content, request.payload.line, request.payload.column) };
+    case "java.references": return { locations: await jdt.references(request.payload.path, request.payload.content, request.payload.line, request.payload.column) };
   }
 }

@@ -1,7 +1,7 @@
-import Editor, { DiffEditor } from "@monaco-editor/react";
-import { ArrowUpRight, Braces, Bug, CaseSensitive, ChevronDown, ChevronRight, Coffee, Columns2, Eye, File, FileCode2, FileJson, FileText, Folder, FolderOpen, GitBranch, GitCompareArrows, Hash, ListTree, LogOut, Package, Pencil, Play, RefreshCw, Save, Search, Square, SquareTerminal, X } from "lucide-react";
+import Editor, { DiffEditor, type Monaco } from "@monaco-editor/react";
+import { ArrowUpRight, Braces, Bug, CaseSensitive, ChevronDown, ChevronRight, CircleAlert, Coffee, Columns2, Eye, File, FileCode2, FileJson, FileText, Folder, FolderOpen, GitBranch, GitCompareArrows, Hash, ListTree, LogOut, Package, Pencil, Play, RefreshCw, Save, Search, Square, SquareTerminal, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
-import type { FileTreeNode, GitStatusEntry, JavaBreakpoint, JavaDebugState, JavaMainClass, JavaProjectNode, JavaProjectOptions, SearchResult, WorkspaceOptions } from "@remote-ide/protocol";
+import type { FileTreeNode, GitStatusEntry, JavaBreakpoint, JavaDebugState, JavaDiagnostic, JavaLspLocation, JavaMainClass, JavaProjectNode, JavaProjectOptions, JavaTypeSuggestion, SearchResult, WorkspaceOptions } from "@remote-ide/protocol";
 import type { editor } from "monaco-editor";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -9,6 +9,7 @@ import { CoreClient } from "./client";
 import { initialLayout, type EditorTab, type LayoutModel } from "./model";
 import { TerminalPanel } from "./TerminalPanel";
 import { JavaPanel } from "./JavaPanel";
+import { ProblemsPanel } from "./ProblemsPanel";
 
 type ConnectionStatus = "idle" | "connecting" | "connected" | "failed" | "disconnected" | "workspace-error";
 const languageByExtension: Record<string, string> = {
@@ -44,6 +45,11 @@ export function App() {
   const [javaDebugState, setJavaDebugState] = useState<JavaDebugState>({ status: "stopped", variables: [] });
   const [javaBreakpoints, setJavaBreakpoints] = useState<JavaBreakpoint[]>([]);
   const [javaPanelHeight, setJavaPanelHeight] = useState(240);
+  const [problemsHeight, setProblemsHeight] = useState(220);
+  const [javaDiagnostics, setJavaDiagnostics] = useState<JavaDiagnostic[]>([]);
+  const [javaChecking, setJavaChecking] = useState(false);
+  const [importChoices, setImportChoices] = useState<{ suggestions: JavaTypeSuggestion[]; range: { startLineNumber: number; startColumn: number; endLineNumber: number; endColumn: number } }>();
+  const [javaUsages, setJavaUsages] = useState<JavaLspLocation[]>();
   const [showRunConfigurationDialog, setShowRunConfigurationDialog] = useState(false);
   const [treeContextMenu, setTreeContextMenu] = useState<{ x: number; y: number; node: FileTreeNode }>();
   const [searchScope, setSearchScope] = useState<string>();
@@ -54,11 +60,14 @@ export function App() {
   const treeRefreshTimer = useRef<ReturnType<typeof setTimeout>>();
   const gitRefreshTimer = useRef<ReturnType<typeof setTimeout>>();
   const javaRefreshTimer = useRef<ReturnType<typeof setTimeout>>();
+  const javaCheckTimer = useRef<ReturnType<typeof setTimeout>>();
   const selfWriteUntil = useRef(new Map<string, number>());
   const terminalWriters = useRef(new Map<string, (data: string) => void>());
   const terminalBuffers = useRef(new Map<string, string>());
   const monacoEditorRef = useRef<editor.IStandaloneCodeEditor>();
+  const monacoRef = useRef<Monaco>();
   const breakpointDecorationsRef = useRef<string[]>([]);
+  const javaLanguageDisposables = useRef<{ dispose(): void }[]>([]);
   const javaOptionsRef = useRef<JavaProjectOptions>();
   const group = layout.editorGroups[0]!;
   const activeTab = group.tabs.find((tab) => tab.id === group.activeTabId);
@@ -80,6 +89,8 @@ export function App() {
     if (treeRefreshTimer.current) clearTimeout(treeRefreshTimer.current);
     if (gitRefreshTimer.current) clearTimeout(gitRefreshTimer.current);
     if (javaRefreshTimer.current) clearTimeout(javaRefreshTimer.current);
+    if (javaCheckTimer.current) clearTimeout(javaCheckTimer.current);
+    for (const disposable of javaLanguageDisposables.current) disposable.dispose();
   }, []);
 
   const updateGroup = useCallback((update: (tabs: EditorTab[], active?: string) => { tabs: EditorTab[]; activeTabId?: string }) => {
@@ -89,6 +100,19 @@ export function App() {
   const updateTerminalGroup = useCallback((update: (group: LayoutModel["terminalGroup"]) => LayoutModel["terminalGroup"]) => {
     setLayout((current) => ({ ...current, terminalGroup: update(current.terminalGroup) }));
   }, []);
+
+  const checkJava = useCallback(async () => {
+    if (!clientRef.current || !javaOptionsRef.current) return;
+    setJavaChecking(true);
+    try { setJavaDiagnostics((await clientRef.current.request("java.check", {})).diagnostics); }
+    catch (error) { setStatusMessage(error instanceof Error ? error.message : "Java checks failed"); }
+    finally { setJavaChecking(false); }
+  }, []);
+
+  const scheduleJavaCheck = useCallback(() => {
+    if (javaCheckTimer.current) clearTimeout(javaCheckTimer.current);
+    javaCheckTimer.current = setTimeout(() => { void checkJava(); }, 700);
+  }, [checkJava]);
 
   const registerTerminalWriter = useCallback((terminalId: string, writer?: (data: string) => void) => {
     if (!writer) { terminalWriters.current.delete(terminalId); return; }
@@ -154,7 +178,7 @@ export function App() {
       }
       if (event.type === "java.debug.state") {
         setJavaDebugState(event.payload);
-        if (event.payload.status === "paused") setLayout((current) => ({ ...current, panels: [...current.panels.filter((panel) => panel.type !== "terminal" && panel.type !== "java"), { id: "java", type: "java" }] }));
+        if (event.payload.status === "paused") setLayout((current) => ({ ...current, panels: [...current.panels.filter((panel) => !["terminal", "java", "problems"].includes(panel.type)), { id: "java", type: "java" }] }));
         return;
       }
       if (gitRefreshTimer.current) clearTimeout(gitRefreshTimer.current);
@@ -292,18 +316,32 @@ export function App() {
     });
   };
 
-  const saveActive = useCallback(async () => {
-    const current = layout.editorGroups[0]?.tabs.find((tab) => tab.id === layout.editorGroups[0]?.activeTabId);
-    if (!current || current.type !== "file" || current.loading || current.error || !current.dirty) return;
+  const saveFileTab = useCallback(async (current: EditorTab) => {
+    if (current.type !== "file" || current.loading || current.error || !current.dirty || !clientRef.current) return;
+    const content = current.content;
     try {
       selfWriteUntil.current.set(current.path, Date.now() + 1500);
-      await clientRef.current!.request("filesystem.writeFile", { path: current.path, content: current.content });
-      updateGroup((tabs, active) => ({ tabs: tabs.map((tab) => tab.id === current.id ? { ...tab, dirty: false, savedContent: tab.content, error: undefined } : tab), activeTabId: active }));
+      await clientRef.current.request("filesystem.writeFile", { path: current.path, content });
+      updateGroup((tabs, active) => ({ tabs: tabs.map((tab) => tab.id === current.id ? { ...tab, dirty: tab.content !== content, savedContent: content, error: undefined } : tab), activeTabId: active }));
+      if (/\.java$/i.test(current.path)) scheduleJavaCheck();
     } catch (error) {
       selfWriteUntil.current.delete(current.path);
       updateGroup((tabs, active) => ({ tabs: tabs.map((tab) => tab.id === current.id ? { ...tab, error: error instanceof Error ? error.message : "Save failed" } : tab), activeTabId: active }));
     }
-  }, [layout, updateGroup]);
+  }, [scheduleJavaCheck, updateGroup]);
+
+  const saveActive = useCallback(async () => {
+    const current = layout.editorGroups[0]?.tabs.find((tab) => tab.id === layout.editorGroups[0]?.activeTabId);
+    if (current) await saveFileTab(current);
+  }, [layout, saveFileTab]);
+
+  useEffect(() => {
+    if (status !== "connected") return;
+    const dirtyFiles = group.tabs.filter((tab) => tab.type === "file" && tab.dirty && !tab.loading && !tab.error);
+    if (dirtyFiles.length === 0) return;
+    const timer = setTimeout(() => { for (const tab of dirtyFiles) void saveFileTab(tab); }, 600);
+    return () => clearTimeout(timer);
+  }, [status, group.tabs, saveFileTab]);
 
   useEffect(() => {
     const listener = (event: KeyboardEvent) => { if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") { event.preventDefault(); void saveActive(); } };
@@ -332,7 +370,7 @@ export function App() {
         const tab = { id, terminalId: result.terminalId, title: `Terminal ${current.tabs.length + 1}`, exited: false };
         return { ...current, tabs: [...current.tabs, tab], activeTabId: id };
       });
-      setLayout((current) => ({ ...current, panels: [...current.panels.filter((panel) => panel.type !== "terminal" && panel.type !== "java"), { id: "terminal", type: "terminal" }] }));
+      setLayout((current) => ({ ...current, panels: [...current.panels.filter((panel) => !["terminal", "java", "problems"].includes(panel.type)), { id: "terminal", type: "terminal" }] }));
     } catch (error) {
       setStatusMessage(error instanceof Error ? error.message : "Could not create terminal");
     }
@@ -343,7 +381,7 @@ export function App() {
     if (visible) {
       setLayout((current) => ({ ...current, panels: current.panels.filter((panel) => panel.type !== "terminal") }));
     } else if (layout.terminalGroup.tabs.length > 0) {
-      setLayout((current) => ({ ...current, panels: [...current.panels.filter((panel) => panel.type !== "java"), { id: "terminal", type: "terminal" }] }));
+      setLayout((current) => ({ ...current, panels: [...current.panels.filter((panel) => !["java", "problems"].includes(panel.type)), { id: "terminal", type: "terminal" }] }));
     } else {
       void createTerminal();
     }
@@ -398,12 +436,18 @@ export function App() {
     const visible = layout.panels.some((panel) => panel.type === "java");
     setLayout((current) => ({
       ...current,
-      panels: visible ? current.panels.filter((panel) => panel.type !== "java") : [...current.panels.filter((panel) => panel.type !== "terminal" && panel.type !== "java"), { id: "java", type: "java" }]
+      panels: visible ? current.panels.filter((panel) => panel.type !== "java") : [...current.panels.filter((panel) => !["terminal", "java", "problems"].includes(panel.type)), { id: "java", type: "java" }]
     }));
   };
 
+  const toggleProblemsPanel = () => {
+    const visible = layout.panels.some((panel) => panel.type === "problems");
+    setLayout((current) => ({ ...current, panels: visible ? current.panels.filter((panel) => panel.type !== "problems") : [...current.panels.filter((panel) => !["terminal", "java", "problems"].includes(panel.type)), { id: "problems", type: "problems" }] }));
+    if (!visible) void checkJava();
+  };
+
   const runJavaAction = async (action: "java.build" | "java.run") => {
-    setLayout((current) => ({ ...current, panels: [...current.panels.filter((panel) => panel.type !== "terminal" && panel.type !== "java"), { id: "java", type: "java" }] }));
+    setLayout((current) => ({ ...current, panels: [...current.panels.filter((panel) => !["terminal", "java", "problems"].includes(panel.type)), { id: "java", type: "java" }] }));
     setJavaRunning(true);
     try { await clientRef.current!.request(action, {}); }
     catch (error) { setJavaRunning(false); setJavaLog((current) => `${current}${error instanceof Error ? error.message : "Java process failed"}\n`); }
@@ -414,7 +458,7 @@ export function App() {
   };
 
   const debugJava = async () => {
-    setLayout((current) => ({ ...current, panels: [...current.panels.filter((panel) => panel.type !== "terminal" && panel.type !== "java"), { id: "java", type: "java" }] }));
+    setLayout((current) => ({ ...current, panels: [...current.panels.filter((panel) => !["terminal", "java", "problems"].includes(panel.type)), { id: "java", type: "java" }] }));
     setJavaRunning(true);
     try { await clientRef.current!.request("java.debug.start", { breakpoints: javaBreakpoints }); }
     catch (error) { setJavaRunning(false); setJavaDebugState({ status: "stopped", variables: [] }); setJavaLog((current) => `${current}${error instanceof Error ? error.message : "Debugger failed"}\n`); }
@@ -435,6 +479,22 @@ export function App() {
     breakpointDecorationsRef.current = instance.deltaDecorations(breakpointDecorationsRef.current, javaBreakpoints.filter((item) => item.path === activeTab.path).map((item) => ({ range: { startLineNumber: item.line, startColumn: 1, endLineNumber: item.line, endColumn: 1 }, options: { isWholeLine: false, glyphMarginClassName: "java-breakpoint", glyphMarginHoverMessage: { value: `Breakpoint at line ${item.line}` } } })));
   }, [activeTab?.path, javaBreakpoints]);
 
+  useEffect(() => {
+    const instance = monacoEditorRef.current;
+    const api = monacoRef.current;
+    const model = instance?.getModel();
+    if (!api || !model || activeTab?.type !== "file") return;
+    const diagnostics = javaDiagnostics.filter((item) => item.path === activeTab.path);
+    api.editor.setModelMarkers(model, "java", diagnostics.map((item) => {
+      const line = Math.max(1, Math.min(item.line, model.getLineCount()));
+      const column = Math.max(1, Math.min(item.column, model.getLineMaxColumn(line)));
+      return {
+      startLineNumber: line, startColumn: column, endLineNumber: line, endColumn: Math.max(column + 1, model.getLineMaxColumn(line)),
+      severity: item.severity === "error" ? api.MarkerSeverity.Error : api.MarkerSeverity.Warning,
+      message: item.message, source: "Maven"
+    }; }));
+  }, [activeTab?.path, javaDiagnostics]);
+
   const selectRunConfiguration = async (id: string) => {
     try {
       const result = await clientRef.current!.request("java.selectRunConfiguration", { id });
@@ -449,6 +509,84 @@ export function App() {
     const move = (moveEvent: PointerEvent) => setJavaPanelHeight(Math.max(140, Math.min(520, startHeight + startY - moveEvent.clientY)));
     const end = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", end); };
     window.addEventListener("pointermove", move); window.addEventListener("pointerup", end);
+  };
+
+  const beginProblemsResize = (event: React.PointerEvent) => {
+    event.currentTarget.setPointerCapture(event.pointerId);
+    const startY = event.clientY;
+    const startHeight = problemsHeight;
+    const move = (moveEvent: PointerEvent) => setProblemsHeight(Math.max(120, Math.min(520, startHeight + startY - moveEvent.clientY)));
+    const end = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", end); };
+    window.addEventListener("pointermove", move); window.addEventListener("pointerup", end);
+  };
+
+  const openDiagnostic = async (diagnostic: JavaDiagnostic) => {
+    await openFile({ name: diagnostic.path.split("/").pop() ?? diagnostic.path, path: diagnostic.path, type: "file" });
+    setPendingNavigation({ result: { path: diagnostic.path, line: diagnostic.line, column: diagnostic.column, preview: diagnostic.message }, matchLength: 1 });
+  };
+
+  const openJavaLocation = async (location: JavaLspLocation) => {
+    await openFile({ name: location.path.split("/").pop() ?? location.path, path: location.path, type: "file" });
+    setPendingNavigation({ result: { path: location.path, line: location.startLine, column: location.startColumn, preview: "Java symbol" }, matchLength: Math.max(1, location.endColumn - location.startColumn) });
+    setJavaUsages(undefined);
+  };
+
+  const applyJavaImport = (suggestion: JavaTypeSuggestion, range = importChoices?.range) => {
+    const instance = monacoEditorRef.current;
+    const model = instance?.getModel();
+    if (!instance || !model || !range) return;
+    const content = model.getValue();
+    const packageName = content.match(/^\s*package\s+([\w$.]+)\s*;/m)?.[1];
+    const needsImport = suggestion.qualifiedName.includes(".") && !suggestion.qualifiedName.startsWith("java.lang.") && !suggestion.qualifiedName.startsWith(`${packageName}.`) && !new RegExp(`^\\s*import\\s+${suggestion.qualifiedName.replaceAll(".", "\\.")}\\s*;`, "m").test(content);
+    const edits: editor.IIdentifiedSingleEditOperation[] = [{ range, text: suggestion.simpleName, forceMoveMarkers: true }];
+    if (needsImport) {
+      const imports = [...content.matchAll(/^\s*import\s+[^;]+;\s*$/gm)];
+      const packageMatch = content.match(/^\s*package\s+[\w$.]+\s*;\s*$/m);
+      const offset = imports.at(-1)?.index !== undefined ? imports.at(-1)!.index! + imports.at(-1)![0].length : packageMatch?.index !== undefined ? packageMatch.index + packageMatch[0].length : 0;
+      const position = model.getPositionAt(offset);
+      edits.push({ range: { startLineNumber: position.lineNumber, startColumn: position.column, endLineNumber: position.lineNumber, endColumn: position.column }, text: `${offset === 0 ? "" : "\n"}import ${suggestion.qualifiedName};\n`, forceMoveMarkers: true });
+    }
+    instance.executeEdits("java-auto-import", edits);
+    instance.focus();
+    setImportChoices(undefined);
+  };
+
+  const mountEditor = (instance: editor.IStandaloneCodeEditor, api: Monaco) => {
+    monacoEditorRef.current = instance;
+    monacoRef.current = api;
+    for (const disposable of javaLanguageDisposables.current) disposable.dispose();
+    javaLanguageDisposables.current = [];
+    if (activeTab?.type !== "file" || !/\.java$/i.test(activeTab.path)) return;
+    const filePath = activeTab.path;
+    javaLanguageDisposables.current.push(api.languages.registerCompletionItemProvider("java", {
+      triggerCharacters: ["."],
+      provideCompletionItems: async (model, position) => {
+        if (!clientRef.current || model !== instance.getModel()) return { suggestions: [] };
+        const result = await clientRef.current.request("java.completion", { path: filePath, content: model.getValue(), line: position.lineNumber, column: position.column });
+        const word = model.getWordUntilPosition(position);
+        return { suggestions: result.items.map((item) => ({
+          label: item.label, detail: item.detail, kind: api.languages.CompletionItemKind.Text, insertText: item.insertText,
+          range: item.range ? { startLineNumber: item.range.startLine, startColumn: item.range.startColumn, endLineNumber: item.range.endLine, endColumn: item.range.endColumn } : { startLineNumber: position.lineNumber, startColumn: word.startColumn, endLineNumber: position.lineNumber, endColumn: word.endColumn },
+          additionalTextEdits: item.additionalTextEdits.map((edit) => ({ range: { startLineNumber: edit.range.startLine, startColumn: edit.range.startColumn, endLineNumber: edit.range.endLine, endColumn: edit.range.endColumn }, text: edit.text }))
+        })) };
+      }
+    }));
+    javaLanguageDisposables.current.push(instance.addAction({ id: "java.semantic-completion", label: "Java completion", keybindings: [api.KeyMod.CtrlCmd | api.KeyCode.Enter, api.KeyMod.WinCtrl | api.KeyCode.Enter], run: () => instance.trigger("java", "editor.action.triggerSuggest", {}) }));
+    javaLanguageDisposables.current.push(instance.onMouseDown((event) => {
+      const line = event.target.position?.lineNumber ?? event.target.range?.startLineNumber;
+      if ((event.target.type === 2 || event.target.type === 3) && line) { toggleBreakpoint(filePath, instance.getValue(), line); return; }
+      const position = event.target.position;
+      if (!position || (!event.event.ctrlKey && !event.event.metaKey) || !clientRef.current) return;
+      event.event.preventDefault();
+      const content = instance.getValue();
+      void clientRef.current.request("java.definition", { path: filePath, content, line: position.lineNumber, column: position.column }).then(async ({ locations }) => {
+        const declaration = locations.find((location) => location.path === filePath && position.lineNumber >= location.startLine && position.lineNumber <= location.endLine && position.column >= location.startColumn && position.column <= location.endColumn);
+        if (declaration) {
+          const references = await clientRef.current!.request("java.references", { path: filePath, content, line: position.lineNumber, column: position.column });
+          setJavaUsages(references.locations);
+        } else if (locations[0]) void openJavaLocation(locations[0]);
+      }).catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : "Java navigation failed"));
+    }));
   };
 
   const openSearchForNode = (node: FileTreeNode) => {
@@ -516,16 +654,18 @@ export function App() {
         <div className="editor-area">
           {!activeTab ? <div className="empty-editor">Open a file from Project</div> : activeTab.loading ? <div className="empty-editor">Loading {activeTab.title}...</div> : activeTab.error && !activeTab.content ? <div className="editor-error">{activeTab.error}</div> : <>
             {activeTab.error && <div className="inline-error">{activeTab.error}</div>}
-            {activeTab.type === "diff" ? <DiffEditor original={activeTab.originalContent ?? ""} modified={activeTab.content} language={languageByExtension[activeTab.path.split(".").pop()?.toLowerCase() ?? ""] ?? "plaintext"} theme="vs-dark" options={{ automaticLayout: true, readOnly: true, originalEditable: false, renderSideBySide: activeTab.diffMode !== "unified", minimap: { enabled: false }, fontSize: 13, scrollBeyondLastLine: false }} /> : activeTab.markdownMode === "preview" ? <div className="markdown-preview"><ReactMarkdown remarkPlugins={[remarkGfm]}>{activeTab.content}</ReactMarkdown></div> : <Editor path={activeTab.path} language={languageByExtension[activeTab.path.split(".").pop()?.toLowerCase() ?? ""] ?? "plaintext"} value={activeTab.content} theme="vs-dark" onMount={(instance) => { monacoEditorRef.current = instance; instance.onMouseDown((event) => { const line = event.target.position?.lineNumber ?? event.target.range?.startLineNumber; if (/\.java$/i.test(activeTab.path) && (event.target.type === 2 || event.target.type === 3) && line) toggleBreakpoint(activeTab.path, activeTab.content, line); }); }} options={{ automaticLayout: true, minimap: { enabled: false }, glyphMargin: /\.java$/i.test(activeTab.path), fontSize: 13, scrollBeyondLastLine: false, padding: { top: 10 } }} onChange={(value) => updateGroup((tabs, active) => ({ tabs: tabs.map((tab) => tab.id === activeTab.id ? { ...tab, content: value ?? "", dirty: (value ?? "") !== tab.savedContent, error: undefined } : tab), activeTabId: active }))} />}
+            {activeTab.type === "diff" ? <DiffEditor original={activeTab.originalContent ?? ""} modified={activeTab.content} language={languageByExtension[activeTab.path.split(".").pop()?.toLowerCase() ?? ""] ?? "plaintext"} theme="vs-dark" options={{ automaticLayout: true, readOnly: true, originalEditable: false, renderSideBySide: activeTab.diffMode !== "unified", minimap: { enabled: false }, fontSize: 13, scrollBeyondLastLine: false }} /> : activeTab.markdownMode === "preview" ? <div className="markdown-preview"><ReactMarkdown remarkPlugins={[remarkGfm]}>{activeTab.content}</ReactMarkdown></div> : <Editor path={activeTab.path} language={languageByExtension[activeTab.path.split(".").pop()?.toLowerCase() ?? ""] ?? "plaintext"} value={activeTab.content} theme="vs-dark" onMount={mountEditor} options={{ automaticLayout: true, minimap: { enabled: false }, glyphMargin: /\.java$/i.test(activeTab.path), fontSize: 13, scrollBeyondLastLine: false, padding: { top: 10 } }} onChange={(value) => updateGroup((tabs, active) => ({ tabs: tabs.map((tab) => tab.id === activeTab.id ? { ...tab, content: value ?? "", dirty: (value ?? "") !== tab.savedContent, error: undefined } : tab), activeTabId: active }))} />}
           </>}
         </div>
       </main>
     </div>
     {layout.panels.some((panel) => panel.type === "terminal") && <TerminalPanel client={clientRef.current!} group={layout.terminalGroup} height={terminalHeight} onActivate={(id) => updateTerminalGroup((current) => ({ ...current, activeTabId: id }))} onCreate={() => void createTerminal()} onClose={closeTerminal} onResizeStart={beginTerminalResize} registerWriter={registerTerminalWriter} />}
     {layout.panels.some((panel) => panel.type === "java") && javaOptions && <JavaPanel height={javaPanelHeight} log={javaLog} running={javaRunning} options={javaOptions} debugState={javaDebugState} onBuild={() => void runJavaAction("java.build")} onRun={() => void runJavaAction("java.run")} onDebug={() => void debugJava()} onStop={() => void stopJava()} onDebugCommand={(command) => void clientRef.current!.request("java.debug.command", { command })} onClear={() => setJavaLog("")} onResizeStart={beginJavaResize} />}
+    {layout.panels.some((panel) => panel.type === "problems") && javaOptions && <ProblemsPanel height={problemsHeight} diagnostics={javaDiagnostics} checking={javaChecking} onRefresh={() => void checkJava()} onOpen={(diagnostic) => void openDiagnostic(diagnostic)} onResizeStart={beginProblemsResize} />}
     <footer className="bottom-tool-bar">
       <button className={`bottom-tool-button ${layout.panels.some((panel) => panel.type === "terminal") ? "active" : ""}`} onClick={toggleTerminalPanel}><SquareTerminal size={14} /><span>Terminal</span>{layout.terminalGroup.tabs.length > 0 && <span className="bottom-tool-count">{layout.terminalGroup.tabs.length}</span>}</button>
       {javaOptions && <button className={`bottom-tool-button ${layout.panels.some((panel) => panel.type === "java") ? "active" : ""}`} onClick={toggleJavaPanel}><Coffee size={14} /><span>Java</span>{javaRunning && <span className="running-indicator" />}</button>}
+      {javaOptions && <button className={`bottom-tool-button ${layout.panels.some((panel) => panel.type === "problems") ? "active" : ""}`} onClick={toggleProblemsPanel}><CircleAlert size={14} /><span>Problems</span>{javaDiagnostics.length > 0 && <span className="bottom-tool-count">{javaDiagnostics.length}</span>}</button>}
     </footer>
     {treeContextMenu && <div className="context-menu-layer" onMouseDown={() => setTreeContextMenu(undefined)}>
       <div className="context-menu" style={{ left: treeContextMenu.x, top: treeContextMenu.y }} onMouseDown={(event) => event.stopPropagation()}>
@@ -535,6 +675,8 @@ export function App() {
       </div>
     </div>}
     {searchScope !== undefined && <FindInFilesDialog client={clientRef.current!} scope={searchScope} onClose={() => setSearchScope(undefined)} onNavigate={(result, matchLength) => void navigateToSearchResult(result, matchLength)} />}
+    {importChoices && <div className="dialog-overlay" onMouseDown={() => setImportChoices(undefined)}><section className="import-chooser" role="dialog" aria-modal="true" aria-label="Choose Java import" onMouseDown={(event) => event.stopPropagation()}><header><span>Import class</span><button title="Close" onClick={() => setImportChoices(undefined)}><X size={15} /></button></header><div>{importChoices.suggestions.map((suggestion) => <button key={suggestion.qualifiedName} onClick={() => applyJavaImport(suggestion)}><span>{suggestion.simpleName}</span><code>{suggestion.qualifiedName}</code><small>{suggestion.source}</small></button>)}</div></section></div>}
+    {javaUsages && <div className="dialog-overlay" onMouseDown={() => setJavaUsages(undefined)}><section className="import-chooser usage-chooser" role="dialog" aria-modal="true" aria-label="Java usages" onMouseDown={(event) => event.stopPropagation()}><header><span>Usages ({javaUsages.length})</span><button title="Close" onClick={() => setJavaUsages(undefined)}><X size={15} /></button></header><div>{javaUsages.length === 0 ? <div className="problems-empty">No project usages found</div> : javaUsages.map((location, index) => <button key={`${location.path}:${location.startLine}:${location.startColumn}:${index}`} onClick={() => void openJavaLocation(location)}><span>{location.path.split("/").pop()}</span><code>{location.path}</code><small>{location.startLine}:{location.startColumn}</small></button>)}</div></section></div>}
     {showRunConfigurationDialog && <RunConfigurationDialog client={clientRef.current!} onClose={() => setShowRunConfigurationDialog(false)} onSaved={(options) => { setJavaOptions(options); javaOptionsRef.current = options; setShowRunConfigurationDialog(false); }} />}
   </div>;
 }

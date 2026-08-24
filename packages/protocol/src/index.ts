@@ -40,6 +40,11 @@ export type JavaDebugState = {
   line?: number;
   variables: JavaDebugVariable[];
 };
+export type JavaDiagnostic = { path: string; line: number; column: number; severity: "error" | "warning"; message: string };
+export type JavaTypeSuggestion = { simpleName: string; qualifiedName: string; source: "project" | "dependency" };
+export type JavaLspRange = { startLine: number; startColumn: number; endLine: number; endColumn: number };
+export type JavaLspCompletion = { label: string; detail?: string; insertText: string; range?: JavaLspRange; additionalTextEdits: { range: JavaLspRange; text: string }[] };
+export type JavaLspLocation = { path: string } & JavaLspRange;
 
 export type JavaProjectNode = {
   name: string;
@@ -147,6 +152,17 @@ export type ProtocolOperations = {
     payload: { command: "continue" | "stepInto" | "stepOver" | "stepOut" };
     result: Record<string, never>;
   };
+  "java.check": {
+    payload: Record<string, never>;
+    result: { diagnostics: JavaDiagnostic[] };
+  };
+  "java.completeType": {
+    payload: { prefix: string };
+    result: { suggestions: JavaTypeSuggestion[] };
+  };
+  "java.completion": { payload: { path: string; content: string; line: number; column: number }; result: { items: JavaLspCompletion[] } };
+  "java.definition": { payload: { path: string; content: string; line: number; column: number }; result: { locations: JavaLspLocation[] } };
+  "java.references": { payload: { path: string; content: string; line: number; column: number }; result: { locations: JavaLspLocation[] } };
 };
 
 export type RequestType = keyof ProtocolOperations;
@@ -227,5 +243,10 @@ export const requestTypes: RequestType[] = [
   "java.run",
   "java.stop",
   "java.debug.start",
-  "java.debug.command"
+  "java.debug.command",
+  "java.check",
+  "java.completeType",
+  "java.completion",
+  "java.definition",
+  "java.references"
 ];

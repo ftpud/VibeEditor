@@ -73,11 +73,15 @@ Markdown file tabs include Edit and Preview controls. Preview mode renders GitHu
 
 ## Java and Maven
 
+Java editing uses a pinned Eclipse JDT Language Server and a private Temurin Java 21 runtime under `.tools/`. Both are downloaded and checksum-verified by `npm install`; run `npm run install:jdtls` to repair or install them manually. This runtime is only used by the language server and does not replace the JDK used by Maven, Run, or Debug.
+
+Normal completion and `Ctrl/Cmd+Enter` provide semantic types, methods, fields, and local variables. Completion edits supplied by JDT LS also insert imports. `Ctrl/Cmd+click` navigates to a declaration; using it on the declaration itself opens the project usages list.
+
 Right-click a `pom.xml` in Project and select **Load as Maven Project**. Core parses the POM, records Maven metadata in the persisted workspace JSON, detects existing main/test Java source directories, and enables the Java tool windows. The saved options include the POM path, Maven executable, source roots, and main/test output paths.
 
 Right-click a folder after Maven loading and select **Mark as Sources Root** to add generated or nonstandard Java sources. The Java sidebar presents source roots as compact Java package trees rather than filesystem folders. Selecting a Java class opens it in the regular editor.
 
-The full-width Java bottom tool window contains Build, Run, Stop, and Clear controls plus streamed process output. Use the plus button beside the run-configuration selector to create a profile. Core discovers classes containing `public static void main`, and the dialog lets you select one and assign a profile name. Profiles and the selected profile persist with the workspace; Maven re-import preserves them.
+The full-width Java bottom tool window contains Build, Run, Debug, Stop, and Clear controls plus streamed process output. Choose **Create new...** in the top run-configuration selector to create a profile. Core discovers classes containing `public static void main`, and the dialog lets you select one and assign a profile name. Profiles and the selected profile persist with the workspace; Maven re-import preserves them.
 
 Build runs `mvn -f <pom> package -DskipTests`; Run executes `mvn -f <pom> exec:java -Dexec.mainClass=<selected-class>`. The Maven Exec Plugin must be available to the project. Only one Java build or run process is active per client session, and disconnecting stops it. Maven and an appropriate JDK must be installed on the backend machine and available to the backend process.
 

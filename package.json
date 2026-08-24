@@ -6,7 +6,8 @@
   "scripts": {
     "core": "npm run start -w @remote-ide/core --",
     "desktop": "npm run start -w @remote-ide/desktop --",
-    "postinstall": "node scripts/fix-node-pty.mjs",
+    "install:jdtls": "node scripts/install-jdtls.mjs",
+    "postinstall": "node scripts/fix-node-pty.mjs && node scripts/install-jdtls.mjs",
     "dev:core": "npm run dev -w @remote-ide/core --",
     "dev:desktop": "npm run dev -w @remote-ide/desktop --",
     "build": "npm run build -w @remote-ide/protocol && npm run build -w @remote-ide/core && npm run build -w @remote-ide/desktop",

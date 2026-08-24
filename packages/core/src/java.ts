@@ -4,7 +4,7 @@ import { mkdtemp, readFile, readdir, rm, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { XMLParser } from "fast-xml-parser";
-import type { JavaBreakpoint, JavaDebugState, JavaMainClass, JavaProjectNode, JavaProjectOptions } from "@remote-ide/protocol";
+import type { JavaBreakpoint, JavaDebugState, JavaDiagnostic, JavaMainClass, JavaProjectNode, JavaProjectOptions, JavaTypeSuggestion } from "@remote-ide/protocol";
 import { CoreError } from "./errors.js";
 import { WorkspaceFileSystem } from "./filesystem.js";
 import { WorkspaceStateStore } from "./workspace-state.js";
@@ -20,6 +20,7 @@ export class JavaProjectService {
   private debugBuffer = "";
   private debugLocation?: { className: string; method: string; line: number };
   private awaitingDebugLocals = false;
+  private dependencyTypes?: JavaTypeSuggestion[];
 
   constructor(
     private readonly filesystem: WorkspaceFileSystem,
@@ -28,6 +29,7 @@ export class JavaProjectService {
   ) {}
 
   async loadMavenProject(pomPath: string): Promise<{ options: JavaProjectOptions; tree: JavaProjectNode[] }> {
+    this.dependencyTypes = undefined;
     if (path.posix.basename(pomPath) !== "pom.xml") throw new CoreError("MAVEN_PROJECT_INVALID", "Select a pom.xml file");
     const xml = await this.filesystem.read(pomPath);
     let document: Record<string, unknown>;
@@ -116,6 +118,57 @@ export class JavaProjectService {
   }
 
   async build(): Promise<void> { await this.start(["package", "-DskipTests"], "Build"); }
+  async check(): Promise<JavaDiagnostic[]> {
+    if (this.process) throw new CoreError("JAVA_PROCESS_FAILED", "Java checks are unavailable while a build, run, or debug process is active");
+    const options = await this.requireOptions();
+    const output = await this.capture(options.mavenExecutable, ["-f", options.pomPath, "compile", "-DskipTests", "-Dstyle.color=never"]);
+    const diagnostics: JavaDiagnostic[] = [];
+    const workspace = this.filesystem.getWorkspace();
+    for (const rawLine of output.split(/\r?\n/)) {
+      const line = rawLine.replace(/\x1b\[[0-9;]*m/g, "");
+      const match = line.match(/^\[(ERROR|WARNING)]\s+(.+?\.java):\[(\d+),(\d+)]\s+(.+)$/) ?? line.match(/^(.+?\.java):(\d+):(?:(\d+):)?\s*(error|warning):\s*(.+)$/i);
+      if (!match) continue;
+      const mavenFormat = match[1] === "ERROR" || match[1] === "WARNING";
+      const filePath = mavenFormat ? match[2]! : match[1]!;
+      const absolute = path.isAbsolute(filePath) ? filePath : path.resolve(workspace, filePath);
+      const relative = path.relative(workspace, absolute).split(path.sep).join(path.posix.sep);
+      if (relative.startsWith("..")) continue;
+      diagnostics.push({
+        path: relative,
+        line: Number(mavenFormat ? match[3] : match[2]),
+        column: Number((mavenFormat ? match[4] : match[3]) || 1),
+        severity: (mavenFormat ? match[1] : match[4])!.toLowerCase() as "error" | "warning",
+        message: (mavenFormat ? match[5] : match[5])!.trim()
+      });
+    }
+    return diagnostics;
+  }
+
+  async completeType(prefix: string): Promise<JavaTypeSuggestion[]> {
+    const normalized = prefix.trim();
+    if (!/^[A-Za-z_$][\w$]*$/.test(normalized)) return [];
+    const options = await this.requireOptions();
+    const projectTypes: JavaTypeSuggestion[] = [];
+    for (const sourceRoot of options.sourceRoots) {
+      let absolute: string;
+      try { absolute = await this.filesystem.resolveExisting(sourceRoot); } catch { continue; }
+      for (const filePath of await this.collectJavaFiles(absolute, sourceRoot)) {
+        const content = await this.filesystem.read(filePath).catch(() => "");
+        const packageName = content.match(/^\s*package\s+([\w$.]+)\s*;/m)?.[1];
+        for (const match of content.matchAll(/\b(?:public\s+)?(?:class|interface|enum|record)\s+([A-Za-z_$][\w$]*)/g)) {
+          const simpleName = match[1]!;
+          projectTypes.push({ simpleName, qualifiedName: packageName ? `${packageName}.${simpleName}` : simpleName, source: "project" });
+        }
+      }
+    }
+    if (!this.dependencyTypes) this.dependencyTypes = await this.indexDependencyTypes(options);
+    const lower = normalized.toLowerCase();
+    return [...projectTypes, ...this.dependencyTypes]
+      .filter((item) => item.simpleName.toLowerCase().startsWith(lower))
+      .filter((item, index, all) => all.findIndex((candidate) => candidate.qualifiedName === item.qualifiedName) === index)
+      .sort((a, b) => Number(b.simpleName === normalized) - Number(a.simpleName === normalized) || a.simpleName.localeCompare(b.simpleName) || a.qualifiedName.localeCompare(b.qualifiedName))
+      .slice(0, 100);
+  }
   async run(): Promise<void> {
     const options = await this.requireOptions();
     const configuration = options.runConfigurations.find((item) => item.id === options.selectedRunConfigurationId);
@@ -202,6 +255,17 @@ export class JavaProjectService {
     });
   }
 
+  private capture(command: string, args: string[]): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const child = spawn(command, args, { cwd: this.filesystem.getWorkspace(), env: process.env, stdio: "pipe" });
+      let output = "";
+      child.stdout.on("data", (data: Buffer) => { output += data.toString(); });
+      child.stderr.on("data", (data: Buffer) => { output += data.toString(); });
+      child.on("error", (error) => reject(new CoreError("JAVA_PROCESS_FAILED", `Java diagnostics failed: ${error.message}`)));
+      child.on("close", () => resolve(output));
+    });
+  }
+
   private async buildDebugClasspath(options: JavaProjectOptions): Promise<string> {
     const temporaryDirectory = await mkdtemp(path.join(os.tmpdir(), "vibe-jdb-"));
     const classpathFile = path.join(temporaryDirectory, "classpath.txt");
@@ -214,6 +278,34 @@ export class JavaProjectService {
     } finally {
       await rm(temporaryDirectory, { recursive: true, force: true });
     }
+  }
+
+  private async indexDependencyTypes(options: JavaProjectOptions): Promise<JavaTypeSuggestion[]> {
+    const classpath = await this.buildDebugClasspath(options);
+    const jars = classpath.split(path.delimiter).filter((entry) => entry.endsWith(".jar"));
+    const suggestions: JavaTypeSuggestion[] = [];
+    for (const jar of jars) {
+      const listing = await this.capture("jar", ["tf", jar]).catch(() => "");
+      for (const entry of listing.split(/\r?\n/)) {
+        if (!entry.endsWith(".class") || entry.includes("$") || entry.endsWith("module-info.class") || entry.endsWith("package-info.class")) continue;
+        const qualifiedName = entry.slice(0, -6).replaceAll("/", ".");
+        const simpleName = qualifiedName.split(".").pop()!;
+        suggestions.push({ simpleName, qualifiedName, source: "dependency" });
+      }
+    }
+    const javaSettings = await this.capture("java", ["-XshowSettings:properties", "-version"]).catch(() => "");
+    const javaHome = javaSettings.match(/^\s*java\.home\s*=\s*(.+)$/m)?.[1]?.trim();
+    if (javaHome) {
+      const listing = await this.capture("jimage", ["list", path.join(javaHome, "lib", "modules")]).catch(() => "");
+      for (const entry of listing.split(/\r?\n/).map((line) => line.trim())) {
+        if (!entry.endsWith(".class") || entry.includes("$") || entry.includes("module-info") || entry.includes("package-info")) continue;
+        const normalized = entry.replace(/^modules\//, "").replace(/^[^/]+\/(?=(?:java|javax)\/)/, "");
+        if (!/^(java|javax)\//.test(normalized) || normalized.includes("/internal/")) continue;
+        const qualifiedName = normalized.slice(0, -6).replaceAll("/", ".");
+        suggestions.push({ simpleName: qualifiedName.split(".").pop()!, qualifiedName, source: "dependency" });
+      }
+    }
+    return suggestions;
   }
 
   private consumeDebugOutput(data: string): void {
