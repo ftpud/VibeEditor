@@ -73,7 +73,7 @@ Markdown file tabs include Edit and Preview controls. Preview mode renders GitHu
 
 ## Java and Maven
 
-Java editing uses a pinned Eclipse JDT Language Server and a private Temurin Java 21 runtime under `.tools/`. Both are downloaded and checksum-verified by `npm install`; run `npm run install:jdtls` to repair or install them manually. This runtime is only used by the language server and does not replace the JDK used by Maven, Run, or Debug.
+Java editing uses a pinned Eclipse JDT Language Server and a private Temurin Java 21 runtime under `.tools/`. `npm install` attempts to download and checksum-verify both, but a download failure does not prevent desktop-only installations. Run `npm run install:jdtls` on the backend machine to install or repair them. This runtime is only used by the language server and does not replace the JDK used by Maven, Run, or Debug.
 
 Normal completion and `Ctrl/Cmd+Enter` provide semantic types, methods, fields, and local variables. Completion edits supplied by JDT LS also insert imports. `Ctrl/Cmd+click` navigates to a declaration; using it on the declaration itself opens the project usages list.
 
