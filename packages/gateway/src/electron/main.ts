@@ -15,6 +15,7 @@ type Runtime = { status: "idle" | "working" | "server" | "client" | "error"; mes
 
 const directory = path.dirname(fileURLToPath(import.meta.url));
 const repository = "https://github.com/ftpud/VibeEditor";
+const repositoryBranch = "dev";
 const remoteNodeEnvironment = `export PATH="$HOME/.local/bin:$HOME/.volta/bin:$HOME/.fnm:$HOME/.nvm/versions/node/current/bin:/usr/local/bin:$PATH"; export NVM_DIR="$HOME/.nvm"; if [ -s "$NVM_DIR/nvm.sh" ]; then . "$NVM_DIR/nvm.sh"; fi; command -v npm >/dev/null 2>&1 || { echo "npm was not found on the SSH host. Install Node.js 20+ for this user or configure NVM in ~/.bashrc." >&2; exit 127; }`;
 const runtimes = new Map<string, Runtime>();
 const tunnels = new Map<string, { ssh: Client; server: Server }>();
@@ -93,7 +94,7 @@ async function refreshStatuses(connectionId?: string): Promise<void> {
   }));
 }
 async function provision(client: Client): Promise<{ commit: string; rebuilt: boolean }> {
-  const command = `set -e; ${remoteNodeEnvironment}; if [ -d ~/.vibe/.git ]; then git -C ~/.vibe pull --ff-only; else rm -rf ~/.vibe; git clone ${repository} ~/.vibe; fi; cd ~/.vibe; head=$(git rev-parse HEAD); rebuilt=0; if [ ! -f ~/.vibe-core-build ] || [ "$(cat ~/.vibe-core-build)" != "$head" ] || [ ! -f packages/core/dist/index.js ] || [ ! -d node_modules ]; then VIBE_SKIP_JDTLS=1 npm install; npm run build -w @remote-ide/protocol; npm run build -w @remote-ide/core; printf '%s' "$head" > ~/.vibe-core-build; rebuilt=1; fi; printf '\nVIBE_RESULT:%s:%s\n' "$head" "$rebuilt"`;
+  const command = `set -e; ${remoteNodeEnvironment}; if [ -d ~/.vibe/.git ]; then git -C ~/.vibe fetch origin ${repositoryBranch}; git -C ~/.vibe checkout -B ${repositoryBranch} origin/${repositoryBranch}; else rm -rf ~/.vibe; git clone --branch ${repositoryBranch} --single-branch ${repository} ~/.vibe; fi; cd ~/.vibe; head=$(git rev-parse HEAD); rebuilt=0; if [ ! -f ~/.vibe-core-build ] || [ "$(cat ~/.vibe-core-build)" != "$head" ] || [ ! -f packages/core/dist/index.js ] || [ ! -d node_modules ]; then VIBE_SKIP_JDTLS=1 npm install; npm run build -w @remote-ide/protocol; npm run build -w @remote-ide/core; printf '%s' "$head" > ~/.vibe-core-build; rebuilt=1; fi; printf '\nVIBE_RESULT:%s:%s\n' "$head" "$rebuilt"`;
   const output = await execute(client, `bash -lc ${shell(command)}`);
   const match = output.match(/VIBE_RESULT:([0-9a-f]{40,64}):([01])/);
   if (!match?.[1]) throw new Error("Remote Git revision could not be determined");

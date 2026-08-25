@@ -69,7 +69,7 @@ The backend watches the configured workspace and broadcasts typed change events.
 
 Vibe Gateway is a separate Electron application for managing Vibe Editor over SSH. Start it from a built checkout with `npm run gateway`, or use `npm run dev:gateway` during development. SSH passwords are encrypted with Electron `safeStorage` before they are written to Gateway's application-data directory.
 
-Each saved SSH connection can contain multiple remote workspaces. **Start server** clones or fast-forwards `https://github.com/ftpud/VibeEditor` under `~/.vibe` on the SSH host, installs dependencies, builds Protocol and Core, then starts Core on remote loopback with a workspace-specific PID and log file. The SSH account therefore needs Git, Node.js 20+, npm, and access to the configured workspace directory.
+Each saved SSH connection can contain multiple remote workspaces. **Start server** clones or updates the `dev` branch of `https://github.com/ftpud/VibeEditor` under `~/.vibe` on the SSH host, installs dependencies, builds Protocol and Core, then starts Core on remote loopback with a workspace-specific PID and log file. The SSH account therefore needs Git, Node.js 20+, npm, and access to the configured workspace directory.
 
 **Start client** creates a source archive from the remote checkout, downloads it over SFTP, installs and builds Protocol and Desktop under Gateway's local application-data directory, opens a loopback SSH tunnel, and launches Vibe Editor against that tunnel. **Stop server** closes Gateway's active tunnel and stops the recorded remote Core process. Keep Gateway running while using a client it launched because Gateway owns the tunnel.
 
