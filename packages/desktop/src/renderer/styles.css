@@ -1,4 +1,4 @@
-:root { color-scheme: dark; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: #c7c9cc; background: #1e1f22; font-size: 13px; }
+:root { color-scheme: dark; font-family: "Inter", "SF Pro Text", "Segoe UI", sans-serif; color: #c7c9cc; background: #1e1f22; font-size: 14px; }
 * { box-sizing: border-box; }
 html, body, #root { width: 100%; height: 100%; margin: 0; overflow: hidden; }
 button, input { font: inherit; letter-spacing: 0; }
@@ -28,23 +28,23 @@ button { color: inherit; }
 .tool-stripe-button.right { border-left: 0; border-right: 2px solid transparent; }
 .tool-stripe-button.right.active { border-right-color: #3574f0; }
 .explorer { flex: 0 0 auto; min-width: 180px; max-width: 500px; display: flex; flex-direction: column; background: #2b2d30; overflow: hidden; }
-.panel-header, .titlebar-actions { height: 34px; flex: 0 0 34px; display: flex; align-items: center; padding: 0 8px; font-size: 12px; color: #b8babf; }
+.panel-header, .titlebar-actions { height: 34px; flex: 0 0 34px; display: flex; align-items: center; padding: 0 8px; font-size: 13px; color: #b8babf; }
 .panel-header { justify-content: space-between; font-weight: 600; border-bottom: 1px solid #393b40; }
 .panel-header button, .titlebar-actions button, .save-button { width: 28px; height: 27px; display: grid; place-items: center; border: 0; background: transparent; border-radius: 3px; cursor: pointer; }
 .panel-header button:hover, .titlebar-actions button:hover, .save-button:hover:not(:disabled) { background: #333; color: white; }
-.workspace-name { height: 27px; padding: 0 8px; display: flex; align-items: center; gap: 3px; font-size: 11px; font-weight: 600; color: #c9cbd0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.workspace-name { height: 28px; padding: 0 8px; display: flex; align-items: center; gap: 3px; font-size: 12px; font-weight: 600; color: #c9cbd0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .tree { flex: 1; overflow: auto; padding: 1px 0 12px; }
-.tree-row { width: 100%; height: 22px; padding: 0 7px; position: relative; display: flex; align-items: center; gap: 5px; border: 0; background: transparent; text-align: left; cursor: pointer; white-space: nowrap; color: #c7c9cc; }
+.tree-row { width: 100%; height: 24px; padding: 0 7px; position: relative; display: flex; align-items: center; gap: 5px; border: 0; background: transparent; text-align: left; cursor: pointer; white-space: nowrap; color: #c7c9cc; }
 .tree-row:hover { background: #34363a; }
 .tree-row.selected { background: #2e436e; color: #ffffff; }
 .tree-row.selected::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 2px; background: #579dff; }
-.tree-row.file-color-red:not(.selected) { background: rgba(176, 66, 73, .24); }
-.tree-row.file-color-orange:not(.selected) { background: rgba(184, 105, 52, .23); }
-.tree-row.file-color-yellow:not(.selected) { background: rgba(170, 139, 54, .22); }
-.tree-row.file-color-green:not(.selected) { background: rgba(69, 139, 79, .23); }
-.tree-row.file-color-blue:not(.selected) { background: rgba(65, 112, 174, .25); }
-.tree-row.file-color-purple:not(.selected) { background: rgba(126, 83, 161, .24); }
-.tree-row.file-color-gray:not(.selected) { background: rgba(116, 120, 126, .22); }
+.tree-row.file-color-red .file-kind-icon, .tree-row.file-color-red .folder-kind-icon { color: #d8646d; }
+.tree-row.file-color-orange .file-kind-icon, .tree-row.file-color-orange .folder-kind-icon { color: #db8a50; }
+.tree-row.file-color-yellow .file-kind-icon, .tree-row.file-color-yellow .folder-kind-icon { color: #d3b34f; }
+.tree-row.file-color-green .file-kind-icon, .tree-row.file-color-green .folder-kind-icon { color: #62ad6d; }
+.tree-row.file-color-blue .file-kind-icon, .tree-row.file-color-blue .folder-kind-icon { color: #6593d1; }
+.tree-row.file-color-purple .file-kind-icon, .tree-row.file-color-purple .folder-kind-icon { color: #a276c5; }
+.tree-row.file-color-gray .file-kind-icon, .tree-row.file-color-gray .folder-kind-icon { color: #8d9198; }
 .tree-row span:last-child { overflow: hidden; text-overflow: ellipsis; }
 .tree-file-name { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; }
 .tree-git-status { width: 14px; flex: 0 0 14px; overflow: visible !important; font-size: 10px; font-weight: 700; text-align: center; }
@@ -53,6 +53,7 @@ button { color: inherit; }
 .tree-children { padding-left: 13px; }
 .tree-indent { width: 14px; flex: 0 0 14px; }
 .file-kind-icon { flex: 0 0 14px; }
+.folder-kind-icon { flex: 0 0 15px; }
 .git-branch { height: 28px; padding: 0 9px; display: flex; align-items: center; gap: 6px; border-bottom: 1px solid #393b40; color: #b7bac0; }
 .git-branch span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .git-changes { flex: 1; overflow: auto; padding-bottom: 12px; }

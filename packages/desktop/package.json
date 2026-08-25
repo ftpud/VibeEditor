@@ -13,6 +13,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.electron.json --noEmit"
   },
   "dependencies": {
+    "@fontsource/inter": "^5.2.5",
     "@monaco-editor/react": "^4.6.0",
     "@remote-ide/protocol": "0.1.0",
     "@xterm/addon-fit": "^0.10.0",
