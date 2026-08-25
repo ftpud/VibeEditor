@@ -27,6 +27,10 @@ describe("WorkspaceTaskStore", () => {
     expect((await execFileAsync("git", ["-C", selected.workspace, "branch", "--show-current"])).stdout.trim()).toBe("feature/task-one");
     await writeFile(path.join(selected.workspace, "tracked.txt"), "task\n");
     expect(await readFile(path.join(root, "tracked.txt"), "utf8")).toBe("root\n");
+    await execFileAsync("git", ["-C", selected.workspace, "add", "tracked.txt"]);
+    await execFileAsync("git", ["-C", selected.workspace, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "task change"]);
+    expect((await store.merge(task.id)).targetBranch).toBe(rootBranch);
+    expect(await readFile(path.join(root, "tracked.txt"), "utf8")).toBe("task\n");
     expect((await store.select()).workspace).toBe(root);
     await store.delete(task.id);
     expect((await store.list()).tasks).toEqual([]);

@@ -86,6 +86,7 @@ export type ProtocolOperations = {
   };
   "tasks.list": { payload: Record<string, never>; result: { tasks: WorkspaceTask[]; selectedTaskId?: string } };
   "tasks.create": { payload: { branch: string }; result: { task: WorkspaceTask } };
+  "tasks.merge": { payload: { taskId: string }; result: { targetBranch: string } };
   "tasks.switch": { payload: { taskId?: string }; result: { workspace: string; tree: FileTreeNode[]; options: WorkspaceOptions; tasks: WorkspaceTask[]; selectedTaskId?: string } };
   "tasks.delete": { payload: { taskId: string }; result: { tasks: WorkspaceTask[]; selectedTaskId?: string } };
   "ai.get": { payload: { provider?: AiProvider }; result: { session: AiSession } };
@@ -273,6 +274,7 @@ export const requestTypes: RequestType[] = [
   "workspace.saveOptions",
   "tasks.list",
   "tasks.create",
+  "tasks.merge",
   "tasks.switch",
   "tasks.delete",
   "ai.get",

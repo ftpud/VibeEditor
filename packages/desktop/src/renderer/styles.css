@@ -115,10 +115,11 @@ button { color: inherit; }
 .task-row:hover { background: #34363a; color: #e4e5e7; }
 .task-row.selected { border-left-color: #3574f0; background: #2e436e; color: white; }
 .task-open { min-width: 0; flex: 1; padding: 7px 8px; display: flex; align-items: flex-start; gap: 8px; border: 0; background: transparent; color: inherit; text-align: left; cursor: pointer; }
-.task-open:disabled, .task-delete:disabled { opacity: .55; cursor: wait; }
-.task-delete { width: 28px; flex: 0 0 28px; margin: 5px 4px 5px 0; display: grid; place-items: center; align-self: stretch; border: 0; border-radius: 3px; background: transparent; color: #85888e; opacity: 0; cursor: pointer; }
-.task-row:hover .task-delete, .task-delete:focus-visible { opacity: 1; }
-.task-delete:hover:not(:disabled) { background: #543034; color: #ed8c93; }
+.task-open:disabled, .task-actions:disabled { opacity: .55; cursor: wait; }
+.task-actions { width: 28px; flex: 0 0 28px; margin: 5px 4px 5px 0; display: grid; place-items: center; align-self: stretch; border: 0; border-radius: 3px; background: transparent; color: #85888e; opacity: 0; cursor: pointer; }
+.task-row:hover .task-actions, .task-actions:focus-visible { opacity: 1; }
+.task-actions:hover:not(:disabled) { background: #414348; color: #e4e5e7; }
+.task-actions-menu { position: fixed; width: 210px; }
 .task-icon { width: 17px; flex: 0 0 17px; padding-top: 2px; color: #92959b; }
 .task-row.selected .task-icon { color: #a9cbff; }
 .task-content { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 4px; }

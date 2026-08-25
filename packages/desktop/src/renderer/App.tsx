@@ -1,5 +1,5 @@
 import Editor, { DiffEditor, type Monaco } from "@monaco-editor/react";
-import { ArrowUpRight, Bot, Braces, Bug, CaseSensitive, Check, ChevronDown, ChevronRight, CircleAlert, Coffee, Columns2, Eye, File, FileCode2, FileDiff, FileJson, FileText, Folder, FolderOpen, GitBranch, GitCompareArrows, Hash, Library, ListTodo, ListTree, LoaderCircle, LogOut, Package, Palette, Pencil, Play, Plus, RefreshCw, Save, Search, Settings, Square, SquareTerminal, Trash2, X } from "lucide-react";
+import { ArrowUpRight, Bot, Braces, Bug, CaseSensitive, Check, ChevronDown, ChevronRight, CircleAlert, Coffee, Columns2, Eye, File, FileCode2, FileDiff, FileJson, FileText, Folder, FolderOpen, GitBranch, GitCompareArrows, GitMerge, Hash, Library, ListTodo, ListTree, LoaderCircle, LogOut, MoreVertical, Package, Palette, Pencil, Play, Plus, RefreshCw, Save, Search, Settings, Square, SquareTerminal, Trash2, X } from "lucide-react";
 import { isValidElement, useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
 import type { AiModel, AiProvider, AiSession, AiStatus, AiTaskSummary, FileColor, FileTreeNode, GitBranch as GitBranchInfo, GitDiffHunk, GitStatusEntry, HttpResponse, JavaBreakpoint, JavaDebugState, JavaDiagnostic, JavaLspLocation, JavaMainClass, JavaProjectNode, JavaProjectOptions, JavaTypeSuggestion, SearchResult, UsefulFile, UsefulFileScope, WorkspaceOptions, WorkspaceTask } from "@remote-ide/protocol";
 import type { editor } from "monaco-editor";
@@ -692,6 +692,18 @@ export function App() {
     finally { setTaskSwitching(false); }
   }, [selectedTaskId, switchTask, taskSwitching]);
 
+  const mergeTask = useCallback(async (task: WorkspaceTask) => {
+    if (!clientRef.current || taskSwitching || !window.confirm(`Merge task "${task.name}" into the main workspace?\n\nBoth workspaces must have all changes committed.`)) return;
+    try {
+      setTaskSwitching(true);
+      const result = await clientRef.current.request("tasks.merge", { taskId: task.id });
+      setTaskSwitching(false);
+      await switchTask();
+      setStatusMessage(`Merged ${task.name} into ${result.targetBranch}`);
+    } catch (error) { setStatusMessage(error instanceof Error ? error.message : "Could not merge task"); }
+    finally { setTaskSwitching(false); }
+  }, [switchTask, taskSwitching]);
+
   const saveUsefulFileDialog = async (name: string) => {
     if (!clientRef.current || !usefulDialog) return;
     if (usefulDialog.mode === "create") await clientRef.current.request("useful.create", { scope: usefulDialog.scope, name });
@@ -1232,7 +1244,7 @@ export function App() {
       <aside className="tasks-panel" style={{ width: tasksWidth }}>
         {tasksOpen && <section className="right-panel-section" style={aiOpen ? { flex: `0 0 ${rightSplit}%` } : undefined}><header className="panel-header"><span>Tasks</span><button title="Create task" disabled={taskSwitching} onClick={() => setShowCreateTaskDialog(true)}><Plus size={15} /></button></header><div className="tasks-list">
           <TaskRow icon={<Folder size={15} />} name="Root workspace" summary={aiStatuses.root} selected={selectedTaskId === undefined} disabled={taskSwitching} onClick={() => void switchTask()} />
-          {tasks.map((task) => <TaskRow key={task.id} icon={<ListTodo size={15} />} name={task.name} summary={aiStatuses.tasks[task.id] ?? emptyAiSummary} selected={selectedTaskId === task.id} disabled={taskSwitching} onClick={() => void switchTask(task.id)} onDelete={() => void deleteTask(task)} />)}
+          {tasks.map((task) => <TaskRow key={task.id} icon={<ListTodo size={15} />} name={task.name} summary={aiStatuses.tasks[task.id] ?? emptyAiSummary} selected={selectedTaskId === task.id} disabled={taskSwitching} onClick={() => void switchTask(task.id)} onMerge={() => void mergeTask(task)} onDelete={() => void deleteTask(task)} />)}
         </div></section>}
         {tasksOpen && aiOpen && <div className="right-panel-divider" onPointerDown={beginRightSplitResize} />}
         {aiOpen && <section className="right-panel-section"><header className="panel-header"><span>AI</span><span className={`ai-status ${aiSession.status}`}>{formatAiStatus(aiSession.status)}</span></header><AiPanel provider={aiProvider} session={aiSession} models={aiModels} attachments={currentAiAttachments} onProviderChange={(provider) => void switchAiProvider(provider)} onAttachmentsChange={updateAiAttachments} onSend={sendAiPrompt} onClear={() => void clearAiContext()} /></section>}
@@ -1349,13 +1361,19 @@ function JavaProjectTree({ nodes, activePath, onOpen }: { nodes: JavaProjectNode
   return <>{render(nodes, 0)}</>;
 }
 
-function TaskRow({ icon, name, summary, selected, disabled, onClick, onDelete }: { icon: ReactNode; name: string; summary: AiTaskSummary; selected: boolean; disabled: boolean; onClick(): void; onDelete?(): void }) {
+function TaskRow({ icon, name, summary, selected, disabled, onClick, onMerge, onDelete }: { icon: ReactNode; name: string; summary: AiTaskSummary; selected: boolean; disabled: boolean; onClick(): void; onMerge?(): void; onDelete?(): void }) {
+  const [menu, setMenu] = useState<{ x: number; y: number }>();
   const preview = summary.preview || "No Codex activity yet";
   return <div className={`task-row ${selected ? "selected" : ""}`}><button className="task-open" disabled={disabled} title={`${name}\n${preview}`} onClick={onClick}>
     <span className="task-icon">{icon}</span>
     <span className="task-content"><span className="task-title"><strong>{name}</strong>{(summary.additions > 0 || summary.deletions > 0) && <span className="task-diff-stat"><small>+{summary.additions}</small><small>-{summary.deletions}</small></span>}{summary.status !== "idle" && <small className={`task-ai-status ${summary.status}`}>{summary.status === "in_progress" && <LoaderCircle className="task-progress-spinner" size={13} />}{formatAiStatus(summary.status)}</small>}</span><span className="task-preview">{preview}</span></span>
     {selected && <Check className="task-check" size={13} />}
-  </button>{onDelete && <button className="task-delete" title={`Delete ${name}`} disabled={disabled} onClick={onDelete}><Trash2 size={13} /></button>}</div>;
+  </button>{onDelete && <button className="task-actions" title={`Actions for ${name}`} disabled={disabled} onClick={(event) => { event.stopPropagation(); const bounds = event.currentTarget.getBoundingClientRect(); setMenu({ x: Math.max(8, bounds.right - 180), y: bounds.bottom + 2 }); }}><MoreVertical size={14} /></button>}
+    {menu && <div className="context-menu-layer" onMouseDown={() => setMenu(undefined)}><div className="context-menu task-actions-menu" style={{ left: menu.x, top: menu.y }} onMouseDown={(event) => event.stopPropagation()}>
+      <button onClick={() => { setMenu(undefined); onMerge?.(); }}><GitMerge size={14} /><span>Merge to main workspace</span></button>
+      <button className="danger" onClick={() => { setMenu(undefined); onDelete?.(); }}><Trash2 size={14} /><span>Delete task</span></button>
+    </div></div>}
+  </div>;
 }
 
 function UsefulFileSection({ title, scope, files, activeTab, onOpen, onCreate, onRename, onDelete }: { title: string; scope: UsefulFileScope; files: UsefulFile[]; activeTab?: EditorTab; onOpen(file: UsefulFile): void; onCreate(scope: UsefulFileScope): void; onRename(file: UsefulFile): void; onDelete(file: UsefulFile): void }) {

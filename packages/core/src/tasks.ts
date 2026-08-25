@@ -60,6 +60,35 @@ export class WorkspaceTaskStore {
     return { workspace: taskId ? this.taskPath(taskId) : this.rootWorkspace, registry: next };
   }
 
+  async merge(taskId: string): Promise<{ targetBranch: string }> {
+    const registry = await this.list();
+    const task = registry.tasks.find((item) => item.id === taskId);
+    if (!task) throw new CoreError("INVALID_REQUEST", "Task does not exist");
+    const taskWorkspace = this.taskPath(taskId);
+    try {
+      const [rootStatus, taskStatus, targetBranch] = await Promise.all([
+        execFileAsync("git", ["-C", this.rootWorkspace, "status", "--porcelain"], { encoding: "utf8" }),
+        execFileAsync("git", ["-C", taskWorkspace, "status", "--porcelain"], { encoding: "utf8" }),
+        execFileAsync("git", ["-C", this.rootWorkspace, "branch", "--show-current"], { encoding: "utf8" }),
+      ]);
+      if (rootStatus.stdout.trim()) throw new CoreError("GIT_FAILED", "Main workspace has uncommitted changes. Commit or rollback them before merging a task.");
+      if (taskStatus.stdout.trim()) throw new CoreError("GIT_FAILED", `Task ${task.name} has uncommitted changes. Commit them before merging.`);
+      const branch = targetBranch.stdout.trim();
+      if (!branch) throw new CoreError("GIT_FAILED", "Main workspace is in detached HEAD state. Check out a branch before merging.");
+      await execFileAsync("git", ["-C", this.rootWorkspace, "fetch", "--no-tags", taskWorkspace, task.branch], { encoding: "utf8" });
+      try { await execFileAsync("git", ["-C", this.rootWorkspace, "merge", "--no-edit", "FETCH_HEAD"], { encoding: "utf8" }); }
+      catch (mergeError) {
+        await execFileAsync("git", ["-C", this.rootWorkspace, "merge", "--abort"], { encoding: "utf8" }).catch(() => undefined);
+        throw mergeError;
+      }
+      return { targetBranch: branch };
+    } catch (error) {
+      if (error instanceof CoreError) throw error;
+      const detail = error as { stderr?: string; stdout?: string; message?: string };
+      throw new CoreError("GIT_FAILED", `Could not merge task ${task.name}: ${(detail.stderr || detail.stdout || detail.message || String(error)).trim()}`);
+    }
+  }
+
   async delete(taskId: string): Promise<Registry> {
     const registry = await this.list();
     if (!registry.tasks.some((task) => task.id === taskId)) throw new CoreError("INVALID_REQUEST", "Task does not exist");
