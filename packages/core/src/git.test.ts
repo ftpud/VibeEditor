@@ -37,7 +37,10 @@ describe("parseGitStatus", () => {
     await writeFile(path.join(root, "file.txt"), "modified\n");
     const filesystem = new WorkspaceFileSystem();
     await filesystem.open(root);
-    await expect(new GitService(root).diff("file.txt", filesystem)).resolves.toEqual({ path: "file.txt", originalContent: "original\n", modifiedContent: "modified\n", hunks: [{ originalStart: 1, originalLines: 1, modifiedStart: 1, modifiedLines: 1 }] });
+    const service = new GitService(root);
+    await expect(service.diff("file.txt", filesystem)).resolves.toEqual({ path: "file.txt", originalContent: "original\n", modifiedContent: "modified\n", hunks: [{ originalStart: 1, originalLines: 1, modifiedStart: 1, modifiedLines: 1 }] });
+    await writeFile(path.join(root, "new.txt"), "one\ntwo\n");
+    await expect(service.diffStats()).resolves.toEqual({ additions: 3, deletions: 1 });
   });
 
   it("rolls back tracked and untracked files", async () => {

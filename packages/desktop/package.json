@@ -1,5 +1,7 @@
 {
   "name": "@remote-ide/desktop",
+  "productName": "Vibe Editor",
+  "description": "Vibe Editor desktop application",
   "version": "0.1.0",
   "private": true,
   "type": "module",

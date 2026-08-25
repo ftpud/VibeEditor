@@ -1,4 +1,4 @@
-# Remote IDE POC
+# Vibe Editor
 
 A minimal remote IDE split into two independently running processes:
 

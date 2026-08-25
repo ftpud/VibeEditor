@@ -21,16 +21,19 @@ export type WorkspaceOptions = {
   activeFile?: string;
   javaProject?: JavaProjectOptions;
   terminal?: WorkspaceTerminalOptions;
+  fileColors?: Record<string, FileColor>;
 };
+export type FileColor = "red" | "orange" | "yellow" | "green" | "blue" | "purple" | "gray";
 export type WorkspaceTerminalOptions = { tabs: { title: string }[]; activeTabIndex?: number; panelOpen: boolean };
 export type WorkspaceTask = { id: string; name: string; branch: string };
 export type AiStatus = "idle" | "in_progress" | "user_prompt" | "done" | "error";
 export type AiMessage = { id: string; role: "user" | "assistant" | "activity" | "error"; text: string; timestamp: string };
 export type AiSession = { threadId?: string; model: string; reasoning: string; status: AiStatus; messages: AiMessage[] };
 export type AiModel = { id: string; name: string; defaultReasoning: string; reasoningLevels: string[] };
-export type AiTaskSummary = { status: AiStatus; preview: string };
+export type AiTaskSummary = { status: AiStatus; preview: string; additions: number; deletions: number };
 export type UsefulFileScope = "global" | "local";
 export type UsefulFile = { scope: UsefulFileScope; name: string };
+export type HttpResponse = { status: number; statusText: string; headers: Record<string, string>; body: string; durationMs: number };
 
 export type JavaProjectOptions = {
   type: "maven";
@@ -84,6 +87,7 @@ export type ProtocolOperations = {
   "ai.get": { payload: Record<string, never>; result: { session: AiSession } };
   "ai.models": { payload: Record<string, never>; result: { models: AiModel[] } };
   "ai.send": { payload: { prompt: string; model: string; reasoning: string }; result: { session: AiSession } };
+  "ai.clear": { payload: Record<string, never>; result: { session: AiSession } };
   "ai.statuses": { payload: Record<string, never>; result: { root: AiTaskSummary; tasks: Record<string, AiTaskSummary> } };
   "useful.list": { payload: Record<string, never>; result: { files: UsefulFile[] } };
   "useful.read": { payload: { scope: UsefulFileScope; name: string }; result: { content: string } };
@@ -91,6 +95,7 @@ export type ProtocolOperations = {
   "useful.write": { payload: { scope: UsefulFileScope; name: string; content: string }; result: Record<string, never> };
   "useful.rename": { payload: { scope: UsefulFileScope; name: string; newName: string }; result: Record<string, never> };
   "useful.delete": { payload: { scope: UsefulFileScope; name: string }; result: Record<string, never> };
+  "http.execute": { payload: { method: string; url: string; headers: Record<string, string>; body?: string }; result: HttpResponse };
   "filesystem.listTree": {
     payload: Record<string, never>;
     result: { tree: FileTreeNode[] };
@@ -264,6 +269,7 @@ export const requestTypes: RequestType[] = [
   "ai.get",
   "ai.models",
   "ai.send",
+  "ai.clear",
   "ai.statuses",
   "useful.list",
   "useful.read",
@@ -271,6 +277,7 @@ export const requestTypes: RequestType[] = [
   "useful.write",
   "useful.rename",
   "useful.delete",
+  "http.execute",
   "filesystem.listTree",
   "filesystem.readFile",
   "filesystem.writeFile",

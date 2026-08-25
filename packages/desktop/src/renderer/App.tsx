@@ -1,7 +1,7 @@
 import Editor, { DiffEditor, type Monaco } from "@monaco-editor/react";
-import { ArrowUpRight, Bot, Braces, Bug, CaseSensitive, Check, ChevronDown, ChevronRight, CircleAlert, Coffee, Columns2, Eye, File, FileCode2, FileDiff, FileJson, FileText, Folder, FolderOpen, GitBranch, GitCompareArrows, Hash, Library, ListTodo, ListTree, LogOut, Package, Pencil, Play, Plus, RefreshCw, Save, Search, Square, SquareTerminal, Trash2, X } from "lucide-react";
+import { ArrowUpRight, Bot, Braces, Bug, CaseSensitive, Check, ChevronDown, ChevronRight, CircleAlert, Coffee, Columns2, Eye, File, FileCode2, FileDiff, FileJson, FileText, Folder, FolderOpen, GitBranch, GitCompareArrows, Hash, Library, ListTodo, ListTree, LogOut, Package, Palette, Pencil, Play, Plus, RefreshCw, Save, Search, Square, SquareTerminal, Trash2, X } from "lucide-react";
 import { isValidElement, useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
-import type { AiModel, AiSession, AiStatus, AiTaskSummary, FileTreeNode, GitDiffHunk, GitStatusEntry, JavaBreakpoint, JavaDebugState, JavaDiagnostic, JavaLspLocation, JavaMainClass, JavaProjectNode, JavaProjectOptions, JavaTypeSuggestion, SearchResult, UsefulFile, UsefulFileScope, WorkspaceOptions, WorkspaceTask } from "@remote-ide/protocol";
+import type { AiModel, AiSession, AiStatus, AiTaskSummary, FileColor, FileTreeNode, GitDiffHunk, GitStatusEntry, HttpResponse, JavaBreakpoint, JavaDebugState, JavaDiagnostic, JavaLspLocation, JavaMainClass, JavaProjectNode, JavaProjectOptions, JavaTypeSuggestion, SearchResult, UsefulFile, UsefulFileScope, WorkspaceOptions, WorkspaceTask } from "@remote-ide/protocol";
 import type { editor } from "monaco-editor";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -17,15 +17,35 @@ import { AiPanel } from "./AiPanel";
 type ConnectionStatus = "idle" | "connecting" | "connected" | "failed" | "disconnected" | "workspace-error";
 const languageByExtension: Record<string, string> = {
   ts: "typescript", tsx: "typescript", js: "javascript", jsx: "javascript", json: "json", html: "html",
-  css: "css", md: "markdown", java: "java", py: "python", yaml: "yaml", yml: "yaml", txt: "plaintext"
+  css: "css", md: "markdown", java: "java", py: "python", yaml: "yaml", yml: "yaml", http: "http", txt: "plaintext"
 };
 const formatAiStatus = (status: AiStatus) => ({ idle: "", in_progress: "In progress", user_prompt: "User prompt", done: "Done", error: "Error" })[status];
+const fileColorChoices: { id: FileColor; label: string }[] = [{ id: "red", label: "Red" }, { id: "orange", label: "Orange" }, { id: "yellow", label: "Yellow" }, { id: "green", label: "Green" }, { id: "blue", label: "Blue" }, { id: "purple", label: "Purple" }, { id: "gray", label: "Gray" }];
 const gitHunkDecorations = (hunks: GitDiffHunk[]): editor.IModelDeltaDecoration[] => hunks.map((hunk) => {
   const start = Math.max(1, hunk.modifiedStart);
   const end = Math.max(start, start + Math.max(1, hunk.modifiedLines) - 1);
   const kind = hunk.originalLines === 0 ? "added" : hunk.modifiedLines === 0 ? "deleted" : "modified";
   return { range: { startLineNumber: start, startColumn: 1, endLineNumber: end, endColumn: 1 }, options: { isWholeLine: true, className: `git-change-line ${kind}`, linesDecorationsClassName: `git-change-marker ${kind}`, hoverMessage: { value: "Click the gutter marker to view this change" } } };
 });
+type ParsedHttpRequest = { line: number; method: string; url: string; headers: Record<string, string>; body?: string };
+function parseHttpRequests(content: string): ParsedHttpRequest[] {
+  const lines = content.split("\n"); const requests: ParsedHttpRequest[] = [];
+  let blockStart = 0;
+  for (let end = 0; end <= lines.length; end += 1) {
+    if (end < lines.length && !/^\s*###(?:\s.*)?$/.test(lines[end]!)) continue;
+    const block = lines.slice(blockStart, end); let index = 0;
+    while (index < block.length && (!block[index]!.trim() || /^\s*(#(?!##)|\/\/)/.test(block[index]!))) index += 1;
+    const match = block[index]?.match(/^\s*([A-Za-z]+)\s+(\S+)\s*(?:HTTP\/\d(?:\.\d)?)?\s*$/);
+    if (match) {
+      const line = blockStart + index + 1; const headers: Record<string, string> = {}; index += 1;
+      while (index < block.length && block[index]!.trim()) { const header = block[index]!.match(/^\s*([^:#][^:]*):\s*(.*)$/); if (header) headers[header[1]!.trim()] = header[2]!.trim(); index += 1; }
+      while (index < block.length && !block[index]!.trim()) index += 1;
+      const body = block.slice(index).join("\n").trimEnd(); requests.push({ line, method: match[1]!.toUpperCase(), url: match[2]!, headers, ...(body ? { body } : {}) });
+    }
+    blockStart = end + 1;
+  }
+  return requests;
+}
 
 export function App() {
   const saved = useMemo(() => {
@@ -42,7 +62,7 @@ export function App() {
   const [tree, setTree] = useState<FileTreeNode[]>([]);
   const [layout, setLayout] = useState<LayoutModel>(initialLayout);
   const [explorerWidth, setExplorerWidth] = useState(260);
-  const [tasksWidth, setTasksWidth] = useState(230);
+  const [tasksWidth, setTasksWidth] = useState(300);
   const [tasksOpen, setTasksOpen] = useState(true);
   const [showCreateTaskDialog, setShowCreateTaskDialog] = useState(false);
   const [tasks, setTasks] = useState<WorkspaceTask[]>([]);
@@ -51,14 +71,16 @@ export function App() {
   const [terminalHeight, setTerminalHeight] = useState(240);
   const [sideView, setSideView] = useState<"project" | "git" | "java" | "ai" | "useful">("project");
   const [usefulFiles, setUsefulFiles] = useState<UsefulFile[]>([]);
+  const [fileColors, setFileColors] = useState<Record<string, FileColor>>({});
   const [usefulDialog, setUsefulDialog] = useState<{ mode: "create" | "rename"; scope: UsefulFileScope; file?: UsefulFile }>();
   const [activeWorkspace, setActiveWorkspace] = useState("");
   const [aiSession, setAiSession] = useState<AiSession>({ model: "gpt-5.6-sol", reasoning: "low", status: "idle", messages: [] });
   const [aiModels, setAiModels] = useState<AiModel[]>([]);
-  const emptyAiSummary: AiTaskSummary = { status: "idle", preview: "" };
+  const emptyAiSummary: AiTaskSummary = { status: "idle", preview: "", additions: 0, deletions: 0 };
   const [aiStatuses, setAiStatuses] = useState<{ root: AiTaskSummary; tasks: Record<string, AiTaskSummary> }>({ root: emptyAiSummary, tasks: {} });
   const [activeGitHunks, setActiveGitHunks] = useState<GitDiffHunk[]>([]);
   const [pendingDiffLine, setPendingDiffLine] = useState<{ path: string; line: number }>();
+  const [httpResult, setHttpResult] = useState<{ request: ParsedHttpRequest; response?: HttpResponse; error?: string; loading: boolean }>();
   const [gitBranch, setGitBranch] = useState("HEAD");
   const [gitEntries, setGitEntries] = useState<GitStatusEntry[]>([]);
   const [gitError, setGitError] = useState("");
@@ -80,6 +102,8 @@ export function App() {
   const [treeContextMenu, setTreeContextMenu] = useState<{ x: number; y: number; node: FileTreeNode }>();
   const [editorGitMenu, setEditorGitMenu] = useState<{ x: number; y: number; path: string; startLine?: number; endLine?: number }>();
   const [gitRollbackMenu, setGitRollbackMenu] = useState<{ x: number; y: number; entry: GitStatusEntry }>();
+  const [tabContextMenu, setTabContextMenu] = useState<{ x: number; y: number; tab: EditorTab }>();
+  const [draggedTabId, setDraggedTabId] = useState<string>();
   const [gitHistory, setGitHistory] = useState<{ path: string; startLine?: number; endLine?: number }>();
   const [searchScope, setSearchScope] = useState<string>();
   const [pendingNavigation, setPendingNavigation] = useState<{ result: SearchResult; matchLength: number }>();
@@ -107,6 +131,7 @@ export function App() {
   const group = layout.editorGroups[0]!;
   const activeTab = group.tabs.find((tab) => tab.id === group.activeTabId);
   const hasDirtyTabs = group.tabs.some((tab) => tab.dirty);
+  const projectGitStatuses = useMemo(() => Object.fromEntries(gitEntries.map((entry) => [entry.path, entry.indexStatus === "?" || entry.indexStatus === "A" ? "C" : "M"] as const)), [gitEntries]);
 
   useEffect(() => { window.desktop?.setDirtyState(hasDirtyTabs); }, [hasDirtyTabs]);
   useEffect(() => { layoutRef.current = layout; }, [layout]);
@@ -183,6 +208,7 @@ export function App() {
   const refreshUsefulFiles = useCallback(async (client = clientRef.current) => { if (client) setUsefulFiles((await client.request("useful.list", {})).files); }, []);
 
   const restoreWorkspaceOptions = useCallback(async (options: WorkspaceOptions, client: CoreClient) => {
+    setFileColors(options.fileColors ?? {});
     const tabs = await Promise.all(options.openFiles.map(async (filePath): Promise<EditorTab> => {
       const title = filePath.split("/").pop() ?? filePath;
       try {
@@ -247,7 +273,7 @@ export function App() {
         return;
       }
       if (gitRefreshTimer.current) clearTimeout(gitRefreshTimer.current);
-      gitRefreshTimer.current = setTimeout(() => { void refreshGit(client); }, 200);
+      gitRefreshTimer.current = setTimeout(() => { void refreshGit(client); void client.request("ai.statuses", {}).then(setAiStatuses).catch(() => undefined); }, 200);
       const refreshDiffs = (changedPath?: string) => {
         const diffTabs = layoutRef.current.editorGroups[0]?.tabs.filter((tab) => tab.type === "diff" && (!changedPath || tab.path === changedPath)) ?? [];
         for (const tab of diffTabs) void client.request("git.diff", { path: tab.path }).then((result) => {
@@ -347,10 +373,10 @@ export function App() {
   const terminalPanelOpen = layout.panels.some((panel) => panel.type === "terminal");
   const activeTerminalIndex = layout.terminalGroup.tabs.findIndex((tab) => tab.id === layout.terminalGroup.activeTabId);
   const terminalOptions: NonNullable<WorkspaceOptions["terminal"]> = { tabs: layout.terminalGroup.tabs.map((tab) => ({ title: tab.title })), ...(activeTerminalIndex >= 0 ? { activeTabIndex: activeTerminalIndex } : {}), panelOpen: terminalPanelOpen };
-  const workspaceOptionsSignature = `${persistedFileTabs.map((tab) => tab.path).join("\0")}\n${persistedActiveTab?.path ?? ""}\n${JSON.stringify(javaOptions)}\n${JSON.stringify(terminalOptions)}`;
+  const workspaceOptionsSignature = `${persistedFileTabs.map((tab) => tab.path).join("\0")}\n${persistedActiveTab?.path ?? ""}\n${JSON.stringify(javaOptions)}\n${JSON.stringify(terminalOptions)}\n${JSON.stringify(fileColors)}`;
   useEffect(() => {
     if (status !== "connected" || !workspaceOptionsReady || !clientRef.current) return;
-    const options: WorkspaceOptions = { openFiles: persistedFileTabs.map((tab) => tab.path), ...(persistedActiveTab ? { activeFile: persistedActiveTab.path } : {}), ...(javaOptions ? { javaProject: javaOptions } : {}), terminal: terminalOptions };
+    const options: WorkspaceOptions = { openFiles: persistedFileTabs.map((tab) => tab.path), ...(persistedActiveTab ? { activeFile: persistedActiveTab.path } : {}), ...(javaOptions ? { javaProject: javaOptions } : {}), terminal: terminalOptions, ...(Object.keys(fileColors).length ? { fileColors } : {}) };
     void clientRef.current.request("workspace.saveOptions", { options }).catch((error: unknown) => {
       setStatusMessage(error instanceof Error ? error.message : "Could not save workspace options");
     });
@@ -444,6 +470,36 @@ export function App() {
     });
   };
 
+  const closeTabs = (tab: EditorTab, mode: "all" | "right") => {
+    const tabs = layoutRef.current.editorGroups[0]?.tabs ?? [];
+    const index = tabs.findIndex((item) => item.id === tab.id);
+    const closing = mode === "all" ? tabs : tabs.slice(index + 1);
+    if (closing.some((item) => item.dirty) && !window.confirm(`Close ${closing.length} tab${closing.length === 1 ? "" : "s"} and discard unsaved changes?`)) return;
+    const closingIds = new Set(closing.map((item) => item.id));
+    updateGroup((current, active) => { const next = current.filter((item) => !closingIds.has(item.id)); return { tabs: next, activeTabId: active && !closingIds.has(active) ? active : next[Math.min(index, next.length - 1)]?.id ?? next.at(-1)?.id }; });
+    setTabContextMenu(undefined);
+  };
+
+  const openTabInWindow = async (tab: EditorTab) => {
+    setTabContextMenu(undefined);
+    if (tab.type === "diff") return;
+    if (tab.dirty) await saveFileTab(tab);
+    const options = { host, port, type: tab.type, path: tab.path, ...(tab.type === "useful" ? { scope: tab.usefulScope } : {}) } as const;
+    if (window.desktop?.openEditorWindow) window.desktop.openEditorWindow(options);
+    else {
+      const url = new URL(window.location.href); url.search = "";
+      url.searchParams.set("detached", "1"); url.searchParams.set("host", host); url.searchParams.set("port", port); url.searchParams.set("type", tab.type); url.searchParams.set("path", tab.path);
+      if (tab.type === "useful" && tab.usefulScope) url.searchParams.set("scope", tab.usefulScope);
+      window.open(url.toString(), "_blank", "popup,width=1000,height=720");
+    }
+  };
+
+  const moveTab = (targetId: string) => {
+    if (!draggedTabId || draggedTabId === targetId) return;
+    updateGroup((tabs, active) => { const source = tabs.findIndex((tab) => tab.id === draggedTabId); const target = tabs.findIndex((tab) => tab.id === targetId); if (source < 0 || target < 0) return { tabs, activeTabId: active }; const next = [...tabs]; const [moved] = next.splice(source, 1); next.splice(target, 0, moved!); return { tabs: next, activeTabId: active }; });
+    setDraggedTabId(undefined);
+  };
+
   const saveFileTab = useCallback(async (current: EditorTab) => {
     if ((current.type !== "file" && current.type !== "useful") || current.loading || current.error || !current.dirty || !clientRef.current) return;
     const content = current.content;
@@ -473,7 +529,7 @@ export function App() {
       const currentFiles = currentGroup.tabs.filter((tab) => tab.type === "file");
       const currentTerminal = layoutRef.current.terminalGroup;
       const currentActiveTerminalIndex = currentTerminal.tabs.findIndex((tab) => tab.id === currentTerminal.activeTabId);
-      await clientRef.current.request("workspace.saveOptions", { options: { openFiles: currentFiles.map((tab) => tab.path), ...(currentFiles.find((tab) => tab.id === currentGroup.activeTabId) ? { activeFile: currentFiles.find((tab) => tab.id === currentGroup.activeTabId)!.path } : {}), ...(javaOptionsRef.current ? { javaProject: javaOptionsRef.current } : {}), terminal: { tabs: currentTerminal.tabs.map((tab) => ({ title: tab.title })), ...(currentActiveTerminalIndex >= 0 ? { activeTabIndex: currentActiveTerminalIndex } : {}), panelOpen: layoutRef.current.panels.some((panel) => panel.type === "terminal") } } });
+      await clientRef.current.request("workspace.saveOptions", { options: { openFiles: currentFiles.map((tab) => tab.path), ...(currentFiles.find((tab) => tab.id === currentGroup.activeTabId) ? { activeFile: currentFiles.find((tab) => tab.id === currentGroup.activeTabId)!.path } : {}), ...(javaOptionsRef.current ? { javaProject: javaOptionsRef.current } : {}), terminal: { tabs: currentTerminal.tabs.map((tab) => ({ title: tab.title })), ...(currentActiveTerminalIndex >= 0 ? { activeTabIndex: currentActiveTerminalIndex } : {}), panelOpen: layoutRef.current.panels.some((panel) => panel.type === "terminal") }, ...(Object.keys(fileColors).length ? { fileColors } : {}) } });
       const result = await clientRef.current.request("tasks.switch", { ...(taskId ? { taskId } : {}) });
       terminalWriters.current.clear(); terminalBuffers.current.clear(); markdownBlockTerminals.current.clear();
       setLayout((current) => ({ ...current, panels: current.panels.filter((panel) => !["terminal", "java", "problems"].includes(panel.type)), terminalGroup: { ...current.terminalGroup, tabs: [], activeTabId: undefined } }));
@@ -487,12 +543,18 @@ export function App() {
       setWorkspaceOptionsReady(true);
       setStatusMessage(error instanceof Error ? error.message : "Could not switch task");
     } finally { setTaskSwitching(false); }
-  }, [refreshAi, refreshGit, restoreWorkspaceOptions, saveFileTab, selectedTaskId]);
+  }, [fileColors, refreshAi, refreshGit, restoreWorkspaceOptions, saveFileTab, selectedTaskId]);
 
   const sendAiPrompt = useCallback(async (prompt: string, model: string, reasoning: string) => {
     if (!clientRef.current) return;
     try { setAiSession((await clientRef.current.request("ai.send", { prompt, model, reasoning })).session); await refreshAi(); }
     catch (error) { setStatusMessage(error instanceof Error ? error.message : "Could not start Codex"); throw error; }
+  }, [refreshAi]);
+
+  const clearAiContext = useCallback(async () => {
+    if (!clientRef.current || !window.confirm("Clear the Codex conversation and start a new context for this task?")) return;
+    try { setAiSession((await clientRef.current.request("ai.clear", {})).session); await refreshAi(); }
+    catch (error) { setStatusMessage(error instanceof Error ? error.message : "Could not clear Codex context"); }
   }, [refreshAi]);
 
   const createTask = useCallback(async (branch: string) => {
@@ -557,7 +619,7 @@ export function App() {
 
   const beginTasksResize = (event: React.PointerEvent) => {
     event.currentTarget.setPointerCapture(event.pointerId);
-    const move = (moveEvent: PointerEvent) => setTasksWidth(Math.max(180, Math.min(420, window.innerWidth - moveEvent.clientX)));
+    const move = (moveEvent: PointerEvent) => setTasksWidth(Math.max(240, Math.min(520, window.innerWidth - moveEvent.clientX)));
     const end = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", end); };
     window.addEventListener("pointermove", move); window.addEventListener("pointerup", end);
   };
@@ -806,21 +868,28 @@ export function App() {
     setImportChoices(undefined);
   };
 
+  const runHttpRequest = async (request: ParsedHttpRequest) => {
+    if (!clientRef.current) return;
+    setHttpResult({ request, loading: true });
+    try { setHttpResult({ request, response: await clientRef.current.request("http.execute", request), loading: false }); }
+    catch (error) { setHttpResult({ request, error: error instanceof Error ? error.message : "HTTP request failed", loading: false }); }
+  };
+
   const mountEditor = (instance: editor.IStandaloneCodeEditor, api: Monaco) => {
     monacoEditorRef.current = instance;
     monacoRef.current = api;
     gitDecorationsRef.current = instance.deltaDecorations([], gitHunkDecorations(activeTab?.type === "file" ? activeGitHunksRef.current : []));
     for (const disposable of javaLanguageDisposables.current) disposable.dispose();
     javaLanguageDisposables.current = [];
-    if (activeTab?.type !== "file") return;
+    if (activeTab?.type !== "file" && activeTab?.type !== "useful") return;
     const filePath = activeTab.path;
-    javaLanguageDisposables.current.push(instance.onContextMenu((event) => {
+    if (activeTab.type === "file") javaLanguageDisposables.current.push(instance.onContextMenu((event) => {
       event.event.preventDefault();
       const selection = instance.getSelection();
       const hasSelection = Boolean(selection && !selection.isEmpty());
       setEditorGitMenu({ x: Math.min(event.event.posx, window.innerWidth - 245), y: Math.min(event.event.posy, window.innerHeight - 85), path: filePath, ...(hasSelection ? { startLine: selection!.startLineNumber, endLine: selection!.endLineNumber } : {}) });
     }));
-    javaLanguageDisposables.current.push(instance.onMouseDown((event) => {
+    if (activeTab.type === "file") javaLanguageDisposables.current.push(instance.onMouseDown((event) => {
       const element = event.target.element as HTMLElement | null;
       if (!element?.closest(".git-change-marker")) return;
       const line = event.target.position?.lineNumber ?? event.target.range?.startLineNumber;
@@ -830,6 +899,14 @@ export function App() {
       setPendingDiffLine({ path: filePath, line: Math.max(1, hunk.modifiedStart) });
       void openDiff(entry);
     }));
+    if (/\.http$/i.test(filePath)) {
+      let decorations: string[] = [];
+      const decorate = () => { decorations = instance.deltaDecorations(decorations, parseHttpRequests(instance.getValue()).map((request) => ({ range: { startLineNumber: request.line, startColumn: 1, endLineNumber: request.line, endColumn: 1 }, options: { glyphMarginClassName: "http-run-marker", glyphMarginHoverMessage: { value: `Run ${request.method} ${request.url}` } } }))); };
+      decorate(); javaLanguageDisposables.current.push(instance.onDidChangeModelContent(decorate));
+      javaLanguageDisposables.current.push(instance.onMouseDown((event) => { if (!(event.target.element as HTMLElement | null)?.closest(".http-run-marker")) return; const line = event.target.position?.lineNumber ?? event.target.range?.startLineNumber; const request = parseHttpRequests(instance.getValue()).find((item) => item.line === line); if (request) void runHttpRequest(request); }));
+      return;
+    }
+    if (activeTab.type !== "file") return;
     if (!/\.java$/i.test(filePath)) return;
     javaLanguageDisposables.current.push(api.languages.registerCompletionItemProvider("java", {
       triggerCharacters: ["."],
@@ -918,14 +995,14 @@ export function App() {
         {sideView === "project" ? <>
           <header className="panel-header"><span>Project</span><button title="Synchronize files" onClick={() => void refreshTree()}><RefreshCw size={14} /></button></header>
           <div className="workspace-name" onContextMenu={(event) => { event.preventDefault(); setTreeContextMenu({ x: Math.min(event.clientX, window.innerWidth - 220), y: Math.min(event.clientY, window.innerHeight - 110), node: { name: "REMOTE WORKSPACE", path: "", type: "directory" } }); }}><ChevronDown size={13} />REMOTE WORKSPACE</div>
-          <div className="tree"><Tree nodes={tree} activePath={activeTab?.path} onOpen={openFile} onContextMenu={(event, node) => { event.preventDefault(); setTreeContextMenu({ x: Math.min(event.clientX, window.innerWidth - 220), y: Math.min(event.clientY, window.innerHeight - 110), node }); }} /></div>
+          <div className="tree"><Tree nodes={tree} activePath={activeTab?.path} fileColors={fileColors} gitStatuses={projectGitStatuses} onOpen={openFile} onContextMenu={(event, node) => { event.preventDefault(); setTreeContextMenu({ x: Math.min(event.clientX, window.innerWidth - 220), y: Math.min(event.clientY, window.innerHeight - 110), node }); }} /></div>
         </> : sideView === "git" ? <>
           <header className="panel-header"><span>Git Changes</span><button title="Refresh Git status" onClick={() => void refreshGit()}><RefreshCw size={14} /></button></header>
           <div className="git-branch"><GitBranch size={13} /><span>{gitBranch}</span></div>
           <GitChangesView entries={gitEntries} error={gitError} activePath={activeTab?.path} onOpenDiff={openDiff} onOpenFile={(entry) => void openFile({ name: entry.path.split("/").pop() ?? entry.path, path: entry.path, type: "file" })} onContextMenu={(event, entry) => { event.preventDefault(); setGitRollbackMenu({ x: Math.min(event.clientX, window.innerWidth - 220), y: Math.min(event.clientY, window.innerHeight - 50), entry }); }} />
         </> : sideView === "ai" ? <>
           <header className="panel-header"><span>AI</span><span className={`ai-status ${aiSession.status}`}>{formatAiStatus(aiSession.status)}</span></header>
-          <AiPanel session={aiSession} models={aiModels} onSend={sendAiPrompt} />
+          <AiPanel session={aiSession} models={aiModels} onSend={sendAiPrompt} onClear={() => void clearAiContext()} />
         </> : sideView === "useful" ? <>
           <header className="panel-header"><span>Useful Files</span><button title="Refresh useful files" onClick={() => void refreshUsefulFiles()}><RefreshCw size={14} /></button></header>
           <div className="useful-files-list"><UsefulFileSection title="Global" scope="global" files={usefulFiles} activeTab={activeTab} onOpen={openUsefulFile} onCreate={(scope) => setUsefulDialog({ mode: "create", scope })} onRename={(file) => setUsefulDialog({ mode: "rename", scope: file.scope, file })} onDelete={(file) => void deleteUsefulFile(file)} /><UsefulFileSection title="Local" scope="local" files={usefulFiles} activeTab={activeTab} onOpen={openUsefulFile} onCreate={(scope) => setUsefulDialog({ mode: "create", scope })} onRename={(file) => setUsefulDialog({ mode: "rename", scope: file.scope, file })} onDelete={(file) => void deleteUsefulFile(file)} /></div>
@@ -947,7 +1024,7 @@ export function App() {
           <span className="connection-dot" />{host}:{port}<button title="Disconnect" onClick={disconnect}><LogOut size={15} /></button>
         </div>
         <div className="tabs" role="tablist">
-          {group.tabs.map((tab) => <button className={`tab ${tab.id === group.activeTabId ? "active" : ""}`} key={tab.id} onClick={() => void activateEditorTab(tab)}>
+          {group.tabs.map((tab) => <button className={`tab ${tab.id === group.activeTabId ? "active" : ""} ${tab.id === draggedTabId ? "dragging" : ""}`} key={tab.id} draggable onDragStart={(event) => { setDraggedTabId(tab.id); event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/plain", tab.id); }} onDragEnd={() => setDraggedTabId(undefined)} onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = "move"; }} onDrop={(event) => { event.preventDefault(); moveTab(tab.id); }} onContextMenu={(event) => { event.preventDefault(); setTabContextMenu({ x: Math.min(event.clientX, window.innerWidth - 220), y: Math.min(event.clientY, window.innerHeight - 125), tab }); }} onClick={() => void activateEditorTab(tab)}>
             {tab.type === "diff" ? <GitCompareArrows size={14} /> : <File size={14} />}<span>{tab.title}</span>{tab.dirty && <span className="dirty" title="Unsaved changes" />}<span className="close" title={`Close ${tab.title}`} onClick={(event) => { event.stopPropagation(); closeTab(tab); }}><X size={13} /></span>
           </button>)}
           <div className="tab-spacer" />
@@ -970,9 +1047,10 @@ export function App() {
         }}>
           {!activeTab ? <div className="empty-editor">Open a file from Project</div> : activeTab.loading ? <div className="empty-editor">Loading {activeTab.title}...</div> : activeTab.error && !activeTab.content ? <div className="editor-error">{activeTab.error}</div> : <>
             {activeTab.error && <div className="inline-error">{activeTab.error}</div>}
-            {activeTab.type === "diff" ? <DiffEditor key={activeTab.path} original={activeTab.originalContent ?? ""} modified={activeTab.content} language={languageByExtension[activeTab.path.split(".").pop()?.toLowerCase() ?? ""] ?? "plaintext"} theme="vs-dark" onMount={mountWorkingDiff} options={{ automaticLayout: true, readOnly: false, originalEditable: false, renderMarginRevertIcon: true, renderSideBySide: activeTab.diffMode !== "unified", minimap: { enabled: false }, fontSize: 13, scrollBeyondLastLine: false }} /> : activeTab.markdownMode === "preview" ? <div className="markdown-preview"><ReactMarkdown remarkPlugins={[remarkGfm]} components={{ pre: renderMarkdownPre }}>{activeTab.content}</ReactMarkdown></div> : <Editor key={`${activeTab.type}:${activeTab.usefulScope ?? "workspace"}:${activeTab.path}`} path={activeTab.type === "useful" ? `useful-${activeTab.usefulScope}/${activeTab.path}` : activeTab.path} language={languageByExtension[activeTab.path.split(".").pop()?.toLowerCase() ?? ""] ?? "plaintext"} value={activeTab.content} theme="vs-dark" onMount={mountEditor} options={{ automaticLayout: true, contextmenu: false, minimap: { enabled: false }, glyphMargin: activeTab.type === "file", fontSize: 13, scrollBeyondLastLine: false, padding: { top: 10 } }} onChange={(value) => updateGroup((tabs, active) => ({ tabs: tabs.map((tab) => tab.id === activeTab.id ? { ...tab, content: value ?? "", dirty: (value ?? "") !== tab.savedContent, error: undefined } : tab), activeTabId: active }))} />}
+            {activeTab.type === "diff" ? <DiffEditor key={activeTab.path} original={activeTab.originalContent ?? ""} modified={activeTab.content} language={languageByExtension[activeTab.path.split(".").pop()?.toLowerCase() ?? ""] ?? "plaintext"} theme="vs-dark" onMount={mountWorkingDiff} options={{ automaticLayout: true, readOnly: false, originalEditable: false, renderMarginRevertIcon: true, renderSideBySide: activeTab.diffMode !== "unified", minimap: { enabled: false }, fontSize: 13, scrollBeyondLastLine: false }} /> : activeTab.markdownMode === "preview" ? <div className="markdown-preview"><ReactMarkdown remarkPlugins={[remarkGfm]} components={{ pre: renderMarkdownPre }}>{activeTab.content}</ReactMarkdown></div> : <Editor key={`${activeTab.type}:${activeTab.usefulScope ?? "workspace"}:${activeTab.path}`} path={activeTab.type === "useful" ? `useful-${activeTab.usefulScope}/${activeTab.path}` : activeTab.path} language={languageByExtension[activeTab.path.split(".").pop()?.toLowerCase() ?? ""] ?? "plaintext"} value={activeTab.content} theme="vs-dark" onMount={mountEditor} options={{ automaticLayout: true, contextmenu: false, minimap: { enabled: false }, glyphMargin: activeTab.type === "file" || /\.http$/i.test(activeTab.path), fontSize: 13, scrollBeyondLastLine: false, padding: { top: 10 } }} onChange={(value) => updateGroup((tabs, active) => ({ tabs: tabs.map((tab) => tab.id === activeTab.id ? { ...tab, content: value ?? "", dirty: (value ?? "") !== tab.savedContent, error: undefined } : tab), activeTabId: active }))} />}
           </>}
         </div>
+        {httpResult && <section className="http-response-panel"><header><span>{httpResult.request.method} {httpResult.request.url}</span>{httpResult.loading ? <small>Sending...</small> : httpResult.response ? <small className={httpResult.response.status >= 400 ? "error" : "success"}>{httpResult.response.status} {httpResult.response.statusText} · {httpResult.response.durationMs} ms</small> : null}<button title="Close response" onClick={() => setHttpResult(undefined)}><X size={14} /></button></header>{httpResult.error ? <div className="http-response-error">{httpResult.error}</div> : httpResult.response ? <div className="http-response-content"><pre className="http-response-headers">{Object.entries(httpResult.response.headers).map(([name, value]) => `${name}: ${value}`).join("\n")}</pre><pre className="http-response-body">{httpResult.response.body}</pre></div> : <div className="http-response-loading">Waiting for response...</div>}</section>}
       </main>
       {tasksOpen && <><div className="right-resize-handle" onPointerDown={beginTasksResize} />
       <aside className="tasks-panel" style={{ width: tasksWidth }}>
@@ -1001,10 +1079,12 @@ export function App() {
         <button onClick={() => openSearchForNode(treeContextMenu.node)}><Search size={14} /><span>Find in Files</span></button>
         {treeContextMenu.node.type === "file" && treeContextMenu.node.name === "pom.xml" && <button onClick={() => void loadMavenProject(treeContextMenu.node.path)}><Package size={14} /><span>Load as Maven Project</span></button>}
         {javaOptions && treeContextMenu.node.type === "directory" && treeContextMenu.node.path && <button onClick={() => void addJavaSourceRoot(treeContextMenu.node.path)}><Coffee size={14} /><span>Mark as Sources Root</span></button>}
+        {treeContextMenu.node.path && <div className="context-submenu-trigger"><button><Palette size={14} /><span>Color</span><ChevronRight size={13} /></button><div className="context-menu context-submenu color-submenu">{fileColorChoices.map((color) => <button key={color.id} onClick={() => { setFileColors((current) => ({ ...current, [treeContextMenu.node.path]: color.id })); setTreeContextMenu(undefined); }}><span className={`file-color-swatch ${color.id}`} /><span>{color.label}</span>{fileColors[treeContextMenu.node.path] === color.id && <Check size={13} />}</button>)}<button disabled={!fileColors[treeContextMenu.node.path]} onClick={() => { setFileColors((current) => { const next = { ...current }; delete next[treeContextMenu.node.path]; return next; }); setTreeContextMenu(undefined); }}><X size={14} /><span>Clear Color</span></button></div></div>}
       </div>
     </div>}
     {editorGitMenu && <div className="context-menu-layer" onMouseDown={() => setEditorGitMenu(undefined)}><div className="context-menu editor-git-menu" style={{ left: editorGitMenu.x, top: editorGitMenu.y }} onMouseDown={(event) => event.stopPropagation()}><div className="context-submenu-trigger"><button><GitBranch size={14} /><span>Git</span><ChevronRight size={13} /></button><div className="context-menu context-submenu"><button onClick={() => { setGitHistory({ path: editorGitMenu.path }); setEditorGitMenu(undefined); }}><FileDiff size={14} /><span>Show file changes</span></button><button disabled={editorGitMenu.startLine === undefined} onClick={() => { setGitHistory({ path: editorGitMenu.path, startLine: editorGitMenu.startLine, endLine: editorGitMenu.endLine }); setEditorGitMenu(undefined); }}><ListTree size={14} /><span>Show selection changes</span></button></div></div></div></div>}
     {gitRollbackMenu && <div className="context-menu-layer" onMouseDown={() => setGitRollbackMenu(undefined)}><div className="context-menu" style={{ left: gitRollbackMenu.x, top: gitRollbackMenu.y }} onMouseDown={(event) => event.stopPropagation()}><button className="danger" onClick={() => void rollbackFile(gitRollbackMenu.entry)}><RefreshCw size={14} /><span>Rollback</span></button></div></div>}
+    {tabContextMenu && <div className="context-menu-layer" onMouseDown={() => setTabContextMenu(undefined)}><div className="context-menu tab-context-menu" style={{ left: tabContextMenu.x, top: tabContextMenu.y }} onMouseDown={(event) => event.stopPropagation()}><button onClick={() => closeTabs(tabContextMenu.tab, "all")}><X size={14} /><span>Close All</span></button><button disabled={group.tabs.findIndex((tab) => tab.id === tabContextMenu.tab.id) === group.tabs.length - 1} onClick={() => closeTabs(tabContextMenu.tab, "right")}><ArrowUpRight className="close-right-icon" size={14} /><span>Close All to the Right</span></button><button disabled={tabContextMenu.tab.type === "diff"} onClick={() => void openTabInWindow(tabContextMenu.tab)}><Columns2 size={14} /><span>Open in New Window</span></button></div></div>}
     {searchScope !== undefined && <FindInFilesDialog client={clientRef.current!} scope={searchScope} onClose={() => setSearchScope(undefined)} onNavigate={(result, matchLength) => void navigateToSearchResult(result, matchLength)} />}
     {importChoices && <div className="dialog-overlay" onMouseDown={() => setImportChoices(undefined)}><section className="import-chooser" role="dialog" aria-modal="true" aria-label="Choose Java import" onMouseDown={(event) => event.stopPropagation()}><header><span>Import class</span><button title="Close" onClick={() => setImportChoices(undefined)}><X size={15} /></button></header><div>{importChoices.suggestions.map((suggestion) => <button key={suggestion.qualifiedName} onClick={() => applyJavaImport(suggestion)}><span>{suggestion.simpleName}</span><code>{suggestion.qualifiedName}</code><small>{suggestion.source}</small></button>)}</div></section></div>}
     {javaUsages && <div className="dialog-overlay" onMouseDown={() => setJavaUsages(undefined)}><section className="import-chooser usage-chooser" role="dialog" aria-modal="true" aria-label="Java usages" onMouseDown={(event) => event.stopPropagation()}><header><span>Usages ({javaUsages.length})</span><button title="Close" onClick={() => setJavaUsages(undefined)}><X size={15} /></button></header><div>{javaUsages.length === 0 ? <div className="problems-empty">No project usages found</div> : javaUsages.map((location, index) => <button key={`${location.path}:${location.startLine}:${location.startColumn}:${index}`} onClick={() => void openJavaLocation(location)}><span>{location.path.split("/").pop()}</span><code>{location.path}</code><small>{location.startLine}:{location.startColumn}</small></button>)}</div></section></div>}
@@ -1018,7 +1098,7 @@ export function App() {
 function ConnectionScreen(props: { host: string; port: string; status: ConnectionStatus; statusMessage: string; setHost(value: string): void; setPort(value: string): void; connect(): Promise<void> }) {
   const connecting = props.status === "connecting";
   return <main className="connection-screen"><form className="connection-form" onSubmit={(event) => { event.preventDefault(); void props.connect(); }}>
-    <h1>Remote IDE</h1><p>Connect to a core backend</p>
+    <h1>Vibe Editor</h1><p>Connect to a core backend</p>
     <label>Host<input autoFocus value={props.host} onChange={(event) => props.setHost(event.target.value)} placeholder="192.168.1.50" required /></label>
     <label>Port<input value={props.port} onChange={(event) => props.setPort(event.target.value)} type="number" min="1" max="65535" required /></label>
     {props.statusMessage && <div className={`connection-message ${props.status}`}>{props.statusMessage}</div>}
@@ -1026,13 +1106,25 @@ function ConnectionScreen(props: { host: string; port: string; status: Connectio
   </form></main>;
 }
 
-function Tree({ nodes, activePath, onOpen, onContextMenu }: { nodes: FileTreeNode[]; activePath?: string; onOpen(node: FileTreeNode): void; onContextMenu(event: ReactMouseEvent, node: FileTreeNode): void }) {
-  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+function Tree({ nodes, activePath, fileColors, gitStatuses, onOpen, onContextMenu }: { nodes: FileTreeNode[]; activePath?: string; fileColors: Record<string, FileColor>; gitStatuses: Record<string, "M" | "C">; onOpen(node: FileTreeNode): void; onContextMenu(event: ReactMouseEvent, node: FileTreeNode): void }) {
+  const initialAutoExpanded = useRef(new Set(collectSingleChildDirectories(nodes)));
+  const [expanded, setExpanded] = useState<Set<string>>(() => new Set(initialAutoExpanded.current));
+  useEffect(() => {
+    const additions = collectSingleChildDirectories(nodes).filter((directory) => !initialAutoExpanded.current.has(directory));
+    if (!additions.length) return;
+    for (const directory of additions) initialAutoExpanded.current.add(directory);
+    setExpanded((current) => new Set([...current, ...additions]));
+  }, [nodes]);
   return <>{nodes.map((node) => node.type === "directory" ? <div key={node.path}>
-    <button className="tree-row" onContextMenu={(event) => onContextMenu(event, node)} onClick={() => setExpanded((current) => { const next = new Set(current); next.has(node.path) ? next.delete(node.path) : next.add(node.path); return next; })}>
+    <button className={`tree-row ${fileColors[node.path] ? `file-color-${fileColors[node.path]}` : ""}`} onContextMenu={(event) => onContextMenu(event, node)} onClick={() => setExpanded((current) => { const next = new Set(current); next.has(node.path) ? next.delete(node.path) : next.add(node.path); return next; })}>
       {expanded.has(node.path) ? <ChevronDown size={14} /> : <ChevronRight size={14} />}{expanded.has(node.path) ? <FolderOpen size={15} /> : <Folder size={15} />}<span>{node.name}</span>
-    </button>{expanded.has(node.path) && <div className="tree-children"><Tree nodes={node.children ?? []} activePath={activePath} onOpen={onOpen} onContextMenu={onContextMenu} /></div>}
-  </div> : <FileTreeRow key={node.path} node={node} selected={activePath === node.path} onOpen={onOpen} onContextMenu={onContextMenu} />)}</>;
+    </button>{expanded.has(node.path) && <div className="tree-children"><Tree nodes={node.children ?? []} activePath={activePath} fileColors={fileColors} gitStatuses={gitStatuses} onOpen={onOpen} onContextMenu={onContextMenu} /></div>}
+  </div> : <FileTreeRow key={node.path} node={node} selected={activePath === node.path} color={fileColors[node.path]} gitStatus={gitStatuses[node.path]} onOpen={onOpen} onContextMenu={onContextMenu} />)}</>;
+}
+
+function collectSingleChildDirectories(nodes: FileTreeNode[]): string[] {
+  const onlyEntry = nodes.length === 1 ? nodes[0] : undefined;
+  return onlyEntry?.type === "directory" ? [onlyEntry.path] : [];
 }
 
 function JavaProjectTree({ nodes, activePath, onOpen }: { nodes: JavaProjectNode[]; activePath?: string; onOpen(node: FileTreeNode): void }) {
@@ -1057,7 +1149,7 @@ function TaskRow({ icon, name, summary, selected, disabled, onClick }: { icon: R
   const preview = summary.preview || "No Codex activity yet";
   return <button className={`task-row ${selected ? "selected" : ""}`} disabled={disabled} title={`${name}\n${preview}`} onClick={onClick}>
     <span className="task-icon">{icon}</span>
-    <span className="task-content"><span className="task-title"><strong>{name}</strong>{summary.status !== "idle" && <small className={`task-ai-status ${summary.status}`}>{formatAiStatus(summary.status)}</small>}</span><span className="task-preview">{preview}</span></span>
+    <span className="task-content"><span className="task-title"><strong>{name}</strong>{(summary.additions > 0 || summary.deletions > 0) && <span className="task-diff-stat"><small>+{summary.additions}</small><small>-{summary.deletions}</small></span>}{summary.status !== "idle" && <small className={`task-ai-status ${summary.status}`}>{formatAiStatus(summary.status)}</small>}</span><span className="task-preview">{preview}</span></span>
     {selected && <Check className="task-check" size={13} />}
   </button>;
 }
@@ -1162,7 +1254,7 @@ function collectGitDirectories(nodes: GitTreeNode[]): string[] {
   return nodes.flatMap((node) => node.type === "directory" ? [node.path, ...collectGitDirectories(node.children)] : []);
 }
 
-function FileTreeRow({ node, selected, onOpen, onContextMenu }: { node: FileTreeNode; selected: boolean; onOpen(node: FileTreeNode): void; onContextMenu(event: ReactMouseEvent, node: FileTreeNode): void }) {
+function FileTreeRow({ node, selected, color: rowColor, gitStatus, onOpen, onContextMenu }: { node: FileTreeNode; selected: boolean; color?: FileColor; gitStatus?: "M" | "C"; onOpen(node: FileTreeNode): void; onContextMenu(event: ReactMouseEvent, node: FileTreeNode): void }) {
   const extension = node.name.split(".").pop()?.toLowerCase() ?? "";
   const appearance: Record<string, { color: string; Icon: typeof File }> = {
     ts: { color: "#5e9fd6", Icon: FileCode2 }, tsx: { color: "#5e9fd6", Icon: FileCode2 },
@@ -1173,8 +1265,8 @@ function FileTreeRow({ node, selected, onOpen, onContextMenu }: { node: FileTree
     yaml: { color: "#ca6b75", Icon: Braces }, yml: { color: "#ca6b75", Icon: Braces }
   };
   const { color, Icon } = appearance[extension] ?? { color: "#9aa0a8", Icon: File };
-  return <button className={`tree-row file-row ${selected ? "selected" : ""}`} onContextMenu={(event) => onContextMenu(event, node)} onClick={() => void onOpen(node)}>
-    <span className="tree-indent" /><Icon className="file-kind-icon" color={color} size={14} /><span>{node.name}</span>
+  return <button className={`tree-row file-row ${selected ? "selected" : ""} ${rowColor ? `file-color-${rowColor}` : ""}`} onContextMenu={(event) => onContextMenu(event, node)} onClick={() => void onOpen(node)}>
+    <span className="tree-indent" /><Icon className="file-kind-icon" color={color} size={14} /><span className="tree-file-name">{node.name}</span>{gitStatus && <span className={`tree-git-status ${gitStatus === "C" ? "created" : "modified"}`}>{gitStatus}</span>}
   </button>;
 }
 

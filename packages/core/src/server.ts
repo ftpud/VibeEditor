@@ -14,6 +14,7 @@ import { JdtLanguageService } from "./jdtls.js";
 import { WorkspaceTaskStore } from "./tasks.js";
 import { CodexSessionManager } from "./codex.js";
 import { UsefulFilesStore } from "./useful-files.js";
+import { executeHttpRequest } from "./http.js";
 
 type SessionServices = {
   workspacePath: string;
@@ -185,9 +186,10 @@ async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStor
     case "ai.get": return { session: await codex.get(workspacePath) };
     case "ai.models": return { models: await codex.models() };
     case "ai.send": return { session: await codex.send(workspacePath, request.payload.prompt, request.payload.model, request.payload.reasoning) };
+    case "ai.clear": return { session: await codex.clear(workspacePath) };
     case "ai.statuses": {
       const registry = await tasks.list();
-      const summarize = async (target: string) => { const session = await codex.get(target); return { status: session.status, preview: session.messages.slice().reverse().find((message) => message.role === "assistant" || message.role === "activity")?.text.replace(/\s+/g, " ").trim().slice(0, 180) ?? session.messages.at(-1)?.text.replace(/\s+/g, " ").trim().slice(0, 180) ?? "" }; };
+      const summarize = async (target: string) => { const session = await codex.get(target); const stats = await new GitService(target).diffStats(); return { status: session.status, preview: session.messages.slice().reverse().find((message) => message.role === "assistant" || message.role === "activity")?.text.replace(/\s+/g, " ").trim().slice(0, 180) ?? session.messages.at(-1)?.text.replace(/\s+/g, " ").trim().slice(0, 180) ?? "", ...stats }; };
       const entries = await Promise.all(registry.tasks.map(async (task) => [task.id, await summarize(tasks.taskPath(task.id))] as const));
       return { root: await summarize(rootWorkspace), tasks: Object.fromEntries(entries) };
     }
@@ -197,6 +199,7 @@ async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStor
     case "useful.write": await usefulFiles.write(request.payload.scope, request.payload.name, request.payload.content); return {};
     case "useful.rename": await usefulFiles.rename(request.payload.scope, request.payload.name, request.payload.newName); return {};
     case "useful.delete": await usefulFiles.delete(request.payload.scope, request.payload.name); return {};
+    case "http.execute": return executeHttpRequest(request.payload.method, request.payload.url, request.payload.headers, request.payload.body);
     case "filesystem.listTree": return { tree: await filesystem.listTree() };
     case "filesystem.readFile": {
       if (typeof request.payload.path !== "string") throw new CoreError("INVALID_REQUEST", "path must be a string");

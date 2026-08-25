@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import path from "node:path";
+import { readFile } from "node:fs/promises";
 import type { GitBranch, GitCommit, GitCommitFile, GitDiffHunk, GitStatusEntry } from "@remote-ide/protocol";
 import { CoreError } from "./errors.js";
 import { WorkspaceFileSystem } from "./filesystem.js";
@@ -100,6 +101,19 @@ export class GitService {
     if (!entry) throw new CoreError("GIT_FAILED", `Path has no Git changes: ${filePath}`);
     if (entry.indexStatus === "?" && entry.worktreeStatus === "?") await this.git(["clean", "-f", "--", filePath]);
     else await this.git(["restore", "--source=HEAD", "--staged", "--worktree", "--", filePath]);
+  }
+
+  async diffStats(): Promise<{ additions: number; deletions: number }> {
+    let additions = 0; let deletions = 0;
+    try {
+      const output = await this.git(["diff", "--numstat", "HEAD"]);
+      for (const line of output.split("\n")) { const [added, removed] = line.split("\t"); if (/^\d+$/.test(added ?? "")) additions += Number(added); if (/^\d+$/.test(removed ?? "")) deletions += Number(removed); }
+    } catch { /* Repositories without HEAD are represented by untracked files below. */ }
+    try {
+      const untracked = (await this.git(["ls-files", "--others", "--exclude-standard", "-z"])).split("\0").filter(Boolean);
+      for (const file of untracked) { try { const content = await readFile(path.join(this.workspace, file), "utf8"); if (!content.includes("\0")) additions += content ? content.split("\n").length - (content.endsWith("\n") ? 1 : 0) : 0; } catch { /* Binary and unreadable files do not have line stats. */ } }
+    } catch { /* Ignore unavailable untracked stats. */ }
+    return { additions, deletions };
   }
 
   private async git(args: string[]): Promise<string> {

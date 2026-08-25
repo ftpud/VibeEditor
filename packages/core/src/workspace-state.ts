@@ -53,7 +53,15 @@ export function validateWorkspaceOptions(value: unknown): WorkspaceOptions {
   const activeFile = typeof candidate.activeFile === "string" && openFiles.includes(candidate.activeFile) ? candidate.activeFile : undefined;
   const javaProject = candidate.javaProject === undefined ? undefined : validateJavaProjectOptions(candidate.javaProject);
   const terminal = candidate.terminal === undefined ? undefined : validateTerminalOptions(candidate.terminal);
-  return { openFiles, ...(activeFile ? { activeFile } : {}), ...(javaProject ? { javaProject } : {}), ...(terminal ? { terminal } : {}) };
+  const fileColors = candidate.fileColors === undefined ? undefined : validateFileColors(candidate.fileColors);
+  return { openFiles, ...(activeFile ? { activeFile } : {}), ...(javaProject ? { javaProject } : {}), ...(terminal ? { terminal } : {}), ...(fileColors && Object.keys(fileColors).length ? { fileColors } : {}) };
+}
+
+function validateFileColors(value: unknown): NonNullable<WorkspaceOptions["fileColors"]> {
+  if (!value || typeof value !== "object" || Array.isArray(value) || Object.keys(value).length > 500) throw new CoreError("INVALID_REQUEST", "Invalid file colors");
+  const colors = new Set(["red", "orange", "yellow", "green", "blue", "purple", "gray"]); const result: Record<string, "red" | "orange" | "yellow" | "green" | "blue" | "purple" | "gray"> = {};
+  for (const [filePath, color] of Object.entries(value as Record<string, unknown>)) { if (!isSafeRelativePath(filePath) || typeof color !== "string" || !colors.has(color)) throw new CoreError("INVALID_REQUEST", "Invalid colored file entry"); result[filePath] = color as typeof result[string]; }
+  return result;
 }
 
 function validateTerminalOptions(value: unknown): NonNullable<WorkspaceOptions["terminal"]> {

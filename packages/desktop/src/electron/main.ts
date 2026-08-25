@@ -16,10 +16,23 @@ const launchConfig = {
   port: launchOption("port")
 };
 
-ipcMain.on("editor:dirty-state", (_event, dirty: boolean) => { hasDirtyTabs = dirty; });
+process.title = "Vibe Editor";
+app.name = "Vibe Editor";
+app.setName("Vibe Editor");
+app.setAppUserModelId("com.vibe-editor.desktop");
+app.commandLine.appendSwitch("class", "VibeEditor");
 
-function createWindow(): void {
+ipcMain.on("editor:dirty-state", (_event, dirty: boolean) => { hasDirtyTabs = dirty; });
+ipcMain.on("editor:open-window", (_event, options: unknown) => {
+  if (!options || typeof options !== "object") return;
+  const value = options as Record<string, unknown>;
+  if (typeof value.host !== "string" || typeof value.port !== "string" || (value.type !== "file" && value.type !== "useful") || typeof value.path !== "string" || value.path.length > 1000) return;
+  createWindow({ detached: "1", host: value.host, port: value.port, type: value.type, path: value.path, ...(value.scope === "global" || value.scope === "local" ? { scope: value.scope } : {}) });
+});
+
+function createWindow(extraQuery: Record<string, string> = {}): void {
   const window = new BrowserWindow({
+    title: extraQuery.detached === "1" ? (extraQuery.path?.split("/").pop() ?? "Vibe Editor") : "Vibe Editor",
     width: 1280,
     height: 800,
     minWidth: 760,
@@ -51,9 +64,9 @@ function createWindow(): void {
     if (choice === 1) { allowClose = true; window.close(); }
   });
   const devUrl = process.env.VITE_DEV_SERVER_URL ?? (app.isPackaged ? undefined : "http://localhost:5173");
-  const query = Object.fromEntries(
+  const query = { ...Object.fromEntries(
     Object.entries(launchConfig).filter((entry): entry is [string, string] => typeof entry[1] === "string")
-  );
+  ), ...extraQuery };
   const load = devUrl
     ? (() => {
         const url = new URL(devUrl);
@@ -64,6 +77,6 @@ function createWindow(): void {
   void load.catch((error: unknown) => console.error("[desktop] page load failed", error));
 }
 
-app.whenReady().then(createWindow);
+app.whenReady().then(() => createWindow());
 app.on("window-all-closed", () => { if (process.platform !== "darwin") app.quit(); });
 app.on("activate", () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });

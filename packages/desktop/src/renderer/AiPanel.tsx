@@ -1,10 +1,10 @@
-import { Send } from "lucide-react";
+import { Send, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { AiModel, AiSession } from "@remote-ide/protocol";
 
-export function AiPanel({ session, models, onSend }: { session: AiSession; models: AiModel[]; onSend(prompt: string, model: string, reasoning: string): Promise<void> }) {
+export function AiPanel({ session, models, onSend, onClear }: { session: AiSession; models: AiModel[]; onSend(prompt: string, model: string, reasoning: string): Promise<void>; onClear(): void }) {
   const [prompt, setPrompt] = useState("");
   const [model, setModel] = useState(session.model);
   const [reasoning, setReasoning] = useState(session.reasoning);
@@ -19,6 +19,7 @@ export function AiPanel({ session, models, onSend }: { session: AiSession; model
     <div className="ai-controls">
       <select aria-label="Codex model" value={model} onChange={(event) => setModel(event.target.value)}>{models.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select>
       <select aria-label="Reasoning effort" value={reasoning} onChange={(event) => setReasoning(event.target.value)}>{(selectedModel?.reasoningLevels ?? [reasoning]).map((level) => <option key={level} value={level}>{level}</option>)}</select>
+      <button title="Clear Codex context" disabled={running || session.messages.length === 0} onClick={onClear}><Trash2 size={14} /></button>
     </div>
     <div className="ai-messages">
       {session.messages.length === 0 && <div className="ai-empty">Start a Codex task for this workspace.</div>}
