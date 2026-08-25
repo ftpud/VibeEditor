@@ -24,7 +24,7 @@ Optional backend tools:
 - Codex integration: an installed and authenticated `codex` CLI.
 - Copilot integration: an installed and authenticated `copilot` CLI.
 
-Gateway remote hosts need Node.js 20+, npm, Git, SSH access, and permission to read the configured workspace. The machine running Gateway needs Electron dependencies but does not need to compile the Desktop application for every launch.
+Gateway remote hosts need Node.js 20+, npm, Git, SSH access, and permission to read and write the configured workspace and run processes there. Gateway currently connects with a username and password. The machine running Gateway needs Electron dependencies but does not need to compile the Desktop application for every launch.
 
 ## Install
 
@@ -162,7 +162,7 @@ Select changed files with the checkboxes, enter a commit message in the bottom c
 
 The top branch selector groups local and remote branches into expandable `/` path hierarchies. Branch leaves provide Checkout and Rename actions.
 
-The full-width bottom Git tool window provides branches, searchable commit history, changed files, commit diffs, and compare-with-local dialogs. Editor context menus can show history for a complete file or the current selection.
+The full-width bottom Git tool window provides local and remote branches, a searchable commit history with a visual branch/merge graph and ref labels, changed files, commit diffs, and compare-with-local dialogs. Right-click a branch, commit, or changed file in the log to compare it with the local working state. Editor context menus can show history for a complete file or the current selection.
 
 ## Task Workspaces
 
