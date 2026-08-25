@@ -189,6 +189,15 @@ async function startClient(workspaceId: string): Promise<void> {
   const desktopMain = path.join(clientRoot, "dist-electron", "main.js");
   const desktopExecutable = process.env.VIBE_DESKTOP_EXECUTABLE || process.execPath;
   const child = spawn(desktopExecutable, [desktopMain, "--host", "127.0.0.1", "--port", String(localPort)], { cwd: clientRoot, env: { ...process.env, VITE_DEV_SERVER_URL: "" }, detached: true, stdio: "ignore" });
+  try {
+    await new Promise<void>((resolve, reject) => {
+      child.once("spawn", resolve);
+      child.once("error", (error) => reject(new Error(`Could not launch Vibe Editor using ${desktopExecutable}: ${error.message}`)));
+    });
+  } catch (error) {
+    tunnels.get(workspaceId)?.server.close(); tunnels.get(workspaceId)?.ssh.end(); tunnels.delete(workspaceId);
+    throw error;
+  }
   child.unref(); runtime(workspaceId, "client", `Client connected through local port ${localPort}${clientBuilt ? " (artifacts reused)" : " (artifacts downloaded)"}`);
 }
 

@@ -8,8 +8,9 @@ const run = (command, args) => {
 };
 
 export async function electronExecutable({ packageRoot, productName, bundleId }) {
-  const rootBin = path.resolve(packageRoot, "../../node_modules/.bin");
-  if (process.platform !== "darwin") return path.join(rootBin, process.platform === "win32" ? "electron.cmd" : "electron");
+  const electronDist = path.resolve(packageRoot, "../../node_modules/electron/dist");
+  if (process.platform === "win32") return path.join(electronDist, "electron.exe");
+  if (process.platform !== "darwin") return path.join(electronDist, "electron");
 
   const electronRoot = path.resolve(packageRoot, "../../node_modules/electron/dist/Electron.app");
   const runtimeRoot = path.join(packageRoot, ".electron-runtime");

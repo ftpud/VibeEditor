@@ -26,7 +26,7 @@ const electron = spawn(electronRuntime, [packageRoot], {
     VIBE_DESKTOP_ICON: path.resolve(packageRoot, "../desktop/assets/app-icon.png"),
   },
   stdio: "inherit",
-  shell: process.platform === "win32",
+  shell: false,
 });
 const stop = (code = 0) => { vite.kill(); electron.kill(); setTimeout(() => process.exit(code), 100); };
 vite.on("exit", (code) => stop(code ?? 0)); electron.on("exit", (code) => stop(code ?? 0));

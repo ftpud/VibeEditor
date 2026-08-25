@@ -25,6 +25,6 @@ const child = spawn(executable, [config.packageRoot, ...process.argv.slice(3)], 
   cwd: config.packageRoot,
   stdio: "inherit",
   env,
-  shell: process.platform === "win32",
+  shell: false,
 });
 child.on("exit", (code, signal) => { if (signal) process.kill(process.pid, signal); else process.exit(code ?? 0); });
