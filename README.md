@@ -65,6 +65,14 @@ The UI state separates layout panels, editor groups, and file tabs in `model.ts`
 
 The backend watches the configured workspace and broadcasts typed change events. The desktop refreshes Explorer automatically and reloads externally changed files that are open and clean. If an open file has unsaved edits, its buffer is preserved and an external-change warning is shown instead. Files deleted outside the editor remain open with a deletion warning.
 
+## Vibe Gateway
+
+Vibe Gateway is a separate Electron application for managing Vibe Editor over SSH. Start it from a built checkout with `npm run gateway`, or use `npm run dev:gateway` during development. SSH passwords are encrypted with Electron `safeStorage` before they are written to Gateway's application-data directory.
+
+Each saved SSH connection can contain multiple remote workspaces. **Start server** clones or fast-forwards `https://github.com/ftpud/VibeEditor` under `~/.vibe` on the SSH host, installs dependencies, builds Protocol and Core, then starts Core on remote loopback with a workspace-specific PID and log file. The SSH account therefore needs Git, Node.js 20+, npm, and access to the configured workspace directory.
+
+**Start client** creates a source archive from the remote checkout, downloads it over SFTP, installs and builds Protocol and Desktop under Gateway's local application-data directory, opens a loopback SSH tunnel, and launches Vibe Editor against that tunnel. **Stop server** closes Gateway's active tunnel and stops the recorded remote Core process. Keep Gateway running while using a client it launched because Gateway owns the tunnel.
+
 The Git tool-window button switches the left sidebar from Project to Git Changes. It shows the current branch and groups conflicted, untracked, staged, modified, deleted, and renamed paths. Status refreshes on workspace changes and Git index updates. Git integration is read-only; staging, reverting, and committing are not included.
 
 Selecting a file in Git Changes opens a separate read-only diff tab comparing `HEAD` with the current workspace content. The tab toolbar switches Monaco between side-by-side and unified layouts. New files use an empty original side, and deleted files use an empty modified side. Diff tabs refresh when their file or Git index changes and are intentionally not included in restored editable-file sessions.

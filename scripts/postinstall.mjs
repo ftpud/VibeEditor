@@ -1,5 +1,10 @@
 await import("./fix-node-pty.mjs");
 
+if (process.env.VIBE_SKIP_JDTLS === "1") {
+  console.log("[postinstall] Skipping JDT LS installation on this desktop-only installation.");
+  process.exit(0);
+}
+
 try {
   await import("./install-jdtls.mjs");
 } catch (error) {
