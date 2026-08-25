@@ -119,6 +119,21 @@ export class GitService {
     else await this.git(["restore", "--source=HEAD", "--staged", "--worktree", "--", filePath]);
   }
 
+  async commit(paths: string[], message: string): Promise<string> {
+    if (!Array.isArray(paths) || paths.length === 0 || paths.length > 500) throw new CoreError("INVALID_REQUEST", "Select at least one file to commit");
+    const uniquePaths = [...new Set(paths)];
+    for (const filePath of uniquePaths) validatePath(filePath);
+    const trimmedMessage = message.trim();
+    if (!trimmedMessage || trimmedMessage.length > 10_000) throw new CoreError("INVALID_REQUEST", "Commit message is required");
+    const status = await this.status();
+    const selected = status.entries.filter((entry) => uniquePaths.includes(entry.path));
+    if (selected.length !== uniquePaths.length) throw new CoreError("GIT_FAILED", "One or more selected files no longer have changes");
+    const commitPaths = [...new Set(selected.flatMap((entry) => entry.originalPath ? [entry.originalPath, entry.path] : [entry.path]))];
+    await this.git(["add", "-A", "--", ...commitPaths]);
+    await this.git(["commit", "--only", "-m", trimmedMessage, "--", ...commitPaths]);
+    return (await this.git(["rev-parse", "HEAD"])).trim();
+  }
+
   async diffStats(): Promise<{ additions: number; deletions: number }> {
     let additions = 0; let deletions = 0;
     try {

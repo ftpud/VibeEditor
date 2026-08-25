@@ -7,7 +7,7 @@ import { promisify } from "node:util";
 import { CoreError } from "./errors.js";
 
 const execFileAsync = promisify(execFile);
-export type WorkspaceTask = { id: string; name: string; branch: string };
+export type WorkspaceTask = { id: string; name: string; branch: string; baseBranch: string };
 type Registry = { selectedTaskId?: string; tasks: WorkspaceTask[] };
 
 export class WorkspaceTaskStore {
@@ -24,7 +24,10 @@ export class WorkspaceTaskStore {
     try {
       const value = JSON.parse(await readFile(this.registryFile, "utf8")) as Registry;
       if (!Array.isArray(value.tasks)) throw new Error("Invalid task registry");
-      return { tasks: value.tasks.filter(isTask), ...(value.selectedTaskId && value.tasks.some((task) => task.id === value.selectedTaskId) ? { selectedTaskId: value.selectedTaskId } : {}) };
+      const validTasks = value.tasks.filter(isTask);
+      const fallbackBaseBranch = validTasks.some((task) => !task.baseBranch) ? await this.rootBranch() : "";
+      const tasks = validTasks.map((task) => ({ ...task, baseBranch: task.baseBranch || fallbackBaseBranch }));
+      return { tasks, ...(value.selectedTaskId && tasks.some((task) => task.id === value.selectedTaskId) ? { selectedTaskId: value.selectedTaskId } : {}) };
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return { tasks: [] };
       throw new CoreError("READ_FAILED", `Could not read tasks: ${error instanceof Error ? error.message : String(error)}`);
@@ -36,7 +39,7 @@ export class WorkspaceTaskStore {
     if (!name || name.length > 200 || !/^[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(name) || name.includes("..") || name.endsWith("/") || name.endsWith(".")) throw new CoreError("INVALID_REQUEST", "Invalid Git branch name");
     const registry = await this.list();
     if (registry.tasks.some((task) => task.branch === name)) throw new CoreError("INVALID_REQUEST", `A task already uses branch ${name}`);
-    const task: WorkspaceTask = { id: crypto.randomUUID(), name, branch: name };
+    const task: WorkspaceTask = { id: crypto.randomUUID(), name, branch: name, baseBranch: await this.rootBranch() };
     const destination = this.taskPath(task.id);
     try {
       await mkdir(path.dirname(destination), { recursive: true });
@@ -68,6 +71,17 @@ export class WorkspaceTaskStore {
 
   taskPath(taskId: string): string { return path.join(this.directory, taskId, "workspace"); }
 
+  private async rootBranch(): Promise<string> {
+    try {
+      try {
+        const upstream = (await execFileAsync("git", ["-C", this.rootWorkspace, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"], { encoding: "utf8" })).stdout.trim();
+        if (upstream) return upstream;
+      } catch { /* A local-only branch uses its current branch as the task base. */ }
+      return (await execFileAsync("git", ["-C", this.rootWorkspace, "branch", "--show-current"], { encoding: "utf8" })).stdout.trim() || "HEAD";
+    }
+    catch (error) { throw new CoreError("GIT_FAILED", `Could not determine task base branch: ${error instanceof Error ? error.message : String(error)}`); }
+  }
+
   private async save(registry: Registry): Promise<void> {
     await mkdir(this.directory, { recursive: true });
     const temporary = `${this.registryFile}.${process.pid}.tmp`;
@@ -79,5 +93,5 @@ export class WorkspaceTaskStore {
 function isTask(value: unknown): value is WorkspaceTask {
   if (!value || typeof value !== "object") return false;
   const task = value as Record<string, unknown>;
-  return typeof task.id === "string" && typeof task.name === "string" && typeof task.branch === "string";
+  return typeof task.id === "string" && typeof task.name === "string" && typeof task.branch === "string" && (task.baseBranch === undefined || typeof task.baseBranch === "string");
 }

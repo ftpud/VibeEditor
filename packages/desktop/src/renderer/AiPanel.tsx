@@ -10,6 +10,7 @@ export function AiPanel({ provider, session, models, attachments, onProviderChan
   const [prompt, setPrompt] = useState("");
   const [model, setModel] = useState(session.model);
   const [reasoning, setReasoning] = useState(session.reasoning);
+  const [composerHeight, setComposerHeight] = useState(90);
   const endRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   useEffect(() => { setModel(session.model); setReasoning(session.reasoning); }, [session.model, session.reasoning]);
@@ -25,6 +26,15 @@ export function AiPanel({ provider, session, models, attachments, onProviderChan
     onAttachmentsChange([...attachments, ...added]);
     if (fileInputRef.current) fileInputRef.current.value = "";
   };
+  const beginComposerResize = (event: React.PointerEvent<HTMLDivElement>) => {
+    event.currentTarget.setPointerCapture(event.pointerId);
+    const startY = event.clientY;
+    const startHeight = composerHeight;
+    const move = (moveEvent: PointerEvent) => setComposerHeight(Math.max(78, Math.min(Math.min(420, window.innerHeight * 0.55), startHeight + startY - moveEvent.clientY)));
+    const end = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", end); };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", end);
+  };
   return <div className="ai-panel">
     <div className="ai-controls">
       <select aria-label="AI provider" value={provider} disabled={running} onChange={(event) => onProviderChange(event.target.value as AiProvider)}><option value="codex">Codex</option><option value="copilot">Copilot CLI</option></select>
@@ -38,7 +48,8 @@ export function AiPanel({ provider, session, models, attachments, onProviderChan
       {running && <div className="ai-working"><span />{providerName} is working...</div>}
       <div ref={endRef} />
     </div>
-    <form className="ai-composer" onSubmit={(event) => { event.preventDefault(); void send(); }}>
+    <div className="ai-composer-resize-handle" onPointerDown={beginComposerResize} />
+    <form className="ai-composer" style={{ height: composerHeight }} onSubmit={(event) => { event.preventDefault(); void send(); }}>
       {attachments.length > 0 && <div className="ai-attachments">{attachments.map((attachment) => <span className="ai-attachment" key={attachment.id} title={attachment.path ?? attachment.name}><span>{attachment.path ?? attachment.name}</span><button type="button" title={`Remove ${attachment.name}`} onClick={() => onAttachmentsChange(attachments.filter((item) => item.id !== attachment.id))}><X size={12} /></button></span>)}</div>}
       <textarea value={prompt} disabled={running} placeholder={`Ask ${providerName}...`} onChange={(event) => setPrompt(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void send(); } }} />
       <div className="ai-composer-actions"><input ref={fileInputRef} type="file" multiple onChange={(event) => void addFiles(event.target.files)} /><button type="button" title="Attach files" disabled={running} onClick={() => fileInputRef.current?.click()}><Paperclip size={15} /></button><button title="Send prompt" disabled={running || (!prompt.trim() && attachments.length === 0)}><Send size={15} /></button></div>

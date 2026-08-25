@@ -59,6 +59,24 @@ describe("parseGitStatus", () => {
     expect(await readFile(path.join(root, "tracked.txt"), "utf8")).toBe("original\n");
     await expect(access(path.join(root, "new.txt"))).rejects.toThrow();
   });
+
+  it("commits only selected files", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "remote-ide-git-commit-"));
+    await execFileAsync("git", ["-C", root, "init"]);
+    await execFileAsync("git", ["-C", root, "config", "user.email", "test@example.com"]);
+    await execFileAsync("git", ["-C", root, "config", "user.name", "Test"]);
+    await writeFile(path.join(root, "selected.txt"), "before\n");
+    await writeFile(path.join(root, "other.txt"), "before\n");
+    await execFileAsync("git", ["-C", root, "add", "."]);
+    await execFileAsync("git", ["-C", root, "commit", "-m", "initial"]);
+    await writeFile(path.join(root, "selected.txt"), "selected change\n");
+    await writeFile(path.join(root, "other.txt"), "other change\n");
+    const service = new GitService(root);
+    await expect(service.commit(["selected.txt"], "selected commit")).resolves.toMatch(/^[0-9a-f]{40}$/);
+    expect((await service.status()).entries.map((entry) => entry.path)).toEqual(["other.txt"]);
+    expect((await execFileAsync("git", ["-C", root, "show", "HEAD:selected.txt"])).stdout).toBe("selected change\n");
+    expect((await execFileAsync("git", ["-C", root, "show", "HEAD:other.txt"])).stdout).toBe("before\n");
+  });
 });
 
 describe("Git history parsing", () => {

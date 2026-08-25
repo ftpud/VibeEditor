@@ -11,6 +11,9 @@ export type EditorTab = {
   error?: string;
   originalContent?: string;
   diffMode?: "split" | "unified";
+  diffRef?: string;
+  diffPath?: string;
+  diffOriginalPath?: string;
   markdownMode?: "edit" | "preview";
   usefulScope?: "global" | "local";
 };

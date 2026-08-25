@@ -22,10 +22,11 @@ export type WorkspaceOptions = {
   javaProject?: JavaProjectOptions;
   terminal?: WorkspaceTerminalOptions;
   fileColors?: Record<string, FileColor>;
+  gitCommitMessage?: string;
 };
 export type FileColor = "red" | "orange" | "yellow" | "green" | "blue" | "purple" | "gray";
 export type WorkspaceTerminalOptions = { tabs: { title: string }[]; activeTabIndex?: number; panelOpen: boolean };
-export type WorkspaceTask = { id: string; name: string; branch: string };
+export type WorkspaceTask = { id: string; name: string; branch: string; baseBranch: string };
 export type AiStatus = "idle" | "in_progress" | "user_prompt" | "done" | "error";
 export type AiProvider = "codex" | "copilot";
 export type AiMessage = { id: string; role: "user" | "assistant" | "activity" | "error"; text: string; timestamp: string };
@@ -149,6 +150,7 @@ export type ProtocolOperations = {
   "git.compareFiles": { payload: { ref: string; path?: string }; result: { files: GitCommitFile[] } };
   "git.compareDiff": { payload: { ref: string; path: string; originalPath?: string }; result: { originalContent: string; modifiedContent: string } };
   "git.rollback": { payload: { path: string }; result: Record<string, never> };
+  "git.commit": { payload: { paths: string[]; message: string }; result: { hash: string } };
   "java.loadMavenProject": {
     payload: { pomPath: string };
     result: { options: JavaProjectOptions; tree: JavaProjectNode[] };
@@ -305,6 +307,7 @@ export const requestTypes: RequestType[] = [
   "git.compareFiles",
   "git.compareDiff",
   "git.rollback",
+  "git.commit",
   "java.loadMavenProject",
   "java.getOptions",
   "java.addSourceRoot",

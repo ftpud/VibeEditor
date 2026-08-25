@@ -16,9 +16,11 @@ describe("WorkspaceTaskStore", () => {
     await writeFile(path.join(root, "tracked.txt"), "root\n");
     await execFileAsync("git", ["-C", root, "add", "tracked.txt"]);
     await execFileAsync("git", ["-C", root, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "initial"]);
+    const rootBranch = (await execFileAsync("git", ["-C", root, "branch", "--show-current"])).stdout.trim();
 
     const store = new WorkspaceTaskStore(root, state);
     const task = await store.create("feature/task-one");
+    expect(task.baseBranch).toBe(rootBranch);
     const selected = await store.select(task.id);
 
     expect((await store.list()).selectedTaskId).toBe(task.id);

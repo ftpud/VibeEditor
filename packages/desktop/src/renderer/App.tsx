@@ -19,7 +19,7 @@ type ConnectionStatus = "idle" | "connecting" | "connected" | "failed" | "discon
 const languageByExtension: Record<string, string> = {
   ts: "typescript", tsx: "typescript", js: "javascript", jsx: "javascript", json: "json", html: "html",
   css: "css", md: "markdown", java: "java", py: "python", yaml: "yaml", yml: "yaml", mta: "yaml", mtaext: "yaml",
-  xml: "xml", http: "http", txt: "plaintext"
+  xml: "xml", cds: "sap-cds", http: "http", txt: "plaintext"
 };
 const formatAiStatus = (status: AiStatus) => ({ idle: "", in_progress: "In progress", user_prompt: "User prompt", done: "Done", error: "Error" })[status];
 const fileColorChoices: { id: FileColor; label: string }[] = [{ id: "red", label: "Red" }, { id: "orange", label: "Orange" }, { id: "yellow", label: "Yellow" }, { id: "green", label: "Green" }, { id: "blue", label: "Blue" }, { id: "purple", label: "Purple" }, { id: "gray", label: "Gray" }];
@@ -82,9 +82,10 @@ export function App() {
   const [showCreateTaskDialog, setShowCreateTaskDialog] = useState(false);
   const [tasks, setTasks] = useState<WorkspaceTask[]>([]);
   const [selectedTaskId, setSelectedTaskId] = useState<string>();
+  const activeTaskRef = useRef<WorkspaceTask>();
   const [taskSwitching, setTaskSwitching] = useState(false);
   const [terminalHeight, setTerminalHeight] = useState(240);
-  const [sideView, setSideView] = useState<"project" | "git" | "java" | "useful">("project");
+  const [sideView, setSideView] = useState<"project" | "git" | "taskGit" | "java" | "useful">("project");
   const [usefulFiles, setUsefulFiles] = useState<UsefulFile[]>([]);
   const [fileColors, setFileColors] = useState<Record<string, FileColor>>({});
   const [usefulDialog, setUsefulDialog] = useState<{ mode: "create" | "rename"; scope: UsefulFileScope; file?: UsefulFile }>();
@@ -101,6 +102,11 @@ export function App() {
   const [gitBranch, setGitBranch] = useState("HEAD");
   const [branchMenu, setBranchMenu] = useState<{ branches: GitBranchInfo[]; selected?: string; loading: boolean }>();
   const [gitEntries, setGitEntries] = useState<GitStatusEntry[]>([]);
+  const [selectedGitPaths, setSelectedGitPaths] = useState<Set<string>>(new Set());
+  const [gitCommitMessage, setGitCommitMessage] = useState("");
+  const [gitCommitting, setGitCommitting] = useState(false);
+  const [taskGitEntries, setTaskGitEntries] = useState<GitStatusEntry[]>([]);
+  const [taskGitError, setTaskGitError] = useState("");
   const [gitError, setGitError] = useState("");
   const [workspaceOptionsReady, setWorkspaceOptionsReady] = useState(false);
   const [javaOptions, setJavaOptions] = useState<JavaProjectOptions>();
@@ -212,6 +218,15 @@ export function App() {
     }
   }, []);
 
+  const refreshTaskGit = useCallback(async (task = activeTaskRef.current, client = clientRef.current) => {
+    if (!client || !task) { setTaskGitEntries([]); setTaskGitError(""); return; }
+    try {
+      const result = await client.request("git.compareFiles", { ref: task.baseBranch });
+      setTaskGitEntries(result.files.map((file) => ({ path: file.path, ...(file.originalPath ? { originalPath: file.originalPath } : {}), indexStatus: file.status === "?" ? "?" : file.status[0] ?? "M", worktreeStatus: file.status === "?" ? "?" : " " })));
+      setTaskGitError("");
+    } catch (error) { setTaskGitEntries([]); setTaskGitError(error instanceof Error ? error.message : "Could not compare task with its base branch"); }
+  }, []);
+
   const refreshAi = useCallback(async (client = clientRef.current) => {
     if (!client) return;
     const [session, statuses] = await Promise.all([client.request("ai.get", { provider: aiProviderRef.current }), client.request("ai.statuses", {})]);
@@ -221,6 +236,8 @@ export function App() {
 
   const restoreWorkspaceOptions = useCallback(async (options: WorkspaceOptions, client: CoreClient) => {
     setFileColors(options.fileColors ?? {});
+    setGitCommitMessage(options.gitCommitMessage ?? "");
+    setSelectedGitPaths(new Set());
     const tabs = await Promise.all(options.openFiles.map(async (filePath): Promise<EditorTab> => {
       const title = filePath.split("/").pop() ?? filePath;
       try {
@@ -285,10 +302,10 @@ export function App() {
         return;
       }
       if (gitRefreshTimer.current) clearTimeout(gitRefreshTimer.current);
-      gitRefreshTimer.current = setTimeout(() => { void refreshGit(client); void client.request("ai.statuses", {}).then(setAiStatuses).catch(() => undefined); }, 200);
+      gitRefreshTimer.current = setTimeout(() => { void refreshGit(client); void refreshTaskGit(activeTaskRef.current, client); void client.request("ai.statuses", {}).then(setAiStatuses).catch(() => undefined); }, 200);
       const refreshDiffs = (changedPath?: string) => {
-        const diffTabs = layoutRef.current.editorGroups[0]?.tabs.filter((tab) => tab.type === "diff" && (!changedPath || tab.path === changedPath)) ?? [];
-        for (const tab of diffTabs) void client.request("git.diff", { path: tab.path }).then((result) => {
+        const diffTabs = layoutRef.current.editorGroups[0]?.tabs.filter((tab) => tab.type === "diff" && (!changedPath || (tab.diffPath ?? tab.path) === changedPath)) ?? [];
+        for (const tab of diffTabs) void (tab.diffRef ? client.request("git.compareDiff", { ref: tab.diffRef, path: tab.diffPath ?? tab.path, ...(tab.diffOriginalPath ? { originalPath: tab.diffOriginalPath } : {}) }) : client.request("git.diff", { path: tab.path })).then((result) => {
           updateGroup((tabs, active) => ({ tabs: tabs.map((item) => item.id === tab.id ? { ...item, originalContent: result.originalContent, content: result.modifiedContent, error: undefined } : item), activeTabId: active }));
         }).catch(() => undefined);
       };
@@ -349,12 +366,12 @@ export function App() {
         } else setJavaTree([]);
         await restoreWorkspaceOptions(result.options, client);
         const taskResult = await client.request("tasks.list", {});
-        setTasks(taskResult.tasks); setSelectedTaskId(taskResult.selectedTaskId);
+        setTasks(taskResult.tasks); setSelectedTaskId(taskResult.selectedTaskId); activeTaskRef.current = taskResult.tasks.find((task) => task.id === taskResult.selectedTaskId);
         setAiModels((await client.request("ai.models", { provider: aiProviderRef.current })).models);
         await refreshAi(client);
         await refreshUsefulFiles(client);
         setTree(result.tree); setStatus("connected"); setStatusMessage("");
-        void refreshGit(client);
+        void refreshGit(client); void refreshTaskGit(activeTaskRef.current, client);
         localStorage.setItem("connection", JSON.stringify({ host, port }));
       } catch (error) {
         client.disconnect(); setStatus("workspace-error"); setStatusMessage(error instanceof Error ? error.message : "Workspace could not be opened");
@@ -385,14 +402,16 @@ export function App() {
   const terminalPanelOpen = layout.panels.some((panel) => panel.type === "terminal");
   const activeTerminalIndex = layout.terminalGroup.tabs.findIndex((tab) => tab.id === layout.terminalGroup.activeTabId);
   const terminalOptions: NonNullable<WorkspaceOptions["terminal"]> = { tabs: layout.terminalGroup.tabs.map((tab) => ({ title: tab.title })), ...(activeTerminalIndex >= 0 ? { activeTabIndex: activeTerminalIndex } : {}), panelOpen: terminalPanelOpen };
-  const workspaceOptionsSignature = `${persistedFileTabs.map((tab) => tab.path).join("\0")}\n${persistedActiveTab?.path ?? ""}\n${JSON.stringify(javaOptions)}\n${JSON.stringify(terminalOptions)}\n${JSON.stringify(fileColors)}`;
+  const workspaceOptionsSignature = `${persistedFileTabs.map((tab) => tab.path).join("\0")}\n${persistedActiveTab?.path ?? ""}\n${JSON.stringify(javaOptions)}\n${JSON.stringify(terminalOptions)}\n${JSON.stringify(fileColors)}\n${gitCommitMessage}`;
   useEffect(() => {
     if (status !== "connected" || !workspaceOptionsReady || !clientRef.current) return;
-    const options: WorkspaceOptions = { openFiles: persistedFileTabs.map((tab) => tab.path), ...(persistedActiveTab ? { activeFile: persistedActiveTab.path } : {}), ...(javaOptions ? { javaProject: javaOptions } : {}), terminal: terminalOptions, ...(Object.keys(fileColors).length ? { fileColors } : {}) };
+    const options: WorkspaceOptions = { openFiles: persistedFileTabs.map((tab) => tab.path), ...(persistedActiveTab ? { activeFile: persistedActiveTab.path } : {}), ...(javaOptions ? { javaProject: javaOptions } : {}), terminal: terminalOptions, ...(Object.keys(fileColors).length ? { fileColors } : {}), ...(gitCommitMessage ? { gitCommitMessage } : {}) };
     void clientRef.current.request("workspace.saveOptions", { options }).catch((error: unknown) => {
       setStatusMessage(error instanceof Error ? error.message : "Could not save workspace options");
     });
   }, [status, workspaceOptionsReady, workspaceOptionsSignature]);
+
+  useEffect(() => setSelectedGitPaths((current) => new Set([...current].filter((path) => gitEntries.some((entry) => entry.path === path)))), [gitEntries]);
 
   const openFile = async (node: FileTreeNode) => {
     const existing = group.tabs.find((tab) => tab.type === "file" && tab.path === node.path);
@@ -420,12 +439,28 @@ export function App() {
     }
   };
 
+  const openTaskDiff = async (entry: GitStatusEntry) => {
+    const task = tasks.find((item) => item.id === selectedTaskId);
+    if (!task) return;
+    const tabPath = `task-git:${task.id}:${entry.path}`;
+    const existing = group.tabs.find((tab) => tab.type === "diff" && tab.path === tabPath);
+    if (existing) { updateGroup((tabs) => ({ tabs, activeTabId: existing.id })); return; }
+    const tab: EditorTab = { id: crypto.randomUUID(), type: "diff", title: `${entry.path.split("/").pop() ?? entry.path} (Task Diff)`, path: tabPath, diffRef: task.baseBranch, diffPath: entry.path, ...(entry.originalPath ? { diffOriginalPath: entry.originalPath } : {}), dirty: false, content: "", savedContent: "", originalContent: "", diffMode: "split", loading: true };
+    updateGroup((tabs) => ({ tabs: [...tabs, tab], activeTabId: tab.id }));
+    try {
+      const result = await clientRef.current!.request("git.compareDiff", { ref: task.baseBranch, path: entry.path, ...(entry.originalPath ? { originalPath: entry.originalPath } : {}) });
+      updateGroup((tabs, active) => ({ tabs: tabs.map((item) => item.id === tab.id ? { ...item, originalContent: result.originalContent, content: result.modifiedContent, savedContent: result.modifiedContent, loading: false } : item), activeTabId: active }));
+    } catch (error) { updateGroup((tabs, active) => ({ tabs: tabs.map((item) => item.id === tab.id ? { ...item, loading: false, error: error instanceof Error ? error.message : "Could not load task diff" } : item), activeTabId: active })); }
+  };
+
   const activateEditorTab = useCallback(async (tab: EditorTab) => {
     updateGroup((tabs) => ({ tabs, activeTabId: tab.id }));
     if (!clientRef.current || tab.loading || tab.dirty) return;
     try {
       if (tab.type === "diff") {
-        const result = await clientRef.current.request("git.diff", { path: tab.path });
+        const result = tab.diffRef
+          ? await clientRef.current.request("git.compareDiff", { ref: tab.diffRef, path: tab.diffPath ?? tab.path, ...(tab.diffOriginalPath ? { originalPath: tab.diffOriginalPath } : {}) })
+          : await clientRef.current.request("git.diff", { path: tab.path });
         updateGroup((tabs, active) => ({
           tabs: tabs.map((item) => item.id === tab.id && !item.dirty ? { ...item, originalContent: result.originalContent, content: result.modifiedContent, savedContent: result.modifiedContent, error: undefined } : item),
           activeTabId: active
@@ -470,6 +505,17 @@ export function App() {
       });
       await Promise.all([refreshGit(), refreshTree()]);
     } catch (error) { setStatusMessage(error instanceof Error ? error.message : "Could not rollback file"); }
+  };
+
+  const commitSelectedFiles = async () => {
+    if (!clientRef.current || gitCommitting || selectedGitPaths.size === 0 || !gitCommitMessage.trim()) return;
+    setGitCommitting(true); setStatusMessage("");
+    try {
+      await clientRef.current.request("git.commit", { paths: [...selectedGitPaths], message: gitCommitMessage });
+      setSelectedGitPaths(new Set()); setGitCommitMessage("");
+      await Promise.all([refreshGit(), refreshTaskGit()]);
+    } catch (error) { setStatusMessage(error instanceof Error ? error.message : "Could not commit selected files"); }
+    finally { setGitCommitting(false); }
   };
 
   const openGitHunkDialog = async (path: string, hunk: GitDiffHunk, x: number, y: number) => {
@@ -566,21 +612,23 @@ export function App() {
       const currentFiles = currentGroup.tabs.filter((tab) => tab.type === "file");
       const currentTerminal = layoutRef.current.terminalGroup;
       const currentActiveTerminalIndex = currentTerminal.tabs.findIndex((tab) => tab.id === currentTerminal.activeTabId);
-      await clientRef.current.request("workspace.saveOptions", { options: { openFiles: currentFiles.map((tab) => tab.path), ...(currentFiles.find((tab) => tab.id === currentGroup.activeTabId) ? { activeFile: currentFiles.find((tab) => tab.id === currentGroup.activeTabId)!.path } : {}), ...(javaOptionsRef.current ? { javaProject: javaOptionsRef.current } : {}), terminal: { tabs: currentTerminal.tabs.map((tab) => ({ title: tab.title })), ...(currentActiveTerminalIndex >= 0 ? { activeTabIndex: currentActiveTerminalIndex } : {}), panelOpen: layoutRef.current.panels.some((panel) => panel.type === "terminal") }, ...(Object.keys(fileColors).length ? { fileColors } : {}) } });
+      await clientRef.current.request("workspace.saveOptions", { options: { openFiles: currentFiles.map((tab) => tab.path), ...(currentFiles.find((tab) => tab.id === currentGroup.activeTabId) ? { activeFile: currentFiles.find((tab) => tab.id === currentGroup.activeTabId)!.path } : {}), ...(javaOptionsRef.current ? { javaProject: javaOptionsRef.current } : {}), terminal: { tabs: currentTerminal.tabs.map((tab) => ({ title: tab.title })), ...(currentActiveTerminalIndex >= 0 ? { activeTabIndex: currentActiveTerminalIndex } : {}), panelOpen: layoutRef.current.panels.some((panel) => panel.type === "terminal") }, ...(Object.keys(fileColors).length ? { fileColors } : {}), ...(gitCommitMessage ? { gitCommitMessage } : {}) } });
       const result = await clientRef.current.request("tasks.switch", { ...(taskId ? { taskId } : {}) });
       terminalWriters.current.clear(); terminalBuffers.current.clear(); markdownBlockTerminals.current.clear();
       setLayout((current) => ({ ...current, panels: current.panels.filter((panel) => !["terminal", "java", "problems"].includes(panel.type)), terminalGroup: { ...current.terminalGroup, tabs: [], activeTabId: undefined } }));
-      setTasks(result.tasks); setSelectedTaskId(result.selectedTaskId); setTree(result.tree);
+      setTasks(result.tasks); setSelectedTaskId(result.selectedTaskId); activeTaskRef.current = result.tasks.find((task) => task.id === result.selectedTaskId); setTree(result.tree);
+      if (!result.selectedTaskId && sideView === "taskGit") setSideView("project");
       setActiveWorkspace(result.workspace); activeWorkspaceRef.current = result.workspace;
       setJavaOptions(result.options.javaProject); setJavaTree([]); setJavaRunning(false); setJavaLog(""); setJavaDiagnostics([]);
       if (result.options.javaProject) setJavaTree((await clientRef.current.request("java.getProjectTree", {})).tree);
       await restoreWorkspaceOptions(result.options, clientRef.current);
-      await Promise.all([refreshGit(), refreshAi()]);
+      const nextTask = result.tasks.find((task) => task.id === result.selectedTaskId);
+      await Promise.all([refreshGit(), refreshAi(), refreshTaskGit(nextTask)]);
     } catch (error) {
       setWorkspaceOptionsReady(true);
       setStatusMessage(error instanceof Error ? error.message : "Could not switch task");
     } finally { setTaskSwitching(false); }
-  }, [fileColors, refreshAi, refreshGit, restoreWorkspaceOptions, saveFileTab, selectedTaskId]);
+  }, [fileColors, gitCommitMessage, refreshAi, refreshGit, refreshTaskGit, restoreWorkspaceOptions, saveFileTab, selectedTaskId, sideView]);
 
   const currentAiAttachmentKey = selectedTaskId ?? "root";
   const currentAiAttachments = aiAttachments[currentAiAttachmentKey] ?? [];
@@ -1109,6 +1157,7 @@ export function App() {
       <nav className="tool-stripe" aria-label="Tool windows">
         <button className={`tool-stripe-button ${sideView === "project" ? "active" : ""}`} title="Project" onClick={() => setSideView("project")}><Folder size={15} /><span>Project</span></button>
         <button className={`tool-stripe-button ${sideView === "git" ? "active" : ""}`} title="Git changes" onClick={() => { setSideView("git"); void refreshGit(); }}><GitBranch size={15} /><span>Git</span>{gitEntries.length > 0 && <span className="tool-badge">{gitEntries.length > 99 ? "99+" : gitEntries.length}</span>}</button>
+        {selectedTaskId && <button className={`tool-stripe-button ${sideView === "taskGit" ? "active" : ""}`} title="Changes from task base branch" onClick={() => { setSideView("taskGit"); void refreshTaskGit(); }}><GitCompareArrows size={15} /><span>Task Git</span>{taskGitEntries.length > 0 && <span className="tool-badge">{taskGitEntries.length > 99 ? "99+" : taskGitEntries.length}</span>}</button>}
         <button className={`tool-stripe-button ${sideView === "useful" ? "active" : ""}`} title="Useful Files" onClick={() => { setSideView("useful"); void refreshUsefulFiles(); }}><Library size={15} /><span>Useful</span></button>
         {javaOptions && <button className={`tool-stripe-button ${sideView === "java" ? "active" : ""}`} title="Java project" onClick={() => { setSideView("java"); void refreshJavaTree(); }}><Coffee size={15} /><span>Java</span></button>}
       </nav>
@@ -1120,7 +1169,15 @@ export function App() {
         </> : sideView === "git" ? <>
           <header className="panel-header"><span>Git Changes</span><button title="Refresh Git status" onClick={() => void refreshGit()}><RefreshCw size={14} /></button></header>
           <div className="git-branch"><GitBranch size={13} /><span>{gitBranch}</span></div>
-          <GitChangesView entries={gitEntries} error={gitError} activePath={activeTab?.path} onOpenDiff={openDiff} onOpenFile={(entry) => void openFile({ name: entry.path.split("/").pop() ?? entry.path, path: entry.path, type: "file" })} onContextMenu={(event, entry) => { event.preventDefault(); setGitRollbackMenu({ x: Math.min(event.clientX, window.innerWidth - 220), y: Math.min(event.clientY, window.innerHeight - 50), entry }); }} />
+          <GitChangesView entries={gitEntries} error={gitError} selectedPaths={selectedGitPaths} onTogglePath={(path) => setSelectedGitPaths((current) => { const next = new Set(current); next.has(path) ? next.delete(path) : next.add(path); return next; })} activePath={activeTab?.path} onOpenDiff={openDiff} onOpenFile={(entry) => void openFile({ name: entry.path.split("/").pop() ?? entry.path, path: entry.path, type: "file" })} onContextMenu={(event, entry) => { event.preventDefault(); setGitRollbackMenu({ x: Math.min(event.clientX, window.innerWidth - 220), y: Math.min(event.clientY, window.innerHeight - 50), entry }); }} />
+          <form className="git-commit-panel" onSubmit={(event) => { event.preventDefault(); void commitSelectedFiles(); }}>
+            <textarea aria-label="Commit message" placeholder="Commit message" value={gitCommitMessage} disabled={gitCommitting} onChange={(event) => setGitCommitMessage(event.target.value)} />
+            <footer><span>{selectedGitPaths.size} selected</span><button disabled={gitCommitting || selectedGitPaths.size === 0 || !gitCommitMessage.trim()}>{gitCommitting ? "Committing..." : "Commit"}</button></footer>
+          </form>
+        </> : sideView === "taskGit" ? <>
+          <header className="panel-header"><span>Task Git</span><button title="Refresh task comparison" onClick={() => void refreshTaskGit()}><RefreshCw size={14} /></button></header>
+          <div className="git-branch"><GitCompareArrows size={13} /><span>{tasks.find((task) => task.id === selectedTaskId)?.baseBranch ?? "Base branch"}</span></div>
+          <GitChangesView entries={taskGitEntries} error={taskGitError} emptyMessage="No changes from base branch" groupTitle="Changes from Base" activePath={activeTab?.path} onOpenDiff={openTaskDiff} onOpenFile={(entry) => void openFile({ name: entry.path.split("/").pop() ?? entry.path, path: entry.path, type: "file" })} />
         </> : sideView === "useful" ? <>
           <header className="panel-header"><span>Useful Files</span><button title="Refresh useful files" onClick={() => void refreshUsefulFiles()}><RefreshCw size={14} /></button></header>
           <div className="useful-files-list"><UsefulFileSection title="Global" scope="global" files={usefulFiles} activeTab={activeTab} onOpen={openUsefulFile} onCreate={(scope) => setUsefulDialog({ mode: "create", scope })} onRename={(file) => setUsefulDialog({ mode: "rename", scope: file.scope, file })} onDelete={(file) => void deleteUsefulFile(file)} /><UsefulFileSection title="Local" scope="local" files={usefulFiles} activeTab={activeTab} onOpen={openUsefulFile} onCreate={(scope) => setUsefulDialog({ mode: "create", scope })} onRename={(file) => setUsefulDialog({ mode: "rename", scope: file.scope, file })} onDelete={(file) => void deleteUsefulFile(file)} /></div>
@@ -1218,8 +1275,29 @@ export function App() {
 }
 
 function BranchSelectorGroup({ title, branches, selected, onSelect, onCheckout, onRename }: { title: string; branches: GitBranchInfo[]; selected?: string; onSelect(name: string): void; onCheckout(branch: GitBranchInfo): void; onRename(branch: GitBranchInfo): void }) {
-  return <section className="branch-selector-group"><header>{title}<small>{branches.length}</small></header>{branches.length === 0 ? <div className="branch-menu-empty">No {title.toLowerCase()} branches</div> : branches.map((branch) => { const depth = Math.max(0, branch.name.split("/").length - (branch.remote ? 2 : 1)); const open = selected === branch.name; return <div className={`branch-selector-item ${open ? "open" : ""}`} key={branch.name}><button className={`branch-selector-row ${branch.current ? "current" : ""} ${open ? "selected" : ""}`} style={{ paddingLeft: 10 + depth * 13 }} onClick={() => onSelect(branch.name)}><GitBranch size={13} /><span>{branch.name}</span>{branch.current && <span className="branch-current-label">Current</span>}<ChevronRight className={open ? "expanded" : ""} size={12} /></button>{open && <div className="branch-action-menu"><button disabled={branch.current} onClick={() => void onCheckout(branch)}><GitBranch size={13} /><span>Checkout</span></button><button disabled={branch.remote} onClick={() => void onRename(branch)}><Pencil size={13} /><span>Rename</span></button></div>}</div>; })}</section>;
+  const nodes = useMemo(() => buildBranchPathTree(branches), [branches]);
+  const currentPaths = branches.filter((branch) => branch.current).flatMap((branch) => { const parts = branch.name.split("/"); return parts.slice(0, -1).map((_, index) => parts.slice(0, index + 1).join("/")); });
+  const currentPathsKey = currentPaths.join("\0");
+  const [expanded, setExpanded] = useState<Set<string>>(() => new Set(currentPaths));
+  useEffect(() => { if (currentPaths.some((path) => !expanded.has(path))) setExpanded((current) => new Set([...current, ...currentPaths])); }, [currentPathsKey]);
+  const renderBranch = (branch: GitBranchInfo, label: string, depth: number) => { const open = selected === branch.name; return <div className={`branch-selector-item ${open ? "open" : ""}`} key={`branch:${branch.name}`}><button className={`branch-selector-row ${branch.current ? "current" : ""} ${open ? "selected" : ""}`} title={branch.name} style={{ paddingLeft: 10 + depth * 15 }} onClick={() => onSelect(branch.name)}><GitBranch size={13} /><span>{label}</span>{branch.current && <span className="branch-current-label">Current</span>}<ChevronRight className={open ? "expanded" : ""} size={12} /></button>{open && <div className="branch-action-menu"><button disabled={branch.current} onClick={() => void onCheckout(branch)}><GitBranch size={13} /><span>Checkout</span></button><button disabled={branch.remote} onClick={() => void onRename(branch)}><Pencil size={13} /><span>Rename</span></button></div>}</div>; };
+  const renderNodes = (items: BranchPathNode[], depth: number): ReactNode => items.map((node) => { if (node.children.length === 0 && node.branch) return renderBranch(node.branch, node.segment, depth); const open = expanded.has(node.path); return <div className="branch-path-group" key={`path:${node.path}`}><button className="branch-path-row" style={{ paddingLeft: 9 + depth * 15 }} aria-expanded={open} onClick={() => setExpanded((current) => { const next = new Set(current); open ? next.delete(node.path) : next.add(node.path); return next; })}>{open ? <ChevronDown size={12} /> : <ChevronRight size={12} />}{open ? <FolderOpen size={13} /> : <Folder size={13} />}<span>{node.segment}</span><small>{countBranchPathLeaves(node)}</small></button>{open && <div>{node.branch && renderBranch(node.branch, node.segment, depth + 1)}{renderNodes(node.children, depth + 1)}</div>}</div>; });
+  return <section className="branch-selector-group"><header>{title}<small>{branches.length}</small></header>{branches.length === 0 ? <div className="branch-menu-empty">No {title.toLowerCase()} branches</div> : renderNodes(nodes, 0)}</section>;
 }
+
+type BranchPathNode = { segment: string; path: string; branch?: GitBranchInfo; children: BranchPathNode[] };
+
+function buildBranchPathTree(branches: GitBranchInfo[]): BranchPathNode[] {
+  const root: BranchPathNode[] = [];
+  for (const branch of branches) {
+    let children = root; let currentPath = ""; const parts = branch.name.split("/");
+    parts.forEach((segment, index) => { currentPath = currentPath ? `${currentPath}/${segment}` : segment; let node = children.find((item) => item.segment === segment); if (!node) { node = { segment, path: currentPath, children: [] }; children.push(node); } if (index === parts.length - 1) node.branch = branch; children = node.children; });
+  }
+  const sort = (nodes: BranchPathNode[]) => { nodes.sort((left, right) => Number(right.children.length > 0) - Number(left.children.length > 0) || left.segment.localeCompare(right.segment)); for (const node of nodes) sort(node.children); };
+  sort(root); return root;
+}
+
+function countBranchPathLeaves(node: BranchPathNode): number { return (node.branch ? 1 : 0) + node.children.reduce((total, child) => total + countBranchPathLeaves(child), 0); }
 
 function ConnectionScreen(props: { host: string; port: string; status: ConnectionStatus; statusMessage: string; setHost(value: string): void; setPort(value: string): void; connect(): Promise<void> }) {
   const connecting = props.status === "connecting";
@@ -1295,25 +1373,25 @@ function UsefulFileDialog({ mode, initialName, scope, onClose, onSave }: { mode:
   return <div className="dialog-overlay" onMouseDown={() => { if (!saving) onClose(); }}><section className="run-config-dialog useful-file-dialog" role="dialog" aria-modal="true" aria-label={`${mode} useful file`} onMouseDown={(event) => event.stopPropagation()}><header><div><h2>{mode === "create" ? "Create" : "Rename"} Useful File</h2><span>{scope === "global" ? "Global" : "Local"}</span></div><button title="Close" disabled={saving} onClick={onClose}><X size={15} /></button></header><form onSubmit={(event) => { event.preventDefault(); void save(); }}><label>File name<input autoFocus value={name} disabled={saving} maxLength={180} placeholder="notes.md" onChange={(event) => setName(event.target.value)} /></label>{error && <div className="find-error">{error}</div>}<footer><button type="button" disabled={saving} onClick={onClose}>Cancel</button><button className="primary" disabled={saving || !name.trim()}>{saving ? "Saving..." : mode === "create" ? "Create" : "Rename"}</button></footer></form></section></div>;
 }
 
-function GitChangesView({ entries, error, activePath, onOpenDiff, onOpenFile, onContextMenu }: { entries: GitStatusEntry[]; error: string; activePath?: string; onOpenDiff(entry: GitStatusEntry): void; onOpenFile(entry: GitStatusEntry): void; onContextMenu(event: ReactMouseEvent, entry: GitStatusEntry): void }) {
+function GitChangesView({ entries, error, emptyMessage = "No local changes", groupTitle, selectedPaths, onTogglePath, activePath, onOpenDiff, onOpenFile, onContextMenu }: { entries: GitStatusEntry[]; error: string; emptyMessage?: string; groupTitle?: string; selectedPaths?: Set<string>; onTogglePath?(path: string): void; activePath?: string; onOpenDiff(entry: GitStatusEntry): void; onOpenFile(entry: GitStatusEntry): void; onContextMenu?(event: ReactMouseEvent, entry: GitStatusEntry): void }) {
   if (error) return <div className="git-empty error">{error}</div>;
-  if (entries.length === 0) return <div className="git-empty">No local changes</div>;
-  const groups = [
+  if (entries.length === 0) return <div className="git-empty">{emptyMessage}</div>;
+  const groups = groupTitle ? [{ title: groupTitle, entries }] : [
     { title: "Conflicts", entries: entries.filter((entry) => entry.indexStatus === "U" || entry.worktreeStatus === "U" || ["AA", "DD"].includes(entry.indexStatus + entry.worktreeStatus)) },
     { title: "Untracked", entries: entries.filter((entry) => entry.indexStatus === "?" && entry.worktreeStatus === "?") },
     { title: "Staged", entries: entries.filter((entry) => entry.indexStatus !== " " && entry.indexStatus !== "?" && entry.indexStatus !== "U" && !["AA", "DD"].includes(entry.indexStatus + entry.worktreeStatus)) },
     { title: "Changes", entries: entries.filter((entry) => entry.indexStatus === " " && entry.worktreeStatus !== " " && entry.worktreeStatus !== "?" && entry.worktreeStatus !== "U") }
   ].filter((group) => group.entries.length > 0);
-  return <div className="git-changes">{groups.map((group) => <GitChangeGroup key={group.title} title={group.title} entries={group.entries} activePath={activePath} onOpenDiff={onOpenDiff} onOpenFile={onOpenFile} onContextMenu={onContextMenu} />)}</div>;
+  return <div className="git-changes">{groups.map((group) => <GitChangeGroup key={group.title} title={group.title} entries={group.entries} selectedPaths={selectedPaths} onTogglePath={onTogglePath} activePath={activePath} onOpenDiff={onOpenDiff} onOpenFile={onOpenFile} onContextMenu={onContextMenu} />)}</div>;
 }
 
-function GitChangeGroup({ title, entries, activePath, onOpenDiff, onOpenFile, onContextMenu }: { title: string; entries: GitStatusEntry[]; activePath?: string; onOpenDiff(entry: GitStatusEntry): void; onOpenFile(entry: GitStatusEntry): void; onContextMenu(event: ReactMouseEvent, entry: GitStatusEntry): void }) {
+function GitChangeGroup({ title, entries, selectedPaths, onTogglePath, activePath, onOpenDiff, onOpenFile, onContextMenu }: { title: string; entries: GitStatusEntry[]; selectedPaths?: Set<string>; onTogglePath?(path: string): void; activePath?: string; onOpenDiff(entry: GitStatusEntry): void; onOpenFile(entry: GitStatusEntry): void; onContextMenu?(event: ReactMouseEvent, entry: GitStatusEntry): void }) {
   const [expanded, setExpanded] = useState(true);
   return <section className={`git-group git-group-${title.toLowerCase()}`}>
     <button className="git-group-title" aria-expanded={expanded} onClick={() => setExpanded((current) => !current)}>
       {expanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />}<span>{title}</span><span className="git-count">{entries.length}</span>
     </button>
-    {expanded && <GitStatusTree entries={entries} activePath={activePath} onOpenDiff={onOpenDiff} onOpenFile={onOpenFile} onContextMenu={onContextMenu} />}
+    {expanded && <GitStatusTree entries={entries} selectedPaths={selectedPaths} onTogglePath={onTogglePath} activePath={activePath} onOpenDiff={onOpenDiff} onOpenFile={onOpenFile} onContextMenu={onContextMenu} />}
   </section>;
 }
 
@@ -1321,7 +1399,7 @@ type GitTreeNode =
   | { type: "directory"; name: string; path: string; children: GitTreeNode[] }
   | { type: "file"; name: string; path: string; entry: GitStatusEntry };
 
-function GitStatusTree({ entries, activePath, onOpenDiff, onOpenFile, onContextMenu }: { entries: GitStatusEntry[]; activePath?: string; onOpenDiff(entry: GitStatusEntry): void; onOpenFile(entry: GitStatusEntry): void; onContextMenu(event: ReactMouseEvent, entry: GitStatusEntry): void }) {
+function GitStatusTree({ entries, selectedPaths, onTogglePath, activePath, onOpenDiff, onOpenFile, onContextMenu }: { entries: GitStatusEntry[]; selectedPaths?: Set<string>; onTogglePath?(path: string): void; activePath?: string; onOpenDiff(entry: GitStatusEntry): void; onOpenFile(entry: GitStatusEntry): void; onContextMenu?(event: ReactMouseEvent, entry: GitStatusEntry): void }) {
   const nodes = useMemo(() => buildGitTree(entries), [entries]);
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set(collectGitDirectories(nodes)));
   useEffect(() => setExpanded((current) => new Set([...current, ...collectGitDirectories(nodes)])), [nodes]);
@@ -1340,7 +1418,8 @@ function GitStatusTree({ entries, activePath, onOpenDiff, onOpenFile, onContextM
     const deleted = entry.indexStatus === "D" || entry.worktreeStatus === "D";
     const status = entry.indexStatus === "?" ? "U" : `${entry.indexStatus}${entry.worktreeStatus}`.trim();
     const kind = entry.indexStatus === "U" || entry.worktreeStatus === "U" ? "conflict" : entry.indexStatus === "?" ? "untracked" : deleted ? "deleted" : entry.indexStatus === "A" ? "added" : "modified";
-    return <button key={node.path} className={`git-file-row ${activePath === entry.path ? "selected" : ""}`} style={{ paddingLeft: 27 + depth * 13 }} title={deleted ? `${entry.path} (deleted)` : `${entry.path} - double-click to open file`} onClick={() => onOpenDiff(entry)} onDoubleClick={() => { if (!deleted) onOpenFile(entry); }} onContextMenu={(event) => onContextMenu(event, entry)}>
+    return <button key={node.path} className={`git-file-row ${activePath === entry.path ? "selected" : ""}`} style={{ paddingLeft: (onTogglePath ? 9 : 27) + depth * 13 }} title={deleted ? `${entry.path} (deleted)` : `${entry.path} - double-click to open file`} onClick={() => onOpenDiff(entry)} onDoubleClick={() => { if (!deleted) onOpenFile(entry); }} onContextMenu={onContextMenu ? (event) => onContextMenu(event, entry) : undefined}>
+      {onTogglePath && <input type="checkbox" aria-label={`Select ${entry.path} for commit`} checked={selectedPaths?.has(entry.path) ?? false} onClick={(event) => event.stopPropagation()} onChange={() => onTogglePath(entry.path)} />}
       <FileCode2 size={14} /><span className="git-file-name">{node.name}</span><span className={`git-status ${kind}`}>{status}</span>
     </button>;
   });
@@ -1388,7 +1467,7 @@ function FileTreeRow({ node, selected, color: rowColor, gitStatus, onOpen, onCon
     json: { color: "#c9b45d", Icon: FileJson }, xml: { color: "#d7a85e", Icon: FileCode2 }, html: { color: "#e8845b", Icon: FileCode2 },
     css: { color: "#8d7bd8", Icon: Hash }, md: { color: "#78a7cf", Icon: FileText },
     java: { color: "#d58b59", Icon: Coffee }, py: { color: "#63a86f", Icon: FileCode2 },
-    yaml: { color: "#ca6b75", Icon: Braces }, yml: { color: "#ca6b75", Icon: Braces }, mta: { color: "#ca6b75", Icon: Braces }, mtaext: { color: "#ca6b75", Icon: Braces }
+    yaml: { color: "#ca6b75", Icon: Braces }, yml: { color: "#ca6b75", Icon: Braces }, mta: { color: "#ca6b75", Icon: Braces }, mtaext: { color: "#ca6b75", Icon: Braces }, cds: { color: "#5aa7a0", Icon: FileCode2 }
   };
   const { color, Icon } = appearance[extension] ?? { color: "#9aa0a8", Icon: File };
   return <button className={`tree-row file-row ${selected ? "selected" : ""} ${rowColor ? `file-color-${rowColor}` : ""}`} onContextMenu={(event) => onContextMenu(event, node)} onClick={() => void onOpen(node)}>

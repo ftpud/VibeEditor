@@ -16,6 +16,40 @@ export function monacoTheme(appTheme = currentTheme(), highlightTheme = currentH
 }
 
 export function configureMonacoThemes(monaco: Monaco): void {
+  if (!monaco.languages.getLanguages().some((language) => language.id === "sap-cds")) {
+    monaco.languages.register({ id: "sap-cds", extensions: [".cds"], aliases: ["SAP CDS", "CDS"] });
+    monaco.languages.setLanguageConfiguration("sap-cds", {
+      comments: { lineComment: "//", blockComment: ["/*", "*/"] },
+      brackets: [["{", "}"], ["[", "]"], ["(", ")"]],
+      autoClosingPairs: [{ open: "{", close: "}" }, { open: "[", close: "]" }, { open: "(", close: ")" }, { open: "'", close: "'" }, { open: "\"", close: "\"" }]
+    });
+    monaco.languages.setMonarchTokensProvider("sap-cds", {
+      defaultToken: "identifier",
+      ignoreCase: true,
+      keywords: ["namespace", "using", "from", "as", "entity", "aspect", "type", "service", "context", "action", "function", "event", "projection", "on", "select", "distinct", "key", "association", "composition", "to", "many", "one", "localized", "enum", "annotate", "extend", "with", "returns", "array", "of", "not", "null", "default", "virtual", "masked", "redirected", "excluding", "where", "group", "by", "having", "order", "asc", "desc", "limit", "offset", "mixin", "into", "case", "when", "then", "else", "end", "cast"],
+      typeKeywords: ["String", "Integer", "Integer64", "Decimal", "DecimalFloat", "Double", "Date", "Time", "DateTime", "Timestamp", "Boolean", "UUID", "LargeString", "Binary", "LargeBinary", "Association", "Composition"],
+      operators: ["=", ">", "<", "!", "~", "?", ":", "==", "<=", ">=", "!=", "&&", "||", "+", "-", "*", "/"],
+      tokenizer: {
+        root: [
+          [/@[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*/, "annotation"],
+          [/[A-Za-z_$][\w$]*/, { cases: { "@typeKeywords": "type", "@keywords": "keyword", "@default": "identifier" } }],
+          [/\$[A-Za-z_$][\w$]*/, "variable.predefined"],
+          [/0[xX][0-9a-fA-F]+/, "number.hex"],
+          [/\d+(?:\.\d+)?(?:[eE][+-]?\d+)?/, "number"],
+          [/\/\*/, "comment", "@comment"],
+          [/\/\/.*$/, "comment"],
+          [/'/, "string", "@singleString"],
+          [/"/, "string", "@doubleString"],
+          [/[{}()\[\]]/, "@brackets"],
+          [/[;,.]/, "delimiter"],
+          [/[=><!~?:&|+\-*\/]+/, "operator"]
+        ],
+        comment: [[/[^/*]+/, "comment"], [/\*\//, "comment", "@pop"], [/[/*]/, "comment"]],
+        singleString: [[/[^'\\]+/, "string"], [/\\./, "string.escape"], [/''/, "string.escape"], [/'/, "string", "@pop"]],
+        doubleString: [[/[^"\\]+/, "string"], [/\\./, "string.escape"], [/""/, "string.escape"], [/"/, "string", "@pop"]]
+      }
+    });
+  }
   monaco.editor.defineTheme("ftpud", {
     base: "vs",
     inherit: true,

@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { CoreClient } from "./client";
 import { configureMonacoThemes, monacoTheme } from "./theme";
 
-const languages: Record<string, string> = { ts: "typescript", tsx: "typescript", js: "javascript", jsx: "javascript", json: "json", html: "html", css: "css", md: "markdown", java: "java", py: "python", yaml: "yaml", yml: "yaml", http: "http", txt: "plaintext" };
+const languages: Record<string, string> = { ts: "typescript", tsx: "typescript", js: "javascript", jsx: "javascript", json: "json", html: "html", css: "css", md: "markdown", java: "java", py: "python", yaml: "yaml", yml: "yaml", cds: "sap-cds", http: "http", txt: "plaintext" };
 
 export function DetachedEditor() {
   const options = useRef(new URLSearchParams(window.location.search)).current;
