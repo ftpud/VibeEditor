@@ -139,6 +139,8 @@ export type ProtocolOperations = {
     result: { path: string; originalContent: string; modifiedContent: string; hunks: GitDiffHunk[] };
   };
   "git.branches": { payload: Record<string, never>; result: { branches: GitBranch[] } };
+  "git.checkoutBranch": { payload: { branch: string; remote?: boolean }; result: { branch: string } };
+  "git.renameBranch": { payload: { branch: string; newName: string }; result: { branch: string } };
   "git.log": { payload: { branch: string; limit?: number }; result: { commits: GitCommit[] } };
   "git.commitFiles": { payload: { hash: string }; result: { files: GitCommitFile[] } };
   "git.commitDiff": { payload: { hash: string; path: string; originalPath?: string }; result: { originalContent: string; modifiedContent: string } };
@@ -292,6 +294,8 @@ export const requestTypes: RequestType[] = [
   "git.status",
   "git.diff",
   "git.branches",
+  "git.checkoutBranch",
+  "git.renameBranch",
   "git.log",
   "git.commitFiles",
   "git.commitDiff",

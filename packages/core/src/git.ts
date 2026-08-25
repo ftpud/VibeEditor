@@ -51,8 +51,24 @@ export class GitService {
   }
 
   async branches(): Promise<GitBranch[]> {
-    const output = await this.git(["for-each-ref", "--format=%(refname:short)%00%(HEAD)%00", "refs/heads", "refs/remotes"]);
-    return output.split("\n").filter(Boolean).map((line) => { const [name, head] = line.split("\0"); return { name: name!, current: head === "*", remote: name!.includes("/") }; }).filter((item) => !item.name.endsWith("/HEAD"));
+    const output = await this.git(["for-each-ref", "--format=%(refname)%00%(refname:short)%00%(HEAD)%00", "refs/heads", "refs/remotes"]);
+    return output.split("\n").filter(Boolean).map((line) => { const [ref, name, head] = line.split("\0"); return { name: name!, current: head === "*", remote: ref!.startsWith("refs/remotes/") }; }).filter((item) => !item.name.endsWith("/HEAD"));
+  }
+
+  async checkoutBranch(branch: string, remote = false): Promise<string> {
+    validateBranchName(branch);
+    if (remote) {
+      const localName = branch.split("/").slice(1).join("/");
+      validateBranchName(localName);
+      await this.git(["switch", "--track", "-c", localName, branch]);
+    } else await this.git(["switch", branch]);
+    return (await this.status()).branch;
+  }
+
+  async renameBranch(branch: string, newName: string): Promise<string> {
+    validateBranchName(branch); validateBranchName(newName);
+    await this.git(["branch", "-m", branch, newName]);
+    return (await this.status()).branch;
   }
 
   async log(branch: string, limit = 200): Promise<GitCommit[]> {
@@ -132,6 +148,7 @@ export function parseDiffHunks(output: string): GitDiffHunk[] {
 
 function validateHash(hash: string): void { if (!/^[0-9a-f]{7,64}$/i.test(hash)) throw new CoreError("INVALID_REQUEST", "Invalid commit hash"); }
 function validateRef(ref: string): void { if (!/^[\w./@{}~^:+-]+$/.test(ref)) throw new CoreError("INVALID_REQUEST", "Invalid Git reference"); }
+function validateBranchName(name: string): void { if (!name || !/^[\w./-]+$/.test(name) || name.startsWith("-") || name.includes("..") || name.includes("//") || name.endsWith("/")) throw new CoreError("INVALID_REQUEST", "Invalid Git branch name"); }
 function validatePath(filePath: string): void { if (!filePath || path.isAbsolute(filePath) || filePath.split(/[\\/]/).includes("..")) throw new CoreError("INVALID_REQUEST", "Invalid Git path"); }
 
 export function parseGitLog(output: string): GitCommit[] {

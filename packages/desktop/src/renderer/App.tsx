@@ -1,7 +1,7 @@
 import Editor, { DiffEditor, type Monaco } from "@monaco-editor/react";
 import { ArrowUpRight, Bot, Braces, Bug, CaseSensitive, Check, ChevronDown, ChevronRight, CircleAlert, Coffee, Columns2, Eye, File, FileCode2, FileDiff, FileJson, FileText, Folder, FolderOpen, GitBranch, GitCompareArrows, Hash, Library, ListTodo, ListTree, LogOut, Package, Palette, Pencil, Play, Plus, RefreshCw, Save, Search, Settings, Square, SquareTerminal, Trash2, X } from "lucide-react";
 import { isValidElement, useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
-import type { AiModel, AiProvider, AiSession, AiStatus, AiTaskSummary, FileColor, FileTreeNode, GitDiffHunk, GitStatusEntry, HttpResponse, JavaBreakpoint, JavaDebugState, JavaDiagnostic, JavaLspLocation, JavaMainClass, JavaProjectNode, JavaProjectOptions, JavaTypeSuggestion, SearchResult, UsefulFile, UsefulFileScope, WorkspaceOptions, WorkspaceTask } from "@remote-ide/protocol";
+import type { AiModel, AiProvider, AiSession, AiStatus, AiTaskSummary, FileColor, FileTreeNode, GitBranch as GitBranchInfo, GitDiffHunk, GitStatusEntry, HttpResponse, JavaBreakpoint, JavaDebugState, JavaDiagnostic, JavaLspLocation, JavaMainClass, JavaProjectNode, JavaProjectOptions, JavaTypeSuggestion, SearchResult, UsefulFile, UsefulFileScope, WorkspaceOptions, WorkspaceTask } from "@remote-ide/protocol";
 import type { editor } from "monaco-editor";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -91,6 +91,7 @@ export function App() {
   const [gitHunkDialog, setGitHunkDialog] = useState<{ x: number; y: number; path: string; hunk: GitDiffHunk; originalContent: string; modifiedContent: string; error?: string }>();
   const [httpResult, setHttpResult] = useState<{ request: ParsedHttpRequest; response?: HttpResponse; error?: string; loading: boolean }>();
   const [gitBranch, setGitBranch] = useState("HEAD");
+  const [branchMenu, setBranchMenu] = useState<{ branches: GitBranchInfo[]; selected?: string; loading: boolean }>();
   const [gitEntries, setGitEntries] = useState<GitStatusEntry[]>([]);
   const [gitError, setGitError] = useState("");
   const [workspaceOptionsReady, setWorkspaceOptionsReady] = useState(false);
@@ -1038,6 +1039,35 @@ export function App() {
     setSearchScope(undefined);
   };
 
+  const loadBranchMenu = async () => {
+    setBranchMenu({ branches: [], loading: true });
+    try { setBranchMenu({ branches: (await clientRef.current!.request("git.branches", {})).branches, loading: false }); }
+    catch (error) { setBranchMenu(undefined); setStatusMessage(error instanceof Error ? error.message : "Could not load branches"); }
+  };
+
+  const toggleBranchMenu = async () => {
+    if (branchMenu) { setBranchMenu(undefined); return; }
+    await loadBranchMenu();
+  };
+
+  const checkoutBranch = async (branch: GitBranchInfo) => {
+    if (!clientRef.current || branch.current) return;
+    try {
+      const result = await clientRef.current.request("git.checkoutBranch", { branch: branch.name, ...(branch.remote ? { remote: true } : {}) });
+      setGitBranch(result.branch); setBranchMenu(undefined);
+      await Promise.all([refreshGit(), refreshTree()]);
+    } catch (error) { setStatusMessage(error instanceof Error ? error.message : "Could not checkout branch"); }
+  };
+
+  const renameBranch = async (branch: GitBranchInfo) => {
+    const newName = window.prompt(`Rename branch ${branch.name} to:`, branch.name);
+    if (!clientRef.current || !newName?.trim() || newName.trim() === branch.name) return;
+    try {
+      const result = await clientRef.current.request("git.renameBranch", { branch: branch.name, newName: newName.trim() });
+      setGitBranch(result.branch); setBranchMenu(undefined); await refreshGit();
+    } catch (error) { setStatusMessage(error instanceof Error ? error.message : "Could not rename branch"); }
+  };
+
   if (status !== "connected") return <ConnectionScreen {...{ host, port, status, statusMessage, setHost, setPort, connect }} />;
 
   return <div className="ide-shell">
@@ -1069,6 +1099,7 @@ export function App() {
       <div className="resize-handle" onPointerDown={beginResize} />
       <main className="workbench">
         <div className="titlebar-actions">
+          <div className="branch-selector"><button className="branch-selector-button" title="Git branches" onClick={() => void toggleBranchMenu()}><GitBranch size={14} /><span>{gitBranch}</span><ChevronDown size={12} /></button>{branchMenu && <div className="branch-menu"><header><span>Git Branches</span><button title="Refresh branches" onClick={() => void loadBranchMenu()}><RefreshCw size={13} /></button></header>{branchMenu.loading ? <div className="branch-menu-empty">Loading branches...</div> : <div className="branch-groups"><BranchSelectorGroup title="Local" branches={branchMenu.branches.filter((branch) => !branch.remote)} selected={branchMenu.selected} onSelect={(name) => setBranchMenu((current) => current ? { ...current, selected: current.selected === name ? undefined : name } : current)} onCheckout={checkoutBranch} onRename={renameBranch} /><BranchSelectorGroup title="Remote" branches={branchMenu.branches.filter((branch) => branch.remote)} selected={branchMenu.selected} onSelect={(name) => setBranchMenu((current) => current ? { ...current, selected: current.selected === name ? undefined : name } : current)} onCheckout={checkoutBranch} onRename={renameBranch} /></div>}</div>}</div>
           {javaOptions && <div className="top-java-run">
             <button title="Run selected Java configuration" disabled={javaRunning || !javaOptions.selectedRunConfigurationId} onClick={() => void runJavaAction("java.run")}><Play size={14} /></button>
             <button title="Debug selected Java configuration" disabled={javaRunning || !javaOptions.selectedRunConfigurationId} onClick={() => void debugJava()}><Bug size={14} /></button>
@@ -1148,6 +1179,10 @@ export function App() {
     {showCreateTaskDialog && <CreateTaskDialog onClose={() => setShowCreateTaskDialog(false)} onCreate={createTask} />}
     {usefulDialog && <UsefulFileDialog mode={usefulDialog.mode} initialName={usefulDialog.file?.name ?? ""} scope={usefulDialog.scope} onClose={() => setUsefulDialog(undefined)} onSave={saveUsefulFileDialog} />}
   </div>;
+}
+
+function BranchSelectorGroup({ title, branches, selected, onSelect, onCheckout, onRename }: { title: string; branches: GitBranchInfo[]; selected?: string; onSelect(name: string): void; onCheckout(branch: GitBranchInfo): void; onRename(branch: GitBranchInfo): void }) {
+  return <section className="branch-selector-group"><header>{title}<small>{branches.length}</small></header>{branches.length === 0 ? <div className="branch-menu-empty">No {title.toLowerCase()} branches</div> : branches.map((branch) => { const depth = Math.max(0, branch.name.split("/").length - (branch.remote ? 2 : 1)); const open = selected === branch.name; return <div className={`branch-selector-item ${open ? "open" : ""}`} key={branch.name}><button className={`branch-selector-row ${branch.current ? "current" : ""} ${open ? "selected" : ""}`} style={{ paddingLeft: 10 + depth * 13 }} onClick={() => onSelect(branch.name)}><GitBranch size={13} /><span>{branch.name}</span>{branch.current && <span className="branch-current-label">Current</span>}<ChevronRight className={open ? "expanded" : ""} size={12} /></button>{open && <div className="branch-action-menu"><button disabled={branch.current} onClick={() => void onCheckout(branch)}><GitBranch size={13} /><span>Checkout</span></button><button disabled={branch.remote} onClick={() => void onRename(branch)}><Pencil size={13} /><span>Rename</span></button></div>}</div>; })}</section>;
 }
 
 function ConnectionScreen(props: { host: string; port: string; status: ConnectionStatus; statusMessage: string; setHost(value: string): void; setPort(value: string): void; connect(): Promise<void> }) {

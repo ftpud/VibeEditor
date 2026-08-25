@@ -165,6 +165,30 @@ button { color: inherit; }
 @keyframes pulse { from { opacity: .35; } to { opacity: 1; } }
 .workbench { min-width: 0; flex: 1; display: flex; flex-direction: column; }
 .titlebar-actions { justify-content: flex-end; gap: 6px; background: #2b2d30; border-bottom: 1px solid #393b40; }
+.branch-selector { position: relative; margin-right: auto; }
+.titlebar-actions .branch-selector-button { width: auto; max-width: 260px; padding: 0 7px; display: flex; align-items: center; gap: 6px; color: #c3c5c9; }
+.branch-selector-button span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.branch-menu { width: 300px; max-height: min(520px, calc(100vh - 60px)); position: absolute; z-index: 45; top: 30px; left: 0; display: flex; flex-direction: column; border: 1px solid #4a4d52; border-radius: 4px; background: #2b2d30; box-shadow: 0 10px 30px rgba(0, 0, 0, .4); }
+.branch-menu > header { height: 34px; flex: 0 0 34px; padding: 0 5px 0 10px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid #3d3f44; font-weight: 600; }
+.branch-groups { min-height: 0; overflow: auto; padding: 5px 5px 8px; }
+.branch-selector-group + .branch-selector-group { margin-top: 5px; padding-top: 4px; border-top: 1px solid #3d3f44; }
+.branch-selector-group > header { height: 25px; padding: 0 6px; display: flex; align-items: center; gap: 6px; color: #aeb1b6; font-size: 10px; font-weight: 600; text-transform: uppercase; }
+.branch-selector-group > header small { margin-left: auto; color: #777a80; font-size: 9px; }
+.branch-selector-item { overflow: hidden; border-radius: 3px; }
+.branch-selector-item.open { margin: 2px 0 4px; background: #25272a; }
+.titlebar-actions .branch-selector-row { width: 100%; height: 29px; padding-right: 8px; display: flex; place-items: initial; align-items: center; justify-content: flex-start; gap: 7px; border: 0; background: transparent; color: #c7c9cc; text-align: left; cursor: pointer; }
+.branch-selector-row:hover,
+.branch-selector-row.selected { background: #34363a; }
+.branch-selector-row > span { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.branch-selector-row.current > span { font-weight: 600; }
+.branch-selector-row > svg:last-child { flex: 0 0 auto; transition: transform .12s ease; }
+.branch-selector-row > svg:last-child.expanded { transform: rotate(90deg); }
+.branch-current-label { flex: 0 0 auto !important; padding: 1px 5px; border-radius: 3px; background: #3c4d42; color: #8ecf98; font-size: 9px; font-weight: 500 !important; }
+.branch-action-menu { margin: 0 7px 6px 29px; padding: 4px; display: grid; grid-template-columns: 1fr 1fr; gap: 4px; border-top: 1px solid #3d3f44; }
+.titlebar-actions .branch-action-menu button { width: 100%; height: 27px; padding: 0 7px; display: flex; place-items: initial; align-items: center; justify-content: center; gap: 6px; border: 1px solid #45484e; border-radius: 3px; background: #2b2d30; color: #d5d7da; cursor: pointer; }
+.branch-action-menu button:hover:not(:disabled) { background: #2e5792; color: white; }
+.branch-action-menu button:disabled { opacity: .4; cursor: default; }
+.branch-menu-empty { padding: 10px; color: #85888e; font-size: 10px; }
 .settings-anchor { position: relative; }
 .settings-menu { width: 230px; position: absolute; z-index: 30; top: 30px; right: 0; padding: 0 10px 10px; border: 1px solid #4a4d52; border-radius: 4px; background: #2b2d30; box-shadow: 0 8px 24px rgba(0, 0, 0, .35); }
 .settings-menu > header { height: 34px; display: flex; align-items: center; border-bottom: 1px solid #3d3f44; font-weight: 600; }
@@ -720,6 +744,20 @@ button { color: inherit; }
 :root[data-theme="light"] .git-hunk-popup > header span { color: #65686e; }
 :root[data-theme="light"] .git-hunk-popup > pre { background: #f7f8f9; color: #24292f; }
 :root[data-theme="light"] .git-hunk-popup > footer button { background: #b53b43; border-color: #a3333a; }
+:root[data-theme="light"] .titlebar-actions .branch-selector-button { color: #3c3f44; }
+:root[data-theme="light"] .branch-menu { background: #ffffff; border-color: #c8cbd0; box-shadow: 0 10px 28px rgba(0, 0, 0, .16); }
+:root[data-theme="light"] .branch-action-menu { border-color: #dfe1e5; }
+:root[data-theme="light"] .branch-menu > header { border-color: #dfe1e5; }
+:root[data-theme="light"] .branch-selector-group > header { color: #65686e; }
+:root[data-theme="light"] .branch-selector-row,
+:root[data-theme="light"] .branch-action-menu button { color: #303236; }
+:root[data-theme="light"] .branch-selector-row:hover,
+:root[data-theme="light"] .branch-selector-row.selected { background: #e7effd; }
+:root[data-theme="light"] .branch-selector-item.open { background: #f5f7fa; }
+:root[data-theme="light"] .branch-selector-group + .branch-selector-group { border-color: #dfe1e5; }
+:root[data-theme="light"] .branch-current-label { background: #e0f2e3; color: #276432; }
+:root[data-theme="light"] .branch-action-menu button { background: #ffffff; border-color: #c8cbd0; }
+:root[data-theme="light"] .branch-action-menu button:hover:not(:disabled) { background: #d9e7fb; color: #17233a; }
 :root[data-theme="light"] .git-log-panel .git-log-details .commit-files > button.selected {
   background: #e7effd;
   color: #202124;

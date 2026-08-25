@@ -2,6 +2,7 @@
   "name": "vibe-editor",
   "private": true,
   "version": "0.1.0",
+  "license": "MIT",
   "workspaces": ["packages/*"],
   "scripts": {
     "core": "npm run start -w @remote-ide/core --",
