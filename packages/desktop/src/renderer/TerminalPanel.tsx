@@ -9,6 +9,9 @@ import "@xterm/xterm/css/xterm.css";
 
 type Props = {
   theme: AppTheme;
+  fontFamily: string;
+  fontSize: number;
+  lineHeight: number;
   client: CoreClient;
   group: TerminalGroup;
   height: number;
@@ -19,7 +22,7 @@ type Props = {
   registerWriter(terminalId: string, writer?: (data: string) => void): void;
 };
 
-export function TerminalPanel({ theme, client, group, height, onActivate, onCreate, onClose, onResizeStart, registerWriter }: Props) {
+export function TerminalPanel({ theme, fontFamily, fontSize, lineHeight, client, group, height, onActivate, onCreate, onClose, onResizeStart, registerWriter }: Props) {
   return <section className="terminal-panel" style={{ height }}>
     <div className="terminal-resize-handle" onPointerDown={onResizeStart} />
     <div className="terminal-tabs" role="tablist">
@@ -30,12 +33,12 @@ export function TerminalPanel({ theme, client, group, height, onActivate, onCrea
       <button className="terminal-action" title="New terminal" onClick={onCreate}><Plus size={15} /></button>
     </div>
     <div className="terminal-content">
-      {group.tabs.map((tab) => <TerminalView key={tab.id} theme={theme} client={client} tab={tab} active={tab.id === group.activeTabId} registerWriter={registerWriter} />)}
+      {group.tabs.map((tab) => <TerminalView key={tab.id} theme={theme} fontFamily={fontFamily} fontSize={fontSize} lineHeight={lineHeight} client={client} tab={tab} active={tab.id === group.activeTabId} registerWriter={registerWriter} />)}
     </div>
   </section>;
 }
 
-function TerminalView({ theme, client, tab, active, registerWriter }: { theme: AppTheme; client: CoreClient; tab: TerminalTab; active: boolean; registerWriter: Props["registerWriter"] }) {
+function TerminalView({ theme, fontFamily, fontSize, lineHeight, client, tab, active, registerWriter }: { theme: AppTheme; fontFamily: string; fontSize: number; lineHeight: number; client: CoreClient; tab: TerminalTab; active: boolean; registerWriter: Props["registerWriter"] }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<Terminal>();
   const fitRef = useRef<FitAddon>();
@@ -45,9 +48,9 @@ function TerminalView({ theme, client, tab, active, registerWriter }: { theme: A
     if (!container) return;
     const terminal = new Terminal({
       cursorBlink: true,
-      fontFamily: "Menlo, Monaco, Consolas, monospace",
-      fontSize: 12,
-      lineHeight: 1.2,
+      fontFamily,
+      fontSize,
+      lineHeight,
       scrollback: 5000,
       theme: theme === "light" ? { background: "#ffffff", foreground: "#2b2d30", cursor: "#2b2d30", selectionBackground: "#b9d7ff" } : { background: "#1e1f22", foreground: "#d4d4d4", cursor: "#d4d4d4", selectionBackground: "#4d5157" }
     });
@@ -68,7 +71,7 @@ function TerminalView({ theme, client, tab, active, registerWriter }: { theme: A
     return () => {
       observer.disconnect(); input.dispose(); registerWriter(tab.terminalId); terminal.dispose();
     };
-  }, [client, registerWriter, tab.terminalId, theme]);
+  }, [client, fontFamily, fontSize, lineHeight, registerWriter, tab.terminalId, theme]);
 
   useEffect(() => {
     if (!active) return;
