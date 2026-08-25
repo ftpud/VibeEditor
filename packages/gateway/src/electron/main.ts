@@ -130,8 +130,9 @@ async function download(client: Client, remote: string, local: string): Promise<
 }
 function runLocal(command: string, args: string[], cwd: string, env = process.env): Promise<void> {
   return new Promise((resolve, reject) => {
-    const child = spawn(command, args, { cwd, env, stdio: "inherit", shell: process.platform === "win32" });
-    child.on("error", reject); child.on("close", (code) => code === 0 ? resolve() : reject(new Error(`${command} exited with ${code}`)));
+    const executable = process.platform === "win32" ? command === "npm" ? "npm.cmd" : command === "tar" ? "tar.exe" : command : command;
+    const child = spawn(executable, args, { cwd, env, stdio: "inherit", shell: false });
+    child.on("error", reject); child.on("close", (code) => code === 0 ? resolve() : reject(new Error(`${executable} exited with ${code}`)));
   });
 }
 async function createTunnel(workspaceId: string, connection: Connection, remotePort: number): Promise<number> {
