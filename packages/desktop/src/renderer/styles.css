@@ -166,7 +166,7 @@ button { color: inherit; }
 .ai-attachment { min-width: 0; max-width: 100%; height: 24px; display: flex; align-items: center; gap: 3px; padding-left: 7px; border: 1px solid #4b4d52; border-radius: 3px; background: #2b2d30; color: #cfd1d4; font-size: 0.8462rem; }
 .ai-attachment > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ai-attachment button { width: 22px; height: 22px; display: grid; place-items: center; border: 0; background: transparent; color: #9da0a5; cursor: pointer; }
-.ai-composer textarea { min-width: 0; height: 66px; resize: none; padding: 7px; border: 1px solid #4b4d52; border-radius: 3px; outline: none; background: #1e1f22; color: #e2e3e5; font: inherit; }
+.ai-composer textarea { min-width: 0; min-height: 66px; height: 66px; max-height: min(45vh, 420px); resize: vertical; padding: 7px; border: 1px solid #4b4d52; border-radius: 3px; outline: none; background: #1e1f22; color: #e2e3e5; font: inherit; }
 .ai-composer textarea:focus { border-color: #3574f0; }
 .ai-composer-actions { align-self: end; display: flex; flex-direction: column; gap: 4px; }
 .ai-composer-actions input { display: none; }
