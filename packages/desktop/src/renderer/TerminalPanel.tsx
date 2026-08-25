@@ -1,8 +1,8 @@
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { Terminal } from "@xterm/xterm";
-import { Plus, X } from "lucide-react";
-import { useEffect, useRef } from "react";
+import { ClipboardPaste, Plus, X } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
 import type { CoreClient } from "./client";
 import type { TerminalGroup, TerminalTab } from "./model";
 import type { AppTheme } from "./theme";
@@ -43,6 +43,13 @@ function TerminalView({ theme, fontFamily, fontSize, lineHeight, client, tab, ac
   const containerRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<Terminal>();
   const fitRef = useRef<FitAddon>();
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number }>();
+
+  const paste = (text: string) => {
+    const cleaned = text.replace(/[\u0000\uFEFF]/g, "").replace(/(?:\r\n|\r|\n)+$/, "");
+    if (cleaned) void client.request("terminal.input", { terminalId: tab.terminalId, data: cleaned });
+    terminalRef.current?.focus();
+  };
 
   useEffect(() => {
     const container = containerRef.current;
@@ -62,9 +69,14 @@ function TerminalView({ theme, fontFamily, fontSize, lineHeight, client, tab, ac
     terminal.attachCustomKeyEventHandler((event) => {
       if (event.type !== "keydown" || (!event.ctrlKey && !event.metaKey)) return true;
       if (event.key.toLowerCase() === "c" && terminal.hasSelection()) { void window.desktop?.writeClipboard(terminal.getSelection()); return false; }
-      if (event.key.toLowerCase() === "v") { void window.desktop?.readClipboard().then((text) => { if (text) void client.request("terminal.input", { terminalId: tab.terminalId, data: text }); }); return false; }
       return true;
     });
+    const handlePaste = (event: ClipboardEvent) => {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      paste(event.clipboardData?.getData("text/plain") ?? "");
+    };
+    container.addEventListener("paste", handlePaste, true);
     terminalRef.current = terminal;
     fitRef.current = fit;
     registerWriter(tab.terminalId, (data) => terminal.write(data));
@@ -77,6 +89,7 @@ function TerminalView({ theme, fontFamily, fontSize, lineHeight, client, tab, ac
     observer.observe(container);
     requestAnimationFrame(() => { fit.fit(); terminal.focus(); });
     return () => {
+      container.removeEventListener("paste", handlePaste, true);
       observer.disconnect(); input.dispose(); registerWriter(tab.terminalId); terminal.dispose();
     };
   }, [client, fontFamily, fontSize, lineHeight, registerWriter, tab.terminalId, theme]);
@@ -86,5 +99,17 @@ function TerminalView({ theme, fontFamily, fontSize, lineHeight, client, tab, ac
     requestAnimationFrame(() => { fitRef.current?.fit(); terminalRef.current?.focus(); });
   }, [active]);
 
-  return <div ref={containerRef} className={`terminal-instance ${active ? "active" : ""}`} />;
+  useEffect(() => {
+    if (!contextMenu) return;
+    const close = () => setContextMenu(undefined);
+    window.addEventListener("mousedown", close);
+    window.addEventListener("blur", close);
+    return () => { window.removeEventListener("mousedown", close); window.removeEventListener("blur", close); };
+  }, [contextMenu]);
+
+  return <><div ref={containerRef} className={`terminal-instance ${active ? "active" : ""}`} onContextMenu={(event) => { event.preventDefault(); setContextMenu({ x: Math.min(event.clientX, window.innerWidth - 150), y: Math.min(event.clientY, window.innerHeight - 42) }); }} />
+    {contextMenu && <div className="terminal-context-menu" style={{ left: contextMenu.x, top: contextMenu.y }} onMouseDown={(event) => event.stopPropagation()}>
+      <button onClick={() => { setContextMenu(undefined); void window.desktop?.readClipboard().then(paste); }}><ClipboardPaste size={14} /><span>Paste</span></button>
+    </div>}
+  </>;
 }

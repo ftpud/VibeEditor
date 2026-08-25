@@ -104,7 +104,7 @@ button { color: inherit; }
 .right-panel-divider { height: 5px; flex: 0 0 5px; z-index: 2; cursor: row-resize; background: transparent; border-top: 1px solid #393b40; }
 .right-panel-divider:hover { background: #3574f0; }
 .tasks-list { flex: 1; overflow: auto; padding: 4px 0 12px; }
-.task-row { width: 100%; min-height: 50px; position: relative; display: flex; align-items: stretch; border-left: 2px solid transparent; border-bottom: 1px solid #35373b; background: transparent; color: #bfc1c5; }
+.task-row { width: 100%; min-height: 56px; position: relative; display: flex; align-items: stretch; border-left: 2px solid transparent; border-bottom: 1px solid #35373b; background: transparent; color: #bfc1c5; }
 .task-row:hover { background: #34363a; color: #e4e5e7; }
 .task-row.selected { border-left-color: #3574f0; background: #2e436e; color: white; }
 .task-open { min-width: 0; flex: 1; padding: 7px 8px; display: flex; align-items: flex-start; gap: 8px; border: 0; background: transparent; color: inherit; text-align: left; cursor: pointer; }
@@ -116,16 +116,18 @@ button { color: inherit; }
 .task-row.selected .task-icon { color: #a9cbff; }
 .task-content { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 4px; }
 .task-title { min-width: 0; display: flex; align-items: center; gap: 6px; }
-.task-title strong { min-width: 0; flex: 1; overflow: hidden; color: #d8dadd; font-size: 0.9231rem; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.task-title strong { min-width: 0; flex: 1; overflow: hidden; color: #d8dadd; font-size: 1rem; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
 .task-row.selected .task-title strong { color: white; }
-.task-preview { min-width: 0; overflow: hidden; color: #85888e; font-size: 0.7692rem; line-height: 14px; text-overflow: ellipsis; white-space: nowrap; }
+.task-preview { min-width: 0; overflow: hidden; color: #85888e; font-size: 0.8462rem; line-height: 1.2; text-overflow: ellipsis; white-space: nowrap; }
 .task-row.selected .task-preview { color: #b9c8df; }
 .task-check { flex: 0 0 13px; margin-top: 2px; color: #8fc1ff; }
-.task-diff-stat { flex: 0 0 auto; display: flex; align-items: center; gap: 4px; font: 9px Menlo, Monaco, Consolas, monospace; }
+.task-diff-stat { flex: 0 0 auto; display: flex; align-items: center; gap: 4px; font: 0.7692rem/1.2 Menlo, Monaco, Consolas, monospace; }
 .task-diff-stat small:first-child { color: #70b879; }
 .task-diff-stat small:last-child { color: #dc747c; }
-.task-ai-status { flex: 0 0 auto; color: #85888e; font-size: 0.6923rem; white-space: nowrap; }
+.task-ai-status { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 4px; color: #85888e; font-size: 0.7692rem; white-space: nowrap; }
 .task-ai-status.in_progress { color: #6ea8fe; }
+.task-progress-spinner { flex: 0 0 auto; animation: task-progress-spin .8s linear infinite; }
+@keyframes task-progress-spin { to { transform: rotate(360deg); } }
 .task-ai-status.user_prompt { color: #e3b762; }
 .task-ai-status.done { color: #70b879; }
 .task-ai-status.error { color: #dc747c; }
@@ -286,6 +288,9 @@ button { color: inherit; }
 .terminal-instance.active { visibility: visible; }
 .terminal-instance .xterm { height: 100%; }
 .terminal-instance .xterm-viewport { scrollbar-width: thin; }
+.terminal-context-menu { position: fixed; z-index: 100; width: 145px; padding: 4px; border: 1px solid #4a4d52; border-radius: 4px; background: #2b2d30; box-shadow: 0 8px 24px rgba(0, 0, 0, .42); }
+.terminal-context-menu button { width: 100%; height: 28px; padding: 0 8px; display: flex; align-items: center; gap: 8px; border: 0; border-radius: 3px; background: transparent; color: #d5d7da; text-align: left; cursor: pointer; }
+.terminal-context-menu button:hover { background: #2e5792; color: white; }
 .java-panel { min-height: 140px; max-height: 520px; flex: 0 0 auto; position: relative; display: flex; border-top: 1px solid #393b40; background: #1e1f22; }
 .java-actions { width: 36px; flex: 0 0 36px; padding: 5px 3px; display: flex; flex-direction: column; align-items: center; gap: 3px; border-right: 1px solid #393b40; background: #2b2d30; }
 .java-actions > span { flex: 1; }
@@ -637,6 +642,9 @@ button { color: inherit; }
 :root[data-theme="light"] .markdown-preview hr { border-color: #d0d7de; }
 :root[data-theme="light"] .terminal-content,
 :root[data-theme="light"] .terminal-instance { background: #ffffff; }
+:root[data-theme="light"] .terminal-context-menu { border-color: #c8cbd0; background: #ffffff; box-shadow: 0 8px 24px rgba(0, 0, 0, .16); }
+:root[data-theme="light"] .terminal-context-menu button { color: #34363a; }
+:root[data-theme="light"] .terminal-context-menu button:hover { background: #d9e7fb; color: #17233a; }
 :root[data-theme="light"] .debug-view { background: #f7f8f9; border-color: #d5d7da; }
 :root[data-theme="light"] .debug-view > header,
 :root[data-theme="light"] .debug-controls,
