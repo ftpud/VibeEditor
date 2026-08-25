@@ -94,7 +94,7 @@ async function refreshStatuses(connectionId?: string): Promise<void> {
   }));
 }
 async function provision(client: Client): Promise<{ commit: string; rebuilt: boolean }> {
-  const command = `set -e; ${remoteNodeEnvironment}; if [ -d ~/.vibe/.git ]; then git -C ~/.vibe fetch origin ${repositoryBranch}; git -C ~/.vibe checkout -B ${repositoryBranch} origin/${repositoryBranch}; else rm -rf ~/.vibe; git clone --branch ${repositoryBranch} --single-branch ${repository} ~/.vibe; fi; cd ~/.vibe; head=$(git rev-parse HEAD); rebuilt=0; if [ ! -f ~/.vibe-core-build ] || [ "$(cat ~/.vibe-core-build)" != "$head" ] || [ ! -f packages/core/dist/index.js ] || [ ! -d node_modules ]; then VIBE_SKIP_JDTLS=1 npm install; npm run build -w @remote-ide/protocol; npm run build -w @remote-ide/core; printf '%s' "$head" > ~/.vibe-core-build; rebuilt=1; fi; printf '\nVIBE_RESULT:%s:%s\n' "$head" "$rebuilt"`;
+  const command = `set -e; ${remoteNodeEnvironment}; if [ -d ~/.vibe/.git ]; then git -C ~/.vibe fetch origin ${repositoryBranch}; git -C ~/.vibe checkout -B ${repositoryBranch} origin/${repositoryBranch}; else rm -rf ~/.vibe; git clone --branch ${repositoryBranch} --single-branch ${repository} ~/.vibe; fi; cd ~/.vibe; head=$(git rev-parse HEAD); rebuilt=0; if [ ! -f ~/.vibe-build ] || [ "$(cat ~/.vibe-build)" != "$head" ] || [ ! -f packages/core/dist/index.js ] || [ ! -f packages/desktop/dist-electron/main.js ] || [ ! -f packages/desktop/dist-renderer/index.html ] || [ ! -d node_modules ]; then VIBE_SKIP_JDTLS=1 npm install; npm run build -w @remote-ide/protocol; npm run build -w @remote-ide/core; npm run build -w @remote-ide/desktop; printf '%s' "$head" > ~/.vibe-build; rebuilt=1; fi; printf '\nVIBE_RESULT:%s:%s\n' "$head" "$rebuilt"`;
   const output = await execute(client, `bash -lc ${shell(command)}`);
   const match = output.match(/VIBE_RESULT:([0-9a-f]{40,64}):([01])/);
   if (!match?.[1]) throw new Error("Remote Git revision could not be determined");
@@ -131,14 +131,9 @@ async function download(client: Client, remote: string, local: string): Promise<
 }
 function runLocal(command: string, args: string[], cwd: string, env = process.env): Promise<void> {
   return new Promise((resolve, reject) => {
-    let executable = command; let commandArgs = args;
+    let executable = command;
     if (process.platform === "win32" && command === "tar") executable = "tar.exe";
-    if (process.platform === "win32" && command === "npm") {
-      const npmCli = process.env.npm_execpath; const node = process.env.npm_node_execpath;
-      if (npmCli && node) { executable = node; commandArgs = [npmCli, ...args]; }
-      else { executable = process.env.ComSpec ?? "cmd.exe"; commandArgs = ["/d", "/s", "/c", "npm", ...args]; }
-    }
-    const child = spawn(executable, commandArgs, { cwd, env, stdio: "inherit", shell: false });
+    const child = spawn(executable, args, { cwd, env, stdio: "inherit", shell: false });
     child.on("error", reject); child.on("close", (code) => code === 0 ? resolve() : reject(new Error(`${executable} exited with ${code}`)));
   });
 }
@@ -154,34 +149,30 @@ async function createTunnel(workspaceId: string, connection: Connection, remoteP
   return address.port;
 }
 async function startClient(workspaceId: string): Promise<void> {
-  const { workspace, connection } = await withWorkspace(workspaceId); runtime(workspaceId, "working", "Downloading client source...");
+  const { workspace, connection } = await withWorkspace(workspaceId); runtime(workspaceId, "working", "Checking remote client build...");
   const client = await connect(connection);
   const commit = (await execute(client, `git -C ~/.vibe rev-parse HEAD`)).trim();
   if (!/^[0-9a-f]{40,64}$/.test(commit)) { client.end(); throw new Error("Remote Vibe checkout was not found. Start the server first."); }
   const clientRoot = path.join(app.getPath("userData"), "clients", workspace.id, commit); const archive = path.join(app.getPath("temp"), `vibe-${workspace.id}-${commit}.tar.gz`);
   const buildMarker = path.join(clientRoot, ".gateway-client-built");
   let clientBuilt = false;
-  try { clientBuilt = (await readFile(buildMarker, "utf8")).trim() === commit; await access(path.join(clientRoot, "packages", "desktop", "dist-electron", "main.js")); await access(path.join(clientRoot, "packages", "desktop", "dist-renderer", "index.html")); }
+  try { clientBuilt = (await readFile(buildMarker, "utf8")).trim() === commit; await access(path.join(clientRoot, "dist-electron", "main.js")); await access(path.join(clientRoot, "dist-renderer", "index.html")); }
   catch { clientBuilt = false; }
   if (!clientBuilt) {
   try {
-    await execute(client, `bash -lc ${shell(`cd ~/.vibe; tar --exclude=.git --exclude=node_modules --exclude=.tools --exclude=dist --exclude=dist-electron --exclude=dist-renderer -czf /tmp/vibe-${workspace.id}.tar.gz .`)}`);
+    await execute(client, `bash -lc ${shell(`set -e; test -f ~/.vibe/packages/desktop/package.json; test -f ~/.vibe/packages/desktop/dist-electron/main.js; test -f ~/.vibe/packages/desktop/dist-renderer/index.html; cd ~/.vibe/packages/desktop; tar -czf /tmp/vibe-${workspace.id}.tar.gz package.json dist-electron dist-renderer`)}`);
     await mkdir(path.dirname(archive), { recursive: true }); await download(client, `/tmp/vibe-${workspace.id}.tar.gz`, archive);
     await execute(client, `rm -f /tmp/vibe-${workspace.id}.tar.gz`);
   } finally { client.end(); }
     await mkdir(clientRoot, { recursive: true });
-    runtime(workspaceId, "working", "Building local client...");
+    runtime(workspaceId, "working", "Installing remote-built client artifacts...");
     await runLocal("tar", ["-xzf", archive, "-C", clientRoot], clientRoot); await rm(archive, { force: true });
-    await runLocal("npm", ["install"], clientRoot, { ...process.env, VIBE_SKIP_JDTLS: "1" });
-    await runLocal("npm", ["run", "build", "-w", "@remote-ide/protocol"], clientRoot);
-    await runLocal("npm", ["run", "build", "-w", "@remote-ide/desktop"], clientRoot);
     await writeFile(buildMarker, `${commit}\n`, "utf8");
   } else { client.end(); runtime(workspaceId, "working", "Reusing local client build..."); }
   const localPort = await createTunnel(workspaceId, connection, workspace.remotePort);
-  const desktopRoot = path.join(clientRoot, "packages", "desktop");
-  const desktopMain = path.join(desktopRoot, "dist-electron", "main.js");
-  const child = spawn(process.execPath, [desktopMain, "--host", "127.0.0.1", "--port", String(localPort)], { cwd: desktopRoot, env: { ...process.env, VITE_DEV_SERVER_URL: "" }, detached: true, stdio: "ignore" });
-  child.unref(); runtime(workspaceId, "client", `Client connected through local port ${localPort}${clientBuilt ? " (build reused)" : " (rebuilt)"}`);
+  const desktopMain = path.join(clientRoot, "dist-electron", "main.js");
+  const child = spawn(process.execPath, [desktopMain, "--host", "127.0.0.1", "--port", String(localPort)], { cwd: clientRoot, env: { ...process.env, VITE_DEV_SERVER_URL: "" }, detached: true, stdio: "ignore" });
+  child.unref(); runtime(workspaceId, "client", `Client connected through local port ${localPort}${clientBuilt ? " (artifacts reused)" : " (artifacts downloaded)"}`);
 }
 
 ipcMain.handle("gateway:get", async () => {

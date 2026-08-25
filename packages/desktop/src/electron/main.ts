@@ -39,7 +39,7 @@ function createWindow(extraQuery: Record<string, string> = {}): void {
     minHeight: 480,
     backgroundColor: "#181818",
     webPreferences: {
-      preload: path.join(directory, "preload.js"),
+      preload: path.join(directory, "preload.cjs"),
       contextIsolation: true,
       nodeIntegration: false,
       webSecurity: true

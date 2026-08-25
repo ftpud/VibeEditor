@@ -1,4 +1,5 @@
-:root { color-scheme: dark; font-family: "Inter", "SF Pro Text", "Segoe UI", sans-serif; color: #c7c9cc; background: #1e1f22; font-size: 14px; }
+:root { color-scheme: dark; font-family: "Inter Variable", "SF Pro Text", "Segoe UI", sans-serif; color: #c7c9cc; background: #1e1f22; font-size: 14px; font-weight: 400; }
+:root[data-platform="windows"] { font-weight: 450; text-rendering: optimizeLegibility; }
 * { box-sizing: border-box; }
 html, body, #root { width: 100%; height: 100%; margin: 0; overflow: hidden; }
 button, input { font: inherit; letter-spacing: 0; }
