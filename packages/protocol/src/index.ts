@@ -12,7 +12,7 @@ export type GitStatusEntry = {
   worktreeStatus: string;
 };
 export type GitBranch = { name: string; current: boolean; remote: boolean };
-export type GitCommit = { hash: string; shortHash: string; author: string; date: string; subject: string };
+export type GitCommit = { hash: string; shortHash: string; author: string; date: string; subject: string; parents?: string[]; refs?: string[]; graph?: string };
 export type GitCommitFile = { path: string; status: string; originalPath?: string };
 export type GitDiffHunk = { originalStart: number; originalLines: number; modifiedStart: number; modifiedLines: number };
 

@@ -1428,10 +1428,15 @@ function GitStatusTree({ entries, selectedPaths, onTogglePath, activePath, onOpe
 
 function buildGitTree(entries: GitStatusEntry[]): GitTreeNode[] {
   const root: GitTreeNode[] = [];
+  const splitPaths = entries.map((entry) => entry.path.split("/"));
+  let sharedDepth = 0;
+  const maximumSharedDepth = Math.max(0, Math.min(...splitPaths.map((parts) => parts.length)) - 1);
+  while (sharedDepth < maximumSharedDepth && splitPaths.every((parts) => parts[sharedDepth] === splitPaths[0]?.[sharedDepth])) sharedDepth += 1;
   for (const entry of entries) {
-    const parts = entry.path.split("/");
+    const fullParts = entry.path.split("/");
+    const parts = fullParts.slice(sharedDepth);
     let children = root;
-    let currentPath = "";
+    let currentPath = fullParts.slice(0, sharedDepth).join("/");
     for (let index = 0; index < parts.length; index += 1) {
       const name = parts[index]!;
       currentPath = currentPath ? `${currentPath}/${name}` : name;
@@ -1452,7 +1457,19 @@ function buildGitTree(entries: GitStatusEntry[]): GitTreeNode[] {
     for (const node of nodes) if (node.type === "directory") sort(node.children);
   };
   sort(root);
-  return root;
+  return compactGitDirectories(root);
+}
+
+function compactGitDirectories(nodes: GitTreeNode[]): GitTreeNode[] {
+  return nodes.map((node) => {
+    if (node.type === "file") return node;
+    let compacted: Extract<GitTreeNode, { type: "directory" }> = { ...node, children: compactGitDirectories(node.children) };
+    while (compacted.children.length === 1 && compacted.children[0]?.type === "directory") {
+      const child = compacted.children[0];
+      compacted = { ...compacted, name: `${compacted.name}/${child.name}`, path: child.path, children: child.children };
+    }
+    return compacted;
+  });
 }
 
 function collectGitDirectories(nodes: GitTreeNode[]): string[] {

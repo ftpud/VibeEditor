@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
-import { GitService, parseCommitFiles, parseGitLog, parseGitStatus } from "./git.js";
+import { GitService, parseCommitFiles, parseGitGraphLog, parseGitLog, parseGitStatus } from "./git.js";
 import { WorkspaceFileSystem } from "./filesystem.js";
 
 const execFileAsync = promisify(execFile);
@@ -89,6 +89,15 @@ describe("Git history parsing", () => {
     expect(parseCommitFiles("M\0src/a.ts\0R100\0src/old.ts\0src/new.ts\0")).toEqual([
       { status: "M", path: "src/a.ts" },
       { status: "R100", originalPath: "src/old.ts", path: "src/new.ts" }
+    ]);
+  });
+
+  it("preserves graph connectors, parents, and branch decorations", () => {
+    const first = "a".repeat(40); const second = "b".repeat(40); const parent = "c".repeat(40);
+    const output = `* \u001e${first}\u001ffirst\u001fAda\u001f2026-08-25T00:00:00Z\u001fMerge feature\u001f${second} ${parent}\u001fHEAD -> main\n|\\\n| * \u001e${second}\u001fsecond\u001fAda\u001f2026-08-24T00:00:00Z\u001fFeature\u001f${parent}\u001ffeature/test\n`;
+    expect(parseGitGraphLog(output)).toEqual([
+      { hash: first, shortHash: "first", author: "Ada", date: "2026-08-25T00:00:00Z", subject: "Merge feature", parents: [second, parent], refs: ["main"], graph: "*" },
+      { hash: second, shortHash: "second", author: "Ada", date: "2026-08-24T00:00:00Z", subject: "Feature", parents: [parent], refs: ["feature/test"], graph: "|\\\n| *" }
     ]);
   });
 });

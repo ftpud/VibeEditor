@@ -73,7 +73,7 @@ export class GitService {
 
   async log(branch: string, limit = 200): Promise<GitCommit[]> {
     if (!/^[\w./@{}~^:+-]+$/.test(branch)) throw new CoreError("INVALID_REQUEST", "Invalid Git branch");
-    return parseGitLog(await this.git(["log", branch, `--max-count=${Math.max(1, Math.min(500, limit))}`, "--format=%H%x00%h%x00%an%x00%aI%x00%s%x00"]));
+    return parseGitGraphLog(await this.git(["log", branch, "--graph", "--date-order", `--max-count=${Math.max(1, Math.min(500, limit))}`, "--format=%x1e%H%x1f%h%x1f%an%x1f%aI%x1f%s%x1f%P%x1f%D"]));
   }
 
   async commitFiles(hash: string): Promise<GitCommitFile[]> {
@@ -171,6 +171,23 @@ export function parseGitLog(output: string): GitCommit[] {
   for (let index = 0; index + 4 < fields.length; index += 5) {
     const hash = fields[index]!.trim(); if (!/^[0-9a-f]{40,64}$/i.test(hash)) continue;
     commits.push({ hash, shortHash: fields[index + 1]!, author: fields[index + 2]!, date: fields[index + 3]!, subject: fields[index + 4]! });
+  }
+  return commits;
+}
+
+export function parseGitGraphLog(output: string): GitCommit[] {
+  const commits: GitCommit[] = [];
+  let connectors: string[] = [];
+  for (const line of output.split("\n")) {
+    const marker = line.indexOf("\x1e");
+    if (marker < 0) { if (line.trim()) connectors.push(line); continue; }
+    const graphLine = line.slice(0, marker).replace(/\s+$/, "");
+    const fields = line.slice(marker + 1).split("\x1f");
+    if (!/^[0-9a-f]{40,64}$/i.test(fields[0] ?? "")) { connectors = []; continue; }
+    const parents = (fields[5] ?? "").split(" ").filter(Boolean);
+    const refs = (fields[6] ?? "").split(", ").map((ref) => ref.replace(/^HEAD -> /, "").trim()).filter(Boolean);
+    commits.push({ hash: fields[0]!, shortHash: fields[1] ?? fields[0]!.slice(0, 7), author: fields[2] ?? "", date: fields[3] ?? "", subject: fields[4] ?? "", ...(parents.length ? { parents } : {}), ...(refs.length ? { refs } : {}), graph: [...connectors, graphLine].join("\n") || "*" });
+    connectors = [];
   }
   return commits;
 }
