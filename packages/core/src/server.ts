@@ -279,5 +279,6 @@ async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStor
     case "java.completion": return { items: await jdt.completion(request.payload.path, request.payload.content, request.payload.line, request.payload.column) };
     case "java.definition": return { locations: await jdt.definition(request.payload.path, request.payload.content, request.payload.line, request.payload.column) };
     case "java.references": return { locations: await jdt.references(request.payload.path, request.payload.content, request.payload.line, request.payload.column) };
+    case "java.semanticTokens": return { tokens: await jdt.semanticTokens(request.payload.path, request.payload.content) };
   }
 }

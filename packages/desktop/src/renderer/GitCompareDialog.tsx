@@ -3,6 +3,7 @@ import { FileDiff, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { GitCommitFile } from "@remote-ide/protocol";
 import type { CoreClient } from "./client";
+import { configureMonacoThemes, monacoTheme } from "./theme";
 
 type Props = { client: CoreClient; reference: string; label: string; path?: string; onClose(): void };
 
@@ -28,7 +29,7 @@ export function GitCompareDialog({ client, reference, label, path, onClose }: Pr
   };
   return <div className="floating-window-layer"><section className="git-history-dialog git-compare-dialog" style={{ left: position.x, top: position.y }} role="dialog" aria-label="Compare with local">
     <header onPointerDown={beginMove}><div><h2>Compare with Local</h2><span>{label}</span></div><button title="Close" onClick={onClose}><X size={15} /></button></header>
-    <div className="git-history-content"><aside>{files.length === 0 && !error && <div className="git-log-empty">No differences</div>}{files.map((file) => <button className={selected?.path === file.path ? "selected" : ""} key={`${file.status}:${file.path}`} onClick={() => void selectFile(file)}><FileDiff size={14} /><span><strong>{file.path.split("/").pop()}</strong><small>{file.path}</small></span><time>{file.status}</time></button>)}</aside><main>{error && <div className="git-log-error">{error}</div>}{selected && diff ? <DiffEditor original={diff.originalContent} modified={diff.modifiedContent} language={languageFor(selected.path)} theme="vs-dark" options={{ automaticLayout: true, readOnly: true, renderSideBySide: true, minimap: { enabled: false }, fontSize: 12, scrollBeyondLastLine: false }} /> : <div className="git-log-empty">Select a changed file</div>}</main></div>
+    <div className="git-history-content"><aside>{files.length === 0 && !error && <div className="git-log-empty">No differences</div>}{files.map((file) => <button className={selected?.path === file.path ? "selected" : ""} key={`${file.status}:${file.path}`} onClick={() => void selectFile(file)}><FileDiff size={14} /><span><strong>{file.path.split("/").pop()}</strong><small>{file.path}</small></span><time>{file.status}</time></button>)}</aside><main>{error && <div className="git-log-error">{error}</div>}{selected && diff ? <DiffEditor original={diff.originalContent} modified={diff.modifiedContent} language={languageFor(selected.path)} beforeMount={configureMonacoThemes} theme={monacoTheme()} options={{ automaticLayout: true, readOnly: true, renderSideBySide: true, minimap: { enabled: false }, fontSize: 12, scrollBeyondLastLine: false }} /> : <div className="git-log-empty">Select a changed file</div>}</main></div>
   </section></div>;
 }
 

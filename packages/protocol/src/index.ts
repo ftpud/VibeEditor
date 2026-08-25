@@ -63,6 +63,7 @@ export type JavaTypeSuggestion = { simpleName: string; qualifiedName: string; so
 export type JavaLspRange = { startLine: number; startColumn: number; endLine: number; endColumn: number };
 export type JavaLspCompletion = { label: string; detail?: string; insertText: string; range?: JavaLspRange; additionalTextEdits: { range: JavaLspRange; text: string }[] };
 export type JavaLspLocation = { path: string } & JavaLspRange;
+export type JavaSemanticToken = JavaLspRange & { type: string; modifiers: string[] };
 
 export type JavaProjectNode = {
   name: string;
@@ -204,6 +205,7 @@ export type ProtocolOperations = {
   "java.completion": { payload: { path: string; content: string; line: number; column: number }; result: { items: JavaLspCompletion[] } };
   "java.definition": { payload: { path: string; content: string; line: number; column: number }; result: { locations: JavaLspLocation[] } };
   "java.references": { payload: { path: string; content: string; line: number; column: number }; result: { locations: JavaLspLocation[] } };
+  "java.semanticTokens": { payload: { path: string; content: string }; result: { tokens: JavaSemanticToken[] } };
 };
 
 export type RequestType = keyof ProtocolOperations;
@@ -313,5 +315,6 @@ export const requestTypes: RequestType[] = [
   "java.completeType",
   "java.completion",
   "java.definition",
-  "java.references"
+  "java.references",
+  "java.semanticTokens"
 ];

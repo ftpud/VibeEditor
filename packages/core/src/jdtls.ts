@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL, fileURLToPath } from "node:url";
 import { createMessageConnection, StreamMessageReader, StreamMessageWriter, type MessageConnection } from "vscode-jsonrpc/node.js";
-import type { JavaLspCompletion, JavaLspLocation } from "@remote-ide/protocol";
+import type { JavaLspCompletion, JavaLspLocation, JavaSemanticToken } from "@remote-ide/protocol";
 import { CoreError } from "./errors.js";
 import { WorkspaceFileSystem } from "./filesystem.js";
 
@@ -19,6 +19,7 @@ export class JdtLanguageService {
   private connection?: MessageConnection;
   private starting?: Promise<void>;
   private readonly documents = new Map<string, { content: string; version: number }>();
+  private semanticLegend: { tokenTypes: string[]; tokenModifiers: string[] } = { tokenTypes: [], tokenModifiers: [] };
 
   constructor(private readonly filesystem: WorkspaceFileSystem) {}
 
@@ -43,6 +44,21 @@ export class JdtLanguageService {
 
   async references(filePath: string, content: string, line: number, column: number): Promise<JavaLspLocation[]> {
     return this.locations("textDocument/references", filePath, content, line, column, { context: { includeDeclaration: false } });
+  }
+
+  async semanticTokens(filePath: string, content: string): Promise<JavaSemanticToken[]> {
+    const connection = await this.ready();
+    const uri = await this.sync(filePath, content);
+    const result = await connection.sendRequest("textDocument/semanticTokens/full", { textDocument: { uri } }) as { data?: number[] } | null;
+    const data = result?.data ?? []; const tokens: JavaSemanticToken[] = [];
+    let line = 0; let column = 0;
+    for (let index = 0; index + 4 < data.length; index += 5) {
+      line += data[index]!; column = data[index] === 0 ? column + data[index + 1]! : data[index + 1]!;
+      const length = data[index + 2]!; const type = this.semanticLegend.tokenTypes[data[index + 3]!] ?? ""; const bits = data[index + 4]!;
+      const modifiers = this.semanticLegend.tokenModifiers.filter((_, bit) => (bits & (1 << bit)) !== 0);
+      tokens.push({ startLine: line + 1, startColumn: column + 1, endLine: line + 1, endColumn: column + length + 1, type, modifiers });
+    }
+    return tokens;
   }
 
   close(): void {
@@ -114,7 +130,9 @@ export class JdtLanguageService {
       connection.onNotification("language/status", (status: any) => { if (status?.type === "ServiceReady") { clearTimeout(timer); resolve(); } });
     });
     connection.listen();
-    await connection.sendRequest("initialize", { processId: process.pid, rootUri: pathToFileURL(this.filesystem.getWorkspace()).href, initializationOptions: { bundles: [], extendedClientCapabilities: { progressReportProvider: true, classFileContentsSupport: true } }, capabilities: { textDocument: { synchronization: { dynamicRegistration: false, didSave: true }, completion: { completionItem: { snippetSupport: false, resolveSupport: { properties: ["additionalTextEdits", "textEdit"] } } }, definition: {}, references: {} }, workspace: { workspaceFolders: true, configuration: true } }, workspaceFolders: [{ uri: pathToFileURL(this.filesystem.getWorkspace()).href, name: path.basename(this.filesystem.getWorkspace()) }] });
+    const initialized = await connection.sendRequest("initialize", { processId: process.pid, rootUri: pathToFileURL(this.filesystem.getWorkspace()).href, initializationOptions: { bundles: [], extendedClientCapabilities: { progressReportProvider: true, classFileContentsSupport: true } }, capabilities: { textDocument: { synchronization: { dynamicRegistration: false, didSave: true }, completion: { completionItem: { snippetSupport: false, resolveSupport: { properties: ["additionalTextEdits", "textEdit"] } } }, definition: {}, references: {}, semanticTokens: { requests: { full: true }, tokenTypes: ["namespace", "type", "class", "enum", "interface", "struct", "typeParameter", "parameter", "variable", "property", "enumMember", "event", "function", "method", "macro", "keyword", "modifier", "comment", "string", "number", "regexp", "operator", "decorator"], tokenModifiers: ["declaration", "definition", "readonly", "static", "deprecated", "abstract", "async", "modification", "documentation", "defaultLibrary"] } }, workspace: { workspaceFolders: true, configuration: true } }, workspaceFolders: [{ uri: pathToFileURL(this.filesystem.getWorkspace()).href, name: path.basename(this.filesystem.getWorkspace()) }] }) as any;
+    const provider = initialized?.capabilities?.semanticTokensProvider;
+    if (provider?.legend) this.semanticLegend = provider.legend;
     connection.sendNotification("initialized", {});
     await serviceReady;
   }

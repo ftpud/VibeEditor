@@ -61,10 +61,6 @@ button { color: inherit; }
 .git-group-title:hover { filter: brightness(1.12); }
 .git-group-untracked .git-group-title { background: #2d4935; color: #a9d8ae; }
 .git-group-changes .git-group-title { background: #4a3d27; color: #e4c487; }
-.git-group-untracked .git-file-row:not(.git-directory-row) { background: #24372a; }
-.git-group-changes .git-file-row:not(.git-directory-row) { background: #3a3224; }
-.git-group-untracked .git-file-row:not(.git-directory-row):hover { background: #31513a; }
-.git-group-changes .git-file-row:not(.git-directory-row):hover { background: #50432c; }
 .git-group-untracked .git-file-row.selected:not(.git-directory-row), .git-group-changes .git-file-row.selected:not(.git-directory-row) { background: #2e5792; color: white; }
 .git-group .git-file-row.selected { background: #2e5792; color: white; }
 .git-count { margin-left: auto; color: #80838a; font-weight: 400; }
@@ -169,6 +165,14 @@ button { color: inherit; }
 @keyframes pulse { from { opacity: .35; } to { opacity: 1; } }
 .workbench { min-width: 0; flex: 1; display: flex; flex-direction: column; }
 .titlebar-actions { justify-content: flex-end; gap: 6px; background: #2b2d30; border-bottom: 1px solid #393b40; }
+.settings-anchor { position: relative; }
+.settings-menu { width: 230px; position: absolute; z-index: 30; top: 30px; right: 0; padding: 0 10px 10px; border: 1px solid #4a4d52; border-radius: 4px; background: #2b2d30; box-shadow: 0 8px 24px rgba(0, 0, 0, .35); }
+.settings-menu > header { height: 34px; display: flex; align-items: center; border-bottom: 1px solid #3d3f44; font-weight: 600; }
+.settings-row { padding-top: 9px; display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.theme-switch { height: 27px; display: flex; border: 1px solid #4b4d52; border-radius: 3px; overflow: hidden; }
+.theme-switch button { width: auto; min-width: 52px; height: 25px; padding: 0 9px; border-radius: 0; color: #bfc1c5; }
+.theme-switch button + button { border-left: 1px solid #4b4d52; }
+.theme-switch button.active { background: #3574f0; color: white; }
 .top-java-run { min-width: 0; display: flex; align-items: center; gap: 3px; }
 .top-java-run button:first-child { color: #68b871; }
 .top-java-run button:nth-child(2) { color: #d7b56d; }
@@ -182,7 +186,11 @@ button { color: inherit; }
 .tab:hover { background: #323438; color: #d5d7da; }
 .tab.active { background: #1e1f22; color: #f0f0f0; border-bottom: 2px solid #3574f0; }
 .tab.dragging { opacity: .4; }
-.tab > span:nth-child(2) { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.tab-file-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.tab-file-name.git-modified { color: #e2b86b; }
+.tab-file-name.git-created { color: #68b871; }
+:root[data-theme="light"] .tab-file-name.git-modified { color: #8c5d00; }
+:root[data-theme="light"] .tab-file-name.git-created { color: #067d17; }
 .dirty { width: 7px; height: 7px; flex: 0 0 7px; border-radius: 50%; background: #ddd; }
 .close { width: 18px; height: 18px; display: grid; place-items: center; border-radius: 3px; }
 .close:hover { background: #444; }
@@ -257,15 +265,16 @@ button { color: inherit; }
 .java-log-wrap pre { min-height: 0; flex: 1; margin: 0; padding: 8px 10px; overflow: auto; color: #c9cbd0; font-family: Menlo, Monaco, Consolas, monospace; font-size: 11px; line-height: 1.45; white-space: pre-wrap; }
 .java-breakpoint { cursor: pointer; }
 .java-breakpoint::after { content: ""; width: 11px; height: 11px; position: absolute; top: 5px; left: 5px; border-radius: 50%; background: #d84f57; box-shadow: 0 0 0 1px #8f3037; }
-.monaco-editor .git-change-line.added { background: rgba(70, 140, 78, .13); }
-.monaco-editor .git-change-line.modified { background: rgba(66, 119, 190, .13); }
-.monaco-editor .git-change-line.deleted { background: rgba(188, 74, 81, .12); }
 .monaco-editor .git-change-marker { width: 5px !important; margin-left: 3px; cursor: pointer; }
 .monaco-editor .git-change-marker.added { background: #58a863; }
 .monaco-editor .git-change-marker.modified { background: #4b8bd4; }
 .monaco-editor .git-change-marker.deleted { height: 4px !important; margin-top: 9px; background: #d45d65; }
 .monaco-editor .http-run-marker { cursor: pointer; }
 .monaco-editor .http-run-marker::after { content: "▶"; position: absolute; left: 4px; top: 3px; color: #65b56f; font-size: 12px; line-height: 16px; }
+.monaco-editor .ftpud-java-class { background: #b0ccff; color: #000000 !important; }
+.monaco-editor .ftpud-java-interface { background: #ffd8b5; color: #000000 !important; }
+.monaco-editor .ftpud-java-annotation { background: #e3ffd4; color: #808000 !important; }
+.monaco-editor .ftpud-java-constant { background: #e3ffd4; color: #660e7a !important; font-weight: 700; font-style: italic; }
 .http-response-panel { height: min(300px, 38%); min-height: 130px; flex: 0 0 auto; display: flex; flex-direction: column; border-top: 1px solid #4a4d52; background: #1e1f22; }
 .http-response-panel > header { height: 32px; flex: 0 0 32px; padding: 0 6px 0 10px; display: flex; align-items: center; gap: 9px; border-bottom: 1px solid #393b40; background: #292b2e; }
 .http-response-panel > header > span { min-width: 0; flex: 1; overflow: hidden; color: #c7c9cc; font: 10px Menlo, Monaco, Consolas, monospace; text-overflow: ellipsis; white-space: nowrap; }
@@ -447,5 +456,277 @@ button { color: inherit; }
 .run-config-dialog form > footer button { min-width: 76px; height: 31px; border: 1px solid #505359; border-radius: 3px; background: #34363a; color: #d5d7da; cursor: pointer; }
 .run-config-dialog form > footer button:hover:not(:disabled) { background: #404247; }
 .run-config-dialog form > footer button.primary { border-color: #3574f0; background: #3574f0; color: white; }
+
+/* Light theme keeps the same information hierarchy while matching Monaco's native light palette. */
+:root[data-theme="light"] { color-scheme: light; color: #2b2d30; background: #ffffff; }
+:root[data-theme="light"] .ide-shell,
+:root[data-theme="light"] .workbench,
+:root[data-theme="light"] .editor-area,
+:root[data-theme="light"] .detached-editor,
+:root[data-theme="light"] .detached-error,
+:root[data-theme="light"] .terminal-panel,
+:root[data-theme="light"] .java-panel,
+:root[data-theme="light"] .problems-panel,
+:root[data-theme="light"] .git-log-panel,
+:root[data-theme="light"] .http-response-panel,
+:root[data-theme="light"] .find-preview-editor { background: #ffffff; color: #2b2d30; }
+:root[data-theme="light"] .tool-stripe,
+:root[data-theme="light"] .right-tool-stripe,
+:root[data-theme="light"] .explorer,
+:root[data-theme="light"] .tasks-panel,
+:root[data-theme="light"] .titlebar-actions,
+:root[data-theme="light"] .tabs,
+:root[data-theme="light"] .tab,
+:root[data-theme="light"] .terminal-tabs,
+:root[data-theme="light"] .terminal-tab,
+:root[data-theme="light"] .bottom-tool-bar,
+:root[data-theme="light"] .java-actions,
+:root[data-theme="light"] .java-log-wrap header,
+:root[data-theme="light"] .problems-panel > header,
+:root[data-theme="light"] .git-log-panel header,
+:root[data-theme="light"] .http-response-panel > header,
+:root[data-theme="light"] .useful-section > header,
+:root[data-theme="light"] .find-pane-header { background: #f2f3f5; color: #3c3f44; border-color: #d5d7da; }
+:root[data-theme="light"] .panel-header,
+:root[data-theme="light"] .titlebar-actions,
+:root[data-theme="light"] .tabs,
+:root[data-theme="light"] .terminal-tabs,
+:root[data-theme="light"] .bottom-tool-bar,
+:root[data-theme="light"] .git-branch,
+:root[data-theme="light"] .java-project-meta,
+:root[data-theme="light"] .ai-controls,
+:root[data-theme="light"] .ai-composer { border-color: #d5d7da; color: #45484e; }
+:root[data-theme="light"] .tab.active,
+:root[data-theme="light"] .terminal-tab.active,
+:root[data-theme="light"] .bottom-tool-button.active { background: #ffffff; color: #202124; }
+:root[data-theme="light"] .tab:hover,
+:root[data-theme="light"] .terminal-tab:hover,
+:root[data-theme="light"] .tree-row:hover,
+:root[data-theme="light"] .task-row:hover:not(:disabled),
+:root[data-theme="light"] .useful-row:hover,
+:root[data-theme="light"] .bottom-tool-button:hover,
+:root[data-theme="light"] .tool-stripe-button:hover { background: #e7e9ec; color: #202124; }
+:root[data-theme="light"] .tree-row,
+:root[data-theme="light"] .git-file-row,
+:root[data-theme="light"] .useful-open,
+:root[data-theme="light"] .task-row { color: #3c3f44; }
+:root[data-theme="light"] .tree-row.selected,
+:root[data-theme="light"] .git-file-row.selected,
+:root[data-theme="light"] .task-row.selected,
+:root[data-theme="light"] .useful-row.selected { background: #d9e7fb; color: #17233a; }
+:root[data-theme="light"] .task-row.selected .task-title strong,
+:root[data-theme="light"] .tree-row.selected { color: #17233a; }
+:root[data-theme="light"] .ai-message { background: #f5f6f7; }
+:root[data-theme="light"] .ai-message > div { color: #303236; }
+:root[data-theme="light"] .ai-activity,
+:root[data-theme="light"] .ai-attachment { background: #f2f3f5; color: #4b4d52; border-color: #c9cbd0; }
+:root[data-theme="light"] .ai-activity pre { background: #fafafa; color: #3c3f44; border-color: #d5d7da; }
+:root[data-theme="light"] .ai-controls select,
+:root[data-theme="light"] .ai-composer textarea,
+:root[data-theme="light"] .top-java-run select,
+:root[data-theme="light"] .find-controls > input,
+:root[data-theme="light"] .run-config-dialog input,
+:root[data-theme="light"] .run-config-dialog select,
+:root[data-theme="light"] .git-commit-search { background: #ffffff; color: #2b2d30; border-color: #b8bbc0; }
+:root[data-theme="light"] .markdown-preview { background: #ffffff; color: #34363a; }
+:root[data-theme="light"] .markdown-preview code { background: #eef0f2; color: #9b4f00; }
+:root[data-theme="light"] .markdown-preview pre,
+:root[data-theme="light"] .markdown-shell-block { background: #f7f8f9; border-color: #d0d3d7; }
+:root[data-theme="light"] .markdown-shell-block > header { background: #eceef0; border-color: #d0d3d7; color: #55585e; }
+:root[data-theme="light"] .context-menu,
+:root[data-theme="light"] .settings-menu,
+:root[data-theme="light"] .find-dialog,
+:root[data-theme="light"] .run-config-dialog,
+:root[data-theme="light"] .import-chooser,
+:root[data-theme="light"] .git-history-dialog { background: #ffffff; color: #303236; border-color: #bfc2c7; box-shadow: 0 10px 32px rgba(0, 0, 0, .18); }
+:root[data-theme="light"] .settings-menu > header,
+:root[data-theme="light"] .theme-switch,
+:root[data-theme="light"] .theme-switch button + button { border-color: #c7c9cc; }
+:root[data-theme="light"] .theme-switch button { color: #3c3f44; }
+:root[data-theme="light"] .theme-switch button.active { color: white; }
+:root[data-theme="light"] .dialog-overlay,
+:root[data-theme="light"] .context-menu-layer { background: rgba(35, 38, 42, .18); }
 .run-config-dialog form > footer button:disabled { opacity: .5; cursor: default; }
 @media (max-width: 800px) { .explorer { min-width: 160px; } .titlebar-actions { font-size: 0; } }
+
+:root[data-theme="light"] .connection-screen { background: #f5f6f7; }
+:root[data-theme="light"] .connection-form h1 { color: #202124; }
+:root[data-theme="light"] .connection-form p,
+:root[data-theme="light"] .connection-form label { color: #55585e; }
+:root[data-theme="light"] .connection-form input { background: #ffffff; color: #202124; border-color: #b8bbc0; }
+:root[data-theme="light"] .connection-message { background: #fff1f1; color: #9f292f; }
+:root[data-theme="light"] .connection-message.connecting { background: #eaf4ff; color: #245f91; }
+:root[data-theme="light"] .tool-stripe-button { color: #65686e; }
+:root[data-theme="light"] .tool-stripe-button.active { background: #dfe8f5; color: #1f4f88; }
+:root[data-theme="light"] .workspace-name,
+:root[data-theme="light"] .panel-header,
+:root[data-theme="light"] .git-group-title,
+:root[data-theme="light"] .task-title strong { color: #3c3f44; }
+:root[data-theme="light"] .panel-header button:hover,
+:root[data-theme="light"] .titlebar-actions button:hover,
+:root[data-theme="light"] .save-button:hover:not(:disabled),
+:root[data-theme="light"] .terminal-action:hover,
+:root[data-theme="light"] .java-actions button:hover:not(:disabled),
+:root[data-theme="light"] .debug-controls button:hover:not(:disabled),
+:root[data-theme="light"] .problems-panel header button:hover:not(:disabled),
+:root[data-theme="light"] .import-chooser > header button:hover,
+:root[data-theme="light"] .find-dialog header button:hover,
+:root[data-theme="light"] .run-config-dialog header button:hover { background: #e1e3e6; color: #202124; }
+:root[data-theme="light"] .git-group-untracked .git-group-title { background: #dff1e2; color: #286235; }
+:root[data-theme="light"] .git-group-changes .git-group-title { background: #f7ebcf; color: #76561b; }
+:root[data-theme="light"] .git-group-untracked .git-file-row.selected:not(.git-directory-row),
+:root[data-theme="light"] .git-group-changes .git-file-row.selected:not(.git-directory-row),
+:root[data-theme="light"] .git-group .git-file-row.selected { background: #d9e7fb; color: #17233a; }
+:root[data-theme="light"] .editor-mode-switch { border-color: #c8cbd0; }
+:root[data-theme="light"] .editor-mode-switch button { background: #f2f3f5; color: #65686e; border-color: #c8cbd0; }
+:root[data-theme="light"] .editor-mode-switch button:hover { background: #e3e5e8; color: #202124; }
+:root[data-theme="light"] .editor-mode-switch button.active { background: #d9e7fb; color: #1f4f88; }
+:root[data-theme="light"] .ai-activity summary:hover { background: #e7e9ec; color: #202124; }
+:root[data-theme="light"] .ai-composer-actions button { background: #e1e3e6; color: #3c3f44; }
+:root[data-theme="light"] .ai-composer-actions button:last-child { background: #3574f0; color: #ffffff; }
+:root[data-theme="light"] .markdown-preview h1,
+:root[data-theme="light"] .markdown-preview h2,
+:root[data-theme="light"] .markdown-preview h3,
+:root[data-theme="light"] .markdown-preview h4 { color: #202124; }
+:root[data-theme="light"] .markdown-preview h1,
+:root[data-theme="light"] .markdown-preview h2 { border-color: #d7d9dc; }
+:root[data-theme="light"] .markdown-preview a { color: #0969da; }
+:root[data-theme="light"] .markdown-preview pre code { color: #24292f; }
+:root[data-theme="light"] .markdown-preview blockquote { color: #656d76; border-left-color: #8c959f; }
+:root[data-theme="light"] .markdown-preview th,
+:root[data-theme="light"] .markdown-preview td { border-color: #d0d7de; }
+:root[data-theme="light"] .markdown-preview th { background: #f6f8fa; color: #24292f; }
+:root[data-theme="light"] .markdown-preview hr { border-color: #d0d7de; }
+:root[data-theme="light"] .terminal-content,
+:root[data-theme="light"] .terminal-instance { background: #ffffff; }
+:root[data-theme="light"] .debug-view { background: #f7f8f9; border-color: #d5d7da; }
+:root[data-theme="light"] .debug-view > header,
+:root[data-theme="light"] .debug-controls,
+:root[data-theme="light"] .debug-location,
+:root[data-theme="light"] .debug-section-title,
+:root[data-theme="light"] .debug-variable { color: #3c3f44; border-color: #d5d7da; }
+:root[data-theme="light"] .problems-list > button,
+:root[data-theme="light"] .git-log-commits > div > button,
+:root[data-theme="light"] .git-history-content > aside > button { color: #3c3f44; border-color: #e0e2e5; }
+:root[data-theme="light"] .problems-list > button:hover,
+:root[data-theme="light"] .branch-row:hover,
+:root[data-theme="light"] .branch-row.selected,
+:root[data-theme="light"] .git-log-commits > div > button:hover,
+:root[data-theme="light"] .git-log-commits > div > button.selected,
+:root[data-theme="light"] .commit-files > button:hover,
+:root[data-theme="light"] .commit-files > button.selected,
+:root[data-theme="light"] .git-history-content > aside > button:hover,
+:root[data-theme="light"] .git-history-content > aside > button.selected { background: #e7edf7; }
+:root[data-theme="light"] .git-log-branches,
+:root[data-theme="light"] .git-log-commits,
+:root[data-theme="light"] .commit-files,
+:root[data-theme="light"] .git-history-content > aside { border-color: #d5d7da; }
+:root[data-theme="light"] .git-history-dialog > header,
+:root[data-theme="light"] .import-chooser > header { background: #f2f3f5; color: #303236; border-color: #d5d7da; }
+:root[data-theme="light"] .find-results > button { color: #3c3f44; border-color: #e0e2e5; }
+:root[data-theme="light"] .find-results > button:hover,
+:root[data-theme="light"] .find-results > button.selected { background: #d9e7fb; }
+:root[data-theme="light"] .match-case:has(input:checked) { background: #d9e7fb; color: #1f4f88; }
+:root[data-theme="light"] .run-config-empty { background: #fff8e7; color: #72551d; }
+:root[data-theme="light"] .run-config-dialog form > footer button { background: #f2f3f5; color: #3c3f44; border-color: #bfc2c7; }
+:root[data-theme="light"] .run-config-dialog form > footer button:hover:not(:disabled) { background: #e3e5e8; }
+:root[data-theme="light"] .run-config-dialog form > footer button.primary { background: #3574f0; color: #ffffff; }
+:root[data-theme="light"] .java-log-wrap pre,
+:root[data-theme="light"] .http-response-panel > header > span,
+:root[data-theme="light"] .http-response-body,
+:root[data-theme="light"] .debug-variable > span,
+:root[data-theme="light"] .import-chooser > div > button,
+:root[data-theme="light"] .branch-group-title,
+:root[data-theme="light"] .branch-row,
+:root[data-theme="light"] .commit-files > button,
+:root[data-theme="light"] .git-commit-search input,
+:root[data-theme="light"] .context-menu button,
+:root[data-theme="light"] .find-dialog h2,
+:root[data-theme="light"] .run-config-dialog h2,
+:root[data-theme="light"] .run-config-dialog label,
+:root[data-theme="light"] .find-pane-header .find-preview-file,
+:root[data-theme="light"] .find-results code { color: #303236; }
+:root[data-theme="light"] .http-response-headers,
+:root[data-theme="light"] .import-chooser button > code,
+:root[data-theme="light"] .git-history-dialog header span,
+:root[data-theme="light"] .find-dialog header span,
+:root[data-theme="light"] .run-config-dialog header span,
+:root[data-theme="light"] .commit-meta,
+:root[data-theme="light"] .git-log-commits time,
+:root[data-theme="light"] .git-history-content small,
+:root[data-theme="light"] .git-history-content time { color: #65686e; }
+:root[data-theme="light"] .git-history-dialog h2 { color: #202124; }
+:root[data-theme="light"] .find-result-file { color: #4b4d52; }
+:root[data-theme="light"] .find-results > button.selected .find-path { color: #17233a; }
+:root[data-theme="light"] .context-menu button:hover { background: #d9e7fb; color: #17233a; }
+:root[data-theme="light"] .bottom-tool-count { background: #d9dce0; color: #34363a; }
+:root[data-theme="light"] .tool-stripe,
+:root[data-theme="light"] .right-tool-stripe,
+:root[data-theme="light"] .explorer,
+:root[data-theme="light"] .tasks-panel,
+:root[data-theme="light"] .resize-handle,
+:root[data-theme="light"] .right-resize-handle,
+:root[data-theme="light"] .panel-header,
+:root[data-theme="light"] .titlebar-actions,
+:root[data-theme="light"] .tabs,
+:root[data-theme="light"] .tab,
+:root[data-theme="light"] .terminal-panel,
+:root[data-theme="light"] .terminal-tabs,
+:root[data-theme="light"] .terminal-tab,
+:root[data-theme="light"] .java-panel,
+:root[data-theme="light"] .java-actions,
+:root[data-theme="light"] .java-log-wrap header,
+:root[data-theme="light"] .problems-panel,
+:root[data-theme="light"] .problems-panel > header,
+:root[data-theme="light"] .git-log-panel,
+:root[data-theme="light"] .git-log-panel header,
+:root[data-theme="light"] .git-log-branches,
+:root[data-theme="light"] .git-log-commits,
+:root[data-theme="light"] .git-log-details,
+:root[data-theme="light"] .commit-files,
+:root[data-theme="light"] .http-response-panel,
+:root[data-theme="light"] .http-response-panel > header,
+:root[data-theme="light"] .http-response-headers,
+:root[data-theme="light"] .bottom-tool-bar,
+:root[data-theme="light"] .useful-section > header,
+:root[data-theme="light"] .git-branch,
+:root[data-theme="light"] .java-project-meta,
+:root[data-theme="light"] .debug-view,
+:root[data-theme="light"] .debug-view > header,
+:root[data-theme="light"] .debug-controls,
+:root[data-theme="light"] .debug-location,
+:root[data-theme="light"] .debug-section-title,
+:root[data-theme="light"] .debug-variable { border-color: #dfe1e5; }
+:root[data-theme="light"] .task-row,
+:root[data-theme="light"] .problems-list > button,
+:root[data-theme="light"] .git-log-commits > div > button,
+:root[data-theme="light"] .git-history-content > aside > button,
+:root[data-theme="light"] .find-results > button { border-bottom-color: #e8e9ec; }
+.git-hunk-error { padding: 7px 10px; background: #4a292c; color: #ed9ba0; font-size: 11px; }
+.git-hunk-popup { width: min(410px, calc(100vw - 24px)); max-height: min(290px, calc(100vh - 24px)); position: fixed; z-index: 75; display: flex; flex-direction: column; overflow: hidden; border: 1px solid #4a4d52; border-radius: 4px; background: #2b2d30; box-shadow: 0 8px 24px rgba(0, 0, 0, .38); }
+.context-menu-layer:has(.git-hunk-popup) { background: transparent; }
+.git-hunk-popup > header { min-height: 42px; padding: 6px 5px 6px 10px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid #3d3f44; }
+.git-hunk-popup > header div { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.git-hunk-popup > header strong { color: #e2e3e5; font-size: 11px; }
+.git-hunk-popup > header span { overflow: hidden; color: #898c92; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+.git-hunk-popup > header button { width: 25px; height: 25px; display: grid; place-items: center; border: 0; border-radius: 3px; background: transparent; cursor: pointer; }
+.git-hunk-popup > pre { min-height: 45px; max-height: 180px; margin: 0; padding: 9px 11px; overflow: auto; background: #1e1f22; color: #d4d4d4; white-space: pre; font: 11px/1.45 Menlo, Monaco, Consolas, monospace; }
+.git-hunk-popup > footer { min-height: 37px; padding: 5px 7px; display: flex; justify-content: flex-end; border-top: 1px solid #3d3f44; }
+.git-hunk-popup > footer button { height: 27px; padding: 0 9px; display: flex; align-items: center; gap: 5px; border: 1px solid #7a3b40; border-radius: 3px; background: #653035; color: #ffffff; cursor: pointer; }
+:root[data-theme="light"] .git-hunk-popup { background: #ffffff; border-color: #c8cbd0; box-shadow: 0 8px 22px rgba(0, 0, 0, .16); }
+:root[data-theme="light"] .git-hunk-popup > header,
+:root[data-theme="light"] .git-hunk-popup > footer { border-color: #dfe1e5; }
+:root[data-theme="light"] .git-hunk-popup > header strong { color: #202124; }
+:root[data-theme="light"] .git-hunk-popup > header span { color: #65686e; }
+:root[data-theme="light"] .git-hunk-popup > pre { background: #f7f8f9; color: #24292f; }
+:root[data-theme="light"] .git-hunk-popup > footer button { background: #b53b43; border-color: #a3333a; }
+:root[data-theme="light"] .git-log-panel .git-log-details .commit-files > button.selected {
+  background: #e7effd;
+  color: #202124;
+  box-shadow: inset 2px 0 #88adf7;
+}
+:root[data-theme="light"] .git-log-panel .git-log-details .commit-files > button.selected:hover { background: #dce9fc; }
+:root[data-theme="light"] .git-log-panel .git-log-details .commit-files > button.selected code { color: #805900; }
+:root[data-theme="light"] .explorer .git-changes .git-file-row:hover { background: #e7effd; color: #202124; }
+:root[data-theme="light"] .explorer .git-changes .git-file-row.selected,
+:root[data-theme="light"] .explorer .git-changes .git-file-row.selected:hover { background: #d9e7fb; color: #17233a; }

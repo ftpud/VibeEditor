@@ -1,5 +1,5 @@
 import Editor, { DiffEditor, type Monaco } from "@monaco-editor/react";
-import { ArrowUpRight, Bot, Braces, Bug, CaseSensitive, Check, ChevronDown, ChevronRight, CircleAlert, Coffee, Columns2, Eye, File, FileCode2, FileDiff, FileJson, FileText, Folder, FolderOpen, GitBranch, GitCompareArrows, Hash, Library, ListTodo, ListTree, LogOut, Package, Palette, Pencil, Play, Plus, RefreshCw, Save, Search, Square, SquareTerminal, Trash2, X } from "lucide-react";
+import { ArrowUpRight, Bot, Braces, Bug, CaseSensitive, Check, ChevronDown, ChevronRight, CircleAlert, Coffee, Columns2, Eye, File, FileCode2, FileDiff, FileJson, FileText, Folder, FolderOpen, GitBranch, GitCompareArrows, Hash, Library, ListTodo, ListTree, LogOut, Package, Palette, Pencil, Play, Plus, RefreshCw, Save, Search, Settings, Square, SquareTerminal, Trash2, X } from "lucide-react";
 import { isValidElement, useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
 import type { AiModel, AiProvider, AiSession, AiStatus, AiTaskSummary, FileColor, FileTreeNode, GitDiffHunk, GitStatusEntry, HttpResponse, JavaBreakpoint, JavaDebugState, JavaDiagnostic, JavaLspLocation, JavaMainClass, JavaProjectNode, JavaProjectOptions, JavaTypeSuggestion, SearchResult, UsefulFile, UsefulFileScope, WorkspaceOptions, WorkspaceTask } from "@remote-ide/protocol";
 import type { editor } from "monaco-editor";
@@ -13,6 +13,7 @@ import { ProblemsPanel } from "./ProblemsPanel";
 import { GitLogPanel } from "./GitLogPanel";
 import { GitHistoryDialog } from "./GitHistoryDialog";
 import { AiPanel, type AiAttachment } from "./AiPanel";
+import { configureMonacoThemes, monacoTheme, type HighlightTheme } from "./theme";
 
 type ConnectionStatus = "idle" | "connecting" | "connected" | "failed" | "disconnected" | "workspace-error";
 const languageByExtension: Record<string, string> = {
@@ -25,7 +26,7 @@ const gitHunkDecorations = (hunks: GitDiffHunk[]): editor.IModelDeltaDecoration[
   const start = Math.max(1, hunk.modifiedStart);
   const end = Math.max(start, start + Math.max(1, hunk.modifiedLines) - 1);
   const kind = hunk.originalLines === 0 ? "added" : hunk.modifiedLines === 0 ? "deleted" : "modified";
-  return { range: { startLineNumber: start, startColumn: 1, endLineNumber: end, endColumn: 1 }, options: { isWholeLine: true, className: `git-change-line ${kind}`, linesDecorationsClassName: `git-change-marker ${kind}`, hoverMessage: { value: "Click the gutter marker to view this change" } } };
+  return { range: { startLineNumber: start, startColumn: 1, endLineNumber: end, endColumn: 1 }, options: { isWholeLine: true, linesDecorationsClassName: `git-change-marker ${kind}`, hoverMessage: { value: "Click the gutter marker to inspect this change" } } };
 });
 type ParsedHttpRequest = { line: number; method: string; url: string; headers: Record<string, string>; body?: string };
 function parseHttpRequests(content: string): ParsedHttpRequest[] {
@@ -48,6 +49,11 @@ function parseHttpRequests(content: string): ParsedHttpRequest[] {
 }
 
 export function App() {
+  const [theme, setTheme] = useState<"dark" | "light">(() => localStorage.getItem("theme") === "light" ? "light" : "dark");
+  const [highlightTheme, setHighlightTheme] = useState<HighlightTheme>(() => localStorage.getItem("highlightTheme") === "ftpud" ? "ftpud" : "default");
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  useEffect(() => { document.documentElement.dataset.theme = theme; document.documentElement.style.colorScheme = theme; localStorage.setItem("theme", theme); }, [theme]);
+  useEffect(() => { localStorage.setItem("highlightTheme", highlightTheme); }, [highlightTheme]);
   const saved = useMemo(() => {
     try { return JSON.parse(localStorage.getItem("connection") ?? "{}") as Partial<{ host: string; port: string }>; } catch { return {}; }
   }, []);
@@ -82,7 +88,7 @@ export function App() {
   const emptyAiSummary: AiTaskSummary = { status: "idle", preview: "", additions: 0, deletions: 0 };
   const [aiStatuses, setAiStatuses] = useState<{ root: AiTaskSummary; tasks: Record<string, AiTaskSummary> }>({ root: emptyAiSummary, tasks: {} });
   const [activeGitHunks, setActiveGitHunks] = useState<GitDiffHunk[]>([]);
-  const [pendingDiffLine, setPendingDiffLine] = useState<{ path: string; line: number }>();
+  const [gitHunkDialog, setGitHunkDialog] = useState<{ x: number; y: number; path: string; hunk: GitDiffHunk; originalContent: string; modifiedContent: string; error?: string }>();
   const [httpResult, setHttpResult] = useState<{ request: ParsedHttpRequest; response?: HttpResponse; error?: string; loading: boolean }>();
   const [gitBranch, setGitBranch] = useState("HEAD");
   const [gitEntries, setGitEntries] = useState<GitStatusEntry[]>([]);
@@ -126,7 +132,6 @@ export function App() {
   const monacoRef = useRef<Monaco>();
   const breakpointDecorationsRef = useRef<string[]>([]);
   const gitDecorationsRef = useRef<string[]>([]);
-  const workingDiffRef = useRef<editor.IStandaloneDiffEditor>();
   const activeGitHunksRef = useRef<GitDiffHunk[]>([]);
   const diffRollbackTimer = useRef<ReturnType<typeof setTimeout>>();
   const javaLanguageDisposables = useRef<{ dispose(): void }[]>([]);
@@ -150,12 +155,6 @@ export function App() {
     monacoEditorRef.current.focus();
     setPendingNavigation(undefined);
   }, [activeTab?.path, pendingNavigation]);
-  useEffect(() => {
-    if (!pendingDiffLine || activeTab?.type !== "diff" || activeTab.path !== pendingDiffLine.path || !workingDiffRef.current) return;
-    workingDiffRef.current.getModifiedEditor().revealLineInCenter(Math.max(1, pendingDiffLine.line));
-    workingDiffRef.current.getModifiedEditor().setPosition({ lineNumber: Math.max(1, pendingDiffLine.line), column: 1 });
-    setPendingDiffLine(undefined);
-  }, [activeTab?.path, activeTab?.type, pendingDiffLine]);
   useEffect(() => () => {
     clientRef.current?.disconnect();
     if (treeRefreshTimer.current) clearTimeout(treeRefreshTimer.current);
@@ -462,6 +461,31 @@ export function App() {
       });
       await Promise.all([refreshGit(), refreshTree()]);
     } catch (error) { setStatusMessage(error instanceof Error ? error.message : "Could not rollback file"); }
+  };
+
+  const openGitHunkDialog = async (path: string, hunk: GitDiffHunk, x: number, y: number) => {
+    if (!clientRef.current) return;
+    try {
+      const result = await clientRef.current.request("git.diff", { path });
+      const current = result.hunks.find((item) => item.originalStart === hunk.originalStart && item.modifiedStart === hunk.modifiedStart) ?? hunk;
+      setGitHunkDialog({ x: Math.min(x + 8, window.innerWidth - 430), y: Math.min(y, window.innerHeight - 300), path, hunk: current, originalContent: result.originalContent, modifiedContent: result.modifiedContent });
+    } catch (error) { setStatusMessage(error instanceof Error ? error.message : "Could not load change block"); }
+  };
+
+  const rollbackGitHunk = async () => {
+    if (!clientRef.current || !gitHunkDialog || !window.confirm(`Rollback this change block in ${gitHunkDialog.path}?`)) return;
+    const { path, hunk, originalContent, modifiedContent } = gitHunkDialog;
+    const originalLines = originalContent.split("\n").slice(Math.max(0, hunk.originalStart - 1), Math.max(0, hunk.originalStart - 1) + hunk.originalLines);
+    const nextLines = modifiedContent.split("\n");
+    nextLines.splice(Math.max(0, hunk.modifiedStart - 1), hunk.modifiedLines, ...originalLines);
+    const content = nextLines.join("\n");
+    try {
+      selfWriteUntil.current.set(path, Date.now() + 1500);
+      await clientRef.current.request("filesystem.writeFile", { path, content });
+      updateGroup((tabs, active) => ({ tabs: tabs.map((tab) => tab.type === "file" && tab.path === path ? { ...tab, content, savedContent: content, dirty: false, error: undefined } : tab), activeTabId: active }));
+      setGitHunkDialog(undefined);
+      await Promise.all([refreshGit(), refreshTree()]);
+    } catch (error) { setGitHunkDialog((current) => current ? { ...current, error: error instanceof Error ? error.message : "Could not rollback change block" } : current); }
   };
 
   const closeTab = (tab: EditorTab) => {
@@ -922,8 +946,7 @@ export function App() {
       const hunk = line ? activeGitHunksRef.current.find((item) => line >= Math.max(1, item.modifiedStart) && line <= Math.max(1, item.modifiedStart) + Math.max(1, item.modifiedLines) - 1) : undefined;
       const entry = gitEntries.find((item) => item.path === filePath);
       if (!hunk || !entry) return;
-      setPendingDiffLine({ path: filePath, line: Math.max(1, hunk.modifiedStart) });
-      void openDiff(entry);
+      void openGitHunkDialog(filePath, hunk, event.event.posx, event.event.posy);
     }));
     if (/\.http$/i.test(filePath)) {
       let decorations: string[] = [];
@@ -934,6 +957,21 @@ export function App() {
     }
     if (activeTab.type !== "file") return;
     if (!/\.java$/i.test(filePath)) return;
+    let semanticDecorations: string[] = []; let semanticTimer: ReturnType<typeof setTimeout> | undefined;
+    const decorateJavaTypes = async () => {
+      if (!clientRef.current || highlightTheme !== "ftpud") { semanticDecorations = instance.deltaDecorations(semanticDecorations, []); return; }
+      try {
+        const result = await clientRef.current.request("java.semanticTokens", { path: filePath, content: instance.getValue() });
+        semanticDecorations = instance.deltaDecorations(semanticDecorations, result.tokens.flatMap((token) => {
+          const constant = (token.modifiers.includes("readonly") || token.type === "enumMember") && (token.modifiers.includes("static") || token.type === "enumMember");
+          const kind = constant ? "constant" : token.type === "interface" ? "interface" : ["class", "type", "enum", "struct"].includes(token.type) ? "class" : token.type === "decorator" ? "annotation" : undefined;
+          return kind ? [{ range: { startLineNumber: token.startLine, startColumn: token.startColumn, endLineNumber: token.endLine, endColumn: token.endColumn }, options: { inlineClassName: `ftpud-java-${kind}`, inlineClassNameAffectsLetterSpacing: false } }] : [];
+        }));
+      } catch { semanticDecorations = instance.deltaDecorations(semanticDecorations, []); }
+    };
+    void decorateJavaTypes();
+    javaLanguageDisposables.current.push(instance.onDidChangeModelContent(() => { if (semanticTimer) clearTimeout(semanticTimer); semanticTimer = setTimeout(() => void decorateJavaTypes(), 500); }));
+    javaLanguageDisposables.current.push({ dispose: () => { if (semanticTimer) clearTimeout(semanticTimer); } });
     javaLanguageDisposables.current.push(api.languages.registerCompletionItemProvider("java", {
       triggerCharacters: ["."],
       provideCompletionItems: async (model, position) => {
@@ -967,12 +1005,6 @@ export function App() {
   };
 
   const mountWorkingDiff = (instance: editor.IStandaloneDiffEditor) => {
-    workingDiffRef.current = instance;
-    if (pendingDiffLine && activeTab?.path === pendingDiffLine.path) {
-      instance.getModifiedEditor().revealLineInCenter(Math.max(1, pendingDiffLine.line));
-      instance.getModifiedEditor().setPosition({ lineNumber: Math.max(1, pendingDiffLine.line), column: 1 });
-      setPendingDiffLine(undefined);
-    }
     instance.getModifiedEditor().onDidChangeModelContent(() => {
       if (diffRollbackTimer.current) clearTimeout(diffRollbackTimer.current);
       diffRollbackTimer.current = setTimeout(async () => {
@@ -1043,11 +1075,11 @@ export function App() {
             <button title="Stop Java process" disabled={!javaRunning} onClick={() => void stopJava()}><Square size={13} /></button>
             <select aria-label="Java run configuration" value={javaOptions.selectedRunConfigurationId ?? ""} onChange={(event) => event.target.value === "__create__" ? setShowRunConfigurationDialog(true) : void selectRunConfiguration(event.target.value)}><option value="" disabled>Select run configuration</option>{javaOptions.runConfigurations.map((configuration) => <option key={configuration.id} value={configuration.id}>{configuration.name}</option>)}<option value="__create__">Create new...</option></select>
           </div>}
-          <span className="connection-dot" />{host}:{port}<button title="Disconnect" onClick={disconnect}><LogOut size={15} /></button>
+          <span className="connection-dot" />{host}:{port}<div className="settings-anchor"><button title="Settings" onClick={() => setSettingsOpen((open) => !open)}><Settings size={15} /></button>{settingsOpen && <div className="settings-menu"><header>Settings</header><div className="settings-row"><span>Theme</span><div className="theme-switch"><button className={theme === "dark" ? "active" : ""} onClick={() => setTheme("dark")}>Dark</button><button className={theme === "light" ? "active" : ""} onClick={() => setTheme("light")}>Light</button></div></div><div className="settings-row"><span>Highlighting</span><div className="theme-switch"><button className={highlightTheme === "default" ? "active" : ""} onClick={() => setHighlightTheme("default")}>Default</button><button className={highlightTheme === "ftpud" ? "active" : ""} onClick={() => setHighlightTheme("ftpud")}>Ftpud</button></div></div></div>}</div><button title="Disconnect" onClick={disconnect}><LogOut size={15} /></button>
         </div>
         <div className="tabs" role="tablist">
           {group.tabs.map((tab) => <button className={`tab ${tab.id === group.activeTabId ? "active" : ""} ${tab.id === draggedTabId ? "dragging" : ""}`} key={tab.id} draggable onDragStart={(event) => { setDraggedTabId(tab.id); event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/plain", tab.id); }} onDragEnd={() => setDraggedTabId(undefined)} onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = "move"; }} onDrop={(event) => { event.preventDefault(); moveTab(tab.id); }} onContextMenu={(event) => { event.preventDefault(); setTabContextMenu({ x: Math.min(event.clientX, window.innerWidth - 220), y: Math.min(event.clientY, window.innerHeight - 125), tab }); }} onClick={() => void activateEditorTab(tab)}>
-            {tab.type === "diff" ? <GitCompareArrows size={14} /> : <File size={14} />}<span>{tab.title}</span>{tab.dirty && <span className="dirty" title="Unsaved changes" />}<span className="close" title={`Close ${tab.title}`} onClick={(event) => { event.stopPropagation(); closeTab(tab); }}><X size={13} /></span>
+            {tab.type === "diff" ? <GitCompareArrows size={14} /> : <File size={14} />}<span className={tab.type === "file" && projectGitStatuses[tab.path] ? `tab-file-name git-${projectGitStatuses[tab.path] === "C" ? "created" : "modified"}` : "tab-file-name"}>{tab.title}</span>{tab.dirty && <span className="dirty" title="Unsaved changes" />}<span className="close" title={`Close ${tab.title}`} onClick={(event) => { event.stopPropagation(); closeTab(tab); }}><X size={13} /></span>
           </button>)}
           <div className="tab-spacer" />
           {activeTab?.type === "diff" && <div className="editor-mode-switch" aria-label="Diff layout">
@@ -1060,7 +1092,7 @@ export function App() {
           </div>}
           <button className="save-button" title="Save active file" disabled={(activeTab?.type !== "file" && activeTab?.type !== "useful") || !activeTab.dirty} onClick={() => void saveActive()}><Save size={15} /></button>
         </div>
-        <div className="editor-area" onContextMenu={(event) => {
+        <div className="editor-area" key={`editor-area:${highlightTheme}`} onContextMenu={(event) => {
           if (activeTab?.type !== "file" || activeTab.markdownMode === "preview") return;
           event.preventDefault();
           const selection = monacoEditorRef.current?.getSelection();
@@ -1069,7 +1101,7 @@ export function App() {
         }}>
           {!activeTab ? <div className="empty-editor">Open a file from Project</div> : activeTab.loading ? <div className="empty-editor">Loading {activeTab.title}...</div> : activeTab.error && !activeTab.content ? <div className="editor-error">{activeTab.error}</div> : <>
             {activeTab.error && <div className="inline-error">{activeTab.error}</div>}
-            {activeTab.type === "diff" ? <DiffEditor key={activeTab.path} original={activeTab.originalContent ?? ""} modified={activeTab.content} language={languageByExtension[activeTab.path.split(".").pop()?.toLowerCase() ?? ""] ?? "plaintext"} theme="vs-dark" onMount={mountWorkingDiff} options={{ automaticLayout: true, readOnly: false, originalEditable: false, renderMarginRevertIcon: true, renderSideBySide: activeTab.diffMode !== "unified", minimap: { enabled: false }, fontSize: 13, scrollBeyondLastLine: false }} /> : activeTab.markdownMode === "preview" ? <div className="markdown-preview"><ReactMarkdown remarkPlugins={[remarkGfm]} components={{ pre: renderMarkdownPre }}>{activeTab.content}</ReactMarkdown></div> : <Editor key={`${activeTab.type}:${activeTab.usefulScope ?? "workspace"}:${activeTab.path}`} path={activeTab.type === "useful" ? `useful-${activeTab.usefulScope}/${activeTab.path}` : activeTab.path} language={languageByExtension[activeTab.path.split(".").pop()?.toLowerCase() ?? ""] ?? "plaintext"} value={activeTab.content} theme="vs-dark" onMount={mountEditor} options={{ automaticLayout: true, contextmenu: false, minimap: { enabled: false }, glyphMargin: activeTab.type === "file" || /\.http$/i.test(activeTab.path), fontSize: 13, scrollBeyondLastLine: false, padding: { top: 10 } }} onChange={(value) => updateGroup((tabs, active) => ({ tabs: tabs.map((tab) => tab.id === activeTab.id ? { ...tab, content: value ?? "", dirty: (value ?? "") !== tab.savedContent, error: undefined } : tab), activeTabId: active }))} />}
+            {activeTab.type === "diff" ? <DiffEditor key={activeTab.path} original={activeTab.originalContent ?? ""} modified={activeTab.content} language={languageByExtension[activeTab.path.split(".").pop()?.toLowerCase() ?? ""] ?? "plaintext"} beforeMount={configureMonacoThemes} theme={monacoTheme(theme, highlightTheme)} onMount={mountWorkingDiff} options={{ automaticLayout: true, readOnly: false, originalEditable: false, renderMarginRevertIcon: true, renderSideBySide: activeTab.diffMode !== "unified", minimap: { enabled: false }, fontSize: 13, scrollBeyondLastLine: false }} /> : activeTab.markdownMode === "preview" ? <div className="markdown-preview"><ReactMarkdown remarkPlugins={[remarkGfm]} components={{ pre: renderMarkdownPre }}>{activeTab.content}</ReactMarkdown></div> : <Editor key={`${activeTab.type}:${activeTab.usefulScope ?? "workspace"}:${activeTab.path}`} path={activeTab.type === "useful" ? `useful-${activeTab.usefulScope}/${activeTab.path}` : activeTab.path} language={languageByExtension[activeTab.path.split(".").pop()?.toLowerCase() ?? ""] ?? "plaintext"} value={activeTab.content} beforeMount={configureMonacoThemes} theme={monacoTheme(theme, highlightTheme)} onMount={mountEditor} options={{ automaticLayout: true, contextmenu: false, minimap: { enabled: false }, glyphMargin: activeTab.type === "file" || /\.http$/i.test(activeTab.path), fontSize: 13, scrollBeyondLastLine: false, padding: { top: 10 } }} onChange={(value) => updateGroup((tabs, active) => ({ tabs: tabs.map((tab) => tab.id === activeTab.id ? { ...tab, content: value ?? "", dirty: (value ?? "") !== tab.savedContent, error: undefined } : tab), activeTabId: active }))} />}
           </>}
         </div>
         {httpResult && <section className="http-response-panel"><header><span>{httpResult.request.method} {httpResult.request.url}</span>{httpResult.loading ? <small>Sending...</small> : httpResult.response ? <small className={httpResult.response.status >= 400 ? "error" : "success"}>{httpResult.response.status} {httpResult.response.statusText} · {httpResult.response.durationMs} ms</small> : null}<button title="Close response" onClick={() => setHttpResult(undefined)}><X size={14} /></button></header>{httpResult.error ? <div className="http-response-error">{httpResult.error}</div> : httpResult.response ? <div className="http-response-content"><pre className="http-response-headers">{Object.entries(httpResult.response.headers).map(([name, value]) => `${name}: ${value}`).join("\n")}</pre><pre className="http-response-body">{httpResult.response.body}</pre></div> : <div className="http-response-loading">Waiting for response...</div>}</section>}
@@ -1082,11 +1114,11 @@ export function App() {
         </div></> : <><header className="panel-header"><span>AI</span><span className={`ai-status ${aiSession.status}`}>{formatAiStatus(aiSession.status)}</span></header><AiPanel provider={aiProvider} session={aiSession} models={aiModels} attachments={currentAiAttachments} onProviderChange={(provider) => void switchAiProvider(provider)} onAttachmentsChange={updateAiAttachments} onSend={sendAiPrompt} onClear={() => void clearAiContext()} /></>}
       </aside></>}
       <nav className="right-tool-stripe" aria-label="Right tool windows">
-        <button className={`tool-stripe-button right ${tasksOpen && rightView === "ai" ? "active" : ""}`} title={tasksOpen && rightView === "ai" ? "Hide AI" : "Show AI"} onClick={() => { if (tasksOpen && rightView === "ai") setTasksOpen(false); else { setRightView("ai"); setTasksOpen(true); void refreshAi(); } }}><Bot size={15} /><span>AI</span>{aiSession.status === "in_progress" && <span className="tool-badge">...</span>}</button>
         <button className={`tool-stripe-button right ${tasksOpen && rightView === "tasks" ? "active" : ""}`} title={tasksOpen && rightView === "tasks" ? "Hide Tasks" : "Show Tasks"} onClick={() => { if (tasksOpen && rightView === "tasks") setTasksOpen(false); else { setRightView("tasks"); setTasksOpen(true); } }}><ListTodo size={15} /><span>Tasks</span>{tasks.length > 0 && <span className="tool-badge">{tasks.length > 99 ? "99+" : tasks.length}</span>}</button>
+        <button className={`tool-stripe-button right ${tasksOpen && rightView === "ai" ? "active" : ""}`} title={tasksOpen && rightView === "ai" ? "Hide AI" : "Show AI"} onClick={() => { if (tasksOpen && rightView === "ai") setTasksOpen(false); else { setRightView("ai"); setTasksOpen(true); void refreshAi(); } }}><Bot size={15} /><span>AI</span>{aiSession.status === "in_progress" && <span className="tool-badge">...</span>}</button>
       </nav>
     </div>
-    {layout.panels.some((panel) => panel.type === "terminal") && <TerminalPanel client={clientRef.current!} group={layout.terminalGroup} height={terminalHeight} onActivate={(id) => updateTerminalGroup((current) => ({ ...current, activeTabId: id }))} onCreate={() => void createTerminal()} onClose={closeTerminal} onResizeStart={beginTerminalResize} registerWriter={registerTerminalWriter} />}
+    {layout.panels.some((panel) => panel.type === "terminal") && <TerminalPanel theme={theme} client={clientRef.current!} group={layout.terminalGroup} height={terminalHeight} onActivate={(id) => updateTerminalGroup((current) => ({ ...current, activeTabId: id }))} onCreate={() => void createTerminal()} onClose={closeTerminal} onResizeStart={beginTerminalResize} registerWriter={registerTerminalWriter} />}
     {layout.panels.some((panel) => panel.type === "java") && javaOptions && <JavaPanel height={javaPanelHeight} log={javaLog} running={javaRunning} options={javaOptions} debugState={javaDebugState} onBuild={() => void runJavaAction("java.build")} onRun={() => void runJavaAction("java.run")} onDebug={() => void debugJava()} onStop={() => void stopJava()} onDebugCommand={(command) => void clientRef.current!.request("java.debug.command", { command })} onClear={() => setJavaLog("")} onResizeStart={beginJavaResize} />}
     {layout.panels.some((panel) => panel.type === "problems") && javaOptions && <ProblemsPanel height={problemsHeight} diagnostics={javaDiagnostics} checking={javaChecking} onRefresh={() => void checkJava()} onOpen={(diagnostic) => void openDiagnostic(diagnostic)} onResizeStart={beginProblemsResize} />}
     {layout.panels.some((panel) => panel.type === "gitlog") && <GitLogPanel client={clientRef.current!} height={gitLogHeight} onResizeStart={beginGitLogResize} />}
@@ -1111,6 +1143,7 @@ export function App() {
     {importChoices && <div className="dialog-overlay" onMouseDown={() => setImportChoices(undefined)}><section className="import-chooser" role="dialog" aria-modal="true" aria-label="Choose Java import" onMouseDown={(event) => event.stopPropagation()}><header><span>Import class</span><button title="Close" onClick={() => setImportChoices(undefined)}><X size={15} /></button></header><div>{importChoices.suggestions.map((suggestion) => <button key={suggestion.qualifiedName} onClick={() => applyJavaImport(suggestion)}><span>{suggestion.simpleName}</span><code>{suggestion.qualifiedName}</code><small>{suggestion.source}</small></button>)}</div></section></div>}
     {javaUsages && <div className="dialog-overlay" onMouseDown={() => setJavaUsages(undefined)}><section className="import-chooser usage-chooser" role="dialog" aria-modal="true" aria-label="Java usages" onMouseDown={(event) => event.stopPropagation()}><header><span>Usages ({javaUsages.length})</span><button title="Close" onClick={() => setJavaUsages(undefined)}><X size={15} /></button></header><div>{javaUsages.length === 0 ? <div className="problems-empty">No project usages found</div> : javaUsages.map((location, index) => <button key={`${location.path}:${location.startLine}:${location.startColumn}:${index}`} onClick={() => void openJavaLocation(location)}><span>{location.path.split("/").pop()}</span><code>{location.path}</code><small>{location.startLine}:{location.startColumn}</small></button>)}</div></section></div>}
     {gitHistory && <GitHistoryDialog client={clientRef.current!} path={gitHistory.path} startLine={gitHistory.startLine} endLine={gitHistory.endLine} onClose={() => setGitHistory(undefined)} />}
+    {gitHunkDialog && <div className="context-menu-layer" onMouseDown={() => setGitHunkDialog(undefined)}><section className="git-hunk-popup" role="dialog" aria-label={`Previous content in ${gitHunkDialog.path}`} style={{ left: gitHunkDialog.x, top: gitHunkDialog.y }} onMouseDown={(event) => event.stopPropagation()}><header><div><strong>Before this change</strong><span>{gitHunkDialog.path.split("/").pop()} · line {gitHunkDialog.hunk.originalStart}</span></div><button title="Close" onClick={() => setGitHunkDialog(undefined)}><X size={14} /></button></header>{gitHunkDialog.error && <div className="git-hunk-error">{gitHunkDialog.error}</div>}<pre>{gitHunkDialog.hunk.originalLines === 0 ? "This block did not exist before." : gitHunkDialog.originalContent.split("\n").slice(Math.max(0, gitHunkDialog.hunk.originalStart - 1), Math.max(0, gitHunkDialog.hunk.originalStart - 1) + gitHunkDialog.hunk.originalLines).join("\n")}</pre><footer><button className="danger" onClick={() => void rollbackGitHunk()}><RefreshCw size={13} /><span>Rollback</span></button></footer></section></div>}
     {showRunConfigurationDialog && <RunConfigurationDialog client={clientRef.current!} onClose={() => setShowRunConfigurationDialog(false)} onSaved={(options) => { setJavaOptions(options); javaOptionsRef.current = options; setShowRunConfigurationDialog(false); }} />}
     {showCreateTaskDialog && <CreateTaskDialog onClose={() => setShowCreateTaskDialog(false)} onCreate={createTask} />}
     {usefulDialog && <UsefulFileDialog mode={usefulDialog.mode} initialName={usefulDialog.file?.name ?? ""} scope={usefulDialog.scope} onClose={() => setUsefulDialog(undefined)} onSave={saveUsefulFileDialog} />}
@@ -1439,7 +1472,7 @@ function FindInFilesDialog({ client, scope, onClose, onNavigate }: { client: Cor
         <section className="find-preview-pane">
           <div className="find-pane-header"><FileCode2 size={13} /><span>Preview</span>{selected && <span className="find-preview-file">{selected.path.split("/").pop()}</span>}{selected && <button title="Open in editor" onClick={() => onNavigate(selected, query.length)}><ArrowUpRight size={14} /></button>}</div>
           <div className="find-preview-editor">
-            {previewError ? <div className="find-empty">{previewError}</div> : selected ? <Editor value={previewContent} language={languageByExtension[selected.path.split(".").pop()?.toLowerCase() ?? ""] ?? "plaintext"} theme="vs-dark" onMount={(instance) => { previewEditorRef.current = instance; }} options={{ readOnly: true, automaticLayout: true, minimap: { enabled: false }, fontSize: 12, lineNumbersMinChars: 3, scrollBeyondLastLine: false, padding: { top: 6 }, renderLineHighlight: "all" }} /> : <div className="find-empty">Select a result</div>}
+            {previewError ? <div className="find-empty">{previewError}</div> : selected ? <Editor value={previewContent} language={languageByExtension[selected.path.split(".").pop()?.toLowerCase() ?? ""] ?? "plaintext"} beforeMount={configureMonacoThemes} theme={monacoTheme()} onMount={(instance) => { previewEditorRef.current = instance; }} options={{ readOnly: true, automaticLayout: true, minimap: { enabled: false }, fontSize: 12, lineNumbersMinChars: 3, scrollBeyondLastLine: false, padding: { top: 6 }, renderLineHighlight: "all" }} /> : <div className="find-empty">Select a result</div>}
           </div>
         </section>
       </div>

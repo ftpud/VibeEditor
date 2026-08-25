@@ -1,12 +1,14 @@
 import crypto from "node:crypto";
 import os from "node:os";
 import path from "node:path";
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { execFile, spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { promisify } from "node:util";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import type { AiMessage, AiModel, AiSession } from "@remote-ide/protocol";
 import { CoreError } from "./errors.js";
 
 const EMPTY: AiSession = { model: "default", reasoning: "medium", status: "idle", messages: [] };
+const execFileAsync = promisify(execFile);
 
 export class CopilotSessionManager {
   private readonly processes = new Map<string, ChildProcessWithoutNullStreams>();
@@ -23,7 +25,16 @@ export class CopilotSessionManager {
   }
 
   async models(): Promise<AiModel[]> {
-    return ["default", "gpt-5.3-codex", "claude-sonnet-4.6", "claude-opus-4.6", "claude-haiku-4.5"].map((id) => ({ id, name: id === "default" ? "Copilot default" : id, defaultReasoning: "medium", reasoningLevels: ["low", "medium", "high", "xhigh"] }));
+    try {
+      const { stdout, stderr } = await execFileAsync("copilot", ["help"], { encoding: "utf8", maxBuffer: 2 * 1024 * 1024, timeout: 10_000 });
+      const output = `${stdout}\n${stderr}`.replace(/\x1b\[[0-9;]*m/g, "");
+      const modelOption = output.match(/(?:^|\n)\s*(?:-m[^\n,]*,\s*)?--model(?:[=\s]+(?:<[^>]+>|[A-Z][A-Z_-]*))?[^\n]*(?:\n(?=\s{4,})[^\n]*)*/i)?.[0] ?? output;
+      const discovered = [...modelOption.matchAll(/\b(?:gpt|claude|gemini|o[1-9])[-a-z0-9._]*\b/gi)].map((match) => match[0]!.toLowerCase());
+      const ids = ["default", ...discovered.filter((id, index, all) => all.indexOf(id) === index)];
+      return ids.map((id) => ({ id, name: id === "default" ? "Copilot default" : id, defaultReasoning: "medium", reasoningLevels: ["low", "medium", "high", "xhigh", "max"] }));
+    } catch {
+      return [{ id: "default", name: "Copilot default (CLI unavailable)", defaultReasoning: "medium", reasoningLevels: ["low", "medium", "high", "xhigh", "max"] }];
+    }
   }
 
   async send(workspace: string, prompt: string, model: string, reasoning: string): Promise<AiSession> {

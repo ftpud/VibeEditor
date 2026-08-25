@@ -3,6 +3,7 @@ import { GitCommitHorizontal, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { GitCommit } from "@remote-ide/protocol";
 import type { CoreClient } from "./client";
+import { configureMonacoThemes, monacoTheme } from "./theme";
 
 type Props = { client: CoreClient; path: string; startLine?: number; endLine?: number; onClose(): void };
 
@@ -20,7 +21,7 @@ export function GitHistoryDialog({ client, path, startLine, endLine, onClose }: 
   };
   return <div className="dialog-overlay" onMouseDown={onClose}><section className="git-history-dialog" role="dialog" aria-modal="true" aria-label="Git file history" onMouseDown={(event) => event.stopPropagation()}>
     <header><div><h2>{selectionHistory ? "Selection History" : "File History"}</h2><span>{path}{selectionHistory ? ` · lines ${startLine}-${endLine}` : ""}</span></div><button title="Close" onClick={onClose}><X size={15} /></button></header>
-    <div className="git-history-content"><aside>{commits.length === 0 && !error && <div className="git-log-empty">No commits found</div>}{commits.map((commit) => <button className={selected?.hash === commit.hash ? "selected" : ""} key={commit.hash} onClick={() => void selectCommit(commit)}><GitCommitHorizontal size={14} /><span><strong>{commit.subject}</strong><small>{commit.shortHash} · {commit.author}</small></span><time>{new Date(commit.date).toLocaleString()}</time></button>)}</aside><main>{error && <div className="git-log-error">{error}</div>}{selected && diff ? <DiffEditor original={diff.originalContent} modified={diff.modifiedContent} language={languageFor(path)} theme="vs-dark" options={{ automaticLayout: true, readOnly: true, renderSideBySide: true, minimap: { enabled: false }, fontSize: 12, scrollBeyondLastLine: false }} /> : <div className="git-log-empty">Select a commit</div>}</main></div>
+    <div className="git-history-content"><aside>{commits.length === 0 && !error && <div className="git-log-empty">No commits found</div>}{commits.map((commit) => <button className={selected?.hash === commit.hash ? "selected" : ""} key={commit.hash} onClick={() => void selectCommit(commit)}><GitCommitHorizontal size={14} /><span><strong>{commit.subject}</strong><small>{commit.shortHash} · {commit.author}</small></span><time>{new Date(commit.date).toLocaleString()}</time></button>)}</aside><main>{error && <div className="git-log-error">{error}</div>}{selected && diff ? <DiffEditor original={diff.originalContent} modified={diff.modifiedContent} language={languageFor(path)} beforeMount={configureMonacoThemes} theme={monacoTheme()} options={{ automaticLayout: true, readOnly: true, renderSideBySide: true, minimap: { enabled: false }, fontSize: 12, scrollBeyondLastLine: false }} /> : <div className="git-log-empty">Select a commit</div>}</main></div>
   </section></div>;
 }
 

@@ -1,6 +1,7 @@
 import Editor from "@monaco-editor/react";
 import { useEffect, useRef, useState } from "react";
 import { CoreClient } from "./client";
+import { configureMonacoThemes, monacoTheme } from "./theme";
 
 const languages: Record<string, string> = { ts: "typescript", tsx: "typescript", js: "javascript", jsx: "javascript", json: "json", html: "html", css: "css", md: "markdown", java: "java", py: "python", yaml: "yaml", yml: "yaml", http: "http", txt: "plaintext" };
 
@@ -31,5 +32,5 @@ export function DetachedEditor() {
     return () => clearTimeout(timer);
   }, [content, dirty, path, ready, scope, type]);
   if (error && !ready) return <main className="detached-error">{error}</main>;
-  return <main className="detached-editor">{error && <div className="inline-error">{error}</div>}{ready ? <Editor path={`detached/${type}/${scope ?? "workspace"}/${path}`} language={languages[path.split(".").pop()?.toLowerCase() ?? ""] ?? "plaintext"} value={content} theme="vs-dark" options={{ automaticLayout: true, minimap: { enabled: false }, fontSize: 13, scrollBeyondLastLine: false, padding: { top: 10 } }} onChange={(value) => { setContent(value ?? ""); setError(""); }} /> : <div className="empty-editor">Opening {path}...</div>}</main>;
+  return <main className="detached-editor">{error && <div className="inline-error">{error}</div>}{ready ? <Editor path={`detached/${type}/${scope ?? "workspace"}/${path}`} language={languages[path.split(".").pop()?.toLowerCase() ?? ""] ?? "plaintext"} value={content} beforeMount={configureMonacoThemes} theme={monacoTheme()} options={{ automaticLayout: true, minimap: { enabled: false }, fontSize: 13, scrollBeyondLastLine: false, padding: { top: 10 } }} onChange={(value) => { setContent(value ?? ""); setError(""); }} /> : <div className="empty-editor">Opening {path}...</div>}</main>;
 }
