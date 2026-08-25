@@ -1,7 +1,7 @@
-import { app, BrowserWindow, ipcMain, safeStorage } from "electron";
+import { app, BrowserWindow, ipcMain, nativeImage, safeStorage } from "electron";
 import { spawn } from "node:child_process";
 import { createServer, type Server } from "node:net";
-import { access, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { access, copyFile, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { Client, type ConnectConfig } from "ssh2";
@@ -14,6 +14,7 @@ type PublicState = { connections: Omit<Connection, "password">[]; workspaces: Wo
 type Runtime = { status: "idle" | "working" | "server" | "client" | "error"; message: string };
 
 const directory = path.dirname(fileURLToPath(import.meta.url));
+const appIcon = path.join(directory, "../assets/app-icon.png");
 const repository = "https://github.com/ftpud/VibeEditor";
 const repositoryBranch = "dev";
 const remoteNodeEnvironment = `export PATH="$HOME/.local/bin:$HOME/.volta/bin:$HOME/.fnm:$HOME/.nvm/versions/node/current/bin:/usr/local/bin:$PATH"; export NVM_DIR="$HOME/.nvm"; if [ -s "$NVM_DIR/nvm.sh" ]; then . "$NVM_DIR/nvm.sh"; fi; command -v npm >/dev/null 2>&1 || { echo "npm was not found on the SSH host. Install Node.js 20+ for this user or configure NVM in ~/.bashrc." >&2; exit 127; }`;
@@ -21,7 +22,10 @@ const runtimes = new Map<string, Runtime>();
 const tunnels = new Map<string, { ssh: Client; server: Server }>();
 
 app.name = "Vibe Gateway";
+app.setName("Vibe Gateway");
 app.setAppUserModelId("com.vibe-editor.gateway");
+process.title = "Vibe Gateway";
+app.commandLine.appendSwitch("class", "VibeGateway");
 
 function stateFile(): string { return path.join(app.getPath("userData"), "gateway.json"); }
 async function readState(): Promise<State> {
@@ -166,7 +170,7 @@ async function startClient(workspaceId: string): Promise<void> {
   catch { clientBuilt = false; }
   if (!clientBuilt) {
   try {
-    await execute(client, `bash -lc ${shell(`set -e; test -f ~/.vibe/packages/desktop/package.json; test -f ~/.vibe/packages/desktop/dist-electron/main.js; test -f ~/.vibe/packages/desktop/dist-renderer/index.html; cd ~/.vibe/packages/desktop; tar -czf /tmp/vibe-${workspace.id}.tar.gz package.json dist-electron dist-renderer`)}`);
+    await execute(client, `bash -lc ${shell(`set -e; test -f ~/.vibe/packages/desktop/package.json || { echo "Desktop package is missing; start the server to provision it first." >&2; exit 1; }; test -f ~/.vibe/packages/desktop/dist-electron/main.js || { echo "Desktop Electron build is missing; start the server to rebuild it first." >&2; exit 1; }; test -f ~/.vibe/packages/desktop/dist-renderer/index.html || { echo "Desktop renderer build is missing; start the server to rebuild it first." >&2; exit 1; }; cd ~/.vibe/packages/desktop; files="package.json dist-electron dist-renderer"; if [ -d assets ]; then files="$files assets"; fi; tar -czf /tmp/vibe-${workspace.id}.tar.gz $files`)}`);
     await mkdir(path.dirname(archive), { recursive: true }); await download(client, `/tmp/vibe-${workspace.id}.tar.gz`, archive);
     await execute(client, `rm -f /tmp/vibe-${workspace.id}.tar.gz`);
   } finally { client.end(); }
@@ -175,9 +179,16 @@ async function startClient(workspaceId: string): Promise<void> {
     await runLocal("tar", ["-xzf", archive, "-C", clientRoot], clientRoot); await rm(archive, { force: true });
     await writeFile(buildMarker, `${expectedMarker}\n`, "utf8");
   } else { client.end(); runtime(workspaceId, "working", "Reusing local client build..."); }
+  const localIcon = process.env.VIBE_DESKTOP_ICON;
+  if (localIcon) {
+    await mkdir(path.join(clientRoot, "assets"), { recursive: true });
+    try { await access(path.join(clientRoot, "assets", "app-icon.png")); }
+    catch { await copyFile(localIcon, path.join(clientRoot, "assets", "app-icon.png")); }
+  }
   const localPort = await createTunnel(workspaceId, connection, workspace.remotePort);
   const desktopMain = path.join(clientRoot, "dist-electron", "main.js");
-  const child = spawn(process.execPath, [desktopMain, "--host", "127.0.0.1", "--port", String(localPort)], { cwd: clientRoot, env: { ...process.env, VITE_DEV_SERVER_URL: "" }, detached: true, stdio: "ignore" });
+  const desktopExecutable = process.env.VIBE_DESKTOP_EXECUTABLE || process.execPath;
+  const child = spawn(desktopExecutable, [desktopMain, "--host", "127.0.0.1", "--port", String(localPort)], { cwd: clientRoot, env: { ...process.env, VITE_DEV_SERVER_URL: "" }, detached: true, stdio: "ignore" });
   child.unref(); runtime(workspaceId, "client", `Client connected through local port ${localPort}${clientBuilt ? " (artifacts reused)" : " (artifacts downloaded)"}`);
 }
 
@@ -200,10 +211,14 @@ ipcMain.handle("gateway:stopServer", (_event, workspaceId: string) => stopServer
 ipcMain.handle("gateway:startClient", (_event, workspaceId: string) => startClient(workspaceId));
 
 function createWindow(): void {
-  const window = new BrowserWindow({ width: 1040, height: 720, minWidth: 820, minHeight: 560, backgroundColor: "#202124", webPreferences: { preload: path.join(directory, "preload.cjs"), contextIsolation: true, nodeIntegration: false } });
+  const window = new BrowserWindow({ width: 1040, height: 720, minWidth: 820, minHeight: 560, icon: appIcon, backgroundColor: "#202124", webPreferences: { preload: path.join(directory, "preload.cjs"), contextIsolation: true, nodeIntegration: false } });
   window.removeMenu(); const devUrl = process.env.VITE_DEV_SERVER_URL;
   void (devUrl ? window.loadURL(devUrl) : window.loadFile(path.join(directory, "../dist-renderer/index.html")));
 }
-app.whenReady().then(createWindow);
+app.whenReady().then(() => {
+  app.setName("Vibe Gateway"); process.title = "Vibe Gateway";
+  if (process.platform === "darwin") app.dock.setIcon(nativeImage.createFromPath(appIcon));
+  createWindow();
+});
 app.on("window-all-closed", () => { for (const tunnel of tunnels.values()) { tunnel.server.close(); tunnel.ssh.end(); } if (process.platform !== "darwin") app.quit(); });
 app.on("activate", () => { if (!BrowserWindow.getAllWindows().length) createWindow(); });

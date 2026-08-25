@@ -13,3 +13,4 @@ coverage/
 .tools/.jre21-extract/
 .tools/*.tar.gz
 .tools/*.zip
+.electron-runtime/

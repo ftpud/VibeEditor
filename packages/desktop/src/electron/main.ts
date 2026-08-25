@@ -1,8 +1,9 @@
-import { app, BrowserWindow, clipboard, dialog, ipcMain, shell } from "electron";
+import { app, BrowserWindow, clipboard, dialog, ipcMain, nativeImage, shell } from "electron";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const directory = path.dirname(fileURLToPath(import.meta.url));
+const appIcon = path.join(directory, "../assets/app-icon.png");
 let hasDirtyTabs = false;
 let allowClose = false;
 
@@ -40,6 +41,7 @@ ipcMain.on("editor:open-window", (_event, options: unknown) => {
 function createWindow(extraQuery: Record<string, string> = {}): void {
   const window = new BrowserWindow({
     title: extraQuery.detached === "1" ? (extraQuery.path?.split("/").pop() ?? "Vibe Editor") : "Vibe Editor",
+    icon: appIcon,
     width: 1280,
     height: 800,
     minWidth: 760,
@@ -84,6 +86,10 @@ function createWindow(extraQuery: Record<string, string> = {}): void {
   void load.catch((error: unknown) => console.error("[desktop] page load failed", error));
 }
 
-app.whenReady().then(() => createWindow());
+app.whenReady().then(() => {
+  app.setName("Vibe Editor"); process.title = "Vibe Editor";
+  if (process.platform === "darwin") app.dock.setIcon(nativeImage.createFromPath(appIcon));
+  createWindow();
+});
 app.on("window-all-closed", () => { if (process.platform !== "darwin") app.quit(); });
 app.on("activate", () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
