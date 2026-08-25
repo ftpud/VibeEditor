@@ -13,6 +13,7 @@ import { JavaProjectService } from "./java.js";
 import { JdtLanguageService } from "./jdtls.js";
 import { WorkspaceTaskStore } from "./tasks.js";
 import { CodexSessionManager } from "./codex.js";
+import { CopilotSessionManager } from "./copilot.js";
 import { UsefulFilesStore } from "./useful-files.js";
 import { executeHttpRequest } from "./http.js";
 
@@ -48,10 +49,12 @@ export async function createServer(host: string, port: number, workspacePath: st
   });
   const server = new WebSocketServer({ host, port });
   const activeSessions = new Set<WebSocket>();
-  const codex = new CodexSessionManager((changedWorkspace) => {
+  const aiChanged = (changedWorkspace: string) => {
     const encoded = JSON.stringify({ type: "ai.changed", payload: { workspace: changedWorkspace } } satisfies ServerEvent);
     for (const socket of activeSessions) if (socket.readyState === WebSocket.OPEN) socket.send(encoded);
-  });
+  };
+  const codex = new CodexSessionManager(aiChanged);
+  const copilot = new CopilotSessionManager(aiChanged);
   const gitIndexWatcher = chokidar.watch(path.join(workspace, ".git", "index"), { ignoreInitial: true });
   gitIndexWatcher.on("change", () => {
     const encoded = JSON.stringify({ type: "git.changed", payload: {} } satisfies ServerEvent);
@@ -134,7 +137,7 @@ export async function createServer(host: string, port: number, workspacePath: st
           services = await servicesPromise;
           await watchSwitchedWorkspace(selected.workspace);
         }
-        const result = await handleRequest(services, tasks, codex, usefulFiles, rootWorkspace, parsed);
+        const result = await handleRequest(services, tasks, codex, copilot, usefulFiles, rootWorkspace, parsed);
         if (parsed.type === "workspace.open") activeSessions.add(socket);
         socket.send(JSON.stringify({ id, ok: true, result }));
       } catch (error) {
@@ -165,7 +168,7 @@ function parseRequest(data: RawData): Request {
   return value as Request;
 }
 
-async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStore, codex: CodexSessionManager, usefulFiles: UsefulFilesStore, rootWorkspace: string, request: Request): Promise<unknown> {
+async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStore, codex: CodexSessionManager, copilot: CopilotSessionManager, usefulFiles: UsefulFilesStore, rootWorkspace: string, request: Request): Promise<unknown> {
   const { filesystem, search, processManager, git, java, jdt, workspaceState, workspacePath } = services;
   if (request.type !== "workspace.open") filesystem.getWorkspace();
   switch (request.type) {
@@ -183,13 +186,13 @@ async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStor
       const registry = await tasks.list();
       return { workspace: workspacePath, tree: await filesystem.listTree(), options: await workspaceState.load(), ...registry };
     }
-    case "ai.get": return { session: await codex.get(workspacePath) };
-    case "ai.models": return { models: await codex.models() };
-    case "ai.send": return { session: await codex.send(workspacePath, request.payload.prompt, request.payload.model, request.payload.reasoning) };
-    case "ai.clear": return { session: await codex.clear(workspacePath) };
+    case "ai.get": return { session: await (request.payload.provider === "copilot" ? copilot : codex).get(workspacePath) };
+    case "ai.models": return { models: await (request.payload.provider === "copilot" ? copilot : codex).models() };
+    case "ai.send": return { session: await (request.payload.provider === "copilot" ? copilot : codex).send(workspacePath, request.payload.prompt, request.payload.model, request.payload.reasoning) };
+    case "ai.clear": return { session: await (request.payload.provider === "copilot" ? copilot : codex).clear(workspacePath) };
     case "ai.statuses": {
       const registry = await tasks.list();
-      const summarize = async (target: string) => { const session = await codex.get(target); const stats = await new GitService(target).diffStats(); return { status: session.status, preview: session.messages.slice().reverse().find((message) => message.role === "assistant" || message.role === "activity")?.text.replace(/\s+/g, " ").trim().slice(0, 180) ?? session.messages.at(-1)?.text.replace(/\s+/g, " ").trim().slice(0, 180) ?? "", ...stats }; };
+      const summarize = async (target: string) => { const sessions = await Promise.all([codex.get(target), copilot.get(target)]); const session = sessions.find((item) => item.status === "in_progress" || item.status === "user_prompt") ?? sessions.sort((a, b) => (b.messages.at(-1)?.timestamp ?? "").localeCompare(a.messages.at(-1)?.timestamp ?? ""))[0]!; const stats = await new GitService(target).diffStats(); return { status: session.status, preview: session.messages.slice().reverse().find((message) => message.role === "assistant" || message.role === "activity")?.text.replace(/\s+/g, " ").trim().slice(0, 180) ?? session.messages.at(-1)?.text.replace(/\s+/g, " ").trim().slice(0, 180) ?? "", ...stats }; };
       const entries = await Promise.all(registry.tasks.map(async (task) => [task.id, await summarize(tasks.taskPath(task.id))] as const));
       return { root: await summarize(rootWorkspace), tasks: Object.fromEntries(entries) };
     }

@@ -27,6 +27,7 @@ export type FileColor = "red" | "orange" | "yellow" | "green" | "blue" | "purple
 export type WorkspaceTerminalOptions = { tabs: { title: string }[]; activeTabIndex?: number; panelOpen: boolean };
 export type WorkspaceTask = { id: string; name: string; branch: string };
 export type AiStatus = "idle" | "in_progress" | "user_prompt" | "done" | "error";
+export type AiProvider = "codex" | "copilot";
 export type AiMessage = { id: string; role: "user" | "assistant" | "activity" | "error"; text: string; timestamp: string };
 export type AiSession = { threadId?: string; model: string; reasoning: string; status: AiStatus; messages: AiMessage[] };
 export type AiModel = { id: string; name: string; defaultReasoning: string; reasoningLevels: string[] };
@@ -84,10 +85,10 @@ export type ProtocolOperations = {
   "tasks.list": { payload: Record<string, never>; result: { tasks: WorkspaceTask[]; selectedTaskId?: string } };
   "tasks.create": { payload: { branch: string }; result: { task: WorkspaceTask } };
   "tasks.switch": { payload: { taskId?: string }; result: { workspace: string; tree: FileTreeNode[]; options: WorkspaceOptions; tasks: WorkspaceTask[]; selectedTaskId?: string } };
-  "ai.get": { payload: Record<string, never>; result: { session: AiSession } };
-  "ai.models": { payload: Record<string, never>; result: { models: AiModel[] } };
-  "ai.send": { payload: { prompt: string; model: string; reasoning: string }; result: { session: AiSession } };
-  "ai.clear": { payload: Record<string, never>; result: { session: AiSession } };
+  "ai.get": { payload: { provider?: AiProvider }; result: { session: AiSession } };
+  "ai.models": { payload: { provider?: AiProvider }; result: { models: AiModel[] } };
+  "ai.send": { payload: { provider?: AiProvider; prompt: string; model: string; reasoning: string }; result: { session: AiSession } };
+  "ai.clear": { payload: { provider?: AiProvider }; result: { session: AiSession } };
   "ai.statuses": { payload: Record<string, never>; result: { root: AiTaskSummary; tasks: Record<string, AiTaskSummary> } };
   "useful.list": { payload: Record<string, never>; result: { files: UsefulFile[] } };
   "useful.read": { payload: { scope: UsefulFileScope; name: string }; result: { content: string } };

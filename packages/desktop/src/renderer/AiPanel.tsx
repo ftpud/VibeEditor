@@ -1,22 +1,32 @@
-import { Send, Trash2 } from "lucide-react";
+import { Paperclip, Send, Trash2, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import type { AiModel, AiSession } from "@remote-ide/protocol";
+import type { AiModel, AiProvider, AiSession } from "@remote-ide/protocol";
 
-export function AiPanel({ session, models, onSend, onClear }: { session: AiSession; models: AiModel[]; onSend(prompt: string, model: string, reasoning: string): Promise<void>; onClear(): void }) {
+export type AiAttachment = { id: string; name: string; path?: string; content?: string };
+
+export function AiPanel({ provider, session, models, attachments, onProviderChange, onAttachmentsChange, onSend, onClear }: { provider: AiProvider; session: AiSession; models: AiModel[]; attachments: AiAttachment[]; onProviderChange(provider: AiProvider): void; onAttachmentsChange(attachments: AiAttachment[]): void; onSend(prompt: string, model: string, reasoning: string, attachments: AiAttachment[]): Promise<void>; onClear(): void }) {
   const [prompt, setPrompt] = useState("");
   const [model, setModel] = useState(session.model);
   const [reasoning, setReasoning] = useState(session.reasoning);
   const endRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   useEffect(() => { setModel(session.model); setReasoning(session.reasoning); }, [session.model, session.reasoning]);
   useEffect(() => { endRef.current?.scrollIntoView({ block: "end" }); }, [session.messages.length, session.status]);
   const selectedModel = useMemo(() => models.find((item) => item.id === model) ?? models[0], [model, models]);
   useEffect(() => { if (selectedModel && !selectedModel.reasoningLevels.includes(reasoning)) setReasoning(selectedModel.defaultReasoning); }, [reasoning, selectedModel]);
   const running = session.status === "in_progress";
-  const send = async () => { if (!prompt.trim() || running) return; const value = prompt; setPrompt(""); try { await onSend(value, model, reasoning); } catch { setPrompt(value); } };
+  const send = async () => { if ((!prompt.trim() && attachments.length === 0) || running) return; const value = prompt; setPrompt(""); try { await onSend(value, model, reasoning, attachments); onAttachmentsChange([]); } catch { setPrompt(value); } };
+  const addFiles = async (files: FileList | null) => {
+    if (!files) return;
+    const added = await Promise.all([...files].map(async (file) => ({ id: crypto.randomUUID(), name: file.name, content: await file.text() })));
+    onAttachmentsChange([...attachments, ...added]);
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  };
   return <div className="ai-panel">
     <div className="ai-controls">
+      <select aria-label="AI provider" value={provider} disabled={running} onChange={(event) => onProviderChange(event.target.value as AiProvider)}><option value="codex">Codex</option><option value="copilot">Copilot CLI</option></select>
       <select aria-label="Codex model" value={model} onChange={(event) => setModel(event.target.value)}>{models.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select>
       <select aria-label="Reasoning effort" value={reasoning} onChange={(event) => setReasoning(event.target.value)}>{(selectedModel?.reasoningLevels ?? [reasoning]).map((level) => <option key={level} value={level}>{level}</option>)}</select>
       <button title="Clear Codex context" disabled={running || session.messages.length === 0} onClick={onClear}><Trash2 size={14} /></button>
@@ -28,8 +38,9 @@ export function AiPanel({ session, models, onSend, onClear }: { session: AiSessi
       <div ref={endRef} />
     </div>
     <form className="ai-composer" onSubmit={(event) => { event.preventDefault(); void send(); }}>
+      {attachments.length > 0 && <div className="ai-attachments">{attachments.map((attachment) => <span className="ai-attachment" key={attachment.id} title={attachment.path ?? attachment.name}><span>{attachment.path ?? attachment.name}</span><button type="button" title={`Remove ${attachment.name}`} onClick={() => onAttachmentsChange(attachments.filter((item) => item.id !== attachment.id))}><X size={12} /></button></span>)}</div>}
       <textarea value={prompt} disabled={running} placeholder="Ask Codex..." onChange={(event) => setPrompt(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void send(); } }} />
-      <button title="Send prompt" disabled={running || !prompt.trim()}><Send size={15} /></button>
+      <div className="ai-composer-actions"><input ref={fileInputRef} type="file" multiple onChange={(event) => void addFiles(event.target.files)} /><button type="button" title="Attach files" disabled={running} onClick={() => fileInputRef.current?.click()}><Paperclip size={15} /></button><button title="Send prompt" disabled={running || (!prompt.trim() && attachments.length === 0)}><Send size={15} /></button></div>
     </form>
   </div>;
 }

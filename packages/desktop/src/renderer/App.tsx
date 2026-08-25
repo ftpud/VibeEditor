@@ -1,7 +1,7 @@
 import Editor, { DiffEditor, type Monaco } from "@monaco-editor/react";
 import { ArrowUpRight, Bot, Braces, Bug, CaseSensitive, Check, ChevronDown, ChevronRight, CircleAlert, Coffee, Columns2, Eye, File, FileCode2, FileDiff, FileJson, FileText, Folder, FolderOpen, GitBranch, GitCompareArrows, Hash, Library, ListTodo, ListTree, LogOut, Package, Palette, Pencil, Play, Plus, RefreshCw, Save, Search, Square, SquareTerminal, Trash2, X } from "lucide-react";
 import { isValidElement, useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
-import type { AiModel, AiSession, AiStatus, AiTaskSummary, FileColor, FileTreeNode, GitDiffHunk, GitStatusEntry, HttpResponse, JavaBreakpoint, JavaDebugState, JavaDiagnostic, JavaLspLocation, JavaMainClass, JavaProjectNode, JavaProjectOptions, JavaTypeSuggestion, SearchResult, UsefulFile, UsefulFileScope, WorkspaceOptions, WorkspaceTask } from "@remote-ide/protocol";
+import type { AiModel, AiProvider, AiSession, AiStatus, AiTaskSummary, FileColor, FileTreeNode, GitDiffHunk, GitStatusEntry, HttpResponse, JavaBreakpoint, JavaDebugState, JavaDiagnostic, JavaLspLocation, JavaMainClass, JavaProjectNode, JavaProjectOptions, JavaTypeSuggestion, SearchResult, UsefulFile, UsefulFileScope, WorkspaceOptions, WorkspaceTask } from "@remote-ide/protocol";
 import type { editor } from "monaco-editor";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -12,7 +12,7 @@ import { JavaPanel } from "./JavaPanel";
 import { ProblemsPanel } from "./ProblemsPanel";
 import { GitLogPanel } from "./GitLogPanel";
 import { GitHistoryDialog } from "./GitHistoryDialog";
-import { AiPanel } from "./AiPanel";
+import { AiPanel, type AiAttachment } from "./AiPanel";
 
 type ConnectionStatus = "idle" | "connecting" | "connected" | "failed" | "disconnected" | "workspace-error";
 const languageByExtension: Record<string, string> = {
@@ -64,18 +64,21 @@ export function App() {
   const [explorerWidth, setExplorerWidth] = useState(260);
   const [tasksWidth, setTasksWidth] = useState(300);
   const [tasksOpen, setTasksOpen] = useState(true);
+  const [rightView, setRightView] = useState<"tasks" | "ai">("tasks");
   const [showCreateTaskDialog, setShowCreateTaskDialog] = useState(false);
   const [tasks, setTasks] = useState<WorkspaceTask[]>([]);
   const [selectedTaskId, setSelectedTaskId] = useState<string>();
   const [taskSwitching, setTaskSwitching] = useState(false);
   const [terminalHeight, setTerminalHeight] = useState(240);
-  const [sideView, setSideView] = useState<"project" | "git" | "java" | "ai" | "useful">("project");
+  const [sideView, setSideView] = useState<"project" | "git" | "java" | "useful">("project");
   const [usefulFiles, setUsefulFiles] = useState<UsefulFile[]>([]);
   const [fileColors, setFileColors] = useState<Record<string, FileColor>>({});
   const [usefulDialog, setUsefulDialog] = useState<{ mode: "create" | "rename"; scope: UsefulFileScope; file?: UsefulFile }>();
   const [activeWorkspace, setActiveWorkspace] = useState("");
   const [aiSession, setAiSession] = useState<AiSession>({ model: "gpt-5.6-sol", reasoning: "low", status: "idle", messages: [] });
+  const [aiProvider, setAiProvider] = useState<AiProvider>("codex");
   const [aiModels, setAiModels] = useState<AiModel[]>([]);
+  const [aiAttachments, setAiAttachments] = useState<Record<string, AiAttachment[]>>({});
   const emptyAiSummary: AiTaskSummary = { status: "idle", preview: "", additions: 0, deletions: 0 };
   const [aiStatuses, setAiStatuses] = useState<{ root: AiTaskSummary; tasks: Record<string, AiTaskSummary> }>({ root: emptyAiSummary, tasks: {} });
   const [activeGitHunks, setActiveGitHunks] = useState<GitDiffHunk[]>([]);
@@ -108,6 +111,7 @@ export function App() {
   const [searchScope, setSearchScope] = useState<string>();
   const [pendingNavigation, setPendingNavigation] = useState<{ result: SearchResult; matchLength: number }>();
   const clientRef = useRef<CoreClient>();
+  const aiProviderRef = useRef<AiProvider>("codex");
   const didAutoConnect = useRef(false);
   const layoutRef = useRef(layout);
   const treeRefreshTimer = useRef<ReturnType<typeof setTimeout>>();
@@ -202,7 +206,7 @@ export function App() {
 
   const refreshAi = useCallback(async (client = clientRef.current) => {
     if (!client) return;
-    const [session, statuses] = await Promise.all([client.request("ai.get", {}), client.request("ai.statuses", {})]);
+    const [session, statuses] = await Promise.all([client.request("ai.get", { provider: aiProviderRef.current }), client.request("ai.statuses", {})]);
     setAiSession(session.session); setAiStatuses(statuses);
   }, []);
   const refreshUsefulFiles = useCallback(async (client = clientRef.current) => { if (client) setUsefulFiles((await client.request("useful.list", {})).files); }, []);
@@ -269,7 +273,7 @@ export function App() {
       }
       if (event.type === "ai.changed") {
         void client.request("ai.statuses", {}).then(setAiStatuses).catch(() => undefined);
-        if (event.payload.workspace === activeWorkspaceRef.current) void client.request("ai.get", {}).then((result) => setAiSession(result.session)).catch(() => undefined);
+        if (event.payload.workspace === activeWorkspaceRef.current) void client.request("ai.get", { provider: aiProviderRef.current }).then((result) => setAiSession(result.session)).catch(() => undefined);
         return;
       }
       if (gitRefreshTimer.current) clearTimeout(gitRefreshTimer.current);
@@ -338,7 +342,7 @@ export function App() {
         await restoreWorkspaceOptions(result.options, client);
         const taskResult = await client.request("tasks.list", {});
         setTasks(taskResult.tasks); setSelectedTaskId(taskResult.selectedTaskId);
-        setAiModels((await client.request("ai.models", {})).models);
+        setAiModels((await client.request("ai.models", { provider: aiProviderRef.current })).models);
         await refreshAi(client);
         await refreshUsefulFiles(client);
         setTree(result.tree); setStatus("connected"); setStatusMessage("");
@@ -545,15 +549,37 @@ export function App() {
     } finally { setTaskSwitching(false); }
   }, [fileColors, refreshAi, refreshGit, restoreWorkspaceOptions, saveFileTab, selectedTaskId]);
 
-  const sendAiPrompt = useCallback(async (prompt: string, model: string, reasoning: string) => {
+  const currentAiAttachmentKey = selectedTaskId ?? "root";
+  const currentAiAttachments = aiAttachments[currentAiAttachmentKey] ?? [];
+  const updateAiAttachments = useCallback((attachments: AiAttachment[]) => setAiAttachments((current) => ({ ...current, [selectedTaskId ?? "root"]: attachments })), [selectedTaskId]);
+  const switchAiProvider = useCallback(async (provider: AiProvider) => {
+    if (!clientRef.current || provider === aiProviderRef.current) return;
+    aiProviderRef.current = provider; setAiProvider(provider);
+    try {
+      const [session, models] = await Promise.all([clientRef.current.request("ai.get", { provider }), clientRef.current.request("ai.models", { provider })]);
+      setAiSession(session.session); setAiModels(models.models);
+    } catch (error) { setStatusMessage(error instanceof Error ? error.message : "Could not switch AI provider"); }
+  }, []);
+  const attachWorkspaceFile = useCallback((path: string) => {
+    const key = selectedTaskId ?? "root";
+    setAiAttachments((current) => {
+      const attachments = current[key] ?? [];
+      if (attachments.some((item) => item.path === path)) return current;
+      return { ...current, [key]: [...attachments, { id: `workspace:${path}`, name: path.split("/").pop() ?? path, path }] };
+    });
+    setRightView("ai"); setTasksOpen(true); void refreshAi(); setEditorGitMenu(undefined);
+  }, [refreshAi, selectedTaskId]);
+  const sendAiPrompt = useCallback(async (prompt: string, model: string, reasoning: string, attachments: AiAttachment[]) => {
     if (!clientRef.current) return;
-    try { setAiSession((await clientRef.current.request("ai.send", { prompt, model, reasoning })).session); await refreshAi(); }
+    const attachmentContext = attachments.map((attachment) => attachment.path ? `- Workspace file: ${attachment.path}` : `- Attached file: ${attachment.name}\n\n\`\`\`\n${attachment.content ?? ""}\n\`\`\``).join("\n");
+    const fullPrompt = attachmentContext ? `${prompt.trim()}\n\nAttached files:\n${attachmentContext}`.trim() : prompt;
+    try { setAiSession((await clientRef.current.request("ai.send", { provider: aiProviderRef.current, prompt: fullPrompt, model, reasoning })).session); await refreshAi(); }
     catch (error) { setStatusMessage(error instanceof Error ? error.message : "Could not start Codex"); throw error; }
   }, [refreshAi]);
 
   const clearAiContext = useCallback(async () => {
     if (!clientRef.current || !window.confirm("Clear the Codex conversation and start a new context for this task?")) return;
-    try { setAiSession((await clientRef.current.request("ai.clear", {})).session); await refreshAi(); }
+    try { setAiSession((await clientRef.current.request("ai.clear", { provider: aiProviderRef.current })).session); await refreshAi(); }
     catch (error) { setStatusMessage(error instanceof Error ? error.message : "Could not clear Codex context"); }
   }, [refreshAi]);
 
@@ -987,7 +1013,6 @@ export function App() {
       <nav className="tool-stripe" aria-label="Tool windows">
         <button className={`tool-stripe-button ${sideView === "project" ? "active" : ""}`} title="Project" onClick={() => setSideView("project")}><Folder size={15} /><span>Project</span></button>
         <button className={`tool-stripe-button ${sideView === "git" ? "active" : ""}`} title="Git changes" onClick={() => { setSideView("git"); void refreshGit(); }}><GitBranch size={15} /><span>Git</span>{gitEntries.length > 0 && <span className="tool-badge">{gitEntries.length > 99 ? "99+" : gitEntries.length}</span>}</button>
-        <button className={`tool-stripe-button ${sideView === "ai" ? "active" : ""}`} title="AI" onClick={() => { setSideView("ai"); void refreshAi(); }}><Bot size={15} /><span>AI</span>{aiSession.status === "in_progress" && <span className="tool-badge">...</span>}</button>
         <button className={`tool-stripe-button ${sideView === "useful" ? "active" : ""}`} title="Useful Files" onClick={() => { setSideView("useful"); void refreshUsefulFiles(); }}><Library size={15} /><span>Useful</span></button>
         {javaOptions && <button className={`tool-stripe-button ${sideView === "java" ? "active" : ""}`} title="Java project" onClick={() => { setSideView("java"); void refreshJavaTree(); }}><Coffee size={15} /><span>Java</span></button>}
       </nav>
@@ -1000,9 +1025,6 @@ export function App() {
           <header className="panel-header"><span>Git Changes</span><button title="Refresh Git status" onClick={() => void refreshGit()}><RefreshCw size={14} /></button></header>
           <div className="git-branch"><GitBranch size={13} /><span>{gitBranch}</span></div>
           <GitChangesView entries={gitEntries} error={gitError} activePath={activeTab?.path} onOpenDiff={openDiff} onOpenFile={(entry) => void openFile({ name: entry.path.split("/").pop() ?? entry.path, path: entry.path, type: "file" })} onContextMenu={(event, entry) => { event.preventDefault(); setGitRollbackMenu({ x: Math.min(event.clientX, window.innerWidth - 220), y: Math.min(event.clientY, window.innerHeight - 50), entry }); }} />
-        </> : sideView === "ai" ? <>
-          <header className="panel-header"><span>AI</span><span className={`ai-status ${aiSession.status}`}>{formatAiStatus(aiSession.status)}</span></header>
-          <AiPanel session={aiSession} models={aiModels} onSend={sendAiPrompt} onClear={() => void clearAiContext()} />
         </> : sideView === "useful" ? <>
           <header className="panel-header"><span>Useful Files</span><button title="Refresh useful files" onClick={() => void refreshUsefulFiles()}><RefreshCw size={14} /></button></header>
           <div className="useful-files-list"><UsefulFileSection title="Global" scope="global" files={usefulFiles} activeTab={activeTab} onOpen={openUsefulFile} onCreate={(scope) => setUsefulDialog({ mode: "create", scope })} onRename={(file) => setUsefulDialog({ mode: "rename", scope: file.scope, file })} onDelete={(file) => void deleteUsefulFile(file)} /><UsefulFileSection title="Local" scope="local" files={usefulFiles} activeTab={activeTab} onOpen={openUsefulFile} onCreate={(scope) => setUsefulDialog({ mode: "create", scope })} onRename={(file) => setUsefulDialog({ mode: "rename", scope: file.scope, file })} onDelete={(file) => void deleteUsefulFile(file)} /></div>
@@ -1054,14 +1076,14 @@ export function App() {
       </main>
       {tasksOpen && <><div className="right-resize-handle" onPointerDown={beginTasksResize} />
       <aside className="tasks-panel" style={{ width: tasksWidth }}>
-        <header className="panel-header"><span>Tasks</span><button title="Create task" disabled={taskSwitching} onClick={() => setShowCreateTaskDialog(true)}><Plus size={15} /></button></header>
-        <div className="tasks-list">
+        {rightView === "tasks" ? <><header className="panel-header"><span>Tasks</span><button title="Create task" disabled={taskSwitching} onClick={() => setShowCreateTaskDialog(true)}><Plus size={15} /></button></header><div className="tasks-list">
           <TaskRow icon={<Folder size={15} />} name="Root workspace" summary={aiStatuses.root} selected={selectedTaskId === undefined} disabled={taskSwitching} onClick={() => void switchTask()} />
           {tasks.map((task) => <TaskRow key={task.id} icon={<ListTodo size={15} />} name={task.name} summary={aiStatuses.tasks[task.id] ?? emptyAiSummary} selected={selectedTaskId === task.id} disabled={taskSwitching} onClick={() => void switchTask(task.id)} />)}
-        </div>
+        </div></> : <><header className="panel-header"><span>AI</span><span className={`ai-status ${aiSession.status}`}>{formatAiStatus(aiSession.status)}</span></header><AiPanel provider={aiProvider} session={aiSession} models={aiModels} attachments={currentAiAttachments} onProviderChange={(provider) => void switchAiProvider(provider)} onAttachmentsChange={updateAiAttachments} onSend={sendAiPrompt} onClear={() => void clearAiContext()} /></>}
       </aside></>}
       <nav className="right-tool-stripe" aria-label="Right tool windows">
-        <button className={`tool-stripe-button right ${tasksOpen ? "active" : ""}`} title={tasksOpen ? "Hide Tasks" : "Show Tasks"} onClick={() => setTasksOpen((open) => !open)}><ListTodo size={15} /><span>Tasks</span>{tasks.length > 0 && <span className="tool-badge">{tasks.length > 99 ? "99+" : tasks.length}</span>}</button>
+        <button className={`tool-stripe-button right ${tasksOpen && rightView === "ai" ? "active" : ""}`} title={tasksOpen && rightView === "ai" ? "Hide AI" : "Show AI"} onClick={() => { if (tasksOpen && rightView === "ai") setTasksOpen(false); else { setRightView("ai"); setTasksOpen(true); void refreshAi(); } }}><Bot size={15} /><span>AI</span>{aiSession.status === "in_progress" && <span className="tool-badge">...</span>}</button>
+        <button className={`tool-stripe-button right ${tasksOpen && rightView === "tasks" ? "active" : ""}`} title={tasksOpen && rightView === "tasks" ? "Hide Tasks" : "Show Tasks"} onClick={() => { if (tasksOpen && rightView === "tasks") setTasksOpen(false); else { setRightView("tasks"); setTasksOpen(true); } }}><ListTodo size={15} /><span>Tasks</span>{tasks.length > 0 && <span className="tool-badge">{tasks.length > 99 ? "99+" : tasks.length}</span>}</button>
       </nav>
     </div>
     {layout.panels.some((panel) => panel.type === "terminal") && <TerminalPanel client={clientRef.current!} group={layout.terminalGroup} height={terminalHeight} onActivate={(id) => updateTerminalGroup((current) => ({ ...current, activeTabId: id }))} onCreate={() => void createTerminal()} onClose={closeTerminal} onResizeStart={beginTerminalResize} registerWriter={registerTerminalWriter} />}
@@ -1082,7 +1104,7 @@ export function App() {
         {treeContextMenu.node.path && <div className="context-submenu-trigger"><button><Palette size={14} /><span>Color</span><ChevronRight size={13} /></button><div className="context-menu context-submenu color-submenu">{fileColorChoices.map((color) => <button key={color.id} onClick={() => { setFileColors((current) => ({ ...current, [treeContextMenu.node.path]: color.id })); setTreeContextMenu(undefined); }}><span className={`file-color-swatch ${color.id}`} /><span>{color.label}</span>{fileColors[treeContextMenu.node.path] === color.id && <Check size={13} />}</button>)}<button disabled={!fileColors[treeContextMenu.node.path]} onClick={() => { setFileColors((current) => { const next = { ...current }; delete next[treeContextMenu.node.path]; return next; }); setTreeContextMenu(undefined); }}><X size={14} /><span>Clear Color</span></button></div></div>}
       </div>
     </div>}
-    {editorGitMenu && <div className="context-menu-layer" onMouseDown={() => setEditorGitMenu(undefined)}><div className="context-menu editor-git-menu" style={{ left: editorGitMenu.x, top: editorGitMenu.y }} onMouseDown={(event) => event.stopPropagation()}><div className="context-submenu-trigger"><button><GitBranch size={14} /><span>Git</span><ChevronRight size={13} /></button><div className="context-menu context-submenu"><button onClick={() => { setGitHistory({ path: editorGitMenu.path }); setEditorGitMenu(undefined); }}><FileDiff size={14} /><span>Show file changes</span></button><button disabled={editorGitMenu.startLine === undefined} onClick={() => { setGitHistory({ path: editorGitMenu.path, startLine: editorGitMenu.startLine, endLine: editorGitMenu.endLine }); setEditorGitMenu(undefined); }}><ListTree size={14} /><span>Show selection changes</span></button></div></div></div></div>}
+    {editorGitMenu && <div className="context-menu-layer" onMouseDown={() => setEditorGitMenu(undefined)}><div className="context-menu editor-git-menu" style={{ left: editorGitMenu.x, top: editorGitMenu.y }} onMouseDown={(event) => event.stopPropagation()}><button onClick={() => attachWorkspaceFile(editorGitMenu.path)}><Bot size={14} /><span>Attach to AI</span></button><div className="context-submenu-trigger"><button><GitBranch size={14} /><span>Git</span><ChevronRight size={13} /></button><div className="context-menu context-submenu"><button onClick={() => { setGitHistory({ path: editorGitMenu.path }); setEditorGitMenu(undefined); }}><FileDiff size={14} /><span>Show file changes</span></button><button disabled={editorGitMenu.startLine === undefined} onClick={() => { setGitHistory({ path: editorGitMenu.path, startLine: editorGitMenu.startLine, endLine: editorGitMenu.endLine }); setEditorGitMenu(undefined); }}><ListTree size={14} /><span>Show selection changes</span></button></div></div></div></div>}
     {gitRollbackMenu && <div className="context-menu-layer" onMouseDown={() => setGitRollbackMenu(undefined)}><div className="context-menu" style={{ left: gitRollbackMenu.x, top: gitRollbackMenu.y }} onMouseDown={(event) => event.stopPropagation()}><button className="danger" onClick={() => void rollbackFile(gitRollbackMenu.entry)}><RefreshCw size={14} /><span>Rollback</span></button></div></div>}
     {tabContextMenu && <div className="context-menu-layer" onMouseDown={() => setTabContextMenu(undefined)}><div className="context-menu tab-context-menu" style={{ left: tabContextMenu.x, top: tabContextMenu.y }} onMouseDown={(event) => event.stopPropagation()}><button onClick={() => closeTabs(tabContextMenu.tab, "all")}><X size={14} /><span>Close All</span></button><button disabled={group.tabs.findIndex((tab) => tab.id === tabContextMenu.tab.id) === group.tabs.length - 1} onClick={() => closeTabs(tabContextMenu.tab, "right")}><ArrowUpRight className="close-right-icon" size={14} /><span>Close All to the Right</span></button><button disabled={tabContextMenu.tab.type === "diff"} onClick={() => void openTabInWindow(tabContextMenu.tab)}><Columns2 size={14} /><span>Open in New Window</span></button></div></div>}
     {searchScope !== undefined && <FindInFilesDialog client={clientRef.current!} scope={searchScope} onClose={() => setSearchScope(undefined)} onNavigate={(result, matchLength) => void navigateToSearchResult(result, matchLength)} />}
