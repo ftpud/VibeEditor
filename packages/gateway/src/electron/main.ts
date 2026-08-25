@@ -130,8 +130,14 @@ async function download(client: Client, remote: string, local: string): Promise<
 }
 function runLocal(command: string, args: string[], cwd: string, env = process.env): Promise<void> {
   return new Promise((resolve, reject) => {
-    const executable = process.platform === "win32" ? command === "npm" ? "npm.cmd" : command === "tar" ? "tar.exe" : command : command;
-    const child = spawn(executable, args, { cwd, env, stdio: "inherit", shell: false });
+    let executable = command; let commandArgs = args;
+    if (process.platform === "win32" && command === "tar") executable = "tar.exe";
+    if (process.platform === "win32" && command === "npm") {
+      const npmCli = process.env.npm_execpath; const node = process.env.npm_node_execpath;
+      if (npmCli && node) { executable = node; commandArgs = [npmCli, ...args]; }
+      else { executable = process.env.ComSpec ?? "cmd.exe"; commandArgs = ["/d", "/s", "/c", "npm", ...args]; }
+    }
+    const child = spawn(executable, commandArgs, { cwd, env, stdio: "inherit", shell: false });
     child.on("error", reject); child.on("close", (code) => code === 0 ? resolve() : reject(new Error(`${executable} exited with ${code}`)));
   });
 }
