@@ -1,6 +1,6 @@
 import { DiffEditor } from "@monaco-editor/react";
 import { ChevronDown, ChevronRight, FileDiff, GitBranch, GitCompareArrows, RefreshCw, Search } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { GitBranch as Branch, GitCommit, GitCommitFile } from "@remote-ide/protocol";
 import type { CoreClient } from "./client";
 import { GitCompareDialog } from "./GitCompareDialog";
@@ -21,7 +21,9 @@ export function GitLogPanel({ client, height, onResizeStart }: Props) {
   const [query, setQuery] = useState("");
   const [menu, setMenu] = useState<{ x: number; y: number; reference: string; label: string; path?: string }>();
   const [compare, setCompare] = useState<{ reference: string; label: string; path?: string }>();
+  const [hoveredLane, setHoveredLane] = useState<string>();
   const filteredCommits = commits.filter((item) => `${item.subject} ${item.shortHash} ${item.hash} ${item.author} ${(item.refs ?? []).join(" ")}`.toLowerCase().includes(query.trim().toLowerCase()));
+  const graph = useMemo(() => buildCommitGraph(commits), [commits]);
 
   const loadBranches = async () => {
     setLoading(true);
@@ -55,11 +57,61 @@ export function GitLogPanel({ client, height, onResizeStart }: Props) {
   return <section className="git-log-panel" style={{ height }}>
     <div className="terminal-resize-handle" onPointerDown={onResizeStart} />
     <aside className="git-log-branches"><header><span>Branches</span><button title="Refresh branches" disabled={loading} onClick={() => void loadBranches()}><RefreshCw size={13} /></button></header><BranchGroup title="Local" branches={branches.filter((item) => !item.remote)} selected={branch} onSelect={setBranch} onContextMenu={(event, item) => { event.preventDefault(); setMenu({ x: event.clientX, y: event.clientY, reference: item.name, label: item.name }); }} /><BranchGroup title="Remote" branches={branches.filter((item) => item.remote)} selected={branch} onSelect={setBranch} onContextMenu={(event, item) => { event.preventDefault(); setMenu({ x: event.clientX, y: event.clientY, reference: item.name, label: item.name }); }} /></aside>
-    <section className="git-log-commits"><header><span>Log {branch}</span><label className="git-commit-search"><Search size={12} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search commits" /></label></header><div>{filteredCommits.map((item) => <button className={commit?.hash === item.hash ? "selected" : ""} key={item.hash} onClick={() => void selectCommit(item)} onContextMenu={(event) => { event.preventDefault(); setMenu({ x: event.clientX, y: event.clientY, reference: item.hash, label: `${item.shortHash} ${item.subject}` }); }}><pre className="git-commit-graph" title={`${item.parents?.length ?? 0} parent${item.parents?.length === 1 ? "" : "s"}`}>{item.graph ?? "*"}</pre><span className="commit-subject"><span>{item.subject}</span>{item.refs?.map((ref) => <small className="commit-ref" key={ref}>{ref}</small>)}</span><span className="commit-meta">{item.shortHash} · {item.author}</span><time>{new Date(item.date).toLocaleString()}</time></button>)}</div></section>
+    <section className="git-log-commits"><header><span>Log {branch}</span><label className="git-commit-search"><Search size={12} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search commits" /></label></header><div>{filteredCommits.map((item) => <button className={commit?.hash === item.hash ? "selected" : ""} key={item.hash} onClick={() => void selectCommit(item)} onContextMenu={(event) => { event.preventDefault(); setMenu({ x: event.clientX, y: event.clientY, reference: item.hash, label: `${item.shortHash} ${item.subject}` }); }}><CommitGraph row={graph.rows.get(item.hash)} width={graph.width} hoveredLane={hoveredLane} onHover={setHoveredLane} /><span className="commit-subject"><span>{item.subject}</span>{item.refs?.map((ref) => <small className="commit-ref" key={ref}>{ref}</small>)}</span><span className="commit-meta">{item.shortHash} · {item.author}</span><time>{new Date(item.date).toLocaleString()}</time></button>)}</div></section>
     <section className="git-log-details"><header>{commit ? <><span>{commit.subject}</span><code>{commit.shortHash}</code></> : <span>Commit details</span>}</header>{error && <div className="git-log-error">{error}</div>}<div className="commit-files">{files.map((item) => <button className={file?.path === item.path ? "selected" : ""} key={`${item.status}:${item.path}`} onClick={() => void selectFile(item)} onContextMenu={(event) => { event.preventDefault(); if (commit) setMenu({ x: event.clientX, y: event.clientY, reference: commit.hash, label: `${commit.shortHash} · ${item.path}`, path: item.path }); }}><FileDiff size={13} /><span>{item.path}</span><code>{item.status}</code></button>)}</div><div className="commit-diff">{file && diff ? <DiffEditor original={diff.originalContent} modified={diff.modifiedContent} language={languageFor(file.path)} beforeMount={configureMonacoThemes} theme={monacoTheme()} options={{ automaticLayout: true, readOnly: true, renderSideBySide: true, minimap: { enabled: false }, fontSize: 11, scrollBeyondLastLine: false }} /> : <div className="git-log-empty">{commit ? "Select a changed file" : "Select a commit"}</div>}</div></section>
     {menu && <div className="context-menu-layer" onMouseDown={() => setMenu(undefined)}><div className="context-menu" style={{ left: Math.min(menu.x, window.innerWidth - 220), top: Math.min(menu.y, window.innerHeight - 50) }} onMouseDown={(event) => event.stopPropagation()}><button onClick={() => { setCompare({ reference: menu.reference, label: menu.label, ...(menu.path ? { path: menu.path } : {}) }); setMenu(undefined); }}><GitCompareArrows size={14} /><span>Compare with Local</span></button></div></div>}
     {compare && <GitCompareDialog client={client} reference={compare.reference} label={compare.label} path={compare.path} onClose={() => setCompare(undefined)} />}
   </section>;
+}
+
+type GraphLane = { id: string; color: string; commit: string; label?: string };
+type GraphSegment = { lane: GraphLane; path: string };
+type CommitGraphRow = { segments: GraphSegment[]; current: GraphLane; currentX: number; lanes: number };
+
+const graphColors = ["#57a6ff", "#d48be8", "#62c58b", "#e7a85c", "#df7080", "#7fc8d6", "#a8b86a", "#9d91f3"];
+const graphX = (index: number) => 10 + index * 15;
+
+function buildCommitGraph(commits: GitCommit[]): { rows: Map<string, CommitGraphRow>; width: number } {
+  let lanes: GraphLane[] = []; let sequence = 0; let maximumLanes = 1;
+  const rows = new Map<string, CommitGraphRow>();
+  const createLane = (commit: string): GraphLane => { const index = sequence++; return { id: `git-lane-${index}`, color: graphColors[index % graphColors.length]!, commit }; };
+  for (const commit of commits) {
+    let currentIndex = lanes.findIndex((lane) => lane.commit === commit.hash);
+    if (currentIndex < 0) { lanes.unshift(createLane(commit.hash)); currentIndex = 0; }
+    const before = [...lanes]; const current = before[currentIndex]!;
+    if (commit.refs?.length) current.label = commit.refs.join(", ");
+    const after = before.filter((_, index) => index !== currentIndex);
+    const targets: { lane: GraphLane; index: number }[] = [];
+    for (const [parentIndex, parent] of (commit.parents ?? []).entries()) {
+      let targetIndex = after.findIndex((lane) => lane.commit === parent);
+      let target = targetIndex >= 0 ? after[targetIndex]! : undefined;
+      if (!target) {
+        target = parentIndex === 0 ? { ...current, commit: parent } : createLane(parent);
+        targetIndex = Math.min(currentIndex + parentIndex, after.length);
+        after.splice(targetIndex, 0, target);
+      }
+      targets.push({ lane: target, index: targetIndex });
+    }
+    const segments: GraphSegment[] = [];
+    for (const [index, lane] of before.entries()) {
+      if (index === currentIndex) { segments.push({ lane, path: `M ${graphX(index)} 0 L ${graphX(index)} 24` }); continue; }
+      const nextIndex = after.findIndex((candidate) => candidate.id === lane.id);
+      if (nextIndex >= 0) segments.push({ lane, path: `M ${graphX(index)} 0 C ${graphX(index)} 16, ${graphX(nextIndex)} 32, ${graphX(nextIndex)} 48` });
+    }
+    for (const target of targets) segments.push({ lane: target.lane, path: `M ${graphX(currentIndex)} 24 C ${graphX(currentIndex)} 32, ${graphX(target.index)} 40, ${graphX(target.index)} 48` });
+    maximumLanes = Math.max(maximumLanes, before.length, after.length);
+    rows.set(commit.hash, { segments, current, currentX: graphX(currentIndex), lanes: Math.max(before.length, after.length) });
+    lanes = after;
+  }
+  return { rows, width: Math.min(132, graphX(maximumLanes - 1) + 10) };
+}
+
+function CommitGraph({ row, width, hoveredLane, onHover }: { row?: CommitGraphRow; width: number; hoveredLane?: string; onHover(id?: string): void }) {
+  if (!row) return <span className="git-graph-placeholder" />;
+  return <svg className={`git-commit-graph ${hoveredLane ? "has-highlight" : ""}`} style={{ width }} viewBox={`0 0 ${width} 48`} preserveAspectRatio="none" onMouseLeave={() => onHover(undefined)} aria-label={row.current.label ? `Git graph: ${row.current.label}` : "Git commit graph"}>
+    {row.segments.map((segment, index) => <g className={hoveredLane === segment.lane.id ? "highlighted" : hoveredLane ? "dimmed" : ""} key={`${segment.lane.id}:${index}`} onMouseEnter={() => onHover(segment.lane.id)}><title>{segment.lane.label ?? "Branch lane"}</title><path className="git-graph-hit" d={segment.path} /><path className="git-graph-line" d={segment.path} stroke={segment.lane.color} /></g>)}
+    <g className={hoveredLane === row.current.id ? "highlighted" : hoveredLane ? "dimmed" : ""} onMouseEnter={() => onHover(row.current.id)}><title>{row.current.label ?? "Commit"}</title><circle className="git-graph-node-ring" cx={row.currentX} cy="24" r="6" fill={row.current.color} /><circle className="git-graph-node" cx={row.currentX} cy="24" r="3" /></g>
+  </svg>;
 }
 
 function BranchGroup({ title, branches, selected, onSelect, onContextMenu }: { title: string; branches: Branch[]; selected: string; onSelect(name: string): void; onContextMenu(event: React.MouseEvent, branch: Branch): void }) {

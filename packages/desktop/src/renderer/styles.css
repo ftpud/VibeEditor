@@ -406,7 +406,16 @@ button { color: inherit; }
 .git-log-commits > div > button { width: 100%; min-height: 49px; padding: 5px 8px 5px 5px; display: grid; grid-template-columns: minmax(18px, auto) minmax(0, 1fr) auto; gap: 2px 8px; border: 0; border-bottom: 1px solid #2d2f33; background: transparent; color: #c9cbd0; text-align: left; cursor: pointer; }
 .git-log-commits > div > button:hover, .git-log-commits > div > button.selected { background: #34363a; }
 .git-log-commits > div > button.selected { box-shadow: inset 2px 0 #3574f0; }
-.git-commit-graph { max-width: 90px; grid-row: 1 / 3; align-self: stretch; margin: -5px 0; padding: 5px 0; overflow: hidden; color: #70a7e8; font: 600 12px/14px "JetBrains Mono Variable", monospace; white-space: pre; }
+.git-commit-graph { min-width: 20px; height: calc(100% + 10px); grid-row: 1 / 3; align-self: stretch; margin: -5px 0; overflow: visible; }
+.git-graph-placeholder { width: 20px; grid-row: 1 / 3; }
+.git-graph-line { fill: none; stroke-width: 2.2; stroke-linecap: round; transition: opacity .12s ease, stroke-width .12s ease, filter .12s ease; }
+.git-graph-hit { fill: none; stroke: transparent; stroke-width: 10; pointer-events: stroke; }
+.git-commit-graph g { transition: opacity .12s ease; }
+.git-commit-graph g.dimmed { opacity: .12; }
+.git-commit-graph g.highlighted .git-graph-line { stroke-width: 3.5; filter: drop-shadow(0 0 2px currentColor); }
+.git-graph-node-ring { stroke: #1e1f22; stroke-width: 2; transition: opacity .12s ease, r .12s ease; }
+.git-graph-node { fill: #f0f2f5; pointer-events: none; }
+.git-commit-graph g.highlighted .git-graph-node-ring { r: 7px; }
 .commit-subject { min-width: 0; grid-column: 2 / -1; display: flex; align-items: center; gap: 5px; overflow: hidden; white-space: nowrap; }
 .commit-subject > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .commit-ref { max-width: 120px; flex: 0 1 auto; overflow: hidden; padding: 1px 5px; border: 1px solid #47698f; border-radius: 3px; background: #27384d; color: #9fc5f2; font-size: 0.6923rem; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
@@ -723,7 +732,8 @@ button { color: inherit; }
 :root[data-theme="light"] .git-history-content small,
 :root[data-theme="light"] .git-history-content time { color: #65686e; }
 :root[data-theme="light"] .git-history-dialog h2 { color: #202124; }
-:root[data-theme="light"] .git-commit-graph { color: #356da8; }
+:root[data-theme="light"] .git-graph-node-ring { stroke: #ffffff; }
+:root[data-theme="light"] .git-graph-node { fill: #ffffff; }
 :root[data-theme="light"] .commit-ref { border-color: #9bbada; background: #e2effc; color: #285c91; }
 :root[data-theme="light"] .find-result-file { color: #4b4d52; }
 :root[data-theme="light"] .find-results > button.selected .find-path { color: #17233a; }
