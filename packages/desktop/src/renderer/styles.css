@@ -393,11 +393,17 @@ button { color: inherit; }
 .git-log-panel header { height: 30px; padding: 0 8px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid #393b40; background: #2b2d30; color: #c5c7cb; font-size: 0.8462rem; font-weight: 600; }
 .git-log-panel header button { width: 25px; height: 24px; display: grid; place-items: center; border: 0; border-radius: 3px; background: transparent; color: #a7aab0; cursor: pointer; }
 .git-log-branches, .git-log-commits { min-width: 0; overflow: hidden; border-right: 1px solid #393b40; }
+.git-log-branches { display: flex; flex-direction: column; }
+.git-branch-tree { min-height: 0; flex: 1; overflow: auto; padding-bottom: 5px; }
+.git-branch-search { height: 27px; margin: 5px 6px; padding: 0 6px; flex: 0 0 27px; display: flex; align-items: center; gap: 4px; border: 1px solid #45484e; border-radius: 3px; background: #1e1f22; color: #85888e; }
+.git-branch-search:focus-within { border-color: #3574f0; }
+.git-branch-search input { min-width: 0; width: 100%; border: 0; outline: 0; background: transparent; color: #d3d5d8; font-size: 0.7692rem; }
+.git-branch-search input::placeholder { color: #71747a; }
 .branch-group-title, .branch-row { width: 100%; height: 25px; padding: 0 7px; display: flex; align-items: center; gap: 5px; border: 0; background: transparent; color: #bdc0c5; text-align: left; cursor: pointer; }
 .branch-group-title { font-size: 0.8462rem; font-weight: 600; }
 .branch-group-title span, .branch-row span { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .branch-group-title small, .branch-row small { color: #7f8288; font-size: 0.6923rem; }
-.branch-row { padding-left: 18px; font-size: 0.8462rem; }
+.branch-row { font-size: 0.8462rem; }
 .branch-row:hover, .branch-row.selected { background: #34363a; }
 .git-log-commits > div { height: calc(100% - 30px); overflow: auto; }
 .git-commit-search { width: min(180px, 55%); height: 23px; padding: 0 6px; display: flex; align-items: center; gap: 4px; border: 1px solid #45484e; border-radius: 3px; background: #1e1f22; color: #85888e; }
@@ -599,7 +605,8 @@ button { color: inherit; }
 :root[data-theme="light"] .find-controls > input,
 :root[data-theme="light"] .run-config-dialog input,
 :root[data-theme="light"] .run-config-dialog select,
-:root[data-theme="light"] .git-commit-search { background: #ffffff; color: #2b2d30; border-color: #b8bbc0; }
+:root[data-theme="light"] .git-commit-search,
+:root[data-theme="light"] .git-branch-search { background: #ffffff; color: #2b2d30; border-color: #b8bbc0; }
 :root[data-theme="light"] .markdown-preview { background: #ffffff; color: #34363a; }
 :root[data-theme="light"] .markdown-preview code { background: #eef0f2; color: #9b4f00; }
 :root[data-theme="light"] .markdown-preview pre,
@@ -717,6 +724,7 @@ button { color: inherit; }
 :root[data-theme="light"] .branch-row,
 :root[data-theme="light"] .commit-files > button,
 :root[data-theme="light"] .git-commit-search input,
+:root[data-theme="light"] .git-branch-search input,
 :root[data-theme="light"] .context-menu button,
 :root[data-theme="light"] .find-dialog h2,
 :root[data-theme="light"] .run-config-dialog h2,

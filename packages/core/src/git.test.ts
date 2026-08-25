@@ -77,6 +77,30 @@ describe("parseGitStatus", () => {
     expect((await execFileAsync("git", ["-C", root, "show", "HEAD:selected.txt"])).stdout).toBe("selected change\n");
     expect((await execFileAsync("git", ["-C", root, "show", "HEAD:other.txt"])).stdout).toBe("before\n");
   });
+
+  it("cherry-picks a commit or applies it without committing", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "remote-ide-git-cherry-pick-"));
+    await execFileAsync("git", ["-C", root, "init"]);
+    await execFileAsync("git", ["-C", root, "config", "user.email", "test@example.com"]);
+    await execFileAsync("git", ["-C", root, "config", "user.name", "Test"]);
+    await writeFile(path.join(root, "base.txt"), "base\n");
+    await execFileAsync("git", ["-C", root, "add", "."]);
+    await execFileAsync("git", ["-C", root, "commit", "-m", "initial"]);
+    const base = (await execFileAsync("git", ["-C", root, "rev-parse", "HEAD"])).stdout.trim();
+    await execFileAsync("git", ["-C", root, "switch", "-c", "source"]);
+    await writeFile(path.join(root, "picked.txt"), "picked\n");
+    await execFileAsync("git", ["-C", root, "add", "."]);
+    await execFileAsync("git", ["-C", root, "commit", "-m", "pick me"]);
+    const picked = (await execFileAsync("git", ["-C", root, "rev-parse", "HEAD"])).stdout.trim();
+    await execFileAsync("git", ["-C", root, "switch", "-c", "target", base]);
+    const service = new GitService(root);
+    await expect(service.cherryPick(picked, false)).resolves.toBe("target");
+    expect((await execFileAsync("git", ["-C", root, "rev-parse", "HEAD"])).stdout.trim()).toBe(base);
+    expect((await service.status()).entries.map((entry) => entry.path)).toContain("picked.txt");
+    await execFileAsync("git", ["-C", root, "reset", "--hard", base]);
+    await expect(service.cherryPick(picked, true)).resolves.toBe("target");
+    expect((await execFileAsync("git", ["-C", root, "show", "HEAD:picked.txt"])).stdout).toBe("picked\n");
+  });
 });
 
 describe("Git history parsing", () => {

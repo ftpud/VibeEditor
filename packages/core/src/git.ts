@@ -88,6 +88,12 @@ export class GitService {
     return { originalContent, modifiedContent };
   }
 
+  async cherryPick(hash: string, commit: boolean): Promise<string> {
+    validateHash(hash);
+    await this.git(["cherry-pick", ...(commit ? [] : ["--no-commit"]), hash]);
+    return (await this.status()).branch;
+  }
+
   async fileHistory(filePath: string, startLine?: number, endLine?: number): Promise<GitCommit[]> {
     validatePath(filePath);
     const lineHistory = startLine !== undefined && endLine !== undefined;

@@ -147,6 +147,7 @@ export type ProtocolOperations = {
   "git.log": { payload: { branch: string; limit?: number }; result: { commits: GitCommit[] } };
   "git.commitFiles": { payload: { hash: string }; result: { files: GitCommitFile[] } };
   "git.commitDiff": { payload: { hash: string; path: string; originalPath?: string }; result: { originalContent: string; modifiedContent: string } };
+  "git.cherryPick": { payload: { hash: string; commit: boolean }; result: { branch: string } };
   "git.fileHistory": { payload: { path: string; startLine?: number; endLine?: number }; result: { commits: GitCommit[] } };
   "git.compareFiles": { payload: { ref: string; path?: string }; result: { files: GitCommitFile[] } };
   "git.compareDiff": { payload: { ref: string; path: string; originalPath?: string }; result: { originalContent: string; modifiedContent: string } };
@@ -305,6 +306,7 @@ export const requestTypes: RequestType[] = [
   "git.log",
   "git.commitFiles",
   "git.commitDiff",
+  "git.cherryPick",
   "git.fileHistory",
   "git.compareFiles",
   "git.compareDiff",

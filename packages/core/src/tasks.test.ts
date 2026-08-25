@@ -25,6 +25,7 @@ describe("WorkspaceTaskStore", () => {
 
     expect((await store.list()).selectedTaskId).toBe(task.id);
     expect((await execFileAsync("git", ["-C", selected.workspace, "branch", "--show-current"])).stdout.trim()).toBe("feature/task-one");
+    expect((await execFileAsync("git", ["-C", selected.workspace, "rev-parse", "--abbrev-ref", "@{upstream}"])).stdout.trim()).toBe(rootBranch);
     await writeFile(path.join(selected.workspace, "tracked.txt"), "task\n");
     expect(await readFile(path.join(root, "tracked.txt"), "utf8")).toBe("root\n");
     await execFileAsync("git", ["-C", selected.workspace, "add", "tracked.txt"]);

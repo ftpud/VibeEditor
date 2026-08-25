@@ -45,6 +45,7 @@ export class WorkspaceTaskStore {
       await mkdir(path.dirname(destination), { recursive: true });
       await cp(this.rootWorkspace, destination, { recursive: true, errorOnExist: true, force: false });
       await execFileAsync("git", ["-C", destination, "switch", "-C", name], { encoding: "utf8" });
+      if (task.baseBranch !== "HEAD") await execFileAsync("git", ["-C", destination, "branch", "--set-upstream-to", task.baseBranch, name], { encoding: "utf8" });
       await this.save({ tasks: [...registry.tasks, task], selectedTaskId: task.id });
       return task;
     } catch (error) {

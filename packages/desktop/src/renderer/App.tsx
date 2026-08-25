@@ -157,6 +157,10 @@ export function App() {
   const hasDirtyTabs = group.tabs.some((tab) => tab.dirty);
   const projectGitStatuses = useMemo(() => Object.fromEntries(gitEntries.map((entry) => [entry.path, entry.indexStatus === "?" || entry.indexStatus === "A" ? "C" : "M"] as const)), [gitEntries]);
 
+  useEffect(() => {
+    const workspaceName = activeWorkspace.replace(/[\\/]+$/, "").split(/[\\/]/).pop();
+    document.title = status === "connected" && workspaceName ? `${workspaceName} — Vibe Editor` : "Vibe Editor";
+  }, [activeWorkspace, status]);
   useEffect(() => { window.desktop?.setDirtyState(hasDirtyTabs); }, [hasDirtyTabs]);
   useEffect(() => { layoutRef.current = layout; }, [layout]);
   useEffect(() => { javaOptionsRef.current = javaOptions; }, [javaOptions]);
@@ -1425,8 +1429,12 @@ function GitStatusTree({ entries, selectedPaths, onTogglePath, activePath, onOpe
   const renderNodes = (items: GitTreeNode[], depth: number): ReactNode => items.map((node) => {
     if (node.type === "directory") {
       const open = expanded.has(node.path);
+      const descendantPaths = collectGitFiles(node);
+      const selectedCount = descendantPaths.filter((path) => selectedPaths?.has(path)).length;
+      const allSelected = descendantPaths.length > 0 && selectedCount === descendantPaths.length;
       return <div key={node.path}>
-        <button className="git-file-row git-directory-row" style={{ paddingLeft: 9 + depth * 13 }} onClick={() => setExpanded((current) => { const next = new Set(current); open ? next.delete(node.path) : next.add(node.path); return next; })}>
+        <button className="git-file-row git-directory-row" style={{ paddingLeft: (onTogglePath ? 9 : 27) + depth * 13 }} onClick={() => setExpanded((current) => { const next = new Set(current); open ? next.delete(node.path) : next.add(node.path); return next; })}>
+          {onTogglePath && <input type="checkbox" aria-label={`Select all changes under ${node.path} for commit`} checked={allSelected} ref={(input) => { if (input) input.indeterminate = selectedCount > 0 && !allSelected; }} onClick={(event) => event.stopPropagation()} onChange={() => descendantPaths.forEach((path) => { if ((selectedPaths?.has(path) ?? false) === allSelected) onTogglePath(path); })} />}
           {open ? <ChevronDown size={13} /> : <ChevronRight size={13} />}{open ? <FolderOpen size={14} /> : <Folder size={14} />}<span className="git-file-name">{node.name}</span>
         </button>
         {open && renderNodes(node.children, depth + 1)}
@@ -1492,6 +1500,10 @@ function compactGitDirectories(nodes: GitTreeNode[]): GitTreeNode[] {
 
 function collectGitDirectories(nodes: GitTreeNode[]): string[] {
   return nodes.flatMap((node) => node.type === "directory" ? [node.path, ...collectGitDirectories(node.children)] : []);
+}
+
+function collectGitFiles(node: GitTreeNode): string[] {
+  return node.type === "file" ? [node.entry.path] : node.children.flatMap(collectGitFiles);
 }
 
 function FileTreeRow({ node, selected, color: rowColor, gitStatus, onOpen, onContextMenu }: { node: FileTreeNode; selected: boolean; color?: FileColor; gitStatus?: "M" | "C"; onOpen(node: FileTreeNode): void; onContextMenu(event: ReactMouseEvent, node: FileTreeNode): void }) {

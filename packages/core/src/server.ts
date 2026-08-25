@@ -247,6 +247,7 @@ async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStor
     case "git.log": return { commits: await git.log(request.payload.branch, request.payload.limit) };
     case "git.commitFiles": return { files: await git.commitFiles(request.payload.hash) };
     case "git.commitDiff": return git.commitDiff(request.payload.hash, request.payload.path, request.payload.originalPath);
+    case "git.cherryPick": return { branch: await git.cherryPick(request.payload.hash, request.payload.commit) };
     case "git.fileHistory": return { commits: await git.fileHistory(request.payload.path, request.payload.startLine, request.payload.endLine) };
     case "git.compareFiles": return { files: await git.compareFiles(request.payload.ref, request.payload.path) };
     case "git.compareDiff": return git.compareDiff(request.payload.ref, request.payload.path, filesystem, request.payload.originalPath);
