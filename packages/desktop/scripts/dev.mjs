@@ -17,6 +17,7 @@ const vite = spawn(executable("vite"), [], { cwd: packageRoot, stdio: "inherit" 
 await waitOn({ resources: ["tcp:5173"], timeout: 30_000 });
 const electron = spawn(executable("electron"), [".", ...process.argv.slice(2)], {
   cwd: packageRoot,
+  env: { ...process.env, VITE_DEV_SERVER_URL: "http://localhost:5173" },
   stdio: "inherit"
 });
 

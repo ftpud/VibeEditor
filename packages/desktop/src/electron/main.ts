@@ -63,7 +63,7 @@ function createWindow(extraQuery: Record<string, string> = {}): void {
     });
     if (choice === 1) { allowClose = true; window.close(); }
   });
-  const devUrl = process.env.VITE_DEV_SERVER_URL ?? (app.isPackaged ? undefined : "http://localhost:5173");
+  const devUrl = process.env.VITE_DEV_SERVER_URL;
   const query = { ...Object.fromEntries(
     Object.entries(launchConfig).filter((entry): entry is [string, string] => typeof entry[1] === "string")
   ), ...extraQuery };
