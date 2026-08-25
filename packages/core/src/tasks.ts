@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import os from "node:os";
 import path from "node:path";
-import { cp, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { cp, mkdir, readdir, readFile, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { CoreError } from "./errors.js";
@@ -42,8 +42,17 @@ export class WorkspaceTaskStore {
     const task: WorkspaceTask = { id: crypto.randomUUID(), name, branch: name, baseBranch: await this.rootBranch() };
     const destination = this.taskPath(task.id);
     try {
+      const nodeModulesDirs = await findNodeModulesDirs(this.rootWorkspace);
+      const skip = new Set(nodeModulesDirs);
       await mkdir(path.dirname(destination), { recursive: true });
-      await cp(this.rootWorkspace, destination, { recursive: true, errorOnExist: true, force: false });
+      // node_modules is excluded from the copy and symlinked back to the root workspace instead: task
+      // branches share the same dependency tree as root, so duplicating potentially huge install trees
+      // per task wastes disk and time. If a task needs its own deps (e.g. after `npm install`), the
+      // symlink can be replaced there without affecting root or other tasks.
+      await cp(this.rootWorkspace, destination, { recursive: true, errorOnExist: true, force: false, filter: (source) => !skip.has(source) });
+      for (const source of nodeModulesDirs) {
+        await symlink(source, path.join(destination, path.relative(this.rootWorkspace, source)), "dir");
+      }
       await execFileAsync("git", ["-C", destination, "switch", "-C", name], { encoding: "utf8" });
       if (task.baseBranch !== "HEAD") await execFileAsync("git", ["-C", destination, "branch", "--set-upstream-to", task.baseBranch, name], { encoding: "utf8" });
       await this.save({ tasks: [...registry.tasks, task], selectedTaskId: task.id });
@@ -118,6 +127,24 @@ export class WorkspaceTaskStore {
     await writeFile(temporary, `${JSON.stringify(registry, null, 2)}\n`, "utf8");
     await rename(temporary, this.registryFile);
   }
+}
+
+// Finds every top-level `node_modules` directory under `root` (i.e. root's own and each
+// workspace package's), without descending into `.git` or into `node_modules` itself.
+async function findNodeModulesDirs(root: string): Promise<string[]> {
+  const results: string[] = [];
+  const walk = async (dir: string): Promise<void> => {
+    let entries;
+    try { entries = await readdir(dir, { withFileTypes: true }); } catch { return; }
+    for (const entry of entries) {
+      if (!entry.isDirectory() || entry.name === ".git") continue;
+      const full = path.join(dir, entry.name);
+      if (entry.name === "node_modules") { results.push(full); continue; }
+      await walk(full);
+    }
+  };
+  await walk(root);
+  return results;
 }
 
 function isTask(value: unknown): value is WorkspaceTask {

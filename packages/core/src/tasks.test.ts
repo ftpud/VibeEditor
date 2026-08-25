@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { access, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { access, lstat, mkdir, mkdtemp, readFile, realpath, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -36,5 +36,25 @@ describe("WorkspaceTaskStore", () => {
     await store.delete(task.id);
     expect((await store.list()).tasks).toEqual([]);
     await expect(access(path.dirname(selected.workspace))).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("symlinks node_modules into the task workspace instead of copying it", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "remote-ide-task-root-"));
+    const state = await mkdtemp(path.join(os.tmpdir(), "remote-ide-task-state-"));
+    await execFileAsync("git", ["init", root]);
+    await writeFile(path.join(root, "tracked.txt"), "root\n");
+    await mkdir(path.join(root, "node_modules", "some-dep"), { recursive: true });
+    await writeFile(path.join(root, "node_modules", "some-dep", "index.js"), "module.exports = 1;\n");
+    await execFileAsync("git", ["-C", root, "add", "tracked.txt"]);
+    await execFileAsync("git", ["-C", root, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "initial"]);
+
+    const store = new WorkspaceTaskStore(root, state);
+    const task = await store.create("feature/task-symlink");
+    const workspace = store.taskPath(task.id);
+
+    const stats = await lstat(path.join(workspace, "node_modules"));
+    expect(stats.isSymbolicLink()).toBe(true);
+    expect(await realpath(path.join(workspace, "node_modules"))).toBe(await realpath(path.join(root, "node_modules")));
+    expect(await readFile(path.join(workspace, "node_modules", "some-dep", "index.js"), "utf8")).toBe("module.exports = 1;\n");
   });
 });
