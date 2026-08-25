@@ -10,3 +10,6 @@ coverage/
 .env.*.local
 .tools/jdtls/
 .tools/jre21/
+.tools/.jre21-extract/
+.tools/*.tar.gz
+.tools/*.zip

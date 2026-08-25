@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { createWriteStream } from "node:fs";
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { pipeline } from "node:stream/promises";
 import { Readable } from "node:stream";
 import { spawn } from "node:child_process";
@@ -34,6 +34,7 @@ async function installRuntime() {
   const runtimeRoot = path.resolve(".tools/jre21");
   const runtimeMarker = path.join(runtimeRoot, ".installed-21.0.8+9");
   try { await readFile(runtimeMarker); return; } catch { /* Install below. */ }
+  await mkdir(path.resolve(".tools"), { recursive: true });
   const osName = { darwin: "mac", linux: "linux", win32: "windows" }[process.platform];
   const architecture = { arm64: "aarch64", x64: "x64" }[process.arch];
   if (!osName || !architecture) throw new Error(`No bundled JRE is available for ${process.platform}/${process.arch}`);
@@ -50,10 +51,28 @@ async function installRuntime() {
   const actual = createHash("sha256").update(await readFile(runtimeArchive)).digest("hex");
   if (actual !== expectedChecksum) throw new Error(`Temurin checksum mismatch: expected ${expectedChecksum}, received ${actual}`);
   await rm(runtimeRoot, { recursive: true, force: true });
-  await mkdir(runtimeRoot, { recursive: true });
-  const args = osName === "windows" ? ["-q", runtimeArchive, "-d", runtimeRoot] : ["-xzf", runtimeArchive, "-C", runtimeRoot, "--strip-components=1"];
-  const extractor = osName === "windows" ? "unzip" : "tar";
-  await new Promise((resolve, reject) => { const child = spawn(extractor, args, { stdio: "inherit" }); child.on("error", reject); child.on("close", (code) => code === 0 ? resolve() : reject(new Error(`${extractor} exited with code ${code}`))); });
+  if (osName === "windows") {
+    const extractRoot = path.resolve(".tools/.jre21-extract");
+    await rm(extractRoot, { recursive: true, force: true });
+    await mkdir(extractRoot, { recursive: true });
+    const command = "Expand-Archive -LiteralPath $args[0] -DestinationPath $args[1] -Force";
+    await run("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", command, runtimeArchive, extractRoot]);
+    const entries = await readdir(extractRoot, { withFileTypes: true });
+    const source = entries.length === 1 && entries[0]?.isDirectory() ? path.join(extractRoot, entries[0].name) : extractRoot;
+    await rename(source, runtimeRoot);
+    if (source !== extractRoot) await rm(extractRoot, { recursive: true, force: true });
+  } else {
+    await mkdir(runtimeRoot, { recursive: true });
+    await run("tar", ["-xzf", runtimeArchive, "-C", runtimeRoot, "--strip-components=1"]);
+  }
   await rm(runtimeArchive, { force: true });
   await writeFile(runtimeMarker, "21.0.8+9\n", "utf8");
+}
+
+function run(command, args) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, { stdio: "inherit" });
+    child.on("error", reject);
+    child.on("close", (code) => code === 0 ? resolve() : reject(new Error(`${command} exited with code ${code}`)));
+  });
 }
