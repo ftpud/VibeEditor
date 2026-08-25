@@ -1,0 +1,66 @@
+import { useEffect, useMemo, useState, type FormEvent } from "react";
+import { CircleStop, HardDrive, Laptop, Network, Pencil, Play, Plus, RefreshCw, Server, Trash2, X } from "lucide-react";
+
+const emptyState: GatewayState = { connections: [], workspaces: [] };
+
+export function App() {
+  const [state, setState] = useState(emptyState);
+  const [selected, setSelected] = useState<string>();
+  const [runtimes, setRuntimes] = useState<Record<string, GatewayRuntime>>({});
+  const [connectionDialog, setConnectionDialog] = useState<Partial<GatewayConnection> & { password: string }>();
+  const [workspaceDialog, setWorkspaceDialog] = useState<Partial<GatewayWorkspace>>();
+  const [error, setError] = useState("");
+  const bridgeReady = Boolean(window.gateway);
+  useEffect(() => {
+    if (!window.gateway) { setError("Gateway preload failed to initialize. Rebuild and restart the application."); return; }
+    void window.gateway.get().then((result) => { setState(result.state); setRuntimes(result.runtimes); setSelected(result.state.connections[0]?.id); }).catch((reason) => setError(reason instanceof Error ? reason.message : String(reason)));
+    return window.gateway.onStatus((id, status) => setRuntimes((current) => ({ ...current, [id]: status })));
+  }, []);
+  const connection = state.connections.find((item) => item.id === selected);
+  const workspaces = useMemo(() => state.workspaces.filter((item) => item.connectionId === selected), [state.workspaces, selected]);
+
+  const action = async (workspace: GatewayWorkspace, operation: "startServer" | "stopServer" | "startClient") => {
+    setError("");
+    try {
+      const result = await window.gateway[operation](workspace.id);
+      if (operation === "startServer" && result && "remotePort" in result) setState((current) => ({ ...current, workspaces: current.workspaces.map((item) => item.id === workspace.id ? { ...item, remotePort: result.remotePort } : item) }));
+    }
+    catch (reason) { const message = reason instanceof Error ? reason.message : String(reason); setError(message); setRuntimes((current) => ({ ...current, [workspace.id]: { status: "error", message } })); }
+  };
+  const removeConnection = async (item: GatewayConnection) => { if (confirm(`Delete ${item.name} and its workspaces?`)) { const next = await window.gateway.deleteConnection(item.id); setState(next); setSelected(next.connections[0]?.id); } };
+  const removeWorkspace = async (item: GatewayWorkspace) => { if (confirm(`Delete workspace ${item.name}?`)) setState(await window.gateway.deleteWorkspace(item.id)); };
+
+  return <div className="gateway-shell">
+    <aside>
+      <header><div><Network size={17} /><strong>Connections</strong></div><button title="Add SSH connection" onClick={() => setConnectionDialog({ port: 22, password: "" })}><Plus size={15} /></button></header>
+      <div className="connection-list">{state.connections.map((item) => <button key={item.id} className={item.id === selected ? "selected" : ""} onClick={() => setSelected(item.id)}><Server size={16} /><span><strong>{item.name}</strong><small>{item.username}@{item.host}:{item.port}</small></span></button>)}</div>
+    </aside>
+    <main>
+      <div className="topbar"><div><HardDrive size={18} /><span>Vibe Gateway</span></div>{connection && <div className="connection-actions"><span>{connection.name}</span><button title="Refresh server status" onClick={() => void window.gateway.refreshStatuses(connection.id)}><RefreshCw size={14} /></button><button title="Edit connection" onClick={() => setConnectionDialog({ ...connection, password: "" })}><Pencil size={14} /></button><button title="Delete connection" onClick={() => void removeConnection(connection)}><Trash2 size={14} /></button></div>}</div>
+      {!bridgeReady ? <div className="empty"><Network size={38} /><strong>Gateway failed to initialize</strong><span>Close the application and run <code>npm run gateway</code> again.</span></div> : !connection ? <div className="empty"><Network size={38} /><strong>No SSH connections</strong><span>Add a connection to manage remote Vibe Editor workspaces.</span><button onClick={() => setConnectionDialog({ port: 22, password: "" })}><Plus size={15} /> Add connection</button></div> : <section className="workspace-view">
+        <header><div><h1>Remote workspaces</h1><p>{connection.username}@{connection.host}</p></div><button onClick={() => setWorkspaceDialog({ connectionId: connection.id, remotePort: 7331 })}><Plus size={15} /> Add workspace</button></header>
+        {error && <div className="error-banner">{error}<button onClick={() => setError("")}><X size={14} /></button></div>}
+        <div className="workspace-list">{workspaces.map((workspace) => { const current = runtimes[workspace.id] ?? { status: "idle", message: "Not running" }; const busy = current.status === "working"; const serverRunning = current.status === "server" || current.status === "client"; return <article key={workspace.id}>
+          <div className="workspace-info"><div className={`status-dot ${current.status}`} /><div><h2>{workspace.name}</h2><code>{workspace.directory}</code><span>Remote port {workspace.remotePort}</span></div><div className="status"><strong>{statusName(current.status)}</strong><small>{current.message}</small></div></div>
+          <div className="workspace-buttons"><button title={serverRunning ? "Server is already running" : "Start server"} disabled={busy || serverRunning} onClick={() => void action(workspace, "startServer")}><Play size={14} /> Start server</button><button disabled={busy} onClick={() => void action(workspace, "startClient")}><Laptop size={14} /> Start client</button><button className="stop" disabled={busy} onClick={() => void action(workspace, "stopServer")}><CircleStop size={14} /> Stop server</button><span /><button title="Edit workspace" onClick={() => setWorkspaceDialog(workspace)}><Pencil size={14} /></button><button title="Delete workspace" onClick={() => void removeWorkspace(workspace)}><Trash2 size={14} /></button></div>
+        </article>; })}{workspaces.length === 0 && <div className="workspace-empty">No workspaces configured for this connection.</div>}</div>
+      </section>}
+    </main>
+    {bridgeReady && connectionDialog && <ConnectionDialog value={connectionDialog} onClose={() => setConnectionDialog(undefined)} onSave={async (value) => { const next = await window.gateway.saveConnection(value); setState(next); setSelected(value.id ?? next.connections.at(-1)?.id); setConnectionDialog(undefined); }} />}
+    {bridgeReady && workspaceDialog && connection && <WorkspaceDialog value={workspaceDialog} connectionId={connection.id} onClose={() => setWorkspaceDialog(undefined)} onSave={async (value) => { setState(await window.gateway.saveWorkspace(value)); setWorkspaceDialog(undefined); }} />}
+  </div>;
+}
+
+function ConnectionDialog({ value, onClose, onSave }: { value: Partial<GatewayConnection> & { password: string }; onClose(): void; onSave(value: Partial<GatewayConnection> & { name: string; host: string; port: number; username: string; password: string }): Promise<void> }) {
+  const [form, setForm] = useState(value); const [saving, setSaving] = useState(false); const [error, setError] = useState("");
+  const submit = async (event: FormEvent) => { event.preventDefault(); setSaving(true); setError(""); try { await onSave({ ...form, name: form.name!.trim(), host: form.host!.trim(), port: Number(form.port), username: form.username!.trim(), password: form.password }); } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); setSaving(false); } };
+  return <div className="dialog-layer"><form className="dialog" onSubmit={(event) => void submit(event)}><header><strong>{form.id ? "Edit SSH connection" : "New SSH connection"}</strong><button type="button" onClick={onClose}><X size={15} /></button></header><label>Name<input required value={form.name ?? ""} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="Production server" /></label><div className="field-row"><label>Host<input required value={form.host ?? ""} onChange={(e) => setForm({ ...form, host: e.target.value })} placeholder="192.168.1.50" /></label><label className="port">Port<input required type="number" min="1" max="65535" value={form.port ?? 22} onChange={(e) => setForm({ ...form, port: Number(e.target.value) })} /></label></div><label>Username<input required value={form.username ?? ""} onChange={(e) => setForm({ ...form, username: e.target.value })} /></label><label>Password<input required={!form.id} type="password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} placeholder={form.id ? "Leave blank to keep saved password" : "SSH password"} /></label>{error && <div className="form-error">{error}</div>}<footer><button type="button" onClick={onClose}>Cancel</button><button className="primary" disabled={saving}>{saving ? "Saving..." : "Save connection"}</button></footer></form></div>;
+}
+
+function WorkspaceDialog({ value, connectionId, onClose, onSave }: { value: Partial<GatewayWorkspace>; connectionId: string; onClose(): void; onSave(value: Partial<GatewayWorkspace> & { connectionId: string; name: string; directory: string; remotePort: number }): Promise<void> }) {
+  const [form, setForm] = useState(value); const [saving, setSaving] = useState(false);
+  const submit = async (event: FormEvent) => { event.preventDefault(); setSaving(true); try { await onSave({ ...form, connectionId, name: form.name!.trim(), directory: form.directory!.trim(), remotePort: Number(form.remotePort) }); } finally { setSaving(false); } };
+  return <div className="dialog-layer"><form className="dialog" onSubmit={(event) => void submit(event)}><header><strong>{form.id ? "Edit remote workspace" : "New remote workspace"}</strong><button type="button" onClick={onClose}><X size={15} /></button></header><label>Name<input required value={form.name ?? ""} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="Backend API" /></label><label>Remote directory<input required value={form.directory ?? ""} onChange={(e) => setForm({ ...form, directory: e.target.value })} placeholder="/home/user/projects/api" /></label><label>Core port<input required type="number" min="1024" max="65535" value={form.remotePort ?? 7331} onChange={(e) => setForm({ ...form, remotePort: Number(e.target.value) })} /></label><footer><button type="button" onClick={onClose}>Cancel</button><button className="primary" disabled={saving}>{saving ? "Saving..." : "Save workspace"}</button></footer></form></div>;
+}
+
+function statusName(status: GatewayRuntime["status"]): string { return { idle: "Stopped", working: "In progress", server: "Server ready", client: "Client running", error: "Failed" }[status]; }

@@ -1,0 +1,65 @@
+:root { font-family: Inter, "Segoe UI", sans-serif; color: #d8d9dc; background: #202124; font-size: 12px; color-scheme: dark; }
+* { box-sizing: border-box; }
+html, body, #root { width: 100%; height: 100%; margin: 0; overflow: hidden; }
+button, input { font: inherit; color: inherit; }
+button { cursor: pointer; }
+.gateway-shell { height: 100%; display: grid; grid-template-columns: 248px minmax(0, 1fr); }
+aside { min-width: 0; display: flex; flex-direction: column; background: #252629; border-right: 1px solid #3c3e42; }
+aside > header, .topbar { height: 42px; flex: 0 0 42px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid #3c3e42; }
+aside > header { padding: 0 8px 0 12px; }
+aside > header div, .topbar > div, .connection-actions { display: flex; align-items: center; gap: 8px; }
+aside button, .topbar button { border: 0; border-radius: 3px; background: transparent; }
+aside > header button, .topbar button { width: 28px; height: 28px; display: grid; place-items: center; }
+aside button:hover, .topbar button:hover { background: #383a3f; }
+.connection-list { padding: 6px; overflow: auto; }
+.connection-list > button { width: 100%; height: 50px; padding: 0 9px; display: flex; align-items: center; gap: 10px; text-align: left; }
+.connection-list > button.selected { background: #2f568a; color: white; }
+.connection-list span { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.connection-list strong, .connection-list small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.connection-list small { color: #989ba1; }
+.connection-list .selected small { color: #d7e6fb; }
+main { min-width: 0; display: flex; flex-direction: column; background: #202124; }
+.topbar { padding: 0 8px 0 14px; background: #292a2d; }
+.connection-actions { color: #aeb1b6; }
+.connection-actions span { margin-right: 2px; }
+.empty { height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; color: #8f9298; }
+.empty strong { color: #d8d9dc; font-size: 15px; }
+.empty button, .workspace-view > header button { height: 31px; padding: 0 11px; display: flex; align-items: center; gap: 6px; border: 1px solid #3574f0; border-radius: 3px; background: #3574f0; color: white; }
+.workspace-view { min-height: 0; flex: 1; display: flex; flex-direction: column; }
+.workspace-view > header { padding: 18px 22px 14px; display: flex; align-items: center; justify-content: space-between; }
+h1, h2, p { margin: 0; }
+h1 { font-size: 18px; font-weight: 600; }
+.workspace-view > header p { margin-top: 4px; color: #92959b; }
+.workspace-list { min-height: 0; padding: 0 22px 22px; overflow: auto; }
+.workspace-list article { margin-bottom: 10px; border: 1px solid #414349; border-radius: 6px; background: #292a2d; }
+.workspace-info { min-height: 84px; padding: 14px 16px; display: grid; grid-template-columns: 9px minmax(0, 1fr) minmax(180px, .45fr); align-items: center; gap: 12px; }
+.status-dot { width: 8px; height: 8px; border-radius: 50%; background: #777a80; }
+.status-dot.working { background: #e2a33a; box-shadow: 0 0 0 3px rgba(226, 163, 58, .15); }
+.status-dot.server, .status-dot.client { background: #59a869; box-shadow: 0 0 0 3px rgba(89, 168, 105, .15); }
+.status-dot.error { background: #d65c5c; }
+.workspace-info h2 { margin-bottom: 7px; font-size: 14px; }
+.workspace-info code { display: block; margin-bottom: 6px; color: #b8bbc0; }
+.workspace-info span, .status small { color: #85888e; font-size: 10px; }
+.status { display: flex; flex-direction: column; gap: 5px; align-items: flex-end; text-align: right; }
+.status small { max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.workspace-buttons { min-height: 42px; padding: 6px 8px; display: grid; grid-template-columns: auto auto auto 1fr 30px 30px; gap: 6px; border-top: 1px solid #3c3e42; }
+.workspace-buttons button { min-width: 30px; padding: 0 10px; display: flex; align-items: center; justify-content: center; gap: 6px; border: 1px solid #4a4d52; border-radius: 3px; background: #34363a; }
+.workspace-buttons button:hover:not(:disabled) { background: #41444a; }
+.workspace-buttons button.stop { color: #ef9a9a; }
+.workspace-buttons button:disabled { opacity: .45; cursor: default; }
+.workspace-empty { padding: 40px; border: 1px dashed #45474c; color: #85888e; text-align: center; }
+.error-banner { margin: 0 22px 12px; padding: 8px 10px; display: flex; justify-content: space-between; align-items: center; border: 1px solid #743f43; background: #3d292b; color: #f0b1b5; }
+.error-banner button { border: 0; background: transparent; }
+.dialog-layer { position: fixed; inset: 0; z-index: 20; display: grid; place-items: center; background: rgba(0, 0, 0, .45); }
+.dialog { width: 430px; padding: 0 16px 15px; border: 1px solid #55585e; border-radius: 6px; background: #2b2d30; box-shadow: 0 18px 45px rgba(0, 0, 0, .45); }
+.dialog > header { height: 44px; margin-bottom: 12px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid #414349; font-size: 14px; }
+.dialog > header button { width: 28px; height: 28px; display: grid; place-items: center; border: 0; background: transparent; }
+.dialog label { margin-bottom: 11px; display: flex; flex-direction: column; gap: 5px; color: #b7b9bd; }
+.dialog input { width: 100%; height: 31px; padding: 0 8px; border: 1px solid #55585e; border-radius: 3px; outline: none; background: #1f2022; }
+.dialog input:focus { border-color: #3574f0; }
+.field-row { display: grid; grid-template-columns: 1fr 92px; gap: 10px; }
+.dialog footer { margin-top: 15px; display: flex; justify-content: flex-end; gap: 7px; }
+.dialog footer button { height: 31px; padding: 0 12px; border: 1px solid #51545a; border-radius: 3px; background: #37393d; }
+.dialog footer button.primary { border-color: #3574f0; background: #3574f0; color: white; }
+.form-error { padding: 7px; background: #3d292b; color: #f0b1b5; }
+@media (max-width: 860px) { .gateway-shell { grid-template-columns: 210px minmax(0, 1fr); } .workspace-info { grid-template-columns: 9px 1fr; } .status { grid-column: 2; align-items: flex-start; text-align: left; } }

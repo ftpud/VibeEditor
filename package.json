@@ -1,14 +1,19 @@
 {
-  "name": "remote-ide-poc",
+  "name": "vibe-editor",
   "private": true,
   "version": "0.1.0",
+  "license": "MIT",
   "workspaces": ["packages/*"],
   "scripts": {
     "core": "npm run start -w @remote-ide/core --",
     "desktop": "npm run start -w @remote-ide/desktop --",
+    "gateway": "npm run start -w @remote-ide/gateway --",
+    "install:jdtls": "node scripts/install-jdtls.mjs",
+    "postinstall": "node scripts/postinstall.mjs",
     "dev:core": "npm run dev -w @remote-ide/core --",
     "dev:desktop": "npm run dev -w @remote-ide/desktop --",
-    "build": "npm run build -w @remote-ide/protocol && npm run build -w @remote-ide/core && npm run build -w @remote-ide/desktop",
+    "dev:gateway": "npm run dev -w @remote-ide/gateway --",
+    "build": "npm run build -w @remote-ide/protocol && npm run build -w @remote-ide/core && npm run build -w @remote-ide/desktop && npm run build -w @remote-ide/gateway",
     "typecheck": "npm run build -w @remote-ide/protocol && npm run typecheck -w @remote-ide/core && npm run typecheck -w @remote-ide/desktop",
     "test": "npm run test --workspaces --if-present"
   },
