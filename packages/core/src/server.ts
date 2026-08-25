@@ -130,8 +130,8 @@ export async function createServer(host: string, port: number, workspacePath: st
         id = parsed.id;
         console.log(`[core] request ${parsed.id}: ${parsed.type}`);
         let services = await servicesPromise;
-        if (parsed.type === "tasks.switch") {
-          const selected = await tasks.select(parsed.payload.taskId);
+        if (parsed.type === "tasks.switch" || (parsed.type === "tasks.delete" && (await tasks.list()).selectedTaskId === parsed.payload.taskId)) {
+          const selected = await tasks.select(parsed.type === "tasks.switch" ? parsed.payload.taskId : undefined);
           services.processManager.closeAll(); services.java.close(); services.jdt.close();
           servicesPromise = makeServices(selected.workspace);
           services = await servicesPromise;
@@ -182,6 +182,7 @@ async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStor
     }
     case "tasks.list": return tasks.list();
     case "tasks.create": return { task: await tasks.create(request.payload.branch) };
+    case "tasks.delete": return tasks.delete(request.payload.taskId);
     case "tasks.switch": {
       const registry = await tasks.list();
       return { workspace: workspacePath, tree: await filesystem.listTree(), options: await workspaceState.load(), ...registry };

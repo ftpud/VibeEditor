@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain } from "electron";
+import { app, BrowserWindow, clipboard, dialog, ipcMain, shell } from "electron";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -23,6 +23,13 @@ app.setAppUserModelId("com.vibe-editor.desktop");
 app.commandLine.appendSwitch("class", "VibeEditor");
 
 ipcMain.on("editor:dirty-state", (_event, dirty: boolean) => { hasDirtyTabs = dirty; });
+ipcMain.handle("desktop:clipboard-read", () => clipboard.readText());
+ipcMain.handle("desktop:clipboard-write", (_event, text: unknown) => { if (typeof text === "string" && text.length <= 2_000_000) clipboard.writeText(text); });
+ipcMain.handle("desktop:open-external", async (_event, value: unknown) => {
+  if (typeof value !== "string" || value.length > 4096) return;
+  const url = new URL(value); if (url.protocol !== "http:" && url.protocol !== "https:") return;
+  await shell.openExternal(url.toString());
+});
 ipcMain.on("editor:open-window", (_event, options: unknown) => {
   if (!options || typeof options !== "object") return;
   const value = options as Record<string, unknown>;

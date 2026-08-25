@@ -1,4 +1,5 @@
 import { FitAddon } from "@xterm/addon-fit";
+import { WebLinksAddon } from "@xterm/addon-web-links";
 import { Terminal } from "@xterm/xterm";
 import { Plus, X } from "lucide-react";
 import { useEffect, useRef } from "react";
@@ -56,7 +57,14 @@ function TerminalView({ theme, fontFamily, fontSize, lineHeight, client, tab, ac
     });
     const fit = new FitAddon();
     terminal.loadAddon(fit);
+    terminal.loadAddon(new WebLinksAddon((event, url) => { if (event.ctrlKey || event.metaKey) void window.desktop?.openExternal(url); }));
     terminal.open(container);
+    terminal.attachCustomKeyEventHandler((event) => {
+      if (event.type !== "keydown" || (!event.ctrlKey && !event.metaKey)) return true;
+      if (event.key.toLowerCase() === "c" && terminal.hasSelection()) { void window.desktop?.writeClipboard(terminal.getSelection()); return false; }
+      if (event.key.toLowerCase() === "v") { void window.desktop?.readClipboard().then((text) => { if (text) void client.request("terminal.input", { terminalId: tab.terminalId, data: text }); }); return false; }
+      return true;
+    });
     terminalRef.current = terminal;
     fitRef.current = fit;
     registerWriter(tab.terminalId, (data) => terminal.write(data));

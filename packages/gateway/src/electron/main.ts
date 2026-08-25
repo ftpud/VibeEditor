@@ -155,8 +155,14 @@ async function startClient(workspaceId: string): Promise<void> {
   if (!/^[0-9a-f]{40,64}$/.test(commit)) { client.end(); throw new Error("Remote Vibe checkout was not found. Start the server first."); }
   const clientRoot = path.join(app.getPath("userData"), "clients", workspace.id, commit); const archive = path.join(app.getPath("temp"), `vibe-${workspace.id}-${commit}.tar.gz`);
   const buildMarker = path.join(clientRoot, ".gateway-client-built");
+  const expectedMarker = `artifact-v1:${commit}`;
   let clientBuilt = false;
-  try { clientBuilt = (await readFile(buildMarker, "utf8")).trim() === commit; await access(path.join(clientRoot, "dist-electron", "main.js")); await access(path.join(clientRoot, "dist-renderer", "index.html")); }
+  try {
+    const marker = (await readFile(buildMarker, "utf8")).trim();
+    clientBuilt = marker === expectedMarker || marker === commit;
+    await access(path.join(clientRoot, "package.json")); await access(path.join(clientRoot, "dist-electron", "main.js")); await access(path.join(clientRoot, "dist-renderer", "index.html"));
+    if (clientBuilt && marker !== expectedMarker) await writeFile(buildMarker, `${expectedMarker}\n`, "utf8");
+  }
   catch { clientBuilt = false; }
   if (!clientBuilt) {
   try {
@@ -167,7 +173,7 @@ async function startClient(workspaceId: string): Promise<void> {
     await mkdir(clientRoot, { recursive: true });
     runtime(workspaceId, "working", "Installing remote-built client artifacts...");
     await runLocal("tar", ["-xzf", archive, "-C", clientRoot], clientRoot); await rm(archive, { force: true });
-    await writeFile(buildMarker, `${commit}\n`, "utf8");
+    await writeFile(buildMarker, `${expectedMarker}\n`, "utf8");
   } else { client.end(); runtime(workspaceId, "working", "Reusing local client build..."); }
   const localPort = await createTunnel(workspaceId, connection, workspace.remotePort);
   const desktopMain = path.join(clientRoot, "dist-electron", "main.js");

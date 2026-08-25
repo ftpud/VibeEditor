@@ -77,7 +77,8 @@ export function App() {
   const [explorerWidth, setExplorerWidth] = useState(260);
   const [tasksWidth, setTasksWidth] = useState(300);
   const [tasksOpen, setTasksOpen] = useState(true);
-  const [rightView, setRightView] = useState<"tasks" | "ai">("tasks");
+  const [aiOpen, setAiOpen] = useState(false);
+  const [rightSplit, setRightSplit] = useState(50);
   const [showCreateTaskDialog, setShowCreateTaskDialog] = useState(false);
   const [tasks, setTasks] = useState<WorkspaceTask[]>([]);
   const [selectedTaskId, setSelectedTaskId] = useState<string>();
@@ -599,7 +600,7 @@ export function App() {
       if (attachments.some((item) => item.path === path)) return current;
       return { ...current, [key]: [...attachments, { id: `workspace:${path}`, name: path.split("/").pop() ?? path, path }] };
     });
-    setRightView("ai"); setTasksOpen(true); void refreshAi(); setEditorGitMenu(undefined);
+    setAiOpen(true); void refreshAi(); setEditorGitMenu(undefined);
   }, [refreshAi, selectedTaskId]);
   const sendAiPrompt = useCallback(async (prompt: string, model: string, reasoning: string, attachments: AiAttachment[]) => {
     if (!clientRef.current) return;
@@ -629,6 +630,19 @@ export function App() {
       throw error;
     }
   }, [switchTask, taskSwitching]);
+
+  const deleteTask = useCallback(async (task: WorkspaceTask) => {
+    if (!clientRef.current || taskSwitching || !window.confirm(`Delete task "${task.name}"?\n\nIts copied workspace and any uncommitted files inside it will be permanently removed.`)) return;
+    try {
+      if (selectedTaskId === task.id) await switchTask();
+      setTaskSwitching(true);
+      const result = await clientRef.current.request("tasks.delete", { taskId: task.id });
+      setTasks(result.tasks); setSelectedTaskId(result.selectedTaskId);
+      setAiAttachments((current) => { const next = { ...current }; delete next[task.id]; return next; });
+      setAiStatuses((current) => { const nextTasks = { ...current.tasks }; delete nextTasks[task.id]; return { ...current, tasks: nextTasks }; });
+    } catch (error) { setStatusMessage(error instanceof Error ? error.message : "Could not delete task"); }
+    finally { setTaskSwitching(false); }
+  }, [selectedTaskId, switchTask, taskSwitching]);
 
   const saveUsefulFileDialog = async (name: string) => {
     if (!clientRef.current || !usefulDialog) return;
@@ -677,7 +691,17 @@ export function App() {
 
   const beginTasksResize = (event: React.PointerEvent) => {
     event.currentTarget.setPointerCapture(event.pointerId);
-    const move = (moveEvent: PointerEvent) => setTasksWidth(Math.max(240, Math.min(520, window.innerWidth - moveEvent.clientX)));
+    const move = (moveEvent: PointerEvent) => setTasksWidth(Math.max(240, Math.min(Math.min(960, window.innerWidth * 0.72), window.innerWidth - moveEvent.clientX)));
+    const end = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", end); };
+    window.addEventListener("pointermove", move); window.addEventListener("pointerup", end);
+  };
+
+  const beginRightSplitResize = (event: React.PointerEvent) => {
+    event.currentTarget.setPointerCapture(event.pointerId);
+    const panel = event.currentTarget.parentElement;
+    if (!panel) return;
+    const bounds = panel.getBoundingClientRect();
+    const move = (moveEvent: PointerEvent) => setRightSplit(Math.max(20, Math.min(80, ((moveEvent.clientY - bounds.top) / bounds.height) * 100)));
     const end = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", end); };
     window.addEventListener("pointermove", move); window.addEventListener("pointerup", end);
   };
@@ -1119,7 +1143,7 @@ export function App() {
           <span className="connection-dot" />{host}:{port}<div className="settings-anchor"><button title="Settings" onClick={() => setSettingsOpen((open) => !open)}><Settings size={15} /></button>{settingsOpen && <div className="settings-menu"><header>Settings</header><div className="settings-row"><span>Theme</span><div className="theme-switch"><button className={theme === "dark" ? "active" : ""} onClick={() => setTheme("dark")}>Dark</button><button className={theme === "light" ? "active" : ""} onClick={() => setTheme("light")}>Light</button></div></div><div className="settings-row"><span>Highlighting</span><div className="theme-switch"><button className={highlightTheme === "default" ? "active" : ""} onClick={() => setHighlightTheme("default")}>Default</button><button className={highlightTheme === "ftpud" ? "active" : ""} onClick={() => setHighlightTheme("ftpud")}>Ftpud</button></div></div><div className="settings-row font-setting"><label htmlFor="ui-font-family">Font</label><select id="ui-font-family" value={uiFontFamily} onChange={(event) => setUiFontFamily(event.target.value as "jetbrains" | "inter")}><option value="jetbrains">JetBrains Mono</option><option value="inter">Inter</option></select></div><div className="settings-row font-setting"><label htmlFor="ui-font-size">Size</label><input id="ui-font-size" type="number" min="10" max="20" step="1" value={uiFontSize} onChange={(event) => setUiFontSize(Math.min(20, Math.max(10, Number(event.target.value) || 13)))} /></div><div className="settings-row font-setting"><label htmlFor="ui-line-height">Line height</label><input id="ui-line-height" type="number" min="1" max="2" step="0.05" value={uiLineHeight} onChange={(event) => setUiLineHeight(Math.min(2, Math.max(1, Number(event.target.value) || 1.2)))} /></div></div>}</div><button title="Disconnect" onClick={disconnect}><LogOut size={15} /></button>
         </div>
         <div className="tabs" role="tablist">
-          {group.tabs.map((tab) => <button className={`tab ${tab.id === group.activeTabId ? "active" : ""} ${tab.id === draggedTabId ? "dragging" : ""}`} key={tab.id} draggable onDragStart={(event) => { setDraggedTabId(tab.id); event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/plain", tab.id); }} onDragEnd={() => setDraggedTabId(undefined)} onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = "move"; }} onDrop={(event) => { event.preventDefault(); moveTab(tab.id); }} onContextMenu={(event) => { event.preventDefault(); setTabContextMenu({ x: Math.min(event.clientX, window.innerWidth - 220), y: Math.min(event.clientY, window.innerHeight - 125), tab }); }} onClick={() => void activateEditorTab(tab)}>
+          {group.tabs.map((tab) => <button className={`tab ${tab.id === group.activeTabId ? "active" : ""} ${tab.id === draggedTabId ? "dragging" : ""}`} key={tab.id} draggable onDragStart={(event) => { setDraggedTabId(tab.id); event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/plain", tab.id); }} onDragEnd={() => setDraggedTabId(undefined)} onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = "move"; }} onDrop={(event) => { event.preventDefault(); moveTab(tab.id); }} onContextMenu={(event) => { event.preventDefault(); setTabContextMenu({ x: Math.min(event.clientX, window.innerWidth - 220), y: Math.min(event.clientY, window.innerHeight - 125), tab }); }} onMouseDown={(event) => { if (event.button === 1) event.preventDefault(); }} onAuxClick={(event) => { if (event.button === 1) { event.preventDefault(); closeTab(tab); } }} onClick={() => void activateEditorTab(tab)}>
             {tab.type === "diff" ? <GitCompareArrows size={14} /> : <File size={14} />}<span className={tab.type === "file" && projectGitStatuses[tab.path] ? `tab-file-name git-${projectGitStatuses[tab.path] === "C" ? "created" : "modified"}` : "tab-file-name"}>{tab.title}</span>{tab.dirty && <span className="dirty" title="Unsaved changes" />}<span className="close" title={`Close ${tab.title}`} onClick={(event) => { event.stopPropagation(); closeTab(tab); }}><X size={13} /></span>
           </button>)}
           <div className="tab-spacer" />
@@ -1147,16 +1171,18 @@ export function App() {
         </div>
         {httpResult && <section className="http-response-panel"><header><span>{httpResult.request.method} {httpResult.request.url}</span>{httpResult.loading ? <small>Sending...</small> : httpResult.response ? <small className={httpResult.response.status >= 400 ? "error" : "success"}>{httpResult.response.status} {httpResult.response.statusText} · {httpResult.response.durationMs} ms</small> : null}<button title="Close response" onClick={() => setHttpResult(undefined)}><X size={14} /></button></header>{httpResult.error ? <div className="http-response-error">{httpResult.error}</div> : httpResult.response ? <div className="http-response-content"><pre className="http-response-headers">{Object.entries(httpResult.response.headers).map(([name, value]) => `${name}: ${value}`).join("\n")}</pre><pre className="http-response-body">{httpResult.response.body}</pre></div> : <div className="http-response-loading">Waiting for response...</div>}</section>}
       </main>
-      {tasksOpen && <><div className="right-resize-handle" onPointerDown={beginTasksResize} />
+      {(tasksOpen || aiOpen) && <><div className="right-resize-handle" onPointerDown={beginTasksResize} />
       <aside className="tasks-panel" style={{ width: tasksWidth }}>
-        {rightView === "tasks" ? <><header className="panel-header"><span>Tasks</span><button title="Create task" disabled={taskSwitching} onClick={() => setShowCreateTaskDialog(true)}><Plus size={15} /></button></header><div className="tasks-list">
+        {tasksOpen && <section className="right-panel-section" style={aiOpen ? { flex: `0 0 ${rightSplit}%` } : undefined}><header className="panel-header"><span>Tasks</span><button title="Create task" disabled={taskSwitching} onClick={() => setShowCreateTaskDialog(true)}><Plus size={15} /></button></header><div className="tasks-list">
           <TaskRow icon={<Folder size={15} />} name="Root workspace" summary={aiStatuses.root} selected={selectedTaskId === undefined} disabled={taskSwitching} onClick={() => void switchTask()} />
-          {tasks.map((task) => <TaskRow key={task.id} icon={<ListTodo size={15} />} name={task.name} summary={aiStatuses.tasks[task.id] ?? emptyAiSummary} selected={selectedTaskId === task.id} disabled={taskSwitching} onClick={() => void switchTask(task.id)} />)}
-        </div></> : <><header className="panel-header"><span>AI</span><span className={`ai-status ${aiSession.status}`}>{formatAiStatus(aiSession.status)}</span></header><AiPanel provider={aiProvider} session={aiSession} models={aiModels} attachments={currentAiAttachments} onProviderChange={(provider) => void switchAiProvider(provider)} onAttachmentsChange={updateAiAttachments} onSend={sendAiPrompt} onClear={() => void clearAiContext()} /></>}
+          {tasks.map((task) => <TaskRow key={task.id} icon={<ListTodo size={15} />} name={task.name} summary={aiStatuses.tasks[task.id] ?? emptyAiSummary} selected={selectedTaskId === task.id} disabled={taskSwitching} onClick={() => void switchTask(task.id)} onDelete={() => void deleteTask(task)} />)}
+        </div></section>}
+        {tasksOpen && aiOpen && <div className="right-panel-divider" onPointerDown={beginRightSplitResize} />}
+        {aiOpen && <section className="right-panel-section"><header className="panel-header"><span>AI</span><span className={`ai-status ${aiSession.status}`}>{formatAiStatus(aiSession.status)}</span></header><AiPanel provider={aiProvider} session={aiSession} models={aiModels} attachments={currentAiAttachments} onProviderChange={(provider) => void switchAiProvider(provider)} onAttachmentsChange={updateAiAttachments} onSend={sendAiPrompt} onClear={() => void clearAiContext()} /></section>}
       </aside></>}
       <nav className="right-tool-stripe" aria-label="Right tool windows">
-        <button className={`tool-stripe-button right ${tasksOpen && rightView === "tasks" ? "active" : ""}`} title={tasksOpen && rightView === "tasks" ? "Hide Tasks" : "Show Tasks"} onClick={() => { if (tasksOpen && rightView === "tasks") setTasksOpen(false); else { setRightView("tasks"); setTasksOpen(true); } }}><ListTodo size={15} /><span>Tasks</span>{tasks.length > 0 && <span className="tool-badge">{tasks.length > 99 ? "99+" : tasks.length}</span>}</button>
-        <button className={`tool-stripe-button right ${tasksOpen && rightView === "ai" ? "active" : ""}`} title={tasksOpen && rightView === "ai" ? "Hide AI" : "Show AI"} onClick={() => { if (tasksOpen && rightView === "ai") setTasksOpen(false); else { setRightView("ai"); setTasksOpen(true); void refreshAi(); } }}><Bot size={15} /><span>AI</span>{aiSession.status === "in_progress" && <span className="tool-badge">...</span>}</button>
+        <button className={`tool-stripe-button right ${tasksOpen ? "active" : ""}`} title={tasksOpen ? "Hide Tasks" : "Show Tasks"} onClick={() => setTasksOpen((open) => !open)}><ListTodo size={15} /><span>Tasks</span>{tasks.length > 0 && <span className="tool-badge">{tasks.length > 99 ? "99+" : tasks.length}</span>}</button>
+        <button className={`tool-stripe-button right ${aiOpen ? "active" : ""}`} title={aiOpen ? "Hide AI" : "Show AI"} onClick={() => { setAiOpen((open) => { if (!open) void refreshAi(); return !open; }); }}><Bot size={15} /><span>AI</span>{aiSession.status === "in_progress" && <span className="tool-badge">...</span>}</button>
       </nav>
     </div>
     {layout.panels.some((panel) => panel.type === "terminal") && <TerminalPanel theme={theme} fontFamily={editorFontFamily} fontSize={uiFontSize} lineHeight={uiLineHeight} client={clientRef.current!} group={layout.terminalGroup} height={terminalHeight} onActivate={(id) => updateTerminalGroup((current) => ({ ...current, activeTabId: id }))} onCreate={() => void createTerminal()} onClose={closeTerminal} onResizeStart={beginTerminalResize} registerWriter={registerTerminalWriter} />}
@@ -1245,13 +1271,13 @@ function JavaProjectTree({ nodes, activePath, onOpen }: { nodes: JavaProjectNode
   return <>{render(nodes, 0)}</>;
 }
 
-function TaskRow({ icon, name, summary, selected, disabled, onClick }: { icon: ReactNode; name: string; summary: AiTaskSummary; selected: boolean; disabled: boolean; onClick(): void }) {
+function TaskRow({ icon, name, summary, selected, disabled, onClick, onDelete }: { icon: ReactNode; name: string; summary: AiTaskSummary; selected: boolean; disabled: boolean; onClick(): void; onDelete?(): void }) {
   const preview = summary.preview || "No Codex activity yet";
-  return <button className={`task-row ${selected ? "selected" : ""}`} disabled={disabled} title={`${name}\n${preview}`} onClick={onClick}>
+  return <div className={`task-row ${selected ? "selected" : ""}`}><button className="task-open" disabled={disabled} title={`${name}\n${preview}`} onClick={onClick}>
     <span className="task-icon">{icon}</span>
     <span className="task-content"><span className="task-title"><strong>{name}</strong>{(summary.additions > 0 || summary.deletions > 0) && <span className="task-diff-stat"><small>+{summary.additions}</small><small>-{summary.deletions}</small></span>}{summary.status !== "idle" && <small className={`task-ai-status ${summary.status}`}>{formatAiStatus(summary.status)}</small>}</span><span className="task-preview">{preview}</span></span>
     {selected && <Check className="task-check" size={13} />}
-  </button>;
+  </button>{onDelete && <button className="task-delete" title={`Delete ${name}`} disabled={disabled} onClick={onDelete}><Trash2 size={13} /></button>}</div>;
 }
 
 function UsefulFileSection({ title, scope, files, activeTab, onOpen, onCreate, onRename, onDelete }: { title: string; scope: UsefulFileScope; files: UsefulFile[]; activeTab?: EditorTab; onOpen(file: UsefulFile): void; onCreate(scope: UsefulFileScope): void; onRename(file: UsefulFile): void; onDelete(file: UsefulFile): void }) {

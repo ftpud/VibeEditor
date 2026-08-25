@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { access, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -26,5 +26,8 @@ describe("WorkspaceTaskStore", () => {
     await writeFile(path.join(selected.workspace, "tracked.txt"), "task\n");
     expect(await readFile(path.join(root, "tracked.txt"), "utf8")).toBe("root\n");
     expect((await store.select()).workspace).toBe(root);
+    await store.delete(task.id);
+    expect((await store.list()).tasks).toEqual([]);
+    await expect(access(path.dirname(selected.workspace))).rejects.toMatchObject({ code: "ENOENT" });
   });
 });

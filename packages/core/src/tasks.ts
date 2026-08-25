@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import os from "node:os";
 import path from "node:path";
-import { cp, mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { cp, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { CoreError } from "./errors.js";
@@ -55,6 +55,15 @@ export class WorkspaceTaskStore {
     const next = { tasks: registry.tasks, ...(taskId ? { selectedTaskId: taskId } : {}) };
     await this.save(next);
     return { workspace: taskId ? this.taskPath(taskId) : this.rootWorkspace, registry: next };
+  }
+
+  async delete(taskId: string): Promise<Registry> {
+    const registry = await this.list();
+    if (!registry.tasks.some((task) => task.id === taskId)) throw new CoreError("INVALID_REQUEST", "Task does not exist");
+    const next = { tasks: registry.tasks.filter((task) => task.id !== taskId), ...(registry.selectedTaskId && registry.selectedTaskId !== taskId ? { selectedTaskId: registry.selectedTaskId } : {}) };
+    await rm(path.dirname(this.taskPath(taskId)), { recursive: true, force: true });
+    await this.save(next);
+    return next;
   }
 
   taskPath(taskId: string): string { return path.join(this.directory, taskId, "workspace"); }
