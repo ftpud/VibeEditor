@@ -69,6 +69,7 @@ function TerminalView({ theme, fontFamily, fontSize, lineHeight, client, tab, ac
     terminal.attachCustomKeyEventHandler((event) => {
       if (event.type !== "keydown" || (!event.ctrlKey && !event.metaKey)) return true;
       if (event.key.toLowerCase() === "c" && terminal.hasSelection()) { void window.desktop?.writeClipboard(terminal.getSelection()); return false; }
+      if (event.key.toLowerCase() === "v") { void window.desktop?.readClipboard().then(paste); return false; }
       return true;
     });
     const handlePaste = (event: ClipboardEvent) => {

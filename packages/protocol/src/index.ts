@@ -78,7 +78,7 @@ export type SearchResult = { path: string; line: number; column: number; preview
 export type ProtocolOperations = {
   "workspace.open": {
     payload: Record<string, never>;
-    result: { workspace: string; tree: FileTreeNode[]; options: WorkspaceOptions };
+    result: { workspace: string; projectName: string; tree: FileTreeNode[]; options: WorkspaceOptions };
   };
   "workspace.saveOptions": {
     payload: { options: WorkspaceOptions };
@@ -87,7 +87,7 @@ export type ProtocolOperations = {
   "tasks.list": { payload: Record<string, never>; result: { tasks: WorkspaceTask[]; selectedTaskId?: string } };
   "tasks.create": { payload: { branch: string }; result: { task: WorkspaceTask } };
   "tasks.merge": { payload: { taskId: string }; result: { targetBranch: string } };
-  "tasks.switch": { payload: { taskId?: string }; result: { workspace: string; tree: FileTreeNode[]; options: WorkspaceOptions; tasks: WorkspaceTask[]; selectedTaskId?: string } };
+  "tasks.switch": { payload: { taskId?: string }; result: { workspace: string; projectName: string; tree: FileTreeNode[]; options: WorkspaceOptions; tasks: WorkspaceTask[]; selectedTaskId?: string } };
   "tasks.delete": { payload: { taskId: string }; result: { tasks: WorkspaceTask[]; selectedTaskId?: string } };
   "ai.get": { payload: { provider?: AiProvider }; result: { session: AiSession } };
   "ai.models": { payload: { provider?: AiProvider }; result: { models: AiModel[] } };

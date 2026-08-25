@@ -174,7 +174,7 @@ async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStor
   switch (request.type) {
     case "workspace.open": {
       const tree = await filesystem.open(workspacePath);
-      return { workspace: filesystem.getWorkspace(), tree, options: await workspaceState.load() };
+      return { workspace: filesystem.getWorkspace(), projectName: path.basename(path.resolve(rootWorkspace)), tree, options: await workspaceState.load() };
     }
     case "workspace.saveOptions": {
       await workspaceState.save(request.payload.options);
@@ -186,7 +186,7 @@ async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStor
     case "tasks.delete": return tasks.delete(request.payload.taskId);
     case "tasks.switch": {
       const registry = await tasks.list();
-      return { workspace: workspacePath, tree: await filesystem.listTree(), options: await workspaceState.load(), ...registry };
+      return { workspace: workspacePath, projectName: path.basename(path.resolve(rootWorkspace)), tree: await filesystem.listTree(), options: await workspaceState.load(), ...registry };
     }
     case "ai.get": return { session: await (request.payload.provider === "copilot" ? copilot : codex).get(workspacePath) };
     case "ai.models": return { models: await (request.payload.provider === "copilot" ? copilot : codex).models() };

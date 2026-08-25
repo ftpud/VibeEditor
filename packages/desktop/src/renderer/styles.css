@@ -263,6 +263,10 @@ button { color: inherit; }
 .editor-mode-switch button:hover { background: #3a3c41; color: #e2e3e5; }
 .editor-mode-switch button.active { background: #2e5792; color: white; }
 .editor-area { min-height: 0; flex: 1; position: relative; }
+.diff-navigation { position: absolute; z-index: 8; right: 18px; bottom: 16px; display: flex; overflow: hidden; border: 1px solid #4a4d52; border-radius: 5px; background: #2b2d30; box-shadow: 0 5px 16px rgba(0,0,0,.35); }
+.diff-navigation button { width: 34px; height: 32px; display: grid; place-items: center; border: 0; border-right: 1px solid #4a4d52; background: transparent; color: #d2d4d7; cursor: pointer; }
+.diff-navigation button:last-child { border-right: 0; }
+.diff-navigation button:hover { background: #3574f0; color: white; }
 .empty-editor, .editor-error { height: 100%; display: grid; place-items: center; color: #777; }
 .editor-error { color: #f0a7a7; padding: 24px; text-align: center; }
 .inline-error { position: absolute; z-index: 2; top: 8px; right: 20px; max-width: 55%; padding: 7px 9px; border: 1px solid #6d3333; border-radius: 3px; background: #321f1f; color: #f2b5b5; }
@@ -747,6 +751,9 @@ button { color: inherit; }
 :root[data-theme="light"] .find-result-file { color: #4b4d52; }
 :root[data-theme="light"] .find-results > button.selected .find-path { color: #17233a; }
 :root[data-theme="light"] .context-menu button:hover { background: #d9e7fb; color: #17233a; }
+:root[data-theme="light"] .diff-navigation { border-color: #c8cbd0; background: #ffffff; box-shadow: 0 5px 14px rgba(0,0,0,.14); }
+:root[data-theme="light"] .diff-navigation button { border-color: #d5d7da; color: #3c3f44; }
+:root[data-theme="light"] .diff-navigation button:hover { background: #3574f0; color: #ffffff; }
 :root[data-theme="light"] .bottom-tool-count { background: #d9dce0; color: #34363a; }
 :root[data-theme="light"] .tool-stripe,
 :root[data-theme="light"] .right-tool-stripe,
