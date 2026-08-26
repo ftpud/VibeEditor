@@ -194,7 +194,7 @@ async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStor
     case "ai.send": return { session: await acp.get(request.payload.provider).send(workspacePath, { prompt: request.payload.prompt, configuration: { ...request.payload.configuration, ...(request.payload.model ? { model: request.payload.model } : {}), ...(request.payload.reasoning ? { reasoning: request.payload.reasoning } : {}) }, mcpServers: request.payload.mcpServers, agent: request.payload.agent }) };
     case "ai.interrupt": return { session: await acp.get(request.payload.provider).interrupt(workspacePath) };
     case "ai.clear": return { session: await acp.get(request.payload.provider).clear(workspacePath) };
-    case "ai.usage": return { usage: await acp.get(request.payload.provider).usage() };
+    case "ai.usage": return { usage: await acp.get(request.payload.provider).usage(workspacePath) };
     case "ai.statuses": {
       const registry = await tasks.list();
       const summarize = async (target: string) => { const summary = summarizeAiSessions(await Promise.all(acp.list().map((item) => acp.get(item.id).get(target)))); return { ...summary, ...await new GitService(target).diffStats() }; };

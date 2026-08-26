@@ -2,7 +2,8 @@ export type AiStatus = "idle" | "in_progress" | "user_prompt" | "done" | "error"
 export type AiProvider = string;
 export type AiConfiguration = Record<string, string | number | boolean>;
 export type AiMessage = { id: string; role: "user" | "assistant" | "activity" | "error"; text: string; timestamp: string };
-export type AiSession = { threadId?: string; model: string; reasoning: string; configuration?: AiConfiguration; availableOptions?: AiOption[]; status: AiStatus; messages: AiMessage[] };
+export type AiSession = { threadId?: string; model: string; reasoning: string; configuration?: AiConfiguration; availableOptions?: AiOption[]; status: AiStatus; messages: AiMessage[]; contextUsed?: number; contextLimit?: number; tokens?: AiTokenUsage };
+export type AiTokenUsage = { total: number; input: number; output: number; thought?: number; cachedRead?: number; cachedWrite?: number };
 export type AiModel = { id: string; name: string; defaultReasoning: string; reasoningLevels: string[] };
 export type AiOption = { id: string; name: string; description: string; section?: string; type: "select" | "number" | "boolean" | "text"; defaultValue: string | number | boolean; choices?: { value: string; name: string; description?: string }[]; min?: number; max?: number; modelDependent?: boolean };
 export type AiSettingsSection = { id: string; name: string; description?: string };
@@ -24,7 +25,7 @@ export abstract class AcpProvider {
   abstract send(workspace: string, request: AcpSendRequest): Promise<AiSession>;
   abstract interrupt(workspace: string): Promise<AiSession>;
   abstract clear(workspace: string): Promise<AiSession>;
-  async usage(): Promise<AiUsage> { return { supported: false, label: "Usage is not exposed by this provider" }; }
+  async usage(_workspace?: string): Promise<AiUsage> { return { supported: false, label: "Usage is not exposed by this provider" }; }
 }
 
 export function mergeConfiguration(session: AiSession, configuration: AiConfiguration): AiConfiguration { return { model: session.model, reasoning: session.reasoning, ...session.configuration, ...configuration }; }
