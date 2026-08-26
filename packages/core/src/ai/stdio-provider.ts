@@ -18,13 +18,22 @@ type Runtime = {
   session: AiSession;
   tools: Map<string, ToolState>;
   anchors: { assistant?: string; thought?: string };
+  /** Bumped for every turn so a superseded turn cannot write a stale status. */
+  generation: number;
+  /** True when the agent implements the `_session/steering` extension. */
+  steering: boolean;
+  /** Follow-ups typed mid-turn that agents without steering run next. */
+  pending: string[];
 };
 type ModeState = { currentModeId: string; availableModes: { id: string; name?: string; description?: string | null }[] } | null | undefined;
 type ModelState = { currentModelId?: string; availableModels: { modelId: string; name: string; description?: string | null }[] } | null | undefined;
 type CreatedSession = { sessionId: string; configOptions?: SessionConfigOption[] | null; modes?: ModeState; models?: ModelState };
-type Connected = { child: ChildProcessWithoutNullStreams; connection: ClientSideConnection; sessionId: string; stderr(): string; configOptions: SessionConfigOption[]; modes: ModeState; models: ModelState; bind(runtime: Runtime): void };
+type Connected = { child: ChildProcessWithoutNullStreams; connection: ClientSideConnection; sessionId: string; stderr(): string; configOptions: SessionConfigOption[]; modes: ModeState; models: ModelState; steering: boolean; bind(runtime: Runtime): void };
+
+const STEERING_METHOD = "_session/steering";
 
 const MODEL_CACHE_MS = 5 * 60_000;
+const CONVERSATION_UPDATES = new Set(["agent_message_chunk", "agent_thought_chunk", "tool_call", "tool_call_update", "plan", "plan_update", "compaction_update"]);
 
 /** Genuine ACP v1 client transport over NDJSON/stdio. */
 export abstract class StdioAcpProvider extends AcpProvider {
@@ -73,42 +82,81 @@ export abstract class StdioAcpProvider extends AcpProvider {
   }
 
   async send(workspace: string, request: AcpSendRequest): Promise<AiSession> {
-    if (!request.prompt.trim() || request.prompt.length > 100_000) throw new CoreError("INVALID_REQUEST", "Prompt must contain at most 100,000 characters");
+    const prompt = this.validate(request.prompt);
     if (this.runtimes.get(workspace)?.running) throw new CoreError("INVALID_REQUEST", `${this.descriptor.name} is already working`);
     const session = await this.get(workspace);
     applyConfiguration(session, request.configuration);
     const runtime = await this.ensureRuntime(workspace, session, request.mcpServers);
-    runtime.running = true;
-    runtime.anchors = {};
-    runtime.session.status = "in_progress";
-    runtime.session.messages.push(this.message("user", request.prompt.trim()));
+    runtime.session.messages.push(this.message("user", prompt));
+    this.runPrompt(workspace, runtime, request.agent ? `${request.agent.instructions.trim()}\n\n${prompt}` : prompt);
     await this.save(workspace, runtime.session); this.onChanged(workspace);
-    const prompt = request.agent ? `${request.agent.instructions.trim()}\n\n${request.prompt.trim()}` : request.prompt.trim();
-    // The completion handlers go through the same queue as `session/update` so a
-    // final status never overtakes text the agent streamed just before it.
-    void runtime.connection.prompt({ sessionId: runtime.sessionId, prompt: [{ type: "text", text: prompt }] }).then((result) => this.queue(workspace, async () => {
-      runtime.running = false; runtime.anchors = {};
-      const usage = result.usage;
-      if (usage) runtime.session.tokens = { total: usage.totalTokens, input: usage.inputTokens, output: usage.outputTokens, ...(usage.thoughtTokens != null ? { thought: usage.thoughtTokens } : {}), ...(usage.cachedReadTokens != null ? { cachedRead: usage.cachedReadTokens } : {}), ...(usage.cachedWriteTokens != null ? { cachedWrite: usage.cachedWriteTokens } : {}) };
-      runtime.session.status = result.stopReason === "cancelled" ? "idle" : result.stopReason === "end_turn" ? "done" : result.stopReason === "refusal" ? "error" : "user_prompt";
-      if (result.stopReason === "max_tokens" || result.stopReason === "max_turn_requests") runtime.session.messages.push(this.message("activity", `Turn stopped early: ${result.stopReason}`));
-      if (result.stopReason === "refusal") runtime.session.messages.push(this.message("error", "The agent refused to continue this turn."));
-      await this.save(workspace, runtime.session); this.onChanged(workspace);
-    })).catch((error: unknown) => this.queue(workspace, async () => {
-      runtime.running = false; runtime.anchors = {};
-      runtime.session.status = "error"; runtime.session.messages.push(this.message("error", this.describe(error, runtime)));
-      await this.save(workspace, runtime.session); this.onChanged(workspace);
-    }));
+    return this.get(workspace);
+  }
+
+  /**
+   * Adds input to a turn that is already running. Agents implementing the
+   * `_session/steering` extension fold it into the live turn; for the rest the
+   * follow-up is queued and dispatched the moment the current turn ends.
+   */
+  async steer(workspace: string, text: string): Promise<AiSession> {
+    const prompt = this.validate(text);
+    const runtime = this.runtimes.get(workspace);
+    if (!runtime?.running) throw new CoreError("INVALID_REQUEST", `${this.descriptor.name} is not currently working`);
+    runtime.session.messages.push(this.message("user", prompt));
+    runtime.anchors = {};
+    if (runtime.steering) {
+      try { await runtime.connection.extMethod(STEERING_METHOD, { sessionId: runtime.sessionId, prompt: [{ type: "text", text: prompt }] }); }
+      catch (error) { runtime.session.messages.push(this.message("activity", `Could not steer the running turn, queued instead: ${error instanceof Error ? error.message : String(error)}`)); runtime.pending.push(prompt); }
+    } else runtime.pending.push(prompt);
+    await this.save(workspace, runtime.session); this.onChanged(workspace);
     return this.get(workspace);
   }
 
   async interrupt(workspace: string): Promise<AiSession> {
     const runtime = this.runtimes.get(workspace);
     if (!runtime?.running) throw new CoreError("INVALID_REQUEST", `${this.descriptor.name} is not currently working`);
-    await runtime.connection.cancel({ sessionId: runtime.sessionId });
-    runtime.running = false; runtime.anchors = {};
+    // Retire the turn before cancelling so neither its late output nor its
+    // completion status (agents may still report `end_turn`) lands afterwards.
+    runtime.generation += 1;
+    runtime.running = false; runtime.anchors = {}; runtime.pending = [];
+    try { await runtime.connection.cancel({ sessionId: runtime.sessionId }); }
+    catch (error) { runtime.session.messages.push(this.message("activity", `Cancel request failed: ${error instanceof Error ? error.message : String(error)}`)); }
     runtime.session.status = "idle"; runtime.session.messages.push(this.message("activity", "Interrupted by user"));
     await this.save(workspace, runtime.session); this.onChanged(workspace); return this.get(workspace);
+  }
+
+  /** Starts a turn and wires its completion back onto the session. */
+  private runPrompt(workspace: string, runtime: Runtime, prompt: string): void {
+    const generation = (runtime.generation += 1);
+    runtime.running = true;
+    runtime.anchors = {};
+    runtime.session.status = "in_progress";
+    // The completion handlers go through the same queue as `session/update` so a
+    // final status never overtakes text the agent streamed just before it.
+    void runtime.connection.prompt({ sessionId: runtime.sessionId, prompt: [{ type: "text", text: prompt }] }).then((result) => this.queue(workspace, async () => {
+      if (runtime.generation !== generation) return;
+      runtime.running = false; runtime.anchors = {};
+      const usage = result.usage;
+      if (usage) runtime.session.tokens = { total: usage.totalTokens, input: usage.inputTokens, output: usage.outputTokens, ...(usage.thoughtTokens != null ? { thought: usage.thoughtTokens } : {}), ...(usage.cachedReadTokens != null ? { cachedRead: usage.cachedReadTokens } : {}), ...(usage.cachedWriteTokens != null ? { cachedWrite: usage.cachedWriteTokens } : {}) };
+      const queued = result.stopReason === "cancelled" ? undefined : runtime.pending.shift();
+      if (queued !== undefined) this.runPrompt(workspace, runtime, queued);
+      else {
+        runtime.session.status = result.stopReason === "cancelled" ? "idle" : result.stopReason === "end_turn" ? "done" : result.stopReason === "refusal" ? "error" : "user_prompt";
+        if (result.stopReason === "max_tokens" || result.stopReason === "max_turn_requests") runtime.session.messages.push(this.message("activity", `Turn stopped early: ${result.stopReason}`));
+        if (result.stopReason === "refusal") runtime.session.messages.push(this.message("error", "The agent refused to continue this turn."));
+      }
+      await this.save(workspace, runtime.session); this.onChanged(workspace);
+    })).catch((error: unknown) => this.queue(workspace, async () => {
+      if (runtime.generation !== generation) return;
+      runtime.running = false; runtime.anchors = {}; runtime.pending = [];
+      runtime.session.status = "error"; runtime.session.messages.push(this.message("error", this.describe(error, runtime)));
+      await this.save(workspace, runtime.session); this.onChanged(workspace);
+    }));
+  }
+
+  private validate(prompt: string): string {
+    if (!prompt.trim() || prompt.length > 100_000) throw new CoreError("INVALID_REQUEST", "Prompt must contain at most 100,000 characters");
+    return prompt.trim();
   }
 
   async clear(workspace: string): Promise<AiSession> {
@@ -139,9 +187,10 @@ export abstract class StdioAcpProvider extends AcpProvider {
     if (existing) { applyConfiguration(existing.session, session.configuration ?? {}); return existing; }
     this.lastWorkspace = workspace;
     const connected = await this.connect(workspace, session.configuration ?? {}, servers);
-    const runtime: Runtime = { child: connected.child, connection: connected.connection, sessionId: connected.sessionId, running: false, stderr: connected.stderr(), session, tools: new Map(), anchors: {} };
+    const runtime: Runtime = { child: connected.child, connection: connected.connection, sessionId: connected.sessionId, running: false, stderr: connected.stderr(), session, tools: new Map(), anchors: {}, generation: 0, steering: connected.steering, pending: [] };
     connected.bind(runtime);
     session.threadId = connected.sessionId;
+    session.steering = connected.steering;
     session.availableOptions = this.toUiOptions(connected.configOptions, connected.modes);
     this.runtimes.set(workspace, runtime);
     const warnings = await this.applyAcpConfiguration(runtime, connected.configOptions, connected.modes);
@@ -167,11 +216,12 @@ export abstract class StdioAcpProvider extends AcpProvider {
     try {
       const initialized = await connection.initialize({ protocolVersion: PROTOCOL_VERSION, clientCapabilities: {}, clientInfo: { name: "Vibe Editor", version: "0.1.0" } });
       authHint = initialized.authMethods?.map((method) => method.description ?? method.name).join("; ") ?? "";
+      const steering = (initialized._meta as { steering?: { supported?: boolean } } | undefined)?.steering?.supported === true;
       const created = await connection.newSession({ cwd: workspace, mcpServers: this.mcpServers(servers) }) as CreatedSession;
       const configOptions = created.configOptions ?? [];
       this.rememberModels(configOptions, created.models);
       return {
-        child, connection, sessionId: created.sessionId, stderr: () => stderr, configOptions, modes: created.modes, models: created.models,
+        child, connection, sessionId: created.sessionId, stderr: () => stderr, configOptions, modes: created.modes, models: created.models, steering,
         bind: (runtime) => {
           child.stderr.on("data", () => { runtime.stderr = stderr; });
           bound = (params) => this.queue(workspace, () => this.consumeUpdate(workspace, runtime, params));
@@ -229,6 +279,9 @@ export abstract class StdioAcpProvider extends AcpProvider {
   private async consumeUpdate(workspace: string, runtime: Runtime, params: SessionNotification): Promise<void> {
     const update = params.update;
     const session = runtime.session;
+    // Agents keep emitting output for a short while after a cancel; that trailing
+    // text belongs to a turn the user already retired, so it is dropped.
+    if (!runtime.running && CONVERSATION_UPDATES.has(update.sessionUpdate)) return;
     switch (update.sessionUpdate) {
       case "agent_message_chunk": {
         const text = textOf(update.content); if (!text) break;

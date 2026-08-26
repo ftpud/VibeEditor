@@ -91,6 +91,7 @@ export type ProtocolOperations = {
   "ai.configure": { payload: { provider?: AiProvider; model?: string; reasoning?: string; configuration?: AiConfiguration }; result: { session: AiSession } };
   "ai.send": { payload: { provider?: AiProvider; prompt: string; model?: string; reasoning?: string; configuration?: AiConfiguration; mcpServers?: AiMcpServer[]; agent?: AiAgent }; result: { session: AiSession } };
   "ai.interrupt": { payload: { provider?: AiProvider }; result: { session: AiSession } };
+  "ai.steer": { payload: { provider?: AiProvider; prompt: string }; result: { session: AiSession } };
   "ai.clear": { payload: { provider?: AiProvider }; result: { session: AiSession } };
   "ai.usage": { payload: { provider?: AiProvider }; result: { usage: AiUsage } };
   "ai.statuses": { payload: Record<string, never>; result: { root: AiTaskSummary; tasks: Record<string, AiTaskSummary> } };
@@ -284,6 +285,7 @@ export const requestTypes: RequestType[] = [
   "ai.configure",
   "ai.send",
   "ai.interrupt",
+  "ai.steer",
   "ai.clear",
   "ai.usage",
   "ai.statuses",

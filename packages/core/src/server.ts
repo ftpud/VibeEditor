@@ -193,6 +193,7 @@ async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStor
     case "ai.configure": return { session: await acp.get(request.payload.provider).configure(workspacePath, { ...request.payload.configuration, ...(request.payload.model ? { model: request.payload.model } : {}), ...(request.payload.reasoning ? { reasoning: request.payload.reasoning } : {}) }) };
     case "ai.send": return { session: await acp.get(request.payload.provider).send(workspacePath, { prompt: request.payload.prompt, configuration: { ...request.payload.configuration, ...(request.payload.model ? { model: request.payload.model } : {}), ...(request.payload.reasoning ? { reasoning: request.payload.reasoning } : {}) }, mcpServers: request.payload.mcpServers, agent: request.payload.agent }) };
     case "ai.interrupt": return { session: await acp.get(request.payload.provider).interrupt(workspacePath) };
+    case "ai.steer": return { session: await acp.get(request.payload.provider).steer(workspacePath, request.payload.prompt) };
     case "ai.clear": return { session: await acp.get(request.payload.provider).clear(workspacePath) };
     case "ai.usage": return { usage: await acp.get(request.payload.provider).usage(workspacePath) };
     case "ai.statuses": {

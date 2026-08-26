@@ -12,8 +12,9 @@ import { AcpRegistry } from "../acp.js";
 const FAKE_AGENT = fileURLToPath(new URL("./fake-acp-agent.mjs", import.meta.url));
 
 class FakeProvider extends StdioAcpProvider {
+  constructor(onChanged: (workspace: string) => void, state: string, private readonly env: NodeJS.ProcessEnv = {}) { super(onChanged, state); }
   readonly descriptor: AiProviderDescriptor = { id: "fake", name: "Fake ACP", description: "test", settings: { title: "t", description: "d", sections: [] }, options: [], capabilities: { models: true, usage: true, mcp: true, agents: true, contextWindow: true } };
-  protected command(_configuration: AiConfiguration) { return { command: process.execPath, args: [FAKE_AGENT] }; }
+  protected command(_configuration: AiConfiguration) { return { command: process.execPath, args: [FAKE_AGENT], env: this.env }; }
   protected async fallbackModels(): Promise<AiModel[]> { return [{ id: "fallback", name: "Fallback", defaultReasoning: "medium", reasoningLevels: ["medium"] }]; }
 }
 
@@ -115,5 +116,57 @@ describe("ACP integration", () => {
     expect(JSON.parse(codex["command"]({ webSearch: "disabled" }).env.CODEX_CONFIG as string)).toEqual({ web_search: "disabled" });
     expect(JSON.parse(codex["command"]({ webSearch: "default" }).env.CODEX_CONFIG as string)).toEqual({});
     expect(codex["command"]({ mode: "read-only" }).env.INITIAL_AGENT_MODE).toBe("read-only");
+  });
+  it("queues mid-turn input for agents without steering and runs it next", async () => {
+    const state = await mkdtemp(path.join(os.tmpdir(), "remote-ide-ai-queue-"));
+    const provider = new FakeProvider(() => undefined, state);
+    const workspace = process.cwd();
+    await provider.send(workspace, { prompt: "first", configuration: { model: "model-a" } });
+    const steered = await provider.steer(workspace, "second");
+    expect(steered.steering).toBe(false);
+    const session = await settle(provider, workspace);
+    expect(session.messages.filter((message) => message.role === "user").map((message) => message.text)).toEqual(["first", "second"]);
+    // Two full turns ran, so the scripted reply appears twice.
+    expect(session.messages.filter((message) => message.text === "Hello, world")).toHaveLength(2);
+    expect(session.status).toBe("done");
+    await provider.clear(workspace);
+  });
+
+  it("injects mid-turn input into the live turn when the agent supports steering", async () => {
+    const state = await mkdtemp(path.join(os.tmpdir(), "remote-ide-ai-steer-"));
+    const provider = new FakeProvider(() => undefined, state, { FAKE_STEERING: "on", FAKE_SLOW: "on" });
+    const workspace = process.cwd();
+    await provider.send(workspace, { prompt: "first", configuration: { model: "model-a" } });
+    const steered = await provider.steer(workspace, "second");
+    expect(steered.steering).toBe(true);
+    await provider.interrupt(workspace);
+    const session = await provider.get(workspace);
+    expect(session.messages.some((message) => message.text.includes("[steered: second]"))).toBe(true);
+    // A single turn absorbed the follow-up, so "working" was not restarted.
+    expect(session.messages.filter((message) => message.text.startsWith("working"))).toHaveLength(1);
+    await provider.clear(workspace);
+  });
+
+  it("stays interrupted even when the agent reports the cancelled turn as a success", async () => {
+    const state = await mkdtemp(path.join(os.tmpdir(), "remote-ide-ai-interrupt-"));
+    const provider = new FakeProvider(() => undefined, state, { FAKE_SLOW: "on" });
+    const workspace = process.cwd();
+    await provider.send(workspace, { prompt: "first", configuration: { model: "model-a" } });
+    await provider.steer(workspace, "queued follow-up");
+    const stopped = await provider.interrupt(workspace);
+    expect(stopped.status).toBe("idle");
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    const session = await provider.get(workspace);
+    expect(session.status).toBe("idle");
+    expect(session.messages.at(-1)?.text).toBe("Interrupted by user");
+    expect(session.messages.some((message) => message.text.includes("trailing output after cancel"))).toBe(false);
+    await expect(provider.steer(workspace, "too late")).rejects.toThrow("not currently working");
+    await provider.clear(workspace);
+  });
+
+  it("rejects mid-turn input when nothing is running", async () => {
+    const state = await mkdtemp(path.join(os.tmpdir(), "remote-ide-ai-idle-steer-"));
+    const provider = new FakeProvider(() => undefined, state);
+    await expect(provider.steer(process.cwd(), "hello")).rejects.toThrow("not currently working");
   });
 });

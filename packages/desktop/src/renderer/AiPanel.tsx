@@ -6,7 +6,7 @@ import type { AiConfiguration, AiModel, AiProvider, AiProviderDescriptor, AiSess
 
 export type AiAttachment = { id: string; name: string; path?: string; content?: string };
 
-export function AiPanel({ provider, providers, session, models, usage, attachments, onProviderChange, onConfigurationChange, onAttachmentsChange, onSend, onInterrupt, onClear }: { provider: AiProvider; providers: AiProviderDescriptor[]; session: AiSession; models: AiModel[]; usage?: AiUsage; attachments: AiAttachment[]; onProviderChange(provider: AiProvider): void; onConfigurationChange(configuration: AiConfiguration): void; onAttachmentsChange(attachments: AiAttachment[]): void; onSend(prompt: string, configuration: AiConfiguration, attachments: AiAttachment[]): Promise<void>; onInterrupt(): void; onClear(): void }) {
+export function AiPanel({ provider, providers, session, models, usage, attachments, onProviderChange, onConfigurationChange, onAttachmentsChange, onSend, onSteer, onInterrupt, onClear }: { provider: AiProvider; providers: AiProviderDescriptor[]; session: AiSession; models: AiModel[]; usage?: AiUsage; attachments: AiAttachment[]; onProviderChange(provider: AiProvider): void; onConfigurationChange(configuration: AiConfiguration): void; onAttachmentsChange(attachments: AiAttachment[]): void; onSend(prompt: string, configuration: AiConfiguration, attachments: AiAttachment[]): Promise<void>; onSteer(prompt: string): Promise<void>; onInterrupt(): void; onClear(): void }) {
   const [prompt, setPrompt] = useState("");
   const [model, setModel] = useState(session.model);
   const [reasoning, setReasoning] = useState(session.reasoning);
@@ -28,7 +28,13 @@ export function AiPanel({ provider, providers, session, models, usage, attachmen
   const updateConfiguration = (values: AiConfiguration) => { const next = { ...configuration, ...values }; setConfiguration(next); onConfigurationChange({ ...next, model, reasoning }); };
   const changeModel = (nextModel: string) => { const item = models.find((candidate) => candidate.id === nextModel); const nextReasoning = item && item.reasoningLevels.length > 0 && !item.reasoningLevels.includes(reasoning) ? item.defaultReasoning : item && item.reasoningLevels.length === 0 ? "" : reasoning; setModel(nextModel); setReasoning(nextReasoning); onConfigurationChange({ ...configuration, model: nextModel, reasoning: nextReasoning }); };
   const changeReasoning = (nextReasoning: string) => { setReasoning(nextReasoning); onConfigurationChange({ ...configuration, model, reasoning: nextReasoning }); };
-  const send = async () => { if ((!prompt.trim() && attachments.length === 0) || running) return; const value = prompt; setPrompt(""); try { await onSend(value, { ...configuration, model, reasoning }, attachments); onAttachmentsChange([]); } catch { setPrompt(value); } };
+  const send = async () => {
+    if (!prompt.trim() && (attachments.length === 0 || running)) return;
+    const value = prompt;
+    setPrompt("");
+    try { if (running) await onSteer(value); else { await onSend(value, { ...configuration, model, reasoning }, attachments); onAttachmentsChange([]); } }
+    catch { setPrompt(value); }
+  };
   const addFiles = async (files: FileList | null) => {
     if (!files) return;
     const added = await Promise.all([...files].map(async (file) => ({ id: crypto.randomUUID(), name: file.name, content: await file.text() })));
@@ -66,8 +72,8 @@ export function AiPanel({ provider, providers, session, models, usage, attachmen
     <div className="ai-composer-resize-handle" onPointerDown={beginComposerResize} />
     <form className="ai-composer" style={{ height: composerHeight }} onSubmit={(event) => { event.preventDefault(); void send(); }}>
       {attachments.length > 0 && <div className="ai-attachments">{attachments.map((attachment) => <span className="ai-attachment" key={attachment.id} title={attachment.path ?? attachment.name}><span>{attachment.path ?? attachment.name}</span><button type="button" title={`Remove ${attachment.name}`} onClick={() => onAttachmentsChange(attachments.filter((item) => item.id !== attachment.id))}><X size={12} /></button></span>)}</div>}
-      <textarea value={prompt} disabled={running} placeholder={`Ask ${providerName}...`} onChange={(event) => setPrompt(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void send(); } }} />
-      <div className="ai-composer-actions"><input ref={fileInputRef} type="file" multiple onChange={(event) => void addFiles(event.target.files)} /><button type="button" title="Attach files" disabled={running} onClick={() => fileInputRef.current?.click()}><Paperclip size={15} /></button><button title="Send prompt" disabled={running || (!prompt.trim() && attachments.length === 0)}><Send size={15} /></button></div>
+      <textarea value={prompt} placeholder={running ? (session.steering ? `Steer ${providerName} while it works...` : `Queue a follow-up for ${providerName}...`) : `Ask ${providerName}...`} onChange={(event) => setPrompt(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void send(); } }} />
+      <div className="ai-composer-actions"><input ref={fileInputRef} type="file" multiple onChange={(event) => void addFiles(event.target.files)} /><button type="button" title="Attach files" disabled={running} onClick={() => fileInputRef.current?.click()}><Paperclip size={15} /></button><button title={running ? (session.steering ? "Add input to the running turn" : "Queue this for the next turn") : "Send prompt"} disabled={!prompt.trim() && (running || attachments.length === 0)}><Send size={15} /></button></div>
     </form>
   </div>;
 }
