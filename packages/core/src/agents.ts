@@ -8,7 +8,8 @@ import { CoreError } from "./errors.js";
 export const AGENT_TEMPLATE = `---
 name: New Agent
 description: Describe when this agent should be used.
-mcpServers: []
+mcpServers:
+  - vibe-editor
 ---
 
 You are a specialized agent. Describe your role, workflow, and constraints here.

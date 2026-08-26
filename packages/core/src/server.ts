@@ -137,6 +137,13 @@ export async function createServer(host: string, port: number, workspacePath: st
         ignored: (watchPath) => path.relative(nextWorkspace, watchPath).split(path.sep).some((part) => part === ".git" || part === "node_modules"),
         awaitWriteFinish: { stabilityThreshold: 150, pollInterval: 50 }
       });
+      // Subscribe immediately: on a small/cached worktree chokidar can become ready while
+      // gitIndexPath() below is still running. Registering after that await misses the one-shot
+      // event and leaves tasks.switch (and the renderer's switching state) pending forever.
+      const watcherReady = new Promise<void>((resolve, reject) => {
+        switchedWatcher!.once("ready", resolve);
+        switchedWatcher!.once("error", reject);
+      });
       const sendChange = (kind: FileChangeKind, absolutePath: string) => {
         const relativePath = path.relative(nextWorkspace, absolutePath).split(path.sep).join("/");
         if (!relativePath || socket.readyState !== WebSocket.OPEN) return;
@@ -147,7 +154,7 @@ export async function createServer(host: string, port: number, workspacePath: st
       switchedGitIndexWatcher.on("all", () => {
         if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: "git.changed", payload: {} } satisfies ServerEvent));
       });
-      await new Promise<void>((resolve, reject) => { switchedWatcher!.once("ready", resolve); switchedWatcher!.once("error", reject); });
+      await watcherReady;
     };
     const client = request.socket.remoteAddress ?? "unknown";
     console.log(`[core] connected: ${client}`);

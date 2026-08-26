@@ -19,6 +19,7 @@ describe("AgentsStore", () => {
     expect(agents.map((agent) => `${agent.scope}:${agent.name}`)).toEqual(["global:planner.md", "local:tester.md", "workspace:reviewer.md"]);
     expect(agents.find((agent) => agent.scope === "workspace")?.agent).toEqual({ name: "Code Reviewer", description: "Reviews changes", instructions: "Review carefully." });
     expect(await store.read("global", "planner.md", workspace)).toBe(AGENT_TEMPLATE);
+    expect(agents.find((agent) => agent.name === "planner.md")?.agent.mcpServers).toEqual(["vibe-editor"]);
   });
 
   it("parses MCP restrictions and falls back to the file name", () => {
