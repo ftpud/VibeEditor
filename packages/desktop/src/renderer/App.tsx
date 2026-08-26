@@ -6,6 +6,7 @@ import type { editor } from "monaco-editor";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { CoreClient } from "./client";
+import { readSetting, readSettingNumber, readWorkspaceSetting, workspaceSettingKey, writeSetting, writeWorkspaceSetting } from "./settings";
 import { initialLayout, type EditorTab, type LayoutModel, type Panel } from "./model";
 import { TerminalPanel } from "./TerminalPanel";
 import { JavaPanel } from "./JavaPanel";
@@ -56,18 +57,14 @@ function parseHttpRequests(content: string): ParsedHttpRequest[] {
 /** Setting name under which the AI provider last used for a task (or the root workspace) is stored. */
 function aiProviderTaskKey(taskId?: string): string { return `ai.provider.task.${taskId ?? "root"}`; }
 
-function workspaceSettingKey(workspace: string, setting: string): string {
-  return `workspace:${encodeURIComponent(workspace)}:${setting}`;
-}
-
 export function App() {
   const workspaceKeyRef = useRef("");
-  const wsSave = (key: string, value: string) => { localStorage.setItem(key, value); if (workspaceKeyRef.current) localStorage.setItem(workspaceSettingKey(workspaceKeyRef.current, key), value); };
-  const [theme, setTheme] = useState<"dark" | "light">(() => localStorage.getItem("theme") === "light" ? "light" : "dark");
-  const [highlightTheme, setHighlightTheme] = useState<HighlightTheme>(() => localStorage.getItem("highlightTheme") === "ftpud" ? "ftpud" : "default");
-  const [uiFontFamily, setUiFontFamily] = useState<"jetbrains" | "inter">(() => localStorage.getItem("uiFontFamily") === "inter" ? "inter" : "jetbrains");
-  const [uiFontSize, setUiFontSize] = useState(() => Math.min(20, Math.max(10, Number(localStorage.getItem("uiFontSize")) || 13)));
-  const [uiLineHeight, setUiLineHeight] = useState(() => Math.min(2, Math.max(1, Number(localStorage.getItem("uiLineHeight")) || 1.2)));
+  const wsSave = (key: string, value: string) => writeWorkspaceSetting(workspaceKeyRef.current, key, value);
+  const [theme, setTheme] = useState<"dark" | "light">(() => readSetting("theme") === "light" ? "light" : "dark");
+  const [highlightTheme, setHighlightTheme] = useState<HighlightTheme>(() => readSetting("highlightTheme") === "ftpud" ? "ftpud" : "default");
+  const [uiFontFamily, setUiFontFamily] = useState<"jetbrains" | "inter">(() => readSetting("uiFontFamily") === "inter" ? "inter" : "jetbrains");
+  const [uiFontSize, setUiFontSize] = useState(() => readSettingNumber("uiFontSize", 13, 10, 20));
+  const [uiLineHeight, setUiLineHeight] = useState(() => readSettingNumber("uiLineHeight", 1.2, 1, 2));
   const [settingsOpen, setSettingsOpen] = useState(false);
   useEffect(() => { document.documentElement.dataset.theme = theme; document.documentElement.style.colorScheme = theme; wsSave("theme", theme); }, [theme]);
   useEffect(() => { wsSave("highlightTheme", highlightTheme); }, [highlightTheme]);
@@ -75,7 +72,7 @@ export function App() {
   useEffect(() => { document.documentElement.style.setProperty("--ui-font-size", `${uiFontSize}px`); wsSave("uiFontSize", String(uiFontSize)); }, [uiFontSize]);
   useEffect(() => { document.documentElement.style.setProperty("--ui-line-height", String(uiLineHeight)); wsSave("uiLineHeight", String(uiLineHeight)); }, [uiLineHeight]);
   const saved = useMemo(() => {
-    try { return JSON.parse(localStorage.getItem("connection") ?? "{}") as Partial<{ host: string; port: string }>; } catch { return {}; }
+    try { return JSON.parse(readSetting("connection") ?? "{}") as Partial<{ host: string; port: string }>; } catch { return {}; }
   }, []);
   const launchConfig = useMemo(() => {
     const params = new URLSearchParams(window.location.search);
@@ -90,10 +87,10 @@ export function App() {
   const showStatus = useCallback((message: string, kind: StatusKind) => { setStatusKind(kind); setStatusMessageState(message); }, []);
   const [tree, setTree] = useState<FileTreeNode[]>([]);
   const [projectFilter, setProjectFilter] = useState("");
-  const [showIgnored, setShowIgnored] = useState(() => localStorage.getItem("showIgnoredFiles") === "true");
+  const [showIgnored, setShowIgnored] = useState(() => readSetting("showIgnoredFiles") === "true");
   const showIgnoredRef = useRef(showIgnored);
   const [layout, setLayout] = useState<LayoutModel>(initialLayout);
-  const [sideLayout, setSideLayout] = useState<"classic" | "ai-focused">(() => localStorage.getItem("sideLayout") === "classic" ? "classic" : "ai-focused");
+  const [sideLayout, setSideLayout] = useState<"classic" | "ai-focused">(() => readSetting("sideLayout") === "classic" ? "classic" : "ai-focused");
   const [leftSidebarWidth, setLeftSidebarWidth] = useState(520);
   const [rightSidebarWidth, setRightSidebarWidth] = useState(360);
   const [leftPanels, setLeftPanels] = useState({ tasks: true, ai: true });
@@ -105,17 +102,17 @@ export function App() {
   const [classicAiOpen, setClassicAiOpen] = useState(false);
   const [classicSplit, setClassicSplit] = useState(50);
 
-  // Persist panel layout per workspace
-  useEffect(() => { if (workspaceKeyRef.current && sideLayout === "ai-focused") { localStorage.setItem(workspaceSettingKey(workspaceKeyRef.current, "focused.leftPanels"), JSON.stringify(leftPanels)); } }, [leftPanels]);
-  useEffect(() => { if (workspaceKeyRef.current && sideLayout === "ai-focused") { localStorage.setItem(workspaceSettingKey(workspaceKeyRef.current, "focused.rightPanels"), JSON.stringify(rightPanels)); } }, [rightPanels]);
-  useEffect(() => { if (workspaceKeyRef.current && sideLayout === "ai-focused") { localStorage.setItem(workspaceSettingKey(workspaceKeyRef.current, "focused.leftWidth"), String(leftSidebarWidth)); } }, [leftSidebarWidth]);
-  useEffect(() => { if (workspaceKeyRef.current && sideLayout === "ai-focused") { localStorage.setItem(workspaceSettingKey(workspaceKeyRef.current, "focused.rightWidth"), String(rightSidebarWidth)); } }, [rightSidebarWidth]);
-  useEffect(() => { if (workspaceKeyRef.current && sideLayout === "classic") { localStorage.setItem(workspaceSettingKey(workspaceKeyRef.current, "classic.leftWidth"), String(classicLeftWidth)); } }, [classicLeftWidth]);
-  useEffect(() => { if (workspaceKeyRef.current && sideLayout === "classic") { localStorage.setItem(workspaceSettingKey(workspaceKeyRef.current, "classic.rightWidth"), String(classicRightWidth)); } }, [classicRightWidth]);
-  useEffect(() => { if (workspaceKeyRef.current && sideLayout === "classic") { localStorage.setItem(workspaceSettingKey(workspaceKeyRef.current, "classic.tasksOpen"), String(classicTasksOpen)); } }, [classicTasksOpen]);
-  useEffect(() => { if (workspaceKeyRef.current && sideLayout === "classic") { localStorage.setItem(workspaceSettingKey(workspaceKeyRef.current, "classic.aiOpen"), String(classicAiOpen)); } }, [classicAiOpen]);
-  useEffect(() => { if (workspaceKeyRef.current && sideLayout === "classic") { localStorage.setItem(workspaceSettingKey(workspaceKeyRef.current, "classic.split"), String(classicSplit)); } }, [classicSplit]);
-  useEffect(() => { if (workspaceKeyRef.current && sideLayout === "classic") { localStorage.setItem(workspaceSettingKey(workspaceKeyRef.current, "classic.sideView"), classicSideView); } }, [classicSideView]);
+  // Persist panel layout per workspace, keeping the value as the global default for new workspaces.
+  useEffect(() => { if (workspaceKeyRef.current && sideLayout === "ai-focused") { writeWorkspaceSetting(workspaceKeyRef.current, "focused.leftPanels", JSON.stringify(leftPanels)); } }, [leftPanels]);
+  useEffect(() => { if (workspaceKeyRef.current && sideLayout === "ai-focused") { writeWorkspaceSetting(workspaceKeyRef.current, "focused.rightPanels", JSON.stringify(rightPanels)); } }, [rightPanels]);
+  useEffect(() => { if (workspaceKeyRef.current && sideLayout === "ai-focused") { writeWorkspaceSetting(workspaceKeyRef.current, "focused.leftWidth", String(leftSidebarWidth)); } }, [leftSidebarWidth]);
+  useEffect(() => { if (workspaceKeyRef.current && sideLayout === "ai-focused") { writeWorkspaceSetting(workspaceKeyRef.current, "focused.rightWidth", String(rightSidebarWidth)); } }, [rightSidebarWidth]);
+  useEffect(() => { if (workspaceKeyRef.current && sideLayout === "classic") { writeWorkspaceSetting(workspaceKeyRef.current, "classic.leftWidth", String(classicLeftWidth)); } }, [classicLeftWidth]);
+  useEffect(() => { if (workspaceKeyRef.current && sideLayout === "classic") { writeWorkspaceSetting(workspaceKeyRef.current, "classic.rightWidth", String(classicRightWidth)); } }, [classicRightWidth]);
+  useEffect(() => { if (workspaceKeyRef.current && sideLayout === "classic") { writeWorkspaceSetting(workspaceKeyRef.current, "classic.tasksOpen", String(classicTasksOpen)); } }, [classicTasksOpen]);
+  useEffect(() => { if (workspaceKeyRef.current && sideLayout === "classic") { writeWorkspaceSetting(workspaceKeyRef.current, "classic.aiOpen", String(classicAiOpen)); } }, [classicAiOpen]);
+  useEffect(() => { if (workspaceKeyRef.current && sideLayout === "classic") { writeWorkspaceSetting(workspaceKeyRef.current, "classic.split", String(classicSplit)); } }, [classicSplit]);
+  useEffect(() => { if (workspaceKeyRef.current && sideLayout === "classic") { writeWorkspaceSetting(workspaceKeyRef.current, "classic.sideView", classicSideView); } }, [classicSideView]);
   const [showCreateTaskDialog, setShowCreateTaskDialog] = useState(false);
   const [tasks, setTasks] = useState<WorkspaceTask[]>([]);
   const [taskFilter, setTaskFilter] = useState("");
@@ -131,7 +128,7 @@ export function App() {
   const [projectName, setProjectName] = useState("");
   const [aiSession, setAiSession] = useState<AiSession>({ model: "gpt-5.6-sol", reasoning: "low", status: "idle", messages: [] });
   const [aiSessions, setAiSessions] = useState<AiSession[]>([]);
-  const [aiProvider, setAiProvider] = useState<AiProvider>(() => localStorage.getItem("aiProvider") === "copilot" ? "copilot" : "codex");
+  const [aiProvider, setAiProvider] = useState<AiProvider>(() => readSetting("aiProvider") === "copilot" ? "copilot" : "codex");
   const [aiModels, setAiModels] = useState<AiModel[]>([]);
   const [aiProviders, setAiProviders] = useState<AiProviderDescriptor[]>([]);
   const [aiUsage, setAiUsage] = useState<AiUsage>();
@@ -179,7 +176,7 @@ export function App() {
   const [searchScope, setSearchScope] = useState<string>();
   const [pendingNavigation, setPendingNavigation] = useState<{ result: SearchResult; matchLength: number }>();
   const clientRef = useRef<CoreClient>();
-  const aiProviderRef = useRef<AiProvider>(localStorage.getItem("aiProvider") === "copilot" ? "copilot" : "codex");
+  const aiProviderRef = useRef<AiProvider>(readSetting("aiProvider") === "copilot" ? "copilot" : "codex");
   const didAutoConnect = useRef(false);
   const layoutRef = useRef(layout);
   const treeRefreshTimer = useRef<ReturnType<typeof setTimeout>>();
@@ -202,12 +199,12 @@ export function App() {
   useEffect(() => {
     if (status !== "connected" || !workspaceOptionsReady || !workspaceKeyRef.current) return;
     const activePanel = layout.panels.find((panel): panel is Panel & { type: BottomPanelType } => ["terminal", "java", "problems", "gitlog"].includes(panel.type));
-    localStorage.setItem(workspaceSettingKey(workspaceKeyRef.current, "bottom.activePanel"), activePanel?.type ?? "");
+    writeWorkspaceSetting(workspaceKeyRef.current, "bottom.activePanel", activePanel?.type ?? "");
   }, [layout.panels, status, workspaceOptionsReady]);
-  useEffect(() => { if (workspaceOptionsReady && workspaceKeyRef.current) localStorage.setItem(workspaceSettingKey(workspaceKeyRef.current, "bottom.terminalHeight"), String(terminalHeight)); }, [terminalHeight, workspaceOptionsReady]);
-  useEffect(() => { if (workspaceOptionsReady && workspaceKeyRef.current) localStorage.setItem(workspaceSettingKey(workspaceKeyRef.current, "bottom.javaHeight"), String(javaPanelHeight)); }, [javaPanelHeight, workspaceOptionsReady]);
-  useEffect(() => { if (workspaceOptionsReady && workspaceKeyRef.current) localStorage.setItem(workspaceSettingKey(workspaceKeyRef.current, "bottom.problemsHeight"), String(problemsHeight)); }, [problemsHeight, workspaceOptionsReady]);
-  useEffect(() => { if (workspaceOptionsReady && workspaceKeyRef.current) localStorage.setItem(workspaceSettingKey(workspaceKeyRef.current, "bottom.gitLogHeight"), String(gitLogHeight)); }, [gitLogHeight, workspaceOptionsReady]);
+  useEffect(() => { if (workspaceOptionsReady && workspaceKeyRef.current) writeWorkspaceSetting(workspaceKeyRef.current, "bottom.terminalHeight", String(terminalHeight)); }, [terminalHeight, workspaceOptionsReady]);
+  useEffect(() => { if (workspaceOptionsReady && workspaceKeyRef.current) writeWorkspaceSetting(workspaceKeyRef.current, "bottom.javaHeight", String(javaPanelHeight)); }, [javaPanelHeight, workspaceOptionsReady]);
+  useEffect(() => { if (workspaceOptionsReady && workspaceKeyRef.current) writeWorkspaceSetting(workspaceKeyRef.current, "bottom.problemsHeight", String(problemsHeight)); }, [problemsHeight, workspaceOptionsReady]);
+  useEffect(() => { if (workspaceOptionsReady && workspaceKeyRef.current) writeWorkspaceSetting(workspaceKeyRef.current, "bottom.gitLogHeight", String(gitLogHeight)); }, [gitLogHeight, workspaceOptionsReady]);
   useEffect(() => {
     if (status !== "connected" || !statusMessage || statusKind === "error" || statusKind === "progress") return;
     const timer = window.setTimeout(() => setStatusMessageState(""), 4500);
@@ -355,7 +352,7 @@ export function App() {
       } catch { return undefined; }
     }))).filter((item): item is NonNullable<typeof item> => Boolean(item));
     const activeTerminal = restoredTerminals.find((item) => item.index === options.terminal?.activeTabIndex)?.tab ?? restoredTerminals[0]?.tab;
-    const savedBottomPanel = workspaceKeyRef.current ? localStorage.getItem(workspaceSettingKey(workspaceKeyRef.current, "bottom.activePanel")) : null;
+    const savedBottomPanel = workspaceKeyRef.current ? readWorkspaceSetting(workspaceKeyRef.current, "bottom.activePanel") : null;
     const validBottomPanel = savedBottomPanel === "gitlog"
       || (savedBottomPanel === "terminal" && restoredTerminals.length > 0)
       || ((savedBottomPanel === "java" || savedBottomPanel === "problems") && Boolean(options.javaProject));
@@ -471,7 +468,7 @@ export function App() {
         // Load workspace-specific settings
         const key = result.workspace;
         workspaceKeyRef.current = key;
-        const setting = (name: string) => localStorage.getItem(workspaceSettingKey(key, name)) ?? localStorage.getItem(name);
+        const setting = (name: string) => readWorkspaceSetting(key, name);
         const wsTheme = setting("theme");
         if (wsTheme === "light" || wsTheme === "dark") setTheme(wsTheme);
         const wsHighlight = setting("highlightTheme");
@@ -528,7 +525,7 @@ export function App() {
         await refreshUsefulFiles(client);
         setTree(result.tree); setStatus("connected"); setStatusMessage("");
         void refreshGit(client); void refreshTaskGit(activeTaskRef.current, client);
-        localStorage.setItem("connection", JSON.stringify({ host, port }));
+        writeSetting("connection", JSON.stringify({ host, port }));
       } catch (error) {
         client.disconnect(); setStatus("workspace-error"); setStatusMessage(error instanceof Error ? error.message : "Workspace could not be opened");
       }
@@ -785,8 +782,8 @@ export function App() {
       const [sessionResult, models] = await Promise.all([clientRef.current.request("ai.get", { provider }), clientRef.current.request("ai.models", { provider })]);
       let session = sessionResult.session;
       const workspace = workspaceKeyRef.current;
-      const savedModel = workspace ? localStorage.getItem(workspaceSettingKey(workspace, `ai.${provider}.model`)) : null;
-      const savedReasoning = workspace ? localStorage.getItem(workspaceSettingKey(workspace, `ai.${provider}.reasoning`)) : null;
+      const savedModel = workspace ? readSetting(workspaceSettingKey(workspace, `ai.${provider}.model`)) : null;
+      const savedReasoning = workspace ? readSetting(workspaceSettingKey(workspace, `ai.${provider}.reasoning`)) : null;
       if (savedModel && models.models.some((model) => model.id === savedModel)) {
         const model = models.models.find((item) => item.id === savedModel)!;
         const reasoning = savedReasoning && model.reasoningLevels.includes(savedReasoning) ? savedReasoning : model.defaultReasoning;
@@ -825,7 +822,7 @@ export function App() {
       if (result.options.javaProject) setJavaTree((await clientRef.current.request("java.getProjectTree", {})).tree);
       await restoreWorkspaceOptions(result.options, clientRef.current);
       const nextTask = result.tasks.find((task) => task.id === result.selectedTaskId);
-      const savedProvider = workspaceKeyRef.current ? (localStorage.getItem(workspaceSettingKey(workspaceKeyRef.current, aiProviderTaskKey(result.selectedTaskId))) as AiProvider | null) : null;
+      const savedProvider = workspaceKeyRef.current ? (readSetting(workspaceSettingKey(workspaceKeyRef.current, aiProviderTaskKey(result.selectedTaskId))) as AiProvider | null) : null;
       const nextProvider = savedProvider && aiProviders.some((item) => item.id === savedProvider) ? savedProvider : aiProviderRef.current;
       await switchAiProvider(nextProvider, result.selectedTaskId);
       await Promise.all([refreshGit(), refreshAi(), refreshAiSessions(), refreshTaskGit(nextTask)]);
@@ -992,7 +989,7 @@ export function App() {
   const toggleShowIgnored = () => {
     const next = !showIgnoredRef.current;
     showIgnoredRef.current = next; setShowIgnored(next);
-    localStorage.setItem("showIgnoredFiles", String(next));
+    writeSetting("showIgnoredFiles", String(next));
     if (clientRef.current) void refreshTree(next);
   };
 
@@ -1036,7 +1033,7 @@ export function App() {
 
   const changeSideLayout = (value: "classic" | "ai-focused") => {
     setSideLayout(value);
-    localStorage.setItem("sideLayout", value);
+    writeSetting("sideLayout", value);
   };
 
   const createTerminal = async (command?: string): Promise<string | undefined> => {
@@ -1460,7 +1457,7 @@ export function App() {
         <button className={`tool-stripe-button ${leftPanels.tasks ? "active" : ""}`} title={leftPanels.tasks ? "Hide Tasks" : "Show Tasks"} onClick={() => setLeftPanels((current) => ({ ...current, tasks: !current.tasks }))}><ListTodo size={15} /><span>Tasks</span>{tasks.length > 0 && <span className="tool-badge">{tasks.length > 99 ? "99+" : tasks.length}</span>}</button>
         <button className={`tool-stripe-button ${leftPanels.ai ? "active" : ""}`} title={leftPanels.ai ? "Hide AI" : "Show AI"} onClick={() => setLeftPanels((current) => { if (!current.ai) void refreshAi(); return { ...current, ai: !current.ai }; })}><Bot size={15} /><span>AI</span>{aiSession.status === "in_progress" && <span className="tool-badge">...</span>}</button>
       </nav>
-      {(leftPanels.tasks || leftPanels.ai) && <><aside className="side-panel side-panel-left" style={{ width: leftSidebarWidth }}><ResizablePanelStack storageKey={workspaceSettingKey(workspaceKeyRef.current, "focused.leftSizes")} ids={[...(leftPanels.tasks ? ["tasks"] : []), ...(leftPanels.ai ? ["ai"] : [])]}>
+      {(leftPanels.tasks || leftPanels.ai) && <><aside className="side-panel side-panel-left" style={{ width: leftSidebarWidth }}><ResizablePanelStack workspace={activeWorkspace} setting="focused.leftSizes" ids={[...(leftPanels.tasks ? ["tasks"] : []), ...(leftPanels.ai ? ["ai"] : [])]}>
         {leftPanels.tasks && <section key="tasks" className="stacked-panel"><header className="panel-header"><span>Tasks</span><button title="Create task" disabled={taskSwitching} onClick={() => setShowCreateTaskDialog(true)}><Plus size={15} /></button></header><QuickFilter value={taskFilter} placeholder="Filter tasks" label="Filter tasks" onChange={setTaskFilter} /><div className="tasks-list">
           {showRootTask && <TaskRow icon={<Folder size={15} />} name="Root workspace" summary={aiStatuses.root} selected={selectedTaskId === undefined} disabled={taskSwitching} onClick={() => void switchTask()} />}
           {filteredTasks.map((task) => <TaskRow key={task.id} icon={<ListTodo size={15} />} name={task.name} summary={aiStatuses.tasks[task.id] ?? emptyAiSummary} selected={selectedTaskId === task.id} disabled={taskSwitching} onClick={() => void switchTask(task.id)} onMerge={() => void mergeTask(task)} onDelete={() => void deleteTask(task)} />)}
@@ -1531,7 +1528,7 @@ export function App() {
       </main>
       {sideLayout === "ai-focused" ? <>
       {rightSidebarOpen && <><div className="right-resize-handle" onPointerDown={beginRightSidebarResize} />
-      <aside className="side-panel side-panel-right" style={{ width: rightSidebarWidth }}><ResizablePanelStack storageKey={workspaceSettingKey(workspaceKeyRef.current, "focused.rightSizes")} ids={[...(rightPanels.project ? ["project"] : []), ...(rightPanels.git ? ["git"] : []), ...(rightPanels.taskGit && selectedTaskId ? ["taskGit"] : []), ...(rightPanels.java && javaOptions ? ["java"] : []), ...(rightPanels.useful ? ["useful"] : [])]}>
+      <aside className="side-panel side-panel-right" style={{ width: rightSidebarWidth }}><ResizablePanelStack workspace={activeWorkspace} setting="focused.rightSizes" ids={[...(rightPanels.project ? ["project"] : []), ...(rightPanels.git ? ["git"] : []), ...(rightPanels.taskGit && selectedTaskId ? ["taskGit"] : []), ...(rightPanels.java && javaOptions ? ["java"] : []), ...(rightPanels.useful ? ["useful"] : [])]}>
         {rightPanels.project && <section key="project" className="stacked-panel">
           <header className="panel-header"><span>Project</span><div className="panel-header-actions"><button title={showIgnored ? "Hide ignored files" : "Show all files (including Git-ignored)"} className={showIgnored ? "active" : ""} onClick={toggleShowIgnored}>{showIgnored ? <Eye size={14} /> : <EyeOff size={14} />}</button><button title="Synchronize files" onClick={() => void refreshTree()}><RefreshCw size={14} /></button></div></header>
           <QuickFilter value={projectFilter} placeholder="Filter files" label="Filter project files" onChange={setProjectFilter} />
@@ -1544,9 +1541,9 @@ export function App() {
           <GitChangesView entries={gitEntries} error={gitError} selectedPaths={selectedGitPaths} onTogglePath={(path) => setSelectedGitPaths((current) => { const next = new Set(current); next.has(path) ? next.delete(path) : next.add(path); return next; })} activePath={activeTab?.path} onOpenDiff={openDiff} onOpenFile={(entry) => void openFile({ name: entry.path.split("/").pop() ?? entry.path, path: entry.path, type: "file" })} onContextMenu={(event, entry) => { event.preventDefault(); setGitRollbackMenu({ x: Math.min(event.clientX, window.innerWidth - 220), y: Math.min(event.clientY, window.innerHeight - 50), entry }); }} />
           <form className="git-commit-panel" onSubmit={(event) => { event.preventDefault(); void commitSelectedFiles(); }}><textarea aria-label="Commit message" placeholder="Commit message" value={gitCommitMessage} disabled={gitCommitting} onChange={(event) => setGitCommitMessage(event.target.value)} /><footer><span>{selectedGitPaths.size} selected</span><button disabled={gitCommitting || selectedGitPaths.size === 0 || !gitCommitMessage.trim()}>{gitCommitting ? "Committing..." : "Commit"}</button></footer></form>
         </section>}
-        {rightPanels.taskGit && selectedTaskId && <section className="stacked-panel"><header className="panel-header"><span>Task Git</span><button title="Refresh task comparison" onClick={() => void refreshTaskGit()}><RefreshCw size={14} /></button></header><div className="git-branch"><GitCompareArrows size={13} /><span>{tasks.find((task) => task.id === selectedTaskId)?.baseBranch ?? "Base branch"}</span></div><GitChangesView entries={taskGitEntries} error={taskGitError} emptyMessage="No changes from base branch" groupTitle="Changes from Base" activePath={activeTab?.path} onOpenDiff={openTaskDiff} onOpenFile={(entry) => void openFile({ name: entry.path.split("/").pop() ?? entry.path, path: entry.path, type: "file" })} /></section>}
-        {rightPanels.java && javaOptions && <section className="stacked-panel"><header className="panel-header"><span>Java Project</span><button title="Refresh Java project" onClick={() => void refreshJavaTree()}><RefreshCw size={14} /></button></header><div className="java-project-meta"><Coffee size={13} /><span>{javaOptions.pomPath}</span></div><div className="tree java-tree"><JavaProjectTree nodes={javaTree} activePath={activeTab?.path} onOpen={openFile} /></div></section>}
-        {rightPanels.useful && <section className="stacked-panel"><header className="panel-header"><span>Useful Files</span><button title="Refresh useful files" onClick={() => void refreshUsefulFiles()}><RefreshCw size={14} /></button></header><div className="useful-files-list"><UsefulFileSection title="Global" scope="global" files={usefulFiles} activeTab={activeTab} onOpen={openUsefulFile} onCreate={(scope) => setUsefulDialog({ mode: "create", scope })} onRename={(file) => setUsefulDialog({ mode: "rename", scope: file.scope, file })} onDelete={(file) => void deleteUsefulFile(file)} /><UsefulFileSection title="Local" scope="local" files={usefulFiles} activeTab={activeTab} onOpen={openUsefulFile} onCreate={(scope) => setUsefulDialog({ mode: "create", scope })} onRename={(file) => setUsefulDialog({ mode: "rename", scope: file.scope, file })} onDelete={(file) => void deleteUsefulFile(file)} /></div></section>}
+        {rightPanels.taskGit && selectedTaskId && <section key="taskGit" className="stacked-panel"><header className="panel-header"><span>Task Git</span><button title="Refresh task comparison" onClick={() => void refreshTaskGit()}><RefreshCw size={14} /></button></header><div className="git-branch"><GitCompareArrows size={13} /><span>{tasks.find((task) => task.id === selectedTaskId)?.baseBranch ?? "Base branch"}</span></div><GitChangesView entries={taskGitEntries} error={taskGitError} emptyMessage="No changes from base branch" groupTitle="Changes from Base" activePath={activeTab?.path} onOpenDiff={openTaskDiff} onOpenFile={(entry) => void openFile({ name: entry.path.split("/").pop() ?? entry.path, path: entry.path, type: "file" })} /></section>}
+        {rightPanels.java && javaOptions && <section key="java" className="stacked-panel"><header className="panel-header"><span>Java Project</span><button title="Refresh Java project" onClick={() => void refreshJavaTree()}><RefreshCw size={14} /></button></header><div className="java-project-meta"><Coffee size={13} /><span>{javaOptions.pomPath}</span></div><div className="tree java-tree"><JavaProjectTree nodes={javaTree} activePath={activeTab?.path} onOpen={openFile} /></div></section>}
+        {rightPanels.useful && <section key="useful" className="stacked-panel"><header className="panel-header"><span>Useful Files</span><button title="Refresh useful files" onClick={() => void refreshUsefulFiles()}><RefreshCw size={14} /></button></header><div className="useful-files-list"><UsefulFileSection title="Global" scope="global" files={usefulFiles} activeTab={activeTab} onOpen={openUsefulFile} onCreate={(scope) => setUsefulDialog({ mode: "create", scope })} onRename={(file) => setUsefulDialog({ mode: "rename", scope: file.scope, file })} onDelete={(file) => void deleteUsefulFile(file)} /><UsefulFileSection title="Local" scope="local" files={usefulFiles} activeTab={activeTab} onOpen={openUsefulFile} onCreate={(scope) => setUsefulDialog({ mode: "create", scope })} onRename={(file) => setUsefulDialog({ mode: "rename", scope: file.scope, file })} onDelete={(file) => void deleteUsefulFile(file)} /></div></section>}
       </ResizablePanelStack></aside></>}
       <nav className="right-tool-stripe" aria-label="Right tool windows">
         <button className={`tool-stripe-button right ${rightPanels.project ? "active" : ""}`} title={rightPanels.project ? "Hide Project" : "Show Project"} onClick={() => setRightPanels((current) => ({ ...current, project: !current.project }))}><Folder size={15} /><span>Project</span></button>
@@ -1636,12 +1633,20 @@ function ConnectionScreen(props: { host: string; port: string; status: Connectio
   </form></main>;
 }
 
-function ResizablePanelStack({ children, storageKey, ids }: { children: ReactNode; storageKey: string; ids: string[] }) {
+function readStackSizes(workspace: string, setting: string): Record<string, number[]> {
+  try {
+    const parsed: unknown = JSON.parse(readWorkspaceSetting(workspace, setting) ?? "{}");
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, number[]> : {};
+  } catch { return {}; }
+}
+
+function ResizablePanelStack({ children, workspace, setting, ids }: { children: ReactNode; workspace: string; setting: string; ids: string[] }) {
   const items = Children.toArray(children);
   const rootRef = useRef<HTMLDivElement>(null);
-  const [savedSizes, setSavedSizes] = useState<Record<string, number[]>>(() => {
-    try { return JSON.parse(localStorage.getItem(storageKey) ?? "{}"); } catch { return {}; }
-  });
+  const [savedSizes, setSavedSizes] = useState<Record<string, number[]>>(() => readStackSizes(workspace, setting));
+  // The workspace is only known once the connection is established, so stored sizes are re-read
+  // whenever it changes instead of staying on whatever was available when the stack first mounted.
+  useEffect(() => { setSavedSizes(readStackSizes(workspace, setting)); }, [workspace, setting]);
   const signature = ids.join("|");
   const stored = savedSizes[signature];
   const sizes = stored?.length === items.length && stored.every((size) => Number.isFinite(size) && size > 0)
@@ -1649,7 +1654,7 @@ function ResizablePanelStack({ children, storageKey, ids }: { children: ReactNod
     : Array.from({ length: items.length }, () => 1 / Math.max(1, items.length));
   const saveSizes = (next: number[]) => setSavedSizes((current) => {
     const updated = { ...current, [signature]: next };
-    localStorage.setItem(storageKey, JSON.stringify(updated));
+    writeWorkspaceSetting(workspace, setting, JSON.stringify(updated));
     return updated;
   });
   const beginResize = (event: React.PointerEvent<HTMLDivElement>, index: number) => {

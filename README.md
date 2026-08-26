@@ -217,6 +217,8 @@ Maven and a suitable project JDK must be available to Core. The pinned Temurin J
 
 ## Persistence
 
+Desktop stores client-side UI preferences — tool window visibility, side panel widths, stacked panel sizes, bottom panel heights, layout mode, theme, and fonts — in `settings.json` inside the Electron application-data directory, so they survive client restarts. Values are kept per remote workspace, and the most recent value is reused as the default for workspaces that have no stored layout yet.
+
 Core stores state outside the project under:
 
 ```text
