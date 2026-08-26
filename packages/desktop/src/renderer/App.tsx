@@ -1731,7 +1731,7 @@ function TaskRow({ icon, name, summary, selected, disabled, onClick, onMerge, on
   const preview = summary.pendingPermission ? "Waiting for permission approval" : (summary.preview || "No AI activity yet");
   return <div className={`task-row ${selected ? "selected" : ""}`}><button className="task-open" disabled={disabled} title={`${name}\n${preview}`} onClick={onClick}>
     <span className="task-icon">{icon}</span>
-    <span className="task-content"><span className="task-title"><strong>{name}</strong>{(summary.additions > 0 || summary.deletions > 0) && <span className="task-diff-stat"><small>+{summary.additions}</small><small>-{summary.deletions}</small></span>}{summary.pendingPermission ? <small className="task-ai-status permission"><ShieldAlert size={13} /> Permission needed</small> : summary.status !== "idle" && <small className={`task-ai-status ${summary.status}`}>{summary.status === "in_progress" && <LoaderCircle className="task-progress-spinner" size={13} />}{formatAiStatus(summary.status)}</small>}</span><span className="task-preview">{preview}</span></span>
+    <span className="task-content"><span className="task-title"><strong>{name}</strong>{(summary.additions > 0 || summary.deletions > 0) && <span className="task-diff-stat"><small>+{summary.additions}</small><small>-{summary.deletions}</small></span>}{summary.pendingPermission ? <small className="task-ai-status permission"><ShieldAlert size={13} /> Permission needed</small> : summary.status !== "idle" && <small className={`task-ai-status ${summary.status}`}>{summary.status === "in_progress" && <LoaderCircle className="task-progress-spinner" size={13} />}{formatAiStatus(summary.status)}</small>}</span><span className="task-preview"><TaskPreviewMarkdown>{preview}</TaskPreviewMarkdown></span></span>
     {selected && <Check className="task-check" size={13} />}
   </button>{onDelete && <button className="task-actions" title={`Actions for ${name}`} disabled={disabled} onClick={(event) => { event.stopPropagation(); const bounds = event.currentTarget.getBoundingClientRect(); setMenu({ x: Math.max(8, bounds.right - 180), y: bounds.bottom + 2 }); }}><MoreVertical size={14} /></button>}
     {menu && <div className="context-menu-layer" onMouseDown={() => setMenu(undefined)}><div className="context-menu task-actions-menu" style={{ left: menu.x, top: menu.y }} onMouseDown={(event) => event.stopPropagation()}>
@@ -1739,6 +1739,10 @@ function TaskRow({ icon, name, summary, selected, disabled, onClick, onMerge, on
       <button className="danger" onClick={() => { setMenu(undefined); onDelete?.(); }}><Trash2 size={14} /><span>Delete task</span></button>
     </div></div>}
   </div>;
+}
+
+function TaskPreviewMarkdown({ children }: { children: string }) {
+  return <ReactMarkdown remarkPlugins={[remarkGfm]} components={{ p: ({ children: value }) => <span>{value}</span>, strong: ({ children: value }) => <em>{value}</em> }}>{children}</ReactMarkdown>;
 }
 
 function UsefulFileSection({ title, scope, files, activeTab, onOpen, onCreate, onRename, onDelete }: { title: string; scope: UsefulFileScope; files: UsefulFile[]; activeTab?: EditorTab; onOpen(file: UsefulFile): void; onCreate(scope: UsefulFileScope): void; onRename(file: UsefulFile): void; onDelete(file: UsefulFile): void }) {
