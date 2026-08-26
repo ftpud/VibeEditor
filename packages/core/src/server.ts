@@ -209,6 +209,23 @@ async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStor
     }
     case "tasks.list": return tasks.list();
     case "tasks.create": return { task: await tasks.create(request.payload.branch, request.payload.existing, request.payload.remote) };
+    case "tasks.createFromPrompt": {
+      if (workspacePath !== rootWorkspace) throw new CoreError("INVALID_REQUEST", "New tasks can only be started from the root workspace");
+      const task = await tasks.createRandom(false);
+      try {
+        await acp.get(request.payload.provider).send(tasks.taskPath(task.id), {
+          prompt: request.payload.prompt,
+          content: request.payload.content,
+          configuration: request.payload.configuration,
+          mcpServers: request.payload.mcpServers,
+          agent: request.payload.agent
+        });
+        return { task };
+      } catch (error) {
+        await tasks.delete(task.id).catch(() => undefined);
+        throw error;
+      }
+    }
     case "tasks.merge": return tasks.merge(request.payload.taskId);
     case "tasks.delete": return tasks.delete(request.payload.taskId);
     case "tasks.switch": {

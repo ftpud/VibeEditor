@@ -9,6 +9,23 @@ import { WorkspaceTaskStore } from "./tasks.js";
 const execFileAsync = promisify(execFile);
 
 describe("WorkspaceTaskStore", () => {
+  it("creates a random task without changing the selected workspace", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "remote-ide-task-random-root-"));
+    const state = await mkdtemp(path.join(os.tmpdir(), "remote-ide-task-random-state-"));
+    await execFileAsync("git", ["init", root]);
+    await writeFile(path.join(root, "tracked.txt"), "root\n");
+    await execFileAsync("git", ["-C", root, "add", "tracked.txt"]);
+    await execFileAsync("git", ["-C", root, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "initial"]);
+
+    const store = new WorkspaceTaskStore(root, state);
+    const task = await store.createRandom(false);
+
+    expect(task.branch).toMatch(/^task\/[0-9a-f]{8}$/);
+    expect((await store.list()).selectedTaskId).toBeUndefined();
+    expect((await execFileAsync("git", ["-C", store.taskPath(task.id), "branch", "--show-current"])).stdout.trim()).toBe(task.branch);
+    await store.delete(task.id);
+  });
+
   it("creates a linked worktree and branch, merges it, and persists selection", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "remote-ide-task-root-"));
     const state = await mkdtemp(path.join(os.tmpdir(), "remote-ide-task-state-"));

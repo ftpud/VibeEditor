@@ -39,7 +39,7 @@ export class WorkspaceTaskStore {
     }
   }
 
-  async create(branch: string, existing = false, remote = false): Promise<WorkspaceTask> {
+  async create(branch: string, existing = false, remote = false, select = true): Promise<WorkspaceTask> {
     const requested = branch.trim();
     const name = remote ? requested.split("/").slice(1).join("/") : requested;
     if (!name || name.length > 200 || !/^[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(name) || name.includes("..") || name.endsWith("/") || name.endsWith(".")) throw new CoreError("INVALID_REQUEST", "Invalid Git branch name");
@@ -63,7 +63,7 @@ export class WorkspaceTaskStore {
         if (task.baseBranch !== "HEAD") await execFileAsync("git", ["-C", this.rootWorkspace, "branch", "--set-upstream-to", task.baseBranch, name], { encoding: "utf8" });
       }
       await this.copyWorkspaceState(this.rootWorkspace, destination);
-      await this.save({ tasks: [...registry.tasks, task], selectedTaskId: task.id });
+      await this.save({ tasks: [...registry.tasks, task], ...(select ? { selectedTaskId: task.id } : registry.selectedTaskId ? { selectedTaskId: registry.selectedTaskId } : {}) });
       return task;
     } catch (error) {
       await this.removeWorktree(destination);
@@ -71,6 +71,14 @@ export class WorkspaceTaskStore {
       await rm(path.dirname(destination), { recursive: true, force: true });
       throw new CoreError("GIT_FAILED", `Could not create task worktree: ${gitError(error)}`);
     }
+  }
+
+  async createRandom(select = true): Promise<WorkspaceTask> {
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      const branch = `task/${crypto.randomUUID().slice(0, 8)}`;
+      if (!await this.branchExists(branch)) return this.create(branch, false, false, select);
+    }
+    throw new CoreError("GIT_FAILED", "Could not generate a unique task branch name");
   }
 
   async select(taskId?: string): Promise<{ workspace: string; registry: Registry }> {

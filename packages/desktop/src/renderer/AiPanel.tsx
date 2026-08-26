@@ -1,4 +1,4 @@
-import { Check, ChevronDown, MessageSquare, Paperclip, Plus, Send, Settings2, Square, Trash2, X } from "lucide-react";
+import { Check, ChevronDown, ListPlus, MessageSquare, Paperclip, Plus, Send, Settings2, Square, Trash2, X } from "lucide-react";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -9,7 +9,7 @@ const AUTOPILOT = /autopilot|auto-?approve|yolo|full[- ]?access|bypass|danger|ne
 
 export type AiAttachment = { id: string; name: string; path?: string; content?: string; data?: string; mimeType?: string };
 
-export function AiPanel({ provider, providers, session, sessions, models, usage, attachments, onProviderChange, onConfigurationChange, onAttachmentsChange, onSend, onSteer, onInterrupt, onNewSession, onSwitchSession, onRemoveSession, onResolvePermission }: { provider: AiProvider; providers: AiProviderDescriptor[]; session: AiSession; sessions: AiSession[]; models: AiModel[]; usage?: AiUsage; attachments: AiAttachment[]; onProviderChange(provider: AiProvider): void; onConfigurationChange(configuration: AiConfiguration): void; onAttachmentsChange(attachments: AiAttachment[]): void; onSend(prompt: string, configuration: AiConfiguration, attachments: AiAttachment[]): Promise<void>; onSteer(prompt: string): Promise<void>; onInterrupt(): void; onNewSession(): void; onSwitchSession(session: AiSession): void; onRemoveSession(session: AiSession): void; onResolvePermission(requestId: string, optionId?: string): void }) {
+export function AiPanel({ provider, providers, session, sessions, models, usage, attachments, onProviderChange, onConfigurationChange, onAttachmentsChange, onSend, onSendAsTask, onSteer, onInterrupt, onNewSession, onSwitchSession, onRemoveSession, onResolvePermission }: { provider: AiProvider; providers: AiProviderDescriptor[]; session: AiSession; sessions: AiSession[]; models: AiModel[]; usage?: AiUsage; attachments: AiAttachment[]; onProviderChange(provider: AiProvider): void; onConfigurationChange(configuration: AiConfiguration): void; onAttachmentsChange(attachments: AiAttachment[]): void; onSend(prompt: string, configuration: AiConfiguration, attachments: AiAttachment[]): Promise<void>; onSendAsTask?: (prompt: string, configuration: AiConfiguration, attachments: AiAttachment[]) => Promise<void>; onSteer(prompt: string): Promise<void>; onInterrupt(): void; onNewSession(): void; onSwitchSession(session: AiSession): void; onRemoveSession(session: AiSession): void; onResolvePermission(requestId: string, optionId?: string): void }) {
   const [prompt, setPrompt] = useState("");
   const [model, setModel] = useState(session.model);
   const [reasoning, setReasoning] = useState(session.reasoning);
@@ -19,6 +19,7 @@ export function AiPanel({ provider, providers, session, sessions, models, usage,
   const [sessionsOpen, setSessionsOpen] = useState(false);
   const [attachmentError, setAttachmentError] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [taskSubmitting, setTaskSubmitting] = useState(false);
   const messagesRef = useRef<HTMLDivElement>(null);
   const pinnedRef = useRef(true);
   const shownSessionRef = useRef(session.id);
@@ -41,7 +42,7 @@ export function AiPanel({ provider, providers, session, sessions, models, usage,
   useEffect(() => { if (selectedModel && !models.some((item) => item.id === model)) { setModel(selectedModel.id); onConfigurationChange({ ...configuration, model: selectedModel.id, reasoning: selectedModel.reasoningLevels.includes(reasoning) ? reasoning : selectedModel.defaultReasoning }); } }, [model, models, onConfigurationChange, reasoning, selectedModel]);
   useEffect(() => { if (selectedModel && selectedModel.reasoningLevels.length > 0 && !selectedModel.reasoningLevels.includes(reasoning)) { setReasoning(selectedModel.defaultReasoning); onConfigurationChange({ ...configuration, model: selectedModel.id, reasoning: selectedModel.defaultReasoning }); } }, [onConfigurationChange, reasoning, selectedModel]);
   const running = session.status === "in_progress";
-  const busy = running || submitting;
+  const busy = running || submitting || taskSubmitting;
   const reasoningLevels = useMemo(() => selectedModel?.reasoningLevels ?? (reasoning ? [reasoning] : []), [reasoning, selectedModel]);
   const descriptor = providers.find((item) => item.id === provider);
   const effectiveOptions = useMemo(() => { const advertised = session.availableOptions ?? []; return [...(descriptor?.options ?? []).filter((option) => !advertised.some((candidate) => candidate.id === option.id)), ...advertised]; }, [descriptor, session.availableOptions]);
@@ -67,13 +68,22 @@ export function AiPanel({ provider, providers, session, sessions, models, usage,
   const changeModel = (nextModel: string) => { const item = models.find((candidate) => candidate.id === nextModel); const nextReasoning = item && item.reasoningLevels.length > 0 && !item.reasoningLevels.includes(reasoning) ? item.defaultReasoning : item && item.reasoningLevels.length === 0 ? "" : reasoning; setModel(nextModel); setReasoning(nextReasoning); onConfigurationChange({ ...configuration, model: nextModel, reasoning: nextReasoning }); };
   const changeReasoning = (nextReasoning: string) => { setReasoning(nextReasoning); onConfigurationChange({ ...configuration, model, reasoning: nextReasoning }); };
   const send = async () => {
-    if (submitting || (!prompt.trim() && (attachments.length === 0 || running))) return;
+    if (submitting || taskSubmitting || (!prompt.trim() && (attachments.length === 0 || running))) return;
     const value = prompt;
     setPrompt("");
     setSubmitting(true);
     try { if (running) await onSteer(value); else { await onSend(value, { ...configuration, model, reasoning }, attachments); onAttachmentsChange([]); } }
     catch { setPrompt(value); }
     finally { setSubmitting(false); }
+  };
+  const sendAsTask = async () => {
+    if (!onSendAsTask || submitting || taskSubmitting || (!prompt.trim() && attachments.length === 0)) return;
+    const value = prompt;
+    setPrompt("");
+    setTaskSubmitting(true);
+    try { await onSendAsTask(value, { ...configuration, model, reasoning }, attachments); onAttachmentsChange([]); }
+    catch { setPrompt(value); }
+    finally { setTaskSubmitting(false); }
   };
   const addFiles = async (files: FileList | null) => {
     if (!files) return;
@@ -127,7 +137,7 @@ export function AiPanel({ provider, providers, session, sessions, models, usage,
       {matchingCommands.length > 0 && <div className="ai-command-menu">{matchingCommands.map((command) => <button type="button" key={command.name} onClick={() => setPrompt(`/${command.name.replace(/^\//, "")} `)}><strong>/{command.name.replace(/^\//, "")}</strong><span>{command.description}{command.inputHint ? ` · ${command.inputHint}` : ""}</span></button>)}</div>}
       {attachments.length > 0 && <div className="ai-attachments">{attachments.map((attachment) => <span className="ai-attachment" key={attachment.id} title={attachment.path ?? attachment.name}><span>{attachment.path ?? attachment.name}</span><button type="button" title={`Remove ${attachment.name}`} onClick={() => onAttachmentsChange(attachments.filter((item) => item.id !== attachment.id))}><X size={12} /></button></span>)}</div>}
       <textarea value={prompt} placeholder={submitting ? `Connecting to ${providerName}...` : running ? (session.steering ? `Steer ${providerName} while it works...` : `Queue a follow-up for ${providerName}...`) : `Ask ${providerName}...`} onChange={(event) => setPrompt(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void send(); } }} />
-      <div className="ai-composer-actions"><input ref={fileInputRef} type="file" multiple onChange={(event) => void addFiles(event.target.files)} /><button type="button" title="Attach files" disabled={busy} onClick={() => fileInputRef.current?.click()}><Paperclip size={15} /></button><button title={submitting ? `Connecting to ${providerName}` : running ? (session.steering ? "Add input to the running turn" : "Queue this for the next turn") : "Send prompt"} disabled={submitting || (!prompt.trim() && (running || attachments.length === 0))}><Send size={15} /></button></div>
+      <div className="ai-composer-actions"><input ref={fileInputRef} type="file" multiple onChange={(event) => void addFiles(event.target.files)} /><button type="button" title="Attach files" disabled={busy} onClick={() => fileInputRef.current?.click()}><Paperclip size={15} /></button>{onSendAsTask && <button type="button" title={taskSubmitting ? "Creating task..." : "Send prompt as a new task"} disabled={submitting || taskSubmitting || (!prompt.trim() && attachments.length === 0)} onClick={() => void sendAsTask()}><ListPlus size={15} /></button>}<button title={submitting ? `Connecting to ${providerName}` : running ? (session.steering ? "Add input to the running turn" : "Queue this for the next turn") : "Send prompt"} disabled={submitting || taskSubmitting || (!prompt.trim() && (running || attachments.length === 0))}><Send size={15} /></button></div>
     </form>
   </div>;
 }

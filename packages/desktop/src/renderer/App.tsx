@@ -857,6 +857,23 @@ export function App() {
     try { applyAiSession((await clientRef.current.request("ai.send", { provider: aiProviderRef.current, prompt, content, configuration })).session, token); await Promise.all([refreshAi(), refreshAiSessions()]); }
     catch (error) { setStatusMessage(error instanceof Error ? error.message : `Could not start ${aiProviderRef.current}`); throw error; }
   }, [aiToken, applyAiSession, refreshAi, refreshAiSessions]);
+  const sendAiPromptAsTask = useCallback(async (prompt: string, configuration: AiConfiguration, attachments: AiAttachment[]) => {
+    if (!clientRef.current || selectedTaskIdRef.current) return;
+    const content = attachments.map((attachment) => attachment.path
+      ? { type: "resource_link" as const, uri: `workspace:${attachment.path}`, name: attachment.name }
+      : attachment.data && attachment.mimeType
+        ? { type: "image" as const, data: attachment.data, mimeType: attachment.mimeType, name: attachment.name }
+        : { type: "resource" as const, uri: `attachment:${encodeURIComponent(attachment.name)}`, mimeType: attachment.mimeType, text: attachment.content ?? "", name: attachment.name });
+    try {
+      const { task } = await clientRef.current.request("tasks.createFromPrompt", { provider: aiProviderRef.current, prompt, content, configuration });
+      setTasks((current) => [...current, task]);
+      await refreshAiStatuses();
+      showStatus(`Started ${task.branch}`, "success");
+    } catch (error) {
+      setStatusMessage(error instanceof Error ? error.message : "Could not start a new task");
+      throw error;
+    }
+  }, [refreshAiStatuses, showStatus]);
   const resolveAiPermission = useCallback(async (requestId: string, optionId?: string) => {
     if (!clientRef.current) return;
     const token = aiToken();
@@ -1463,7 +1480,7 @@ export function App() {
           {filteredTasks.map((task) => <TaskRow key={task.id} icon={<ListTodo size={15} />} name={task.name} summary={aiStatuses.tasks[task.id] ?? emptyAiSummary} selected={selectedTaskId === task.id} disabled={taskSwitching} onClick={() => void switchTask(task.id)} onMerge={() => void mergeTask(task)} onDelete={() => void deleteTask(task)} />)}
           {!showRootTask && filteredTasks.length === 0 && <div className="filter-empty">No matching tasks</div>}
         </div></section>}
-        {leftPanels.ai && <section key="ai" className="stacked-panel"><header className="panel-header"><span>AI</span><span className={`ai-status ${aiSession.status}`}>{formatAiStatus(aiSession.status)}</span></header><AiPanel key={`${activeWorkspace}:${aiProvider}:${aiSession.id ?? "legacy"}`} provider={aiProvider} providers={aiProviders} session={aiSession} sessions={aiSessions} models={aiModels} usage={aiUsage} attachments={currentAiAttachments} onProviderChange={(provider) => void switchAiProvider(provider)} onConfigurationChange={configureAi} onAttachmentsChange={updateAiAttachments} onSend={sendAiPrompt} onSteer={steerAiPrompt} onInterrupt={() => void interruptAi()} onNewSession={() => void newAiSession()} onSwitchSession={(session) => void switchAiSession(session)} onRemoveSession={(session) => void removeAiSession(session)} onResolvePermission={(requestId, optionId) => void resolveAiPermission(requestId, optionId)} /></section>}
+        {leftPanels.ai && <section key="ai" className="stacked-panel"><header className="panel-header"><span>AI</span><span className={`ai-status ${aiSession.status}`}>{formatAiStatus(aiSession.status)}</span></header><AiPanel key={`${activeWorkspace}:${aiProvider}:${aiSession.id ?? "legacy"}`} provider={aiProvider} providers={aiProviders} session={aiSession} sessions={aiSessions} models={aiModels} usage={aiUsage} attachments={currentAiAttachments} onProviderChange={(provider) => void switchAiProvider(provider)} onConfigurationChange={configureAi} onAttachmentsChange={updateAiAttachments} onSend={sendAiPrompt} onSendAsTask={selectedTaskId ? undefined : sendAiPromptAsTask} onSteer={steerAiPrompt} onInterrupt={() => void interruptAi()} onNewSession={() => void newAiSession()} onSwitchSession={(session) => void switchAiSession(session)} onRemoveSession={(session) => void removeAiSession(session)} onResolvePermission={(requestId, optionId) => void resolveAiPermission(requestId, optionId)} /></section>}
       </ResizablePanelStack></aside><div className="resize-handle" onPointerDown={beginLeftSidebarResize} /></>}
       </> : <>
       <nav className="tool-stripe" aria-label="Left tool windows">
@@ -1560,7 +1577,7 @@ export function App() {
           {!showRootTask && filteredTasks.length === 0 && <div className="filter-empty">No matching tasks</div>}
         </div></section>}
         {classicTasksOpen && classicAiOpen && <div className="classic-panel-divider" onPointerDown={beginClassicSplitResize} />}
-        {classicAiOpen && <section className="stacked-panel"><header className="panel-header"><span>AI</span><span className={`ai-status ${aiSession.status}`}>{formatAiStatus(aiSession.status)}</span></header><AiPanel key={`classic:${activeWorkspace}:${aiProvider}:${aiSession.id ?? "legacy"}`} provider={aiProvider} providers={aiProviders} session={aiSession} sessions={aiSessions} models={aiModels} usage={aiUsage} attachments={currentAiAttachments} onProviderChange={(provider) => void switchAiProvider(provider)} onConfigurationChange={configureAi} onAttachmentsChange={updateAiAttachments} onSend={sendAiPrompt} onSteer={steerAiPrompt} onInterrupt={() => void interruptAi()} onNewSession={() => void newAiSession()} onSwitchSession={(session) => void switchAiSession(session)} onRemoveSession={(session) => void removeAiSession(session)} onResolvePermission={(requestId, optionId) => void resolveAiPermission(requestId, optionId)} /></section>}
+        {classicAiOpen && <section className="stacked-panel"><header className="panel-header"><span>AI</span><span className={`ai-status ${aiSession.status}`}>{formatAiStatus(aiSession.status)}</span></header><AiPanel key={`classic:${activeWorkspace}:${aiProvider}:${aiSession.id ?? "legacy"}`} provider={aiProvider} providers={aiProviders} session={aiSession} sessions={aiSessions} models={aiModels} usage={aiUsage} attachments={currentAiAttachments} onProviderChange={(provider) => void switchAiProvider(provider)} onConfigurationChange={configureAi} onAttachmentsChange={updateAiAttachments} onSend={sendAiPrompt} onSendAsTask={selectedTaskId ? undefined : sendAiPromptAsTask} onSteer={steerAiPrompt} onInterrupt={() => void interruptAi()} onNewSession={() => void newAiSession()} onSwitchSession={(session) => void switchAiSession(session)} onRemoveSession={(session) => void removeAiSession(session)} onResolvePermission={(requestId, optionId) => void resolveAiPermission(requestId, optionId)} /></section>}
       </aside></>}
       <nav className="right-tool-stripe" aria-label="Right tool windows"><button className={`tool-stripe-button right ${classicTasksOpen ? "active" : ""}`} title={classicTasksOpen ? "Hide Tasks" : "Show Tasks"} onClick={() => setClassicTasksOpen((open) => !open)}><ListTodo size={15} /><span>Tasks</span>{tasks.length > 0 && <span className="tool-badge">{tasks.length > 99 ? "99+" : tasks.length}</span>}</button><button className={`tool-stripe-button right ${classicAiOpen ? "active" : ""}`} title={classicAiOpen ? "Hide AI" : "Show AI"} onClick={() => { setClassicAiOpen((open) => { if (!open) void refreshAi(); return !open; }); }}><Bot size={15} /><span>AI</span>{aiSession.status === "in_progress" && <span className="tool-badge">...</span>}</button></nav>
       </>}
