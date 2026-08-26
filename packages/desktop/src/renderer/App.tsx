@@ -721,13 +721,13 @@ export function App() {
       const nextTask = result.tasks.find((task) => task.id === result.selectedTaskId);
       const taskProviderKey = result.selectedTaskId ?? "root";
       const savedProvider = workspaceKeyRef.current ? (localStorage.getItem(workspaceSettingKey(workspaceKeyRef.current, `ai.provider.task.${taskProviderKey}`)) as AiProvider | null) : null;
-      if (savedProvider && savedProvider !== aiProviderRef.current) await switchAiProvider(savedProvider);
+      if (savedProvider && aiProviders.some((p) => p.id === savedProvider) && savedProvider !== aiProviderRef.current) await switchAiProvider(savedProvider);
       await Promise.all([refreshGit(), refreshAi(), refreshTaskGit(nextTask)]);
     } catch (error) {
       setWorkspaceOptionsReady(true);
       setStatusMessage(error instanceof Error ? error.message : "Could not switch task");
     } finally { setTaskSwitching(false); }
-  }, [fileColors, gitCommitMessage, refreshAi, refreshGit, refreshTaskGit, restoreWorkspaceOptions, saveFileTab, selectedTaskId, sideView, switchAiProvider]);
+  }, [aiProviders, fileColors, gitCommitMessage, refreshAi, refreshGit, refreshTaskGit, restoreWorkspaceOptions, saveFileTab, selectedTaskId, sideView, switchAiProvider]);
 
   const currentAiAttachmentKey = selectedTaskId ?? "root";
   const currentAiAttachments = aiAttachments[currentAiAttachmentKey] ?? [];
