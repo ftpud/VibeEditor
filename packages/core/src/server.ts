@@ -16,6 +16,7 @@ import { CodexSessionManager } from "./codex.js";
 import { CopilotSessionManager } from "./copilot.js";
 import { UsefulFilesStore } from "./useful-files.js";
 import { executeHttpRequest } from "./http.js";
+import { summarizeAiSessions } from "./ai-summary.js";
 
 type SessionServices = {
   workspacePath: string;
@@ -194,7 +195,7 @@ async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStor
     case "ai.clear": return { session: await (request.payload.provider === "copilot" ? copilot : codex).clear(workspacePath) };
     case "ai.statuses": {
       const registry = await tasks.list();
-      const summarize = async (target: string) => { const sessions = await Promise.all([codex.get(target), copilot.get(target)]); const session = sessions.find((item) => item.status === "in_progress" || item.status === "user_prompt") ?? sessions.sort((a, b) => (b.messages.at(-1)?.timestamp ?? "").localeCompare(a.messages.at(-1)?.timestamp ?? ""))[0]!; const stats = await new GitService(target).diffStats(); return { status: session.status, preview: session.messages.slice().reverse().find((message) => message.role === "assistant" || message.role === "activity")?.text.replace(/\s+/g, " ").trim().slice(0, 180) ?? session.messages.at(-1)?.text.replace(/\s+/g, " ").trim().slice(0, 180) ?? "", ...stats }; };
+      const summarize = async (target: string) => { const summary = summarizeAiSessions(await Promise.all([codex.get(target), copilot.get(target)])); return { ...summary, ...await new GitService(target).diffStats() }; };
       const entries = await Promise.all(registry.tasks.map(async (task) => [task.id, await summarize(tasks.taskPath(task.id))] as const));
       return { root: await summarize(rootWorkspace), tasks: Object.fromEntries(entries) };
     }

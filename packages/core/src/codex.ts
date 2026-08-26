@@ -1,10 +1,11 @@
 import crypto from "node:crypto";
 import os from "node:os";
 import path from "node:path";
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import type { AiMessage, AiModel, AiSession } from "@remote-ide/protocol";
 import { CoreError } from "./errors.js";
+import { spawnInShell } from "./shell-process.js";
 
 const EMPTY: AiSession = { model: "gpt-5.6-sol", reasoning: "low", status: "idle", messages: [] };
 
@@ -42,7 +43,7 @@ export class CodexSessionManager {
     await this.save(workspace, session); this.onChanged(workspace);
     const config = `model_reasoning_effort=${JSON.stringify(reasoning)}`;
     const args = session.threadId ? ["exec", "resume", session.threadId, "-", "--json", "-m", model, "-c", config] : ["exec", "-", "--json", "-C", workspace, "-s", "workspace-write", "-m", model, "-c", config];
-    const child = spawn("codex", args, { cwd: workspace, env: process.env });
+    const child = spawnInShell("codex", args, workspace);
     this.processes.set(workspace, child);
     let stdout = ""; let stderr = "";
     child.stdin.end(prompt.trim());

@@ -1,14 +1,13 @@
 import crypto from "node:crypto";
 import os from "node:os";
 import path from "node:path";
-import { execFile, spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { promisify } from "node:util";
+import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import type { AiMessage, AiModel, AiSession } from "@remote-ide/protocol";
 import { CoreError } from "./errors.js";
+import { execInShell, spawnInShell } from "./shell-process.js";
 
-const EMPTY: AiSession = { model: "default", reasoning: "medium", status: "idle", messages: [] };
-const execFileAsync = promisify(execFile);
+const EMPTY: AiSession = { model: "auto", reasoning: "medium", status: "idle", messages: [] };
 
 export class CopilotSessionManager {
   private readonly processes = new Map<string, ChildProcessWithoutNullStreams>();
@@ -28,14 +27,10 @@ export class CopilotSessionManager {
 
   async models(): Promise<AiModel[]> {
     try {
-      const { stdout, stderr } = await execFileAsync("copilot", ["help"], { encoding: "utf8", maxBuffer: 2 * 1024 * 1024, timeout: 10_000 });
-      const output = `${stdout}\n${stderr}`.replace(/\x1b\[[0-9;]*m/g, "");
-      const modelOption = output.match(/(?:^|\n)\s*(?:-m[^\n,]*,\s*)?--model(?:[=\s]+(?:<[^>]+>|[A-Z][A-Z_-]*))?[^\n]*(?:\n(?=\s{4,})[^\n]*)*/i)?.[0] ?? output;
-      const discovered = [...modelOption.matchAll(/\b(?:gpt|claude|gemini|o[1-9])[-a-z0-9._]*\b/gi)].map((match) => match[0]!.toLowerCase());
-      const ids = ["default", ...discovered.filter((id, index, all) => all.indexOf(id) === index)];
-      return ids.map((id) => ({ id, name: id === "default" ? "Copilot default" : id, defaultReasoning: "medium", reasoningLevels: ["low", "medium", "high", "xhigh", "max"] }));
+      const { stdout, stderr } = await execInShell("copilot", ["help"], { encoding: "utf8", maxBuffer: 2 * 1024 * 1024, timeout: 10_000 });
+      return parseCopilotModels(`${stdout}\n${stderr}`);
     } catch {
-      return [{ id: "default", name: "Copilot default (CLI unavailable)", defaultReasoning: "medium", reasoningLevels: ["low", "medium", "high", "xhigh", "max"] }];
+      return [{ id: "auto", name: "Auto (Copilot CLI unavailable)", defaultReasoning: "medium", reasoningLevels: ["none", "minimal", "low", "medium", "high", "xhigh", "max"] }];
     }
   }
 
@@ -47,8 +42,8 @@ export class CopilotSessionManager {
     session.model = model; session.reasoning = reasoning; session.status = "in_progress"; session.messages.push(toMessage("user", prompt.trim()));
     await this.save(workspace, session); this.onChanged(workspace);
     const args = ["-p", prompt.trim(), "--output-format=json", "--stream=on", `--session-id=${session.threadId}`, `--reasoning-effort=${reasoning}`, "--allow-all-tools", "--no-ask-user", "--no-color"];
-    if (model && model !== "default") args.push(`--model=${model}`);
-    const child = spawn("copilot", args, { cwd: workspace, env: process.env });
+    if (model) args.push(`--model=${model}`);
+    const child = spawnInShell("copilot", args, workspace);
     this.processes.set(workspace, child);
     this.toolNames.set(workspace, new Map());
     let stdout = ""; let stderr = "";
@@ -99,3 +94,10 @@ export class CopilotSessionManager {
 }
 
 function toMessage(role: AiMessage["role"], text: string): AiMessage { return { id: crypto.randomUUID(), role, text, timestamp: new Date().toISOString() }; }
+
+export function parseCopilotModels(helpOutput: string): AiModel[] {
+  const output = helpOutput.replace(/\x1b\[[0-9;]*m/g, "");
+  const discovered = [...output.matchAll(/\b(?:gpt|claude|gemini|mai|kimi|raptor|o[1-9])[-a-z0-9._]*\b/gi)].map((match) => match[0]!.toLowerCase());
+  const ids = ["auto", ...discovered.filter((id, index, all) => all.indexOf(id) === index)];
+  return ids.map((id) => ({ id, name: id === "auto" ? "Auto (Copilot)" : id, defaultReasoning: "medium", reasoningLevels: ["none", "minimal", "low", "medium", "high", "xhigh", "max"] }));
+}

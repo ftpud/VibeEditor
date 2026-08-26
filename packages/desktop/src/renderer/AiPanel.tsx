@@ -16,6 +16,7 @@ export function AiPanel({ provider, session, models, attachments, onProviderChan
   useEffect(() => { setModel(session.model); setReasoning(session.reasoning); }, [session.model, session.reasoning]);
   useEffect(() => { endRef.current?.scrollIntoView({ block: "end" }); }, [session.messages.length, session.status]);
   const selectedModel = useMemo(() => models.find((item) => item.id === model) ?? models[0], [model, models]);
+  useEffect(() => { if (selectedModel && !models.some((item) => item.id === model)) setModel(selectedModel.id); }, [model, models, selectedModel]);
   useEffect(() => { if (selectedModel && !selectedModel.reasoningLevels.includes(reasoning)) setReasoning(selectedModel.defaultReasoning); }, [reasoning, selectedModel]);
   const running = session.status === "in_progress";
   const providerName = provider === "codex" ? "Codex CLI" : "Copilot CLI";

@@ -1371,7 +1371,7 @@ function JavaProjectTree({ nodes, activePath, onOpen }: { nodes: JavaProjectNode
 
 function TaskRow({ icon, name, summary, selected, disabled, onClick, onMerge, onDelete }: { icon: ReactNode; name: string; summary: AiTaskSummary; selected: boolean; disabled: boolean; onClick(): void; onMerge?(): void; onDelete?(): void }) {
   const [menu, setMenu] = useState<{ x: number; y: number }>();
-  const preview = summary.preview || "No Codex activity yet";
+  const preview = summary.preview || "No AI activity yet";
   return <div className={`task-row ${selected ? "selected" : ""}`}><button className="task-open" disabled={disabled} title={`${name}\n${preview}`} onClick={onClick}>
     <span className="task-icon">{icon}</span>
     <span className="task-content"><span className="task-title"><strong>{name}</strong>{(summary.additions > 0 || summary.deletions > 0) && <span className="task-diff-stat"><small>+{summary.additions}</small><small>-{summary.deletions}</small></span>}{summary.status !== "idle" && <small className={`task-ai-status ${summary.status}`}>{summary.status === "in_progress" && <LoaderCircle className="task-progress-spinner" size={13} />}{formatAiStatus(summary.status)}</small>}</span><span className="task-preview">{preview}</span></span>
