@@ -140,6 +140,10 @@ export class GitService {
     return (await this.git(["rev-parse", "HEAD"])).trim();
   }
 
+  async push(): Promise<void> {
+    await this.git(["push"]);
+  }
+
   async diffStats(): Promise<{ additions: number; deletions: number }> {
     let additions = 0; let deletions = 0;
     try {

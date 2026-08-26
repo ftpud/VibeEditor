@@ -158,6 +158,7 @@ export type ProtocolOperations = {
   "git.compareDiff": { payload: { ref: string; path: string; originalPath?: string }; result: { originalContent: string; modifiedContent: string } };
   "git.rollback": { payload: { path: string }; result: Record<string, never> };
   "git.commit": { payload: { paths: string[]; message: string }; result: { hash: string } };
+  "git.push": { payload: Record<string, never>; result: Record<string, never> };
   "java.loadMavenProject": {
     payload: { pomPath: string };
     result: { options: JavaProjectOptions; tree: JavaProjectNode[] };
@@ -331,6 +332,7 @@ const requestTypeRegistry: Record<RequestType, true> = {
   "git.compareDiff": true,
   "git.rollback": true,
   "git.commit": true,
+  "git.push": true,
   "java.loadMavenProject": true,
   "java.getOptions": true,
   "java.addSourceRoot": true,

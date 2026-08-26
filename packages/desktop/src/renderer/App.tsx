@@ -1,5 +1,5 @@
 import Editor, { DiffEditor, type Monaco } from "@monaco-editor/react";
-import { ArrowUpRight, Bot, Braces, Bug, CaseSensitive, Check, ChevronDown, ChevronRight, ChevronUp, CircleAlert, Coffee, Columns2, Eye, EyeOff, File, FileCode2, FileDiff, FileJson, FileText, Folder, FolderOpen, GitBranch, GitCompareArrows, GitMerge, Hash, Library, ListTodo, ListTree, LoaderCircle, LogOut, MoreVertical, Package, Palette, Pencil, Play, Plus, RefreshCw, Save, Search, Settings, ShieldAlert, Square, SquareTerminal, Trash2, X } from "lucide-react";
+import { ArrowUp, ArrowUpRight, Bot, Braces, Bug, CaseSensitive, Check, ChevronDown, ChevronRight, ChevronUp, CircleAlert, Coffee, Columns2, Eye, EyeOff, File, FileCode2, FileDiff, FileJson, FileText, Folder, FolderOpen, GitBranch, GitCompareArrows, GitMerge, Hash, Library, ListTodo, ListTree, LoaderCircle, LogOut, MoreVertical, Package, Palette, Pencil, Play, Plus, RefreshCw, Save, Search, Settings, ShieldAlert, Square, SquareTerminal, Trash2, X } from "lucide-react";
 import { Children, isValidElement, useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
 import type { AiConfiguration, AiModel, AiProvider, AiProviderDescriptor, AiSession, AiStatus, AiTaskSummary, AiUsage, FileColor, FileTreeNode, GitBranch as GitBranchInfo, GitDiffHunk, GitStatusEntry, HttpResponse, JavaBreakpoint, JavaDebugState, JavaDiagnostic, JavaLspLocation, JavaMainClass, JavaProjectNode, JavaProjectOptions, JavaTypeSuggestion, SearchResult, UsefulFile, UsefulFileScope, WorkspaceOptions, WorkspaceTask } from "@remote-ide/protocol";
 import type { editor } from "monaco-editor";
@@ -99,6 +99,17 @@ export function App() {
   const [classicTasksOpen, setClassicTasksOpen] = useState(true);
   const [classicAiOpen, setClassicAiOpen] = useState(false);
   const [classicSplit, setClassicSplit] = useState(50);
+
+  // Persist panel layout per workspace
+  useEffect(() => { if (workspaceKeyRef.current && sideLayout === "ai-focused") { localStorage.setItem(workspaceSettingKey(workspaceKeyRef.current, "focused.leftPanels"), JSON.stringify(leftPanels)); } }, [leftPanels]);
+  useEffect(() => { if (workspaceKeyRef.current && sideLayout === "ai-focused") { localStorage.setItem(workspaceSettingKey(workspaceKeyRef.current, "focused.rightPanels"), JSON.stringify(rightPanels)); } }, [rightPanels]);
+  useEffect(() => { if (workspaceKeyRef.current && sideLayout === "ai-focused") { localStorage.setItem(workspaceSettingKey(workspaceKeyRef.current, "focused.leftWidth"), String(leftSidebarWidth)); } }, [leftSidebarWidth]);
+  useEffect(() => { if (workspaceKeyRef.current && sideLayout === "ai-focused") { localStorage.setItem(workspaceSettingKey(workspaceKeyRef.current, "focused.rightWidth"), String(rightSidebarWidth)); } }, [rightSidebarWidth]);
+  useEffect(() => { if (workspaceKeyRef.current && sideLayout === "classic") { localStorage.setItem(workspaceSettingKey(workspaceKeyRef.current, "classic.leftWidth"), String(classicLeftWidth)); } }, [classicLeftWidth]);
+  useEffect(() => { if (workspaceKeyRef.current && sideLayout === "classic") { localStorage.setItem(workspaceSettingKey(workspaceKeyRef.current, "classic.rightWidth"), String(classicRightWidth)); } }, [classicRightWidth]);
+  useEffect(() => { if (workspaceKeyRef.current && sideLayout === "classic") { localStorage.setItem(workspaceSettingKey(workspaceKeyRef.current, "classic.tasksOpen"), String(classicTasksOpen)); } }, [classicTasksOpen]);
+  useEffect(() => { if (workspaceKeyRef.current && sideLayout === "classic") { localStorage.setItem(workspaceSettingKey(workspaceKeyRef.current, "classic.aiOpen"), String(classicAiOpen)); } }, [classicAiOpen]);
+  useEffect(() => { if (workspaceKeyRef.current && sideLayout === "classic") { localStorage.setItem(workspaceSettingKey(workspaceKeyRef.current, "classic.split"), String(classicSplit)); } }, [classicSplit]);
   const [showCreateTaskDialog, setShowCreateTaskDialog] = useState(false);
   const [tasks, setTasks] = useState<WorkspaceTask[]>([]);
   const [taskFilter, setTaskFilter] = useState("");
@@ -442,6 +453,20 @@ export function App() {
         if (wsFontSize >= 10 && wsFontSize <= 20) setUiFontSize(wsFontSize);
         const wsLineHeight = Number(setting("uiLineHeight"));
         if (wsLineHeight >= 1 && wsLineHeight <= 2) setUiLineHeight(wsLineHeight);
+        // Restore panel layout for current layout mode
+        const currentLayout = localStorage.getItem("sideLayout") === "classic" ? "classic" : "ai-focused";
+        if (currentLayout === "ai-focused") {
+          try { const saved = JSON.parse(setting("focused.leftPanels") ?? "{}"); if (typeof saved === "object" && saved !== null) setLeftPanels((current) => ({ ...current, ...saved })); } catch {}
+          try { const saved = JSON.parse(setting("focused.rightPanels") ?? "{}"); if (typeof saved === "object" && saved !== null) setRightPanels((current) => ({ ...current, ...saved })); } catch {}
+          const savedLeftWidth = Number(setting("focused.leftWidth")); if (savedLeftWidth >= 280 && savedLeftWidth <= 900) setLeftSidebarWidth(savedLeftWidth);
+          const savedRightWidth = Number(setting("focused.rightWidth")); if (savedRightWidth >= 180 && savedRightWidth <= 700) setRightSidebarWidth(savedRightWidth);
+        } else {
+          const savedLeftWidth = Number(setting("classic.leftWidth")); if (savedLeftWidth >= 180 && savedLeftWidth <= 500) setClassicLeftWidth(savedLeftWidth);
+          const savedRightWidth = Number(setting("classic.rightWidth")); if (savedRightWidth >= 240 && savedRightWidth <= 960) setClassicRightWidth(savedRightWidth);
+          const savedTasksOpen = setting("classic.tasksOpen"); if (savedTasksOpen === "true" || savedTasksOpen === "false") setClassicTasksOpen(savedTasksOpen === "true");
+          const savedAiOpen = setting("classic.aiOpen"); if (savedAiOpen === "true" || savedAiOpen === "false") setClassicAiOpen(savedAiOpen === "true");
+          const savedSplit = Number(setting("classic.split")); if (savedSplit >= 10 && savedSplit <= 90) setClassicSplit(savedSplit);
+        }
         const providerResult = await client.request("ai.providers", {});
         setAiProviders(providerResult.providers);
         setJavaOptions(result.options.javaProject);
@@ -614,10 +639,19 @@ export function App() {
     setGitCommitting(true); setStatusMessage("");
     try {
       await clientRef.current.request("git.commit", { paths: [...selectedGitPaths], message: gitCommitMessage });
-      setSelectedGitPaths(new Set()); setGitCommitMessage("");
+      setSelectedGitPaths(new Set());
       await Promise.all([refreshGit(), refreshTaskGit()]);
     } catch (error) { setStatusMessage(error instanceof Error ? error.message : "Could not commit selected files"); }
     finally { setGitCommitting(false); }
+  };
+
+  const pushGit = async () => {
+    if (!clientRef.current) return;
+    setStatusMessage("");
+    try {
+      await clientRef.current.request("git.push", {});
+      setStatusMessage("Pushed successfully");
+    } catch (error) { setStatusMessage(error instanceof Error ? error.message : "Could not push"); }
   };
 
   const openGitHunkDialog = async (path: string, hunk: GitDiffHunk, x: number, y: number) => {
@@ -1411,7 +1445,7 @@ export function App() {
           <div className="workspace-name" onContextMenu={(event) => { event.preventDefault(); setTreeContextMenu({ x: Math.min(event.clientX, window.innerWidth - 220), y: Math.min(event.clientY, window.innerHeight - 110), node: { name: "REMOTE WORKSPACE", path: "", type: "directory" } }); }}><ChevronDown size={13} />REMOTE WORKSPACE</div>
           <div className="tree">{filteredTree.length > 0 ? <Tree nodes={filteredTree} activePath={activeTab?.path} fileColors={fileColors} gitStatuses={projectGitStatuses} expandAll={Boolean(projectFilter.trim())} onOpen={openFile} onContextMenu={(event, node) => { event.preventDefault(); setTreeContextMenu({ x: Math.min(event.clientX, window.innerWidth - 220), y: Math.min(event.clientY, window.innerHeight - 110), node }); }} /> : <div className="filter-empty">No matching files</div>}</div>
         </> : classicSideView === "git" ? <>
-          <header className="panel-header"><span>Git Changes</span><button title="Refresh Git status" onClick={() => void refreshGit()}><RefreshCw size={14} /></button></header><div className="git-branch"><GitBranch size={13} /><span>{gitBranch}</span></div>
+          <header className="panel-header"><span>Git Changes</span><button title="Push" onClick={() => void pushGit()}><ArrowUp size={14} /></button><button title="Refresh Git status" onClick={() => void refreshGit()}><RefreshCw size={14} /></button></header><div className="git-branch"><GitBranch size={13} /><span>{gitBranch}</span></div>
           <GitChangesView entries={gitEntries} error={gitError} selectedPaths={selectedGitPaths} onTogglePath={(path) => setSelectedGitPaths((current) => { const next = new Set(current); next.has(path) ? next.delete(path) : next.add(path); return next; })} activePath={activeTab?.path} onOpenDiff={openDiff} onOpenFile={(entry) => void openFile({ name: entry.path.split("/").pop() ?? entry.path, path: entry.path, type: "file" })} onContextMenu={(event, entry) => { event.preventDefault(); setGitRollbackMenu({ x: Math.min(event.clientX, window.innerWidth - 220), y: Math.min(event.clientY, window.innerHeight - 50), entry }); }} />
           <form className="git-commit-panel" onSubmit={(event) => { event.preventDefault(); void commitSelectedFiles(); }}><textarea aria-label="Commit message" placeholder="Commit message" value={gitCommitMessage} disabled={gitCommitting} onChange={(event) => setGitCommitMessage(event.target.value)} /><footer><span>{selectedGitPaths.size} selected</span><button disabled={gitCommitting || selectedGitPaths.size === 0 || !gitCommitMessage.trim()}>{gitCommitting ? "Committing..." : "Commit"}</button></footer></form>
         </> : classicSideView === "taskGit" && selectedTaskId ? <><header className="panel-header"><span>Task Git</span><button title="Refresh task comparison" onClick={() => void refreshTaskGit()}><RefreshCw size={14} /></button></header><div className="git-branch"><GitCompareArrows size={13} /><span>{tasks.find((task) => task.id === selectedTaskId)?.baseBranch ?? "Base branch"}</span></div><GitChangesView entries={taskGitEntries} error={taskGitError} emptyMessage="No changes from base branch" groupTitle="Changes from Base" activePath={activeTab?.path} onOpenDiff={openTaskDiff} onOpenFile={(entry) => void openFile({ name: entry.path.split("/").pop() ?? entry.path, path: entry.path, type: "file" })} /></> : classicSideView === "useful" ? <><header className="panel-header"><span>Useful Files</span><button title="Refresh useful files" onClick={() => void refreshUsefulFiles()}><RefreshCw size={14} /></button></header><div className="useful-files-list"><UsefulFileSection title="Global" scope="global" files={usefulFiles} activeTab={activeTab} onOpen={openUsefulFile} onCreate={(scope) => setUsefulDialog({ mode: "create", scope })} onRename={(file) => setUsefulDialog({ mode: "rename", scope: file.scope, file })} onDelete={(file) => void deleteUsefulFile(file)} /><UsefulFileSection title="Local" scope="local" files={usefulFiles} activeTab={activeTab} onOpen={openUsefulFile} onCreate={(scope) => setUsefulDialog({ mode: "create", scope })} onRename={(file) => setUsefulDialog({ mode: "rename", scope: file.scope, file })} onDelete={(file) => void deleteUsefulFile(file)} /></div></> : <><header className="panel-header"><span>Java Project</span><button title="Refresh Java project" onClick={() => void refreshJavaTree()}><RefreshCw size={14} /></button></header><div className="java-project-meta"><Coffee size={13} /><span>{javaOptions?.pomPath}</span></div><div className="tree java-tree"><JavaProjectTree nodes={javaTree} activePath={activeTab?.path} onOpen={openFile} /></div></>}
@@ -1467,7 +1501,7 @@ export function App() {
           <div className="tree">{filteredTree.length > 0 ? <Tree nodes={filteredTree} activePath={activeTab?.path} fileColors={fileColors} gitStatuses={projectGitStatuses} expandAll={Boolean(projectFilter.trim())} onOpen={openFile} onContextMenu={(event, node) => { event.preventDefault(); setTreeContextMenu({ x: Math.min(event.clientX, window.innerWidth - 220), y: Math.min(event.clientY, window.innerHeight - 110), node }); }} /> : <div className="filter-empty">No matching files</div>}</div>
         </section>}
         {rightPanels.git && <section className="stacked-panel">
-          <header className="panel-header"><span>Git Changes</span><button title="Refresh Git status" onClick={() => void refreshGit()}><RefreshCw size={14} /></button></header>
+          <header className="panel-header"><span>Git Changes</span><button title="Push" onClick={() => void pushGit()}><ArrowUp size={14} /></button><button title="Refresh Git status" onClick={() => void refreshGit()}><RefreshCw size={14} /></button></header>
           <div className="git-branch"><GitBranch size={13} /><span>{gitBranch}</span></div>
           <GitChangesView entries={gitEntries} error={gitError} selectedPaths={selectedGitPaths} onTogglePath={(path) => setSelectedGitPaths((current) => { const next = new Set(current); next.has(path) ? next.delete(path) : next.add(path); return next; })} activePath={activeTab?.path} onOpenDiff={openDiff} onOpenFile={(entry) => void openFile({ name: entry.path.split("/").pop() ?? entry.path, path: entry.path, type: "file" })} onContextMenu={(event, entry) => { event.preventDefault(); setGitRollbackMenu({ x: Math.min(event.clientX, window.innerWidth - 220), y: Math.min(event.clientY, window.innerHeight - 50), entry }); }} />
           <form className="git-commit-panel" onSubmit={(event) => { event.preventDefault(); void commitSelectedFiles(); }}><textarea aria-label="Commit message" placeholder="Commit message" value={gitCommitMessage} disabled={gitCommitting} onChange={(event) => setGitCommitMessage(event.target.value)} /><footer><span>{selectedGitPaths.size} selected</span><button disabled={gitCommitting || selectedGitPaths.size === 0 || !gitCommitMessage.trim()}>{gitCommitting ? "Committing..." : "Commit"}</button></footer></form>

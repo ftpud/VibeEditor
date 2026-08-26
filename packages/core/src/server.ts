@@ -289,6 +289,7 @@ async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStor
     case "git.compareDiff": return git.compareDiff(request.payload.ref, request.payload.path, filesystem, request.payload.originalPath);
     case "git.rollback": await git.rollback(request.payload.path); return {};
     case "git.commit": return { hash: await git.commit(request.payload.paths, request.payload.message) };
+    case "git.push": await git.push(); return {};
     case "java.loadMavenProject": {
       if (typeof request.payload.pomPath !== "string") throw new CoreError("INVALID_REQUEST", "pomPath must be a string");
       return java.loadMavenProject(request.payload.pomPath);
