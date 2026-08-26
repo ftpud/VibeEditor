@@ -16,7 +16,7 @@ type Runtime = { status: "idle" | "working" | "server" | "client" | "error"; mes
 const directory = path.dirname(fileURLToPath(import.meta.url));
 const appIcon = path.join(directory, "../assets/app-icon.png");
 const repository = "https://github.com/ftpud/VibeEditor";
-const repositoryBranch = "AI";
+const repositoryBranch = "dev";
 const remoteNodeEnvironment = `export PATH="$HOME/.local/bin:$HOME/.volta/bin:$HOME/.fnm:$HOME/.nvm/versions/node/current/bin:/usr/local/bin:$PATH"; export NVM_DIR="$HOME/.nvm"; if [ -s "$NVM_DIR/nvm.sh" ]; then . "$NVM_DIR/nvm.sh"; fi; command -v npm >/dev/null 2>&1 || { echo "npm was not found on the SSH host. Install Node.js 20+ for this user or configure NVM in ~/.bashrc." >&2; exit 127; }`;
 const runtimes = new Map<string, Runtime>();
 const tunnels = new Map<string, { ssh: Client; server: Server }>();
