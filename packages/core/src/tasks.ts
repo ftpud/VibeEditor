@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import os from "node:os";
 import path from "node:path";
-import { cp, mkdir, readdir, readFile, rename, rm, symlink, writeFile } from "node:fs/promises";
+import { cp, lstat, mkdir, readdir, readFile, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { CoreError } from "./errors.js";
@@ -27,9 +27,11 @@ export class WorkspaceTaskStore {
       const validTasks = value.tasks.filter(isTask);
       const fallbackBaseBranch = validTasks.some((task) => !task.baseBranch) ? await this.rootBranch() : "";
       const tasks = validTasks.map((task) => ({ ...task, baseBranch: task.baseBranch || fallbackBaseBranch }));
+      for (const task of tasks) await this.migrateLegacyCopy(task);
       return { tasks, ...(value.selectedTaskId && tasks.some((task) => task.id === value.selectedTaskId) ? { selectedTaskId: value.selectedTaskId } : {}) };
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return { tasks: [] };
+      if (error instanceof CoreError) throw error;
       throw new CoreError("READ_FAILED", `Could not read tasks: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
@@ -39,26 +41,22 @@ export class WorkspaceTaskStore {
     if (!name || name.length > 200 || !/^[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(name) || name.includes("..") || name.endsWith("/") || name.endsWith(".")) throw new CoreError("INVALID_REQUEST", "Invalid Git branch name");
     const registry = await this.list();
     if (registry.tasks.some((task) => task.branch === name)) throw new CoreError("INVALID_REQUEST", `A task already uses branch ${name}`);
+    if (await this.branchExists(name)) throw new CoreError("INVALID_REQUEST", `Git branch ${name} already exists`);
     const task: WorkspaceTask = { id: crypto.randomUUID(), name, branch: name, baseBranch: await this.rootBranch() };
     const destination = this.taskPath(task.id);
     try {
-      const nodeModulesDirs = await findNodeModulesDirs(this.rootWorkspace);
-      const skip = new Set(nodeModulesDirs);
       await mkdir(path.dirname(destination), { recursive: true });
-      // node_modules is excluded from the copy and symlinked back to the root workspace instead: task
-      // branches share the same dependency tree as root, so duplicating potentially huge install trees
-      // per task wastes disk and time. If a task needs its own deps (e.g. after `npm install`), the
-      // symlink can be replaced there without affecting root or other tasks.
-      await cp(this.rootWorkspace, destination, { recursive: true, errorOnExist: true, force: false, filter: (source) => !skip.has(source) });
-      for (const source of nodeModulesDirs) {
-        await symlink(source, path.join(destination, path.relative(this.rootWorkspace, source)), "dir");
-      }
-      await execFileAsync("git", ["-C", destination, "switch", "-C", name], { encoding: "utf8" });
-      if (task.baseBranch !== "HEAD") await execFileAsync("git", ["-C", destination, "branch", "--set-upstream-to", task.baseBranch, name], { encoding: "utf8" });
+      await execFileAsync("git", ["-C", this.rootWorkspace, "worktree", "add", "-b", name, destination, "HEAD"], { encoding: "utf8" });
+      if (task.baseBranch !== "HEAD") await execFileAsync("git", ["-C", this.rootWorkspace, "branch", "--set-upstream-to", task.baseBranch, name], { encoding: "utf8" });
+      await this.copyWorkspaceState(this.rootWorkspace, destination);
+      await this.linkNodeModules(destination);
       await this.save({ tasks: [...registry.tasks, task], selectedTaskId: task.id });
       return task;
     } catch (error) {
-      throw new CoreError("GIT_FAILED", `Could not create task workspace: ${error instanceof Error ? error.message : String(error)}`);
+      await this.removeWorktree(destination);
+      if (await this.branchExists(name)) await execFileAsync("git", ["-C", this.rootWorkspace, "branch", "-D", name], { encoding: "utf8" }).catch(() => undefined);
+      await rm(path.dirname(destination), { recursive: true, force: true });
+      throw new CoreError("GIT_FAILED", `Could not create task worktree: ${gitError(error)}`);
     }
   }
 
@@ -85,8 +83,7 @@ export class WorkspaceTaskStore {
       if (taskStatus.stdout.trim()) throw new CoreError("GIT_FAILED", `Task ${task.name} has uncommitted changes. Commit them before merging.`);
       const branch = targetBranch.stdout.trim();
       if (!branch) throw new CoreError("GIT_FAILED", "Main workspace is in detached HEAD state. Check out a branch before merging.");
-      await execFileAsync("git", ["-C", this.rootWorkspace, "fetch", "--no-tags", taskWorkspace, task.branch], { encoding: "utf8" });
-      try { await execFileAsync("git", ["-C", this.rootWorkspace, "merge", "--no-edit", "FETCH_HEAD"], { encoding: "utf8" }); }
+      try { await execFileAsync("git", ["-C", this.rootWorkspace, "merge", "--no-edit", task.branch], { encoding: "utf8" }); }
       catch (mergeError) {
         await execFileAsync("git", ["-C", this.rootWorkspace, "merge", "--abort"], { encoding: "utf8" }).catch(() => undefined);
         throw mergeError;
@@ -94,21 +91,99 @@ export class WorkspaceTaskStore {
       return { targetBranch: branch };
     } catch (error) {
       if (error instanceof CoreError) throw error;
-      const detail = error as { stderr?: string; stdout?: string; message?: string };
-      throw new CoreError("GIT_FAILED", `Could not merge task ${task.name}: ${(detail.stderr || detail.stdout || detail.message || String(error)).trim()}`);
+      throw new CoreError("GIT_FAILED", `Could not merge task ${task.name}: ${gitError(error)}`);
     }
   }
 
   async delete(taskId: string): Promise<Registry> {
     const registry = await this.list();
-    if (!registry.tasks.some((task) => task.id === taskId)) throw new CoreError("INVALID_REQUEST", "Task does not exist");
-    const next = { tasks: registry.tasks.filter((task) => task.id !== taskId), ...(registry.selectedTaskId && registry.selectedTaskId !== taskId ? { selectedTaskId: registry.selectedTaskId } : {}) };
-    await rm(path.dirname(this.taskPath(taskId)), { recursive: true, force: true });
-    await this.save(next);
-    return next;
+    const task = registry.tasks.find((item) => item.id === taskId);
+    if (!task) throw new CoreError("INVALID_REQUEST", "Task does not exist");
+    const next = { tasks: registry.tasks.filter((item) => item.id !== taskId), ...(registry.selectedTaskId && registry.selectedTaskId !== taskId ? { selectedTaskId: registry.selectedTaskId } : {}) };
+    try {
+      await this.removeWorktree(this.taskPath(taskId));
+      if (await this.branchExists(task.branch)) await execFileAsync("git", ["-C", this.rootWorkspace, "branch", "-D", task.branch], { encoding: "utf8" });
+      await rm(path.dirname(this.taskPath(taskId)), { recursive: true, force: true });
+      await this.save(next);
+      return next;
+    } catch (error) {
+      throw new CoreError("GIT_FAILED", `Could not delete task worktree: ${gitError(error)}`);
+    }
   }
 
   taskPath(taskId: string): string { return path.join(this.directory, taskId, "workspace"); }
+
+  private async migrateLegacyCopy(task: WorkspaceTask): Promise<void> {
+    const destination = this.taskPath(task.id);
+    let gitMetadata;
+    try { gitMetadata = await lstat(path.join(destination, ".git")); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+      throw error;
+    }
+    if (!gitMetadata.isDirectory()) return;
+
+    const migrationRef = `refs/vibe-editor/migration/${task.id}`;
+    const backup = path.join(path.dirname(destination), `legacy-workspace-${process.pid}`);
+    let createdBranch = false;
+    try {
+      await execFileAsync("git", ["-C", this.rootWorkspace, "fetch", "--no-tags", destination, `${task.branch}:${migrationRef}`], { encoding: "utf8" });
+      const migratedCommit = (await execFileAsync("git", ["-C", this.rootWorkspace, "rev-parse", migrationRef], { encoding: "utf8" })).stdout.trim();
+      if (await this.branchExists(task.branch)) {
+        const existingCommit = (await execFileAsync("git", ["-C", this.rootWorkspace, "rev-parse", task.branch], { encoding: "utf8" })).stdout.trim();
+        if (existingCommit !== migratedCommit) throw new Error(`Git branch ${task.branch} already exists at a different commit`);
+      } else {
+        await execFileAsync("git", ["-C", this.rootWorkspace, "branch", task.branch, migratedCommit], { encoding: "utf8" });
+        createdBranch = true;
+      }
+      await rename(destination, backup);
+      await execFileAsync("git", ["-C", this.rootWorkspace, "worktree", "add", destination, task.branch], { encoding: "utf8" });
+      await this.copyWorkspaceState(backup, destination);
+      if (task.baseBranch !== "HEAD") await execFileAsync("git", ["-C", this.rootWorkspace, "branch", "--set-upstream-to", task.baseBranch, task.branch], { encoding: "utf8" });
+      await this.linkNodeModules(destination);
+      await rm(backup, { recursive: true, force: true });
+      await execFileAsync("git", ["-C", this.rootWorkspace, "update-ref", "-d", migrationRef], { encoding: "utf8" });
+    } catch (error) {
+      if (await exists(backup)) {
+        await this.removeWorktree(destination);
+        await rm(destination, { recursive: true, force: true });
+        await rename(backup, destination).catch(() => undefined);
+      }
+      if (createdBranch && await this.branchExists(task.branch)) await execFileAsync("git", ["-C", this.rootWorkspace, "branch", "-D", task.branch], { encoding: "utf8" }).catch(() => undefined);
+      await execFileAsync("git", ["-C", this.rootWorkspace, "update-ref", "-d", migrationRef], { encoding: "utf8" }).catch(() => undefined);
+      throw new CoreError("GIT_FAILED", `Could not migrate task ${task.name} to a Git worktree: ${gitError(error)}`);
+    }
+  }
+
+  private async copyWorkspaceState(source: string, destination: string): Promise<void> {
+    const stagedPatch = (await execFileAsync("git", ["-C", source, "diff", "--cached", "--binary"], { encoding: "buffer", maxBuffer: 100 * 1024 * 1024 })).stdout;
+    const deleted = (await execFileAsync("git", ["-C", source, "ls-files", "--deleted", "-z"], { encoding: "utf8" })).stdout.split("\0").filter(Boolean);
+    await cp(source, destination, { recursive: true, force: true, filter: (item) => item !== path.join(source, ".git") && !isNodeModulesPath(source, item) });
+    for (const relative of deleted) await rm(path.join(destination, relative), { recursive: true, force: true });
+    if (!stagedPatch.length) return;
+    const patchFile = path.join(path.dirname(destination), `staged-${process.pid}-${crypto.randomUUID()}.patch`);
+    await writeFile(patchFile, stagedPatch);
+    try { await execFileAsync("git", ["-C", destination, "apply", "--cached", "--binary", patchFile], { maxBuffer: 100 * 1024 * 1024 }); }
+    finally { await rm(patchFile, { force: true }); }
+  }
+
+  private async linkNodeModules(destination: string): Promise<void> {
+    for (const source of await findNodeModulesDirs(this.rootWorkspace)) {
+      const target = path.join(destination, path.relative(this.rootWorkspace, source));
+      await mkdir(path.dirname(target), { recursive: true });
+      if (!await exists(target)) await symlink(source, target, "dir");
+    }
+  }
+
+  private async branchExists(branch: string): Promise<boolean> {
+    try { await execFileAsync("git", ["-C", this.rootWorkspace, "show-ref", "--verify", "--quiet", `refs/heads/${branch}`]); return true; }
+    catch { return false; }
+  }
+
+  private async removeWorktree(workspace: string): Promise<void> {
+    await execFileAsync("git", ["-C", this.rootWorkspace, "worktree", "remove", "--force", workspace], { encoding: "utf8" }).catch(() => undefined);
+    await execFileAsync("git", ["-C", this.rootWorkspace, "worktree", "prune"], { encoding: "utf8" }).catch(() => undefined);
+  }
 
   private async rootBranch(): Promise<string> {
     try {
@@ -118,7 +193,7 @@ export class WorkspaceTaskStore {
       } catch { /* A local-only branch uses its current branch as the task base. */ }
       return (await execFileAsync("git", ["-C", this.rootWorkspace, "branch", "--show-current"], { encoding: "utf8" })).stdout.trim() || "HEAD";
     }
-    catch (error) { throw new CoreError("GIT_FAILED", `Could not determine task base branch: ${error instanceof Error ? error.message : String(error)}`); }
+    catch (error) { throw new CoreError("GIT_FAILED", `Could not determine task base branch: ${gitError(error)}`); }
   }
 
   private async save(registry: Registry): Promise<void> {
@@ -129,8 +204,6 @@ export class WorkspaceTaskStore {
   }
 }
 
-// Finds every top-level `node_modules` directory under `root` (i.e. root's own and each
-// workspace package's), without descending into `.git` or into `node_modules` itself.
 async function findNodeModulesDirs(root: string): Promise<string[]> {
   const results: string[] = [];
   const walk = async (dir: string): Promise<void> => {
@@ -145,6 +218,19 @@ async function findNodeModulesDirs(root: string): Promise<string[]> {
   };
   await walk(root);
   return results;
+}
+
+function isNodeModulesPath(root: string, source: string): boolean {
+  return path.relative(root, source).split(path.sep).includes("node_modules");
+}
+
+async function exists(target: string): Promise<boolean> {
+  try { await lstat(target); return true; } catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return false; throw error; }
+}
+
+function gitError(error: unknown): string {
+  const detail = error as { stderr?: string | Buffer; stdout?: string | Buffer; message?: string };
+  return String(detail.stderr || detail.stdout || detail.message || error).trim();
 }
 
 function isTask(value: unknown): value is WorkspaceTask {

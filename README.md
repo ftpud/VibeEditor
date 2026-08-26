@@ -166,7 +166,7 @@ The full-width bottom Git tool window provides local and remote branches, a sear
 
 ## Task Workspaces
 
-The Tasks tool window creates isolated workspace copies under Core's state directory. Creating a task asks for a branch name, copies the current root workspace, and switches the copy to the new branch. Selecting Root workspace returns to the original directory. Deleting a task requires confirmation and removes its copied workspace.
+The Tasks tool window creates isolated Git worktrees under Core's state directory. Creating a task asks for a branch name, creates a linked worktree on that new branch, and carries the root workspace's current staged, unstaged, untracked, ignored, and deleted-file state into it. Existing dependencies are shared through `node_modules` symlinks. Selecting Root workspace returns to the original directory. Deleting a task requires confirmation and removes its worktree and task branch. Legacy copied task workspaces are converted automatically, retaining their commits and working state.
 
 Open files, active tab, terminal tabs, terminal panel state, useful local files, AI sessions, file colors, and Git commit drafts are persisted per task workspace. Task rows show AI state, the latest activity preview, Git additions/deletions, and an animated in-progress indicator.
 
@@ -229,7 +229,7 @@ Set a different location before starting Core:
 REMOTE_IDE_STATE_DIR=/var/lib/vibe-editor npm run core -- --workspace /srv/project
 ```
 
-State files are keyed by canonical workspace paths. They contain workspace layout options, tasks, useful files, AI session metadata, file colors, terminal restoration data, and Git commit drafts. Project source files remain in their configured workspace or task copy.
+State files are keyed by canonical workspace paths. They contain workspace layout options, tasks, useful files, AI session metadata, file colors, terminal restoration data, and Git commit drafts. Project source files remain in their configured workspace or task worktree.
 
 Gateway uses Electron's platform application-data directory, for example `%APPDATA%/Vibe Gateway` on Windows or `~/Library/Application Support/Vibe Gateway` on macOS.
 
@@ -241,7 +241,7 @@ npm test
 npm run build
 ```
 
-The test suite covers filesystem isolation, workspace state validation, task copies, Git parsing/diffs/rollback/selective commits, HTTP execution, Java project behavior, search, and other Core services.
+The test suite covers filesystem isolation, workspace state validation, task worktrees and legacy migration, Git parsing/diffs/rollback/selective commits, HTTP execution, Java project behavior, search, and other Core services.
 
 ## Security
 

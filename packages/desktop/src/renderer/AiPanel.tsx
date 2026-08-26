@@ -92,10 +92,16 @@ function selectValue(option: { choices?: { value: string }[]; defaultValue: stri
 function ActivityMessage({ text }: { text: string }) {
   const [firstLine, ...output] = text.split("\n");
   const summary = firstLine?.trim() || "Execution details";
-  if (summary === "Reasoning") return <div className="ai-reasoning" aria-label="Reasoning">
-    <span>Reasoning</span>
-    <pre>{output.join("\n")}</pre>
-  </div>;
+  const reasoning = summary === "Reasoning";
+  if (reasoning) {
+    const content = output.join("\n");
+    const previewLine = output.find((line) => line.trim())?.trim().replace(/\s+/g, " ") || "No reasoning details";
+    const preview = previewLine.length > 120 ? `${previewLine.slice(0, 119)}…` : previewLine;
+    return <details className="ai-reasoning" aria-label="Reasoning">
+      <summary><span>Reasoning</span><code title={preview}>{preview}</code></summary>
+      <pre>{content}</pre>
+    </details>;
+  }
   return <details className="ai-activity">
     <summary><span>Execution</span><code>{summary}</code></summary>
     <pre>{output.length > 0 ? output.join("\n") : text}</pre>

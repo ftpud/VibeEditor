@@ -2,6 +2,8 @@ import type { RawData } from "ws";
 import { WebSocket, WebSocketServer } from "ws";
 import chokidar from "chokidar";
 import path from "node:path";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { requestTypes, type FileChangeKind, type Request, type RequestType, type Response, type ServerEvent } from "@remote-ide/protocol";
 import { CoreError } from "./errors.js";
 import { WorkspaceFileSystem } from "./filesystem.js";
@@ -16,6 +18,8 @@ import { UsefulFilesStore } from "./useful-files.js";
 import { executeHttpRequest } from "./http.js";
 import { summarizeAiSessions } from "./ai/summary.js";
 import { createAcpRegistry, type AcpRegistry } from "./ai/index.js";
+
+const execFileAsync = promisify(execFile);
 
 type SessionServices = {
   workspacePath: string;
@@ -54,8 +58,8 @@ export async function createServer(host: string, port: number, workspacePath: st
     for (const socket of activeSessions) if (socket.readyState === WebSocket.OPEN) socket.send(encoded);
   };
   const acp = createAcpRegistry(aiChanged);
-  const gitIndexWatcher = chokidar.watch(path.join(workspace, ".git", "index"), { ignoreInitial: true });
-  gitIndexWatcher.on("change", () => {
+  const gitIndexWatcher = chokidar.watch(await gitIndexPath(workspace), { ignoreInitial: true });
+  gitIndexWatcher.on("all", () => {
     const encoded = JSON.stringify({ type: "git.changed", payload: {} } satisfies ServerEvent);
     for (const socket of activeSessions) if (socket.readyState === WebSocket.OPEN) socket.send(encoded);
   });
@@ -104,9 +108,11 @@ export async function createServer(host: string, port: number, workspacePath: st
     };
     let servicesPromise = makeServices(workspace);
     let switchedWatcher: ReturnType<typeof chokidar.watch> | undefined;
+    let switchedGitIndexWatcher: ReturnType<typeof chokidar.watch> | undefined;
     const watchSwitchedWorkspace = async (nextWorkspace: string) => {
       await switchedWatcher?.close();
-      if (nextWorkspace === workspace) { switchedWatcher = undefined; return; }
+      await switchedGitIndexWatcher?.close();
+      if (nextWorkspace === workspace) { switchedWatcher = undefined; switchedGitIndexWatcher = undefined; return; }
       switchedWatcher = chokidar.watch(nextWorkspace, {
         ignoreInitial: true,
         ignored: (watchPath) => path.relative(nextWorkspace, watchPath).split(path.sep).some((part) => part === ".git" || part === "node_modules"),
@@ -118,6 +124,10 @@ export async function createServer(host: string, port: number, workspacePath: st
         socket.send(JSON.stringify({ type: "filesystem.changed", payload: { path: relativePath, kind } } satisfies ServerEvent));
       };
       switchedWatcher.on("add", (file) => sendChange("add", file)).on("change", (file) => sendChange("change", file)).on("unlink", (file) => sendChange("unlink", file)).on("addDir", (directory) => sendChange("addDir", directory)).on("unlinkDir", (directory) => sendChange("unlinkDir", directory));
+      switchedGitIndexWatcher = chokidar.watch(await gitIndexPath(nextWorkspace), { ignoreInitial: true });
+      switchedGitIndexWatcher.on("all", () => {
+        if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: "git.changed", payload: {} } satisfies ServerEvent));
+      });
       await new Promise<void>((resolve, reject) => { switchedWatcher!.once("ready", resolve); switchedWatcher!.once("error", reject); });
     };
     const client = request.socket.remoteAddress ?? "unknown";
@@ -149,11 +159,17 @@ export async function createServer(host: string, port: number, workspacePath: st
       activeSessions.delete(socket);
       void servicesPromise.then((services) => { services.processManager.closeAll(); services.java.close(); services.jdt.close(); });
       void switchedWatcher?.close();
+      void switchedGitIndexWatcher?.close();
       console.log(`[core] disconnected: ${client}`);
     });
     socket.on("error", (error) => console.error(`[core] socket error: ${error.message}`));
   });
   return server;
+}
+
+async function gitIndexPath(workspace: string): Promise<string> {
+  const value = (await execFileAsync("git", ["-C", workspace, "rev-parse", "--git-path", "index"], { encoding: "utf8" })).stdout.trim();
+  return path.isAbsolute(value) ? value : path.resolve(workspace, value);
 }
 
 function parseRequest(data: RawData): Request {

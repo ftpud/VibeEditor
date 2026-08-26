@@ -41,7 +41,7 @@ Vibe Editor is a remote-workspace IDE: an Electron/React/Monaco desktop client t
 
 ## Task Workspaces
 
-- Isolated task workspace copies created under Core's state directory, each on its own new branch.
+- Isolated task Git worktrees created under Core's state directory, each on its own new branch; legacy workspace copies are migrated automatically without losing commits or working changes.
 - Per-task persistence of open files, active tab, terminal tabs/panel state, useful local files, AI sessions, file colors, and Git commit drafts.
 - Task Git tool window compares a task's full working state against its recorded upstream (or the root workspace's branch).
 - Task list shows AI state, latest activity preview, Git additions/deletions, and an in-progress indicator; Tasks and AI panels can share the resizable right sidebar with a draggable divider.
