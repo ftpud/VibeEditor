@@ -374,8 +374,7 @@ export abstract class StdioAcpProvider extends AcpProvider {
     }
     this.lastWorkspace = workspace;
     const connected = await this.connect(workspace, session.configuration ?? {}, servers, session.threadId);
-    if (connected.resumed) session.messages = [];
-    else if (connected.resumeFailed) session.messages.push(this.message("activity", "The saved ACP session could not be resumed; a new agent session was started."));
+    if (connected.resumeFailed) session.messages.push(this.message("activity", "The saved ACP session could not be resumed; a new agent session was started."));
     const runtime: Runtime = { child: connected.child, connection: connected.connection, sessionId: connected.sessionId, running: false, stderr: connected.stderr(), session, tools: new Map(), anchors: {}, generation: 0, steering: connected.steering, pending: [], configOptions: connected.configOptions, modes: connected.modes, mcpKey };
     connected.bind(runtime);
     session.threadId = connected.sessionId;
@@ -429,7 +428,14 @@ export abstract class StdioAcpProvider extends AcpProvider {
           child.stderr.on("data", () => { runtime.stderr = stderr; });
           bound = (params) => this.queue(workspace, () => this.consumeUpdate(workspace, runtime, params));
           permissionBound = (params) => this.requestPermission(workspace, runtime, params);
-          for (const params of buffered.splice(0)) void bound(params);
+          for (const params of buffered.splice(0)) {
+            // Resuming replays the whole conversation. Those updates land after the freshly typed
+            // prompt was already appended, which would push it to the top of the transcript, so the
+            // replay is dropped in favour of the transcript we persisted for this session. Sessions
+            // without a stored transcript (created outside the editor) still take the replay.
+            if (resumed && runtime.session.messages.length > 0) continue;
+            void bound(params);
+          }
           child.on("error", (error) => { void this.runtimeFailed(workspace, error.message); });
           child.on("close", (code) => { if (this.runtimes.get(workspace) === runtime) { this.runtimes.delete(workspace); this.cancelPermissionWaiters(workspace); void this.runtimeFailed(workspace, stderr.trim() || `${this.descriptor.name} ACP server exited with code ${code ?? 1}`); } });
         }

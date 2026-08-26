@@ -213,7 +213,7 @@ describe("ACP integration", () => {
     await expect(provider.steer(process.cwd(), "hello")).rejects.toThrow("not currently working");
   });
 
-  it("loads the persisted ACP session and replaces the local transcript with authoritative history", async () => {
+  it("loads the persisted ACP session while keeping the local transcript in order", async () => {
     const state = await mkdtemp(path.join(os.tmpdir(), "remote-ide-ai-resume-"));
     const provider = new FakeProvider(() => undefined, state, { FAKE_LOAD: "on" });
     const workspace = process.cwd();
@@ -224,8 +224,11 @@ describe("ACP integration", () => {
     await provider.configure(workspace, { maxAiCredits: 1 });
     await provider.send(workspace, { prompt: "second", configuration: { model: "model-a", maxAiCredits: 1 } });
     const session = await settle(provider, workspace);
-    expect(session.messages.some((message) => message.text === "Restored authoritative history")).toBe(true);
-    expect(session.messages.some((message) => message.text === "first")).toBe(false);
+    // The replayed history would land after the new prompt and push it to the top of the box, so
+    // the transcript we already persisted is kept and the fresh prompt stays at the bottom.
+    expect(session.messages.some((message) => message.text === "Restored authoritative history")).toBe(false);
+    expect(session.messages.some((message) => message.text === "first")).toBe(true);
+    expect(session.messages.findIndex((message) => message.text === "second")).toBeGreaterThan(session.messages.findIndex((message) => message.text === "first"));
     await provider.clear(workspace);
   });
 
