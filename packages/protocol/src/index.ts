@@ -282,8 +282,9 @@ export type JavaOutputEvent = { type: "java.output"; payload: { data: string } }
 export type JavaExitEvent = { type: "java.exit"; payload: { exitCode: number | null; signal: string | null } };
 export type JavaDebugStateEvent = { type: "java.debug.state"; payload: JavaDebugState };
 export type AiChangedEvent = { type: "ai.changed"; payload: { workspace: string } };
+export type TasksChangedEvent = { type: "tasks.changed"; payload: Record<string, never> };
 
-export type ServerEvent = FilesystemChangedEvent | TerminalOutputEvent | TerminalExitEvent | GitChangedEvent | JavaOutputEvent | JavaExitEvent | JavaDebugStateEvent | AiChangedEvent;
+export type ServerEvent = FilesystemChangedEvent | TerminalOutputEvent | TerminalExitEvent | GitChangedEvent | JavaOutputEvent | JavaExitEvent | JavaDebugStateEvent | AiChangedEvent | TasksChangedEvent;
 
 /**
  * Every request the core accepts. Declaring it as a fully keyed record makes TypeScript

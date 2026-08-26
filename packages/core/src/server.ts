@@ -21,6 +21,7 @@ import { summarizeAiSessions } from "./ai/summary.js";
 import { createAcpRegistry, type AcpRegistry } from "./ai/index.js";
 import type { AiAgent, AiMcpServer } from "@remote-ide/acp";
 import { fileURLToPath } from "node:url";
+import { AppEventBridge } from "./app-events.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -57,6 +58,18 @@ export async function createServer(host: string, port: number, workspacePath: st
   });
   const server = new WebSocketServer({ host, port });
   const activeSessions = new Set<WebSocket>();
+  const appEvents = new AppEventBridge(rootWorkspace);
+  await appEvents.ready();
+  const appEventWatcher = chokidar.watch(appEvents.directory, { ignoreInitial: true, depth: 0 });
+  await new Promise<void>((resolve, reject) => { appEventWatcher.once("ready", resolve); appEventWatcher.once("error", reject); });
+  appEventWatcher.on("add", (file) => {
+    void appEvents.consume(file).then((event) => {
+      if (!event) return;
+      const message: ServerEvent = event.type === "tasks.changed" ? { type: "tasks.changed", payload: {} } : { type: "ai.changed", payload: { workspace: event.workspace } };
+      const encoded = JSON.stringify(message);
+      for (const socket of activeSessions) if (socket.readyState === WebSocket.OPEN) socket.send(encoded);
+    }).catch((error) => console.error(`[core] app event error: ${error instanceof Error ? error.message : String(error)}`));
+  });
   const aiChanged = (changedWorkspace: string) => {
     const encoded = JSON.stringify({ type: "ai.changed", payload: { workspace: changedWorkspace } } satisfies ServerEvent);
     for (const socket of activeSessions) if (socket.readyState === WebSocket.OPEN) socket.send(encoded);
@@ -84,7 +97,7 @@ export async function createServer(host: string, port: number, workspacePath: st
     .on("addDir", (directory) => broadcastChange("addDir", directory))
     .on("unlinkDir", (directory) => broadcastChange("unlinkDir", directory))
     .on("error", (error) => console.error(`[core] watcher error: ${String(error)}`));
-  server.on("close", () => { void watcher.close(); void gitIndexWatcher.close(); });
+  server.on("close", () => { void watcher.close(); void gitIndexWatcher.close(); void appEventWatcher.close(); });
   server.on("listening", () => console.log(`[core] listening on ws://${host}:${port}`));
   server.on("connection", (socket, request) => {
     const makeServices = async (nextWorkspace: string): Promise<SessionServices> => {

@@ -4,6 +4,7 @@ import type { AiConfiguration, AiProvider } from "@remote-ide/acp";
 import { WorkspaceTaskStore, type WorkspaceTask } from "./tasks.js";
 import { createAcpRegistry, type AcpRegistry } from "./ai/index.js";
 import { summarizeAiSessions } from "./ai/summary.js";
+import { AppEventBridge } from "./app-events.js";
 
 type ToolResult = { content: { type: "text"; text: string }[]; isError?: boolean };
 
@@ -39,22 +40,28 @@ export const appToolDefinitions = [
 ] as const;
 
 export class AppToolService {
-  constructor(private readonly tasks: WorkspaceTaskStore, private readonly acp: AcpRegistry) {}
+  constructor(private readonly tasks: WorkspaceTaskStore, private readonly acp: AcpRegistry, private readonly onTasksChanged: () => Promise<void> = async () => undefined) {}
 
   async call(name: string, args: Record<string, unknown>): Promise<unknown> {
-    if (name === "task_create") return { task: await this.tasks.create(requiredString(args, "branch"), false, false, false) };
+    if (name === "task_create") {
+      const task = await this.tasks.create(requiredString(args, "branch"), false, false, false);
+      await this.onTasksChanged();
+      return { task };
+    }
     if (name === "task_create_and_start") {
       const prompt = requiredString(args, "prompt");
       const provider = requiredString(args, "provider") as AiProvider;
       const model = requiredString(args, "model");
       const branch = optionalString(args, "branch");
       const task = branch ? await this.tasks.create(branch, false, false, false) : await this.tasks.createRandom(false);
+      await this.onTasksChanged();
       try {
         const configuration: AiConfiguration = { model };
         const session = await this.acp.get(provider).send(this.tasks.taskPath(task.id), { prompt, configuration });
         return { task, session: { status: session.status, model: session.model } };
       } catch (error) {
         await this.tasks.delete(task.id).catch(() => undefined);
+        await this.onTasksChanged().catch(() => undefined);
         throw error;
       }
     }
@@ -89,7 +96,8 @@ function optionalString(args: Record<string, unknown>, key: string): string | un
 async function main() {
   const rootWorkspace = process.env.VIBE_EDITOR_ROOT_WORKSPACE;
   if (!rootWorkspace) throw new Error("VIBE_EDITOR_ROOT_WORKSPACE is required");
-  const service = new AppToolService(new WorkspaceTaskStore(rootWorkspace), createAcpRegistry(() => undefined));
+  const events = new AppEventBridge(rootWorkspace);
+  const service = new AppToolService(new WorkspaceTaskStore(rootWorkspace), createAcpRegistry((workspace) => { void events.emit({ type: "ai.changed", workspace }); }), () => events.emit({ type: "tasks.changed" }));
   const lines = createInterface({ input: process.stdin, terminal: false });
   for await (const line of lines) {
     if (!line.trim()) continue;

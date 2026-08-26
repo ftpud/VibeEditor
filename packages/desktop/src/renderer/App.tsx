@@ -308,6 +308,14 @@ export function App() {
     aiStatusesApplied.current = sequence;
     setAiStatuses(statuses);
   }, []);
+  const refreshTasks = useCallback(async (client = clientRef.current) => {
+    if (!client) return;
+    const result = await client.request("tasks.list", {});
+    setTasks(result.tasks);
+    setSelectedTaskId(result.selectedTaskId);
+    selectedTaskIdRef.current = result.selectedTaskId;
+    activeTaskRef.current = result.tasks.find((task) => task.id === result.selectedTaskId);
+  }, []);
   // The transcript has the same problem, and it is worse there: a reply that was requested for the
   // previous task or provider would drop that conversation into the panel, so the next prompt looks
   // like it was prepended to a transcript it does not belong to. Every session snapshot therefore
@@ -416,6 +424,10 @@ export function App() {
       if (event.type === "ai.changed") {
         if (event.payload.workspace === activeWorkspaceRef.current) void refreshAi(client).catch(() => undefined);
         else void refreshAiStatuses(client).catch(() => undefined);
+        return;
+      }
+      if (event.type === "tasks.changed") {
+        void Promise.all([refreshTasks(client), refreshAiStatuses(client)]).catch(() => undefined);
         return;
       }
       if (gitRefreshTimer.current) clearTimeout(gitRefreshTimer.current);

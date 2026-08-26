@@ -10,7 +10,8 @@ function harness() {
   const session = { status: "in_progress", model: "gpt-5", messages: [], reasoning: "medium" };
   const provider = { send: vi.fn(async () => session), get: vi.fn(async () => session) };
   const acp = { get: vi.fn(() => provider), list: vi.fn(() => [{ id: "codex", name: "Codex" }]) };
-  return { service: new AppToolService(tasks as never, acp as never), tasks, provider, task };
+  const onTasksChanged = vi.fn(async () => undefined);
+  return { service: new AppToolService(tasks as never, acp as never, onTasksChanged), tasks, provider, task, onTasksChanged };
 }
 
 describe("Vibe Editor app tools", () => {
@@ -20,11 +21,12 @@ describe("Vibe Editor app tools", () => {
   });
 
   it("creates and starts a task with the requested provider and model", async () => {
-    const { service, tasks, provider, task } = harness();
+    const { service, tasks, provider, task, onTasksChanged } = harness();
     await expect(service.call("task_create_and_start", { branch: "feature/one", prompt: "Implement it", provider: "codex", model: "gpt-5" }))
       .resolves.toEqual({ task, session: { status: "in_progress", model: "gpt-5" } });
     expect(tasks.create).toHaveBeenCalledWith("feature/one", false, false, false);
     expect(provider.send).toHaveBeenCalledWith("/tasks/task-1/workspace", { prompt: "Implement it", configuration: { model: "gpt-5" } });
+    expect(onTasksChanged).toHaveBeenCalledOnce();
   });
 
   it("lists aggregate and provider task status", async () => {
@@ -33,9 +35,10 @@ describe("Vibe Editor app tools", () => {
   });
 
   it("removes a task when its agent cannot be started", async () => {
-    const { service, tasks, provider } = harness();
+    const { service, tasks, provider, onTasksChanged } = harness();
     provider.send.mockRejectedValueOnce(new Error("bad model"));
     await expect(service.call("task_create_and_start", { prompt: "Implement it", provider: "codex", model: "missing" })).rejects.toThrow("bad model");
     expect(tasks.delete).toHaveBeenCalledWith("task-1");
+    expect(onTasksChanged).toHaveBeenCalledTimes(2);
   });
 });
