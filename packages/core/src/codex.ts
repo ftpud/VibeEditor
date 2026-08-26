@@ -54,6 +54,14 @@ export class CodexSessionManager {
     return session;
   }
 
+  async configure(workspace: string, model: string, reasoning: string): Promise<AiSession> {
+    if (this.processes.has(workspace)) throw new CoreError("INVALID_REQUEST", "Codex is already working on this task");
+    const session = await this.get(workspace);
+    session.model = model; session.reasoning = reasoning;
+    await this.save(workspace, session); this.onChanged(workspace);
+    return session;
+  }
+
   async clear(workspace: string): Promise<AiSession> {
     if (this.processes.has(workspace)) throw new CoreError("INVALID_REQUEST", "Codex is still working on this task");
     const current = await this.get(workspace);

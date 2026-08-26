@@ -91,6 +91,7 @@ export type ProtocolOperations = {
   "tasks.delete": { payload: { taskId: string }; result: { tasks: WorkspaceTask[]; selectedTaskId?: string } };
   "ai.get": { payload: { provider?: AiProvider }; result: { session: AiSession } };
   "ai.models": { payload: { provider?: AiProvider }; result: { models: AiModel[] } };
+  "ai.configure": { payload: { provider?: AiProvider; model: string; reasoning: string }; result: { session: AiSession } };
   "ai.send": { payload: { provider?: AiProvider; prompt: string; model: string; reasoning: string }; result: { session: AiSession } };
   "ai.clear": { payload: { provider?: AiProvider }; result: { session: AiSession } };
   "ai.statuses": { payload: Record<string, never>; result: { root: AiTaskSummary; tasks: Record<string, AiTaskSummary> } };
@@ -280,6 +281,7 @@ export const requestTypes: RequestType[] = [
   "tasks.delete",
   "ai.get",
   "ai.models",
+  "ai.configure",
   "ai.send",
   "ai.clear",
   "ai.statuses",

@@ -664,6 +664,11 @@ export function App() {
     try { setAiSession((await clientRef.current.request("ai.send", { provider: aiProviderRef.current, prompt: fullPrompt, model, reasoning })).session); await refreshAi(); }
     catch (error) { setStatusMessage(error instanceof Error ? error.message : "Could not start Codex"); throw error; }
   }, [refreshAi]);
+  const configureAi = useCallback(async (model: string, reasoning: string) => {
+    if (!clientRef.current) return;
+    try { setAiSession((await clientRef.current.request("ai.configure", { provider: aiProviderRef.current, model, reasoning })).session); }
+    catch (error) { setStatusMessage(error instanceof Error ? error.message : "Could not save AI settings"); }
+  }, []);
 
   const clearAiContext = useCallback(async () => {
     if (!clientRef.current || !window.confirm("Clear the Codex conversation and start a new context for this task?")) return;
@@ -1255,7 +1260,7 @@ export function App() {
           {tasks.map((task) => <TaskRow key={task.id} icon={<ListTodo size={15} />} name={task.name} summary={aiStatuses.tasks[task.id] ?? emptyAiSummary} selected={selectedTaskId === task.id} disabled={taskSwitching} onClick={() => void switchTask(task.id)} onMerge={() => void mergeTask(task)} onDelete={() => void deleteTask(task)} />)}
         </div></section>}
         {tasksOpen && aiOpen && <div className="right-panel-divider" onPointerDown={beginRightSplitResize} />}
-        {aiOpen && <section className="right-panel-section"><header className="panel-header"><span>AI</span><span className={`ai-status ${aiSession.status}`}>{formatAiStatus(aiSession.status)}</span></header><AiPanel provider={aiProvider} session={aiSession} models={aiModels} attachments={currentAiAttachments} onProviderChange={(provider) => void switchAiProvider(provider)} onAttachmentsChange={updateAiAttachments} onSend={sendAiPrompt} onClear={() => void clearAiContext()} /></section>}
+        {aiOpen && <section className="right-panel-section"><header className="panel-header"><span>AI</span><span className={`ai-status ${aiSession.status}`}>{formatAiStatus(aiSession.status)}</span></header><AiPanel provider={aiProvider} session={aiSession} models={aiModels} attachments={currentAiAttachments} onProviderChange={(provider) => void switchAiProvider(provider)} onConfigurationChange={configureAi} onAttachmentsChange={updateAiAttachments} onSend={sendAiPrompt} onClear={() => void clearAiContext()} /></section>}
       </aside></>}
       <nav className="right-tool-stripe" aria-label="Right tool windows">
         <button className={`tool-stripe-button right ${tasksOpen ? "active" : ""}`} title={tasksOpen ? "Hide Tasks" : "Show Tasks"} onClick={() => setTasksOpen((open) => !open)}><ListTodo size={15} /><span>Tasks</span>{tasks.length > 0 && <span className="tool-badge">{tasks.length > 99 ? "99+" : tasks.length}</span>}</button>
@@ -1413,9 +1418,12 @@ function GitChangesView({ entries, error, emptyMessage = "No local changes", gro
 
 function GitChangeGroup({ title, entries, selectedPaths, onTogglePath, activePath, onOpenDiff, onOpenFile, onContextMenu }: { title: string; entries: GitStatusEntry[]; selectedPaths?: Set<string>; onTogglePath?(path: string): void; activePath?: string; onOpenDiff(entry: GitStatusEntry): void; onOpenFile(entry: GitStatusEntry): void; onContextMenu?(event: ReactMouseEvent, entry: GitStatusEntry): void }) {
   const [expanded, setExpanded] = useState(true);
+  const selectable = Boolean(onTogglePath && (title === "Changes" || title === "Untracked"));
+  const selectedCount = entries.filter((entry) => selectedPaths?.has(entry.path)).length;
+  const allSelected = entries.length > 0 && selectedCount === entries.length;
   return <section className={`git-group git-group-${title.toLowerCase()}`}>
     <button className="git-group-title" aria-expanded={expanded} onClick={() => setExpanded((current) => !current)}>
-      {expanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />}<span>{title}</span><span className="git-count">{entries.length}</span>
+      {expanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />}{selectable && <input type="checkbox" aria-label={`Select all ${title.toLowerCase()} files for commit`} checked={allSelected} ref={(input) => { if (input) input.indeterminate = selectedCount > 0 && !allSelected; }} onClick={(event) => event.stopPropagation()} onChange={() => entries.forEach((entry) => { if ((selectedPaths?.has(entry.path) ?? false) === allSelected) onTogglePath?.(entry.path); })} />}<span>{title}</span><span className="git-count">{entries.length}</span>
     </button>
     {expanded && <GitStatusTree entries={entries} selectedPaths={selectedPaths} onTogglePath={onTogglePath} activePath={activePath} onOpenDiff={onOpenDiff} onOpenFile={onOpenFile} onContextMenu={onContextMenu} />}
   </section>;

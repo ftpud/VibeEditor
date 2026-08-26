@@ -8,6 +8,7 @@ import { CoreError } from "./errors.js";
 import { execInShell, spawnInShell } from "./shell-process.js";
 
 const EMPTY: AiSession = { model: "auto", reasoning: "medium", status: "idle", messages: [] };
+const FALLBACK_MODELS = ["claude-sonnet-4.6", "gpt-5.4", "claude-haiku-4.5", "gpt-5.3-codex", "gemini-3.1-pro-preview", "gemini-3.5-flash", "gemini-3.6-flash", "gemini-3.7-flash", "mai-code-1-flash"];
 
 export class CopilotSessionManager {
   private readonly processes = new Map<string, ChildProcessWithoutNullStreams>();
@@ -28,7 +29,8 @@ export class CopilotSessionManager {
   async models(): Promise<AiModel[]> {
     try {
       const { stdout, stderr } = await execInShell("copilot", ["help"], { encoding: "utf8", maxBuffer: 2 * 1024 * 1024, timeout: 10_000 });
-      return parseCopilotModels(`${stdout}\n${stderr}`);
+      const provided = parseCopilotModels(`${stdout}\n${stderr}`);
+      return provided.length > 1 ? provided : copilotModels(["auto", ...FALLBACK_MODELS]);
     } catch {
       return [{ id: "auto", name: "Auto (Copilot CLI unavailable)", defaultReasoning: "medium", reasoningLevels: ["none", "minimal", "low", "medium", "high", "xhigh", "max"] }];
     }
@@ -51,6 +53,14 @@ export class CopilotSessionManager {
     child.stderr.on("data", (chunk: Buffer) => { stderr = (stderr + chunk.toString()).slice(-20_000); });
     child.on("error", (error) => { void this.finish(workspace, 1, (error as NodeJS.ErrnoException).code === "ENOENT" ? "Copilot CLI is not installed. Install and authenticate the `copilot` command first." : error.message); });
     child.on("close", (code) => { if (stdout.trim()) this.queue(workspace, () => this.consume(workspace, stdout)); this.queue(workspace, () => this.finish(workspace, code ?? 1, stderr)); });
+    return session;
+  }
+
+  async configure(workspace: string, model: string, reasoning: string): Promise<AiSession> {
+    if (this.processes.has(workspace)) throw new CoreError("INVALID_REQUEST", "Copilot is already working on this task");
+    const session = await this.get(workspace);
+    session.model = model; session.reasoning = reasoning;
+    await this.save(workspace, session); this.onChanged(workspace);
     return session;
   }
 
@@ -98,6 +108,10 @@ function toMessage(role: AiMessage["role"], text: string): AiMessage { return { 
 export function parseCopilotModels(helpOutput: string): AiModel[] {
   const output = helpOutput.replace(/\x1b\[[0-9;]*m/g, "");
   const discovered = [...output.matchAll(/\b(?:gpt|claude|gemini|mai|kimi|raptor|o[1-9])[-a-z0-9._]*\b/gi)].map((match) => match[0]!.toLowerCase());
-  const ids = ["auto", ...discovered.filter((id, index, all) => all.indexOf(id) === index)];
+  return copilotModels(["auto", ...discovered]);
+}
+
+function copilotModels(values: string[]): AiModel[] {
+  const ids = values.filter((id, index, all) => all.indexOf(id) === index);
   return ids.map((id) => ({ id, name: id === "auto" ? "Auto (Copilot)" : id, defaultReasoning: "medium", reasoningLevels: ["none", "minimal", "low", "medium", "high", "xhigh", "max"] }));
 }

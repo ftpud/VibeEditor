@@ -6,7 +6,7 @@ import type { AiModel, AiProvider, AiSession } from "@remote-ide/protocol";
 
 export type AiAttachment = { id: string; name: string; path?: string; content?: string };
 
-export function AiPanel({ provider, session, models, attachments, onProviderChange, onAttachmentsChange, onSend, onClear }: { provider: AiProvider; session: AiSession; models: AiModel[]; attachments: AiAttachment[]; onProviderChange(provider: AiProvider): void; onAttachmentsChange(attachments: AiAttachment[]): void; onSend(prompt: string, model: string, reasoning: string, attachments: AiAttachment[]): Promise<void>; onClear(): void }) {
+export function AiPanel({ provider, session, models, attachments, onProviderChange, onConfigurationChange, onAttachmentsChange, onSend, onClear }: { provider: AiProvider; session: AiSession; models: AiModel[]; attachments: AiAttachment[]; onProviderChange(provider: AiProvider): void; onConfigurationChange(model: string, reasoning: string): void; onAttachmentsChange(attachments: AiAttachment[]): void; onSend(prompt: string, model: string, reasoning: string, attachments: AiAttachment[]): Promise<void>; onClear(): void }) {
   const [prompt, setPrompt] = useState("");
   const [model, setModel] = useState(session.model);
   const [reasoning, setReasoning] = useState(session.reasoning);
@@ -16,10 +16,12 @@ export function AiPanel({ provider, session, models, attachments, onProviderChan
   useEffect(() => { setModel(session.model); setReasoning(session.reasoning); }, [session.model, session.reasoning]);
   useEffect(() => { endRef.current?.scrollIntoView({ block: "end" }); }, [session.messages.length, session.status]);
   const selectedModel = useMemo(() => models.find((item) => item.id === model) ?? models[0], [model, models]);
-  useEffect(() => { if (selectedModel && !models.some((item) => item.id === model)) setModel(selectedModel.id); }, [model, models, selectedModel]);
-  useEffect(() => { if (selectedModel && !selectedModel.reasoningLevels.includes(reasoning)) setReasoning(selectedModel.defaultReasoning); }, [reasoning, selectedModel]);
+  useEffect(() => { if (selectedModel && !models.some((item) => item.id === model)) { setModel(selectedModel.id); onConfigurationChange(selectedModel.id, selectedModel.reasoningLevels.includes(reasoning) ? reasoning : selectedModel.defaultReasoning); } }, [model, models, onConfigurationChange, reasoning, selectedModel]);
+  useEffect(() => { if (selectedModel && !selectedModel.reasoningLevels.includes(reasoning)) { setReasoning(selectedModel.defaultReasoning); onConfigurationChange(selectedModel.id, selectedModel.defaultReasoning); } }, [onConfigurationChange, reasoning, selectedModel]);
   const running = session.status === "in_progress";
   const providerName = provider === "codex" ? "Codex CLI" : "Copilot CLI";
+  const changeModel = (nextModel: string) => { const item = models.find((candidate) => candidate.id === nextModel); const nextReasoning = item && !item.reasoningLevels.includes(reasoning) ? item.defaultReasoning : reasoning; setModel(nextModel); setReasoning(nextReasoning); onConfigurationChange(nextModel, nextReasoning); };
+  const changeReasoning = (nextReasoning: string) => { setReasoning(nextReasoning); onConfigurationChange(model, nextReasoning); };
   const send = async () => { if ((!prompt.trim() && attachments.length === 0) || running) return; const value = prompt; setPrompt(""); try { await onSend(value, model, reasoning, attachments); onAttachmentsChange([]); } catch { setPrompt(value); } };
   const addFiles = async (files: FileList | null) => {
     if (!files) return;
@@ -39,8 +41,8 @@ export function AiPanel({ provider, session, models, attachments, onProviderChan
   return <div className="ai-panel">
     <div className="ai-controls">
       <select aria-label="AI provider" value={provider} disabled={running} onChange={(event) => onProviderChange(event.target.value as AiProvider)}><option value="codex">Codex</option><option value="copilot">Copilot CLI</option></select>
-      <select aria-label={`${providerName} model`} value={model} onChange={(event) => setModel(event.target.value)}>{models.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select>
-      <select aria-label="Reasoning effort" value={reasoning} onChange={(event) => setReasoning(event.target.value)}>{(selectedModel?.reasoningLevels ?? [reasoning]).map((level) => <option key={level} value={level}>{level}</option>)}</select>
+      <select aria-label={`${providerName} model`} value={model} disabled={running} onChange={(event) => changeModel(event.target.value)}>{models.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select>
+      <select aria-label="Reasoning effort" value={reasoning} disabled={running} onChange={(event) => changeReasoning(event.target.value)}>{(selectedModel?.reasoningLevels ?? [reasoning]).map((level) => <option key={level} value={level}>{level}</option>)}</select>
       <button title={`Clear ${providerName} context`} disabled={running || session.messages.length === 0} onClick={onClear}><Trash2 size={14} /></button>
     </div>
     <div className="ai-messages">

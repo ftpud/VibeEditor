@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { parseCopilotModels } from "./copilot.js";
+import { mkdtemp } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { CodexSessionManager } from "./codex.js";
+import { CopilotSessionManager, parseCopilotModels } from "./copilot.js";
 import { execInShell } from "./shell-process.js";
 
 describe("AI CLI integration", () => {
@@ -12,5 +16,17 @@ describe("AI CLI integration", () => {
     const marker = "value with spaces; $(not-a-command)";
     const result = await execInShell("printf", ["%s", marker], { encoding: "utf8", timeout: 10_000 });
     expect(result.stdout).toBe(marker);
+  });
+
+  it("persists model settings independently by provider and workspace", async () => {
+    const state = await mkdtemp(path.join(os.tmpdir(), "remote-ide-ai-settings-"));
+    const workspace = "/workspace/one";
+    const codex = new CodexSessionManager(() => undefined, state);
+    const copilot = new CopilotSessionManager(() => undefined, state);
+    await codex.configure(workspace, "gpt-test", "high");
+    await copilot.configure(workspace, "claude-test", "low");
+    expect(await codex.get(workspace)).toMatchObject({ model: "gpt-test", reasoning: "high" });
+    expect(await copilot.get(workspace)).toMatchObject({ model: "claude-test", reasoning: "low" });
+    expect(await copilot.get("/workspace/two")).toMatchObject({ model: "auto", reasoning: "medium" });
   });
 });

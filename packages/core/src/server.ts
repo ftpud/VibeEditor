@@ -191,6 +191,7 @@ async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStor
     }
     case "ai.get": return { session: await (request.payload.provider === "copilot" ? copilot : codex).get(workspacePath) };
     case "ai.models": return { models: await (request.payload.provider === "copilot" ? copilot : codex).models() };
+    case "ai.configure": return { session: await (request.payload.provider === "copilot" ? copilot : codex).configure(workspacePath, request.payload.model, request.payload.reasoning) };
     case "ai.send": return { session: await (request.payload.provider === "copilot" ? copilot : codex).send(workspacePath, request.payload.prompt, request.payload.model, request.payload.reasoning) };
     case "ai.clear": return { session: await (request.payload.provider === "copilot" ? copilot : codex).clear(workspacePath) };
     case "ai.statuses": {

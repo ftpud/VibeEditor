@@ -61,6 +61,7 @@ button { color: inherit; }
 .git-group { margin: 0; }
 .git-group-title { width: 100%; height: 25px; padding: 0 8px; display: flex; align-items: center; gap: 4px; border: 0; background: transparent; color: #c9cbd0; font-size: 0.8462rem; font-weight: 600; text-align: left; cursor: pointer; }
 .git-group-title:hover { filter: brightness(1.12); }
+.git-group-title input[type="checkbox"] { width: 14px; height: 14px; flex: 0 0 14px; margin: 0 2px 0 0; accent-color: #3574f0; cursor: pointer; }
 .git-group-untracked .git-group-title { background: #2d4935; color: #a9d8ae; }
 .git-group-changes .git-group-title { background: #4a3d27; color: #e4c487; }
 .git-group-untracked .git-file-row.selected:not(.git-directory-row), .git-group-changes .git-file-row.selected:not(.git-directory-row) { background: #2e5792; color: white; }
