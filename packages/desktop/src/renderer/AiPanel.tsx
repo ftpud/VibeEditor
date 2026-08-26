@@ -14,7 +14,7 @@ export function AiPanel({ provider, providers, session, sessions, models, usage,
   const [model, setModel] = useState(session.model);
   const [reasoning, setReasoning] = useState(session.reasoning);
   const [configuration, setConfiguration] = useState<AiConfiguration>(session.configuration ?? {});
-  const [composerHeight, setComposerHeight] = useState(90);
+  const [composerHeight, setComposerHeight] = useState(104);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [sessionsOpen, setSessionsOpen] = useState(false);
   const [attachmentError, setAttachmentError] = useState("");
