@@ -19,6 +19,8 @@ import { AgentsStore } from "./agents.js";
 import { executeHttpRequest } from "./http.js";
 import { summarizeAiSessions } from "./ai/summary.js";
 import { createAcpRegistry, type AcpRegistry } from "./ai/index.js";
+import type { AiAgent, AiMcpServer } from "@remote-ide/acp";
+import { fileURLToPath } from "node:url";
 
 const execFileAsync = promisify(execFile);
 
@@ -215,12 +217,13 @@ async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStor
       if (workspacePath !== rootWorkspace) throw new CoreError("INVALID_REQUEST", "New tasks can only be started from the root workspace");
       const task = await tasks.createRandom(false);
       try {
+        const appTools = withAppTools(rootWorkspace, request.payload.mcpServers, request.payload.agent);
         await acp.get(request.payload.provider).send(tasks.taskPath(task.id), {
           prompt: request.payload.prompt,
           content: request.payload.content,
           configuration: request.payload.configuration,
-          mcpServers: request.payload.mcpServers,
-          agent: request.payload.agent
+          mcpServers: appTools.servers,
+          agent: appTools.agent
         });
         return { task };
       } catch (error) {
@@ -238,7 +241,10 @@ async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStor
     case "ai.get": return { session: await acp.get(request.payload.provider).get(workspacePath) };
     case "ai.models": return { models: await acp.get(request.payload.provider).models() };
     case "ai.configure": return { session: await acp.get(request.payload.provider).configure(workspacePath, { ...request.payload.configuration, ...(request.payload.model ? { model: request.payload.model } : {}), ...(request.payload.reasoning ? { reasoning: request.payload.reasoning } : {}) }) };
-    case "ai.send": return { session: await acp.get(request.payload.provider).send(workspacePath, { prompt: request.payload.prompt, content: request.payload.content, configuration: { ...request.payload.configuration, ...(request.payload.model ? { model: request.payload.model } : {}), ...(request.payload.reasoning ? { reasoning: request.payload.reasoning } : {}) }, mcpServers: request.payload.mcpServers, agent: request.payload.agent }) };
+    case "ai.send": {
+      const appTools = withAppTools(rootWorkspace, request.payload.mcpServers, request.payload.agent);
+      return { session: await acp.get(request.payload.provider).send(workspacePath, { prompt: request.payload.prompt, content: request.payload.content, configuration: { ...request.payload.configuration, ...(request.payload.model ? { model: request.payload.model } : {}), ...(request.payload.reasoning ? { reasoning: request.payload.reasoning } : {}) }, mcpServers: appTools.servers, agent: appTools.agent }) };
+    }
     case "ai.permission.resolve": return { session: await acp.get(request.payload.provider).resolvePermission(workspacePath, request.payload.requestId, request.payload.optionId) };
     case "ai.interrupt": return { session: await acp.get(request.payload.provider).interrupt(workspacePath) };
     case "ai.steer": return { session: await acp.get(request.payload.provider).steer(workspacePath, request.payload.prompt) };
@@ -349,4 +355,16 @@ async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStor
     case "java.references": return { locations: await jdt.references(request.payload.path, request.payload.content, request.payload.line, request.payload.column) };
     case "java.semanticTokens": return { tokens: await jdt.semanticTokens(request.payload.path, request.payload.content) };
   }
+}
+
+export function withAppTools(rootWorkspace: string, servers?: AiMcpServer[], agent?: AiAgent): { servers: AiMcpServer[]; agent?: AiAgent } {
+  if (!agent?.mcpServers?.includes("vibe-editor")) return { servers: servers ?? [], ...(agent ? { agent } : {}) };
+  const compiled = fileURLToPath(new URL("app-tools.js", import.meta.url));
+  const source = fileURLToPath(new URL("app-tools.ts", import.meta.url));
+  const runningFromSource = import.meta.url.endsWith("/src/server.ts");
+  const appServer: AiMcpServer = runningFromSource
+    ? { transport: "stdio", name: "vibe-editor", command: process.execPath, args: ["--import", "tsx", source], env: { VIBE_EDITOR_ROOT_WORKSPACE: rootWorkspace } }
+    : { transport: "stdio", name: "vibe-editor", command: process.execPath, args: [compiled], env: { VIBE_EDITOR_ROOT_WORKSPACE: rootWorkspace } };
+  const filtered = (servers ?? []).filter((server) => server.name !== appServer.name);
+  return { servers: [...filtered, appServer], agent };
 }

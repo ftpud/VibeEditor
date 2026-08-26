@@ -178,6 +178,8 @@ Tasks and AI can be open simultaneously in the resizable right sidebar. Tasks ap
 
 The AI tool window uses an extensible AI Capability Provider (ACP) layer with Codex CLI and Copilot CLI adapters. Providers declare their available models, reasoning levels, additional controls, usage support, MCP support, and custom-agent support; the UI is generated from those capabilities. Sessions, logs, configuration, and continuation state are persisted per task workspace. Attachment selections are scoped per task while Desktop remains open. See [docs/ACP.md](docs/ACP.md) for the plugin contract and current provider limitations.
 
+Agent presets can opt into the built-in `vibe-editor` MCP server by listing it under `mcpServers`. It exposes `task_create`, `task_create_and_start`, and `task_list`, allowing that agent to create isolated task worktrees, delegate a prompt to a selected provider/model, and inspect task statuses. An empty or omitted `mcpServers` list does not grant access.
+
 The Agents tool window manages global and workspace-local Markdown agent presets and also discovers `.md` presets from the active worktree's `.agents` directory. New managed agents start with a front-matter template. Select an agent from the low-contrast picker in the AI toolbar; that choice is remembered independently for Root and every task.
 
 Prompts can attach local files or workspace files. Right-click an editor and select **Attach to AI** to add the current file. Execution and command output is collapsed into expandable activity blocks. Task cards show in-progress, waiting-for-user, done, and error states so another task can be used while an AI process continues.
