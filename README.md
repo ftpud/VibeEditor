@@ -176,7 +176,7 @@ Tasks and AI can be open simultaneously in the resizable right sidebar. Tasks ap
 
 ## AI
 
-The AI tool window supports Codex CLI and Copilot CLI. Available models are loaded from the selected provider, and the UI exposes model and reasoning controls. Sessions, logs, and continuation state are persisted per task workspace. Attachment selections are scoped per task while Desktop remains open.
+The AI tool window uses an extensible AI Capability Provider (ACP) layer with Codex CLI and Copilot CLI adapters. Providers declare their available models, reasoning levels, additional controls, usage support, MCP support, and custom-agent support; the UI is generated from those capabilities. Sessions, logs, configuration, and continuation state are persisted per task workspace. Attachment selections are scoped per task while Desktop remains open. See [docs/ACP.md](docs/ACP.md) for the plugin contract and current provider limitations.
 
 Prompts can attach local files or workspace files. Right-click an editor and select **Attach to AI** to add the current file. Execution and command output is collapsed into expandable activity blocks. Task cards show in-progress, waiting-for-user, done, and error states so another task can be used while an AI process continues.
 

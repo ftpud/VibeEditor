@@ -1,0 +1,58 @@
+export type AiStatus = "idle" | "in_progress" | "user_prompt" | "done" | "error";
+export type AiProvider = string;
+export type AiConfiguration = Record<string, string | number | boolean>;
+export type AiMessage = { id: string; role: "user" | "assistant" | "activity" | "error"; text: string; timestamp: string };
+export type AiSession = { threadId?: string; model: string; reasoning: string; configuration?: AiConfiguration; availableOptions?: AiOption[]; status: AiStatus; messages: AiMessage[]; contextUsed?: number; contextLimit?: number; tokens?: AiTokenUsage; steering?: boolean };
+export type AiTokenUsage = { total: number; input: number; output: number; thought?: number; cachedRead?: number; cachedWrite?: number };
+/**
+ * Optional catalogue metadata. Everything here is advertised by the agent (ACP
+ * model `_meta`, option descriptions) or read from the CLI's own model cache, so
+ * a field is simply absent when the provider does not publish it.
+ */
+export type AiModelDetails = {
+  description?: string;
+  /** Relative request cost, e.g. Copilot's "0.33x" premium-request multiplier. */
+  price?: string;
+  /** Coarse cost bucket advertised alongside the multiplier: low, medium, high, very_high. */
+  priceTier?: string;
+  /** False when the account cannot use the model (policy, plan or quota). */
+  available?: boolean;
+  /** Usable context window in tokens. */
+  contextWindow?: number;
+  /** Largest context window the model can be configured with, when it differs. */
+  maxContextWindow?: number;
+  /** Accepted prompt content types, e.g. ["text", "image"]. */
+  inputModalities?: string[];
+  /** Per-reasoning-level explanations keyed by level id. */
+  reasoningDescriptions?: Record<string, string>;
+  /** Deprecation or migration notice published by the agent. */
+  note?: string;
+};
+export type AiModel = { id: string; name: string; defaultReasoning: string; reasoningLevels: string[] } & AiModelDetails;
+export type AiOption = { id: string; name: string; description: string; section?: string; type: "select" | "number" | "boolean" | "text"; defaultValue: string | number | boolean; choices?: { value: string; name: string; description?: string }[]; min?: number; max?: number; modelDependent?: boolean };
+export type AiSettingsSection = { id: string; name: string; description?: string };
+export type AiSettingsLayout = { title: string; description: string; sections: AiSettingsSection[] };
+export type AiProviderCapabilities = { models: boolean; usage: boolean; mcp: boolean; agents: boolean; contextWindow: boolean };
+export type AiProviderDescriptor = { id: AiProvider; name: string; description: string; settings: AiSettingsLayout; options: AiOption[]; capabilities: AiProviderCapabilities };
+export type AiUsage = { supported: boolean; label?: string; used?: number; limit?: number; unit?: string; resetsAt?: string; details?: Record<string, string | number> };
+export type AiMcpServer = { name: string; command: string; args?: string[]; env?: Record<string, string>; enabled?: boolean };
+export type AiAgent = { name: string; description?: string; instructions: string; mcpServers?: string[] };
+export type AiTaskSummary = { status: AiStatus; preview: string; additions: number; deletions: number };
+export type AcpSendRequest = { prompt: string; configuration: AiConfiguration; mcpServers?: AiMcpServer[]; agent?: AiAgent };
+
+/** Shared provider contract. Each provider owns its settings UI metadata. */
+export abstract class AcpProvider {
+  abstract readonly descriptor: AiProviderDescriptor;
+  abstract get(workspace: string): Promise<AiSession>;
+  abstract models(): Promise<AiModel[]>;
+  abstract configure(workspace: string, configuration: AiConfiguration): Promise<AiSession>;
+  abstract send(workspace: string, request: AcpSendRequest): Promise<AiSession>;
+  abstract interrupt(workspace: string): Promise<AiSession>;
+  /** Adds input to a turn that is already running. */
+  abstract steer(workspace: string, prompt: string): Promise<AiSession>;
+  abstract clear(workspace: string): Promise<AiSession>;
+  async usage(_workspace?: string): Promise<AiUsage> { return { supported: false, label: "Usage is not exposed by this provider" }; }
+}
+
+export function mergeConfiguration(session: AiSession, configuration: AiConfiguration): AiConfiguration { return { model: session.model, reasoning: session.reasoning, ...session.configuration, ...configuration }; }
+export function applyConfiguration(session: AiSession, configuration: AiConfiguration): void { const merged = mergeConfiguration(session, configuration); if (typeof merged.model === "string") session.model = merged.model; if (typeof merged.reasoning === "string") session.reasoning = merged.reasoning; session.configuration = merged; }

@@ -1,7 +1,7 @@
 import Editor, { DiffEditor, type Monaco } from "@monaco-editor/react";
 import { ArrowUpRight, Bot, Braces, Bug, CaseSensitive, Check, ChevronDown, ChevronRight, ChevronUp, CircleAlert, Coffee, Columns2, Eye, File, FileCode2, FileDiff, FileJson, FileText, Folder, FolderOpen, GitBranch, GitCompareArrows, GitMerge, Hash, Library, ListTodo, ListTree, LoaderCircle, LogOut, MoreVertical, Package, Palette, Pencil, Play, Plus, RefreshCw, Save, Search, Settings, Square, SquareTerminal, Trash2, X } from "lucide-react";
 import { isValidElement, useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
-import type { AiModel, AiProvider, AiSession, AiStatus, AiTaskSummary, FileColor, FileTreeNode, GitBranch as GitBranchInfo, GitDiffHunk, GitStatusEntry, HttpResponse, JavaBreakpoint, JavaDebugState, JavaDiagnostic, JavaLspLocation, JavaMainClass, JavaProjectNode, JavaProjectOptions, JavaTypeSuggestion, SearchResult, UsefulFile, UsefulFileScope, WorkspaceOptions, WorkspaceTask } from "@remote-ide/protocol";
+import type { AiConfiguration, AiModel, AiProvider, AiProviderDescriptor, AiSession, AiStatus, AiTaskSummary, AiUsage, FileColor, FileTreeNode, GitBranch as GitBranchInfo, GitDiffHunk, GitStatusEntry, HttpResponse, JavaBreakpoint, JavaDebugState, JavaDiagnostic, JavaLspLocation, JavaMainClass, JavaProjectNode, JavaProjectOptions, JavaTypeSuggestion, SearchResult, UsefulFile, UsefulFileScope, WorkspaceOptions, WorkspaceTask } from "@remote-ide/protocol";
 import type { editor } from "monaco-editor";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -100,9 +100,13 @@ export function App() {
   const [aiSession, setAiSession] = useState<AiSession>({ model: "gpt-5.6-sol", reasoning: "low", status: "idle", messages: [] });
   const [aiProvider, setAiProvider] = useState<AiProvider>(() => localStorage.getItem("aiProvider") === "copilot" ? "copilot" : "codex");
   const [aiModels, setAiModels] = useState<AiModel[]>([]);
+  const [aiProviders, setAiProviders] = useState<AiProviderDescriptor[]>([]);
+  const [aiUsage, setAiUsage] = useState<AiUsage>();
   const [aiAttachments, setAiAttachments] = useState<Record<string, AiAttachment[]>>({});
   const emptyAiSummary: AiTaskSummary = { status: "idle", preview: "", additions: 0, deletions: 0 };
   const [aiStatuses, setAiStatuses] = useState<{ root: AiTaskSummary; tasks: Record<string, AiTaskSummary> }>({ root: emptyAiSummary, tasks: {} });
+  const aiStatusesRequested = useRef(0);
+  const aiStatusesApplied = useRef(0);
   const [activeGitHunks, setActiveGitHunks] = useState<GitDiffHunk[]>([]);
   const [gitHunkDialog, setGitHunkDialog] = useState<{ x: number; y: number; path: string; hunk: GitDiffHunk; originalContent: string; modifiedContent: string; error?: string }>();
   const [httpResult, setHttpResult] = useState<{ request: ParsedHttpRequest; response?: HttpResponse; error?: string; loading: boolean }>();
@@ -238,11 +242,22 @@ export function App() {
     } catch (error) { setTaskGitEntries([]); setTaskGitError(error instanceof Error ? error.message : "Could not compare task with its base branch"); }
   }, []);
 
+  // Several ai.statuses requests can be in flight at once (AI activity emits a burst of ai.changed
+  // events) and the backend answers them concurrently, so responses can arrive out of order. Without
+  // this guard an older snapshot overwrites a newer one and the task rows keep showing stale progress.
+  const refreshAiStatuses = useCallback(async (client = clientRef.current) => {
+    if (!client) return;
+    const sequence = ++aiStatusesRequested.current;
+    const statuses = await client.request("ai.statuses", {});
+    if (sequence <= aiStatusesApplied.current) return;
+    aiStatusesApplied.current = sequence;
+    setAiStatuses(statuses);
+  }, []);
   const refreshAi = useCallback(async (client = clientRef.current) => {
     if (!client) return;
-    const [session, statuses] = await Promise.all([client.request("ai.get", { provider: aiProviderRef.current }), client.request("ai.statuses", {})]);
-    setAiSession(session.session); setAiStatuses(statuses);
-  }, []);
+    const [session] = await Promise.all([client.request("ai.get", { provider: aiProviderRef.current }), refreshAiStatuses(client)]);
+    setAiSession(session.session);
+  }, [refreshAiStatuses]);
   const refreshUsefulFiles = useCallback(async (client = clientRef.current) => { if (client) setUsefulFiles((await client.request("useful.list", {})).files); }, []);
 
   const restoreWorkspaceOptions = useCallback(async (options: WorkspaceOptions, client: CoreClient) => {
@@ -308,12 +323,12 @@ export function App() {
         return;
       }
       if (event.type === "ai.changed") {
-        void client.request("ai.statuses", {}).then(setAiStatuses).catch(() => undefined);
+        void refreshAiStatuses(client).catch(() => undefined);
         if (event.payload.workspace === activeWorkspaceRef.current) void client.request("ai.get", { provider: aiProviderRef.current }).then((result) => setAiSession(result.session)).catch(() => undefined);
         return;
       }
       if (gitRefreshTimer.current) clearTimeout(gitRefreshTimer.current);
-      gitRefreshTimer.current = setTimeout(() => { void refreshGit(client); void refreshTaskGit(activeTaskRef.current, client); void client.request("ai.statuses", {}).then(setAiStatuses).catch(() => undefined); }, 200);
+      gitRefreshTimer.current = setTimeout(() => { void refreshGit(client); void refreshTaskGit(activeTaskRef.current, client); void refreshAiStatuses(client).catch(() => undefined); }, 200);
       const refreshDiffs = (changedPath?: string) => {
         const diffTabs = layoutRef.current.editorGroups[0]?.tabs.filter((tab) => tab.type === "diff" && (!changedPath || (tab.diffPath ?? tab.path) === changedPath)) ?? [];
         for (const tab of diffTabs) void (tab.diffRef ? client.request("git.compareDiff", { ref: tab.diffRef, path: tab.diffPath ?? tab.path, ...(tab.diffOriginalPath ? { originalPath: tab.diffOriginalPath } : {}) }) : client.request("git.diff", { path: tab.path })).then((result) => {
@@ -386,8 +401,10 @@ export function App() {
         if (wsFontSize >= 10 && wsFontSize <= 20) setUiFontSize(wsFontSize);
         const wsLineHeight = Number(setting("uiLineHeight"));
         if (wsLineHeight >= 1 && wsLineHeight <= 2) setUiLineHeight(wsLineHeight);
+        const providerResult = await client.request("ai.providers", {});
+        setAiProviders(providerResult.providers);
         const wsProvider = setting("aiProvider") as AiProvider | null;
-        const provider = wsProvider === "copilot" ? "copilot" : "codex";
+        const provider = providerResult.providers.some((item) => item.id === wsProvider) ? wsProvider! : (providerResult.providers[0]?.id ?? "codex");
         aiProviderRef.current = provider; setAiProvider(provider);
         setJavaOptions(result.options.javaProject);
         if (result.options.javaProject) {
@@ -405,8 +422,8 @@ export function App() {
           const reasoning = savedReasoning && model.reasoningLevels.includes(savedReasoning) ? savedReasoning : model.defaultReasoning;
           if (session.model !== savedModel || session.reasoning !== reasoning) session = (await client.request("ai.configure", { provider: aiProviderRef.current, model: savedModel, reasoning })).session;
         }
-        setAiModels(modelResult.models); setAiSession(session);
-        setAiStatuses(await client.request("ai.statuses", {}));
+        setAiModels(modelResult.models); setAiSession(session); setAiUsage((await client.request("ai.usage", { provider })).usage);
+        await refreshAiStatuses(client);
         await refreshUsefulFiles(client);
         setTree(result.tree); setStatus("connected"); setStatusMessage("");
         void refreshGit(client); void refreshTaskGit(activeTaskRef.current, client);
@@ -688,7 +705,7 @@ export function App() {
         const reasoning = savedReasoning && model.reasoningLevels.includes(savedReasoning) ? savedReasoning : model.defaultReasoning;
         if (session.model !== savedModel || session.reasoning !== reasoning) session = (await clientRef.current.request("ai.configure", { provider, model: savedModel, reasoning })).session;
       }
-      setAiSession(session); setAiModels(models.models);
+      setAiSession(session); setAiModels(models.models); setAiUsage((await clientRef.current.request("ai.usage", { provider })).usage);
     } catch (error) { setStatusMessage(error instanceof Error ? error.message : "Could not switch AI provider"); }
   }, []);
   const attachWorkspaceFile = useCallback((path: string) => {
@@ -700,18 +717,24 @@ export function App() {
     });
     setAiOpen(true); void refreshAi(); setEditorGitMenu(undefined);
   }, [refreshAi, selectedTaskId]);
-  const sendAiPrompt = useCallback(async (prompt: string, model: string, reasoning: string, attachments: AiAttachment[]) => {
+  const sendAiPrompt = useCallback(async (prompt: string, configuration: AiConfiguration, attachments: AiAttachment[]) => {
     if (!clientRef.current) return;
     const attachmentContext = attachments.map((attachment) => attachment.path ? `- Workspace file: ${attachment.path}` : `- Attached file: ${attachment.name}\n\n\`\`\`\n${attachment.content ?? ""}\n\`\`\``).join("\n");
     const fullPrompt = attachmentContext ? `${prompt.trim()}\n\nAttached files:\n${attachmentContext}`.trim() : prompt;
-    try { setAiSession((await clientRef.current.request("ai.send", { provider: aiProviderRef.current, prompt: fullPrompt, model, reasoning })).session); await refreshAi(); }
+    try { setAiSession((await clientRef.current.request("ai.send", { provider: aiProviderRef.current, prompt: fullPrompt, configuration })).session); await refreshAi(); }
     catch (error) { setStatusMessage(error instanceof Error ? error.message : "Could not start Codex"); throw error; }
   }, [refreshAi]);
-  const configureAi = useCallback(async (model: string, reasoning: string) => {
+  const steerAiPrompt = useCallback(async (prompt: string) => {
+    if (!clientRef.current) return;
+    try { setAiSession((await clientRef.current.request("ai.steer", { provider: aiProviderRef.current, prompt })).session); await refreshAi(); }
+    catch (error) { setStatusMessage(error instanceof Error ? error.message : "Could not add input to the running turn"); throw error; }
+  }, [refreshAi]);
+  const configureAi = useCallback(async (configuration: AiConfiguration) => {
     if (!clientRef.current) return;
     try {
-      setAiSession((await clientRef.current.request("ai.configure", { provider: aiProviderRef.current, model, reasoning })).session);
-      wsSave(`ai.${aiProviderRef.current}.model`, model); wsSave(`ai.${aiProviderRef.current}.reasoning`, reasoning);
+      setAiSession((await clientRef.current.request("ai.configure", { provider: aiProviderRef.current, configuration })).session);
+      if (typeof configuration.model === "string") wsSave(`ai.${aiProviderRef.current}.model`, configuration.model);
+      if (typeof configuration.reasoning === "string") wsSave(`ai.${aiProviderRef.current}.reasoning`, configuration.reasoning);
     }
     catch (error) { setStatusMessage(error instanceof Error ? error.message : "Could not save AI settings"); }
   }, []);
@@ -720,6 +743,12 @@ export function App() {
     if (!clientRef.current || !window.confirm("Clear the Codex conversation and start a new context for this task?")) return;
     try { setAiSession((await clientRef.current.request("ai.clear", { provider: aiProviderRef.current })).session); await refreshAi(); }
     catch (error) { setStatusMessage(error instanceof Error ? error.message : "Could not clear Codex context"); }
+  }, [refreshAi]);
+
+  const interruptAi = useCallback(async () => {
+    if (!clientRef.current) return;
+    try { setAiSession((await clientRef.current.request("ai.interrupt", { provider: aiProviderRef.current })).session); await refreshAi(); }
+    catch (error) { setStatusMessage(error instanceof Error ? error.message : "Could not stop AI task"); }
   }, [refreshAi]);
 
   const createTask = useCallback(async (branch: string) => {
@@ -745,7 +774,7 @@ export function App() {
       const result = await clientRef.current.request("tasks.delete", { taskId: task.id });
       setTasks(result.tasks); setSelectedTaskId(result.selectedTaskId);
       setAiAttachments((current) => { const next = { ...current }; delete next[task.id]; return next; });
-      setAiStatuses((current) => { const nextTasks = { ...current.tasks }; delete nextTasks[task.id]; return { ...current, tasks: nextTasks }; });
+      setAiStatuses((current) => { aiStatusesApplied.current = aiStatusesRequested.current; const nextTasks = { ...current.tasks }; delete nextTasks[task.id]; return { ...current, tasks: nextTasks }; });
     } catch (error) { setStatusMessage(error instanceof Error ? error.message : "Could not delete task"); }
     finally { setTaskSwitching(false); }
   }, [selectedTaskId, switchTask, taskSwitching]);
@@ -1306,7 +1335,7 @@ export function App() {
           {tasks.map((task) => <TaskRow key={task.id} icon={<ListTodo size={15} />} name={task.name} summary={aiStatuses.tasks[task.id] ?? emptyAiSummary} selected={selectedTaskId === task.id} disabled={taskSwitching} onClick={() => void switchTask(task.id)} onMerge={() => void mergeTask(task)} onDelete={() => void deleteTask(task)} />)}
         </div></section>}
         {tasksOpen && aiOpen && <div className="right-panel-divider" onPointerDown={beginRightSplitResize} />}
-        {aiOpen && <section className="right-panel-section"><header className="panel-header"><span>AI</span><span className={`ai-status ${aiSession.status}`}>{formatAiStatus(aiSession.status)}</span></header><AiPanel provider={aiProvider} session={aiSession} models={aiModels} attachments={currentAiAttachments} onProviderChange={(provider) => void switchAiProvider(provider)} onConfigurationChange={configureAi} onAttachmentsChange={updateAiAttachments} onSend={sendAiPrompt} onClear={() => void clearAiContext()} /></section>}
+        {aiOpen && <section className="right-panel-section"><header className="panel-header"><span>AI</span><span className={`ai-status ${aiSession.status}`}>{formatAiStatus(aiSession.status)}</span></header><AiPanel provider={aiProvider} providers={aiProviders} session={aiSession} models={aiModels} usage={aiUsage} attachments={currentAiAttachments} onProviderChange={(provider) => void switchAiProvider(provider)} onConfigurationChange={configureAi} onAttachmentsChange={updateAiAttachments} onSend={sendAiPrompt} onSteer={steerAiPrompt} onInterrupt={() => void interruptAi()} onClear={() => void clearAiContext()} /></section>}
       </aside></>}
       <nav className="right-tool-stripe" aria-label="Right tool windows">
         <button className={`tool-stripe-button right ${tasksOpen ? "active" : ""}`} title={tasksOpen ? "Hide Tasks" : "Show Tasks"} onClick={() => setTasksOpen((open) => !open)}><ListTodo size={15} /><span>Tasks</span>{tasks.length > 0 && <span className="tool-badge">{tasks.length > 99 ? "99+" : tasks.length}</span>}</button>

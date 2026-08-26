@@ -27,12 +27,8 @@ export type WorkspaceOptions = {
 export type FileColor = "red" | "orange" | "yellow" | "green" | "blue" | "purple" | "gray";
 export type WorkspaceTerminalOptions = { tabs: { title: string }[]; activeTabIndex?: number; panelOpen: boolean };
 export type WorkspaceTask = { id: string; name: string; branch: string; baseBranch: string };
-export type AiStatus = "idle" | "in_progress" | "user_prompt" | "done" | "error";
-export type AiProvider = "codex" | "copilot";
-export type AiMessage = { id: string; role: "user" | "assistant" | "activity" | "error"; text: string; timestamp: string };
-export type AiSession = { threadId?: string; model: string; reasoning: string; status: AiStatus; messages: AiMessage[] };
-export type AiModel = { id: string; name: string; defaultReasoning: string; reasoningLevels: string[] };
-export type AiTaskSummary = { status: AiStatus; preview: string; additions: number; deletions: number };
+export type { AiAgent, AiConfiguration, AiMessage, AiModel, AiMcpServer, AiOption, AiProvider, AiProviderCapabilities, AiProviderDescriptor, AiSession, AiSettingsLayout, AiSettingsSection, AiStatus, AiTaskSummary, AiUsage } from "@remote-ide/acp";
+import type { AiAgent, AiConfiguration, AiMcpServer, AiModel, AiProvider, AiProviderDescriptor, AiSession, AiTaskSummary, AiUsage } from "@remote-ide/acp";
 export type UsefulFileScope = "global" | "local";
 export type UsefulFile = { scope: UsefulFileScope; name: string };
 export type HttpResponse = { status: number; statusText: string; headers: Record<string, string>; body: string; durationMs: number };
@@ -89,11 +85,15 @@ export type ProtocolOperations = {
   "tasks.merge": { payload: { taskId: string }; result: { targetBranch: string } };
   "tasks.switch": { payload: { taskId?: string }; result: { workspace: string; projectName: string; tree: FileTreeNode[]; options: WorkspaceOptions; tasks: WorkspaceTask[]; selectedTaskId?: string } };
   "tasks.delete": { payload: { taskId: string }; result: { tasks: WorkspaceTask[]; selectedTaskId?: string } };
+  "ai.providers": { payload: Record<string, never>; result: { providers: AiProviderDescriptor[] } };
   "ai.get": { payload: { provider?: AiProvider }; result: { session: AiSession } };
   "ai.models": { payload: { provider?: AiProvider }; result: { models: AiModel[] } };
-  "ai.configure": { payload: { provider?: AiProvider; model: string; reasoning: string }; result: { session: AiSession } };
-  "ai.send": { payload: { provider?: AiProvider; prompt: string; model: string; reasoning: string }; result: { session: AiSession } };
+  "ai.configure": { payload: { provider?: AiProvider; model?: string; reasoning?: string; configuration?: AiConfiguration }; result: { session: AiSession } };
+  "ai.send": { payload: { provider?: AiProvider; prompt: string; model?: string; reasoning?: string; configuration?: AiConfiguration; mcpServers?: AiMcpServer[]; agent?: AiAgent }; result: { session: AiSession } };
+  "ai.interrupt": { payload: { provider?: AiProvider }; result: { session: AiSession } };
+  "ai.steer": { payload: { provider?: AiProvider; prompt: string }; result: { session: AiSession } };
   "ai.clear": { payload: { provider?: AiProvider }; result: { session: AiSession } };
+  "ai.usage": { payload: { provider?: AiProvider }; result: { usage: AiUsage } };
   "ai.statuses": { payload: Record<string, never>; result: { root: AiTaskSummary; tasks: Record<string, AiTaskSummary> } };
   "useful.list": { payload: Record<string, never>; result: { files: UsefulFile[] } };
   "useful.read": { payload: { scope: UsefulFileScope; name: string }; result: { content: string } };
@@ -279,11 +279,15 @@ export const requestTypes: RequestType[] = [
   "tasks.merge",
   "tasks.switch",
   "tasks.delete",
+  "ai.providers",
   "ai.get",
   "ai.models",
   "ai.configure",
   "ai.send",
+  "ai.interrupt",
+  "ai.steer",
   "ai.clear",
+  "ai.usage",
   "ai.statuses",
   "useful.list",
   "useful.read",
