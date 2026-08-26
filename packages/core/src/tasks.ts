@@ -89,7 +89,7 @@ export class WorkspaceTaskStore {
     return { workspace: taskId ? this.taskPath(taskId) : this.rootWorkspace, registry: next };
   }
 
-  async merge(taskId: string): Promise<{ targetBranch: string }> {
+  async merge(taskId: string, strategy: "merge" | "smart" = "smart"): Promise<{ targetBranch: string }> {
     const registry = await this.list();
     const task = registry.tasks.find((item) => item.id === taskId);
     if (!task) throw new CoreError("INVALID_REQUEST", "Task does not exist");
@@ -107,6 +107,16 @@ export class WorkspaceTaskStore {
       await execFileAsync("git", ["-C", taskWorkspace, "add", "--all"], { encoding: "utf8" });
       const staged = (await execFileAsync("git", ["-C", taskWorkspace, "diff", "--cached", "--name-only"], { encoding: "utf8" })).stdout.trim();
       if (staged) await execFileAsync("git", ["-C", taskWorkspace, "commit", "-m", `Complete task: ${task.name}`], { encoding: "utf8" });
+
+      if (strategy === "merge") {
+        if (rootStatus.stdout.trim()) throw new CoreError("GIT_FAILED", "Main workspace has uncommitted changes. Use Smart merge to preserve them automatically.");
+        try { await execFileAsync("git", ["-C", this.rootWorkspace, "merge", "--no-edit", task.branch], { encoding: "utf8" }); }
+        catch (mergeError) {
+          await execFileAsync("git", ["-C", this.rootWorkspace, "merge", "--abort"], { encoding: "utf8" }).catch(() => undefined);
+          throw mergeError;
+        }
+        return { targetBranch: branch };
+      }
 
       if (rootStatus.stdout.trim()) {
         await execFileAsync("git", ["-C", this.rootWorkspace, "stash", "push", "--include-untracked", "--message", `remote-ide: merge ${task.name}`], { encoding: "utf8" });

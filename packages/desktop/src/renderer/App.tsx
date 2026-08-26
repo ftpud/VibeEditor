@@ -116,6 +116,7 @@ export function App() {
   useEffect(() => { if (workspaceKeyRef.current && sideLayout === "classic") { writeWorkspaceSetting(workspaceKeyRef.current, "classic.split", String(classicSplit)); } }, [classicSplit]);
   useEffect(() => { if (workspaceKeyRef.current && sideLayout === "classic") { writeWorkspaceSetting(workspaceKeyRef.current, "classic.sideView", classicSideView); } }, [classicSideView]);
   const [showCreateTaskDialog, setShowCreateTaskDialog] = useState(false);
+  const [mergeDialog, setMergeDialog] = useState<WorkspaceTask>();
   const [tasks, setTasks] = useState<WorkspaceTask[]>([]);
   const [taskFilter, setTaskFilter] = useState("");
   const [selectedTaskId, setSelectedTaskId] = useState<string>();
@@ -982,11 +983,12 @@ export function App() {
     finally { setTaskSwitching(false); }
   }, [selectedTaskId, switchTask, taskSwitching]);
 
-  const mergeTask = useCallback(async (task: WorkspaceTask) => {
-    if (!clientRef.current || taskSwitching || !window.confirm(`Merge task "${task.name}" into the main workspace?\n\nTask changes will be committed automatically. Existing main-workspace changes will be preserved.`)) return;
+  const mergeTask = useCallback(async (task: WorkspaceTask, strategy: "merge" | "smart") => {
+    if (!clientRef.current || taskSwitching) return;
+    setMergeDialog(undefined);
     try {
       setTaskSwitching(true);
-      const result = await clientRef.current.request("tasks.merge", { taskId: task.id });
+      const result = await clientRef.current.request("tasks.merge", { taskId: task.id, strategy });
       setTaskSwitching(false);
       await switchTask();
       showStatus(`Merged ${task.name} into ${result.targetBranch}`, "success");
@@ -1531,7 +1533,7 @@ export function App() {
       {(leftPanels.tasks || leftPanels.ai) && <><aside className="side-panel side-panel-left" style={{ width: leftSidebarWidth }}><ResizablePanelStack workspace={activeWorkspace} setting="focused.leftSizes" ids={[...(leftPanels.tasks ? ["tasks"] : []), ...(leftPanels.ai ? ["ai"] : [])]}>
         {leftPanels.tasks && <section key="tasks" className="stacked-panel"><header className="panel-header"><span>Tasks</span><button title="Create task" disabled={taskSwitching} onClick={() => setShowCreateTaskDialog(true)}><Plus size={15} /></button></header><QuickFilter value={taskFilter} placeholder="Filter tasks" label="Filter tasks" onChange={setTaskFilter} /><div className="tasks-list">
           {showRootTask && <TaskRow icon={<Folder size={15} />} name="Root workspace" summary={aiStatuses.root} selected={selectedTaskId === undefined} disabled={taskSwitching} onClick={() => void switchTask()} />}
-          {filteredTasks.map((task) => <TaskRow key={task.id} icon={<ListTodo size={15} />} name={task.name} summary={aiStatuses.tasks[task.id] ?? emptyAiSummary} selected={selectedTaskId === task.id} disabled={taskSwitching} onClick={() => void switchTask(task.id)} onMerge={() => void mergeTask(task)} onDelete={() => void deleteTask(task)} />)}
+          {filteredTasks.map((task) => <TaskRow key={task.id} icon={<ListTodo size={15} />} name={task.name} summary={aiStatuses.tasks[task.id] ?? emptyAiSummary} selected={selectedTaskId === task.id} disabled={taskSwitching} onClick={() => void switchTask(task.id)} onMerge={() => setMergeDialog(task)} onDelete={() => void deleteTask(task)} />)}
           {!showRootTask && filteredTasks.length === 0 && <div className="filter-empty">No matching tasks</div>}
         </div></section>}
         {leftPanels.ai && <section key="ai" className="stacked-panel"><header className="panel-header"><span>AI</span><span className={`ai-status ${aiSession.status}`}>{formatAiStatus(aiSession.status)}</span></header><AiPanel key={`${activeWorkspace}:${aiProvider}:${aiSession.id ?? "legacy"}`} provider={aiProvider} providers={aiProviders} session={aiSession} sessions={aiSessions} models={aiModels} usage={aiUsage} agents={agents} selectedAgent={selectedAgentKey} attachments={currentAiAttachments} onProviderChange={(provider) => void switchAiProvider(provider)} onAgentChange={selectAgent} onConfigurationChange={configureAi} onAttachmentsChange={updateAiAttachments} onSend={sendAiPrompt} onSendAsTask={selectedTaskId ? undefined : sendAiPromptAsTask} onSteer={steerAiPrompt} onInterrupt={() => void interruptAi()} onNewSession={() => void newAiSession()} onSwitchSession={(session) => void switchAiSession(session)} onRemoveSession={(session) => void removeAiSession(session)} onResolvePermission={(requestId, optionId) => void resolveAiPermission(requestId, optionId)} /></section>}
@@ -1630,7 +1632,7 @@ export function App() {
       {(classicTasksOpen || classicAiOpen) && <><div className="right-resize-handle" onPointerDown={beginClassicRightResize} /><aside className="side-panel classic-right-panel" style={{ width: classicRightWidth }}>
         {classicTasksOpen && <section className="stacked-panel" style={classicAiOpen ? { flex: `0 0 ${classicSplit}%` } : undefined}><header className="panel-header"><span>Tasks</span><button title="Create task" disabled={taskSwitching} onClick={() => setShowCreateTaskDialog(true)}><Plus size={15} /></button></header><QuickFilter value={taskFilter} placeholder="Filter tasks" label="Filter tasks" onChange={setTaskFilter} /><div className="tasks-list">
           {showRootTask && <TaskRow icon={<Folder size={15} />} name="Root workspace" summary={aiStatuses.root} selected={selectedTaskId === undefined} disabled={taskSwitching} onClick={() => void switchTask()} />}
-          {filteredTasks.map((task) => <TaskRow key={task.id} icon={<ListTodo size={15} />} name={task.name} summary={aiStatuses.tasks[task.id] ?? emptyAiSummary} selected={selectedTaskId === task.id} disabled={taskSwitching} onClick={() => void switchTask(task.id)} onMerge={() => void mergeTask(task)} onDelete={() => void deleteTask(task)} />)}
+          {filteredTasks.map((task) => <TaskRow key={task.id} icon={<ListTodo size={15} />} name={task.name} summary={aiStatuses.tasks[task.id] ?? emptyAiSummary} selected={selectedTaskId === task.id} disabled={taskSwitching} onClick={() => void switchTask(task.id)} onMerge={() => setMergeDialog(task)} onDelete={() => void deleteTask(task)} />)}
           {!showRootTask && filteredTasks.length === 0 && <div className="filter-empty">No matching tasks</div>}
         </div></section>}
         {classicTasksOpen && classicAiOpen && <div className="classic-panel-divider" onPointerDown={beginClassicSplitResize} />}
@@ -1667,6 +1669,7 @@ export function App() {
     {gitHunkDialog && <div className="context-menu-layer" onMouseDown={() => setGitHunkDialog(undefined)}><section className="git-hunk-popup" role="dialog" aria-label={`Previous content in ${gitHunkDialog.path}`} style={{ left: gitHunkDialog.x, top: gitHunkDialog.y }} onMouseDown={(event) => event.stopPropagation()}><header><div><strong>Before this change</strong><span>{gitHunkDialog.path.split("/").pop()} · line {gitHunkDialog.hunk.originalStart}</span></div><button title="Close" onClick={() => setGitHunkDialog(undefined)}><X size={14} /></button></header>{gitHunkDialog.error && <div className="git-hunk-error">{gitHunkDialog.error}</div>}<pre>{gitHunkDialog.hunk.originalLines === 0 ? "This block did not exist before." : gitHunkDialog.originalContent.split("\n").slice(Math.max(0, gitHunkDialog.hunk.originalStart - 1), Math.max(0, gitHunkDialog.hunk.originalStart - 1) + gitHunkDialog.hunk.originalLines).join("\n")}</pre><footer><button className="danger" onClick={() => void rollbackGitHunk()}><RefreshCw size={13} /><span>Rollback</span></button></footer></section></div>}
     {showRunConfigurationDialog && <RunConfigurationDialog client={clientRef.current!} onClose={() => setShowRunConfigurationDialog(false)} onSaved={(options) => { setJavaOptions(options); javaOptionsRef.current = options; setShowRunConfigurationDialog(false); }} />}
     {showCreateTaskDialog && <CreateTaskDialog client={clientRef.current!} onClose={() => setShowCreateTaskDialog(false)} onCreate={createTask} />}
+    {mergeDialog && <MergeTaskDialog task={mergeDialog} onClose={() => setMergeDialog(undefined)} onMerge={(strategy) => void mergeTask(mergeDialog, strategy)} />}
     {usefulDialog && <UsefulFileDialog mode={usefulDialog.mode} initialName={usefulDialog.file?.name ?? ""} scope={usefulDialog.scope} onClose={() => setUsefulDialog(undefined)} onSave={saveUsefulFileDialog} />}
     {agentDialog && <AgentDialog mode={agentDialog.mode} initialName={agentDialog.file?.name ?? ""} scope={agentDialog.scope} onClose={() => setAgentDialog(undefined)} onSave={saveAgentDialog} />}
   </div>;
@@ -1830,6 +1833,26 @@ function UsefulFileSection({ title, scope, files, activeTab, onOpen, onCreate, o
   return <section className="useful-section"><header><span>{title}</span><button title={`Create ${title} file`} onClick={() => onCreate(scope)}><Plus size={14} /></button></header>
     {scoped.length === 0 ? <div className="useful-empty">No files</div> : scoped.map((file) => <div key={file.name} className={`useful-row ${activeTab?.type === "useful" && activeTab.usefulScope === scope && activeTab.path === file.name ? "selected" : ""}`}><button className="useful-open" title={file.name} onClick={() => void onOpen(file)}><FileText size={14} /><span>{file.name}</span></button><button title={`Rename ${file.name}`} onClick={() => onRename(file)}><Pencil size={12} /></button><button title={`Delete ${file.name}`} onClick={() => onDelete(file)}><Trash2 size={12} /></button></div>)}
   </section>;
+}
+
+function MergeTaskDialog({ task, onClose, onMerge }: { task: WorkspaceTask; onClose(): void; onMerge(strategy: "merge" | "smart"): void }) {
+  useEffect(() => {
+    const listener = (event: KeyboardEvent) => { if (event.key === "Escape") onClose(); };
+    window.addEventListener("keydown", listener); return () => window.removeEventListener("keydown", listener);
+  }, [onClose]);
+  return <div className="dialog-overlay" onMouseDown={onClose}>
+    <section className="run-config-dialog merge-task-dialog" role="dialog" aria-modal="true" aria-labelledby="merge-task-title" onMouseDown={(event) => event.stopPropagation()}>
+      <header><div><h2 id="merge-task-title">Merge task to main workspace</h2><span>{task.name}</span></div><button title="Close" onClick={onClose}><X size={15} /></button></header>
+      <div className="merge-task-content">
+        <div className="merge-task-intro"><GitMerge size={22} /><div><strong>Ready to integrate this task?</strong><span>All task changes will be committed first.</span></div></div>
+        <div className="merge-task-options">
+          <button onClick={() => onMerge("merge")}><span className="merge-option-icon"><GitMerge size={17} /></span><span><strong>Commit and merge</strong><small>Commit the task, then merge it normally. Main must have no uncommitted changes.</small></span></button>
+          <button className="recommended" autoFocus onClick={() => onMerge("smart")}><span className="merge-option-icon"><GitCompareArrows size={17} /></span><span><strong>Smart merge <em>Recommended</em></strong><small>Preserve local main changes, rebase the task onto main, then restore your work.</small></span></button>
+        </div>
+        <footer><button onClick={onClose}>Cancel</button></footer>
+      </div>
+    </section>
+  </div>;
 }
 
 function UsefulFileDialog({ mode, initialName, scope, onClose, onSave }: { mode: "create" | "rename"; initialName: string; scope: UsefulFileScope; onClose(): void; onSave(name: string): Promise<void> }) {

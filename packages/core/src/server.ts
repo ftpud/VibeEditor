@@ -228,7 +228,7 @@ async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStor
         throw error;
       }
     }
-    case "tasks.merge": return tasks.merge(request.payload.taskId);
+    case "tasks.merge": return tasks.merge(request.payload.taskId, request.payload.strategy);
     case "tasks.delete": return tasks.delete(request.payload.taskId);
     case "tasks.switch": {
       const registry = await tasks.list();

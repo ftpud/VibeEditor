@@ -674,6 +674,24 @@ button { color: inherit; }
 .run-config-dialog form > footer button { min-width: 76px; height: 31px; border: 1px solid #505359; border-radius: 3px; background: #34363a; color: #d5d7da; cursor: pointer; }
 .run-config-dialog form > footer button:hover:not(:disabled) { background: #404247; }
 .run-config-dialog form > footer button.primary { border-color: #3574f0; background: #3574f0; color: white; }
+.merge-task-dialog { width: min(560px, calc(100vw - 48px)); }
+.merge-task-content { padding: 18px; }
+.merge-task-intro { display: flex; align-items: center; gap: 12px; padding: 0 2px 16px; color: #79a7ff; }
+.merge-task-intro > div { display: flex; flex-direction: column; gap: 3px; }
+.merge-task-intro strong { color: #e7e8ea; font-size: .9231rem; }
+.merge-task-intro span { color: #92959b; font-size: .8462rem; }
+.merge-task-options { display: grid; gap: 9px; }
+.merge-task-options > button { width: 100%; min-height: 72px; padding: 12px; display: flex; align-items: flex-start; gap: 12px; border: 1px solid #4b4e54; border-radius: 6px; background: #25262a; color: #d9dade; text-align: left; cursor: pointer; }
+.merge-task-options > button:hover, .merge-task-options > button:focus-visible { border-color: #6d8fc8; background: #2d3441; outline: none; }
+.merge-task-options > button.recommended { border-color: #4269a8; background: #293344; }
+.merge-option-icon { width: 32px; height: 32px; flex: 0 0 32px; display: grid; place-items: center; border-radius: 50%; background: #353941; color: #9ebef5; }
+.merge-task-options button > span:last-child { display: flex; flex-direction: column; gap: 5px; }
+.merge-task-options strong { font-size: .9231rem; }
+.merge-task-options small { color: #999ca2; line-height: 1.4; }
+.merge-task-options em { margin-left: 6px; padding: 2px 5px; border-radius: 8px; background: #365f9f; color: #eaf2ff; font-size: .6923rem; font-style: normal; font-weight: 500; }
+.merge-task-content > footer { display: flex; justify-content: flex-end; margin-top: 16px; }
+.merge-task-content > footer button { min-width: 76px; height: 31px; border: 1px solid #505359; border-radius: 3px; background: #34363a; color: #d5d7da; cursor: pointer; }
+.merge-task-content > footer button:hover { background: #404247; }
 
 /* Light theme keeps the same information hierarchy while matching Monaco's native light palette. */
 :root[data-theme="light"] { color-scheme: light; color: #2b2d30; background: #ffffff; }
@@ -886,6 +904,12 @@ button { color: inherit; }
 :root[data-theme="light"] .run-config-dialog form > footer button { background: #f2f3f5; color: #3c3f44; border-color: #bfc2c7; }
 :root[data-theme="light"] .run-config-dialog form > footer button:hover:not(:disabled) { background: #e3e5e8; }
 :root[data-theme="light"] .run-config-dialog form > footer button.primary { background: #3574f0; color: #ffffff; }
+:root[data-theme="light"] .merge-task-intro strong { color: #303236; }
+:root[data-theme="light"] .merge-task-options > button { border-color: #c5c8cd; background: #f6f7f8; color: #303236; }
+:root[data-theme="light"] .merge-task-options > button:hover, :root[data-theme="light"] .merge-task-options > button:focus-visible { border-color: #7297d4; background: #edf3fc; }
+:root[data-theme="light"] .merge-task-options > button.recommended { border-color: #7297d4; background: #edf3fc; }
+:root[data-theme="light"] .merge-option-icon { background: #dfe9f8; color: #315f9f; }
+:root[data-theme="light"] .merge-task-content > footer button { border-color: #bfc2c7; background: #f2f3f5; color: #3c3f44; }
 :root[data-theme="light"] .task-branch-help { border-color: #c8cbd0; background: #ffffff; }
 :root[data-theme="light"] .task-branch-help button { color: #3c3f44; }
 :root[data-theme="light"] .task-branch-help button:hover,
