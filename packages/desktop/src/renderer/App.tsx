@@ -1,5 +1,5 @@
 import Editor, { DiffEditor, type Monaco } from "@monaco-editor/react";
-import { ArrowUpRight, Bot, Braces, Bug, CaseSensitive, Check, ChevronDown, ChevronRight, ChevronUp, CircleAlert, Coffee, Columns2, Eye, File, FileCode2, FileDiff, FileJson, FileText, Folder, FolderOpen, GitBranch, GitCompareArrows, GitMerge, Hash, Library, ListTodo, ListTree, LoaderCircle, LogOut, MoreVertical, Package, Palette, Pencil, Play, Plus, RefreshCw, Save, Search, Settings, Square, SquareTerminal, Trash2, X } from "lucide-react";
+import { ArrowUpRight, Bot, Braces, Bug, CaseSensitive, Check, ChevronDown, ChevronRight, ChevronUp, CircleAlert, Coffee, Columns2, Eye, File, FileCode2, FileDiff, FileJson, FileText, Folder, FolderOpen, GitBranch, GitCompareArrows, GitMerge, Hash, Library, ListTodo, ListTree, LoaderCircle, LogOut, MoreVertical, Package, Palette, Pencil, Play, Plus, RefreshCw, Save, Search, Settings, ShieldAlert, Square, SquareTerminal, Trash2, X } from "lucide-react";
 import { isValidElement, useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
 import type { AiConfiguration, AiModel, AiProvider, AiProviderDescriptor, AiSession, AiStatus, AiTaskSummary, AiUsage, FileColor, FileTreeNode, GitBranch as GitBranchInfo, GitDiffHunk, GitStatusEntry, HttpResponse, JavaBreakpoint, JavaDebugState, JavaDiagnostic, JavaLspLocation, JavaMainClass, JavaProjectNode, JavaProjectOptions, JavaTypeSuggestion, SearchResult, UsefulFile, UsefulFileScope, WorkspaceOptions, WorkspaceTask } from "@remote-ide/protocol";
 import type { editor } from "monaco-editor";
@@ -103,7 +103,7 @@ export function App() {
   const [aiProviders, setAiProviders] = useState<AiProviderDescriptor[]>([]);
   const [aiUsage, setAiUsage] = useState<AiUsage>();
   const [aiAttachments, setAiAttachments] = useState<Record<string, AiAttachment[]>>({});
-  const emptyAiSummary: AiTaskSummary = { status: "idle", preview: "", additions: 0, deletions: 0 };
+  const emptyAiSummary: AiTaskSummary = { status: "idle", preview: "", additions: 0, deletions: 0, pendingPermission: false };
   const [aiStatuses, setAiStatuses] = useState<{ root: AiTaskSummary; tasks: Record<string, AiTaskSummary> }>({ root: emptyAiSummary, tasks: {} });
   const aiStatusesRequested = useRef(0);
   const aiStatusesApplied = useRef(0);
@@ -659,6 +659,26 @@ export function App() {
     if (current) await saveFileTab(current);
   }, [layout, saveFileTab]);
 
+  const switchAiProvider = useCallback(async (provider: AiProvider) => {
+    if (!clientRef.current || provider === aiProviderRef.current) return;
+    aiProviderRef.current = provider; setAiProvider(provider);
+    wsSave("aiProvider", provider);
+    wsSave(`ai.provider.task.${selectedTaskId ?? "root"}`, provider);
+    try {
+      const [sessionResult, models] = await Promise.all([clientRef.current.request("ai.get", { provider }), clientRef.current.request("ai.models", { provider })]);
+      let session = sessionResult.session;
+      const workspace = workspaceKeyRef.current;
+      const savedModel = workspace ? localStorage.getItem(workspaceSettingKey(workspace, `ai.${provider}.model`)) : null;
+      const savedReasoning = workspace ? localStorage.getItem(workspaceSettingKey(workspace, `ai.${provider}.reasoning`)) : null;
+      if (savedModel && models.models.some((model) => model.id === savedModel)) {
+        const model = models.models.find((item) => item.id === savedModel)!;
+        const reasoning = savedReasoning && model.reasoningLevels.includes(savedReasoning) ? savedReasoning : model.defaultReasoning;
+        if (session.model !== savedModel || session.reasoning !== reasoning) session = (await clientRef.current.request("ai.configure", { provider, model: savedModel, reasoning })).session;
+      }
+      setAiSession(session); setAiModels(models.models); setAiUsage((await clientRef.current.request("ai.usage", { provider })).usage);
+    } catch (error) { setStatusMessage(error instanceof Error ? error.message : "Could not switch AI provider"); }
+  }, [selectedTaskId]);
+
   const switchTask = useCallback(async (taskId?: string) => {
     if (!clientRef.current || taskId === selectedTaskId) return;
     setTaskSwitching(true); setWorkspaceOptionsReady(false); setStatusMessage("");
@@ -680,34 +700,19 @@ export function App() {
       if (result.options.javaProject) setJavaTree((await clientRef.current.request("java.getProjectTree", {})).tree);
       await restoreWorkspaceOptions(result.options, clientRef.current);
       const nextTask = result.tasks.find((task) => task.id === result.selectedTaskId);
+      const taskProviderKey = result.selectedTaskId ?? "root";
+      const savedProvider = workspaceKeyRef.current ? (localStorage.getItem(workspaceSettingKey(workspaceKeyRef.current, `ai.provider.task.${taskProviderKey}`)) as AiProvider | null) : null;
+      if (savedProvider && savedProvider !== aiProviderRef.current) await switchAiProvider(savedProvider);
       await Promise.all([refreshGit(), refreshAi(), refreshTaskGit(nextTask)]);
     } catch (error) {
       setWorkspaceOptionsReady(true);
       setStatusMessage(error instanceof Error ? error.message : "Could not switch task");
     } finally { setTaskSwitching(false); }
-  }, [fileColors, gitCommitMessage, refreshAi, refreshGit, refreshTaskGit, restoreWorkspaceOptions, saveFileTab, selectedTaskId, sideView]);
+  }, [fileColors, gitCommitMessage, refreshAi, refreshGit, refreshTaskGit, restoreWorkspaceOptions, saveFileTab, selectedTaskId, sideView, switchAiProvider]);
 
   const currentAiAttachmentKey = selectedTaskId ?? "root";
   const currentAiAttachments = aiAttachments[currentAiAttachmentKey] ?? [];
   const updateAiAttachments = useCallback((attachments: AiAttachment[]) => setAiAttachments((current) => ({ ...current, [selectedTaskId ?? "root"]: attachments })), [selectedTaskId]);
-  const switchAiProvider = useCallback(async (provider: AiProvider) => {
-    if (!clientRef.current || provider === aiProviderRef.current) return;
-    aiProviderRef.current = provider; setAiProvider(provider);
-    wsSave("aiProvider", provider);
-    try {
-      const [sessionResult, models] = await Promise.all([clientRef.current.request("ai.get", { provider }), clientRef.current.request("ai.models", { provider })]);
-      let session = sessionResult.session;
-      const workspace = workspaceKeyRef.current;
-      const savedModel = workspace ? localStorage.getItem(workspaceSettingKey(workspace, `ai.${provider}.model`)) : null;
-      const savedReasoning = workspace ? localStorage.getItem(workspaceSettingKey(workspace, `ai.${provider}.reasoning`)) : null;
-      if (savedModel && models.models.some((model) => model.id === savedModel)) {
-        const model = models.models.find((item) => item.id === savedModel)!;
-        const reasoning = savedReasoning && model.reasoningLevels.includes(savedReasoning) ? savedReasoning : model.defaultReasoning;
-        if (session.model !== savedModel || session.reasoning !== reasoning) session = (await clientRef.current.request("ai.configure", { provider, model: savedModel, reasoning })).session;
-      }
-      setAiSession(session); setAiModels(models.models); setAiUsage((await clientRef.current.request("ai.usage", { provider })).usage);
-    } catch (error) { setStatusMessage(error instanceof Error ? error.message : "Could not switch AI provider"); }
-  }, []);
   const attachWorkspaceFile = useCallback((path: string) => {
     const key = selectedTaskId ?? "root";
     setAiAttachments((current) => {
@@ -1459,10 +1464,10 @@ function JavaProjectTree({ nodes, activePath, onOpen }: { nodes: JavaProjectNode
 
 function TaskRow({ icon, name, summary, selected, disabled, onClick, onMerge, onDelete }: { icon: ReactNode; name: string; summary: AiTaskSummary; selected: boolean; disabled: boolean; onClick(): void; onMerge?(): void; onDelete?(): void }) {
   const [menu, setMenu] = useState<{ x: number; y: number }>();
-  const preview = summary.preview || "No AI activity yet";
+  const preview = summary.pendingPermission ? "Waiting for permission approval" : (summary.preview || "No AI activity yet");
   return <div className={`task-row ${selected ? "selected" : ""}`}><button className="task-open" disabled={disabled} title={`${name}\n${preview}`} onClick={onClick}>
     <span className="task-icon">{icon}</span>
-    <span className="task-content"><span className="task-title"><strong>{name}</strong>{(summary.additions > 0 || summary.deletions > 0) && <span className="task-diff-stat"><small>+{summary.additions}</small><small>-{summary.deletions}</small></span>}{summary.status !== "idle" && <small className={`task-ai-status ${summary.status}`}>{summary.status === "in_progress" && <LoaderCircle className="task-progress-spinner" size={13} />}{formatAiStatus(summary.status)}</small>}</span><span className="task-preview">{preview}</span></span>
+    <span className="task-content"><span className="task-title"><strong>{name}</strong>{(summary.additions > 0 || summary.deletions > 0) && <span className="task-diff-stat"><small>+{summary.additions}</small><small>-{summary.deletions}</small></span>}{summary.pendingPermission ? <small className="task-ai-status permission"><ShieldAlert size={13} /> Permission needed</small> : summary.status !== "idle" && <small className={`task-ai-status ${summary.status}`}>{summary.status === "in_progress" && <LoaderCircle className="task-progress-spinner" size={13} />}{formatAiStatus(summary.status)}</small>}</span><span className="task-preview">{preview}</span></span>
     {selected && <Check className="task-check" size={13} />}
   </button>{onDelete && <button className="task-actions" title={`Actions for ${name}`} disabled={disabled} onClick={(event) => { event.stopPropagation(); const bounds = event.currentTarget.getBoundingClientRect(); setMenu({ x: Math.max(8, bounds.right - 180), y: bounds.bottom + 2 }); }}><MoreVertical size={14} /></button>}
     {menu && <div className="context-menu-layer" onMouseDown={() => setMenu(undefined)}><div className="context-menu task-actions-menu" style={{ left: menu.x, top: menu.y }} onMouseDown={(event) => event.stopPropagation()}>

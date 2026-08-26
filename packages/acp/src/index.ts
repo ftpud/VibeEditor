@@ -47,7 +47,7 @@ export type AiMcpServer =
   | { transport?: "stdio"; name: string; command: string; args?: string[]; env?: Record<string, string>; enabled?: boolean }
   | { transport: "http" | "sse"; name: string; url: string; headers?: Record<string, string>; enabled?: boolean };
 export type AiAgent = { name: string; description?: string; instructions: string; mcpServers?: string[] };
-export type AiTaskSummary = { status: AiStatus; preview: string; additions: number; deletions: number };
+export type AiTaskSummary = { status: AiStatus; preview: string; additions: number; deletions: number; pendingPermission: boolean };
 export type AcpSendRequest = { prompt: string; content?: AiContentBlock[]; configuration: AiConfiguration; mcpServers?: AiMcpServer[]; agent?: AiAgent };
 
 /** Shared provider contract. Each provider owns its settings UI metadata. */
