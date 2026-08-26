@@ -166,7 +166,7 @@ The full-width bottom Git tool window provides local and remote branches, a sear
 
 ## Task Workspaces
 
-The Tasks tool window creates isolated Git worktrees under Core's state directory. Creating a task asks for a branch name, creates a linked worktree on that new branch, and carries the root workspace's current staged, unstaged, untracked, ignored, and deleted-file state into it. Existing dependencies are shared through `node_modules` symlinks. Selecting Root workspace returns to the original directory. Deleting a task requires confirmation and removes its worktree and task branch. Legacy copied task workspaces are converted automatically, retaining their commits and working state.
+The Tasks tool window creates isolated Git worktrees under Core's state directory. Creating a task asks for a branch name, creates a linked worktree on that new branch, and carries the root workspace's current staged, unstaged, untracked, ignored, and deleted-file state into it. `node_modules` directories are excluded; install dependencies in a task worktree when needed so each worktree has an independent dependency tree. Selecting Root workspace returns to the original directory. Deleting a task requires confirmation and removes its worktree and task branch. Legacy copied task workspaces are converted automatically, retaining their commits and working state.
 
 Open files, active tab, terminal tabs, terminal panel state, useful local files, AI sessions, file colors, and Git commit drafts are persisted per task workspace. Task rows show AI state, the latest activity preview, Git additions/deletions, and an animated in-progress indicator.
 

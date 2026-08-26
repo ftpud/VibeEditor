@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import os from "node:os";
 import path from "node:path";
-import { cp, lstat, mkdir, readdir, readFile, rename, rm, symlink, writeFile } from "node:fs/promises";
+import { cp, lstat, mkdir, readdir, readFile, readlink, rename, rm, writeFile } from "node:fs/promises";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { CoreError } from "./errors.js";
@@ -27,7 +27,10 @@ export class WorkspaceTaskStore {
       const validTasks = value.tasks.filter(isTask);
       const fallbackBaseBranch = validTasks.some((task) => !task.baseBranch) ? await this.rootBranch() : "";
       const tasks = validTasks.map((task) => ({ ...task, baseBranch: task.baseBranch || fallbackBaseBranch }));
-      for (const task of tasks) await this.migrateLegacyCopy(task);
+      for (const task of tasks) {
+        await this.migrateLegacyCopy(task);
+        await this.removeSharedNodeModules(this.taskPath(task.id));
+      }
       return { tasks, ...(value.selectedTaskId && tasks.some((task) => task.id === value.selectedTaskId) ? { selectedTaskId: value.selectedTaskId } : {}) };
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return { tasks: [] };
@@ -49,7 +52,6 @@ export class WorkspaceTaskStore {
       await execFileAsync("git", ["-C", this.rootWorkspace, "worktree", "add", "-b", name, destination, "HEAD"], { encoding: "utf8" });
       if (task.baseBranch !== "HEAD") await execFileAsync("git", ["-C", this.rootWorkspace, "branch", "--set-upstream-to", task.baseBranch, name], { encoding: "utf8" });
       await this.copyWorkspaceState(this.rootWorkspace, destination);
-      await this.linkNodeModules(destination);
       await this.save({ tasks: [...registry.tasks, task], selectedTaskId: task.id });
       return task;
     } catch (error) {
@@ -140,7 +142,6 @@ export class WorkspaceTaskStore {
       await execFileAsync("git", ["-C", this.rootWorkspace, "worktree", "add", destination, task.branch], { encoding: "utf8" });
       await this.copyWorkspaceState(backup, destination);
       if (task.baseBranch !== "HEAD") await execFileAsync("git", ["-C", this.rootWorkspace, "branch", "--set-upstream-to", task.baseBranch, task.branch], { encoding: "utf8" });
-      await this.linkNodeModules(destination);
       await rm(backup, { recursive: true, force: true });
       await execFileAsync("git", ["-C", this.rootWorkspace, "update-ref", "-d", migrationRef], { encoding: "utf8" });
     } catch (error) {
@@ -167,17 +168,31 @@ export class WorkspaceTaskStore {
     finally { await rm(patchFile, { force: true }); }
   }
 
-  private async linkNodeModules(destination: string): Promise<void> {
-    for (const source of await findNodeModulesDirs(this.rootWorkspace)) {
-      const target = path.join(destination, path.relative(this.rootWorkspace, source));
-      await mkdir(path.dirname(target), { recursive: true });
-      if (!await exists(target)) await symlink(source, target, "dir");
-    }
-  }
-
   private async branchExists(branch: string): Promise<boolean> {
     try { await execFileAsync("git", ["-C", this.rootWorkspace, "show-ref", "--verify", "--quiet", `refs/heads/${branch}`]); return true; }
     catch { return false; }
+  }
+
+  private async removeSharedNodeModules(workspace: string): Promise<void> {
+    const walk = async (directory: string): Promise<void> => {
+      let entries;
+      try { entries = await readdir(directory, { withFileTypes: true }); }
+      catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return; throw error; }
+      for (const entry of entries) {
+        if (entry.name === ".git") continue;
+        const target = path.join(directory, entry.name);
+        if (entry.name === "node_modules") {
+          if (entry.isSymbolicLink()) {
+            const linkTarget = path.resolve(path.dirname(target), await readlink(target));
+            const formerSharedTarget = path.join(this.rootWorkspace, path.relative(workspace, target));
+            if (linkTarget === formerSharedTarget) await rm(target);
+          }
+          continue;
+        }
+        if (entry.isDirectory()) await walk(target);
+      }
+    };
+    await walk(workspace);
   }
 
   private async removeWorktree(workspace: string): Promise<void> {
@@ -202,22 +217,6 @@ export class WorkspaceTaskStore {
     await writeFile(temporary, `${JSON.stringify(registry, null, 2)}\n`, "utf8");
     await rename(temporary, this.registryFile);
   }
-}
-
-async function findNodeModulesDirs(root: string): Promise<string[]> {
-  const results: string[] = [];
-  const walk = async (dir: string): Promise<void> => {
-    let entries;
-    try { entries = await readdir(dir, { withFileTypes: true }); } catch { return; }
-    for (const entry of entries) {
-      if (!entry.isDirectory() || entry.name === ".git") continue;
-      const full = path.join(dir, entry.name);
-      if (entry.name === "node_modules") { results.push(full); continue; }
-      await walk(full);
-    }
-  };
-  await walk(root);
-  return results;
 }
 
 function isNodeModulesPath(root: string, source: string): boolean {

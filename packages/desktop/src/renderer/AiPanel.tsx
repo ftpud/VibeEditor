@@ -98,12 +98,16 @@ function ActivityMessage({ text }: { text: string }) {
     const previewLine = output.find((line) => line.trim())?.trim().replace(/\s+/g, " ") || "No reasoning details";
     const preview = previewLine.length > 120 ? `${previewLine.slice(0, 119)}…` : previewLine;
     return <details className="ai-reasoning" aria-label="Reasoning">
-      <summary><span>Reasoning</span><code title={preview}>{preview}</code></summary>
-      <pre>{content}</pre>
+      <summary><span>Reasoning</span><div className="ai-reasoning-preview" title={preview}><ReasoningMarkdown>{preview}</ReasoningMarkdown></div></summary>
+      <div className="ai-reasoning-content"><ReasoningMarkdown>{content}</ReasoningMarkdown></div>
     </details>;
   }
   return <details className="ai-activity">
     <summary><span>Execution</span><code>{summary}</code></summary>
     <pre>{output.length > 0 ? output.join("\n") : text}</pre>
   </details>;
+}
+
+function ReasoningMarkdown({ children }: { children: string }) {
+  return <ReactMarkdown remarkPlugins={[remarkGfm]} components={{ strong: ({ children: value }) => <em>{value}</em> }}>{children}</ReactMarkdown>;
 }

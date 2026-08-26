@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { access, lstat, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { access, lstat, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -73,7 +73,7 @@ describe("WorkspaceTaskStore", () => {
     expect(await readFile(path.join(root, "unstaged.txt"), "utf8")).toBe("unstaged\n");
   });
 
-  it("symlinks node_modules into the task workspace instead of copying it", async () => {
+  it("leaves node_modules out of the task workspace", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "remote-ide-task-root-"));
     const state = await mkdtemp(path.join(os.tmpdir(), "remote-ide-task-state-"));
     await execFileAsync("git", ["init", root]);
@@ -84,13 +84,31 @@ describe("WorkspaceTaskStore", () => {
     await execFileAsync("git", ["-C", root, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "initial"]);
 
     const store = new WorkspaceTaskStore(root, state);
-    const task = await store.create("feature/task-symlink");
+    const task = await store.create("feature/task-dependencies");
     const workspace = store.taskPath(task.id);
 
-    const stats = await lstat(path.join(workspace, "node_modules"));
-    expect(stats.isSymbolicLink()).toBe(true);
-    expect(await realpath(path.join(workspace, "node_modules"))).toBe(await realpath(path.join(root, "node_modules")));
-    expect(await readFile(path.join(workspace, "node_modules", "some-dep", "index.js"), "utf8")).toBe("module.exports = 1;\n");
+    await expect(access(path.join(workspace, "node_modules"))).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await readFile(path.join(root, "node_modules", "some-dep", "index.js"), "utf8")).toBe("module.exports = 1;\n");
+  });
+
+  it("removes node_modules symlinks from existing task worktrees", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "remote-ide-task-root-"));
+    const state = await mkdtemp(path.join(os.tmpdir(), "remote-ide-task-state-"));
+    await execFileAsync("git", ["init", root]);
+    await writeFile(path.join(root, "tracked.txt"), "root\n");
+    await mkdir(path.join(root, "node_modules"));
+    await execFileAsync("git", ["-C", root, "add", "tracked.txt"]);
+    await execFileAsync("git", ["-C", root, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "initial"]);
+
+    const store = new WorkspaceTaskStore(root, state);
+    const task = await store.create("feature/existing-symlink");
+    const workspace = store.taskPath(task.id);
+    await symlink(path.join(root, "node_modules"), path.join(workspace, "node_modules"), "dir");
+
+    await store.list();
+
+    await expect(access(path.join(workspace, "node_modules"))).rejects.toMatchObject({ code: "ENOENT" });
+    expect((await lstat(path.join(root, "node_modules"))).isDirectory()).toBe(true);
   });
 
   it("automatically migrates a legacy copied repository and preserves its changes", async () => {
