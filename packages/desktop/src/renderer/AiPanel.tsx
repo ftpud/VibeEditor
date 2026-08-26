@@ -92,6 +92,10 @@ function selectValue(option: { choices?: { value: string }[]; defaultValue: stri
 function ActivityMessage({ text }: { text: string }) {
   const [firstLine, ...output] = text.split("\n");
   const summary = firstLine?.trim() || "Execution details";
+  if (summary === "Reasoning") return <div className="ai-reasoning" aria-label="Reasoning">
+    <span>Reasoning</span>
+    <pre>{output.join("\n")}</pre>
+  </div>;
   return <details className="ai-activity">
     <summary><span>Execution</span><code>{summary}</code></summary>
     <pre>{output.length > 0 ? output.join("\n") : text}</pre>
