@@ -17,6 +17,17 @@ button { color: inherit; }
 .connection-message { padding: 9px 10px; border-left: 3px solid #d16969; background: #2b2020; color: #f1b4b4; }
 .connection-message.connecting { border-color: #4da5e8; background: #1c2932; color: #b7d9f2; }
 .ide-shell { height: 100%; display: flex; flex-direction: column; background: #1e1f22; }
+.status-toast { min-width: 250px; max-width: min(520px, calc(100vw - 32px)); min-height: 40px; padding: 8px 8px 8px 11px; position: fixed; z-index: 100; top: 42px; right: 16px; display: flex; align-items: center; gap: 9px; border: 1px solid #4b4d52; border-left-width: 3px; border-radius: 4px; background: #2b2d30; color: #e2e3e5; box-shadow: 0 8px 24px rgba(0, 0, 0, .38); }
+.status-toast.progress { border-left-color: #579dff; }
+.status-toast.success { border-left-color: #62ad6d; }
+.status-toast.error { border-left-color: #d8646d; }
+.status-toast.progress > svg { color: #73a9f5; }
+.status-toast.success > svg { color: #70bd79; }
+.status-toast.error > svg { color: #e2767e; }
+.status-toast > span { min-width: 0; flex: 1; overflow-wrap: anywhere; }
+.status-toast > button { width: 25px; height: 25px; padding: 0; display: grid; flex: 0 0 25px; place-items: center; border: 0; border-radius: 3px; background: transparent; color: #a8aab0; cursor: pointer; }
+.status-toast > button:hover { background: #3a3c41; color: #ffffff; }
+.status-toast-spinner { animation: task-progress-spin .9s linear infinite; }
 .workspace-row { min-height: 0; flex: 1; display: flex; }
 .tool-stripe { width: 30px; flex: 0 0 30px; display: flex; flex-direction: column; align-items: center; padding: 2px 0; overflow-y: auto; overflow-x: hidden; border-right: 1px solid #393b40; background: #2b2d30; }
 .tool-stripe-button { width: 29px; min-height: 78px; padding: 6px 0; display: flex; flex-direction: column; align-items: center; gap: 5px; border: 0; border-left: 2px solid transparent; background: transparent; color: #8b8d91; cursor: pointer; }
@@ -781,6 +792,11 @@ button { color: inherit; }
 :root[data-theme="light"] .connection-form input { background: #ffffff; color: #202124; border-color: #b8bbc0; }
 :root[data-theme="light"] .connection-message { background: #fff1f1; color: #9f292f; }
 :root[data-theme="light"] .connection-message.connecting { background: #eaf4ff; color: #245f91; }
+:root[data-theme="light"] .status-toast { border-color: #c8cbd0; background: #ffffff; color: #303236; box-shadow: 0 8px 22px rgba(0, 0, 0, .16); }
+:root[data-theme="light"] .status-toast.progress { border-left-color: #3574f0; }
+:root[data-theme="light"] .status-toast.success { border-left-color: #438c4d; }
+:root[data-theme="light"] .status-toast.error { border-left-color: #c94f57; }
+:root[data-theme="light"] .status-toast > button:hover { background: #e4e6e9; color: #202124; }
 :root[data-theme="light"] .tool-stripe-button { color: #65686e; }
 :root[data-theme="light"] .tool-stripe-button.active { background: #dfe8f5; color: #1f4f88; }
 :root[data-theme="light"] .workspace-name,
