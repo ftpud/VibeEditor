@@ -31,6 +31,8 @@ export type { AiAgent, AiCommand, AiConfiguration, AiContentBlock, AiMessage, Ai
 import type { AiAgent, AiConfiguration, AiContentBlock, AiMcpServer, AiModel, AiProvider, AiProviderDescriptor, AiSession, AiTaskSummary, AiUsage } from "@remote-ide/acp";
 export type UsefulFileScope = "global" | "local";
 export type UsefulFile = { scope: UsefulFileScope; name: string };
+export type AgentFileScope = "global" | "local" | "workspace";
+export type AgentFile = { scope: AgentFileScope; name: string; agent: AiAgent };
 export type HttpResponse = { status: number; statusText: string; headers: Record<string, string>; body: string; durationMs: number };
 
 export type JavaProjectOptions = {
@@ -106,6 +108,12 @@ export type ProtocolOperations = {
   "useful.write": { payload: { scope: UsefulFileScope; name: string; content: string }; result: Record<string, never> };
   "useful.rename": { payload: { scope: UsefulFileScope; name: string; newName: string }; result: Record<string, never> };
   "useful.delete": { payload: { scope: UsefulFileScope; name: string }; result: Record<string, never> };
+  "agents.list": { payload: Record<string, never>; result: { agents: AgentFile[] } };
+  "agents.read": { payload: { scope: AgentFileScope; name: string }; result: { content: string } };
+  "agents.create": { payload: { scope: Exclude<AgentFileScope, "workspace">; name: string }; result: Record<string, never> };
+  "agents.write": { payload: { scope: AgentFileScope; name: string; content: string }; result: Record<string, never> };
+  "agents.rename": { payload: { scope: Exclude<AgentFileScope, "workspace">; name: string; newName: string }; result: { name: string } };
+  "agents.delete": { payload: { scope: Exclude<AgentFileScope, "workspace">; name: string }; result: Record<string, never> };
   "http.execute": { payload: { method: string; url: string; headers: Record<string, string>; body?: string }; result: HttpResponse };
   "filesystem.listTree": {
     payload: { includeIgnored?: boolean };
@@ -311,6 +319,12 @@ const requestTypeRegistry: Record<RequestType, true> = {
   "useful.write": true,
   "useful.rename": true,
   "useful.delete": true,
+  "agents.list": true,
+  "agents.read": true,
+  "agents.create": true,
+  "agents.write": true,
+  "agents.rename": true,
+  "agents.delete": true,
   "http.execute": true,
   "filesystem.listTree": true,
   "filesystem.readFile": true,

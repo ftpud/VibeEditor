@@ -15,6 +15,7 @@ import { JavaProjectService } from "./java.js";
 import { JdtLanguageService } from "./jdtls.js";
 import { WorkspaceTaskStore } from "./tasks.js";
 import { UsefulFilesStore } from "./useful-files.js";
+import { AgentsStore } from "./agents.js";
 import { executeHttpRequest } from "./http.js";
 import { summarizeAiSessions } from "./ai/summary.js";
 import { createAcpRegistry, type AcpRegistry } from "./ai/index.js";
@@ -36,6 +37,7 @@ export async function createServer(host: string, port: number, workspacePath: st
   const rootWorkspace = workspacePath;
   const tasks = new WorkspaceTaskStore(rootWorkspace);
   const usefulFiles = new UsefulFilesStore(rootWorkspace);
+  const agents = new AgentsStore(rootWorkspace);
   const savedTasks = await tasks.list();
   if (savedTasks.selectedTaskId) workspacePath = tasks.taskPath(savedTasks.selectedTaskId);
   const validation = new WorkspaceFileSystem();
@@ -158,7 +160,7 @@ export async function createServer(host: string, port: number, workspacePath: st
             await watchSwitchedWorkspace(selected.workspace);
           }
         } finally { release?.(); }
-        const result = await handleRequest(services, tasks, acp, usefulFiles, rootWorkspace, parsed);
+        const result = await handleRequest(services, tasks, acp, usefulFiles, agents, rootWorkspace, parsed);
         if (parsed.type === "workspace.open") activeSessions.add(socket);
         socket.send(JSON.stringify({ id, ok: true, result }));
       } catch (error) {
@@ -195,7 +197,7 @@ function parseRequest(data: RawData): Request {
   return value as Request;
 }
 
-async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStore, acp: AcpRegistry, usefulFiles: UsefulFilesStore, rootWorkspace: string, request: Request): Promise<unknown> {
+async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStore, acp: AcpRegistry, usefulFiles: UsefulFilesStore, agents: AgentsStore, rootWorkspace: string, request: Request): Promise<unknown> {
   const { filesystem, search, processManager, git, java, jdt, workspaceState, workspacePath } = services;
   if (request.type !== "workspace.open") filesystem.getWorkspace();
   switch (request.type) {
@@ -257,6 +259,12 @@ async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStor
     case "useful.write": await usefulFiles.write(request.payload.scope, request.payload.name, request.payload.content); return {};
     case "useful.rename": await usefulFiles.rename(request.payload.scope, request.payload.name, request.payload.newName); return {};
     case "useful.delete": await usefulFiles.delete(request.payload.scope, request.payload.name); return {};
+    case "agents.list": return { agents: await agents.list(workspacePath) };
+    case "agents.read": return { content: await agents.read(request.payload.scope, request.payload.name, workspacePath) };
+    case "agents.create": await agents.create(request.payload.scope, request.payload.name, workspacePath); return {};
+    case "agents.write": await agents.write(request.payload.scope, request.payload.name, request.payload.content, workspacePath); return {};
+    case "agents.rename": return { name: await agents.rename(request.payload.scope, request.payload.name, request.payload.newName, workspacePath) };
+    case "agents.delete": await agents.delete(request.payload.scope, request.payload.name, workspacePath); return {};
     case "http.execute": return executeHttpRequest(request.payload.method, request.payload.url, request.payload.headers, request.payload.body);
     case "filesystem.listTree": return { tree: await filesystem.listTree(request.payload.includeIgnored === true) };
     case "filesystem.readFile": {
