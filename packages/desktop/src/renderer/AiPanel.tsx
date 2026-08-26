@@ -19,7 +19,7 @@ export function AiPanel({ provider, providers, session, sessions, models, usage,
   const endRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   useEffect(() => { setModel(session.model); setReasoning(session.reasoning); setConfiguration(session.configuration ?? {}); }, [session.model, session.reasoning, session.configuration]);
-  useEffect(() => { endRef.current?.scrollIntoView({ block: "end" }); }, [session.id, session.messages.length, session.status]);
+  useEffect(() => { requestAnimationFrame(() => endRef.current?.scrollIntoView({ block: "end" })); }, [session.id, session.messages.length, session.status]);
   const selectedModel = useMemo(() => models.find((item) => item.id === model) ?? models[0], [model, models]);
   useEffect(() => { if (selectedModel && !models.some((item) => item.id === model)) { setModel(selectedModel.id); onConfigurationChange({ ...configuration, model: selectedModel.id, reasoning: selectedModel.reasoningLevels.includes(reasoning) ? reasoning : selectedModel.defaultReasoning }); } }, [model, models, onConfigurationChange, reasoning, selectedModel]);
   useEffect(() => { if (selectedModel && selectedModel.reasoningLevels.length > 0 && !selectedModel.reasoningLevels.includes(reasoning)) { setReasoning(selectedModel.defaultReasoning); onConfigurationChange({ ...configuration, model: selectedModel.id, reasoning: selectedModel.defaultReasoning }); } }, [onConfigurationChange, reasoning, selectedModel]);
@@ -69,7 +69,7 @@ export function AiPanel({ provider, providers, session, sessions, models, usage,
     </div>
     {sessionsOpen && <section className="ai-sessions">
       <header><strong>Sessions</strong><button onClick={() => { setSessionsOpen(false); onNewSession(); }}><Plus size={13} /> New</button></header>
-      <div>{sessions.map((item) => <div className="ai-session-row" key={item.id}><button className="ai-session-select" onClick={() => { setSessionsOpen(false); onSwitchSession(item); }}>{item.id === session.id && <Check size={13} />}<span><strong>{sessionTitle(item)}</strong><small>{sessionDate(item)}</small></span></button><button className="ai-session-remove" title="Remove session" disabled={sessions.length === 1} onClick={() => onRemoveSession(item)}><Trash2 size={13} /></button></div>)}</div>
+      <div>{sessions.filter((item) => item.id).map((item, index) => <div className="ai-session-row" key={item.id ?? index}><button className="ai-session-select" onClick={() => { setSessionsOpen(false); onSwitchSession(item); }}>{item.id === session.id && <Check size={13} />}<span><strong>{sessionTitle(item)}</strong><small>{sessionDate(item)}</small></span></button><button className="ai-session-remove" title="Remove session" disabled={sessions.length === 1} onClick={() => onRemoveSession(item)}><Trash2 size={13} /></button></div>)}</div>
     </section>}
     {settingsOpen && descriptor && <section className="ai-settings">
       <header><strong>{descriptor.settings.title}</strong><p>{descriptor.settings.description}</p></header>

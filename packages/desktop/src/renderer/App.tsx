@@ -177,15 +177,23 @@ export function App() {
   useEffect(() => { layoutRef.current = layout; }, [layout]);
   useEffect(() => { javaOptionsRef.current = javaOptions; }, [javaOptions]);
   useEffect(() => { activeWorkspaceRef.current = activeWorkspace; }, [activeWorkspace]);
+  const prevWorkspaceRef = useRef(activeWorkspace);
   useEffect(() => {
     if (!activeWorkspace || !aiSession.id) return;
     const key = `aiSessions:${encodeURIComponent(activeWorkspace)}:${aiProvider}`;
     let stored: AiSession[] = [];
     try { stored = JSON.parse(localStorage.getItem(key) ?? "[]") as AiSession[]; } catch { stored = []; }
-    const updated = { ...aiSession, updatedAt: new Date().toISOString() };
-    const next = [updated, ...stored.filter((item) => item.id !== updated.id)].slice(0, 50);
-    localStorage.setItem(key, JSON.stringify(next));
-    setAiSessions(next);
+    // Only save to localStorage if we're not in a workspace transition (prevents saving old workspace's session to new workspace)
+    if (prevWorkspaceRef.current === activeWorkspace) {
+      const updated = { ...aiSession, updatedAt: new Date().toISOString() };
+      const next = [updated, ...stored.filter((item) => item.id !== updated.id)].slice(0, 50);
+      localStorage.setItem(key, JSON.stringify(next));
+      setAiSessions(next);
+    } else {
+      // Workspace just changed - only load sessions, don't save the old workspace's session here
+      prevWorkspaceRef.current = activeWorkspace;
+      setAiSessions(stored);
+    }
   }, [activeWorkspace, aiProvider, aiSession]);
   useEffect(() => { activeGitHunksRef.current = activeGitHunks; }, [activeGitHunks]);
   useEffect(() => {
@@ -770,7 +778,7 @@ export function App() {
   }, [refreshAi]);
 
   const switchAiSession = useCallback(async (session: AiSession) => {
-    if (!clientRef.current || session.id === aiSession.id) return;
+    if (!clientRef.current || !session.id || session.id === aiSession.id) return;
     try { setAiSession((await clientRef.current.request("ai.restore", { provider: aiProviderRef.current, session })).session); await refreshAi(); }
     catch (error) { setStatusMessage(error instanceof Error ? error.message : "Could not switch AI session"); }
   }, [aiSession.id, refreshAi]);
