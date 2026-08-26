@@ -94,23 +94,50 @@ export class WorkspaceTaskStore {
     const task = registry.tasks.find((item) => item.id === taskId);
     if (!task) throw new CoreError("INVALID_REQUEST", "Task does not exist");
     const taskWorkspace = this.taskPath(taskId);
+    let stashedRootChanges = false;
+    let merged = false;
     try {
-      const [rootStatus, taskStatus, targetBranch] = await Promise.all([
+      const [rootStatus, targetBranch] = await Promise.all([
         execFileAsync("git", ["-C", this.rootWorkspace, "status", "--porcelain"], { encoding: "utf8" }),
-        execFileAsync("git", ["-C", taskWorkspace, "status", "--porcelain"], { encoding: "utf8" }),
         execFileAsync("git", ["-C", this.rootWorkspace, "branch", "--show-current"], { encoding: "utf8" }),
       ]);
-      if (rootStatus.stdout.trim()) throw new CoreError("GIT_FAILED", "Main workspace has uncommitted changes. Commit or rollback them before merging a task.");
-      if (taskStatus.stdout.trim()) throw new CoreError("GIT_FAILED", `Task ${task.name} has uncommitted changes. Commit them before merging.`);
       const branch = targetBranch.stdout.trim();
       if (!branch) throw new CoreError("GIT_FAILED", "Main workspace is in detached HEAD state. Check out a branch before merging.");
-      try { await execFileAsync("git", ["-C", this.rootWorkspace, "merge", "--no-edit", task.branch], { encoding: "utf8" }); }
-      catch (mergeError) {
-        await execFileAsync("git", ["-C", this.rootWorkspace, "merge", "--abort"], { encoding: "utf8" }).catch(() => undefined);
-        throw mergeError;
+
+      await execFileAsync("git", ["-C", taskWorkspace, "add", "--all"], { encoding: "utf8" });
+      const staged = (await execFileAsync("git", ["-C", taskWorkspace, "diff", "--cached", "--name-only"], { encoding: "utf8" })).stdout.trim();
+      if (staged) await execFileAsync("git", ["-C", taskWorkspace, "commit", "-m", `Complete task: ${task.name}`], { encoding: "utf8" });
+
+      if (rootStatus.stdout.trim()) {
+        await execFileAsync("git", ["-C", this.rootWorkspace, "stash", "push", "--include-untracked", "--message", `remote-ide: merge ${task.name}`], { encoding: "utf8" });
+        stashedRootChanges = true;
+      }
+
+      try { await execFileAsync("git", ["-C", taskWorkspace, "rebase", branch], { encoding: "utf8" }); }
+      catch (rebaseError) {
+        await execFileAsync("git", ["-C", taskWorkspace, "rebase", "--abort"], { encoding: "utf8" }).catch(() => undefined);
+        throw rebaseError;
+      }
+      await execFileAsync("git", ["-C", this.rootWorkspace, "merge", "--ff-only", task.branch], { encoding: "utf8" });
+      merged = true;
+      if (stashedRootChanges) {
+        stashedRootChanges = false;
+        try { await execFileAsync("git", ["-C", this.rootWorkspace, "stash", "pop", "--index"], { encoding: "utf8" }); }
+        catch (restoreError) {
+          throw new CoreError("GIT_FAILED", `The task was merged, but the main workspace changes could not be restored cleanly. Resolve the working tree conflicts; the backup remains in Git stash. ${gitError(restoreError)}`);
+        }
       }
       return { targetBranch: branch };
     } catch (error) {
+      if (stashedRootChanges) {
+        stashedRootChanges = false;
+        try {
+          await execFileAsync("git", ["-C", this.rootWorkspace, "stash", "pop", "--index"], { encoding: "utf8" });
+        } catch (restoreError) {
+          const action = merged ? "The task was merged, but" : "The merge was stopped and";
+          throw new CoreError("GIT_FAILED", `${action} the main workspace changes could not be restored cleanly. Resolve the working tree conflicts; the backup remains in Git stash. ${gitError(restoreError)}`);
+        }
+      }
       if (error instanceof CoreError) throw error;
       throw new CoreError("GIT_FAILED", `Could not merge task ${task.name}: ${gitError(error)}`);
     }

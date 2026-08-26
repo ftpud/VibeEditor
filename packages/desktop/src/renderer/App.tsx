@@ -954,7 +954,7 @@ export function App() {
   }, [selectedTaskId, switchTask, taskSwitching]);
 
   const mergeTask = useCallback(async (task: WorkspaceTask) => {
-    if (!clientRef.current || taskSwitching || !window.confirm(`Merge task "${task.name}" into the main workspace?\n\nBoth workspaces must have all changes committed.`)) return;
+    if (!clientRef.current || taskSwitching || !window.confirm(`Merge task "${task.name}" into the main workspace?\n\nTask changes will be committed automatically. Existing main-workspace changes will be preserved.`)) return;
     try {
       setTaskSwitching(true);
       const result = await clientRef.current.request("tasks.merge", { taskId: task.id });

@@ -59,6 +59,44 @@ describe("WorkspaceTaskStore", () => {
     await expect(execFileAsync("git", ["-C", root, "show-ref", "--verify", "refs/heads/feature/task-one"])).rejects.toBeTruthy();
   });
 
+  it("commits task changes and preserves uncommitted main workspace changes while rebasing", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "remote-ide-task-smart-merge-root-"));
+    const state = await mkdtemp(path.join(os.tmpdir(), "remote-ide-task-smart-merge-state-"));
+    await execFileAsync("git", ["init", root]);
+    await execFileAsync("git", ["-C", root, "config", "user.name", "Test"]);
+    await execFileAsync("git", ["-C", root, "config", "user.email", "test@example.com"]);
+    await writeFile(path.join(root, "task.txt"), "base\n");
+    await writeFile(path.join(root, "main.txt"), "base\n");
+    await writeFile(path.join(root, "staged.txt"), "base\n");
+    await execFileAsync("git", ["-C", root, "add", "."]);
+    await execFileAsync("git", ["-C", root, "commit", "-m", "initial"]);
+
+    const store = new WorkspaceTaskStore(root, state);
+    const task = await store.create("feature/smart-merge");
+    const workspace = store.taskPath(task.id);
+    await writeFile(path.join(workspace, "task.txt"), "task change\n");
+    await writeFile(path.join(workspace, "new-task.txt"), "new task file\n");
+    await writeFile(path.join(root, "main.txt"), "committed on main\n");
+    await execFileAsync("git", ["-C", root, "add", "main.txt"]);
+    await execFileAsync("git", ["-C", root, "commit", "-m", "main advances"]);
+    const mainHead = (await execFileAsync("git", ["-C", root, "rev-parse", "HEAD"])).stdout.trim();
+    await writeFile(path.join(root, "staged.txt"), "staged main work\n");
+    await execFileAsync("git", ["-C", root, "add", "staged.txt"]);
+    await writeFile(path.join(root, "local.txt"), "uncommitted main work\n");
+
+    await store.merge(task.id);
+
+    expect(await readFile(path.join(root, "task.txt"), "utf8")).toBe("task change\n");
+    expect(await readFile(path.join(root, "new-task.txt"), "utf8")).toBe("new task file\n");
+    expect(await readFile(path.join(root, "main.txt"), "utf8")).toBe("committed on main\n");
+    expect(await readFile(path.join(root, "staged.txt"), "utf8")).toBe("staged main work\n");
+    expect(await readFile(path.join(root, "local.txt"), "utf8")).toBe("uncommitted main work\n");
+    expect((await execFileAsync("git", ["-C", root, "status", "--porcelain"])).stdout).toContain("?? local.txt");
+    expect((await execFileAsync("git", ["-C", root, "diff", "--cached", "--name-only"])).stdout.trim()).toBe("staged.txt");
+    expect((await execFileAsync("git", ["-C", root, "log", "-1", "--pretty=%s"])).stdout.trim()).toBe("Complete task: feature/smart-merge");
+    expect((await execFileAsync("git", ["-C", workspace, "rev-parse", "HEAD^1"])).stdout.trim()).toBe(mainHead);
+  });
+
   it("creates a task worktree from an existing branch without recreating it", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "remote-ide-task-existing-root-"));
     const state = await mkdtemp(path.join(os.tmpdir(), "remote-ide-task-existing-state-"));
