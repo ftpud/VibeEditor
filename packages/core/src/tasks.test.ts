@@ -42,6 +42,24 @@ describe("WorkspaceTaskStore", () => {
     await expect(execFileAsync("git", ["-C", root, "show-ref", "--verify", "refs/heads/feature/task-one"])).rejects.toBeTruthy();
   });
 
+  it("creates a task worktree from an existing branch without recreating it", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "remote-ide-task-existing-root-"));
+    const state = await mkdtemp(path.join(os.tmpdir(), "remote-ide-task-existing-state-"));
+    await execFileAsync("git", ["init", root]);
+    await writeFile(path.join(root, "tracked.txt"), "root\n");
+    await execFileAsync("git", ["-C", root, "add", "tracked.txt"]);
+    await execFileAsync("git", ["-C", root, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "initial"]);
+    await execFileAsync("git", ["-C", root, "branch", "feature/existing"]);
+
+    const store = new WorkspaceTaskStore(root, state);
+    const task = await store.create("feature/existing", true);
+    const selected = await store.select(task.id);
+
+    expect(task.branch).toBe("feature/existing");
+    expect((await execFileAsync("git", ["-C", selected.workspace, "branch", "--show-current"])).stdout.trim()).toBe("feature/existing");
+    await store.delete(task.id);
+  });
+
   it("carries the root working state into a new worktree without changing the root", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "remote-ide-task-root-"));
     const state = await mkdtemp(path.join(os.tmpdir(), "remote-ide-task-state-"));

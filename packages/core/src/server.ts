@@ -208,7 +208,7 @@ async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStor
       return {};
     }
     case "tasks.list": return tasks.list();
-    case "tasks.create": return { task: await tasks.create(request.payload.branch) };
+    case "tasks.create": return { task: await tasks.create(request.payload.branch, request.payload.existing, request.payload.remote) };
     case "tasks.merge": return tasks.merge(request.payload.taskId);
     case "tasks.delete": return tasks.delete(request.payload.taskId);
     case "tasks.switch": {

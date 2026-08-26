@@ -39,24 +39,35 @@ export class WorkspaceTaskStore {
     }
   }
 
-  async create(branch: string): Promise<WorkspaceTask> {
-    const name = branch.trim();
+  async create(branch: string, existing = false, remote = false): Promise<WorkspaceTask> {
+    const requested = branch.trim();
+    const name = remote ? requested.split("/").slice(1).join("/") : requested;
     if (!name || name.length > 200 || !/^[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(name) || name.includes("..") || name.endsWith("/") || name.endsWith(".")) throw new CoreError("INVALID_REQUEST", "Invalid Git branch name");
     const registry = await this.list();
     if (registry.tasks.some((task) => task.branch === name)) throw new CoreError("INVALID_REQUEST", `A task already uses branch ${name}`);
-    if (await this.branchExists(name)) throw new CoreError("INVALID_REQUEST", `Git branch ${name} already exists`);
+    const exists = await this.branchExists(name);
+    if (!existing && exists) throw new CoreError("INVALID_REQUEST", `Git branch ${name} already exists. Select it from the existing branches list.`);
+    if (existing && !remote && !exists) throw new CoreError("INVALID_REQUEST", `Git branch ${name} no longer exists`);
     const task: WorkspaceTask = { id: crypto.randomUUID(), name, branch: name, baseBranch: await this.rootBranch() };
     const destination = this.taskPath(task.id);
+    let createdBranch = false;
     try {
       await mkdir(path.dirname(destination), { recursive: true });
-      await execFileAsync("git", ["-C", this.rootWorkspace, "worktree", "add", "-b", name, destination, "HEAD"], { encoding: "utf8" });
-      if (task.baseBranch !== "HEAD") await execFileAsync("git", ["-C", this.rootWorkspace, "branch", "--set-upstream-to", task.baseBranch, name], { encoding: "utf8" });
+      if (remote) {
+        await execFileAsync("git", ["-C", this.rootWorkspace, "worktree", "add", "--track", "-b", name, destination, requested], { encoding: "utf8" });
+        createdBranch = true;
+      } else if (existing) await execFileAsync("git", ["-C", this.rootWorkspace, "worktree", "add", destination, name], { encoding: "utf8" });
+      else {
+        await execFileAsync("git", ["-C", this.rootWorkspace, "worktree", "add", "-b", name, destination, "HEAD"], { encoding: "utf8" });
+        createdBranch = true;
+        if (task.baseBranch !== "HEAD") await execFileAsync("git", ["-C", this.rootWorkspace, "branch", "--set-upstream-to", task.baseBranch, name], { encoding: "utf8" });
+      }
       await this.copyWorkspaceState(this.rootWorkspace, destination);
       await this.save({ tasks: [...registry.tasks, task], selectedTaskId: task.id });
       return task;
     } catch (error) {
       await this.removeWorktree(destination);
-      if (await this.branchExists(name)) await execFileAsync("git", ["-C", this.rootWorkspace, "branch", "-D", name], { encoding: "utf8" }).catch(() => undefined);
+      if (createdBranch && await this.branchExists(name)) await execFileAsync("git", ["-C", this.rootWorkspace, "branch", "-D", name], { encoding: "utf8" }).catch(() => undefined);
       await rm(path.dirname(destination), { recursive: true, force: true });
       throw new CoreError("GIT_FAILED", `Could not create task worktree: ${gitError(error)}`);
     }

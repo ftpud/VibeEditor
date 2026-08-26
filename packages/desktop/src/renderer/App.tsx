@@ -1,6 +1,6 @@
 import Editor, { DiffEditor, type Monaco } from "@monaco-editor/react";
 import { ArrowUpRight, Bot, Braces, Bug, CaseSensitive, Check, ChevronDown, ChevronRight, ChevronUp, CircleAlert, Coffee, Columns2, Eye, EyeOff, File, FileCode2, FileDiff, FileJson, FileText, Folder, FolderOpen, GitBranch, GitCompareArrows, GitMerge, Hash, Library, ListTodo, ListTree, LoaderCircle, LogOut, MoreVertical, Package, Palette, Pencil, Play, Plus, RefreshCw, Save, Search, Settings, ShieldAlert, Square, SquareTerminal, Trash2, X } from "lucide-react";
-import { isValidElement, useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
+import { Children, isValidElement, useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
 import type { AiConfiguration, AiModel, AiProvider, AiProviderDescriptor, AiSession, AiStatus, AiTaskSummary, AiUsage, FileColor, FileTreeNode, GitBranch as GitBranchInfo, GitDiffHunk, GitStatusEntry, HttpResponse, JavaBreakpoint, JavaDebugState, JavaDiagnostic, JavaLspLocation, JavaMainClass, JavaProjectNode, JavaProjectOptions, JavaTypeSuggestion, SearchResult, UsefulFile, UsefulFileScope, WorkspaceOptions, WorkspaceTask } from "@remote-ide/protocol";
 import type { editor } from "monaco-editor";
 import ReactMarkdown from "react-markdown";
@@ -92,7 +92,7 @@ export function App() {
   const [leftSidebarWidth, setLeftSidebarWidth] = useState(520);
   const [rightSidebarWidth, setRightSidebarWidth] = useState(360);
   const [leftPanels, setLeftPanels] = useState({ tasks: true, ai: true });
-  const [rightPanels, setRightPanels] = useState({ project: true, git: false, taskGit: false, java: false, useful: false });
+  const [rightPanels, setRightPanels] = useState({ project: true, git: true, taskGit: false, java: false, useful: false });
   const [classicSideView, setClassicSideView] = useState<"project" | "git" | "taskGit" | "java" | "useful">("project");
   const [classicLeftWidth, setClassicLeftWidth] = useState(260);
   const [classicRightWidth, setClassicRightWidth] = useState(300);
@@ -844,11 +844,11 @@ export function App() {
     catch (error) { setStatusMessage(error instanceof Error ? error.message : "Could not stop AI task"); }
   }, [aiToken, applyAiSession, refreshAi]);
 
-  const createTask = useCallback(async (branch: string) => {
+  const createTask = useCallback(async (branch: string, existing?: { remote: boolean }) => {
     if (!clientRef.current || taskSwitching) return;
     try {
       setTaskSwitching(true);
-      const result = await clientRef.current.request("tasks.create", { branch });
+      const result = await clientRef.current.request("tasks.create", { branch, existing: Boolean(existing), remote: existing?.remote });
       setTasks((current) => [...current, result.task]);
       setTaskSwitching(false);
       await switchTask(result.task.id);
@@ -1388,14 +1388,14 @@ export function App() {
         <button className={`tool-stripe-button ${leftPanels.tasks ? "active" : ""}`} title={leftPanels.tasks ? "Hide Tasks" : "Show Tasks"} onClick={() => setLeftPanels((current) => ({ ...current, tasks: !current.tasks }))}><ListTodo size={15} /><span>Tasks</span>{tasks.length > 0 && <span className="tool-badge">{tasks.length > 99 ? "99+" : tasks.length}</span>}</button>
         <button className={`tool-stripe-button ${leftPanels.ai ? "active" : ""}`} title={leftPanels.ai ? "Hide AI" : "Show AI"} onClick={() => setLeftPanels((current) => { if (!current.ai) void refreshAi(); return { ...current, ai: !current.ai }; })}><Bot size={15} /><span>AI</span>{aiSession.status === "in_progress" && <span className="tool-badge">...</span>}</button>
       </nav>
-      {(leftPanels.tasks || leftPanels.ai) && <><aside className="side-panel side-panel-left" style={{ width: leftSidebarWidth }}>
+      {(leftPanels.tasks || leftPanels.ai) && <><aside className="side-panel side-panel-left" style={{ width: leftSidebarWidth }}><ResizablePanelStack>
         {leftPanels.tasks && <section className="stacked-panel"><header className="panel-header"><span>Tasks</span><button title="Create task" disabled={taskSwitching} onClick={() => setShowCreateTaskDialog(true)}><Plus size={15} /></button></header><QuickFilter value={taskFilter} placeholder="Filter tasks" label="Filter tasks" onChange={setTaskFilter} /><div className="tasks-list">
           {showRootTask && <TaskRow icon={<Folder size={15} />} name="Root workspace" summary={aiStatuses.root} selected={selectedTaskId === undefined} disabled={taskSwitching} onClick={() => void switchTask()} />}
           {filteredTasks.map((task) => <TaskRow key={task.id} icon={<ListTodo size={15} />} name={task.name} summary={aiStatuses.tasks[task.id] ?? emptyAiSummary} selected={selectedTaskId === task.id} disabled={taskSwitching} onClick={() => void switchTask(task.id)} onMerge={() => void mergeTask(task)} onDelete={() => void deleteTask(task)} />)}
           {!showRootTask && filteredTasks.length === 0 && <div className="filter-empty">No matching tasks</div>}
         </div></section>}
         {leftPanels.ai && <section className="stacked-panel"><header className="panel-header"><span>AI</span><span className={`ai-status ${aiSession.status}`}>{formatAiStatus(aiSession.status)}</span></header><AiPanel key={`${activeWorkspace}:${aiProvider}:${aiSession.id ?? "legacy"}`} provider={aiProvider} providers={aiProviders} session={aiSession} sessions={aiSessions} models={aiModels} usage={aiUsage} attachments={currentAiAttachments} onProviderChange={(provider) => void switchAiProvider(provider)} onConfigurationChange={configureAi} onAttachmentsChange={updateAiAttachments} onSend={sendAiPrompt} onSteer={steerAiPrompt} onInterrupt={() => void interruptAi()} onNewSession={() => void newAiSession()} onSwitchSession={(session) => void switchAiSession(session)} onRemoveSession={(session) => void removeAiSession(session)} onResolvePermission={(requestId, optionId) => void resolveAiPermission(requestId, optionId)} /></section>}
-      </aside><div className="resize-handle" onPointerDown={beginLeftSidebarResize} /></>}
+      </ResizablePanelStack></aside><div className="resize-handle" onPointerDown={beginLeftSidebarResize} /></>}
       </> : <>
       <nav className="tool-stripe" aria-label="Left tool windows">
         <button className={`tool-stripe-button ${classicSideView === "project" ? "active" : ""}`} title="Project" onClick={() => setClassicSideView("project")}><Folder size={15} /><span>Project</span></button>
@@ -1459,7 +1459,7 @@ export function App() {
       </main>
       {sideLayout === "ai-focused" ? <>
       {rightSidebarOpen && <><div className="right-resize-handle" onPointerDown={beginRightSidebarResize} />
-      <aside className="side-panel side-panel-right" style={{ width: rightSidebarWidth }}>
+      <aside className="side-panel side-panel-right" style={{ width: rightSidebarWidth }}><ResizablePanelStack>
         {rightPanels.project && <section className="stacked-panel">
           <header className="panel-header"><span>Project</span><div className="panel-header-actions"><button title={showIgnored ? "Hide ignored files" : "Show all files (including Git-ignored)"} className={showIgnored ? "active" : ""} onClick={toggleShowIgnored}>{showIgnored ? <Eye size={14} /> : <EyeOff size={14} />}</button><button title="Synchronize files" onClick={() => void refreshTree()}><RefreshCw size={14} /></button></div></header>
           <QuickFilter value={projectFilter} placeholder="Filter files" label="Filter project files" onChange={setProjectFilter} />
@@ -1475,7 +1475,7 @@ export function App() {
         {rightPanels.taskGit && selectedTaskId && <section className="stacked-panel"><header className="panel-header"><span>Task Git</span><button title="Refresh task comparison" onClick={() => void refreshTaskGit()}><RefreshCw size={14} /></button></header><div className="git-branch"><GitCompareArrows size={13} /><span>{tasks.find((task) => task.id === selectedTaskId)?.baseBranch ?? "Base branch"}</span></div><GitChangesView entries={taskGitEntries} error={taskGitError} emptyMessage="No changes from base branch" groupTitle="Changes from Base" activePath={activeTab?.path} onOpenDiff={openTaskDiff} onOpenFile={(entry) => void openFile({ name: entry.path.split("/").pop() ?? entry.path, path: entry.path, type: "file" })} /></section>}
         {rightPanels.java && javaOptions && <section className="stacked-panel"><header className="panel-header"><span>Java Project</span><button title="Refresh Java project" onClick={() => void refreshJavaTree()}><RefreshCw size={14} /></button></header><div className="java-project-meta"><Coffee size={13} /><span>{javaOptions.pomPath}</span></div><div className="tree java-tree"><JavaProjectTree nodes={javaTree} activePath={activeTab?.path} onOpen={openFile} /></div></section>}
         {rightPanels.useful && <section className="stacked-panel"><header className="panel-header"><span>Useful Files</span><button title="Refresh useful files" onClick={() => void refreshUsefulFiles()}><RefreshCw size={14} /></button></header><div className="useful-files-list"><UsefulFileSection title="Global" scope="global" files={usefulFiles} activeTab={activeTab} onOpen={openUsefulFile} onCreate={(scope) => setUsefulDialog({ mode: "create", scope })} onRename={(file) => setUsefulDialog({ mode: "rename", scope: file.scope, file })} onDelete={(file) => void deleteUsefulFile(file)} /><UsefulFileSection title="Local" scope="local" files={usefulFiles} activeTab={activeTab} onOpen={openUsefulFile} onCreate={(scope) => setUsefulDialog({ mode: "create", scope })} onRename={(file) => setUsefulDialog({ mode: "rename", scope: file.scope, file })} onDelete={(file) => void deleteUsefulFile(file)} /></div></section>}
-      </aside></>}
+      </ResizablePanelStack></aside></>}
       <nav className="right-tool-stripe" aria-label="Right tool windows">
         <button className={`tool-stripe-button right ${rightPanels.project ? "active" : ""}`} title={rightPanels.project ? "Hide Project" : "Show Project"} onClick={() => setRightPanels((current) => ({ ...current, project: !current.project }))}><Folder size={15} /><span>Project</span></button>
         <button className={`tool-stripe-button right ${rightPanels.git ? "active" : ""}`} title={rightPanels.git ? "Hide Git changes" : "Show Git changes"} onClick={() => setRightPanels((current) => { if (!current.git) void refreshGit(); return { ...current, git: !current.git }; })}><GitBranch size={15} /><span>Git</span>{gitEntries.length > 0 && <span className="tool-badge">{gitEntries.length > 99 ? "99+" : gitEntries.length}</span>}</button>
@@ -1523,7 +1523,7 @@ export function App() {
     {gitHistory && <GitHistoryDialog client={clientRef.current!} path={gitHistory.path} startLine={gitHistory.startLine} endLine={gitHistory.endLine} onClose={() => setGitHistory(undefined)} />}
     {gitHunkDialog && <div className="context-menu-layer" onMouseDown={() => setGitHunkDialog(undefined)}><section className="git-hunk-popup" role="dialog" aria-label={`Previous content in ${gitHunkDialog.path}`} style={{ left: gitHunkDialog.x, top: gitHunkDialog.y }} onMouseDown={(event) => event.stopPropagation()}><header><div><strong>Before this change</strong><span>{gitHunkDialog.path.split("/").pop()} · line {gitHunkDialog.hunk.originalStart}</span></div><button title="Close" onClick={() => setGitHunkDialog(undefined)}><X size={14} /></button></header>{gitHunkDialog.error && <div className="git-hunk-error">{gitHunkDialog.error}</div>}<pre>{gitHunkDialog.hunk.originalLines === 0 ? "This block did not exist before." : gitHunkDialog.originalContent.split("\n").slice(Math.max(0, gitHunkDialog.hunk.originalStart - 1), Math.max(0, gitHunkDialog.hunk.originalStart - 1) + gitHunkDialog.hunk.originalLines).join("\n")}</pre><footer><button className="danger" onClick={() => void rollbackGitHunk()}><RefreshCw size={13} /><span>Rollback</span></button></footer></section></div>}
     {showRunConfigurationDialog && <RunConfigurationDialog client={clientRef.current!} onClose={() => setShowRunConfigurationDialog(false)} onSaved={(options) => { setJavaOptions(options); javaOptionsRef.current = options; setShowRunConfigurationDialog(false); }} />}
-    {showCreateTaskDialog && <CreateTaskDialog onClose={() => setShowCreateTaskDialog(false)} onCreate={createTask} />}
+    {showCreateTaskDialog && <CreateTaskDialog client={clientRef.current!} onClose={() => setShowCreateTaskDialog(false)} onCreate={createTask} />}
     {usefulDialog && <UsefulFileDialog mode={usefulDialog.mode} initialName={usefulDialog.file?.name ?? ""} scope={usefulDialog.scope} onClose={() => setUsefulDialog(undefined)} onSave={saveUsefulFileDialog} />}
   </div>;
 }
@@ -1562,6 +1562,32 @@ function ConnectionScreen(props: { host: string; port: string; status: Connectio
     {props.statusMessage && <div className={`connection-message ${props.status}`}>{props.statusMessage}</div>}
     <button className="primary" disabled={connecting}>{connecting ? "Connecting..." : "Connect"}</button>
   </form></main>;
+}
+
+function ResizablePanelStack({ children }: { children: ReactNode }) {
+  const items = Children.toArray(children);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const [sizes, setSizes] = useState<number[]>([]);
+  useEffect(() => { setSizes(Array.from({ length: items.length }, () => 1 / Math.max(1, items.length))); }, [items.length]);
+  const beginResize = (event: React.PointerEvent<HTMLDivElement>, index: number) => {
+    event.currentTarget.setPointerCapture(event.pointerId);
+    const root = rootRef.current;
+    if (!root) return;
+    const bounds = root.getBoundingClientRect();
+    const available = bounds.height - (items.length - 1) * 5;
+    const startY = event.clientY;
+    const start = sizes.length === items.length ? sizes : Array.from({ length: items.length }, () => 1 / items.length);
+    const combined = start[index]! + start[index + 1]!;
+    const move = (moveEvent: PointerEvent) => {
+      const delta = (moveEvent.clientY - startY) / Math.max(1, available);
+      const minimum = Math.min(.45, 70 / Math.max(1, available));
+      const first = Math.max(minimum, Math.min(combined - minimum, start[index]! + delta));
+      setSizes(start.map((value, itemIndex) => itemIndex === index ? first : itemIndex === index + 1 ? combined - first : value));
+    };
+    const end = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", end); };
+    window.addEventListener("pointermove", move); window.addEventListener("pointerup", end);
+  };
+  return <div className="resizable-panel-stack" ref={rootRef}>{items.map((item, index) => <div className="resizable-panel-item" key={isValidElement(item) && item.key != null ? item.key : index} style={{ flexGrow: sizes[index] ?? 1 / Math.max(1, items.length) }}>{item}{index < items.length - 1 && <div className="focused-panel-divider" onPointerDown={(event) => beginResize(event, index)} />}</div>)}</div>;
 }
 
 function QuickFilter({ value, placeholder, label, onChange }: { value: string; placeholder: string; label: string; onChange(value: string): void }) {
@@ -1777,25 +1803,38 @@ function FileTreeRow({ node, selected, color: rowColor, gitStatus, onOpen, onCon
   </button>;
 }
 
-function CreateTaskDialog({ onClose, onCreate }: { onClose(): void; onCreate(branch: string): Promise<void> }) {
+function CreateTaskDialog({ client, onClose, onCreate }: { client: CoreClient; onClose(): void; onCreate(branch: string, existing?: { remote: boolean }): Promise<void> }) {
   const [branch, setBranch] = useState("");
+  const [branches, setBranches] = useState<GitBranchInfo[]>([]);
+  const [selected, setSelected] = useState<GitBranchInfo>();
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   useEffect(() => {
     const listener = (event: KeyboardEvent) => { if (event.key === "Escape" && !saving) onClose(); };
     window.addEventListener("keydown", listener); return () => window.removeEventListener("keydown", listener);
   }, [onClose, saving]);
+  useEffect(() => {
+    let current = true;
+    void client.request("git.branches", {}).then((result) => { if (current) setBranches(result.branches); }).catch((loadError) => { if (current) setError(loadError instanceof Error ? loadError.message : "Could not load branches"); });
+    return () => { current = false; };
+  }, [client]);
+  const suggestions = useMemo(() => {
+    const query = branch.trim().toLowerCase();
+    return branches.filter((item) => !item.current && (!query || item.name.toLowerCase().includes(query))).slice(0, 8);
+  }, [branch, branches]);
   const create = async () => {
     if (!branch.trim() || saving) return;
     setSaving(true); setError("");
-    try { await onCreate(branch.trim()); onClose(); }
+    try { await onCreate(branch.trim(), selected ? { remote: selected.remote } : undefined); onClose(); }
     catch (createError) { setError(createError instanceof Error ? createError.message : "Could not create task"); setSaving(false); }
   };
   return <div className="dialog-overlay" onMouseDown={() => { if (!saving) onClose(); }}>
     <section className="run-config-dialog task-create-dialog" role="dialog" aria-modal="true" aria-label="Create task" onMouseDown={(event) => event.stopPropagation()}>
       <header><div><h2>Create Task</h2><span>A separate workspace copy will be created for this branch.</span></div><button title="Close" disabled={saving} onClick={onClose}><X size={15} /></button></header>
       <form onSubmit={(event) => { event.preventDefault(); void create(); }}>
-        <label>Branch name<input autoFocus value={branch} disabled={saving} onChange={(event) => setBranch(event.target.value)} maxLength={200} placeholder="feature/my-task" /></label>
+        <label>Branch name<input autoFocus value={branch} disabled={saving} onChange={(event) => { setBranch(event.target.value); setSelected(undefined); }} maxLength={200} placeholder="feature/my-task" /></label>
+        {suggestions.length > 0 && <div className="task-branch-help" role="listbox" aria-label="Existing branches">{suggestions.map((item) => <button type="button" role="option" aria-selected={selected?.name === item.name} className={selected?.name === item.name ? "selected" : ""} key={`${item.remote ? "remote" : "local"}:${item.name}`} onClick={() => { setBranch(item.name); setSelected(item); }}><GitBranch size={13} /><span>{item.name}</span><small>{item.remote ? "remote" : "existing"}</small></button>)}</div>}
+        <div className="task-branch-mode">{selected ? <>Use existing {selected.remote ? "remote " : ""}branch <strong>{selected.name}</strong></> : <>Create new branch <strong>{branch.trim() || "..."}</strong></>}</div>
         {error && <div className="find-error">{error}</div>}
         <footer><button type="button" disabled={saving} onClick={onClose}>Cancel</button><button className="primary" disabled={saving || !branch.trim()}>{saving ? "Creating..." : "Create"}</button></footer>
       </form>

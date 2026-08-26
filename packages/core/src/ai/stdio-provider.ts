@@ -9,7 +9,7 @@ import { ClientSideConnection, PROTOCOL_VERSION, ndJsonStream, type Client, type
 import { AcpProvider, applyConfiguration, type AcpSendRequest, type AiConfiguration, type AiContentBlock, type AiMessage, type AiModel, type AiModelDetails, type AiOption, type AiProviderDescriptor, type AiSession, type AiUsage } from "@remote-ide/acp";
 import { CoreError } from "../errors.js";
 
-type ToolState = { title: string; status?: string; command?: string; body: string[]; content: AiContentBlock[] };
+type ToolState = { title: string; name?: string; status?: string; command?: string; body: string[]; content: AiContentBlock[]; completion?: string };
 type Runtime = {
   child: ChildProcessWithoutNullStreams;
   connection: ClientSideConnection;
@@ -531,9 +531,10 @@ export abstract class StdioAcpProvider extends AcpProvider {
       }
       case "tool_call": {
         runtime.anchors = {};
-        const tool: ToolState = { title: update.title, status: update.status ?? undefined, ...toolBody(update) };
+        const tool: ToolState = { title: update.title, name: update.name ?? undefined, status: update.status ?? undefined, ...toolBody(update) };
         runtime.tools.set(update.toolCallId, tool);
         session.messages.push({ id: update.toolCallId, role: "activity", text: renderTool(tool), content: tool.content, timestamp: new Date().toISOString() });
+        appendTaskCompletion(session, update.toolCallId, tool);
         break;
       }
       case "tool_call_update": {
@@ -544,10 +545,12 @@ export abstract class StdioAcpProvider extends AcpProvider {
         if (next.command) tool.command = next.command;
         if (next.body.length > 0) tool.body = next.body;
         if (next.content.length > 0) tool.content = next.content;
+        if (next.completion) tool.completion = next.completion;
         runtime.tools.set(update.toolCallId, tool);
         const existing = session.messages.find((message) => message.id === update.toolCallId);
         if (existing) { existing.text = renderTool(tool); existing.content = tool.content; }
         else session.messages.push({ id: update.toolCallId, role: "activity", text: renderTool(tool), content: tool.content, timestamp: new Date().toISOString() });
+        appendTaskCompletion(session, update.toolCallId, tool);
         break;
       }
       case "plan": case "plan_update": {
@@ -761,11 +764,12 @@ function contentLabel(content: AiContentBlock): string {
   return `[Workspace resource: ${content.name}]`;
 }
 
-function toolBody(update: { rawInput?: unknown; content?: unknown }): { command?: string; body: string[]; content: AiContentBlock[] } {
+function toolBody(update: { rawInput?: unknown; content?: unknown }): { command?: string; body: string[]; content: AiContentBlock[]; completion?: string } {
   const lines: string[] = [];
   const content: AiContentBlock[] = [];
   const input = update.rawInput as Record<string, unknown> | undefined;
   const command = input && typeof input.command === "string" ? input.command : undefined;
+  const completion = input && typeof input.summary === "string" ? input.summary.trim() : undefined;
   for (const key of ["path", "filePath", "url", "scope"] as const) if (input && typeof input[key] === "string") lines.push(`${key}: ${input[key]}`);
   for (const item of Array.isArray(update.content) ? update.content : []) {
     const entry = item as { type?: string; content?: { type?: string; text?: string }; path?: string; newText?: string; terminalId?: string };
@@ -774,10 +778,20 @@ function toolBody(update: { rawInput?: unknown; content?: unknown }): { command?
     else if (entry.type === "diff" && entry.path) lines.push(`--- ${entry.path}\n${entry.newText ?? ""}`);
     else if (entry.type === "terminal" && entry.terminalId) lines.push(`terminal ${entry.terminalId}`);
   }
-  return command === undefined ? { body: lines, content } : { command, body: lines, content };
+  return { ...(command === undefined ? {} : { command }), body: lines, content, ...(completion ? { completion } : {}) };
 }
 
 function renderTool(tool: ToolState): string {
   const heading = tool.status && tool.status !== "completed" ? `${tool.title} (${tool.status})` : tool.title;
   return [heading, ...(tool.command ? [`$ ${tool.command}`] : []), ...tool.body].join("\n");
+}
+
+function appendTaskCompletion(session: AiSession, toolCallId: string, tool: ToolState): void {
+  if (tool.status !== "completed" || !/task[_ -]?complete/i.test(`${tool.name ?? ""} ${tool.title}`)) return;
+  const text = tool.completion ?? tool.body.find((line) => line.trim());
+  if (!text) return;
+  const id = `${toolCallId}:completion`;
+  const existing = session.messages.find((message) => message.id === id);
+  if (existing) existing.text = text;
+  else session.messages.push({ id, role: "assistant", text, timestamp: new Date().toISOString() });
 }
