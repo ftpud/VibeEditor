@@ -719,11 +719,19 @@ export function App() {
   }, [refreshAi, selectedTaskId]);
   const sendAiPrompt = useCallback(async (prompt: string, configuration: AiConfiguration, attachments: AiAttachment[]) => {
     if (!clientRef.current) return;
-    const attachmentContext = attachments.map((attachment) => attachment.path ? `- Workspace file: ${attachment.path}` : `- Attached file: ${attachment.name}\n\n\`\`\`\n${attachment.content ?? ""}\n\`\`\``).join("\n");
-    const fullPrompt = attachmentContext ? `${prompt.trim()}\n\nAttached files:\n${attachmentContext}`.trim() : prompt;
-    try { setAiSession((await clientRef.current.request("ai.send", { provider: aiProviderRef.current, prompt: fullPrompt, configuration })).session); await refreshAi(); }
+    const content = attachments.map((attachment) => attachment.path
+      ? { type: "resource_link" as const, uri: `workspace:${attachment.path}`, name: attachment.name }
+      : attachment.data && attachment.mimeType
+        ? { type: "image" as const, data: attachment.data, mimeType: attachment.mimeType, name: attachment.name }
+        : { type: "resource" as const, uri: `attachment:${encodeURIComponent(attachment.name)}`, mimeType: attachment.mimeType, text: attachment.content ?? "", name: attachment.name });
+    try { setAiSession((await clientRef.current.request("ai.send", { provider: aiProviderRef.current, prompt, content, configuration })).session); await refreshAi(); }
     catch (error) { setStatusMessage(error instanceof Error ? error.message : "Could not start Codex"); throw error; }
   }, [refreshAi]);
+  const resolveAiPermission = useCallback(async (requestId: string, optionId?: string) => {
+    if (!clientRef.current) return;
+    try { setAiSession((await clientRef.current.request("ai.permission.resolve", { provider: aiProviderRef.current, requestId, optionId })).session); }
+    catch (error) { setStatusMessage(error instanceof Error ? error.message : "Could not resolve permission request"); }
+  }, []);
   const steerAiPrompt = useCallback(async (prompt: string) => {
     if (!clientRef.current) return;
     try { setAiSession((await clientRef.current.request("ai.steer", { provider: aiProviderRef.current, prompt })).session); await refreshAi(); }
@@ -1335,7 +1343,7 @@ export function App() {
           {tasks.map((task) => <TaskRow key={task.id} icon={<ListTodo size={15} />} name={task.name} summary={aiStatuses.tasks[task.id] ?? emptyAiSummary} selected={selectedTaskId === task.id} disabled={taskSwitching} onClick={() => void switchTask(task.id)} onMerge={() => void mergeTask(task)} onDelete={() => void deleteTask(task)} />)}
         </div></section>}
         {tasksOpen && aiOpen && <div className="right-panel-divider" onPointerDown={beginRightSplitResize} />}
-        {aiOpen && <section className="right-panel-section"><header className="panel-header"><span>AI</span><span className={`ai-status ${aiSession.status}`}>{formatAiStatus(aiSession.status)}</span></header><AiPanel provider={aiProvider} providers={aiProviders} session={aiSession} models={aiModels} usage={aiUsage} attachments={currentAiAttachments} onProviderChange={(provider) => void switchAiProvider(provider)} onConfigurationChange={configureAi} onAttachmentsChange={updateAiAttachments} onSend={sendAiPrompt} onSteer={steerAiPrompt} onInterrupt={() => void interruptAi()} onClear={() => void clearAiContext()} /></section>}
+        {aiOpen && <section className="right-panel-section"><header className="panel-header"><span>AI</span><span className={`ai-status ${aiSession.status}`}>{formatAiStatus(aiSession.status)}</span></header><AiPanel provider={aiProvider} providers={aiProviders} session={aiSession} models={aiModels} usage={aiUsage} attachments={currentAiAttachments} onProviderChange={(provider) => void switchAiProvider(provider)} onConfigurationChange={configureAi} onAttachmentsChange={updateAiAttachments} onSend={sendAiPrompt} onSteer={steerAiPrompt} onInterrupt={() => void interruptAi()} onClear={() => void clearAiContext()} onResolvePermission={(requestId, optionId) => void resolveAiPermission(requestId, optionId)} /></section>}
       </aside></>}
       <nav className="right-tool-stripe" aria-label="Right tool windows">
         <button className={`tool-stripe-button right ${tasksOpen ? "active" : ""}`} title={tasksOpen ? "Hide Tasks" : "Show Tasks"} onClick={() => setTasksOpen((open) => !open)}><ListTodo size={15} /><span>Tasks</span>{tasks.length > 0 && <span className="tool-badge">{tasks.length > 99 ? "99+" : tasks.length}</span>}</button>

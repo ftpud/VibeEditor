@@ -207,7 +207,8 @@ async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStor
     case "ai.get": return { session: await acp.get(request.payload.provider).get(workspacePath) };
     case "ai.models": return { models: await acp.get(request.payload.provider).models() };
     case "ai.configure": return { session: await acp.get(request.payload.provider).configure(workspacePath, { ...request.payload.configuration, ...(request.payload.model ? { model: request.payload.model } : {}), ...(request.payload.reasoning ? { reasoning: request.payload.reasoning } : {}) }) };
-    case "ai.send": return { session: await acp.get(request.payload.provider).send(workspacePath, { prompt: request.payload.prompt, configuration: { ...request.payload.configuration, ...(request.payload.model ? { model: request.payload.model } : {}), ...(request.payload.reasoning ? { reasoning: request.payload.reasoning } : {}) }, mcpServers: request.payload.mcpServers, agent: request.payload.agent }) };
+    case "ai.send": return { session: await acp.get(request.payload.provider).send(workspacePath, { prompt: request.payload.prompt, content: request.payload.content, configuration: { ...request.payload.configuration, ...(request.payload.model ? { model: request.payload.model } : {}), ...(request.payload.reasoning ? { reasoning: request.payload.reasoning } : {}) }, mcpServers: request.payload.mcpServers, agent: request.payload.agent }) };
+    case "ai.permission.resolve": return { session: await acp.get(request.payload.provider).resolvePermission(workspacePath, request.payload.requestId, request.payload.optionId) };
     case "ai.interrupt": return { session: await acp.get(request.payload.provider).interrupt(workspacePath) };
     case "ai.steer": return { session: await acp.get(request.payload.provider).steer(workspacePath, request.payload.prompt) };
     case "ai.clear": return { session: await acp.get(request.payload.provider).clear(workspacePath) };

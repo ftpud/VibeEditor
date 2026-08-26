@@ -9,12 +9,12 @@ import { CopilotSessionManager } from "./copilot.js";
 import { StdioAcpProvider } from "../stdio-provider.js";
 import { AcpRegistry } from "../acp.js";
 
-const FAKE_AGENT = fileURLToPath(new URL("./fake-acp-agent.mjs", import.meta.url));
+const FAKE_AGENT = fileURLToPath(new URL("./fake-acp-agent.py", import.meta.url));
 
 class FakeProvider extends StdioAcpProvider {
   constructor(onChanged: (workspace: string) => void, state: string, private readonly env: NodeJS.ProcessEnv = {}) { super(onChanged, state); }
   readonly descriptor: AiProviderDescriptor = { id: "fake", name: "Fake ACP", description: "test", settings: { title: "t", description: "d", sections: [] }, options: [], capabilities: { models: true, usage: true, mcp: true, agents: true, contextWindow: true } };
-  protected command(_configuration: AiConfiguration) { return { command: process.execPath, args: [FAKE_AGENT], env: this.env }; }
+  protected command(_configuration: AiConfiguration) { return { command: "python3", args: [FAKE_AGENT], env: this.env }; }
   protected async fallbackModels(): Promise<AiModel[]> { return [{ id: "fallback", name: "Fallback", defaultReasoning: "medium", reasoningLevels: ["medium"] }]; }
 }
 
@@ -106,9 +106,9 @@ describe("ACP integration", () => {
     await provider.clear(workspace);
   });
 
-  it("never passes reasoning effort on the Copilot command line", () => {
+  it("passes server-scoped Copilot model and reasoning configuration at launch", () => {
     const command = new CopilotSessionManager(() => undefined)["command"]({ model: "claude-haiku-4.5", reasoning: "medium", maxAiCredits: 5 });
-    expect(command.args).toEqual(["--acp", "--stdio", "--max-ai-credits=5"]);
+    expect(command.args).toEqual(["--acp", "--stdio", "--model=claude-haiku-4.5", "--reasoning-effort=medium", "--max-ai-credits=5"]);
   });
 
   it("configures Codex web search with the supported top-level key", () => {
@@ -168,5 +168,46 @@ describe("ACP integration", () => {
     const state = await mkdtemp(path.join(os.tmpdir(), "remote-ide-ai-idle-steer-"));
     const provider = new FakeProvider(() => undefined, state);
     await expect(provider.steer(process.cwd(), "hello")).rejects.toThrow("not currently working");
+  });
+
+  it("loads the persisted ACP session and replaces the local transcript with authoritative history", async () => {
+    const state = await mkdtemp(path.join(os.tmpdir(), "remote-ide-ai-resume-"));
+    const provider = new FakeProvider(() => undefined, state, { FAKE_LOAD: "on" });
+    const workspace = process.cwd();
+    await provider.send(workspace, { prompt: "first", configuration: { model: "model-a" } });
+    await settle(provider, workspace);
+    // This fixture-only launch option closes the runtime; the next send must load
+    // the stored session id instead of silently creating a fresh conversation.
+    await provider.configure(workspace, { maxAiCredits: 1 });
+    await provider.send(workspace, { prompt: "second", configuration: { model: "model-a", maxAiCredits: 1 } });
+    const session = await settle(provider, workspace);
+    expect(session.messages.some((message) => message.text === "Restored authoritative history")).toBe(true);
+    expect(session.messages.some((message) => message.text === "first")).toBe(false);
+    await provider.clear(workspace);
+  });
+
+  it("blocks permission requests until the user selects an advertised option", async () => {
+    const state = await mkdtemp(path.join(os.tmpdir(), "remote-ide-ai-permission-"));
+    const provider = new FakeProvider(() => undefined, state, { FAKE_PERMISSION: "on" });
+    const workspace = process.cwd();
+    await provider.send(workspace, { prompt: "permission", configuration: { model: "model-a" } });
+    let session = await provider.get(workspace);
+    for (let attempt = 0; !session.pendingPermission && attempt < 100; attempt += 1) { await new Promise((resolve) => setTimeout(resolve, 10)); session = await provider.get(workspace); }
+    expect(session.pendingPermission).toMatchObject({ title: "Write protected file", details: "$ touch /protected" });
+    await provider.resolvePermission(workspace, session.pendingPermission!.id, "yes");
+    session = await settle(provider, workspace);
+    expect(session.messages.some((message) => message.text.includes("Permission: yes"))).toBe(true);
+    await provider.clear(workspace);
+  });
+
+  it("maps typed prompt blocks and remote MCP transports to ACP", async () => {
+    const provider = new FakeProvider(() => undefined, await mkdtemp(path.join(os.tmpdir(), "remote-ide-ai-content-")));
+    const blocks = provider["promptContent"](process.cwd(), "look", [
+      { type: "image", data: "aGVsbG8=", mimeType: "image/png" },
+      { type: "resource", uri: "attachment:notes.txt", mimeType: "text/plain", text: "notes" },
+      { type: "resource_link", uri: "workspace:README.md", name: "README.md" }
+    ]);
+    expect(blocks.map((block) => block.type)).toEqual(["text", "image", "resource", "resource_link"]);
+    expect(provider["mcpServers"]([{ transport: "http", name: "remote", url: "https://example.test/mcp", headers: { Authorization: "secret" } }])).toEqual([{ type: "http", name: "remote", url: "https://example.test/mcp", headers: [{ name: "Authorization", value: "secret" }] }]);
   });
 });

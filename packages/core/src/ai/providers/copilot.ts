@@ -22,10 +22,10 @@ export class CopilotSessionManager extends StdioAcpProvider {
   };
 
   protected command(configuration: AiConfiguration): { command: string; args: string[] } {
-    // Reasoning effort is deliberately not passed on the command line: the CLI
-    // rejects it outright for models that have no effort levels. The ACP
-    // `reasoning_effort` config option applies it against the selected model.
     const args = ["--acp", "--stdio"];
+    const fixedModel = typeof configuration.model === "string" && configuration.model && configuration.model !== "auto";
+    if (fixedModel) args.push(`--model=${configuration.model}`);
+    if (fixedModel && typeof configuration.reasoning === "string" && configuration.reasoning && configuration.reasoning !== "none") args.push(`--reasoning-effort=${configuration.reasoning}`);
     if (typeof configuration.maxAiCredits === "number" && configuration.maxAiCredits > 0) args.push(`--max-ai-credits=${configuration.maxAiCredits}`);
     return { command: process.env.COPILOT_CLI_PATH ?? "copilot", args };
   }

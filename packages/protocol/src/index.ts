@@ -27,8 +27,8 @@ export type WorkspaceOptions = {
 export type FileColor = "red" | "orange" | "yellow" | "green" | "blue" | "purple" | "gray";
 export type WorkspaceTerminalOptions = { tabs: { title: string }[]; activeTabIndex?: number; panelOpen: boolean };
 export type WorkspaceTask = { id: string; name: string; branch: string; baseBranch: string };
-export type { AiAgent, AiConfiguration, AiMessage, AiModel, AiMcpServer, AiOption, AiProvider, AiProviderCapabilities, AiProviderDescriptor, AiSession, AiSettingsLayout, AiSettingsSection, AiStatus, AiTaskSummary, AiUsage } from "@remote-ide/acp";
-import type { AiAgent, AiConfiguration, AiMcpServer, AiModel, AiProvider, AiProviderDescriptor, AiSession, AiTaskSummary, AiUsage } from "@remote-ide/acp";
+export type { AiAgent, AiCommand, AiConfiguration, AiContentBlock, AiMessage, AiModel, AiMcpServer, AiOption, AiPermissionRequest, AiProvider, AiProviderCapabilities, AiProviderDescriptor, AiSession, AiSettingsLayout, AiSettingsSection, AiStatus, AiTaskSummary, AiUsage } from "@remote-ide/acp";
+import type { AiAgent, AiConfiguration, AiContentBlock, AiMcpServer, AiModel, AiProvider, AiProviderDescriptor, AiSession, AiTaskSummary, AiUsage } from "@remote-ide/acp";
 export type UsefulFileScope = "global" | "local";
 export type UsefulFile = { scope: UsefulFileScope; name: string };
 export type HttpResponse = { status: number; statusText: string; headers: Record<string, string>; body: string; durationMs: number };
@@ -89,7 +89,8 @@ export type ProtocolOperations = {
   "ai.get": { payload: { provider?: AiProvider }; result: { session: AiSession } };
   "ai.models": { payload: { provider?: AiProvider }; result: { models: AiModel[] } };
   "ai.configure": { payload: { provider?: AiProvider; model?: string; reasoning?: string; configuration?: AiConfiguration }; result: { session: AiSession } };
-  "ai.send": { payload: { provider?: AiProvider; prompt: string; model?: string; reasoning?: string; configuration?: AiConfiguration; mcpServers?: AiMcpServer[]; agent?: AiAgent }; result: { session: AiSession } };
+  "ai.send": { payload: { provider?: AiProvider; prompt: string; content?: AiContentBlock[]; model?: string; reasoning?: string; configuration?: AiConfiguration; mcpServers?: AiMcpServer[]; agent?: AiAgent }; result: { session: AiSession } };
+  "ai.permission.resolve": { payload: { provider?: AiProvider; requestId: string; optionId?: string }; result: { session: AiSession } };
   "ai.interrupt": { payload: { provider?: AiProvider }; result: { session: AiSession } };
   "ai.steer": { payload: { provider?: AiProvider; prompt: string }; result: { session: AiSession } };
   "ai.clear": { payload: { provider?: AiProvider }; result: { session: AiSession } };
@@ -284,6 +285,7 @@ export const requestTypes: RequestType[] = [
   "ai.models",
   "ai.configure",
   "ai.send",
+  "ai.permission.resolve",
   "ai.interrupt",
   "ai.steer",
   "ai.clear",
