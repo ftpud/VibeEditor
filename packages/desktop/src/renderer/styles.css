@@ -140,6 +140,7 @@ button { color: inherit; }
 .task-ai-status.user_prompt { color: #e3b762; }
 .task-ai-status.done { color: #70b879; }
 .task-ai-status.error { color: #dc747c; }
+.task-ai-status.permission { color: #e3b762; }
 .ai-status { font-size: 0.7692rem; font-weight: 500; }
 .ai-status.in_progress { color: #6ea8fe; }
 .ai-status.user_prompt { color: #e3b762; }
