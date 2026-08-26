@@ -4,7 +4,31 @@ export type AiConfiguration = Record<string, string | number | boolean>;
 export type AiMessage = { id: string; role: "user" | "assistant" | "activity" | "error"; text: string; timestamp: string };
 export type AiSession = { threadId?: string; model: string; reasoning: string; configuration?: AiConfiguration; availableOptions?: AiOption[]; status: AiStatus; messages: AiMessage[]; contextUsed?: number; contextLimit?: number; tokens?: AiTokenUsage; steering?: boolean };
 export type AiTokenUsage = { total: number; input: number; output: number; thought?: number; cachedRead?: number; cachedWrite?: number };
-export type AiModel = { id: string; name: string; defaultReasoning: string; reasoningLevels: string[] };
+/**
+ * Optional catalogue metadata. Everything here is advertised by the agent (ACP
+ * model `_meta`, option descriptions) or read from the CLI's own model cache, so
+ * a field is simply absent when the provider does not publish it.
+ */
+export type AiModelDetails = {
+  description?: string;
+  /** Relative request cost, e.g. Copilot's "0.33x" premium-request multiplier. */
+  price?: string;
+  /** Coarse cost bucket advertised alongside the multiplier: low, medium, high, very_high. */
+  priceTier?: string;
+  /** False when the account cannot use the model (policy, plan or quota). */
+  available?: boolean;
+  /** Usable context window in tokens. */
+  contextWindow?: number;
+  /** Largest context window the model can be configured with, when it differs. */
+  maxContextWindow?: number;
+  /** Accepted prompt content types, e.g. ["text", "image"]. */
+  inputModalities?: string[];
+  /** Per-reasoning-level explanations keyed by level id. */
+  reasoningDescriptions?: Record<string, string>;
+  /** Deprecation or migration notice published by the agent. */
+  note?: string;
+};
+export type AiModel = { id: string; name: string; defaultReasoning: string; reasoningLevels: string[] } & AiModelDetails;
 export type AiOption = { id: string; name: string; description: string; section?: string; type: "select" | "number" | "boolean" | "text"; defaultValue: string | number | boolean; choices?: { value: string; name: string; description?: string }[]; min?: number; max?: number; modelDependent?: boolean };
 export type AiSettingsSection = { id: string; name: string; description?: string };
 export type AiSettingsLayout = { title: string; description: string; sections: AiSettingsSection[] };

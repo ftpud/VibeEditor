@@ -73,12 +73,12 @@ describe("ACP integration", () => {
     await provider.clear(workspace);
   });
 
-  it("reads the model catalogue and per-model reasoning levels from the live agent", async () => {
+  it("reads the model catalogue, pricing metadata and per-model reasoning levels from the live agent", async () => {
     const state = await mkdtemp(path.join(os.tmpdir(), "remote-ide-ai-models-"));
     const provider = new FakeProvider(() => undefined, state);
     expect(await provider.models()).toEqual([
-      { id: "model-a", name: "MODEL-A", defaultReasoning: "medium", reasoningLevels: ["low", "medium", "high"] },
-      { id: "model-b", name: "MODEL-B", defaultReasoning: "", reasoningLevels: [] }
+      { id: "model-a", name: "MODEL-A", description: "Fast test model", price: "0.33x", priceTier: "low", available: true, defaultReasoning: "medium", reasoningLevels: ["low", "medium", "high"], reasoningDescriptions: { low: "low effort", medium: "medium effort", high: "high effort" } },
+      { id: "model-b", name: "MODEL-B", price: "10x", priceTier: "high", available: false, defaultReasoning: "", reasoningLevels: [] }
     ]);
   });
 

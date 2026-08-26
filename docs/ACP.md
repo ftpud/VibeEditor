@@ -14,9 +14,13 @@ To add a provider, subclass `AcpProvider`, implement the six operations under `a
 
 ## Current adapters
 
-Codex discovers model and reasoning metadata from its local model cache. Its ACP options expose sandbox and web search. MCP definitions become per-invocation `mcp_servers.*` config overrides; custom-agent instructions are prepended to the task. The Codex CLI does not currently expose account quota through the non-interactive interface, so ACP reports usage as unsupported instead of inventing a value.
+Codex discovers model and reasoning metadata from its local model cache, which also supplies context window sizes, input modalities, and retirement notices for the models advertised over ACP. Its ACP options expose sandbox and web search. MCP definitions become per-invocation `mcp_servers.*` config overrides; custom-agent instructions are prepended to the task. The Codex CLI does not currently expose account quota through the non-interactive interface, so ACP reports usage as unsupported instead of inventing a value.
 
-Copilot discovers models from CLI completion metadata. Its ACP options expose context tier, agent mode, a per-session AI-credit ceiling, and reasoning summaries. MCP definitions use `--additional-mcp-config`; user-defined agent instructions are composed into the prompt and can restrict the enabled MCP set. Copilot documents quota details in interactive `/usage`; ACP reports that availability and exposes the credit ceiling, but the CLI does not currently provide a stable machine-readable quota command.
+Copilot discovers models from CLI completion metadata, including the premium-request multiplier, cost tier, and availability it publishes in the model option's `_meta`. Its ACP options expose context tier, agent mode, a per-session AI-credit ceiling, and reasoning summaries. MCP definitions use `--additional-mcp-config`; user-defined agent instructions are composed into the prompt and can restrict the enabled MCP set. Copilot documents quota details in interactive `/usage`; ACP reports that availability and exposes the credit ceiling, but the CLI does not currently provide a stable machine-readable quota command.
+
+## Model catalogue metadata
+
+`AiModel` carries optional catalogue details beside the id and name: `description`, `price` and `priceTier` (relative request cost), `available`, `contextWindow` and `maxContextWindow`, `inputModalities`, per-level `reasoningDescriptions`, and a free-form `note` for deprecations. Providers fill in only what their agent publishes — ACP itself mandates nothing beyond id, name, and description — and the desktop model picker renders whatever is present. Agents that report a context window only per turn (`usage_update`) have it recorded against the selected model as it is observed. Provider adapters can add facts the handshake omits by overriding `describeModels`.
 
 ## Common request extensions
 

@@ -2,13 +2,13 @@ import type { AiConfiguration, AiModel, AiProviderDescriptor } from "@remote-ide
 import { StdioAcpProvider } from "../stdio-provider.js";
 
 /** Used only when the Copilot ACP server cannot be reached; the live list wins. */
-const FALLBACK_MODELS: [string, string, string[]][] = [
-  ["auto", "Auto", []],
-  ["claude-sonnet-5", "Claude Sonnet 5", ["low", "medium", "high", "xhigh", "max"]],
-  ["claude-sonnet-4.6", "Claude Sonnet 4.6", ["low", "medium", "high", "max"]],
-  ["claude-haiku-4.5", "Claude Haiku 4.5", []],
-  ["gpt-5.6-sol", "GPT-5.6 Sol", ["none", "low", "medium", "high", "xhigh", "max"]],
-  ["gpt-5.3-codex", "GPT-5.3-Codex", ["low", "medium", "high", "xhigh"]]
+const FALLBACK_MODELS: { id: string; name: string; reasoningLevels: string[]; price: string; priceTier: string }[] = [
+  { id: "auto", name: "Auto", reasoningLevels: [], price: "", priceTier: "" },
+  { id: "claude-sonnet-5", name: "Claude Sonnet 5", reasoningLevels: ["low", "medium", "high", "xhigh", "max"], price: "1x", priceTier: "medium" },
+  { id: "claude-sonnet-4.6", name: "Claude Sonnet 4.6", reasoningLevels: ["low", "medium", "high", "max"], price: "1x", priceTier: "medium" },
+  { id: "claude-haiku-4.5", name: "Claude Haiku 4.5", reasoningLevels: [], price: "0.33x", priceTier: "low" },
+  { id: "gpt-5.6-sol", name: "GPT-5.6 Sol", reasoningLevels: ["none", "low", "medium", "high", "xhigh", "max"], price: "1x", priceTier: "medium" },
+  { id: "gpt-5.3-codex", name: "GPT-5.3-Codex", reasoningLevels: ["low", "medium", "high", "xhigh"], price: "1x", priceTier: "medium" }
 ];
 
 export class CopilotSessionManager extends StdioAcpProvider {
@@ -31,6 +31,6 @@ export class CopilotSessionManager extends StdioAcpProvider {
   }
 
   protected async fallbackModels(): Promise<AiModel[]> {
-    return FALLBACK_MODELS.map(([id, name, reasoningLevels]) => ({ id, name, defaultReasoning: reasoningLevels.includes("medium") ? "medium" : "", reasoningLevels }));
+    return FALLBACK_MODELS.map((model) => ({ id: model.id, name: model.name, defaultReasoning: model.reasoningLevels.includes("medium") ? "medium" : "", reasoningLevels: model.reasoningLevels, ...(model.price ? { price: model.price, priceTier: model.priceTier } : {}) }));
   }
 }

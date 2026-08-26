@@ -5,7 +5,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { Readable, Writable } from "node:stream";
 import { ClientSideConnection, PROTOCOL_VERSION, ndJsonStream, type Client, type McpServer, type SessionConfigOption, type SessionNotification } from "@agentclientprotocol/sdk";
-import { AcpProvider, applyConfiguration, type AcpSendRequest, type AiConfiguration, type AiMessage, type AiModel, type AiOption, type AiProviderDescriptor, type AiSession, type AiUsage } from "@remote-ide/acp";
+import { AcpProvider, applyConfiguration, type AcpSendRequest, type AiConfiguration, type AiMessage, type AiModel, type AiModelDetails, type AiOption, type AiProviderDescriptor, type AiSession, type AiUsage } from "@remote-ide/acp";
 import { CoreError } from "../errors.js";
 
 type ToolState = { title: string; status?: string; command?: string; body: string[] };
@@ -26,7 +26,8 @@ type Runtime = {
   pending: string[];
 };
 type ModeState = { currentModeId: string; availableModes: { id: string; name?: string; description?: string | null }[] } | null | undefined;
-type ModelState = { currentModelId?: string; availableModels: { modelId: string; name: string; description?: string | null }[] } | null | undefined;
+type ModelState = { currentModelId?: string; availableModels: { modelId: string; name: string; description?: string | null; _meta?: Record<string, unknown> }[] } | null | undefined;
+type SelectChoice = { value: string; name: string; description?: string; _meta?: Record<string, unknown> };
 type CreatedSession = { sessionId: string; configOptions?: SessionConfigOption[] | null; modes?: ModeState; models?: ModelState };
 type Connected = { child: ChildProcessWithoutNullStreams; connection: ClientSideConnection; sessionId: string; stderr(): string; configOptions: SessionConfigOption[]; modes: ModeState; models: ModelState; steering: boolean; bind(runtime: Runtime): void };
 
@@ -70,9 +71,15 @@ export abstract class StdioAcpProvider extends AcpProvider {
     if (this.modelCache && Date.now() - this.modelCache.at < MODEL_CACHE_MS) return this.modelCache.models;
     this.modelDiscovery ??= this.discoverModels().finally(() => { this.modelDiscovery = undefined; });
     const discovered = await this.modelDiscovery.catch(() => [] as AiModel[]);
-    if (discovered.length > 0) { this.modelCache = { at: Date.now(), models: discovered }; return discovered; }
-    return this.modelCache?.models ?? this.fallbackModels();
+    if (discovered.length > 0) { const described = await this.describeModels(discovered); this.modelCache = { at: Date.now(), models: described }; return described; }
+    return this.modelCache?.models ?? this.describeModels(await this.fallbackModels());
   }
+
+  /**
+   * Provider hook for catalogue facts the ACP handshake does not carry, such as
+   * context window sizes the CLI keeps in its own model cache.
+   */
+  protected async describeModels(models: AiModel[]): Promise<AiModel[]> { return models; }
 
   async configure(workspace: string, configuration: AiConfiguration | string, legacyReasoning?: string): Promise<AiSession> {
     if (this.runtimes.get(workspace)?.running) throw new CoreError("INVALID_REQUEST", `${this.descriptor.name} is currently working`);
@@ -324,7 +331,7 @@ export abstract class StdioAcpProvider extends AcpProvider {
       }
       case "current_mode_update": session.configuration = { ...session.configuration, mode: update.currentModeId }; break;
       case "config_option_update": this.syncFromOptions(session, update.configOptions ?? [], undefined); break;
-      case "usage_update": session.contextUsed = update.used; if (update.size != null) session.contextLimit = update.size; break;
+      case "usage_update": session.contextUsed = update.used; if (update.size != null) { session.contextLimit = update.size; this.rememberContextWindow(session.model, update.size); } break;
       case "compaction_update": session.messages.push(this.message("activity", "Compacting conversation history")); break;
       default: break;
     }
@@ -351,19 +358,20 @@ export abstract class StdioAcpProvider extends AcpProvider {
     try {
       connected = await this.connect(this.lastWorkspace, {});
       const option = connected.configOptions.find((item) => item.category === "model");
-      const advertised = option ? selectOptions(option) : (connected.models?.availableModels ?? []).map((model) => ({ value: model.modelId, name: model.name }));
+      const advertised = option ? selectOptions(option) : (connected.models?.availableModels ?? []).map((model) => ({ value: model.modelId, name: model.name, description: model.description ?? undefined, _meta: model._meta }));
       if (advertised.length === 0) return [];
-      if (!option || option.type !== "select") return advertised.map((item) => ({ id: item.value, name: item.name, defaultReasoning: "", reasoningLevels: [] }));
+      if (!option || option.type !== "select") return advertised.map((item) => ({ id: item.value, name: item.name, defaultReasoning: "", reasoningLevels: [], ...modelDetails(item) }));
       const models: AiModel[] = [];
       for (const item of advertised) {
         let reasoningLevels: string[] = [];
         let defaultReasoning = "";
+        let descriptions: Record<string, string> = {};
         try {
           const response = await connected.connection.setSessionConfigOption({ sessionId: connected.sessionId, configId: option.id, value: item.value });
           const thought = (response.configOptions ?? []).find((candidate) => candidate.category === "thought_level");
-          if (thought) { reasoningLevels = selectValues(thought); defaultReasoning = String(thought.currentValue); }
+          if (thought) { reasoningLevels = selectValues(thought); defaultReasoning = String(thought.currentValue); descriptions = reasoningDescriptions(thought); }
         } catch { /* the agent rejected this model; still list it, without reasoning levels */ }
-        models.push({ id: item.value, name: item.name, defaultReasoning, reasoningLevels });
+        models.push({ id: item.value, name: item.name, defaultReasoning, reasoningLevels, ...modelDetails(item), ...(Object.keys(descriptions).length > 0 ? { reasoningDescriptions: descriptions } : {}) });
       }
       return models;
     } finally { connected?.child.stdin.end(); connected?.child.kill("SIGTERM"); }
@@ -371,18 +379,28 @@ export abstract class StdioAcpProvider extends AcpProvider {
 
   private rememberModels(options: SessionConfigOption[], models?: ModelState): void {
     const option = options.find((item) => item.category === "model");
-    const advertised = option ? selectOptions(option) : (models?.availableModels ?? []).map((model) => ({ value: model.modelId, name: model.name }));
+    const advertised = option ? selectOptions(option) : (models?.availableModels ?? []).map((model) => ({ value: model.modelId, name: model.name, description: model.description ?? undefined, _meta: model._meta }));
     if (advertised.length === 0) return;
     const known = new Map((this.modelCache?.models ?? []).map((model) => [model.id, model] as const));
-    this.modelCache = { at: this.modelCache?.at ?? 0, models: advertised.map((item) => known.get(item.value) ?? { id: item.value, name: item.name, defaultReasoning: "", reasoningLevels: [] }) };
+    this.modelCache = { at: this.modelCache?.at ?? 0, models: advertised.map((item) => ({ id: item.value, name: item.name, defaultReasoning: "", reasoningLevels: [], ...known.get(item.value), ...modelDetails(item) })) };
   }
 
   private rememberEffort(modelId: string, options: SessionConfigOption[]): void {
     const entry = this.modelCache?.models.find((model) => model.id === modelId);
     if (!entry) return;
     const thought = options.find((option) => option.category === "thought_level");
-    if (thought) { entry.reasoningLevels = selectValues(thought); entry.defaultReasoning = String(thought.currentValue); }
+    if (thought) {
+      entry.reasoningLevels = selectValues(thought); entry.defaultReasoning = String(thought.currentValue);
+      const descriptions = reasoningDescriptions(thought);
+      if (Object.keys(descriptions).length > 0) entry.reasoningDescriptions = descriptions;
+    }
     else { entry.reasoningLevels = []; entry.defaultReasoning = ""; }
+  }
+
+  /** Agents report the live context window per turn; keep it on the selected model. */
+  private rememberContextWindow(modelId: string, size: number): void {
+    const entry = this.modelCache?.models.find((model) => model.id === modelId);
+    if (entry && !entry.contextWindow) entry.contextWindow = size;
   }
 
   private toUiOptions(options: SessionConfigOption[], modes: ModeState): AiOption[] {
@@ -442,9 +460,37 @@ export abstract class StdioAcpProvider extends AcpProvider {
   private async runtimeFailed(workspace: string, message: string): Promise<void> { const session = await this.get(workspace); if (session.status === "in_progress") { session.status = "error"; session.messages.push(this.message("error", message)); await this.save(workspace, session); this.onChanged(workspace); } }
 }
 
-function selectOptions(option: SessionConfigOption): { value: string; name: string; description?: string }[] {
+function selectOptions(option: SessionConfigOption): SelectChoice[] {
   if (option.type !== "select") return [];
-  return option.options.flatMap((item) => ("options" in item ? item.options : [item])).map((item) => ({ value: item.value, name: item.name, description: item.description ?? undefined }));
+  return option.options.flatMap((item) => ("options" in item ? item.options : [item])).map((item) => ({ value: item.value, name: item.name, description: item.description ?? undefined, _meta: (item as { _meta?: Record<string, unknown> })._meta }));
+}
+
+/**
+ * Catalogue metadata agents publish next to a model. ACP itself only mandates an
+ * id, name and description, so anything richer arrives through `_meta`; Copilot
+ * advertises its premium-request multiplier and availability there.
+ */
+function modelDetails(choice: SelectChoice): AiModelDetails {
+  const meta = choice._meta ?? {};
+  const text = (value: unknown): string | undefined => (typeof value === "string" && value.trim() ? value.trim() : undefined);
+  const price = text(meta.copilotUsage) ?? text(meta.usage) ?? text(meta.price) ?? text(meta.multiplier);
+  const tier = text(meta.copilotPriceCategory) ?? text(meta.priceCategory) ?? text(meta.priceTier);
+  const enablement = text(meta.copilotEnablement) ?? text(meta.enablement);
+  const contextWindow = typeof meta.contextWindow === "number" ? meta.contextWindow : undefined;
+  return {
+    // Agents commonly repeat the display name as the description; that is noise.
+    ...(choice.description && choice.description !== choice.name ? { description: choice.description } : {}),
+    ...(price ? { price } : {}),
+    ...(tier ? { priceTier: tier } : {}),
+    ...(enablement ? { available: enablement === "enabled" } : {}),
+    ...(contextWindow ? { contextWindow } : {})
+  };
+}
+
+/** Reasoning levels carry their own descriptions; keep them for the picker. */
+function reasoningDescriptions(option: SessionConfigOption): Record<string, string> {
+  const entries = selectOptions(option).filter((item) => item.description).map((item) => [item.value, item.description as string] as const);
+  return Object.fromEntries(entries);
 }
 
 function selectValues(option: SessionConfigOption): string[] { return selectOptions(option).map((item) => item.value); }

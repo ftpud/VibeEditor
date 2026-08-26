@@ -2,6 +2,7 @@
 import readline from "node:readline";
 
 const MODELS = { "model-a": ["low", "medium", "high"], "model-b": [] };
+const MODEL_META = { "model-a": { description: "Fast test model", _meta: { copilotUsage: "0.33x", copilotPriceCategory: "low", copilotEnablement: "enabled" } }, "model-b": { _meta: { copilotUsage: "10x", copilotPriceCategory: "high", copilotEnablement: "disabled" } } };
 const STEERING = process.env.FAKE_STEERING === "on";
 const SLOW = process.env.FAKE_SLOW === "on";
 let live = null;
@@ -12,8 +13,8 @@ let cancelled = false;
 const send = (payload) => process.stdout.write(`${JSON.stringify(payload)}\n`);
 const notify = (sessionId, update) => send({ jsonrpc: "2.0", method: "session/update", params: { sessionId, update } });
 const options = () => [
-  { type: "select", id: "model", name: "Model", category: "model", currentValue: model, options: Object.keys(MODELS).map((id) => ({ value: id, name: id.toUpperCase() })) },
-  ...(MODELS[model].length > 0 ? [{ type: "select", id: "reasoning_effort", name: "Reasoning", category: "thought_level", currentValue: effort, options: MODELS[model].map((value) => ({ value, name: value })) }] : []),
+  { type: "select", id: "model", name: "Model", category: "model", currentValue: model, options: Object.keys(MODELS).map((id) => ({ value: id, name: id.toUpperCase(), ...MODEL_META[id] })) },
+  ...(MODELS[model].length > 0 ? [{ type: "select", id: "reasoning_effort", name: "Reasoning", category: "thought_level", currentValue: effort, options: MODELS[model].map((value) => ({ value, name: value, description: `${value} effort` })) }] : []),
   { type: "select", id: "allow_all", name: "Allow all", category: "permissions", currentValue: "off", options: [{ value: "on", name: "On" }, { value: "off", name: "Off" }] }
 ];
 
