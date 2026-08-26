@@ -134,8 +134,7 @@ export abstract class StdioAcpProvider extends AcpProvider {
     const runtime = await this.ensureRuntime(workspace, session, allowedServers);
     const visible = [prompt, ...(request.content ?? []).map(contentLabel)].filter(Boolean).join("\n");
     runtime.session.messages.push({ ...this.message("user", visible), content: request.content });
-    if (request.agent?.instructions.trim()) content.unshift({ type: "text", text: request.agent.instructions.trim() });
-    this.runPrompt(workspace, runtime, content);
+    this.runPrompt(workspace, runtime, this.withAgent(content, request.agent));
     await this.save(workspace, runtime.session); this.onChanged(workspace);
     return this.get(workspace);
   }
@@ -226,6 +225,21 @@ export abstract class StdioAcpProvider extends AcpProvider {
     }
     if (result.length === 0) throw new CoreError("INVALID_REQUEST", "Prompt or attachment is required");
     return result;
+  }
+
+  /**
+   * Keep the preset and request in one ACP text block. A few ACP servers only honor one of two
+   * adjacent text blocks, which made a visibly selected agent appear to be ignored.
+   */
+  private withAgent(content: ContentBlock[], agent?: AcpSendRequest["agent"]): ContentBlock[] {
+    const instructions = agent?.instructions.trim();
+    if (!agent || !instructions) return content;
+    const header = [`Selected agent: ${agent.name}`, ...(agent.description?.trim() ? [`Agent description: ${agent.description.trim()}`] : []), "", "<agent_instructions>", instructions, "</agent_instructions>", "", "<user_request>"];
+    const firstText = content.findIndex((block) => block.type === "text");
+    if (firstText < 0) return [{ type: "text", text: [...header, "</user_request>"].join("\n") }, ...content];
+    const block = content[firstText] as Extract<ContentBlock, { type: "text" }>;
+    const combined = { type: "text" as const, text: [...header, block.text, "</user_request>"].join("\n") };
+    return content.map((item, index) => index === firstText ? combined : item);
   }
 
   async resolvePermission(workspace: string, requestId: string, optionId?: string): Promise<AiSession> {

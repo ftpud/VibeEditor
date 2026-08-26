@@ -256,4 +256,10 @@ describe("ACP integration", () => {
     expect(blocks.map((block) => block.type)).toEqual(["text", "image", "resource", "resource_link"]);
     expect(provider["mcpServers"]([{ transport: "http", name: "remote", url: "https://example.test/mcp", headers: { Authorization: "secret" } }])).toEqual([{ type: "http", name: "remote", url: "https://example.test/mcp", headers: [{ name: "Authorization", value: "secret" }] }]);
   });
+
+  it("passes a selected agent and user request in the same ACP text block", async () => {
+    const provider = new FakeProvider(() => undefined, await mkdtemp(path.join(os.tmpdir(), "remote-ide-ai-agent-")));
+    const content = provider["withAgent"]([{ type: "text", text: "Fix the bug" }], { name: "Reviewer", description: "Checks correctness", instructions: "Review every change." });
+    expect(content).toEqual([{ type: "text", text: "Selected agent: Reviewer\nAgent description: Checks correctness\n\n<agent_instructions>\nReview every change.\n</agent_instructions>\n\n<user_request>\nFix the bug\n</user_request>" }]);
+  });
 });
