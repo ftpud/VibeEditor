@@ -34,6 +34,13 @@ button { color: inherit; }
 .panel-header-actions { margin-left: auto; display: flex; align-items: center; gap: 2px; }
 .panel-header button, .titlebar-actions button, .save-button { width: 28px; height: 27px; display: grid; place-items: center; border: 0; background: transparent; border-radius: 3px; cursor: pointer; }
 .panel-header button:hover, .titlebar-actions button:hover, .save-button:hover:not(:disabled) { background: #333; color: white; }
+.quick-filter { height: 31px; flex: 0 0 31px; margin: 5px 7px 3px; padding: 0 7px; display: flex; align-items: center; gap: 6px; border: 1px solid #45474c; border-radius: 4px; background: #25272a; color: #85888e; }
+.quick-filter:focus-within { border-color: #579dff; color: #b7c9e7; }
+.quick-filter input { min-width: 0; flex: 1; border: 0; outline: 0; background: transparent; color: #d7d9dc; font: inherit; font-size: .8462rem; }
+.quick-filter input::placeholder { color: #74777d; }
+.quick-filter button { width: 20px; height: 20px; padding: 0; display: grid; place-items: center; border: 0; border-radius: 3px; background: transparent; color: #85888e; cursor: pointer; }
+.quick-filter button:hover { background: #3a3c41; color: #e4e5e7; }
+.filter-empty { padding: 18px 10px; color: #85888e; font-size: .8462rem; text-align: center; }
 .workspace-name { height: 28px; padding: 0 8px; display: flex; align-items: center; gap: 3px; font-size: 0.9231rem; font-weight: 600; color: #c9cbd0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .tree { flex: 1; overflow: auto; padding: 1px 0 12px; }
 .tree-row { width: 100%; height: 24px; padding: 0 7px; position: relative; display: flex; align-items: center; gap: 5px; border: 0; background: transparent; text-align: left; cursor: pointer; white-space: nowrap; color: #c7c9cc; }
@@ -774,6 +781,10 @@ button { color: inherit; }
 :root[data-theme="light"] .import-chooser > header button:hover,
 :root[data-theme="light"] .find-dialog header button:hover,
 :root[data-theme="light"] .run-config-dialog header button:hover { background: #e1e3e6; color: #202124; }
+:root[data-theme="light"] .quick-filter { border-color: #c8cbd0; background: #ffffff; color: #666a71; }
+:root[data-theme="light"] .quick-filter input { color: #2b2d30; }
+:root[data-theme="light"] .quick-filter input::placeholder { color: #85888e; }
+:root[data-theme="light"] .quick-filter button:hover { background: #e4e6e9; color: #22252a; }
 :root[data-theme="light"] .git-group-untracked .git-group-title { background: #dff1e2; color: #286235; }
 :root[data-theme="light"] .git-group-changes .git-group-title { background: #f7ebcf; color: #76561b; }
 :root[data-theme="light"] .git-group-untracked .git-file-row.selected:not(.git-directory-row),

@@ -84,6 +84,7 @@ export function App() {
   const [status, setStatus] = useState<ConnectionStatus>("idle");
   const [statusMessage, setStatusMessage] = useState("");
   const [tree, setTree] = useState<FileTreeNode[]>([]);
+  const [projectFilter, setProjectFilter] = useState("");
   const [showIgnored, setShowIgnored] = useState(() => localStorage.getItem("showIgnoredFiles") === "true");
   const showIgnoredRef = useRef(showIgnored);
   const [layout, setLayout] = useState<LayoutModel>(initialLayout);
@@ -94,6 +95,7 @@ export function App() {
   const [rightSplit, setRightSplit] = useState(50);
   const [showCreateTaskDialog, setShowCreateTaskDialog] = useState(false);
   const [tasks, setTasks] = useState<WorkspaceTask[]>([]);
+  const [taskFilter, setTaskFilter] = useState("");
   const [selectedTaskId, setSelectedTaskId] = useState<string>();
   const activeTaskRef = useRef<WorkspaceTask>();
   const selectedTaskIdRef = useRef<string>();
@@ -1337,6 +1339,13 @@ export function App() {
 
   const editorFontFamily = uiFontFamily === "jetbrains" ? "JetBrains Mono Variable" : "Inter Variable";
   const editorLineHeight = Math.round(uiFontSize * uiLineHeight);
+  const filteredTree = useMemo(() => filterFileTree(tree, projectFilter), [projectFilter, tree]);
+  const normalizedTaskFilter = taskFilter.trim().toLowerCase();
+  const filteredTasks = useMemo(() => normalizedTaskFilter ? tasks.filter((task) => {
+    const summary = aiStatuses.tasks[task.id] ?? emptyAiSummary;
+    return `${task.name} ${summary.status} ${summary.preview}`.toLowerCase().includes(normalizedTaskFilter);
+  }) : tasks, [aiStatuses.tasks, normalizedTaskFilter, tasks]);
+  const showRootTask = !normalizedTaskFilter || `root workspace ${aiStatuses.root.status} ${aiStatuses.root.preview}`.toLowerCase().includes(normalizedTaskFilter);
 
   if (status !== "connected") return <ConnectionScreen {...{ host, port, status, statusMessage, setHost, setPort, connect }} />;
 
@@ -1352,8 +1361,9 @@ export function App() {
       <aside className="explorer" style={{ width: explorerWidth }}>
         {sideView === "project" ? <>
           <header className="panel-header"><span>Project</span><div className="panel-header-actions"><button title={showIgnored ? "Hide ignored files" : "Show all files (including Git-ignored)"} className={showIgnored ? "active" : ""} onClick={toggleShowIgnored}>{showIgnored ? <Eye size={14} /> : <EyeOff size={14} />}</button><button title="Synchronize files" onClick={() => void refreshTree()}><RefreshCw size={14} /></button></div></header>
+          <QuickFilter value={projectFilter} placeholder="Filter files" label="Filter project files" onChange={setProjectFilter} />
           <div className="workspace-name" onContextMenu={(event) => { event.preventDefault(); setTreeContextMenu({ x: Math.min(event.clientX, window.innerWidth - 220), y: Math.min(event.clientY, window.innerHeight - 110), node: { name: "REMOTE WORKSPACE", path: "", type: "directory" } }); }}><ChevronDown size={13} />REMOTE WORKSPACE</div>
-          <div className="tree"><Tree nodes={tree} activePath={activeTab?.path} fileColors={fileColors} gitStatuses={projectGitStatuses} onOpen={openFile} onContextMenu={(event, node) => { event.preventDefault(); setTreeContextMenu({ x: Math.min(event.clientX, window.innerWidth - 220), y: Math.min(event.clientY, window.innerHeight - 110), node }); }} /></div>
+          <div className="tree">{filteredTree.length > 0 ? <Tree nodes={filteredTree} activePath={activeTab?.path} fileColors={fileColors} gitStatuses={projectGitStatuses} expandAll={Boolean(projectFilter.trim())} onOpen={openFile} onContextMenu={(event, node) => { event.preventDefault(); setTreeContextMenu({ x: Math.min(event.clientX, window.innerWidth - 220), y: Math.min(event.clientY, window.innerHeight - 110), node }); }} /> : <div className="filter-empty">No matching files</div>}</div>
         </> : sideView === "git" ? <>
           <header className="panel-header"><span>Git Changes</span><button title="Refresh Git status" onClick={() => void refreshGit()}><RefreshCw size={14} /></button></header>
           <div className="git-branch"><GitBranch size={13} /><span>{gitBranch}</span></div>
@@ -1418,9 +1428,10 @@ export function App() {
       </main>
       {(tasksOpen || aiOpen) && <><div className="right-resize-handle" onPointerDown={beginTasksResize} />
       <aside className="tasks-panel" style={{ width: tasksWidth }}>
-        {tasksOpen && <section className="right-panel-section" style={aiOpen ? { flex: `0 0 ${rightSplit}%` } : undefined}><header className="panel-header"><span>Tasks</span><button title="Create task" disabled={taskSwitching} onClick={() => setShowCreateTaskDialog(true)}><Plus size={15} /></button></header><div className="tasks-list">
-          <TaskRow icon={<Folder size={15} />} name="Root workspace" summary={aiStatuses.root} selected={selectedTaskId === undefined} disabled={taskSwitching} onClick={() => void switchTask()} />
-          {tasks.map((task) => <TaskRow key={task.id} icon={<ListTodo size={15} />} name={task.name} summary={aiStatuses.tasks[task.id] ?? emptyAiSummary} selected={selectedTaskId === task.id} disabled={taskSwitching} onClick={() => void switchTask(task.id)} onMerge={() => void mergeTask(task)} onDelete={() => void deleteTask(task)} />)}
+        {tasksOpen && <section className="right-panel-section" style={aiOpen ? { flex: `0 0 ${rightSplit}%` } : undefined}><header className="panel-header"><span>Tasks</span><button title="Create task" disabled={taskSwitching} onClick={() => setShowCreateTaskDialog(true)}><Plus size={15} /></button></header><QuickFilter value={taskFilter} placeholder="Filter tasks" label="Filter tasks" onChange={setTaskFilter} /><div className="tasks-list">
+          {showRootTask && <TaskRow icon={<Folder size={15} />} name="Root workspace" summary={aiStatuses.root} selected={selectedTaskId === undefined} disabled={taskSwitching} onClick={() => void switchTask()} />}
+          {filteredTasks.map((task) => <TaskRow key={task.id} icon={<ListTodo size={15} />} name={task.name} summary={aiStatuses.tasks[task.id] ?? emptyAiSummary} selected={selectedTaskId === task.id} disabled={taskSwitching} onClick={() => void switchTask(task.id)} onMerge={() => void mergeTask(task)} onDelete={() => void deleteTask(task)} />)}
+          {!showRootTask && filteredTasks.length === 0 && <div className="filter-empty">No matching tasks</div>}
         </div></section>}
         {tasksOpen && aiOpen && <div className="right-panel-divider" onPointerDown={beginRightSplitResize} />}
         {aiOpen && <section className="right-panel-section"><header className="panel-header"><span>AI</span><span className={`ai-status ${aiSession.status}`}>{formatAiStatus(aiSession.status)}</span></header><AiPanel key={`${activeWorkspace}:${aiProvider}:${aiSession.id ?? "legacy"}`} provider={aiProvider} providers={aiProviders} session={aiSession} sessions={aiSessions} models={aiModels} usage={aiUsage} attachments={currentAiAttachments} onProviderChange={(provider) => void switchAiProvider(provider)} onConfigurationChange={configureAi} onAttachmentsChange={updateAiAttachments} onSend={sendAiPrompt} onSteer={steerAiPrompt} onInterrupt={() => void interruptAi()} onNewSession={() => void newAiSession()} onSwitchSession={(session) => void switchAiSession(session)} onRemoveSession={(session) => void removeAiSession(session)} onResolvePermission={(requestId, optionId) => void resolveAiPermission(requestId, optionId)} /></section>}
@@ -1498,7 +1509,21 @@ function ConnectionScreen(props: { host: string; port: string; status: Connectio
   </form></main>;
 }
 
-function Tree({ nodes, activePath, fileColors, gitStatuses, onOpen, onContextMenu }: { nodes: FileTreeNode[]; activePath?: string; fileColors: Record<string, FileColor>; gitStatuses: Record<string, "M" | "C">; onOpen(node: FileTreeNode): void; onContextMenu(event: ReactMouseEvent, node: FileTreeNode): void }) {
+function QuickFilter({ value, placeholder, label, onChange }: { value: string; placeholder: string; label: string; onChange(value: string): void }) {
+  return <div className="quick-filter"><Search size={13} /><input aria-label={label} value={value} placeholder={placeholder} onChange={(event) => onChange(event.target.value)} />{value && <button title="Clear filter" aria-label="Clear filter" onClick={() => onChange("")}><X size={12} /></button>}</div>;
+}
+
+function filterFileTree(nodes: FileTreeNode[], query: string): FileTreeNode[] {
+  const needle = query.trim().toLowerCase();
+  if (!needle) return nodes;
+  return nodes.flatMap((node) => {
+    if (node.type === "file") return `${node.name} ${node.path}`.toLowerCase().includes(needle) ? [node] : [];
+    const children = filterFileTree(node.children ?? [], needle);
+    return `${node.name} ${node.path}`.toLowerCase().includes(needle) || children.length > 0 ? [{ ...node, children }] : [];
+  });
+}
+
+function Tree({ nodes, activePath, fileColors, gitStatuses, expandAll = false, onOpen, onContextMenu }: { nodes: FileTreeNode[]; activePath?: string; fileColors: Record<string, FileColor>; gitStatuses: Record<string, "M" | "C">; expandAll?: boolean; onOpen(node: FileTreeNode): void; onContextMenu(event: ReactMouseEvent, node: FileTreeNode): void }) {
   const initialAutoExpanded = useRef(new Set(collectSingleChildDirectories(nodes)));
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set(initialAutoExpanded.current));
   useEffect(() => {
@@ -1509,8 +1534,8 @@ function Tree({ nodes, activePath, fileColors, gitStatuses, onOpen, onContextMen
   }, [nodes]);
   return <>{nodes.map((node) => node.type === "directory" ? <div key={node.path}>
     <button className={`tree-row ${fileColors[node.path] ? `file-color-${fileColors[node.path]}` : ""}`} onContextMenu={(event) => onContextMenu(event, node)} onClick={() => setExpanded((current) => { const next = new Set(current); next.has(node.path) ? next.delete(node.path) : next.add(node.path); return next; })}>
-      {expanded.has(node.path) ? <ChevronDown size={14} /> : <ChevronRight size={14} />}{expanded.has(node.path) ? <FolderOpen className="folder-kind-icon" size={15} /> : <Folder className="folder-kind-icon" size={15} />}<span>{node.name}</span>
-    </button>{expanded.has(node.path) && <div className="tree-children"><Tree nodes={node.children ?? []} activePath={activePath} fileColors={fileColors} gitStatuses={gitStatuses} onOpen={onOpen} onContextMenu={onContextMenu} /></div>}
+      {expandAll || expanded.has(node.path) ? <ChevronDown size={14} /> : <ChevronRight size={14} />}{expandAll || expanded.has(node.path) ? <FolderOpen className="folder-kind-icon" size={15} /> : <Folder className="folder-kind-icon" size={15} />}<span>{node.name}</span>
+    </button>{(expandAll || expanded.has(node.path)) && <div className="tree-children"><Tree nodes={node.children ?? []} activePath={activePath} fileColors={fileColors} gitStatuses={gitStatuses} expandAll={expandAll} onOpen={onOpen} onContextMenu={onContextMenu} /></div>}
   </div> : <FileTreeRow key={node.path} node={node} selected={activePath === node.path} color={fileColors[node.path]} gitStatus={gitStatuses[node.path]} onOpen={onOpen} onContextMenu={onContextMenu} />)}</>;
 }
 
