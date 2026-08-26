@@ -18,17 +18,25 @@ button { color: inherit; }
 .connection-message.connecting { border-color: #4da5e8; background: #1c2932; color: #b7d9f2; }
 .ide-shell { height: 100%; display: flex; flex-direction: column; background: #1e1f22; }
 .workspace-row { min-height: 0; flex: 1; display: flex; }
-.tool-stripe { width: 30px; flex: 0 0 30px; display: flex; flex-direction: column; align-items: center; padding: 2px 0; border-right: 1px solid #393b40; background: #2b2d30; }
+.tool-stripe { width: 30px; flex: 0 0 30px; display: flex; flex-direction: column; align-items: center; padding: 2px 0; overflow-y: auto; overflow-x: hidden; border-right: 1px solid #393b40; background: #2b2d30; }
 .tool-stripe-button { width: 29px; min-height: 78px; padding: 6px 0; display: flex; flex-direction: column; align-items: center; gap: 5px; border: 0; border-left: 2px solid transparent; background: transparent; color: #8b8d91; cursor: pointer; }
 .tool-stripe-button { position: relative; }
 .tool-stripe-button > span:not(.tool-badge) { writing-mode: vertical-rl; transform: rotate(180deg); font-size: 0.8462rem; letter-spacing: 0; }
 .tool-badge { position: absolute; right: 1px; bottom: 1px; min-width: 13px; height: 13px; padding: 0 2px; display: grid; place-items: center; border-radius: 6px; background: #3574f0; color: white; font-size: 0.6154rem; line-height: 1; }
 .tool-stripe-button:hover { color: #d8d9dc; background: #34363a; }
 .tool-stripe-button.active { color: #d8d9dc; border-left-color: #3574f0; background: #33353a; }
-.right-tool-stripe { width: 30px; flex: 0 0 30px; display: flex; flex-direction: column; align-items: center; padding: 2px 0; border-left: 1px solid #393b40; background: #2b2d30; }
+.right-tool-stripe { width: 30px; flex: 0 0 30px; display: flex; flex-direction: column; align-items: center; padding: 2px 0; overflow-y: auto; overflow-x: hidden; border-left: 1px solid #393b40; background: #2b2d30; }
 .tool-stripe-button.right { border-left: 0; border-right: 2px solid transparent; }
 .tool-stripe-button.right.active { border-right-color: #3574f0; }
-.explorer { flex: 0 0 auto; min-width: 180px; max-width: 500px; display: flex; flex-direction: column; background: #2b2d30; overflow: hidden; }
+.side-panel { min-height: 0; flex: 0 0 auto; display: flex; flex-direction: column; background: #2b2d30; overflow: hidden; }
+.side-panel-left { min-width: 280px; max-width: min(900px, 65vw); }
+.side-panel-right { min-width: 180px; max-width: min(700px, 55vw); }
+.classic-left-panel { min-width: 180px; max-width: 500px; }
+.classic-right-panel { min-width: 240px; max-width: min(960px, 72vw); }
+.stacked-panel { min-height: 0; flex: 1 1 0; display: flex; flex-direction: column; overflow: hidden; }
+.stacked-panel + .stacked-panel { border-top: 4px solid #393b40; }
+.classic-panel-divider { height: 5px; flex: 0 0 5px; z-index: 2; cursor: row-resize; border-top: 1px solid #393b40; }
+.classic-panel-divider:hover { background: #3574f0; }
 .panel-header, .titlebar-actions { height: 34px; flex: 0 0 34px; display: flex; align-items: center; padding: 0 8px; font-size: 1.0000rem; color: #b8babf; }
 .panel-header { justify-content: space-between; font-weight: 600; border-bottom: 1px solid #393b40; }
 .panel-header-actions { margin-left: auto; display: flex; align-items: center; gap: 2px; }
@@ -115,10 +123,6 @@ button { color: inherit; }
 .resize-handle:hover { background: #3574f0; }
 .right-resize-handle { width: 4px; margin-left: -2px; z-index: 3; cursor: col-resize; background: transparent; border-right: 1px solid #393b40; }
 .right-resize-handle:hover { background: #3574f0; }
-.tasks-panel { flex: 0 0 auto; min-width: 240px; max-width: min(960px, 72vw); display: flex; flex-direction: column; background: #2b2d30; overflow: hidden; }
-.right-panel-section { min-height: 0; flex: 1 1 0; display: flex; flex-direction: column; overflow: hidden; }
-.right-panel-divider { height: 5px; flex: 0 0 5px; z-index: 2; cursor: row-resize; background: transparent; border-top: 1px solid #393b40; }
-.right-panel-divider:hover { background: #3574f0; }
 .tasks-list { flex: 1; overflow: auto; padding: 4px 0 12px; }
 .task-row { width: 100%; min-height: 56px; position: relative; display: flex; align-items: stretch; border-left: 2px solid transparent; border-bottom: 1px solid #35373b; background: transparent; color: #bfc1c5; }
 .task-row:hover { background: #34363a; color: #e4e5e7; }
@@ -660,8 +664,7 @@ button { color: inherit; }
 :root[data-theme="light"] .find-preview-editor { background: #ffffff; color: #2b2d30; }
 :root[data-theme="light"] .tool-stripe,
 :root[data-theme="light"] .right-tool-stripe,
-:root[data-theme="light"] .explorer,
-:root[data-theme="light"] .tasks-panel,
+:root[data-theme="light"] .side-panel,
 :root[data-theme="light"] .titlebar-actions,
 :root[data-theme="light"] .tabs,
 :root[data-theme="light"] .tab,
@@ -756,7 +759,7 @@ button { color: inherit; }
 :root[data-theme="light"] .dialog-overlay,
 :root[data-theme="light"] .context-menu-layer { background: rgba(35, 38, 42, .18); }
 .run-config-dialog form > footer button:disabled { opacity: .5; cursor: default; }
-@media (max-width: 800px) { .explorer { min-width: 160px; } .titlebar-actions { font-size: 0; } }
+@media (max-width: 800px) { .side-panel-left { min-width: 240px; } .side-panel-right { min-width: 160px; } .titlebar-actions { font-size: 0; } }
 
 :root[data-theme="light"] .connection-screen { background: #f5f6f7; }
 :root[data-theme="light"] .connection-form h1 { color: #202124; }
@@ -887,8 +890,7 @@ button { color: inherit; }
 :root[data-theme="light"] .bottom-tool-count { background: #d9dce0; color: #34363a; }
 :root[data-theme="light"] .tool-stripe,
 :root[data-theme="light"] .right-tool-stripe,
-:root[data-theme="light"] .explorer,
-:root[data-theme="light"] .tasks-panel,
+:root[data-theme="light"] .side-panel,
 :root[data-theme="light"] .resize-handle,
 :root[data-theme="light"] .right-resize-handle,
 :root[data-theme="light"] .panel-header,
@@ -968,6 +970,6 @@ button { color: inherit; }
 }
 :root[data-theme="light"] .git-log-panel .git-log-details .commit-files > button.selected:hover { background: #dce9fc; }
 :root[data-theme="light"] .git-log-panel .git-log-details .commit-files > button.selected code { color: #805900; }
-:root[data-theme="light"] .explorer .git-changes .git-file-row:hover { background: #e7effd; color: #202124; }
-:root[data-theme="light"] .explorer .git-changes .git-file-row.selected,
-:root[data-theme="light"] .explorer .git-changes .git-file-row.selected:hover { background: #d9e7fb; color: #17233a; }
+:root[data-theme="light"] .side-panel .git-changes .git-file-row:hover { background: #e7effd; color: #202124; }
+:root[data-theme="light"] .side-panel .git-changes .git-file-row.selected,
+:root[data-theme="light"] .side-panel .git-changes .git-file-row.selected:hover { background: #d9e7fb; color: #17233a; }
