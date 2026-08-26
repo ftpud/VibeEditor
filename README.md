@@ -1,32 +1,26 @@
 # Vibe Editor
 
-Vibe Editor is a remote-workspace IDE built with Electron, React, Monaco Editor, Node.js, and WebSockets. The backend runs beside the project and owns filesystem, terminal, Git, Java, and AI operations. The desktop connects using only the backend IP address and port.
+Vibe Editor is an Electron desktop IDE for a local or remote workspace. A Node.js backend, Core, owns filesystem, terminal, Git, Java, HTTP, and AI operations; the React/Monaco desktop client talks to it over WebSockets and never receives an unrestricted server path.
 
-The repository contains four npm workspaces:
-
-- `@remote-ide/core`: workspace-scoped WebSocket backend.
-- `@remote-ide/desktop`: Vibe Editor Electron client.
-- `@remote-ide/gateway`: SSH connection, remote server, tunnel, and desktop launcher.
-- `@remote-ide/protocol`: shared request, response, event, and DTO types.
+This repository is under active development and currently targets source-based development and launches rather than packaged application releases.
 
 ## Requirements
 
-For local development and direct installs:
-
-- Node.js 20 or newer.
-- npm 10 or newer.
+- Node.js 20 or newer and npm.
 - Git.
-- A compiler toolchain supported by `node-pty` when a prebuilt binary is unavailable.
+- A compiler toolchain supported by `node-pty` if npm cannot use a prebuilt binary.
+- The platform libraries required by Electron.
 
-Optional backend tools:
+Optional features have additional requirements:
 
-- Java development: Maven, a project JDK, `jdb`, and the bundled JDT Language Server runtime.
-- Codex integration: an installed and authenticated `codex` CLI.
-- Copilot integration: an installed and authenticated `copilot` CLI.
-
-Gateway remote hosts need Node.js 20+, npm, Git, SSH access, and permission to read and write the configured workspace and run processes there. Gateway currently connects with a username and password. The machine running Gateway needs Electron dependencies but does not need to compile the Desktop application for every launch.
+- Java: Maven and a project JDK that provides `java`, `jdb`, `jimage`, and related tools. The installer downloads JDT LS and a Temurin 21 JRE used only to run the language server.
+- Codex: valid Codex authentication/configuration in the account running Core. The Codex ACP server itself is an npm dependency of this repository; a separate `codex` executable is not required.
+- Copilot: an installed and authenticated `copilot` CLI, or `COPILOT_CLI_PATH` pointing to it.
+- Gateway: password-based SSH access to a host with Node.js 20+, npm, Git, and permission to run processes and modify the selected workspace. The local machine must also provide `tar` and Electron's platform dependencies.
 
 ## Install
+
+Gateway is hard-coded to provision the `dev` branch, so use that branch when following the remote workflow:
 
 ```bash
 git clone --branch dev https://github.com/ftpud/VibeEditor.git
@@ -34,235 +28,152 @@ cd VibeEditor
 npm install
 ```
 
-`npm install` runs the JDT LS installer. To install Desktop or Gateway without downloading Java tooling:
+`npm install` attempts to download the pinned JDT LS and Temurin runtime. A download failure is reported as a warning because Java tooling is optional. Skip both downloads on a desktop-only installation with:
 
 ```bash
 VIBE_SKIP_JDTLS=1 npm install
 ```
 
-Install or repair Java language tooling later with:
+Install or repair them later on the machine running Core:
 
 ```bash
 npm run install:jdtls
 ```
 
+The bundled JRE installer supports Windows, macOS, and Linux on x64 or ARM64.
+
 ## Development
 
-Start Core with the absolute path of the only root workspace it may expose:
+Core requires an absolute root workspace path. Start it first:
 
 ```bash
 npm run dev:core -- --host 127.0.0.1 --port 7331 --workspace /absolute/path/to/project
 ```
 
-Start Desktop in another terminal:
+Then start Desktop in another terminal:
 
 ```bash
 npm run dev:desktop -- --host 127.0.0.1 --port 7331
 ```
 
-When both `--host` and `--port` are present, Desktop connects automatically. Without them, it displays the connection screen. The workspace path belongs only to Core and is never supplied to Desktop.
+Desktop connects automatically only when both options are supplied; otherwise it opens the connection screen. Core defaults to `127.0.0.1:7331`, but `--workspace` has no default. The development launchers compile Electron code, start Vite (`5173` for Desktop and `5174` for Gateway), and launch Electron. Core uses `tsx watch`.
 
-Start Gateway during development with:
+Run Gateway in development with:
 
 ```bash
 npm run dev:gateway
 ```
 
-The development launchers compile Electron code, run Vite, and start the corresponding Electron process.
+## Build and run
 
-## Build and Run
-
-Build every package in dependency order:
+Build all five workspaces in dependency order:
 
 ```bash
 npm run build
 ```
 
-Run the compiled backend and Desktop:
+Run the compiled Core and Desktop:
 
 ```bash
 npm run core -- --host 127.0.0.1 --port 7331 --workspace /absolute/path/to/project
 npm run desktop -- --host 127.0.0.1 --port 7331
 ```
 
-Run compiled Gateway:
+`npm run desktop` uses the existing build, so rebuild after source changes. Gateway rebuilds itself each time it starts:
 
 ```bash
 npm run gateway
 ```
 
-`npm run gateway` rebuilds Gateway before launching it. `npm run desktop` uses the existing Desktop build, so run `npm run build` after pulling changes.
+Useful checks are:
 
-## Remote Connections
+```bash
+npm run typecheck
+npm run typecheck -w @remote-ide/gateway
+npm test
+npm run build
+```
 
-Core defaults to `127.0.0.1:7331`. Binding to `0.0.0.0` makes it reachable through the host network:
+The root `typecheck` script builds ACP and Protocol, then checks Core and Desktop; the explicit workspace command checks Gateway. Tests currently live in Core and run with Vitest. The build covers all workspaces.
+
+## Remote connections
+
+For direct network access, bind Core beyond loopback only on a trusted private network:
 
 ```bash
 npm run core -- --host 0.0.0.0 --port 7331 --workspace /srv/projects/example
 ```
 
-Only do this on a trusted network with an appropriate firewall. Core has no authentication or TLS.
-
-For an SSH tunnel, keep Core bound to loopback on the remote host:
+Core has no authentication or TLS. An SSH tunnel is the safer default:
 
 ```bash
-ssh -N -L 7331:127.0.0.1:7331 user@remote-host
-npm run desktop -- --host 127.0.0.1 --port 7331
-```
-
-Choose another local port when `7331` is occupied:
-
-```bash
+# Run Core on 127.0.0.1:7331 on the remote host, then tunnel it locally.
 ssh -N -L 8733:127.0.0.1:7331 user@remote-host
 npm run desktop -- --host 127.0.0.1 --port 8733
 ```
 
-When Core runs in WSL and Desktop runs on Windows, try the WSL address or Windows localhost forwarding. If the connection is blocked, bind Core to `0.0.0.0`, allow the selected TCP port through Windows Firewall, or use SSH tunneling. Do not expose the port to the public internet.
+### Vibe Gateway
 
-## Vibe Gateway
+Gateway stores SSH connections and remote workspace definitions in its Electron application-data directory. Passwords are encrypted with Electron `safeStorage`; public-key and SSH-agent authentication are not implemented.
 
-Vibe Gateway automates the SSH workflow:
+- **Start server** clones or resets the `dev` branch in `~/.vibe`, conditionally installs dependencies/builds artifacts, selects a free loopback port if needed, and starts Core with workspace-specific PID and log files.
+- **Start client** downloads and caches the remote Desktop build by Git revision, opens a local SSH tunnel, and launches it with the local Electron runtime. Keep Gateway open while using that tunnel.
+- **Stop server** closes Gateway's tunnel and stops the Core process recorded for that workspace.
 
-1. Add one or more SSH connections with host, port, username, and password.
-2. Add remote workspaces with a remote directory and preferred Core port.
-3. Select **Start server**, **Start client**, or **Stop server**.
+Known Gateway limitation: the current remote provisioning command builds Protocol, Core, and Desktop but omits the new ACP workspace. A fresh remote checkout can therefore fail before Core is built. Until provisioning is corrected, build ACP once on the remote host and retry **Start server**:
 
-Credentials are encrypted with Electron `safeStorage` before being stored in Gateway's application-data directory.
-
-**Start server** connects over SSH, clones or updates the `dev` branch of this repository under `~/.vibe`, and checks the current Git revision against `~/.vibe-build`. Dependencies and Protocol/Core/Desktop artifacts are rebuilt only when the revision changed, required artifacts are missing, or `node_modules` is absent. Core runs on remote loopback with workspace-specific PID and log files. If the preferred port is occupied, Gateway selects an available port and persists it. The Start server button remains disabled while the server is running.
-
-**Start client** reuses platform-independent Desktop JavaScript and renderer artifacts produced on the remote host. Gateway downloads and caches those artifacts by revision, opens a local SSH tunnel, and launches Desktop with Gateway's local Electron runtime. This avoids rebuilding client source on the Windows or macOS client when the cached revision is current. Keep Gateway running because it owns the SSH tunnel.
-
-**Stop server** closes the active tunnel and stops the recorded remote Core process. Gateway checks remote PID files at startup and through the refresh action so workspace cards show current server status.
-
-## Editor
-
-The Project tool window provides a filesystem tree with automatic single-path expansion, file-type icons, Git `M`/`C` indicators, persisted icon colors, recursive Find in Files, and external-change monitoring. Open files autosave after a short pause. Clean open buffers reload after external edits; dirty buffers are preserved with a conflict warning.
-
-Editor tabs support drag-and-drop ordering, middle-click close, Close All, Close All to the Right, and detached editor windows. Modified and created files are marked in the tab strip. Monaco gutter markers show changed blocks without coloring the entire line; selecting a marker opens the previous content and a block rollback action.
-
-Supported highlighting includes TypeScript, JavaScript, JSON, HTML, CSS, XML, Java, Python, YAML, MTA/MTAEXT, SAP CDS, Markdown, and HTTP request files. Settings provide Dark/Light UI themes, Default/Ftpud highlighting, JetBrains Mono or Inter, UI font size, and line height.
-
-## Terminal
-
-The full-width bottom Terminal tool window supports multiple persisted tabs per task workspace. Terminal processes are recreated after reconnect or task switching; terminal dimensions are not persisted.
-
-- `Ctrl+C`/`Cmd+C` copies when text is selected and otherwise reaches the shell.
-- `Ctrl+V`/`Cmd+V` pastes through a single sanitized input path.
-- Right-click provides Paste.
-- `Ctrl`/`Cmd`-click opens HTTP and HTTPS links externally.
-
-Each terminal is a backend PTY rooted in the active workspace. Closing its tab terminates that PTY.
-
-## Git
-
-The Git Changes tool window shows conflicted, untracked, staged, and working-tree changes as a collapsible tree. Single-click opens a split or unified diff; double-click opens the working file. Files and individual change blocks can be rolled back with confirmation.
-
-Select changed files with the checkboxes, enter a commit message in the bottom composer, and select **Commit**. Only the selected paths are staged and committed; unrelated staged changes are excluded. The draft commit message is persisted separately for the root workspace and every task workspace.
-
-The top branch selector groups local and remote branches into expandable `/` path hierarchies. Branch leaves provide Checkout and Rename actions.
-
-The full-width bottom Git tool window provides local and remote branches, a searchable commit history with a visual branch/merge graph and ref labels, changed files, commit diffs, and compare-with-local dialogs. Right-click a branch, commit, or changed file in the log to compare it with the local working state. Editor context menus can show history for a complete file or the current selection.
-
-## Task Workspaces
-
-The Tasks tool window creates isolated Git worktrees under Core's state directory. Creating a task asks for a branch name, creates a linked worktree on that new branch, and carries the root workspace's current staged, unstaged, untracked, ignored, and deleted-file state into it. `node_modules` directories are excluded; install dependencies in a task worktree when needed so each worktree has an independent dependency tree. Selecting Root workspace returns to the original directory. Deleting a task requires confirmation and removes its worktree and task branch. Legacy copied task workspaces are converted automatically, retaining their commits and working state.
-
-Open files, active tab, terminal tabs, terminal panel state, useful local files, AI sessions, file colors, and Git commit drafts are persisted per task workspace. Task rows show AI state, the latest activity preview, Git additions/deletions, and an animated in-progress indicator.
-
-While a task is active, the Task Git tool window compares its complete working state with the upstream branch recorded when the task was created. The comparison uses the tracked remote upstream when available and otherwise the root workspace's current branch.
-
-Tasks and AI can be open simultaneously in the resizable right sidebar. Tasks appear above AI with a draggable divider; either tool window fills the sidebar when opened alone.
-
-## AI
-
-The AI tool window uses an extensible AI Capability Provider (ACP) layer with Codex CLI and Copilot CLI adapters. Providers declare their available models, reasoning levels, additional controls, usage support, MCP support, and custom-agent support; the UI is generated from those capabilities. Sessions, logs, configuration, and continuation state are persisted per task workspace. Attachment selections are scoped per task while Desktop remains open. See [docs/ACP.md](docs/ACP.md) for the plugin contract and current provider limitations.
-
-Agent presets can opt into the built-in `vibe-editor` MCP server by listing it under `mcpServers`. It exposes `task_create`, `task_create_and_start`, `task_list`, `task_delete`, `task_ai_response_tail`, and `task_append_prompt`, allowing that agent to manage isolated task worktrees, delegate and follow up on prompts, inspect task statuses, and read recent AI responses. An empty or omitted `mcpServers` list does not grant access.
-
-The Agents tool window manages global and workspace-local Markdown agent presets and also discovers `.md` presets from the active worktree's `.agents` directory. New managed agents start with a front-matter template. Select an agent from the low-contrast picker in the AI toolbar; that choice is remembered independently for Root and every task.
-
-Prompts can attach local files or workspace files. Right-click an editor and select **Attach to AI** to add the current file. Execution and command output is collapsed into expandable activity blocks. Task cards show in-progress, waiting-for-user, done, and error states so another task can be used while an AI process continues.
-
-The prompt composer has a full-width panel-style resize handle. **Clear context** starts a fresh provider context without deleting the task workspace.
-
-## Markdown, Useful Files, and HTTP
-
-Markdown opens in rendered mode by default and can switch between Preview and Edit. GitHub-flavored Markdown tables, task lists, links, code, and images are supported. Shell code blocks have Play actions. Re-running the same block reuses that block's terminal; different blocks receive separate terminals.
-
-Useful Files contains editable Global and Local sections with Create, Rename, and Delete actions. Global files are shared by backend workspaces that use the same Core state directory. Local files belong to the active root or task workspace. Useful Markdown files use the same preview and executable-shell behavior as workspace Markdown.
-
-`.http` files support multiple requests separated by `###`. A request contains a method and URL, optional headers, a blank line, and an optional body:
-
-```http
-POST https://example.test/api/items
-Authorization: Bearer token
-Content-Type: application/json
-
-{"name":"example"}
-
-###
-
-GET https://example.test/api/items
-Accept: application/json
+```bash
+ssh user@remote-host 'cd ~/.vibe && npm run build -w @remote-ide/acp'
 ```
 
-Use the editor gutter Play action to execute a request and inspect status, headers, duration, and response body.
+Gateway always resets its remote checkout to `origin/dev`; it does not deploy uncommitted local source changes.
 
-## Java and Maven
+## Features
 
-Right-click `pom.xml` and select **Load as Maven Project**. Core discovers standard Java source roots and stores Maven project options with the workspace. Additional directories can be marked as source roots from the Project context menu.
+- **Editor:** Monaco editing and diffs, autosave, external-change handling, detached windows, tab reordering, recursive search, Git gutter markers and block rollback, Markdown preview, and persisted themes/fonts/layout.
+- **Terminal:** multiple workspace-specific `node-pty` terminals with restored tab metadata. Processes are recreated after a reconnect or task switch; dimensions and shell process state are not restored.
+- **Git:** status and diffs, selective commits, push, checkout and branch rename, searchable graph/history, file/selection history, compare-with-ref, cherry-pick, and file or hunk rollback.
+- **Task workspaces:** isolated Git worktrees on new, existing, or remote branches. A new task copies the root's staged, unstaged, untracked, ignored, and deleted-file state but excludes `node_modules`. Tasks can be compared with their recorded base and merged back with normal or smart merge.
+- **AI:** a shared AI Capability Provider layer with Codex ACP and Copilot ACP adapters, model/configuration discovery, resumable sessions, permission prompts, usage data, attachments, steering, MCP servers, and global/local/workspace agent presets. See [docs/ACP.md](docs/ACP.md).
+- **Vibe MCP tools:** an agent preset may opt into the built-in `vibe-editor` MCP server to create/list/delete task worktrees, start task agents, append prompts, and inspect recent responses. It is not enabled when `mcpServers` is empty or omitted.
+- **Java/Maven:** Maven project loading, source roots, JDT LS completion/navigation/diagnostics/semantic tokens, main-class run configurations, and `jdb` debugging.
+- **HTTP and notes:** executable requests in `.http` files, executable shell blocks in Markdown, and global or workspace-local Useful Files.
 
-JDT LS supplies diagnostics, semantic highlighting, object/method/field/local-variable completion, import edits, declaration navigation, and project usages. `Ctrl/Cmd+Enter` triggers Java completion. `Ctrl/Cmd+click` navigates to declarations; invoking it on a declaration opens usages.
+## Architecture
 
-Java run configurations are selected at the top of the application. **Create new...** discovers classes containing `public static void main`. Run, Debug, and Stop use the selected configuration. The Java and Problems bottom tool windows provide Maven build/run output, JDB controls, breakpoints, local variables, compiler diagnostics, and source highlighting.
+The npm workspaces are:
 
-Maven and a suitable project JDK must be available to Core. The pinned Temurin Java 21 runtime under `.tools/` is used for JDT LS only. Run and Debug use the project's compiled output and local Java tools.
+- `@remote-ide/acp`: provider-neutral AI capability and session types.
+- `@remote-ide/protocol`: typed WebSocket requests, responses, events, and DTOs shared by Core and Desktop.
+- `@remote-ide/core`: the single-root, workspace-scoped backend and its services.
+- `@remote-ide/desktop`: the Electron/React/Monaco IDE client.
+- `@remote-ide/gateway`: the Electron SSH provisioner, tunnel owner, and Desktop launcher.
 
-## Persistence
+Each connected client is bound to the configured root or a Core-managed task worktree. Task switching replaces the active service context; clients cannot submit an arbitrary workspace path. Chokidar watches workspace and Git changes and Core sends typed refresh events to Desktop.
 
-Desktop stores client-side UI preferences — tool window visibility, side panel widths, stacked panel sizes, bottom panel heights, layout mode, theme, and fonts — in `settings.json` inside the Electron application-data directory, so they survive client restarts. Values are kept per remote workspace, and the most recent value is reused as the default for workspaces that have no stored layout yet.
-
-Core stores state outside the project under:
+Core state defaults to:
 
 ```text
 ~/.remote-ide/workspaces
 ```
 
-Set a different location before starting Core:
+Override it before starting Core:
 
 ```bash
 REMOTE_IDE_STATE_DIR=/var/lib/vibe-editor npm run core -- --workspace /srv/project
 ```
 
-State files are keyed by canonical workspace paths. They contain workspace layout options, tasks, useful files, AI session metadata, file colors, terminal restoration data, and Git commit drafts. Project source files remain in their configured workspace or task worktree.
+Core stores task registries/worktrees, workspace options, useful files, managed agent presets, AI session data, terminal restoration metadata, file colors, and commit drafts there. Workspace `.agents/*.md` presets remain in the project. Desktop stores UI settings in `settings.json` under its Electron application-data directory.
 
-Gateway uses Electron's platform application-data directory, for example `%APPDATA%/Vibe Gateway` on Windows or `~/Library/Application Support/Vibe Gateway` on macOS.
+## Current limitations and security
 
-## Verification
-
-```bash
-npm run typecheck
-npm test
-npm run build
-```
-
-The test suite covers filesystem isolation, workspace state validation, task worktrees and legacy migration, Git parsing/diffs/rollback/selective commits, HTTP execution, Java project behavior, search, and other Core services.
-
-## Security
-
-Core intentionally has no authentication, authorization, or TLS. Anyone who can reach its port can read and modify files inside the configured workspace and execute processes with Core's operating-system permissions. Run it only on loopback, a trusted private network, or through a protected SSH tunnel.
-
-Filesystem operations validate normalized and resolved paths, enforce the configured workspace boundary, and reject parent traversal and symlink escapes. This boundary does not make an unauthenticated public Core deployment safe.
-
-Electron renderers use context isolation, disable Node integration, and expose narrow preload bridges for approved desktop operations.
-
-## Architecture
-
-Each WebSocket client receives services bound to the configured root or selected task workspace. The shared protocol uses correlated typed requests and typed server events for filesystem, terminal, Git, Java, and AI updates. Desktop uses the browser WebSocket API; filesystem paths and process execution remain on Core.
-
-Core watches the active workspace and Git metadata with Chokidar. Changes trigger tree/status refreshes and safe reloads of clean editor buffers. Task switching replaces the active filesystem, workspace-state, Java, terminal, useful-file, and AI context without allowing the client to supply an arbitrary server path.
+- Core exposes one root workspace per process and has no authentication, authorization, or TLS. Anyone who can reach its port can modify files and run commands with Core's operating-system permissions. Do not expose it to the public internet.
+- Filesystem methods reject parent traversal and symlinks escaping the active workspace, but this boundary does not make an exposed Core safe. Text files, useful files, agent files, HTTP bodies, and HTTP responses are limited to 2 MB where applicable; HTTP requests time out after 30 seconds.
+- Task workspaces require the root to be a Git repository. Each task has an independent dependency tree, so run its package installation after switching when needed. Deleting a task forcibly removes its worktree and local task branch. Merging first commits all task changes; smart merge may stash and restore root changes.
+- Gateway accepts username/password authentication only, depends on the fixed public repository and `dev` branch, and owns non-persistent tunnels. Closing Gateway closes its tunnels but does not stop remote Core unless **Stop server** is used.
+- Java support is Maven-specific. The downloaded JRE runs JDT LS only; builds, runs, and debugging still depend on suitable project Java/Maven tools on the Core host.
+- The editor opens existing UTF-8 text files only; binary and invalid UTF-8 files are rejected.
 
 ## License
 
-Vibe Editor is available under the MIT License. See [LICENSE.md](LICENSE.md).
+Vibe Editor is available under the [MIT License](LICENSE.md).
