@@ -40,11 +40,12 @@ export class CodexSessionManager {
     if (this.processes.has(workspace)) throw new CoreError("INVALID_REQUEST", "Codex is already working on this task");
     const session = await this.get(workspace);
     session.model = model; session.reasoning = reasoning; session.status = "in_progress"; session.messages.push(toMessage("user", prompt.trim()));
-    await this.save(workspace, session); this.onChanged(workspace);
+    await this.save(workspace, session);
     const config = `model_reasoning_effort=${JSON.stringify(reasoning)}`;
     const args = session.threadId ? ["exec", "resume", session.threadId, "-", "--json", "-m", model, "-c", config] : ["exec", "-", "--json", "-C", workspace, "-s", "workspace-write", "-m", model, "-c", config];
     const child = spawnInShell("codex", args, workspace);
     this.processes.set(workspace, child);
+    this.onChanged(workspace);
     let stdout = ""; let stderr = "";
     child.stdin.end(prompt.trim());
     child.stdout.on("data", (chunk: Buffer) => { stdout += chunk.toString(); const lines = stdout.split("\n"); stdout = lines.pop() ?? ""; for (const line of lines) this.queue(workspace, () => this.consume(workspace, line)); });

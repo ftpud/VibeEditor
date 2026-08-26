@@ -49,18 +49,24 @@ function parseHttpRequests(content: string): ParsedHttpRequest[] {
   return requests;
 }
 
+function workspaceSettingKey(workspace: string, setting: string): string {
+  return `workspace:${encodeURIComponent(workspace)}:${setting}`;
+}
+
 export function App() {
+  const workspaceKeyRef = useRef("");
+  const wsSave = (key: string, value: string) => { localStorage.setItem(key, value); if (workspaceKeyRef.current) localStorage.setItem(workspaceSettingKey(workspaceKeyRef.current, key), value); };
   const [theme, setTheme] = useState<"dark" | "light">(() => localStorage.getItem("theme") === "light" ? "light" : "dark");
   const [highlightTheme, setHighlightTheme] = useState<HighlightTheme>(() => localStorage.getItem("highlightTheme") === "ftpud" ? "ftpud" : "default");
   const [uiFontFamily, setUiFontFamily] = useState<"jetbrains" | "inter">(() => localStorage.getItem("uiFontFamily") === "inter" ? "inter" : "jetbrains");
   const [uiFontSize, setUiFontSize] = useState(() => Math.min(20, Math.max(10, Number(localStorage.getItem("uiFontSize")) || 13)));
   const [uiLineHeight, setUiLineHeight] = useState(() => Math.min(2, Math.max(1, Number(localStorage.getItem("uiLineHeight")) || 1.2)));
   const [settingsOpen, setSettingsOpen] = useState(false);
-  useEffect(() => { document.documentElement.dataset.theme = theme; document.documentElement.style.colorScheme = theme; localStorage.setItem("theme", theme); }, [theme]);
-  useEffect(() => { localStorage.setItem("highlightTheme", highlightTheme); }, [highlightTheme]);
-  useEffect(() => { const value = uiFontFamily === "jetbrains" ? '"JetBrains Mono Variable"' : '"Inter Variable"'; document.documentElement.style.setProperty("--ui-font-family", value); localStorage.setItem("uiFontFamily", uiFontFamily); }, [uiFontFamily]);
-  useEffect(() => { document.documentElement.style.setProperty("--ui-font-size", `${uiFontSize}px`); localStorage.setItem("uiFontSize", String(uiFontSize)); }, [uiFontSize]);
-  useEffect(() => { document.documentElement.style.setProperty("--ui-line-height", String(uiLineHeight)); localStorage.setItem("uiLineHeight", String(uiLineHeight)); }, [uiLineHeight]);
+  useEffect(() => { document.documentElement.dataset.theme = theme; document.documentElement.style.colorScheme = theme; wsSave("theme", theme); }, [theme]);
+  useEffect(() => { wsSave("highlightTheme", highlightTheme); }, [highlightTheme]);
+  useEffect(() => { const value = uiFontFamily === "jetbrains" ? '"JetBrains Mono Variable"' : '"Inter Variable"'; document.documentElement.style.setProperty("--ui-font-family", value); wsSave("uiFontFamily", uiFontFamily); }, [uiFontFamily]);
+  useEffect(() => { document.documentElement.style.setProperty("--ui-font-size", `${uiFontSize}px`); wsSave("uiFontSize", String(uiFontSize)); }, [uiFontSize]);
+  useEffect(() => { document.documentElement.style.setProperty("--ui-line-height", String(uiLineHeight)); wsSave("uiLineHeight", String(uiLineHeight)); }, [uiLineHeight]);
   const saved = useMemo(() => {
     try { return JSON.parse(localStorage.getItem("connection") ?? "{}") as Partial<{ host: string; port: string }>; } catch { return {}; }
   }, []);
@@ -92,7 +98,7 @@ export function App() {
   const [activeWorkspace, setActiveWorkspace] = useState("");
   const [projectName, setProjectName] = useState("");
   const [aiSession, setAiSession] = useState<AiSession>({ model: "gpt-5.6-sol", reasoning: "low", status: "idle", messages: [] });
-  const [aiProvider, setAiProvider] = useState<AiProvider>("codex");
+  const [aiProvider, setAiProvider] = useState<AiProvider>(() => localStorage.getItem("aiProvider") === "copilot" ? "copilot" : "codex");
   const [aiModels, setAiModels] = useState<AiModel[]>([]);
   const [aiAttachments, setAiAttachments] = useState<Record<string, AiAttachment[]>>({});
   const emptyAiSummary: AiTaskSummary = { status: "idle", preview: "", additions: 0, deletions: 0 };
@@ -133,7 +139,7 @@ export function App() {
   const [searchScope, setSearchScope] = useState<string>();
   const [pendingNavigation, setPendingNavigation] = useState<{ result: SearchResult; matchLength: number }>();
   const clientRef = useRef<CoreClient>();
-  const aiProviderRef = useRef<AiProvider>("codex");
+  const aiProviderRef = useRef<AiProvider>(localStorage.getItem("aiProvider") === "copilot" ? "copilot" : "codex");
   const didAutoConnect = useRef(false);
   const layoutRef = useRef(layout);
   const treeRefreshTimer = useRef<ReturnType<typeof setTimeout>>();
@@ -366,6 +372,23 @@ export function App() {
         clientRef.current = client;
         setActiveWorkspace(result.workspace); activeWorkspaceRef.current = result.workspace;
         setProjectName(result.projectName);
+        // Load workspace-specific settings
+        const key = result.workspace;
+        workspaceKeyRef.current = key;
+        const setting = (name: string) => localStorage.getItem(workspaceSettingKey(key, name)) ?? localStorage.getItem(name);
+        const wsTheme = setting("theme");
+        if (wsTheme === "light" || wsTheme === "dark") setTheme(wsTheme);
+        const wsHighlight = setting("highlightTheme");
+        if (wsHighlight === "ftpud" || wsHighlight === "default") setHighlightTheme(wsHighlight);
+        const wsFontFamily = setting("uiFontFamily");
+        if (wsFontFamily === "inter" || wsFontFamily === "jetbrains") setUiFontFamily(wsFontFamily);
+        const wsFontSize = Number(setting("uiFontSize"));
+        if (wsFontSize >= 10 && wsFontSize <= 20) setUiFontSize(wsFontSize);
+        const wsLineHeight = Number(setting("uiLineHeight"));
+        if (wsLineHeight >= 1 && wsLineHeight <= 2) setUiLineHeight(wsLineHeight);
+        const wsProvider = setting("aiProvider") as AiProvider | null;
+        const provider = wsProvider === "copilot" ? "copilot" : "codex";
+        aiProviderRef.current = provider; setAiProvider(provider);
         setJavaOptions(result.options.javaProject);
         if (result.options.javaProject) {
           try { setJavaTree((await client.request("java.getProjectTree", {})).tree); } catch { setJavaTree([]); }
@@ -373,8 +396,17 @@ export function App() {
         await restoreWorkspaceOptions(result.options, client);
         const taskResult = await client.request("tasks.list", {});
         setTasks(taskResult.tasks); setSelectedTaskId(taskResult.selectedTaskId); activeTaskRef.current = taskResult.tasks.find((task) => task.id === taskResult.selectedTaskId);
-        setAiModels((await client.request("ai.models", { provider: aiProviderRef.current })).models);
-        await refreshAi(client);
+        const modelResult = await client.request("ai.models", { provider: aiProviderRef.current });
+        let session = (await client.request("ai.get", { provider: aiProviderRef.current })).session;
+        const savedModel = setting(`ai.${aiProviderRef.current}.model`);
+        const savedReasoning = setting(`ai.${aiProviderRef.current}.reasoning`);
+        if (savedModel && modelResult.models.some((model) => model.id === savedModel)) {
+          const model = modelResult.models.find((item) => item.id === savedModel)!;
+          const reasoning = savedReasoning && model.reasoningLevels.includes(savedReasoning) ? savedReasoning : model.defaultReasoning;
+          if (session.model !== savedModel || session.reasoning !== reasoning) session = (await client.request("ai.configure", { provider: aiProviderRef.current, model: savedModel, reasoning })).session;
+        }
+        setAiModels(modelResult.models); setAiSession(session);
+        setAiStatuses(await client.request("ai.statuses", {}));
         await refreshUsefulFiles(client);
         setTree(result.tree); setStatus("connected"); setStatusMessage("");
         void refreshGit(client); void refreshTaskGit(activeTaskRef.current, client);
@@ -396,6 +428,7 @@ export function App() {
   const disconnect = () => {
     if (hasDirtyTabs && !window.confirm("Disconnect and discard unsaved changes?")) return;
     clientRef.current?.disconnect(); clientRef.current = undefined;
+    workspaceKeyRef.current = "";
     setWorkspaceOptionsReady(false);
     setTasks([]); setSelectedTaskId(undefined);
     setJavaOptions(undefined); setJavaTree([]); setJavaRunning(false); setJavaLog("");
@@ -643,9 +676,19 @@ export function App() {
   const switchAiProvider = useCallback(async (provider: AiProvider) => {
     if (!clientRef.current || provider === aiProviderRef.current) return;
     aiProviderRef.current = provider; setAiProvider(provider);
+    wsSave("aiProvider", provider);
     try {
-      const [session, models] = await Promise.all([clientRef.current.request("ai.get", { provider }), clientRef.current.request("ai.models", { provider })]);
-      setAiSession(session.session); setAiModels(models.models);
+      const [sessionResult, models] = await Promise.all([clientRef.current.request("ai.get", { provider }), clientRef.current.request("ai.models", { provider })]);
+      let session = sessionResult.session;
+      const workspace = workspaceKeyRef.current;
+      const savedModel = workspace ? localStorage.getItem(workspaceSettingKey(workspace, `ai.${provider}.model`)) : null;
+      const savedReasoning = workspace ? localStorage.getItem(workspaceSettingKey(workspace, `ai.${provider}.reasoning`)) : null;
+      if (savedModel && models.models.some((model) => model.id === savedModel)) {
+        const model = models.models.find((item) => item.id === savedModel)!;
+        const reasoning = savedReasoning && model.reasoningLevels.includes(savedReasoning) ? savedReasoning : model.defaultReasoning;
+        if (session.model !== savedModel || session.reasoning !== reasoning) session = (await clientRef.current.request("ai.configure", { provider, model: savedModel, reasoning })).session;
+      }
+      setAiSession(session); setAiModels(models.models);
     } catch (error) { setStatusMessage(error instanceof Error ? error.message : "Could not switch AI provider"); }
   }, []);
   const attachWorkspaceFile = useCallback((path: string) => {
@@ -666,7 +709,10 @@ export function App() {
   }, [refreshAi]);
   const configureAi = useCallback(async (model: string, reasoning: string) => {
     if (!clientRef.current) return;
-    try { setAiSession((await clientRef.current.request("ai.configure", { provider: aiProviderRef.current, model, reasoning })).session); }
+    try {
+      setAiSession((await clientRef.current.request("ai.configure", { provider: aiProviderRef.current, model, reasoning })).session);
+      wsSave(`ai.${aiProviderRef.current}.model`, model); wsSave(`ai.${aiProviderRef.current}.reasoning`, reasoning);
+    }
     catch (error) { setStatusMessage(error instanceof Error ? error.message : "Could not save AI settings"); }
   }, []);
 

@@ -7,8 +7,8 @@ import { CopilotSessionManager, parseCopilotModels } from "./copilot.js";
 import { execInShell } from "./shell-process.js";
 
 describe("AI CLI integration", () => {
-  it("discovers and deduplicates models provided by Copilot help", () => {
-    const models = parseCopilotModels("--model <model> choices: GPT-5.4, claude-sonnet-4.6, gpt-5.4");
+  it("discovers and deduplicates models provided by Copilot completion", () => {
+    const models = parseCopilotModels("--model) COMPREPLY=( $(compgen -W 'auto GPT-5.4 claude-sonnet-4.6 gpt-5.4' -- \"$cur\") )");
     expect(models.map((model) => model.id)).toEqual(["auto", "gpt-5.4", "claude-sonnet-4.6"]);
   });
 

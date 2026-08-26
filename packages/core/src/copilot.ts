@@ -28,7 +28,7 @@ export class CopilotSessionManager {
 
   async models(): Promise<AiModel[]> {
     try {
-      const { stdout, stderr } = await execInShell("copilot", ["help"], { encoding: "utf8", maxBuffer: 2 * 1024 * 1024, timeout: 10_000 });
+      const { stdout, stderr } = await execInShell("copilot", ["completion", "bash"], { encoding: "utf8", maxBuffer: 2 * 1024 * 1024, timeout: 10_000 });
       const provided = parseCopilotModels(`${stdout}\n${stderr}`);
       return provided.length > 1 ? provided : copilotModels(["auto", ...FALLBACK_MODELS]);
     } catch {
@@ -42,11 +42,12 @@ export class CopilotSessionManager {
     const session = await this.get(workspace);
     session.threadId ??= crypto.randomUUID();
     session.model = model; session.reasoning = reasoning; session.status = "in_progress"; session.messages.push(toMessage("user", prompt.trim()));
-    await this.save(workspace, session); this.onChanged(workspace);
+    await this.save(workspace, session);
     const args = ["-p", prompt.trim(), "--output-format=json", "--stream=on", `--session-id=${session.threadId}`, `--reasoning-effort=${reasoning}`, "--allow-all-tools", "--no-ask-user", "--no-color"];
     if (model) args.push(`--model=${model}`);
     const child = spawnInShell("copilot", args, workspace);
     this.processes.set(workspace, child);
+    this.onChanged(workspace);
     this.toolNames.set(workspace, new Map());
     let stdout = ""; let stderr = "";
     child.stdout.on("data", (chunk: Buffer) => { stdout += chunk.toString(); const lines = stdout.split("\n"); stdout = lines.pop() ?? ""; for (const line of lines) this.queue(workspace, () => this.consume(workspace, line)); });
@@ -107,7 +108,8 @@ function toMessage(role: AiMessage["role"], text: string): AiMessage { return { 
 
 export function parseCopilotModels(helpOutput: string): AiModel[] {
   const output = helpOutput.replace(/\x1b\[[0-9;]*m/g, "");
-  const discovered = [...output.matchAll(/\b(?:gpt|claude|gemini|mai|kimi|raptor|o[1-9])[-a-z0-9._]*\b/gi)].map((match) => match[0]!.toLowerCase());
+  const choices = output.match(/--model\)\s*[\s\S]*?compgen\s+-W\s+(['"])(.*?)\1/)?.[2] ?? "";
+  const discovered = choices.split(/\s+/).filter(Boolean).map((model) => model.toLowerCase());
   return copilotModels(["auto", ...discovered]);
 }
 
