@@ -2,18 +2,19 @@ import { ChevronDown, Paperclip, Send, Settings2, Square, Trash2, X } from "luci
 import { useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import type { AiConfiguration, AiModel, AiProvider, AiProviderDescriptor, AiSession, AiUsage } from "@remote-ide/protocol";
+import type { AiConfiguration, AiContentBlock, AiModel, AiProvider, AiProviderDescriptor, AiSession, AiUsage } from "@remote-ide/protocol";
 import { ModelPicker } from "./ModelPicker";
 
-export type AiAttachment = { id: string; name: string; path?: string; content?: string };
+export type AiAttachment = { id: string; name: string; path?: string; content?: string; data?: string; mimeType?: string };
 
-export function AiPanel({ provider, providers, session, models, usage, attachments, onProviderChange, onConfigurationChange, onAttachmentsChange, onSend, onSteer, onInterrupt, onClear }: { provider: AiProvider; providers: AiProviderDescriptor[]; session: AiSession; models: AiModel[]; usage?: AiUsage; attachments: AiAttachment[]; onProviderChange(provider: AiProvider): void; onConfigurationChange(configuration: AiConfiguration): void; onAttachmentsChange(attachments: AiAttachment[]): void; onSend(prompt: string, configuration: AiConfiguration, attachments: AiAttachment[]): Promise<void>; onSteer(prompt: string): Promise<void>; onInterrupt(): void; onClear(): void }) {
+export function AiPanel({ provider, providers, session, models, usage, attachments, onProviderChange, onConfigurationChange, onAttachmentsChange, onSend, onSteer, onInterrupt, onClear, onResolvePermission }: { provider: AiProvider; providers: AiProviderDescriptor[]; session: AiSession; models: AiModel[]; usage?: AiUsage; attachments: AiAttachment[]; onProviderChange(provider: AiProvider): void; onConfigurationChange(configuration: AiConfiguration): void; onAttachmentsChange(attachments: AiAttachment[]): void; onSend(prompt: string, configuration: AiConfiguration, attachments: AiAttachment[]): Promise<void>; onSteer(prompt: string): Promise<void>; onInterrupt(): void; onClear(): void; onResolvePermission(requestId: string, optionId?: string): void }) {
   const [prompt, setPrompt] = useState("");
   const [model, setModel] = useState(session.model);
   const [reasoning, setReasoning] = useState(session.reasoning);
   const [configuration, setConfiguration] = useState<AiConfiguration>(session.configuration ?? {});
   const [composerHeight, setComposerHeight] = useState(90);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [attachmentError, setAttachmentError] = useState("");
   const endRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   useEffect(() => { setModel(session.model); setReasoning(session.reasoning); setConfiguration(session.configuration ?? {}); }, [session.model, session.reasoning, session.configuration]);
@@ -25,6 +26,7 @@ export function AiPanel({ provider, providers, session, models, usage, attachmen
   const reasoningLevels = useMemo(() => selectedModel?.reasoningLevels ?? (reasoning ? [reasoning] : []), [reasoning, selectedModel]);
   const descriptor = providers.find((item) => item.id === provider);
   const effectiveOptions = useMemo(() => { const advertised = session.availableOptions ?? []; return [...(descriptor?.options ?? []).filter((option) => !advertised.some((candidate) => candidate.id === option.id)), ...advertised]; }, [descriptor, session.availableOptions]);
+  const matchingCommands = useMemo(() => { const token = prompt.split(/\s/, 1)[0] ?? ""; return prompt.startsWith("/") ? (session.availableCommands ?? []).filter((command) => `/${command.name.replace(/^\//, "")}`.startsWith(token)).slice(0, 8) : []; }, [prompt, session.availableCommands]);
   const providerName = descriptor?.name ?? provider;
   const updateConfiguration = (values: AiConfiguration) => { const next = { ...configuration, ...values }; setConfiguration(next); onConfigurationChange({ ...next, model, reasoning }); };
   const changeModel = (nextModel: string) => { const item = models.find((candidate) => candidate.id === nextModel); const nextReasoning = item && item.reasoningLevels.length > 0 && !item.reasoningLevels.includes(reasoning) ? item.defaultReasoning : item && item.reasoningLevels.length === 0 ? "" : reasoning; setModel(nextModel); setReasoning(nextReasoning); onConfigurationChange({ ...configuration, model: nextModel, reasoning: nextReasoning }); };
@@ -38,7 +40,13 @@ export function AiPanel({ provider, providers, session, models, usage, attachmen
   };
   const addFiles = async (files: FileList | null) => {
     if (!files) return;
-    const added = await Promise.all([...files].map(async (file) => ({ id: crypto.randomUUID(), name: file.name, content: await file.text() })));
+    setAttachmentError("");
+    const added: AiAttachment[] = [];
+    for (const file of [...files]) {
+      if (file.type.startsWith("image/")) added.push({ id: crypto.randomUUID(), name: file.name, mimeType: file.type, data: await readBase64(file) });
+      else if (isTextFile(file)) added.push({ id: crypto.randomUUID(), name: file.name, mimeType: file.type || "text/plain", content: await file.text() });
+      else setAttachmentError(`${file.name} is a binary file type that this ACP prompt cannot embed.`);
+    }
     onAttachmentsChange([...attachments, ...added]);
     if (fileInputRef.current) fileInputRef.current.value = "";
   };
@@ -66,18 +74,24 @@ export function AiPanel({ provider, providers, session, models, usage, attachmen
     </section>}
     <div className="ai-messages">
       {session.messages.length === 0 && <div className="ai-empty">Start a {providerName} task for this workspace.</div>}
-      {session.messages.map((message) => message.role === "activity" ? <ActivityMessage key={message.id} text={message.text} /> : <article key={message.id} className={`ai-message ${message.role}`}><header>{message.role === "user" ? "You" : message.role === "assistant" ? providerName : "Error"}</header><div>{message.role === "assistant" ? <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.text}</ReactMarkdown> : <pre>{message.text}</pre>}</div></article>)}
+      {session.messages.map((message) => message.role === "activity" ? <ActivityMessage key={message.id} text={message.text} content={message.content} /> : <article key={message.id} className={`ai-message ${message.role}`}><header>{message.role === "user" ? "You" : message.role === "assistant" ? providerName : "Error"}</header><div>{message.role === "assistant" ? <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.text}</ReactMarkdown> : <pre>{message.text}</pre>}<RichContent content={message.content} /></div></article>)}
+      {session.pendingPermission && <section className="ai-permission"><strong>Permission required</strong><span>{session.pendingPermission.title}</span>{session.pendingPermission.details && <pre>{session.pendingPermission.details}</pre>}<div>{session.pendingPermission.options.map((option) => <button key={option.optionId} className={option.kind.startsWith("reject") ? "reject" : "allow"} onClick={() => onResolvePermission(session.pendingPermission!.id, option.optionId)}>{option.name}</button>)}<button className="reject" onClick={() => onResolvePermission(session.pendingPermission!.id)}>Cancel</button></div></section>}
       {running && <div className="ai-working"><span />{providerName} is working...</div>}
       <div ref={endRef} />
     </div>
     <div className="ai-composer-resize-handle" onPointerDown={beginComposerResize} />
     <form className="ai-composer" style={{ height: composerHeight }} onSubmit={(event) => { event.preventDefault(); void send(); }}>
+      {attachmentError && <div className="ai-attachment-error">{attachmentError}</div>}
+      {matchingCommands.length > 0 && <div className="ai-command-menu">{matchingCommands.map((command) => <button type="button" key={command.name} onClick={() => setPrompt(`/${command.name.replace(/^\//, "")} `)}><strong>/{command.name.replace(/^\//, "")}</strong><span>{command.description}{command.inputHint ? ` · ${command.inputHint}` : ""}</span></button>)}</div>}
       {attachments.length > 0 && <div className="ai-attachments">{attachments.map((attachment) => <span className="ai-attachment" key={attachment.id} title={attachment.path ?? attachment.name}><span>{attachment.path ?? attachment.name}</span><button type="button" title={`Remove ${attachment.name}`} onClick={() => onAttachmentsChange(attachments.filter((item) => item.id !== attachment.id))}><X size={12} /></button></span>)}</div>}
       <textarea value={prompt} placeholder={running ? (session.steering ? `Steer ${providerName} while it works...` : `Queue a follow-up for ${providerName}...`) : `Ask ${providerName}...`} onChange={(event) => setPrompt(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void send(); } }} />
       <div className="ai-composer-actions"><input ref={fileInputRef} type="file" multiple onChange={(event) => void addFiles(event.target.files)} /><button type="button" title="Attach files" disabled={running} onClick={() => fileInputRef.current?.click()}><Paperclip size={15} /></button><button title={running ? (session.steering ? "Add input to the running turn" : "Queue this for the next turn") : "Send prompt"} disabled={!prompt.trim() && (running || attachments.length === 0)}><Send size={15} /></button></div>
     </form>
   </div>;
 }
+
+function isTextFile(file: File): boolean { return file.type.startsWith("text/") || /(?:json|xml|yaml|javascript|typescript|markdown|csv|toml|sql)$/.test(file.type) || /\.(?:txt|md|json|jsonl|ya?ml|xml|csv|toml|ini|log|tsx?|jsx?|css|html?|sql|py|java|c|cc|cpp|h|hpp|rs|go|sh)$/i.test(file.name); }
+function readBase64(file: File): Promise<string> { return new Promise((resolve, reject) => { const reader = new FileReader(); reader.onerror = () => reject(reader.error); reader.onload = () => resolve(String(reader.result).split(",", 2)[1] ?? ""); reader.readAsDataURL(file); }); }
 
 function SettingRow({ name, description, children }: { name: string; description: string; children: React.ReactNode }) {
   return <label className="ai-setting-row"><span><strong>{name}</strong><small>{description}</small></span><span className="ai-setting-control">{children}</span></label>;
@@ -89,7 +103,7 @@ function selectValue(option: { choices?: { value: string }[]; defaultValue: stri
   return option.choices?.some((choice) => choice.value === current) ? current : String(option.defaultValue);
 }
 
-function ActivityMessage({ text }: { text: string }) {
+function ActivityMessage({ text, content }: { text: string; content?: AiContentBlock[] }) {
   const [firstLine, ...output] = text.split("\n");
   const summary = firstLine?.trim() || "Execution details";
   const reasoning = summary === "Reasoning";
@@ -102,11 +116,13 @@ function ActivityMessage({ text }: { text: string }) {
       <div className="ai-reasoning-content"><ReasoningMarkdown>{content}</ReasoningMarkdown></div>
     </details>;
   }
-  return <details className="ai-activity">
+  return <><details className="ai-activity">
     <summary><span>Execution</span><code>{summary}</code></summary>
     <pre>{output.length > 0 ? output.join("\n") : text}</pre>
-  </details>;
+  </details><RichContent content={content} /></>;
 }
+
+function RichContent({ content }: { content?: AiContentBlock[] }) { return <>{content?.map((block, index) => block.type === "image" ? <img className="ai-content-image" key={index} src={`data:${block.mimeType};base64,${block.data}`} alt={block.name ?? "ACP image output"} /> : block.type === "resource" || block.type === "resource_link" ? <a className="ai-content-resource" key={index} href={block.uri} title={block.uri}>{block.type === "resource_link" ? block.name : block.name ?? block.uri}</a> : null)}</>; }
 
 function ReasoningMarkdown({ children }: { children: string }) {
   return <ReactMarkdown remarkPlugins={[remarkGfm]} components={{ strong: ({ children: value }) => <em>{value}</em> }}>{children}</ReactMarkdown>;

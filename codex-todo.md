@@ -125,11 +125,11 @@ The current implementation is suitable for self-contained tasks completed in one
 
 Before considering ACP a CLI replacement, implement these items in order:
 
-1. [ ] Use ACP `loadSession` or resume with the saved `threadId`.
-2. [ ] Apply configuration in place without terminating the thread.
-3. [ ] Add a permission-review UI with allow and reject choices.
-4. [ ] Support native ACP content blocks and image attachments.
+1. [x] Use ACP `loadSession` or resume with the saved `threadId`.
+2. [x] Apply configuration in place without terminating the thread.
+3. [x] Add a permission-review UI with allow and reject choices.
+4. [x] Support native ACP content blocks and image attachments.
 5. [ ] Add authentication and elicitation handlers.
 6. [ ] Surface command discovery, goals, account limits, and richer events.
 7. [ ] Add session list, fork, archive, and delete controls.
-8. [ ] Repair and extend the failing ACP transport tests.
+8. [x] Repair and extend the failing ACP transport tests.

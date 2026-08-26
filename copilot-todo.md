@@ -35,11 +35,11 @@ The visible transcript can therefore disagree with what Copilot remembers. A lat
 
 ### Required work
 
-1. [ ] Inspect `agentCapabilities.loadSession` and session capabilities during initialization.
-2. [ ] Call ACP load/resume with the persisted session ID when reopening a workspace.
-3. [ ] Reconstruct the visible transcript from the authoritative loaded ACP history where available.
+1. [x] Inspect `agentCapabilities.loadSession` and session capabilities during initialization.
+2. [x] Call ACP load/resume with the persisted session ID when reopening a workspace.
+3. [x] Reconstruct the visible transcript from the authoritative loaded ACP history where available.
 4. [ ] Expose session list, new, rename, close, and resume operations in the UI.
-5. [ ] Do not restart the session for options that ACP can change in place.
+5. [x] Do not restart the session for options that ACP can change in place.
 
 ## 2. Permission handling removes Copilot's main safety boundary
 
@@ -51,9 +51,9 @@ The Copilot session can report `allow_all = off` while Vibe still approves each 
 
 ### Required work
 
-1. [ ] Add a blocking permission card showing tool name, command/path/URL, affected scope, and every ACP response option.
-2. [ ] Require an explicit user choice for approval or rejection.
-3. [ ] Distinguish allow-once, allow-for-session, and persisted approval semantics.
+1. [x] Add a blocking permission card showing tool name, command/path/URL, affected scope, and every ACP response option.
+2. [x] Require an explicit user choice for approval or rejection.
+3. [x] Distinguish allow-once, allow-for-session, and persisted approval semantics.
 4. [ ] Add launch-time tool availability plus allow/deny rules.
 5. [ ] Add URL, path, sandbox, and temporary-directory controls.
 6. [ ] Add an obvious full-access warning for `allow_all` and autopilot.
@@ -81,8 +81,8 @@ GitHub notes that some ACP settings are server-launch settings and are inherited
 ### Required work
 
 1. [ ] Wait for authoritative model/reasoning configuration before applying stored choices.
-2. [ ] Treat later `config_option_update` messages as initialization state, then apply the user's desired value once the option appears.
-3. [ ] Pass server-scoped configuration at process launch where required.
+2. [x] Treat later `config_option_update` messages as initialization state, then apply the user's desired value once the option appears.
+3. [x] Pass server-scoped configuration at process launch where required.
 4. [ ] Do not show the hardcoded fallback catalogue when BYOK fixes the server to a different model.
 5. [ ] Confirm the applied model and effort from Copilot's response and warn when they cannot be changed.
 6. [ ] Add tests for GitHub-hosted and BYOK initialization sequences.
@@ -109,11 +109,11 @@ Copilot CLI supports native `--attachment` input, subject to model and organizat
 
 ### Required work
 
-1. [ ] Change the request contract from one string to ACP content blocks.
-2. [ ] Send supported images as ACP image blocks.
-3. [ ] Send text files as embedded resources with URI and MIME type.
-4. [ ] Reject unsupported binary files with a clear message instead of calling `file.text()`.
-5. [ ] Render image and resource output from tool calls.
+1. [x] Change the request contract from one string to ACP content blocks.
+2. [x] Send supported images as ACP image blocks.
+3. [x] Send text files as embedded resources with URI and MIME type.
+4. [x] Reject unsupported binary files with a clear message instead of calling `file.text()`.
+5. [x] Render image and resource output from tool calls.
 
 ## 5. Copilot's dynamic command surface is available but invisible
 
@@ -134,11 +134,11 @@ GitHub documents both the supported ACP commands and terminal-only exclusions in
 
 ### Required work
 
-1. [ ] Store each complete `available_commands_update` snapshot on the session.
-2. [ ] Add slash completion and a searchable command menu.
-3. [ ] Display each command's description and argument hint.
+1. [x] Store each complete `available_commands_update` snapshot on the session.
+2. [x] Add slash completion and a searchable command menu.
+3. [x] Display each command's description and argument hint.
 4. [ ] Add native UI equivalents for session resume, diff review, login, tasks, and undo/rewind.
-5. [ ] Prevent known terminal-only commands from being accidentally forwarded to the model as prose.
+5. [x] Prevent known terminal-only commands from being accidentally forwarded to the model as prose.
 
 ## 6. Authentication requires prior CLI setup
 
@@ -192,7 +192,7 @@ Persistent MCP servers configured in Copilot CLI may still load normally, but Vi
 
 ### Required work
 
-1. [ ] Extend `AiMcpServer` with stdio, HTTP, and SSE variants.
+1. [x] Extend `AiMcpServer` with stdio, HTTP, and SSE variants.
 2. [ ] Add URL/header/OAuth and timeout fields with secure secret storage.
 3. [ ] Add enabled-tool and disabled-tool filters.
 4. [ ] Surface MCP startup/authentication errors and server status.

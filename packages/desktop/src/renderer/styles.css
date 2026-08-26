@@ -239,12 +239,24 @@ button { color: inherit; }
 .ai-working span { width: 7px; height: 7px; border-radius: 50%; background: #579dff; animation: pulse 1.1s infinite alternate; }
 .ai-composer-resize-handle { height: 5px; flex: 0 0 5px; z-index: 2; cursor: row-resize; border-top: 1px solid #393b40; background: transparent; }
 .ai-composer-resize-handle:hover { background: #3574f0; }
-.ai-composer { flex: 0 0 auto; box-sizing: border-box; padding: 6px; display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-rows: minmax(0, 1fr); gap: 5px; }
+.ai-composer { position: relative; flex: 0 0 auto; box-sizing: border-box; padding: 6px; display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-rows: minmax(0, 1fr); gap: 5px; }
 .ai-composer:has(.ai-attachments) { grid-template-rows: auto minmax(0, 1fr); }
 .ai-attachments { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 4px; max-height: 76px; overflow: auto; }
 .ai-attachment { min-width: 0; max-width: 100%; height: 24px; display: flex; align-items: center; gap: 3px; padding-left: 7px; border: 1px solid #4b4d52; border-radius: 3px; background: #2b2d30; color: #cfd1d4; font-size: 0.8462rem; }
 .ai-attachment > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ai-attachment button { width: 22px; height: 22px; display: grid; place-items: center; border: 0; background: transparent; color: #9da0a5; cursor: pointer; }
+.ai-attachment-error { grid-column: 1 / -1; color: #ff8b8b; font-size: 0.8rem; }
+.ai-content-image { display: block; max-width: 100%; max-height: 360px; margin-top: 8px; border-radius: 4px; }
+.ai-permission { margin: 8px; padding: 10px; display: grid; gap: 7px; border: 1px solid #d49b36; border-radius: 5px; background: #30291d; }
+.ai-permission pre { max-height: 150px; overflow: auto; margin: 0; white-space: pre-wrap; }
+.ai-permission > div { display: flex; flex-wrap: wrap; gap: 6px; }
+.ai-permission button { padding: 4px 8px; border: 1px solid #60636a; border-radius: 3px; cursor: pointer; }
+.ai-permission button.allow { background: #315d3b; color: white; }
+.ai-permission button.reject { background: #5e3434; color: white; }
+.ai-command-menu { position: absolute; left: 8px; right: 8px; bottom: calc(100% + 4px); z-index: 4; display: grid; max-height: 240px; overflow: auto; border: 1px solid #55585f; background: #25272b; box-shadow: 0 5px 18px #0008; }
+.ai-command-menu button { padding: 7px 9px; display: grid; grid-template-columns: auto 1fr; gap: 10px; border: 0; border-bottom: 1px solid #3d3f44; background: transparent; color: inherit; text-align: left; cursor: pointer; }
+.ai-command-menu button:hover { background: #34373d; }
+.ai-command-menu span { overflow: hidden; color: #aeb1b7; text-overflow: ellipsis; white-space: nowrap; }
 .ai-composer textarea { min-width: 0; min-height: 0; height: 100%; resize: none; padding: 7px; border: 1px solid #4b4d52; border-radius: 3px; outline: none; background: #1e1f22; color: #e2e3e5; font: inherit; }
 .ai-composer textarea:focus { border-color: #3574f0; }
 .ai-composer-actions { align-self: end; display: flex; flex-direction: column; gap: 4px; }
