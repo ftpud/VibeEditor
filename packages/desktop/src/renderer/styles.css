@@ -148,6 +148,10 @@ button { color: inherit; }
 .ai-status.error { color: #dc747c; }
 .ai-panel { min-height: 0; flex: 1; display: flex; flex-direction: column; }
 .ai-toolbar { padding: 7px; display: grid; grid-template-columns: minmax(90px, .75fr) minmax(110px, 1fr) 38px 28px; gap: 6px; align-items: end; border-bottom: 1px solid #393b40; }
+.ai-quick-settings { padding: 6px 7px; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; border-bottom: 1px solid #393b40; }
+.ai-quick-setting { min-width: 0; display: flex; align-items: center; gap: 6px; color: #a6a9ae; font-size: .6923rem; font-weight: 600; letter-spacing: .03em; text-transform: uppercase; }
+.ai-quick-setting select { height: 24px; padding: 0 5px; }
+.ai-quick-toggle { margin-left: auto; }
 .ai-provider-picker, .ai-model-picker { min-width: 0; display: grid; gap: 3px; }
 .ai-model-picker { position: relative; }
 .ai-provider-picker > span, .ai-model-picker > span { color: #85888e; font-size: .6923rem; font-weight: 600; letter-spacing: .03em; text-transform: uppercase; }
@@ -260,7 +264,8 @@ button { color: inherit; }
 .ai-attachment button { width: 22px; height: 22px; display: grid; place-items: center; border: 0; background: transparent; color: #9da0a5; cursor: pointer; }
 .ai-attachment-error { grid-column: 1 / -1; color: #ff8b8b; font-size: 0.8rem; }
 .ai-content-image { display: block; max-width: 100%; max-height: 360px; margin-top: 8px; border-radius: 4px; }
-.ai-permission { margin: 8px; padding: 10px; display: grid; gap: 7px; border: 1px solid #d49b36; border-radius: 5px; background: #30291d; }
+.ai-permission { margin: 8px; padding: 10px; display: grid; gap: 7px; border: 1px solid #d49b36; border-radius: 5px; background: #30291d; color: #ecd9b4; }
+.ai-permission pre, .ai-permission strong, .ai-permission span { color: inherit; }
 .ai-permission pre { max-height: 150px; overflow: auto; margin: 0; white-space: pre-wrap; }
 .ai-permission > div { display: flex; flex-wrap: wrap; gap: 6px; }
 .ai-permission button { padding: 4px 8px; border: 1px solid #60636a; border-radius: 3px; cursor: pointer; }
@@ -693,6 +698,13 @@ button { color: inherit; }
 :root[data-theme="light"] .task-row.selected .task-title strong,
 :root[data-theme="light"] .tree-row.selected { color: #17233a; }
 :root[data-theme="light"] .ai-message { background: #f5f6f7; }
+:root[data-theme="light"] .ai-permission { background: #fff8e6; border-color: #d9a441; color: #5f4611; }
+:root[data-theme="light"] .ai-permission button { border-color: #c2c5ca; }
+:root[data-theme="light"] .ai-permission button.allow { background: #2f7d40; color: #ffffff; }
+:root[data-theme="light"] .ai-permission button.reject { background: #f2f3f5; color: #9f292f; border-color: #d9b0b3; }
+:root[data-theme="light"] .ai-quick-settings { border-color: #d5d7da; }
+:root[data-theme="light"] .ai-quick-setting { color: #55585e; }
+:root[data-theme="light"] .ai-quick-setting select { background: #ffffff; color: #2b2d30; border-color: #b8bbc0; }
 :root[data-theme="light"] .ai-settings, :root[data-theme="light"] .ai-sessions, :root[data-theme="light"] .ai-sessions > header { background: #f7f8fa; }
 :root[data-theme="light"] .ai-settings > header,
 :root[data-theme="light"] .ai-setting-section,
