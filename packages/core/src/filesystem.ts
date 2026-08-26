@@ -1,15 +1,19 @@
+import { execFile } from "node:child_process";
 import { constants } from "node:fs";
 import { access, lstat, readFile, readdir, realpath, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { promisify } from "node:util";
 import type { FileTreeNode } from "@remote-ide/protocol";
 import { CoreError } from "./errors.js";
+
+const execFileAsync = promisify(execFile);
 
 export const MAX_FILE_SIZE = 2 * 1024 * 1024;
 
 export class WorkspaceFileSystem {
   private workspace?: string;
 
-  async open(workspacePath: string): Promise<FileTreeNode[]> {
+  async open(workspacePath: string, includeIgnored = false): Promise<FileTreeNode[]> {
     if (!path.isAbsolute(workspacePath)) {
       throw new CoreError("WORKSPACE_NOT_FOUND", "Workspace path must be absolute");
     }
@@ -17,7 +21,7 @@ export class WorkspaceFileSystem {
       const info = await stat(workspacePath);
       if (!info.isDirectory()) throw new Error("not a directory");
       this.workspace = await realpath(workspacePath);
-      return await this.listTree();
+      return await this.listTree(includeIgnored);
     } catch (error) {
       this.workspace = undefined;
       if (error instanceof CoreError) throw error;
@@ -30,8 +34,12 @@ export class WorkspaceFileSystem {
     return this.workspace;
   }
 
-  async listTree(): Promise<FileTreeNode[]> {
+  async listTree(includeIgnored = false): Promise<FileTreeNode[]> {
     const root = this.getWorkspace();
+    if (!includeIgnored) {
+      const tracked = await listGitPaths(root);
+      if (tracked) return buildTreeFromPaths(tracked);
+    }
     return this.walkDirectory(root, "");
   }
 
@@ -120,4 +128,48 @@ export class WorkspaceFileSystem {
     }
     return nodes;
   }
+}
+
+async function listGitPaths(root: string): Promise<string[] | undefined> {
+  try {
+    const { stdout } = await execFileAsync("git", ["-C", root, "ls-files", "--cached", "--others", "--exclude-standard", "-z"], {
+      encoding: "utf8",
+      maxBuffer: 64 * 1024 * 1024
+    });
+    return stdout.split("\0").filter((entry) => entry.length > 0);
+  } catch {
+    return undefined;
+  }
+}
+
+function buildTreeFromPaths(paths: string[]): FileTreeNode[] {
+  const rootNodes: FileTreeNode[] = [];
+  const directories = new Map<string, FileTreeNode[]>([["", rootNodes]]);
+  const seen = new Set<string>();
+  for (const entry of paths) {
+    const segments = entry.split("/").filter((segment) => segment.length > 0);
+    if (segments.length === 0) continue;
+    let relative = "";
+    for (let index = 0; index < segments.length; index += 1) {
+      const name = segments[index]!;
+      const parent = directories.get(relative)!;
+      relative = relative ? `${relative}/${name}` : name;
+      if (seen.has(relative)) continue;
+      seen.add(relative);
+      if (index === segments.length - 1) {
+        parent.push({ name, path: relative, type: "file" });
+      } else {
+        const children: FileTreeNode[] = [];
+        parent.push({ name, path: relative, type: "directory", children });
+        directories.set(relative, children);
+      }
+    }
+  }
+  sortTree(rootNodes);
+  return rootNodes;
+}
+
+function sortTree(nodes: FileTreeNode[]): void {
+  nodes.sort((a, b) => Number(b.type === "directory") - Number(a.type === "directory") || a.name.localeCompare(b.name));
+  for (const node of nodes) if (node.children) sortTree(node.children);
 }

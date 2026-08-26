@@ -1,5 +1,5 @@
 import Editor, { DiffEditor, type Monaco } from "@monaco-editor/react";
-import { ArrowUpRight, Bot, Braces, Bug, CaseSensitive, Check, ChevronDown, ChevronRight, ChevronUp, CircleAlert, Coffee, Columns2, Eye, File, FileCode2, FileDiff, FileJson, FileText, Folder, FolderOpen, GitBranch, GitCompareArrows, GitMerge, Hash, Library, ListTodo, ListTree, LoaderCircle, LogOut, MoreVertical, Package, Palette, Pencil, Play, Plus, RefreshCw, Save, Search, Settings, ShieldAlert, Square, SquareTerminal, Trash2, X } from "lucide-react";
+import { ArrowUpRight, Bot, Braces, Bug, CaseSensitive, Check, ChevronDown, ChevronRight, ChevronUp, CircleAlert, Coffee, Columns2, Eye, EyeOff, File, FileCode2, FileDiff, FileJson, FileText, Folder, FolderOpen, GitBranch, GitCompareArrows, GitMerge, Hash, Library, ListTodo, ListTree, LoaderCircle, LogOut, MoreVertical, Package, Palette, Pencil, Play, Plus, RefreshCw, Save, Search, Settings, ShieldAlert, Square, SquareTerminal, Trash2, X } from "lucide-react";
 import { isValidElement, useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
 import type { AiConfiguration, AiModel, AiProvider, AiProviderDescriptor, AiSession, AiStatus, AiTaskSummary, AiUsage, FileColor, FileTreeNode, GitBranch as GitBranchInfo, GitDiffHunk, GitStatusEntry, HttpResponse, JavaBreakpoint, JavaDebugState, JavaDiagnostic, JavaLspLocation, JavaMainClass, JavaProjectNode, JavaProjectOptions, JavaTypeSuggestion, SearchResult, UsefulFile, UsefulFileScope, WorkspaceOptions, WorkspaceTask } from "@remote-ide/protocol";
 import type { editor } from "monaco-editor";
@@ -84,6 +84,8 @@ export function App() {
   const [status, setStatus] = useState<ConnectionStatus>("idle");
   const [statusMessage, setStatusMessage] = useState("");
   const [tree, setTree] = useState<FileTreeNode[]>([]);
+  const [showIgnored, setShowIgnored] = useState(() => localStorage.getItem("showIgnoredFiles") === "true");
+  const showIgnoredRef = useRef(showIgnored);
   const [layout, setLayout] = useState<LayoutModel>(initialLayout);
   const [explorerWidth, setExplorerWidth] = useState(260);
   const [tasksWidth, setTasksWidth] = useState(300);
@@ -377,7 +379,7 @@ export function App() {
       }
       if (treeRefreshTimer.current) clearTimeout(treeRefreshTimer.current);
       treeRefreshTimer.current = setTimeout(() => {
-        void client.request("filesystem.listTree", {})
+        void client.request("filesystem.listTree", { includeIgnored: showIgnoredRef.current })
           .then((result) => setTree(result.tree))
           .catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : "Automatic refresh failed"));
       }, 150);
@@ -415,7 +417,7 @@ export function App() {
     try {
       await client.connect(host.trim(), Number(port));
       try {
-        const result = await client.request("workspace.open", {});
+        const result = await client.request("workspace.open", { includeIgnored: showIgnoredRef.current });
         clientRef.current = client;
         setActiveWorkspace(result.workspace); activeWorkspaceRef.current = result.workspace;
         setProjectName(result.projectName);
@@ -735,7 +737,7 @@ export function App() {
       const currentTerminal = layoutRef.current.terminalGroup;
       const currentActiveTerminalIndex = currentTerminal.tabs.findIndex((tab) => tab.id === currentTerminal.activeTabId);
       await clientRef.current.request("workspace.saveOptions", { options: { openFiles: currentFiles.map((tab) => tab.path), ...(currentFiles.find((tab) => tab.id === currentGroup.activeTabId) ? { activeFile: currentFiles.find((tab) => tab.id === currentGroup.activeTabId)!.path } : {}), ...(javaOptionsRef.current ? { javaProject: javaOptionsRef.current } : {}), terminal: { tabs: currentTerminal.tabs.map((tab) => ({ title: tab.title })), ...(currentActiveTerminalIndex >= 0 ? { activeTabIndex: currentActiveTerminalIndex } : {}), panelOpen: layoutRef.current.panels.some((panel) => panel.type === "terminal") }, ...(Object.keys(fileColors).length ? { fileColors } : {}), ...(gitCommitMessage ? { gitCommitMessage } : {}) } });
-      const result = await clientRef.current.request("tasks.switch", { ...(taskId ? { taskId } : {}) });
+      const result = await clientRef.current.request("tasks.switch", { ...(taskId ? { taskId } : {}), includeIgnored: showIgnoredRef.current });
       terminalWriters.current.clear(); terminalBuffers.current.clear(); markdownBlockTerminals.current.clear();
       setLayout((current) => ({ ...current, panels: current.panels.filter((panel) => !["terminal", "java", "problems"].includes(panel.type)), terminalGroup: { ...current.terminalGroup, tabs: [], activeTabId: undefined } }));
       setTasks(result.tasks); setSelectedTaskId(result.selectedTaskId); selectedTaskIdRef.current = result.selectedTaskId; activeTaskRef.current = result.tasks.find((task) => task.id === result.selectedTaskId); setTree(result.tree);
@@ -903,9 +905,16 @@ export function App() {
     window.addEventListener("keydown", listener); return () => window.removeEventListener("keydown", listener);
   }, [saveActive]);
 
-  const refreshTree = async () => {
-    try { setTree((await clientRef.current!.request("filesystem.listTree", {})).tree); }
+  const refreshTree = async (includeIgnored = showIgnoredRef.current) => {
+    try { setTree((await clientRef.current!.request("filesystem.listTree", { includeIgnored })).tree); }
     catch (error) { setStatusMessage(error instanceof Error ? error.message : "Refresh failed"); }
+  };
+
+  const toggleShowIgnored = () => {
+    const next = !showIgnoredRef.current;
+    showIgnoredRef.current = next; setShowIgnored(next);
+    localStorage.setItem("showIgnoredFiles", String(next));
+    if (clientRef.current) void refreshTree(next);
   };
 
   const beginResize = (event: React.PointerEvent) => {
@@ -1342,7 +1351,7 @@ export function App() {
       </nav>
       <aside className="explorer" style={{ width: explorerWidth }}>
         {sideView === "project" ? <>
-          <header className="panel-header"><span>Project</span><button title="Synchronize files" onClick={() => void refreshTree()}><RefreshCw size={14} /></button></header>
+          <header className="panel-header"><span>Project</span><button title={showIgnored ? "Hide ignored files" : "Show all files (including Git-ignored)"} className={showIgnored ? "active" : ""} onClick={toggleShowIgnored}>{showIgnored ? <Eye size={14} /> : <EyeOff size={14} />}</button><button title="Synchronize files" onClick={() => void refreshTree()}><RefreshCw size={14} /></button></header>
           <div className="workspace-name" onContextMenu={(event) => { event.preventDefault(); setTreeContextMenu({ x: Math.min(event.clientX, window.innerWidth - 220), y: Math.min(event.clientY, window.innerHeight - 110), node: { name: "REMOTE WORKSPACE", path: "", type: "directory" } }); }}><ChevronDown size={13} />REMOTE WORKSPACE</div>
           <div className="tree"><Tree nodes={tree} activePath={activeTab?.path} fileColors={fileColors} gitStatuses={projectGitStatuses} onOpen={openFile} onContextMenu={(event, node) => { event.preventDefault(); setTreeContextMenu({ x: Math.min(event.clientX, window.innerWidth - 220), y: Math.min(event.clientY, window.innerHeight - 110), node }); }} /></div>
         </> : sideView === "git" ? <>

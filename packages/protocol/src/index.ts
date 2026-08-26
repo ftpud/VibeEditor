@@ -73,7 +73,7 @@ export type SearchResult = { path: string; line: number; column: number; preview
 
 export type ProtocolOperations = {
   "workspace.open": {
-    payload: Record<string, never>;
+    payload: { includeIgnored?: boolean };
     result: { workspace: string; projectName: string; tree: FileTreeNode[]; options: WorkspaceOptions };
   };
   "workspace.saveOptions": {
@@ -83,7 +83,7 @@ export type ProtocolOperations = {
   "tasks.list": { payload: Record<string, never>; result: { tasks: WorkspaceTask[]; selectedTaskId?: string } };
   "tasks.create": { payload: { branch: string }; result: { task: WorkspaceTask } };
   "tasks.merge": { payload: { taskId: string }; result: { targetBranch: string } };
-  "tasks.switch": { payload: { taskId?: string }; result: { workspace: string; projectName: string; tree: FileTreeNode[]; options: WorkspaceOptions; tasks: WorkspaceTask[]; selectedTaskId?: string } };
+  "tasks.switch": { payload: { taskId?: string; includeIgnored?: boolean }; result: { workspace: string; projectName: string; tree: FileTreeNode[]; options: WorkspaceOptions; tasks: WorkspaceTask[]; selectedTaskId?: string } };
   "tasks.delete": { payload: { taskId: string }; result: { tasks: WorkspaceTask[]; selectedTaskId?: string } };
   "ai.providers": { payload: Record<string, never>; result: { providers: AiProviderDescriptor[] } };
   "ai.get": { payload: { provider?: AiProvider }; result: { session: AiSession } };
@@ -107,7 +107,7 @@ export type ProtocolOperations = {
   "useful.delete": { payload: { scope: UsefulFileScope; name: string }; result: Record<string, never> };
   "http.execute": { payload: { method: string; url: string; headers: Record<string, string>; body?: string }; result: HttpResponse };
   "filesystem.listTree": {
-    payload: Record<string, never>;
+    payload: { includeIgnored?: boolean };
     result: { tree: FileTreeNode[] };
   };
   "filesystem.readFile": {

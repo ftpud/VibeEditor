@@ -200,7 +200,7 @@ async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStor
   if (request.type !== "workspace.open") filesystem.getWorkspace();
   switch (request.type) {
     case "workspace.open": {
-      const tree = await filesystem.open(workspacePath);
+      const tree = await filesystem.open(workspacePath, request.payload.includeIgnored === true);
       return { workspace: filesystem.getWorkspace(), projectName: path.basename(path.resolve(rootWorkspace)), tree, options: await workspaceState.load() };
     }
     case "workspace.saveOptions": {
@@ -213,7 +213,7 @@ async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStor
     case "tasks.delete": return tasks.delete(request.payload.taskId);
     case "tasks.switch": {
       const registry = await tasks.list();
-      return { workspace: workspacePath, projectName: path.basename(path.resolve(rootWorkspace)), tree: await filesystem.listTree(), options: await workspaceState.load(), ...registry };
+      return { workspace: workspacePath, projectName: path.basename(path.resolve(rootWorkspace)), tree: await filesystem.listTree(request.payload.includeIgnored === true), options: await workspaceState.load(), ...registry };
     }
     case "ai.providers": return { providers: acp.list() };
     case "ai.get": return { session: await acp.get(request.payload.provider).get(workspacePath) };
@@ -241,7 +241,7 @@ async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStor
     case "useful.rename": await usefulFiles.rename(request.payload.scope, request.payload.name, request.payload.newName); return {};
     case "useful.delete": await usefulFiles.delete(request.payload.scope, request.payload.name); return {};
     case "http.execute": return executeHttpRequest(request.payload.method, request.payload.url, request.payload.headers, request.payload.body);
-    case "filesystem.listTree": return { tree: await filesystem.listTree() };
+    case "filesystem.listTree": return { tree: await filesystem.listTree(request.payload.includeIgnored === true) };
     case "filesystem.readFile": {
       if (typeof request.payload.path !== "string") throw new CoreError("INVALID_REQUEST", "path must be a string");
       return { path: request.payload.path, content: await filesystem.read(request.payload.path) };
