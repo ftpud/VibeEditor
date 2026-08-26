@@ -5,6 +5,8 @@ import remarkGfm from "remark-gfm";
 import type { AiConfiguration, AiContentBlock, AiModel, AiProvider, AiProviderDescriptor, AiSession, AiUsage } from "@remote-ide/protocol";
 import { ModelPicker } from "./ModelPicker";
 
+const AUTOPILOT = /autopilot|auto-?approve|yolo|full[- ]?access|bypass|danger|never ?ask/i;
+
 export type AiAttachment = { id: string; name: string; path?: string; content?: string; data?: string; mimeType?: string };
 
 export function AiPanel({ provider, providers, session, sessions, models, usage, attachments, onProviderChange, onConfigurationChange, onAttachmentsChange, onSend, onSteer, onInterrupt, onNewSession, onSwitchSession, onRemoveSession, onResolvePermission }: { provider: AiProvider; providers: AiProviderDescriptor[]; session: AiSession; sessions: AiSession[]; models: AiModel[]; usage?: AiUsage; attachments: AiAttachment[]; onProviderChange(provider: AiProvider): void; onConfigurationChange(configuration: AiConfiguration): void; onAttachmentsChange(attachments: AiAttachment[]): void; onSend(prompt: string, configuration: AiConfiguration, attachments: AiAttachment[]): Promise<void>; onSteer(prompt: string): Promise<void>; onInterrupt(): void; onNewSession(): void; onSwitchSession(session: AiSession): void; onRemoveSession(session: AiSession): void; onResolvePermission(requestId: string, optionId?: string): void }) {
@@ -43,8 +45,22 @@ export function AiPanel({ provider, providers, session, sessions, models, usage,
   const effectiveOptions = useMemo(() => { const advertised = session.availableOptions ?? []; return [...(descriptor?.options ?? []).filter((option) => !advertised.some((candidate) => candidate.id === option.id)), ...advertised]; }, [descriptor, session.availableOptions]);
   const matchingCommands = useMemo(() => { const token = prompt.split(/\s/, 1)[0] ?? ""; return prompt.startsWith("/") ? (session.availableCommands ?? []).filter((command) => `/${command.name.replace(/^\//, "")}`.startsWith(token)).slice(0, 8) : []; }, [prompt, session.availableCommands]);
   const providerName = descriptor?.name ?? provider;
-  const autopilotOption = useMemo(() => effectiveOptions.find((option) => /autopilot|auto-?approve|yolo|full[- ]?access/i.test(`${option.id} ${option.name}`)), [effectiveOptions]);
-  const quickOptionIds = useMemo(() => new Set(autopilotOption ? [autopilotOption.id] : []), [autopilotOption]);
+  // Agents express "approve everything" differently: some advertise a dedicated boolean, others only
+  // offer it as one choice of a broader mode option, so both shapes are folded into one switch.
+  const autopilot = useMemo(() => {
+    const toggle = effectiveOptions.find((option) => option.type === "boolean" && AUTOPILOT.test(`${option.id} ${option.name}`));
+    if (toggle) return { option: toggle, on: true as const, off: false as const };
+    for (const option of effectiveOptions) {
+      if (option.type !== "select" || !option.choices) continue;
+      const match = option.choices.find((choice) => AUTOPILOT.test(`${choice.value} ${choice.name}`));
+      if (!match) continue;
+      const fallback = option.choices.find((choice) => String(option.defaultValue) === choice.value && choice.value !== match.value) ?? option.choices.find((choice) => choice.value !== match.value);
+      if (fallback) return { option, on: match.value, off: fallback.value };
+    }
+    return undefined;
+  }, [effectiveOptions]);
+  const autopilotOn = autopilot ? String(configuration[autopilot.option.id] ?? autopilot.option.defaultValue) === String(autopilot.on) : false;
+  const quickOptionIds = useMemo(() => new Set(autopilot?.option.type === "boolean" ? [autopilot.option.id] : []), [autopilot]);
   const updateConfiguration = (values: AiConfiguration) => { const next = { ...configuration, ...values }; setConfiguration(next); onConfigurationChange({ ...next, model, reasoning }); };
   const changeModel = (nextModel: string) => { const item = models.find((candidate) => candidate.id === nextModel); const nextReasoning = item && item.reasoningLevels.length > 0 && !item.reasoningLevels.includes(reasoning) ? item.defaultReasoning : item && item.reasoningLevels.length === 0 ? "" : reasoning; setModel(nextModel); setReasoning(nextReasoning); onConfigurationChange({ ...configuration, model: nextModel, reasoning: nextReasoning }); };
   const changeReasoning = (nextReasoning: string) => { setReasoning(nextReasoning); onConfigurationChange({ ...configuration, model, reasoning: nextReasoning }); };
@@ -77,12 +93,10 @@ export function AiPanel({ provider, providers, session, sessions, models, usage,
     window.addEventListener("pointerup", end);
   };
   return <div className="ai-panel">
-    <div className="ai-toolbar">
+    <div className={`ai-toolbar${autopilot ? " with-autopilot" : ""}`}>
       <div className="ai-provider-picker"><span>Provider</span><select aria-label="AI provider" value={provider} disabled={running} onChange={(event) => { setSettingsOpen(false); onProviderChange(event.target.value as AiProvider); }}>{providers.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></div>
       <ModelPicker models={models} value={model} label={`${providerName} model`} disabled={running} onChange={changeModel} />
-      {autopilotOption && <div className="ai-autopilot" title={autopilotOption.description}><span>Autopilot</span>{autopilotOption.type === "boolean"
-        ? <label className="ai-switch"><input type="checkbox" aria-label={autopilotOption.name} disabled={running} checked={Boolean(configuration[autopilotOption.id] ?? autopilotOption.defaultValue)} onChange={(event) => updateConfiguration({ [autopilotOption.id]: event.target.checked })} /><span /></label>
-        : <select aria-label={autopilotOption.name} disabled={running} value={selectValue(autopilotOption, configuration[autopilotOption.id])} onChange={(event) => updateConfiguration({ [autopilotOption.id]: event.target.value })}>{autopilotOption.choices?.map((choice) => <option key={choice.value} value={choice.value} title={choice.description}>{choice.name}</option>)}</select>}</div>}
+      {autopilot && <div className="ai-autopilot" title={`${autopilot.option.name}: approve every action without asking.`}><span>Auto</span><label className="ai-switch"><input type="checkbox" aria-label="Autopilot" disabled={running} checked={autopilotOn} onChange={(event) => updateConfiguration({ [autopilot.option.id]: event.target.checked ? autopilot.on : autopilot.off })} /><span /></label></div>}
       <button className={settingsOpen ? "active" : ""} title={`${providerName} settings`} aria-expanded={settingsOpen} onClick={() => setSettingsOpen((open) => !open)}><Settings2 size={14} /><ChevronDown className="ai-settings-chevron" size={12} /></button>
       {running ? <button className="ai-interrupt" title={`Stop ${providerName}`} onClick={onInterrupt}><Square size={12} fill="currentColor" /></button> : <button className={sessionsOpen ? "active" : ""} title="Manage sessions" aria-expanded={sessionsOpen} onClick={() => { setSettingsOpen(false); setSessionsOpen((open) => !open); }}><MessageSquare size={14} /></button>}
     </div>

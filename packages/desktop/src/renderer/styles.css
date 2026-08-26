@@ -148,7 +148,8 @@ button { color: inherit; }
 .ai-status.done { color: #70b879; }
 .ai-status.error { color: #dc747c; }
 .ai-panel { min-height: 0; flex: 1; display: flex; flex-direction: column; }
-.ai-toolbar { padding: 7px; display: grid; grid-template-columns: minmax(78px, .7fr) minmax(96px, 1fr) auto 38px 28px; gap: 6px; align-items: end; border-bottom: 1px solid #393b40; }
+.ai-toolbar { padding: 7px; display: grid; grid-template-columns: minmax(78px, .7fr) minmax(96px, 1fr) 38px 28px; gap: 6px; align-items: end; border-bottom: 1px solid #393b40; }
+.ai-toolbar.with-autopilot { grid-template-columns: minmax(72px, .7fr) minmax(88px, 1fr) auto 38px 28px; }
 .ai-autopilot { min-width: 0; height: 29px; display: flex; align-items: center; gap: 6px; color: #a6a9ae; font-size: .6923rem; font-weight: 600; letter-spacing: .03em; text-transform: uppercase; }
 .ai-provider-picker, .ai-model-picker { min-width: 0; display: grid; gap: 3px; }
 .ai-model-picker { position: relative; }
