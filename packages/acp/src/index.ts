@@ -10,7 +10,7 @@ export type AiMessage = { id: string; role: "user" | "assistant" | "activity" | 
 export type AiCommand = { name: string; description: string; inputHint?: string };
 export type AiPermissionOption = { optionId: string; name: string; kind: "allow_once" | "allow_always" | "reject_once" | "reject_always" };
 export type AiPermissionRequest = { id: string; title: string; toolCallId: string; details?: string; options: AiPermissionOption[] };
-export type AiSession = { threadId?: string; model: string; reasoning: string; configuration?: AiConfiguration; availableOptions?: AiOption[]; availableCommands?: AiCommand[]; pendingPermission?: AiPermissionRequest; status: AiStatus; messages: AiMessage[]; contextUsed?: number; contextLimit?: number; tokens?: AiTokenUsage; steering?: boolean };
+export type AiSession = { id?: string; createdAt?: string; updatedAt?: string; threadId?: string; model: string; reasoning: string; configuration?: AiConfiguration; availableOptions?: AiOption[]; availableCommands?: AiCommand[]; pendingPermission?: AiPermissionRequest; status: AiStatus; messages: AiMessage[]; contextUsed?: number; contextLimit?: number; tokens?: AiTokenUsage; steering?: boolean };
 export type AiTokenUsage = { total: number; input: number; output: number; thought?: number; cachedRead?: number; cachedWrite?: number };
 /**
  * Optional catalogue metadata. Everything here is advertised by the agent (ACP
@@ -62,6 +62,7 @@ export abstract class AcpProvider {
   /** Adds input to a turn that is already running. */
   abstract steer(workspace: string, prompt: string): Promise<AiSession>;
   abstract clear(workspace: string): Promise<AiSession>;
+  abstract restore(workspace: string, session: AiSession): Promise<AiSession>;
   async usage(_workspace?: string): Promise<AiUsage> { return { supported: false, label: "Usage is not exposed by this provider" }; }
 }
 

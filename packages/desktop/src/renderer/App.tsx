@@ -98,6 +98,7 @@ export function App() {
   const [activeWorkspace, setActiveWorkspace] = useState("");
   const [projectName, setProjectName] = useState("");
   const [aiSession, setAiSession] = useState<AiSession>({ model: "gpt-5.6-sol", reasoning: "low", status: "idle", messages: [] });
+  const [aiSessions, setAiSessions] = useState<AiSession[]>([]);
   const [aiProvider, setAiProvider] = useState<AiProvider>(() => localStorage.getItem("aiProvider") === "copilot" ? "copilot" : "codex");
   const [aiModels, setAiModels] = useState<AiModel[]>([]);
   const [aiProviders, setAiProviders] = useState<AiProviderDescriptor[]>([]);
@@ -176,6 +177,16 @@ export function App() {
   useEffect(() => { layoutRef.current = layout; }, [layout]);
   useEffect(() => { javaOptionsRef.current = javaOptions; }, [javaOptions]);
   useEffect(() => { activeWorkspaceRef.current = activeWorkspace; }, [activeWorkspace]);
+  useEffect(() => {
+    if (!activeWorkspace || !aiSession.id) return;
+    const key = `aiSessions:${encodeURIComponent(activeWorkspace)}:${aiProvider}`;
+    let stored: AiSession[] = [];
+    try { stored = JSON.parse(localStorage.getItem(key) ?? "[]") as AiSession[]; } catch { stored = []; }
+    const updated = { ...aiSession, updatedAt: new Date().toISOString() };
+    const next = [updated, ...stored.filter((item) => item.id !== updated.id)].slice(0, 50);
+    localStorage.setItem(key, JSON.stringify(next));
+    setAiSessions(next);
+  }, [activeWorkspace, aiProvider, aiSession]);
   useEffect(() => { activeGitHunksRef.current = activeGitHunks; }, [activeGitHunks]);
   useEffect(() => {
     if (!pendingNavigation || activeTab?.path !== pendingNavigation.result.path || !monacoEditorRef.current) return;
@@ -752,11 +763,27 @@ export function App() {
     catch (error) { setStatusMessage(error instanceof Error ? error.message : "Could not save AI settings"); }
   }, []);
 
-  const clearAiContext = useCallback(async () => {
-    if (!clientRef.current || !window.confirm("Clear the Codex conversation and start a new context for this task?")) return;
+  const newAiSession = useCallback(async () => {
+    if (!clientRef.current) return;
     try { setAiSession((await clientRef.current.request("ai.clear", { provider: aiProviderRef.current })).session); await refreshAi(); }
-    catch (error) { setStatusMessage(error instanceof Error ? error.message : "Could not clear Codex context"); }
+    catch (error) { setStatusMessage(error instanceof Error ? error.message : "Could not start a new AI session"); }
   }, [refreshAi]);
+
+  const switchAiSession = useCallback(async (session: AiSession) => {
+    if (!clientRef.current || session.id === aiSession.id) return;
+    try { setAiSession((await clientRef.current.request("ai.restore", { provider: aiProviderRef.current, session })).session); await refreshAi(); }
+    catch (error) { setStatusMessage(error instanceof Error ? error.message : "Could not switch AI session"); }
+  }, [aiSession.id, refreshAi]);
+
+  const removeAiSession = useCallback(async (session: AiSession) => {
+    const key = `aiSessions:${encodeURIComponent(activeWorkspace)}:${aiProviderRef.current}`;
+    const remaining = aiSessions.filter((item) => item.id !== session.id);
+    localStorage.setItem(key, JSON.stringify(remaining));
+    setAiSessions(remaining);
+    if (session.id !== aiSession.id) return;
+    if (remaining[0]) await switchAiSession(remaining[0]);
+    else await newAiSession();
+  }, [activeWorkspace, aiSession.id, aiSessions, newAiSession, switchAiSession]);
 
   const interruptAi = useCallback(async () => {
     if (!clientRef.current) return;
@@ -1348,7 +1375,7 @@ export function App() {
           {tasks.map((task) => <TaskRow key={task.id} icon={<ListTodo size={15} />} name={task.name} summary={aiStatuses.tasks[task.id] ?? emptyAiSummary} selected={selectedTaskId === task.id} disabled={taskSwitching} onClick={() => void switchTask(task.id)} onMerge={() => void mergeTask(task)} onDelete={() => void deleteTask(task)} />)}
         </div></section>}
         {tasksOpen && aiOpen && <div className="right-panel-divider" onPointerDown={beginRightSplitResize} />}
-        {aiOpen && <section className="right-panel-section"><header className="panel-header"><span>AI</span><span className={`ai-status ${aiSession.status}`}>{formatAiStatus(aiSession.status)}</span></header><AiPanel provider={aiProvider} providers={aiProviders} session={aiSession} models={aiModels} usage={aiUsage} attachments={currentAiAttachments} onProviderChange={(provider) => void switchAiProvider(provider)} onConfigurationChange={configureAi} onAttachmentsChange={updateAiAttachments} onSend={sendAiPrompt} onSteer={steerAiPrompt} onInterrupt={() => void interruptAi()} onClear={() => void clearAiContext()} onResolvePermission={(requestId, optionId) => void resolveAiPermission(requestId, optionId)} /></section>}
+        {aiOpen && <section className="right-panel-section"><header className="panel-header"><span>AI</span><span className={`ai-status ${aiSession.status}`}>{formatAiStatus(aiSession.status)}</span></header><AiPanel key={`${activeWorkspace}:${aiProvider}:${aiSession.id ?? "legacy"}`} provider={aiProvider} providers={aiProviders} session={aiSession} sessions={aiSessions} models={aiModels} usage={aiUsage} attachments={currentAiAttachments} onProviderChange={(provider) => void switchAiProvider(provider)} onConfigurationChange={configureAi} onAttachmentsChange={updateAiAttachments} onSend={sendAiPrompt} onSteer={steerAiPrompt} onInterrupt={() => void interruptAi()} onNewSession={() => void newAiSession()} onSwitchSession={(session) => void switchAiSession(session)} onRemoveSession={(session) => void removeAiSession(session)} onResolvePermission={(requestId, optionId) => void resolveAiPermission(requestId, optionId)} /></section>}
       </aside></>}
       <nav className="right-tool-stripe" aria-label="Right tool windows">
         <button className={`tool-stripe-button right ${tasksOpen ? "active" : ""}`} title={tasksOpen ? "Hide Tasks" : "Show Tasks"} onClick={() => setTasksOpen((open) => !open)}><ListTodo size={15} /><span>Tasks</span>{tasks.length > 0 && <span className="tool-badge">{tasks.length > 99 ? "99+" : tasks.length}</span>}</button>

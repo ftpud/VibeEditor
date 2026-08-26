@@ -1,4 +1,4 @@
-import { ChevronDown, Paperclip, Send, Settings2, Square, Trash2, X } from "lucide-react";
+import { Check, ChevronDown, MessageSquare, Paperclip, Plus, Send, Settings2, Square, Trash2, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -7,18 +7,19 @@ import { ModelPicker } from "./ModelPicker";
 
 export type AiAttachment = { id: string; name: string; path?: string; content?: string; data?: string; mimeType?: string };
 
-export function AiPanel({ provider, providers, session, models, usage, attachments, onProviderChange, onConfigurationChange, onAttachmentsChange, onSend, onSteer, onInterrupt, onClear, onResolvePermission }: { provider: AiProvider; providers: AiProviderDescriptor[]; session: AiSession; models: AiModel[]; usage?: AiUsage; attachments: AiAttachment[]; onProviderChange(provider: AiProvider): void; onConfigurationChange(configuration: AiConfiguration): void; onAttachmentsChange(attachments: AiAttachment[]): void; onSend(prompt: string, configuration: AiConfiguration, attachments: AiAttachment[]): Promise<void>; onSteer(prompt: string): Promise<void>; onInterrupt(): void; onClear(): void; onResolvePermission(requestId: string, optionId?: string): void }) {
+export function AiPanel({ provider, providers, session, sessions, models, usage, attachments, onProviderChange, onConfigurationChange, onAttachmentsChange, onSend, onSteer, onInterrupt, onNewSession, onSwitchSession, onRemoveSession, onResolvePermission }: { provider: AiProvider; providers: AiProviderDescriptor[]; session: AiSession; sessions: AiSession[]; models: AiModel[]; usage?: AiUsage; attachments: AiAttachment[]; onProviderChange(provider: AiProvider): void; onConfigurationChange(configuration: AiConfiguration): void; onAttachmentsChange(attachments: AiAttachment[]): void; onSend(prompt: string, configuration: AiConfiguration, attachments: AiAttachment[]): Promise<void>; onSteer(prompt: string): Promise<void>; onInterrupt(): void; onNewSession(): void; onSwitchSession(session: AiSession): void; onRemoveSession(session: AiSession): void; onResolvePermission(requestId: string, optionId?: string): void }) {
   const [prompt, setPrompt] = useState("");
   const [model, setModel] = useState(session.model);
   const [reasoning, setReasoning] = useState(session.reasoning);
   const [configuration, setConfiguration] = useState<AiConfiguration>(session.configuration ?? {});
   const [composerHeight, setComposerHeight] = useState(90);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [sessionsOpen, setSessionsOpen] = useState(false);
   const [attachmentError, setAttachmentError] = useState("");
   const endRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   useEffect(() => { setModel(session.model); setReasoning(session.reasoning); setConfiguration(session.configuration ?? {}); }, [session.model, session.reasoning, session.configuration]);
-  useEffect(() => { endRef.current?.scrollIntoView({ block: "end" }); }, [session.messages.length, session.status]);
+  useEffect(() => { endRef.current?.scrollIntoView({ block: "end" }); }, [session.id, session.messages.length, session.status]);
   const selectedModel = useMemo(() => models.find((item) => item.id === model) ?? models[0], [model, models]);
   useEffect(() => { if (selectedModel && !models.some((item) => item.id === model)) { setModel(selectedModel.id); onConfigurationChange({ ...configuration, model: selectedModel.id, reasoning: selectedModel.reasoningLevels.includes(reasoning) ? reasoning : selectedModel.defaultReasoning }); } }, [model, models, onConfigurationChange, reasoning, selectedModel]);
   useEffect(() => { if (selectedModel && selectedModel.reasoningLevels.length > 0 && !selectedModel.reasoningLevels.includes(reasoning)) { setReasoning(selectedModel.defaultReasoning); onConfigurationChange({ ...configuration, model: selectedModel.id, reasoning: selectedModel.defaultReasoning }); } }, [onConfigurationChange, reasoning, selectedModel]);
@@ -64,8 +65,12 @@ export function AiPanel({ provider, providers, session, models, usage, attachmen
       <div className="ai-provider-picker"><span>Provider</span><select aria-label="AI provider" value={provider} disabled={running} onChange={(event) => { setSettingsOpen(false); onProviderChange(event.target.value as AiProvider); }}>{providers.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></div>
       <ModelPicker models={models} value={model} label={`${providerName} model`} disabled={running} onChange={changeModel} />
       <button className={settingsOpen ? "active" : ""} title={`${providerName} settings`} aria-expanded={settingsOpen} onClick={() => setSettingsOpen((open) => !open)}><Settings2 size={14} /><ChevronDown className="ai-settings-chevron" size={12} /></button>
-      {running ? <button className="ai-interrupt" title={`Stop ${providerName}`} onClick={onInterrupt}><Square size={12} fill="currentColor" /></button> : <button className="ai-clear" title={`Clear ${providerName} conversation`} disabled={session.messages.length === 0} onClick={onClear}><Trash2 size={14} /></button>}
+      {running ? <button className="ai-interrupt" title={`Stop ${providerName}`} onClick={onInterrupt}><Square size={12} fill="currentColor" /></button> : <button className={sessionsOpen ? "active" : ""} title="Manage sessions" aria-expanded={sessionsOpen} onClick={() => { setSettingsOpen(false); setSessionsOpen((open) => !open); }}><MessageSquare size={14} /></button>}
     </div>
+    {sessionsOpen && <section className="ai-sessions">
+      <header><strong>Sessions</strong><button onClick={() => { setSessionsOpen(false); onNewSession(); }}><Plus size={13} /> New</button></header>
+      <div>{sessions.map((item) => <div className="ai-session-row" key={item.id}><button className="ai-session-select" onClick={() => { setSessionsOpen(false); onSwitchSession(item); }}>{item.id === session.id && <Check size={13} />}<span><strong>{sessionTitle(item)}</strong><small>{sessionDate(item)}</small></span></button><button className="ai-session-remove" title="Remove session" disabled={sessions.length === 1} onClick={() => onRemoveSession(item)}><Trash2 size={13} /></button></div>)}</div>
+    </section>}
     {settingsOpen && descriptor && <section className="ai-settings">
       <header><strong>{descriptor.settings.title}</strong><p>{descriptor.settings.description}</p></header>
       {reasoningLevels.length > 0 && <div className="ai-setting-section"><div className="ai-setting-section-title"><strong>Model behavior</strong><span>Controls the depth of analysis before the agent responds.</span></div><SettingRow name="Reasoning effort" description={selectedModel?.reasoningDescriptions?.[reasoning] ?? "Higher effort can improve difficult tasks, but usually takes longer."}><select aria-label="Reasoning effort" value={reasoningLevels.includes(reasoning) ? reasoning : (selectedModel?.defaultReasoning ?? reasoningLevels[0])} disabled={running} onChange={(event) => changeReasoning(event.target.value)}>{reasoningLevels.map((level) => <option key={level} value={level} title={selectedModel?.reasoningDescriptions?.[level]}>{level}</option>)}</select></SettingRow></div>}
@@ -74,7 +79,7 @@ export function AiPanel({ provider, providers, session, models, usage, attachmen
     </section>}
     <div className="ai-messages">
       {session.messages.length === 0 && <div className="ai-empty">Start a {providerName} task for this workspace.</div>}
-      {session.messages.map((message) => message.role === "activity" ? <ActivityMessage key={message.id} text={message.text} content={message.content} /> : <article key={message.id} className={`ai-message ${message.role}`}><header>{message.role === "user" ? "You" : message.role === "assistant" ? providerName : "Error"}</header><div>{message.role === "assistant" ? <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.text}</ReactMarkdown> : <pre>{message.text}</pre>}<RichContent content={message.content} /></div></article>)}
+      {session.messages.map((message, index) => message.role === "activity" ? <ActivityMessage key={`${message.id}:${index}`} text={message.text} content={message.content} /> : <article key={`${message.id}:${index}`} className={`ai-message ${message.role}`}><header>{message.role === "user" ? "You" : message.role === "assistant" ? providerName : "Error"}</header><div>{message.role === "assistant" ? <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.text}</ReactMarkdown> : <pre>{message.text}</pre>}<RichContent content={message.content} /></div></article>)}
       {session.pendingPermission && <section className="ai-permission"><strong>Permission required</strong><span>{session.pendingPermission.title}</span>{session.pendingPermission.details && <pre>{session.pendingPermission.details}</pre>}<div>{session.pendingPermission.options.map((option) => <button key={option.optionId} className={option.kind.startsWith("reject") ? "reject" : "allow"} onClick={() => onResolvePermission(session.pendingPermission!.id, option.optionId)}>{option.name}</button>)}<button className="reject" onClick={() => onResolvePermission(session.pendingPermission!.id)}>Cancel</button></div></section>}
       {running && <div className="ai-working"><span />{providerName} is working...</div>}
       <div ref={endRef} />
@@ -88,6 +93,16 @@ export function AiPanel({ provider, providers, session, models, usage, attachmen
       <div className="ai-composer-actions"><input ref={fileInputRef} type="file" multiple onChange={(event) => void addFiles(event.target.files)} /><button type="button" title="Attach files" disabled={running} onClick={() => fileInputRef.current?.click()}><Paperclip size={15} /></button><button title={running ? (session.steering ? "Add input to the running turn" : "Queue this for the next turn") : "Send prompt"} disabled={!prompt.trim() && (running || attachments.length === 0)}><Send size={15} /></button></div>
     </form>
   </div>;
+}
+
+function sessionTitle(session: AiSession): string {
+  const first = session.messages.find((message) => message.role === "user")?.text.trim();
+  return first ? (first.length > 46 ? `${first.slice(0, 45)}…` : first) : "New session";
+}
+
+function sessionDate(session: AiSession): string {
+  const value = session.updatedAt ?? session.createdAt;
+  return value ? new Date(value).toLocaleString() : "";
 }
 
 function isTextFile(file: File): boolean { return file.type.startsWith("text/") || /(?:json|xml|yaml|javascript|typescript|markdown|csv|toml|sql)$/.test(file.type) || /\.(?:txt|md|json|jsonl|ya?ml|xml|csv|toml|ini|log|tsx?|jsx?|css|html?|sql|py|java|c|cc|cpp|h|hpp|rs|go|sh)$/i.test(file.name); }

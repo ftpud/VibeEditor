@@ -187,6 +187,18 @@ button { color: inherit; }
 .ai-settings-chevron { transition: transform .15s ease; }
 .ai-toolbar > button.active .ai-settings-chevron { transform: rotate(180deg); }
 .ai-settings { max-height: min(440px, 55%); overflow: auto; border-bottom: 1px solid #393b40; background: #222428; }
+.ai-sessions { max-height: min(360px, 48%); overflow: auto; border-bottom: 1px solid #393b40; background: #222428; }
+.ai-sessions > header { position: sticky; top: 0; z-index: 1; padding: 8px 10px; display: flex; align-items: center; justify-content: space-between; background: #222428; border-bottom: 1px solid #34373b; }
+.ai-sessions > header button { display: flex; align-items: center; gap: 4px; padding: 4px 7px; border: 0; border-radius: 4px; background: #3574f0; color: white; font: inherit; cursor: pointer; }
+.ai-session-row { display: flex; align-items: stretch; border-bottom: 1px solid #303237; }
+.ai-session-select { min-width: 0; flex: 1; padding: 8px 10px; display: flex; align-items: center; gap: 7px; border: 0; background: transparent; color: #d4d6da; text-align: left; cursor: pointer; }
+.ai-session-select:hover, .ai-session-remove:hover:not(:disabled) { background: #303338; }
+.ai-session-select > span { min-width: 0; display: grid; gap: 2px; }
+.ai-session-select strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .8077rem; font-weight: 500; }
+.ai-session-select small { color: #858990; font-size: .6923rem; }
+.ai-session-remove { width: 32px; border: 0; background: transparent; color: #858990; cursor: pointer; }
+.ai-session-remove:hover:not(:disabled) { color: #e2858b; }
+.ai-session-remove:disabled { opacity: .25; cursor: default; }
 .ai-settings > header { padding: 12px 12px 10px; border-bottom: 1px solid #34373b; }
 .ai-settings > header strong { color: #e0e2e5; font-size: .9231rem; }
 .ai-settings p { margin: 4px 0 0; color: #969aa1; font-size: .7692rem; line-height: 1.45; }
@@ -681,7 +693,7 @@ button { color: inherit; }
 :root[data-theme="light"] .task-row.selected .task-title strong,
 :root[data-theme="light"] .tree-row.selected { color: #17233a; }
 :root[data-theme="light"] .ai-message { background: #f5f6f7; }
-:root[data-theme="light"] .ai-settings { background: #f7f8fa; }
+:root[data-theme="light"] .ai-settings, :root[data-theme="light"] .ai-sessions, :root[data-theme="light"] .ai-sessions > header { background: #f7f8fa; }
 :root[data-theme="light"] .ai-settings > header,
 :root[data-theme="light"] .ai-setting-section,
 :root[data-theme="light"] .ai-setting-row + .ai-setting-row { border-color: #dfe1e4; }

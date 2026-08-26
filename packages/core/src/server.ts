@@ -212,6 +212,7 @@ async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStor
     case "ai.interrupt": return { session: await acp.get(request.payload.provider).interrupt(workspacePath) };
     case "ai.steer": return { session: await acp.get(request.payload.provider).steer(workspacePath, request.payload.prompt) };
     case "ai.clear": return { session: await acp.get(request.payload.provider).clear(workspacePath) };
+    case "ai.restore": return { session: await acp.get(request.payload.provider).restore(workspacePath, request.payload.session) };
     case "ai.usage": return { usage: await acp.get(request.payload.provider).usage(workspacePath) };
     case "ai.statuses": {
       const registry = await tasks.list();

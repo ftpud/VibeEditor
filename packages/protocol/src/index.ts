@@ -94,6 +94,7 @@ export type ProtocolOperations = {
   "ai.interrupt": { payload: { provider?: AiProvider }; result: { session: AiSession } };
   "ai.steer": { payload: { provider?: AiProvider; prompt: string }; result: { session: AiSession } };
   "ai.clear": { payload: { provider?: AiProvider }; result: { session: AiSession } };
+  "ai.restore": { payload: { provider?: AiProvider; session: AiSession }; result: { session: AiSession } };
   "ai.usage": { payload: { provider?: AiProvider }; result: { usage: AiUsage } };
   "ai.statuses": { payload: Record<string, never>; result: { root: AiTaskSummary; tasks: Record<string, AiTaskSummary> } };
   "useful.list": { payload: Record<string, never>; result: { files: UsefulFile[] } };

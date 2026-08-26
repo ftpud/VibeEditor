@@ -62,9 +62,10 @@ export abstract class StdioAcpProvider extends AcpProvider {
     if (live) return { ...live.session, messages: live.session.messages.slice(-1000) };
     try {
       const saved = JSON.parse(await readFile(this.file(workspace), "utf8")) as AiSession;
-      return { ...saved, model: saved.model ?? "auto", reasoning: saved.reasoning ?? "medium", status: saved.status === "in_progress" ? "error" : saved.status, messages: Array.isArray(saved.messages) ? saved.messages.slice(-1000) : [] };
+      const now = new Date().toISOString();
+      return { ...saved, id: saved.id ?? crypto.randomUUID(), createdAt: saved.createdAt ?? now, updatedAt: saved.updatedAt ?? now, model: saved.model ?? "auto", reasoning: saved.reasoning ?? "medium", status: saved.status === "in_progress" ? "error" : saved.status, messages: Array.isArray(saved.messages) ? saved.messages.slice(-1000) : [] };
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return { model: "auto", reasoning: "medium", status: "idle", messages: [] };
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return this.emptySession();
       throw new CoreError("READ_FAILED", `Could not load ${this.descriptor.name} session: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
@@ -225,8 +226,20 @@ export abstract class StdioAcpProvider extends AcpProvider {
     if (this.runtimes.get(workspace)?.running) throw new CoreError("INVALID_REQUEST", `${this.descriptor.name} is still working`);
     await this.closeRuntime(workspace);
     const current = await this.get(workspace);
-    const session: AiSession = { model: current.model, reasoning: current.reasoning, configuration: current.configuration, availableOptions: current.availableOptions, status: "idle", messages: [] };
+    const session: AiSession = { ...this.emptySession(), model: current.model, reasoning: current.reasoning, configuration: current.configuration, availableOptions: current.availableOptions };
     await this.save(workspace, session); this.onChanged(workspace); return session;
+  }
+
+  async restore(workspace: string, session: AiSession): Promise<AiSession> {
+    if (this.runtimes.get(workspace)?.running) throw new CoreError("INVALID_REQUEST", `${this.descriptor.name} is still working`);
+    await this.closeRuntime(workspace);
+    const restored: AiSession = { ...session, id: session.id ?? crypto.randomUUID(), createdAt: session.createdAt ?? new Date().toISOString(), updatedAt: new Date().toISOString(), pendingPermission: undefined, status: session.status === "in_progress" ? "error" : session.status, messages: session.messages.slice(-1000) };
+    await this.save(workspace, restored); this.onChanged(workspace); return restored;
+  }
+
+  private emptySession(): AiSession {
+    const now = new Date().toISOString();
+    return { id: crypto.randomUUID(), createdAt: now, updatedAt: now, model: "auto", reasoning: "medium", status: "idle", messages: [] };
   }
 
   async usage(workspace?: string): Promise<AiUsage> {
