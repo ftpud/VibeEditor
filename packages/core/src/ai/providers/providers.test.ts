@@ -4,7 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import { CodexSessionManager } from "./codex.js";
 import { CopilotSessionManager, parseCopilotModels } from "./copilot.js";
-import { execInShell } from "./shell-process.js";
+import { execInShell } from "../../shell-process.js";
+import { AcpRegistry } from "../acp.js";
 
 describe("AI CLI integration", () => {
   it("discovers and deduplicates models provided by Copilot completion", () => {
@@ -28,5 +29,11 @@ describe("AI CLI integration", () => {
     expect(await codex.get(workspace)).toMatchObject({ model: "gpt-test", reasoning: "high" });
     expect(await copilot.get(workspace)).toMatchObject({ model: "claude-test", reasoning: "low" });
     expect(await copilot.get("/workspace/two")).toMatchObject({ model: "auto", reasoning: "medium" });
+  });
+
+  it("discovers providers through the ACP registry and rejects unknown plugins", () => {
+    const registry = new AcpRegistry().register(new CodexSessionManager(() => undefined));
+    expect(registry.list().map((provider) => provider.id)).toEqual(["codex"]);
+    expect(() => registry.get("missing")).toThrow("Unknown AI provider");
   });
 });

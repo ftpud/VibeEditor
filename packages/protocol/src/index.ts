@@ -28,10 +28,28 @@ export type FileColor = "red" | "orange" | "yellow" | "green" | "blue" | "purple
 export type WorkspaceTerminalOptions = { tabs: { title: string }[]; activeTabIndex?: number; panelOpen: boolean };
 export type WorkspaceTask = { id: string; name: string; branch: string; baseBranch: string };
 export type AiStatus = "idle" | "in_progress" | "user_prompt" | "done" | "error";
-export type AiProvider = "codex" | "copilot";
+/** Provider ids are intentionally open so third-party ACP plugins do not require protocol changes. */
+export type AiProvider = string;
 export type AiMessage = { id: string; role: "user" | "assistant" | "activity" | "error"; text: string; timestamp: string };
-export type AiSession = { threadId?: string; model: string; reasoning: string; status: AiStatus; messages: AiMessage[] };
+export type AiConfiguration = Record<string, string | number | boolean>;
+export type AiSession = { threadId?: string; model: string; reasoning: string; configuration?: AiConfiguration; status: AiStatus; messages: AiMessage[] };
 export type AiModel = { id: string; name: string; defaultReasoning: string; reasoningLevels: string[] };
+export type AiOption = {
+  id: string;
+  name: string;
+  description?: string;
+  type: "select" | "number" | "boolean" | "text";
+  defaultValue: string | number | boolean;
+  choices?: { value: string; name: string }[];
+  min?: number;
+  max?: number;
+  modelDependent?: boolean;
+};
+export type AiProviderCapabilities = { models: boolean; usage: boolean; mcp: boolean; agents: boolean; contextWindow: boolean };
+export type AiProviderDescriptor = { id: AiProvider; name: string; options: AiOption[]; capabilities: AiProviderCapabilities };
+export type AiUsage = { supported: boolean; label?: string; used?: number; limit?: number; unit?: string; resetsAt?: string; details?: Record<string, string | number> };
+export type AiMcpServer = { name: string; command: string; args?: string[]; env?: Record<string, string>; enabled?: boolean };
+export type AiAgent = { name: string; description?: string; instructions: string; mcpServers?: string[] };
 export type AiTaskSummary = { status: AiStatus; preview: string; additions: number; deletions: number };
 export type UsefulFileScope = "global" | "local";
 export type UsefulFile = { scope: UsefulFileScope; name: string };
@@ -89,11 +107,13 @@ export type ProtocolOperations = {
   "tasks.merge": { payload: { taskId: string }; result: { targetBranch: string } };
   "tasks.switch": { payload: { taskId?: string }; result: { workspace: string; projectName: string; tree: FileTreeNode[]; options: WorkspaceOptions; tasks: WorkspaceTask[]; selectedTaskId?: string } };
   "tasks.delete": { payload: { taskId: string }; result: { tasks: WorkspaceTask[]; selectedTaskId?: string } };
+  "ai.providers": { payload: Record<string, never>; result: { providers: AiProviderDescriptor[] } };
   "ai.get": { payload: { provider?: AiProvider }; result: { session: AiSession } };
   "ai.models": { payload: { provider?: AiProvider }; result: { models: AiModel[] } };
-  "ai.configure": { payload: { provider?: AiProvider; model: string; reasoning: string }; result: { session: AiSession } };
-  "ai.send": { payload: { provider?: AiProvider; prompt: string; model: string; reasoning: string }; result: { session: AiSession } };
+  "ai.configure": { payload: { provider?: AiProvider; model?: string; reasoning?: string; configuration?: AiConfiguration }; result: { session: AiSession } };
+  "ai.send": { payload: { provider?: AiProvider; prompt: string; model?: string; reasoning?: string; configuration?: AiConfiguration; mcpServers?: AiMcpServer[]; agent?: AiAgent }; result: { session: AiSession } };
   "ai.clear": { payload: { provider?: AiProvider }; result: { session: AiSession } };
+  "ai.usage": { payload: { provider?: AiProvider }; result: { usage: AiUsage } };
   "ai.statuses": { payload: Record<string, never>; result: { root: AiTaskSummary; tasks: Record<string, AiTaskSummary> } };
   "useful.list": { payload: Record<string, never>; result: { files: UsefulFile[] } };
   "useful.read": { payload: { scope: UsefulFileScope; name: string }; result: { content: string } };
@@ -279,11 +299,13 @@ export const requestTypes: RequestType[] = [
   "tasks.merge",
   "tasks.switch",
   "tasks.delete",
+  "ai.providers",
   "ai.get",
   "ai.models",
   "ai.configure",
   "ai.send",
   "ai.clear",
+  "ai.usage",
   "ai.statuses",
   "useful.list",
   "useful.read",

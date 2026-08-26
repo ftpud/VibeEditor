@@ -3,18 +3,29 @@ import os from "node:os";
 import path from "node:path";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
-import type { AiMessage, AiModel, AiSession } from "@remote-ide/protocol";
-import { CoreError } from "./errors.js";
-import { execInShell, spawnInShell } from "./shell-process.js";
+import type { AiConfiguration, AiMessage, AiModel, AiProviderDescriptor, AiSession, AiUsage } from "@remote-ide/protocol";
+import { CoreError } from "../../errors.js";
+import { AcpProvider, applyConfiguration, mergeConfiguration, type AcpSendRequest } from "../acp.js";
+import { execInShell, spawnInShell } from "../../shell-process.js";
 
 const EMPTY: AiSession = { model: "auto", reasoning: "medium", status: "idle", messages: [] };
 const FALLBACK_MODELS = ["claude-sonnet-4.6", "gpt-5.4", "claude-haiku-4.5", "gpt-5.3-codex", "gemini-3.1-pro-preview", "gemini-3.5-flash", "gemini-3.6-flash", "gemini-3.7-flash", "mai-code-1-flash"];
 
-export class CopilotSessionManager {
+export class CopilotSessionManager extends AcpProvider {
+  readonly descriptor: AiProviderDescriptor = {
+    id: "copilot", name: "Copilot CLI",
+    capabilities: { models: true, usage: true, mcp: true, agents: true, contextWindow: true },
+    options: [
+      { id: "context", name: "Context window", type: "select", defaultValue: "default", choices: [{ value: "default", name: "Default" }, { value: "long_context", name: "Long context" }] },
+      { id: "mode", name: "Agent mode", type: "select", defaultValue: "interactive", choices: [{ value: "interactive", name: "Interactive" }, { value: "plan", name: "Plan" }, { value: "autopilot", name: "Autopilot" }] },
+      { id: "maxAiCredits", name: "Maximum AI credits", description: "Optional per-session spending guard (0 means provider default)", type: "number", defaultValue: 0, min: 0 },
+      { id: "reasoningSummaries", name: "Reasoning summaries", type: "boolean", defaultValue: false },
+    ]
+  };
   private readonly processes = new Map<string, ChildProcessWithoutNullStreams>();
   private readonly queues = new Map<string, Promise<void>>();
   private readonly toolNames = new Map<string, Map<string, string>>();
-  constructor(private readonly onChanged: (workspace: string) => void, private readonly stateDirectory = process.env.REMOTE_IDE_STATE_DIR ?? path.join(os.homedir(), ".remote-ide", "workspaces")) {}
+  constructor(private readonly onChanged: (workspace: string) => void, private readonly stateDirectory = process.env.REMOTE_IDE_STATE_DIR ?? path.join(os.homedir(), ".remote-ide", "workspaces")) { super(); }
 
   async get(workspace: string): Promise<AiSession> {
     try {
@@ -36,15 +47,25 @@ export class CopilotSessionManager {
     }
   }
 
-  async send(workspace: string, prompt: string, model: string, reasoning: string): Promise<AiSession> {
+  async send(workspace: string, request: AcpSendRequest | string, legacyModel?: string, legacyReasoning?: string): Promise<AiSession> {
+    const normalized: AcpSendRequest = typeof request === "string" ? { prompt: request, configuration: { model: legacyModel ?? EMPTY.model, reasoning: legacyReasoning ?? EMPTY.reasoning } } : request;
+    const prompt = normalized.prompt;
     if (!prompt.trim() || prompt.length > 100_000) throw new CoreError("INVALID_REQUEST", "Prompt must contain at most 100,000 characters");
     if (this.processes.has(workspace)) throw new CoreError("INVALID_REQUEST", "Copilot is already working on this task");
     const session = await this.get(workspace);
     session.threadId ??= crypto.randomUUID();
-    session.model = model; session.reasoning = reasoning; session.status = "in_progress"; session.messages.push(toMessage("user", prompt.trim()));
+    applyConfiguration(session, normalized.configuration);
+    session.status = "in_progress"; session.messages.push(toMessage("user", prompt.trim()));
     await this.save(workspace, session);
-    const args = ["-p", prompt.trim(), "--output-format=json", "--stream=on", `--session-id=${session.threadId}`, `--reasoning-effort=${reasoning}`, "--allow-all-tools", "--no-ask-user", "--no-color"];
-    if (model) args.push(`--model=${model}`);
+    const configuration = mergeConfiguration(session, normalized.configuration);
+    const effectivePrompt = normalized.agent ? `${normalized.agent.instructions.trim()}\n\n${prompt.trim()}` : prompt.trim();
+    const args = ["-p", effectivePrompt, "--output-format=json", "--stream=on", `--session-id=${session.threadId}`, `--reasoning-effort=${session.reasoning}`, "--allow-all-tools", "--no-ask-user", "--no-color"];
+    if (session.model) args.push(`--model=${session.model}`);
+    if (configuration.context) args.push(`--context=${String(configuration.context)}`);
+    if (configuration.mode && configuration.mode !== "interactive") args.push(`--mode=${String(configuration.mode)}`);
+    if (typeof configuration.maxAiCredits === "number" && configuration.maxAiCredits > 0) args.push(`--max-ai-credits=${configuration.maxAiCredits}`);
+    if (configuration.reasoningSummaries === true) args.push("--enable-reasoning-summaries");
+    if (normalized.mcpServers?.length) args.push("--additional-mcp-config", JSON.stringify({ mcpServers: Object.fromEntries(normalized.mcpServers.filter((item) => item.enabled !== false && (!normalized.agent?.mcpServers || normalized.agent.mcpServers.includes(item.name))).map((item) => [item.name, { command: item.command, args: item.args, env: item.env }])) }));
     const child = spawnInShell("copilot", args, workspace);
     this.processes.set(workspace, child);
     this.onChanged(workspace);
@@ -57,10 +78,10 @@ export class CopilotSessionManager {
     return session;
   }
 
-  async configure(workspace: string, model: string, reasoning: string): Promise<AiSession> {
+  async configure(workspace: string, configuration: AiConfiguration | string, legacyReasoning?: string): Promise<AiSession> {
     if (this.processes.has(workspace)) throw new CoreError("INVALID_REQUEST", "Copilot is already working on this task");
     const session = await this.get(workspace);
-    session.model = model; session.reasoning = reasoning;
+    applyConfiguration(session, typeof configuration === "string" ? { model: configuration, reasoning: legacyReasoning ?? session.reasoning } : configuration);
     await this.save(workspace, session); this.onChanged(workspace);
     return session;
   }
@@ -68,7 +89,7 @@ export class CopilotSessionManager {
   async clear(workspace: string): Promise<AiSession> {
     if (this.processes.has(workspace)) throw new CoreError("INVALID_REQUEST", "Copilot is still working on this task");
     const current = await this.get(workspace);
-    const session: AiSession = { model: current.model, reasoning: current.reasoning, status: "idle", messages: [] };
+    const session: AiSession = { model: current.model, reasoning: current.reasoning, configuration: current.configuration, status: "idle", messages: [] };
     await this.save(workspace, session); this.onChanged(workspace); return session;
   }
 
@@ -88,6 +109,10 @@ export class CopilotSessionManager {
       else session.messages.push(toMessage("activity", `${toolName}\n${content}`.trim()));
     } else if ((event.type === "request_user_input" || event.type === "user_input_request") && data) { session.status = "user_prompt"; session.messages.push(toMessage("activity", String(data.question ?? data.text ?? "Copilot is waiting for user input"))); }
     await this.save(workspace, session); this.onChanged(workspace);
+  }
+
+  async usage(): Promise<AiUsage> {
+    return { supported: true, label: "Copilot exposes quota and token details through its interactive /usage command. Per-session limits can be set here with Maximum AI credits." };
   }
 
   private async finish(workspace: string, code: number, stderr: string): Promise<void> {

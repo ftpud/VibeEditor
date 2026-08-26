@@ -3,16 +3,25 @@ import os from "node:os";
 import path from "node:path";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
-import type { AiMessage, AiModel, AiSession } from "@remote-ide/protocol";
-import { CoreError } from "./errors.js";
-import { spawnInShell } from "./shell-process.js";
+import type { AiConfiguration, AiMessage, AiModel, AiProviderDescriptor, AiSession } from "@remote-ide/protocol";
+import { CoreError } from "../../errors.js";
+import { AcpProvider, applyConfiguration, mergeConfiguration, type AcpSendRequest } from "../acp.js";
+import { spawnInShell } from "../../shell-process.js";
 
 const EMPTY: AiSession = { model: "gpt-5.6-sol", reasoning: "low", status: "idle", messages: [] };
 
-export class CodexSessionManager {
+export class CodexSessionManager extends AcpProvider {
+  readonly descriptor: AiProviderDescriptor = {
+    id: "codex", name: "Codex CLI",
+    capabilities: { models: true, usage: false, mcp: true, agents: true, contextWindow: false },
+    options: [
+      { id: "sandbox", name: "Sandbox", type: "select", defaultValue: "workspace-write", choices: [{ value: "read-only", name: "Read only" }, { value: "workspace-write", name: "Workspace write" }] },
+      { id: "webSearch", name: "Web search", type: "boolean", defaultValue: false },
+    ]
+  };
   private readonly processes = new Map<string, ChildProcessWithoutNullStreams>();
   private readonly queues = new Map<string, Promise<void>>();
-  constructor(private readonly onChanged: (workspace: string) => void, private readonly stateDirectory = process.env.REMOTE_IDE_STATE_DIR ?? path.join(os.homedir(), ".remote-ide", "workspaces")) {}
+  constructor(private readonly onChanged: (workspace: string) => void, private readonly stateDirectory = process.env.REMOTE_IDE_STATE_DIR ?? path.join(os.homedir(), ".remote-ide", "workspaces")) { super(); }
 
   async get(workspace: string): Promise<AiSession> {
     try {
@@ -35,14 +44,30 @@ export class CodexSessionManager {
     } catch { return [{ id: EMPTY.model, name: EMPTY.model, defaultReasoning: EMPTY.reasoning, reasoningLevels: ["low", "medium", "high", "xhigh"] }]; }
   }
 
-  async send(workspace: string, prompt: string, model: string, reasoning: string): Promise<AiSession> {
+  async send(workspace: string, request: AcpSendRequest | string, legacyModel?: string, legacyReasoning?: string): Promise<AiSession> {
+    const normalized: AcpSendRequest = typeof request === "string" ? { prompt: request, configuration: { model: legacyModel ?? EMPTY.model, reasoning: legacyReasoning ?? EMPTY.reasoning } } : request;
+    let prompt = normalized.prompt;
     if (!prompt.trim() || prompt.length > 100_000) throw new CoreError("INVALID_REQUEST", "Prompt must contain at most 100,000 characters");
     if (this.processes.has(workspace)) throw new CoreError("INVALID_REQUEST", "Codex is already working on this task");
     const session = await this.get(workspace);
-    session.model = model; session.reasoning = reasoning; session.status = "in_progress"; session.messages.push(toMessage("user", prompt.trim()));
+    applyConfiguration(session, normalized.configuration);
+    if (normalized.agent) prompt = `${normalized.agent.instructions.trim()}\n\n${prompt}`;
+    session.status = "in_progress"; session.messages.push(toMessage("user", normalized.prompt.trim()));
     await this.save(workspace, session);
-    const config = `model_reasoning_effort=${JSON.stringify(reasoning)}`;
-    const args = session.threadId ? ["exec", "resume", session.threadId, "-", "--json", "-m", model, "-c", config] : ["exec", "-", "--json", "-C", workspace, "-s", "workspace-write", "-m", model, "-c", config];
+    const configuration = mergeConfiguration(session, normalized.configuration);
+    const config = `model_reasoning_effort=${JSON.stringify(session.reasoning)}`;
+    const args = session.threadId ? ["exec", "resume", session.threadId, "-", "--json", "-m", session.model, "-c", config] : ["exec", "-", "--json", "-C", workspace, "-s", String(configuration.sandbox ?? "workspace-write"), "-m", session.model, "-c", config];
+    if (configuration.webSearch === true) args.push("-c", "features.web_search=true");
+    for (const server of normalized.mcpServers?.filter((item) => item.enabled !== false && (!normalized.agent?.mcpServers || normalized.agent.mcpServers.includes(item.name))) ?? []) {
+      if (!/^[A-Za-z0-9_-]+$/.test(server.name)) throw new CoreError("INVALID_REQUEST", `Invalid MCP server name '${server.name}'`);
+      const prefix = `mcp_servers.${server.name}`;
+      args.push("-c", `${prefix}.command=${JSON.stringify(server.command)}`);
+      if (server.args?.length) args.push("-c", `${prefix}.args=${JSON.stringify(server.args)}`);
+      for (const [name, value] of Object.entries(server.env ?? {})) {
+        if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) throw new CoreError("INVALID_REQUEST", `Invalid MCP environment variable '${name}'`);
+        args.push("-c", `${prefix}.env.${name}=${JSON.stringify(value)}`);
+      }
+    }
     const child = spawnInShell("codex", args, workspace);
     this.processes.set(workspace, child);
     this.onChanged(workspace);
@@ -55,10 +80,10 @@ export class CodexSessionManager {
     return session;
   }
 
-  async configure(workspace: string, model: string, reasoning: string): Promise<AiSession> {
+  async configure(workspace: string, configuration: AiConfiguration | string, legacyReasoning?: string): Promise<AiSession> {
     if (this.processes.has(workspace)) throw new CoreError("INVALID_REQUEST", "Codex is already working on this task");
     const session = await this.get(workspace);
-    session.model = model; session.reasoning = reasoning;
+    applyConfiguration(session, typeof configuration === "string" ? { model: configuration, reasoning: legacyReasoning ?? session.reasoning } : configuration);
     await this.save(workspace, session); this.onChanged(workspace);
     return session;
   }
@@ -66,7 +91,7 @@ export class CodexSessionManager {
   async clear(workspace: string): Promise<AiSession> {
     if (this.processes.has(workspace)) throw new CoreError("INVALID_REQUEST", "Codex is still working on this task");
     const current = await this.get(workspace);
-    const session: AiSession = { model: current.model, reasoning: current.reasoning, status: "idle", messages: [] };
+    const session: AiSession = { model: current.model, reasoning: current.reasoning, configuration: current.configuration, status: "idle", messages: [] };
     await this.save(workspace, session); this.onChanged(workspace); return session;
   }
 
