@@ -73,9 +73,10 @@ export abstract class StdioAcpProvider extends AcpProvider {
     const live = this.runtimes.get(workspace);
     if (live) return { ...live.session, messages: live.session.messages.slice(-1000) };
     try {
-      const saved = JSON.parse(await readFile(this.file(workspace), "utf8")) as AiSession;
+      const saved = JSON.parse(await readFile(this.file(workspace), "utf8")) as AiSession & { _ownerPid?: number };
       const now = new Date().toISOString();
-      return { ...saved, id: saved.id ?? crypto.randomUUID(), createdAt: saved.createdAt ?? now, updatedAt: saved.updatedAt ?? now, model: saved.model ?? "auto", reasoning: saved.reasoning ?? "medium", status: saved.status === "in_progress" ? "error" : saved.status, messages: Array.isArray(saved.messages) ? saved.messages.slice(-1000) : [] };
+      const { _ownerPid, ...session } = saved;
+      return { ...session, id: saved.id ?? crypto.randomUUID(), createdAt: saved.createdAt ?? now, updatedAt: saved.updatedAt ?? now, model: saved.model ?? "auto", reasoning: saved.reasoning ?? "medium", status: saved.status === "in_progress" && !processExists(_ownerPid) ? "error" : saved.status, messages: Array.isArray(saved.messages) ? saved.messages.slice(-1000) : [] };
     } catch (error) {
       // A workspace that never talked to the agent still needs a stable id: minting a
       // fresh one on every `get` would make the client believe the session changed.
@@ -702,7 +703,7 @@ export abstract class StdioAcpProvider extends AcpProvider {
   private message(role: AiMessage["role"], text: string): AiMessage { return { id: crypto.randomUUID(), role, text, timestamp: new Date().toISOString() }; }
   private file(workspace: string): string { return path.join(this.stateDirectory, `${crypto.createHash("sha256").update(workspace).digest("hex")}-${this.descriptor.id}.json`); }
   private async save(workspace: string, session: AiSession): Promise<void> {
-    const serialized = `${JSON.stringify({ ...session, messages: session.messages.slice(-1000) }, null, 2)}\n`;
+    const serialized = `${JSON.stringify({ ...session, messages: session.messages.slice(-1000), ...(session.status === "in_progress" ? { _ownerPid: process.pid } : {}) }, null, 2)}\n`;
     const previous = this.saveQueues.get(workspace) ?? Promise.resolve();
     const next = previous.catch(() => undefined).then(async () => {
       await mkdir(this.stateDirectory, { recursive: true });
@@ -724,6 +725,12 @@ export abstract class StdioAcpProvider extends AcpProvider {
   }
   private cancelPermissionWaiters(workspace: string): void { for (const [id, waiter] of this.permissionWaiters) if (waiter.workspace === workspace) { this.permissionWaiters.delete(id); waiter.resolve({ outcome: { outcome: "cancelled" } }); } }
   private async runtimeFailed(workspace: string, message: string): Promise<void> { const session = await this.get(workspace); session.pendingPermission = undefined; if (session.status === "in_progress") { session.status = "error"; session.messages.push(this.message("error", message)); await this.save(workspace, session); this.onChanged(workspace); } }
+}
+
+function processExists(pid?: number): boolean {
+  if (!Number.isSafeInteger(pid) || pid! <= 0) return false;
+  try { process.kill(pid!, 0); return true; }
+  catch (error) { return (error as NodeJS.ErrnoException).code === "EPERM"; }
 }
 
 function selectOptions(option: SessionConfigOption): SelectChoice[] {

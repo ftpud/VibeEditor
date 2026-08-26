@@ -5,8 +5,8 @@ import { summarizeAiSessions } from "./summary.js";
 const session = (status: AiSession["status"], text: string, timestamp: string): AiSession => ({ model: "test", reasoning: "medium", status, messages: [{ id: text, role: "assistant", text, timestamp }] });
 
 describe("summarizeAiSessions", () => {
-  it("keeps completed activity as a preview without reporting a running status", () => {
-    expect(summarizeAiSessions([session("done", "Finished work", "2026-08-26T10:00:00Z")])).toEqual({ status: "idle", preview: "Finished work", pendingPermission: false });
+  it("reports completed activity as done", () => {
+    expect(summarizeAiSessions([session("done", "Finished work", "2026-08-26T10:00:00Z")])).toEqual({ status: "done", preview: "Finished work", pendingPermission: false });
   });
 
   it("prioritizes an active provider over newer inactive history", () => {

@@ -7,7 +7,7 @@ export function summarizeAiSessions(sessions: AiSession[]): { status: AiStatus; 
   if (!session) return { status: "idle", preview: "", pendingPermission: false };
   const message = [...session.messages].reverse().find((item) => item.role === "assistant" || item.role === "activity") ?? session.messages.at(-1);
   return {
-    status: session.status === "done" ? "idle" : session.status,
+    status: session.status,
     preview: message?.text.replace(/\s+/g, " ").trim().slice(0, 180) ?? "",
     pendingPermission: sessions.some((item) => item.pendingPermission !== undefined)
   };

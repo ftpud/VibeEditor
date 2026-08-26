@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, writeFile } from "node:fs/promises";
+import crypto from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -28,6 +29,23 @@ async function settle(provider: FakeProvider, workspace: string): Promise<AiSess
 }
 
 describe("ACP integration", () => {
+  it("keeps a session owned by another live process in progress but marks an abandoned session as error", async () => {
+    const state = await mkdtemp(path.join(os.tmpdir(), "remote-ide-ai-owner-"));
+    const workspace = process.cwd();
+    const running = new FakeProvider(() => undefined, state, { FAKE_SLOW: "on" });
+    await running.send(workspace, { prompt: "slow work", configuration: { model: "model-a" } });
+
+    const observer = new FakeProvider(() => undefined, state);
+    expect((await observer.get(workspace)).status).toBe("in_progress");
+    await running.interrupt(workspace);
+    await settle(running, workspace);
+
+    const abandonedWorkspace = "/workspace/abandoned";
+    const hash = crypto.createHash("sha256").update(abandonedWorkspace).digest("hex");
+    await writeFile(path.join(state, `${hash}-fake.json`), JSON.stringify({ status: "in_progress", model: "model-a", reasoning: "medium", messages: [], _ownerPid: 999_999_999 }));
+    expect((await observer.get(abandonedWorkspace)).status).toBe("error");
+  });
+
   it("persists model settings independently by provider and workspace", async () => {
     const state = await mkdtemp(path.join(os.tmpdir(), "remote-ide-ai-settings-"));
     const workspace = "/workspace/one";
