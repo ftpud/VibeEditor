@@ -107,6 +107,8 @@ export async function createServer(host: string, port: number, workspacePath: st
       return { workspacePath: nextWorkspace, filesystem, search, git, java, jdt, processManager, workspaceState };
     };
     let servicesPromise = makeServices(workspace);
+    /** Resolves once no task switch is in flight for this connection. */
+    let switching: Promise<void> = Promise.resolve();
     let switchedWatcher: ReturnType<typeof chokidar.watch> | undefined;
     let switchedGitIndexWatcher: ReturnType<typeof chokidar.watch> | undefined;
     const watchSwitchedWorkspace = async (nextWorkspace: string) => {
@@ -138,14 +140,24 @@ export async function createServer(host: string, port: number, workspacePath: st
         const parsed = parseRequest(data);
         id = parsed.id;
         console.log(`[core] request ${parsed.id}: ${parsed.type}`);
-        let services = await servicesPromise;
-        if (parsed.type === "tasks.switch" || (parsed.type === "tasks.delete" && (await tasks.list()).selectedTaskId === parsed.payload.taskId)) {
-          const selected = await tasks.select(parsed.type === "tasks.switch" ? parsed.payload.taskId : undefined);
-          services.processManager.closeAll(); services.java.close(); services.jdt.close();
-          servicesPromise = makeServices(selected.workspace);
+        // Requests are handled concurrently, so anything that arrives while a task switch is
+        // rebuilding the services has to wait for it. Otherwise it would run against the
+        // previous worktree and answer the client with another task's state.
+        const switchesWorkspace = parsed.type === "tasks.switch" || parsed.type === "tasks.delete";
+        if (!switchesWorkspace) await switching;
+        let release: (() => void) | undefined;
+        if (switchesWorkspace) { const previous = switching; switching = new Promise<void>((resolve) => { release = resolve; }); await previous; }
+        let services: SessionServices;
+        try {
           services = await servicesPromise;
-          await watchSwitchedWorkspace(selected.workspace);
-        }
+          if (parsed.type === "tasks.switch" || (parsed.type === "tasks.delete" && (await tasks.list()).selectedTaskId === parsed.payload.taskId)) {
+            const selected = await tasks.select(parsed.type === "tasks.switch" ? parsed.payload.taskId : undefined);
+            services.processManager.closeAll(); services.java.close(); services.jdt.close();
+            servicesPromise = makeServices(selected.workspace);
+            services = await servicesPromise;
+            await watchSwitchedWorkspace(selected.workspace);
+          }
+        } finally { release?.(); }
         const result = await handleRequest(services, tasks, acp, usefulFiles, rootWorkspace, parsed);
         if (parsed.type === "workspace.open") activeSessions.add(socket);
         socket.send(JSON.stringify({ id, ok: true, result }));
@@ -212,7 +224,9 @@ async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStor
     case "ai.interrupt": return { session: await acp.get(request.payload.provider).interrupt(workspacePath) };
     case "ai.steer": return { session: await acp.get(request.payload.provider).steer(workspacePath, request.payload.prompt) };
     case "ai.clear": return { session: await acp.get(request.payload.provider).clear(workspacePath) };
-    case "ai.restore": return { session: await acp.get(request.payload.provider).restore(workspacePath, request.payload.session) };
+    case "ai.sessions": return { sessions: await acp.get(request.payload.provider).sessions(workspacePath) };
+    case "ai.restore": return { session: await acp.get(request.payload.provider).restore(workspacePath, request.payload.sessionId) };
+    case "ai.remove": return { session: await acp.get(request.payload.provider).remove(workspacePath, request.payload.sessionId) };
     case "ai.usage": return { usage: await acp.get(request.payload.provider).usage(workspacePath) };
     case "ai.statuses": {
       const registry = await tasks.list();

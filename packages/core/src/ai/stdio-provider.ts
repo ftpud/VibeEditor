@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { Readable, Writable } from "node:stream";
 import { ClientSideConnection, PROTOCOL_VERSION, ndJsonStream, type Client, type ContentBlock, type McpServer, type RequestPermissionRequest, type RequestPermissionResponse, type SessionConfigOption, type SessionNotification } from "@agentclientprotocol/sdk";
 import { AcpProvider, applyConfiguration, type AcpSendRequest, type AiConfiguration, type AiContentBlock, type AiMessage, type AiModel, type AiModelDetails, type AiOption, type AiProviderDescriptor, type AiSession, type AiUsage } from "@remote-ide/acp";
@@ -38,7 +38,17 @@ type PermissionWaiter = { workspace: string; resolve(response: RequestPermission
 
 const STEERING_METHOD = "_session/steering";
 
+function stamp(session: AiSession): number { return Date.parse(session.updatedAt ?? session.createdAt ?? "") || 0; }
+
+/** Everything the session picker needs to label a conversation, without its transcript. */
+function summarize(session: AiSession): AiSession {
+  const first = session.messages?.find((message) => message.role === "user");
+  return { ...session, pendingPermission: undefined, availableCommands: undefined, availableOptions: undefined, messages: first ? [first] : [] };
+}
+
 const MODEL_CACHE_MS = 5 * 60_000;
+/** Archived sessions kept per workspace and provider. */
+const ARCHIVE_LIMIT = 50;
 const CONVERSATION_UPDATES = new Set(["agent_message_chunk", "agent_thought_chunk", "tool_call", "tool_call_update", "plan", "plan_update", "compaction_update"]);
 const TERMINAL_ONLY_COMMANDS = new Set(["/diff", "/resume", "/theme", "/settings", "/login", "/help", "/tasks", "/undo"]);
 
@@ -54,6 +64,8 @@ export abstract class StdioAcpProvider extends AcpProvider {
   private modelDiscovery?: Promise<AiModel[]>;
   private lastWorkspace = process.cwd();
   private readonly permissionWaiters = new Map<string, PermissionWaiter>();
+  private readonly blankSessions = new Map<string, AiSession>();
+  private readonly archiveIndex = new Map<string, { at: number; sessions: AiSession[] }>();
 
   constructor(private readonly onChanged: (workspace: string) => void, private readonly stateDirectory = process.env.REMOTE_IDE_STATE_DIR ?? path.join(os.homedir(), ".remote-ide", "workspaces")) { super(); }
 
@@ -65,7 +77,13 @@ export abstract class StdioAcpProvider extends AcpProvider {
       const now = new Date().toISOString();
       return { ...saved, id: saved.id ?? crypto.randomUUID(), createdAt: saved.createdAt ?? now, updatedAt: saved.updatedAt ?? now, model: saved.model ?? "auto", reasoning: saved.reasoning ?? "medium", status: saved.status === "in_progress" ? "error" : saved.status, messages: Array.isArray(saved.messages) ? saved.messages.slice(-1000) : [] };
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return this.emptySession();
+      // A workspace that never talked to the agent still needs a stable id: minting a
+      // fresh one on every `get` would make the client believe the session changed.
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        const pending = this.blankSessions.get(workspace) ?? this.emptySession();
+        this.blankSessions.set(workspace, pending);
+        return { ...pending, messages: [] };
+      }
       throw new CoreError("READ_FAILED", `Could not load ${this.descriptor.name} session: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
@@ -226,15 +244,102 @@ export abstract class StdioAcpProvider extends AcpProvider {
     if (this.runtimes.get(workspace)?.running) throw new CoreError("INVALID_REQUEST", `${this.descriptor.name} is still working`);
     await this.closeRuntime(workspace);
     const current = await this.get(workspace);
+    await this.archive(workspace, current);
     const session: AiSession = { ...this.emptySession(), model: current.model, reasoning: current.reasoning, configuration: current.configuration, availableOptions: current.availableOptions };
+    this.blankSessions.delete(workspace);
     await this.save(workspace, session); this.onChanged(workspace); return session;
   }
 
-  async restore(workspace: string, session: AiSession): Promise<AiSession> {
+  /** Active session first, then everything archived, most recently updated first. */
+  async sessions(workspace: string): Promise<AiSession[]> {
+    const current = await this.get(workspace).catch(() => undefined);
+    const seen = new Set<string>();
+    const result: AiSession[] = [];
+    for (const session of [...(current ? [summarize(current)] : []), ...await this.index(workspace)]) {
+      if (!session.id || seen.has(session.id)) continue;
+      seen.add(session.id);
+      result.push(session);
+    }
+    return result;
+  }
+
+  async restore(workspace: string, sessionId: string): Promise<AiSession> {
     if (this.runtimes.get(workspace)?.running) throw new CoreError("INVALID_REQUEST", `${this.descriptor.name} is still working`);
+    const current = await this.get(workspace);
+    if (current.id === sessionId) return current;
+    const target = await this.readArchived(workspace, sessionId);
+    if (!target) throw new CoreError("INVALID_REQUEST", "That session is no longer available");
     await this.closeRuntime(workspace);
-    const restored: AiSession = { ...session, id: session.id ?? crypto.randomUUID(), createdAt: session.createdAt ?? new Date().toISOString(), updatedAt: new Date().toISOString(), pendingPermission: undefined, status: session.status === "in_progress" ? "error" : session.status, messages: session.messages.slice(-1000) };
+    await this.archive(workspace, current);
+    const restored: AiSession = { ...target, id: target.id ?? crypto.randomUUID(), createdAt: target.createdAt ?? new Date().toISOString(), updatedAt: new Date().toISOString(), pendingPermission: undefined, status: target.status === "in_progress" ? "error" : target.status, messages: (target.messages ?? []).slice(-1000) };
+    this.blankSessions.delete(workspace);
     await this.save(workspace, restored); this.onChanged(workspace); return restored;
+  }
+
+  async remove(workspace: string, sessionId: string): Promise<AiSession> {
+    if (this.runtimes.get(workspace)?.running) throw new CoreError("INVALID_REQUEST", `${this.descriptor.name} is still working`);
+    await rm(this.archiveFile(workspace, sessionId), { force: true });
+    await this.cacheIndex(workspace, (await this.index(workspace)).filter((session) => session.id !== sessionId));
+    const current = await this.get(workspace);
+    if (current.id !== sessionId) { this.onChanged(workspace); return current; }
+    // The removed session is the active one, so fall back to the newest remaining conversation.
+    // It must not go through `clear`, which would archive the very session being removed.
+    await this.closeRuntime(workspace);
+    this.blankSessions.delete(workspace);
+    const newest = (await this.index(workspace))[0]?.id;
+    const next = newest ? await this.readArchived(workspace, newest) : undefined;
+    const session: AiSession = next?.id
+      ? { ...next, updatedAt: new Date().toISOString(), pendingPermission: undefined, status: next.status === "in_progress" ? "error" : next.status, messages: (next.messages ?? []).slice(-1000) }
+      : { ...this.emptySession(), model: current.model, reasoning: current.reasoning, configuration: current.configuration, availableOptions: current.availableOptions };
+    await this.save(workspace, session); this.onChanged(workspace); return session;
+  }
+
+  private archiveDirectory(workspace: string): string { return `${this.file(workspace).replace(/\.json$/, "")}-sessions`; }
+  private archiveFile(workspace: string, sessionId: string): string { return path.join(this.archiveDirectory(workspace), `${sessionId.replace(/[^\w.-]/g, "_")}.json`); }
+
+  /** Keeps a copy of a session that is about to stop being the active one. */
+  private async archive(workspace: string, session: AiSession): Promise<void> {
+    if (!session.id || session.messages.length === 0) return;
+    const directory = this.archiveDirectory(workspace);
+    await mkdir(directory, { recursive: true });
+    const serialized = `${JSON.stringify({ ...session, pendingPermission: undefined, status: session.status === "in_progress" ? "error" : session.status, messages: session.messages.slice(-1000) }, null, 2)}\n`;
+    const file = this.archiveFile(workspace, session.id);
+    const temp = `${file}.${process.pid}.${crypto.randomUUID()}.tmp`;
+    await writeFile(temp, serialized);
+    await rename(temp, file);
+    const index = [summarize(session), ...(await this.index(workspace)).filter((entry) => entry.id !== session.id)].sort((left, right) => stamp(right) - stamp(left));
+    await Promise.all(index.slice(ARCHIVE_LIMIT).map((entry) => rm(this.archiveFile(workspace, entry.id!), { force: true })));
+    await this.cacheIndex(workspace, index.slice(0, ARCHIVE_LIMIT));
+  }
+
+  /**
+   * Transcripts stay on disk and only the labels the picker needs are held in memory. The index is
+   * rebuilt only when the archive directory has been touched since it was cached, so another core
+   * process working on the same state directory cannot leave the listing stale.
+   */
+  private async index(workspace: string): Promise<AiSession[]> {
+    const directory = this.archiveDirectory(workspace);
+    const modified = await this.archiveStamp(workspace);
+    const cached = this.archiveIndex.get(workspace);
+    if (cached && cached.at === modified) return cached.sessions;
+    let names: string[] = [];
+    try { names = await readdir(directory); } catch { this.archiveIndex.set(workspace, { at: modified, sessions: [] }); return []; }
+    const sessions = await Promise.all(names.filter((name) => name.endsWith(".json")).map(async (name) => {
+      try { return summarize(JSON.parse(await readFile(path.join(directory, name), "utf8")) as AiSession); } catch { return undefined; }
+    }));
+    const index = sessions.filter((session): session is AiSession => Boolean(session?.id)).sort((left, right) => stamp(right) - stamp(left));
+    this.archiveIndex.set(workspace, { at: modified, sessions: index });
+    return index;
+  }
+
+  private async archiveStamp(workspace: string): Promise<number> { return stat(this.archiveDirectory(workspace)).then((stats) => stats.mtimeMs).catch(() => 0); }
+  private async cacheIndex(workspace: string, sessions: AiSession[]): Promise<void> { this.archiveIndex.set(workspace, { at: await this.archiveStamp(workspace), sessions }); }
+
+  private async readArchived(workspace: string, sessionId: string): Promise<AiSession | undefined> {
+    try {
+      const session = JSON.parse(await readFile(this.archiveFile(workspace, sessionId), "utf8")) as AiSession;
+      return session.id === sessionId ? session : undefined;
+    } catch { return undefined; }
   }
 
   private emptySession(): AiSession {

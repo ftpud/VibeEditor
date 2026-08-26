@@ -30,6 +30,8 @@ const gitHunkDecorations = (hunks: GitDiffHunk[]): editor.IModelDeltaDecoration[
   return { range: { startLineNumber: start, startColumn: 1, endLineNumber: end, endColumn: 1 }, options: { isWholeLine: true, linesDecorationsClassName: `git-change-marker ${kind}`, hoverMessage: { value: "Click the gutter marker to inspect this change" } } };
 });
 type ParsedHttpRequest = { line: number; method: string; url: string; headers: Record<string, string>; body?: string };
+/** Identifies which workspace, provider and request order an AI session snapshot was fetched for. */
+type AiSnapshotToken = { sequence: number; workspace: string; provider: AiProvider };
 function parseHttpRequests(content: string): ParsedHttpRequest[] {
   const lines = content.split("\n"); const requests: ParsedHttpRequest[] = [];
   let blockStart = 0;
@@ -48,6 +50,9 @@ function parseHttpRequests(content: string): ParsedHttpRequest[] {
   }
   return requests;
 }
+
+/** Setting name under which the AI provider last used for a task (or the root workspace) is stored. */
+function aiProviderTaskKey(taskId?: string): string { return `ai.provider.task.${taskId ?? "root"}`; }
 
 function workspaceSettingKey(workspace: string, setting: string): string {
   return `workspace:${encodeURIComponent(workspace)}:${setting}`;
@@ -89,6 +94,7 @@ export function App() {
   const [tasks, setTasks] = useState<WorkspaceTask[]>([]);
   const [selectedTaskId, setSelectedTaskId] = useState<string>();
   const activeTaskRef = useRef<WorkspaceTask>();
+  const selectedTaskIdRef = useRef<string>();
   const [taskSwitching, setTaskSwitching] = useState(false);
   const [terminalHeight, setTerminalHeight] = useState(240);
   const [sideView, setSideView] = useState<"project" | "git" | "taskGit" | "java" | "useful">("project");
@@ -108,6 +114,8 @@ export function App() {
   const [aiStatuses, setAiStatuses] = useState<{ root: AiTaskSummary; tasks: Record<string, AiTaskSummary> }>({ root: emptyAiSummary, tasks: {} });
   const aiStatusesRequested = useRef(0);
   const aiStatusesApplied = useRef(0);
+  const aiSessionRequested = useRef(0);
+  const aiSessionApplied = useRef(0);
   const [activeGitHunks, setActiveGitHunks] = useState<GitDiffHunk[]>([]);
   const [gitHunkDialog, setGitHunkDialog] = useState<{ x: number; y: number; path: string; hunk: GitDiffHunk; originalContent: string; modifiedContent: string; error?: string }>();
   const [httpResult, setHttpResult] = useState<{ request: ParsedHttpRequest; response?: HttpResponse; error?: string; loading: boolean }>();
@@ -177,24 +185,7 @@ export function App() {
   useEffect(() => { layoutRef.current = layout; }, [layout]);
   useEffect(() => { javaOptionsRef.current = javaOptions; }, [javaOptions]);
   useEffect(() => { activeWorkspaceRef.current = activeWorkspace; }, [activeWorkspace]);
-  const prevWorkspaceRef = useRef(activeWorkspace);
-  useEffect(() => {
-    if (!activeWorkspace || !aiSession.id) return;
-    const key = `aiSessions:${encodeURIComponent(activeWorkspace)}:${aiProvider}`;
-    let stored: AiSession[] = [];
-    try { stored = JSON.parse(localStorage.getItem(key) ?? "[]") as AiSession[]; } catch { stored = []; }
-    // Only save to localStorage if we're not in a workspace transition (prevents saving old workspace's session to new workspace)
-    if (prevWorkspaceRef.current === activeWorkspace) {
-      const updated = { ...aiSession, updatedAt: new Date().toISOString() };
-      const next = [updated, ...stored.filter((item) => item.id !== updated.id)].slice(0, 50);
-      localStorage.setItem(key, JSON.stringify(next));
-      setAiSessions(next);
-    } else {
-      // Workspace just changed - only load sessions, don't save the old workspace's session here
-      prevWorkspaceRef.current = activeWorkspace;
-      setAiSessions(stored);
-    }
-  }, [activeWorkspace, aiProvider, aiSession]);
+  useEffect(() => { selectedTaskIdRef.current = selectedTaskId; }, [selectedTaskId]);
   useEffect(() => { activeGitHunksRef.current = activeGitHunks; }, [activeGitHunks]);
   useEffect(() => {
     if (!pendingNavigation || activeTab?.path !== pendingNavigation.result.path || !monacoEditorRef.current) return;
@@ -272,11 +263,33 @@ export function App() {
     aiStatusesApplied.current = sequence;
     setAiStatuses(statuses);
   }, []);
+  // The transcript has the same problem, and it is worse there: a reply that was requested for the
+  // previous task or provider would drop that conversation into the panel, so the next prompt looks
+  // like it was prepended to a transcript it does not belong to. Every session snapshot therefore
+  // carries the workspace, provider and request order it was asked for, and stale ones are dropped.
+  const aiToken = useCallback((): AiSnapshotToken => ({ sequence: ++aiSessionRequested.current, workspace: activeWorkspaceRef.current, provider: aiProviderRef.current }), []);
+  const applyAiSession = useCallback((session: AiSession, token: AiSnapshotToken): boolean => {
+    if (token.workspace !== activeWorkspaceRef.current || token.provider !== aiProviderRef.current) return false;
+    if (token.sequence <= aiSessionApplied.current) return false;
+    aiSessionApplied.current = token.sequence;
+    setAiSession(session);
+    return true;
+  }, []);
   const refreshAi = useCallback(async (client = clientRef.current) => {
     if (!client) return;
+    const token = aiToken();
     const [session] = await Promise.all([client.request("ai.get", { provider: aiProviderRef.current }), refreshAiStatuses(client)]);
-    setAiSession(session.session);
-  }, [refreshAiStatuses]);
+    applyAiSession(session.session, token);
+  }, [aiToken, applyAiSession, refreshAiStatuses]);
+  // The listing only changes when a conversation starts, is switched or is removed, so it is kept
+  // out of `refreshAi`, which also runs for every chunk the agent streams.
+  const refreshAiSessions = useCallback(async (client = clientRef.current) => {
+    if (!client) return;
+    const provider = aiProviderRef.current;
+    const workspace = activeWorkspaceRef.current;
+    const sessions = (await client.request("ai.sessions", { provider })).sessions;
+    if (provider === aiProviderRef.current && workspace === activeWorkspaceRef.current) setAiSessions(sessions);
+  }, []);
   const refreshUsefulFiles = useCallback(async (client = clientRef.current) => { if (client) setUsefulFiles((await client.request("useful.list", {})).files); }, []);
 
   const restoreWorkspaceOptions = useCallback(async (options: WorkspaceOptions, client: CoreClient) => {
@@ -342,8 +355,8 @@ export function App() {
         return;
       }
       if (event.type === "ai.changed") {
-        void refreshAiStatuses(client).catch(() => undefined);
-        if (event.payload.workspace === activeWorkspaceRef.current) void client.request("ai.get", { provider: aiProviderRef.current }).then((result) => setAiSession(result.session)).catch(() => undefined);
+        if (event.payload.workspace === activeWorkspaceRef.current) void refreshAi(client).catch(() => undefined);
+        else void refreshAiStatuses(client).catch(() => undefined);
         return;
       }
       if (gitRefreshTimer.current) clearTimeout(gitRefreshTimer.current);
@@ -422,26 +435,31 @@ export function App() {
         if (wsLineHeight >= 1 && wsLineHeight <= 2) setUiLineHeight(wsLineHeight);
         const providerResult = await client.request("ai.providers", {});
         setAiProviders(providerResult.providers);
-        const wsProvider = setting("aiProvider") as AiProvider | null;
-        const provider = providerResult.providers.some((item) => item.id === wsProvider) ? wsProvider! : (providerResult.providers[0]?.id ?? "codex");
-        aiProviderRef.current = provider; setAiProvider(provider);
         setJavaOptions(result.options.javaProject);
         if (result.options.javaProject) {
           try { setJavaTree((await client.request("java.getProjectTree", {})).tree); } catch { setJavaTree([]); }
         } else setJavaTree([]);
         await restoreWorkspaceOptions(result.options, client);
         const taskResult = await client.request("tasks.list", {});
-        setTasks(taskResult.tasks); setSelectedTaskId(taskResult.selectedTaskId); activeTaskRef.current = taskResult.tasks.find((task) => task.id === taskResult.selectedTaskId);
-        const modelResult = await client.request("ai.models", { provider: aiProviderRef.current });
-        let session = (await client.request("ai.get", { provider: aiProviderRef.current })).session;
-        const savedModel = setting(`ai.${aiProviderRef.current}.model`);
-        const savedReasoning = setting(`ai.${aiProviderRef.current}.reasoning`);
+        setTasks(taskResult.tasks); setSelectedTaskId(taskResult.selectedTaskId); selectedTaskIdRef.current = taskResult.selectedTaskId; activeTaskRef.current = taskResult.tasks.find((task) => task.id === taskResult.selectedTaskId);
+        // The provider is remembered per task, so it can only be resolved once the selected task is known.
+        const taskProvider = setting(aiProviderTaskKey(taskResult.selectedTaskId)) as AiProvider | null;
+        const wsProvider = setting("aiProvider") as AiProvider | null;
+        const known = (candidate: AiProvider | null) => Boolean(candidate) && providerResult.providers.some((item) => item.id === candidate);
+        const provider = known(taskProvider) ? taskProvider! : known(wsProvider) ? wsProvider! : (providerResult.providers[0]?.id ?? "codex");
+        aiProviderRef.current = provider; setAiProvider(provider);
+        wsSave(aiProviderTaskKey(taskResult.selectedTaskId), provider);
+        const modelResult = await client.request("ai.models", { provider });
+        let session = (await client.request("ai.get", { provider })).session;
+        const savedModel = setting(`ai.${provider}.model`);
+        const savedReasoning = setting(`ai.${provider}.reasoning`);
         if (savedModel && modelResult.models.some((model) => model.id === savedModel)) {
           const model = modelResult.models.find((item) => item.id === savedModel)!;
           const reasoning = savedReasoning && model.reasoningLevels.includes(savedReasoning) ? savedReasoning : model.defaultReasoning;
-          if (session.model !== savedModel || session.reasoning !== reasoning) session = (await client.request("ai.configure", { provider: aiProviderRef.current, model: savedModel, reasoning })).session;
+          if (session.model !== savedModel || session.reasoning !== reasoning) session = (await client.request("ai.configure", { provider, model: savedModel, reasoning })).session;
         }
         setAiModels(modelResult.models); setAiSession(session); setAiUsage((await client.request("ai.usage", { provider })).usage);
+        setAiSessions((await client.request("ai.sessions", { provider })).sessions);
         await refreshAiStatuses(client);
         await refreshUsefulFiles(client);
         setTree(result.tree); setStatus("connected"); setStatusMessage("");
@@ -678,11 +696,15 @@ export function App() {
     if (current) await saveFileTab(current);
   }, [layout, saveFileTab]);
 
-  const switchAiProvider = useCallback(async (provider: AiProvider) => {
-    if (!clientRef.current || provider === aiProviderRef.current) return;
-    aiProviderRef.current = provider; setAiProvider(provider);
+  // `taskId` is passed explicitly because task switching changes the selected task and the provider
+  // in the same pass: reading it from state here would remember the provider under the previous task.
+  const switchAiProvider = useCallback(async (provider: AiProvider, taskId = selectedTaskIdRef.current) => {
+    if (!clientRef.current) return;
     wsSave("aiProvider", provider);
-    wsSave(`ai.provider.task.${selectedTaskId ?? "root"}`, provider);
+    wsSave(aiProviderTaskKey(taskId), provider);
+    if (provider === aiProviderRef.current) return;
+    aiProviderRef.current = provider; setAiProvider(provider);
+    const token = aiToken();
     try {
       const [sessionResult, models] = await Promise.all([clientRef.current.request("ai.get", { provider }), clientRef.current.request("ai.models", { provider })]);
       let session = sessionResult.session;
@@ -694,9 +716,14 @@ export function App() {
         const reasoning = savedReasoning && model.reasoningLevels.includes(savedReasoning) ? savedReasoning : model.defaultReasoning;
         if (session.model !== savedModel || session.reasoning !== reasoning) session = (await clientRef.current.request("ai.configure", { provider, model: savedModel, reasoning })).session;
       }
-      setAiSession(session); setAiModels(models.models); setAiUsage((await clientRef.current.request("ai.usage", { provider })).usage);
+      if (!applyAiSession(session, { ...token, provider })) return;
+      setAiModels(models.models);
+      const usage = (await clientRef.current.request("ai.usage", { provider })).usage;
+      if (provider !== aiProviderRef.current) return;
+      setAiUsage(usage);
+      await refreshAiSessions();
     } catch (error) { setStatusMessage(error instanceof Error ? error.message : "Could not switch AI provider"); }
-  }, [selectedTaskId]);
+  }, [aiToken, applyAiSession, refreshAiSessions]);
 
   const switchTask = useCallback(async (taskId?: string) => {
     if (!clientRef.current || taskId === selectedTaskId) return;
@@ -711,7 +738,7 @@ export function App() {
       const result = await clientRef.current.request("tasks.switch", { ...(taskId ? { taskId } : {}) });
       terminalWriters.current.clear(); terminalBuffers.current.clear(); markdownBlockTerminals.current.clear();
       setLayout((current) => ({ ...current, panels: current.panels.filter((panel) => !["terminal", "java", "problems"].includes(panel.type)), terminalGroup: { ...current.terminalGroup, tabs: [], activeTabId: undefined } }));
-      setTasks(result.tasks); setSelectedTaskId(result.selectedTaskId); activeTaskRef.current = result.tasks.find((task) => task.id === result.selectedTaskId); setTree(result.tree);
+      setTasks(result.tasks); setSelectedTaskId(result.selectedTaskId); selectedTaskIdRef.current = result.selectedTaskId; activeTaskRef.current = result.tasks.find((task) => task.id === result.selectedTaskId); setTree(result.tree);
       if (!result.selectedTaskId && sideView === "taskGit") setSideView("project");
       setActiveWorkspace(result.workspace); activeWorkspaceRef.current = result.workspace;
       setProjectName(result.projectName);
@@ -719,15 +746,15 @@ export function App() {
       if (result.options.javaProject) setJavaTree((await clientRef.current.request("java.getProjectTree", {})).tree);
       await restoreWorkspaceOptions(result.options, clientRef.current);
       const nextTask = result.tasks.find((task) => task.id === result.selectedTaskId);
-      const taskProviderKey = result.selectedTaskId ?? "root";
-      const savedProvider = workspaceKeyRef.current ? (localStorage.getItem(workspaceSettingKey(workspaceKeyRef.current, `ai.provider.task.${taskProviderKey}`)) as AiProvider | null) : null;
-      if (savedProvider && aiProviders.some((p) => p.id === savedProvider) && savedProvider !== aiProviderRef.current) await switchAiProvider(savedProvider);
-      await Promise.all([refreshGit(), refreshAi(), refreshTaskGit(nextTask)]);
+      const savedProvider = workspaceKeyRef.current ? (localStorage.getItem(workspaceSettingKey(workspaceKeyRef.current, aiProviderTaskKey(result.selectedTaskId))) as AiProvider | null) : null;
+      const nextProvider = savedProvider && aiProviders.some((item) => item.id === savedProvider) ? savedProvider : aiProviderRef.current;
+      await switchAiProvider(nextProvider, result.selectedTaskId);
+      await Promise.all([refreshGit(), refreshAi(), refreshAiSessions(), refreshTaskGit(nextTask)]);
     } catch (error) {
       setWorkspaceOptionsReady(true);
       setStatusMessage(error instanceof Error ? error.message : "Could not switch task");
     } finally { setTaskSwitching(false); }
-  }, [aiProviders, fileColors, gitCommitMessage, refreshAi, refreshGit, refreshTaskGit, restoreWorkspaceOptions, saveFileTab, selectedTaskId, sideView, switchAiProvider]);
+  }, [aiProviders, fileColors, gitCommitMessage, refreshAi, refreshAiSessions, refreshGit, refreshTaskGit, restoreWorkspaceOptions, saveFileTab, selectedTaskId, sideView, switchAiProvider]);
 
   const currentAiAttachmentKey = selectedTaskId ?? "root";
   const currentAiAttachments = aiAttachments[currentAiAttachmentKey] ?? [];
@@ -748,56 +775,60 @@ export function App() {
       : attachment.data && attachment.mimeType
         ? { type: "image" as const, data: attachment.data, mimeType: attachment.mimeType, name: attachment.name }
         : { type: "resource" as const, uri: `attachment:${encodeURIComponent(attachment.name)}`, mimeType: attachment.mimeType, text: attachment.content ?? "", name: attachment.name });
-    try { setAiSession((await clientRef.current.request("ai.send", { provider: aiProviderRef.current, prompt, content, configuration })).session); await refreshAi(); }
-    catch (error) { setStatusMessage(error instanceof Error ? error.message : "Could not start Codex"); throw error; }
-  }, [refreshAi]);
+    const token = aiToken();
+    try { applyAiSession((await clientRef.current.request("ai.send", { provider: aiProviderRef.current, prompt, content, configuration })).session, token); await Promise.all([refreshAi(), refreshAiSessions()]); }
+    catch (error) { setStatusMessage(error instanceof Error ? error.message : `Could not start ${aiProviderRef.current}`); throw error; }
+  }, [aiToken, applyAiSession, refreshAi, refreshAiSessions]);
   const resolveAiPermission = useCallback(async (requestId: string, optionId?: string) => {
     if (!clientRef.current) return;
-    try { setAiSession((await clientRef.current.request("ai.permission.resolve", { provider: aiProviderRef.current, requestId, optionId })).session); }
+    const token = aiToken();
+    try { applyAiSession((await clientRef.current.request("ai.permission.resolve", { provider: aiProviderRef.current, requestId, optionId })).session, token); }
     catch (error) { setStatusMessage(error instanceof Error ? error.message : "Could not resolve permission request"); }
-  }, []);
+  }, [aiToken, applyAiSession]);
   const steerAiPrompt = useCallback(async (prompt: string) => {
     if (!clientRef.current) return;
-    try { setAiSession((await clientRef.current.request("ai.steer", { provider: aiProviderRef.current, prompt })).session); await refreshAi(); }
+    const token = aiToken();
+    try { applyAiSession((await clientRef.current.request("ai.steer", { provider: aiProviderRef.current, prompt })).session, token); await refreshAi(); }
     catch (error) { setStatusMessage(error instanceof Error ? error.message : "Could not add input to the running turn"); throw error; }
-  }, [refreshAi]);
+  }, [aiToken, applyAiSession, refreshAi]);
   const configureAi = useCallback(async (configuration: AiConfiguration) => {
     if (!clientRef.current) return;
+    const token = aiToken();
     try {
-      setAiSession((await clientRef.current.request("ai.configure", { provider: aiProviderRef.current, configuration })).session);
+      applyAiSession((await clientRef.current.request("ai.configure", { provider: aiProviderRef.current, configuration })).session, token);
       if (typeof configuration.model === "string") wsSave(`ai.${aiProviderRef.current}.model`, configuration.model);
       if (typeof configuration.reasoning === "string") wsSave(`ai.${aiProviderRef.current}.reasoning`, configuration.reasoning);
     }
     catch (error) { setStatusMessage(error instanceof Error ? error.message : "Could not save AI settings"); }
-  }, []);
+  }, [aiToken, applyAiSession]);
 
   const newAiSession = useCallback(async () => {
     if (!clientRef.current) return;
-    try { setAiSession((await clientRef.current.request("ai.clear", { provider: aiProviderRef.current })).session); await refreshAi(); }
+    const token = aiToken();
+    try { applyAiSession((await clientRef.current.request("ai.clear", { provider: aiProviderRef.current })).session, token); await Promise.all([refreshAi(), refreshAiSessions()]); }
     catch (error) { setStatusMessage(error instanceof Error ? error.message : "Could not start a new AI session"); }
-  }, [refreshAi]);
+  }, [aiToken, applyAiSession, refreshAi, refreshAiSessions]);
 
   const switchAiSession = useCallback(async (session: AiSession) => {
-    if (!clientRef.current || !session.id || session.id === aiSession.id) return;
-    try { setAiSession((await clientRef.current.request("ai.restore", { provider: aiProviderRef.current, session })).session); await refreshAi(); }
+    if (!clientRef.current || !session.id) return;
+    const token = aiToken();
+    try { applyAiSession((await clientRef.current.request("ai.restore", { provider: aiProviderRef.current, sessionId: session.id })).session, token); await Promise.all([refreshAi(), refreshAiSessions()]); }
     catch (error) { setStatusMessage(error instanceof Error ? error.message : "Could not switch AI session"); }
-  }, [aiSession.id, refreshAi]);
+  }, [aiToken, applyAiSession, refreshAi, refreshAiSessions]);
 
   const removeAiSession = useCallback(async (session: AiSession) => {
-    const key = `aiSessions:${encodeURIComponent(activeWorkspace)}:${aiProviderRef.current}`;
-    const remaining = aiSessions.filter((item) => item.id !== session.id);
-    localStorage.setItem(key, JSON.stringify(remaining));
-    setAiSessions(remaining);
-    if (session.id !== aiSession.id) return;
-    if (remaining[0]) await switchAiSession(remaining[0]);
-    else await newAiSession();
-  }, [activeWorkspace, aiSession.id, aiSessions, newAiSession, switchAiSession]);
+    if (!clientRef.current || !session.id) return;
+    const token = aiToken();
+    try { applyAiSession((await clientRef.current.request("ai.remove", { provider: aiProviderRef.current, sessionId: session.id })).session, token); await Promise.all([refreshAi(), refreshAiSessions()]); }
+    catch (error) { setStatusMessage(error instanceof Error ? error.message : "Could not remove AI session"); }
+  }, [aiToken, applyAiSession, refreshAi, refreshAiSessions]);
 
   const interruptAi = useCallback(async () => {
     if (!clientRef.current) return;
-    try { setAiSession((await clientRef.current.request("ai.interrupt", { provider: aiProviderRef.current })).session); await refreshAi(); }
+    const token = aiToken();
+    try { applyAiSession((await clientRef.current.request("ai.interrupt", { provider: aiProviderRef.current })).session, token); await refreshAi(); }
     catch (error) { setStatusMessage(error instanceof Error ? error.message : "Could not stop AI task"); }
-  }, [refreshAi]);
+  }, [aiToken, applyAiSession, refreshAi]);
 
   const createTask = useCallback(async (branch: string) => {
     if (!clientRef.current || taskSwitching) return;

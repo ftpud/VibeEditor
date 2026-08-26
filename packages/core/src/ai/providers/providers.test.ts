@@ -73,6 +73,49 @@ describe("ACP integration", () => {
     await provider.clear(workspace);
   });
 
+  it("archives conversations so they can be listed, switched back to and removed", async () => {
+    const state = await mkdtemp(path.join(os.tmpdir(), "remote-ide-ai-sessions-"));
+    const provider = new FakeProvider(() => undefined, state);
+    const workspace = process.cwd();
+
+    expect((await provider.get(workspace)).id).toBe((await provider.get(workspace)).id);
+
+    await provider.send(workspace, { prompt: "first conversation", configuration: { model: "model-a", reasoning: "low" } });
+    const first = await settle(provider, workspace);
+    const second = await provider.clear(workspace);
+    expect(second.id).not.toBe(first.id);
+    await provider.send(workspace, { prompt: "second conversation", configuration: { model: "model-a", reasoning: "low" } });
+    await settle(provider, workspace);
+
+    const listed = await provider.sessions(workspace);
+    expect(listed.map((session) => session.id)).toEqual([second.id, first.id]);
+    expect(listed[1]!.messages[0]?.text).toBe("first conversation");
+
+    const restored = await provider.restore(workspace, first.id!);
+    expect(restored.id).toBe(first.id);
+    expect(restored.messages.map((message) => message.text)).toEqual(first.messages.map((message) => message.text));
+    expect((await provider.get(workspace)).id).toBe(first.id);
+    expect((await provider.sessions(workspace)).map((session) => session.id)).toEqual([first.id, second.id]);
+
+    // A restarted backend has to rebuild the listing from disk before it can switch sessions.
+    const restarted = new FakeProvider(() => undefined, state);
+    expect((await restarted.sessions(workspace)).map((session) => session.id)).toEqual([first.id, second.id]);
+    expect((await restarted.restore(workspace, second.id!)).messages.map((message) => message.text)).toContain("second conversation");
+    await provider.restore(workspace, first.id!);
+
+    await expect(provider.restore(workspace, "unknown-session")).rejects.toThrow(/no longer available/);
+
+    const afterRemoval = await provider.remove(workspace, first.id!);
+    expect(afterRemoval.id).toBe(second.id);
+    expect(afterRemoval.messages[0]?.text).toBe("second conversation");
+    expect((await provider.sessions(workspace)).map((session) => session.id)).toEqual([second.id]);
+
+    const afterLastRemoval = await provider.remove(workspace, second.id!);
+    expect(afterLastRemoval.messages).toEqual([]);
+    expect((await provider.sessions(workspace)).map((session) => session.id)).toEqual([afterLastRemoval.id]);
+    await provider.clear(workspace);
+  });
+
   it("reads the model catalogue, pricing metadata and per-model reasoning levels from the live agent", async () => {
     const state = await mkdtemp(path.join(os.tmpdir(), "remote-ide-ai-models-"));
     const provider = new FakeProvider(() => undefined, state);

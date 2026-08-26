@@ -62,7 +62,12 @@ export abstract class AcpProvider {
   /** Adds input to a turn that is already running. */
   abstract steer(workspace: string, prompt: string): Promise<AiSession>;
   abstract clear(workspace: string): Promise<AiSession>;
-  abstract restore(workspace: string, session: AiSession): Promise<AiSession>;
+  /** Every session recorded for the workspace, most recently updated first. */
+  abstract sessions(workspace: string): Promise<AiSession[]>;
+  /** Makes a previously recorded session the active one again. */
+  abstract restore(workspace: string, sessionId: string): Promise<AiSession>;
+  /** Forgets a recorded session. Removing the active one starts a fresh session. */
+  abstract remove(workspace: string, sessionId: string): Promise<AiSession>;
   async usage(_workspace?: string): Promise<AiUsage> { return { supported: false, label: "Usage is not exposed by this provider" }; }
 }
 

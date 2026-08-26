@@ -1,5 +1,5 @@
 import { Check, ChevronDown, MessageSquare, Paperclip, Plus, Send, Settings2, Square, Trash2, X } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { AiConfiguration, AiContentBlock, AiModel, AiProvider, AiProviderDescriptor, AiSession, AiUsage } from "@remote-ide/protocol";
@@ -16,10 +16,24 @@ export function AiPanel({ provider, providers, session, sessions, models, usage,
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [sessionsOpen, setSessionsOpen] = useState(false);
   const [attachmentError, setAttachmentError] = useState("");
-  const endRef = useRef<HTMLDivElement>(null);
+  const messagesRef = useRef<HTMLDivElement>(null);
+  const pinnedRef = useRef(true);
+  const shownSessionRef = useRef(session.id);
   const fileInputRef = useRef<HTMLInputElement>(null);
   useEffect(() => { setModel(session.model); setReasoning(session.reasoning); setConfiguration(session.configuration ?? {}); }, [session.model, session.reasoning, session.configuration]);
-  useEffect(() => { requestAnimationFrame(() => endRef.current?.scrollIntoView({ block: "end" })); }, [session.id, session.messages.length, session.status]);
+  const lastMessage = session.messages[session.messages.length - 1];
+  // `scrollIntoView` on a trailing anchor scrolls whichever ancestor it finds first, which after a
+  // task or session switch is the panel itself, leaving the transcript parked at its old offset.
+  // Driving the transcript's own scrollTop keeps the newest message at the bottom where it belongs.
+  useLayoutEffect(() => {
+    if (shownSessionRef.current !== session.id) { shownSessionRef.current = session.id; pinnedRef.current = true; }
+    if (!messagesRef.current || !pinnedRef.current) return;
+    // A second pass after paint catches markdown and images that change the height once rendered.
+    const scroll = () => { if (messagesRef.current) messagesRef.current.scrollTop = messagesRef.current.scrollHeight; };
+    scroll();
+    const frame = requestAnimationFrame(scroll);
+    return () => cancelAnimationFrame(frame);
+  }, [session.id, session.messages.length, session.status, lastMessage?.text, session.pendingPermission?.id]);
   const selectedModel = useMemo(() => models.find((item) => item.id === model) ?? models[0], [model, models]);
   useEffect(() => { if (selectedModel && !models.some((item) => item.id === model)) { setModel(selectedModel.id); onConfigurationChange({ ...configuration, model: selectedModel.id, reasoning: selectedModel.reasoningLevels.includes(reasoning) ? reasoning : selectedModel.defaultReasoning }); } }, [model, models, onConfigurationChange, reasoning, selectedModel]);
   useEffect(() => { if (selectedModel && selectedModel.reasoningLevels.length > 0 && !selectedModel.reasoningLevels.includes(reasoning)) { setReasoning(selectedModel.defaultReasoning); onConfigurationChange({ ...configuration, model: selectedModel.id, reasoning: selectedModel.defaultReasoning }); } }, [onConfigurationChange, reasoning, selectedModel]);
@@ -77,12 +91,11 @@ export function AiPanel({ provider, providers, session, sessions, models, usage,
       {[...descriptor.settings.sections, ...(effectiveOptions.some((option) => option.section === "acp") ? [{ id: "acp", name: "Agent options", description: "Settings advertised dynamically by the connected ACP server." }] : [])].map((section) => { const options = effectiveOptions.filter((option) => option.section === section.id); if (options.length === 0) return null; return <div className="ai-setting-section" key={section.id}><div className="ai-setting-section-title"><strong>{section.name}</strong>{section.description && <span>{section.description}</span>}</div>{options.map((option) => <SettingRow key={option.id} name={option.name} description={option.description}>{option.type === "select" ? <select disabled={running} value={selectValue(option, configuration[option.id])} onChange={(event) => updateConfiguration({ [option.id]: event.target.value })}>{option.choices?.map((choice) => <option key={choice.value} value={choice.value} title={choice.description}>{choice.name}</option>)}</select> : option.type === "boolean" ? <label className="ai-switch"><input type="checkbox" disabled={running} checked={Boolean(configuration[option.id] ?? option.defaultValue)} onChange={(event) => updateConfiguration({ [option.id]: event.target.checked })} /><span /></label> : <input disabled={running} type={option.type} min={option.min} max={option.max} value={String(configuration[option.id] ?? option.defaultValue)} onChange={(event) => updateConfiguration({ [option.id]: option.type === "number" ? Number(event.target.value) : event.target.value })} />}</SettingRow>)}</div>; })}
       {usage?.label && <details className="ai-usage"><summary>Usage information</summary><p>{usage.label}{usage.used !== undefined ? ` ${usage.used.toLocaleString()}${usage.limit !== undefined ? ` / ${usage.limit.toLocaleString()}` : ""} ${usage.unit ?? ""}` : ""}</p>{usage.details && <ul>{Object.entries(usage.details).map(([key, value]) => <li key={key}>{key}: {typeof value === "number" ? value.toLocaleString() : value}</li>)}</ul>}</details>}
     </section>}
-    <div className="ai-messages">
+    <div className="ai-messages" ref={messagesRef} onScroll={(event) => { const element = event.currentTarget; pinnedRef.current = element.scrollHeight - element.scrollTop - element.clientHeight < 40; }}>
       {session.messages.length === 0 && <div className="ai-empty">Start a {providerName} task for this workspace.</div>}
       {session.messages.map((message, index) => message.role === "activity" ? <ActivityMessage key={`${message.id}:${index}`} text={message.text} content={message.content} /> : <article key={`${message.id}:${index}`} className={`ai-message ${message.role}`}><header>{message.role === "user" ? "You" : message.role === "assistant" ? providerName : "Error"}</header><div>{message.role === "assistant" ? <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.text}</ReactMarkdown> : <pre>{message.text}</pre>}<RichContent content={message.content} /></div></article>)}
       {session.pendingPermission && <section className="ai-permission"><strong>Permission required</strong><span>{session.pendingPermission.title}</span>{session.pendingPermission.details && <pre>{session.pendingPermission.details}</pre>}<div>{session.pendingPermission.options.map((option) => <button key={option.optionId} className={option.kind.startsWith("reject") ? "reject" : "allow"} onClick={() => onResolvePermission(session.pendingPermission!.id, option.optionId)}>{option.name}</button>)}<button className="reject" onClick={() => onResolvePermission(session.pendingPermission!.id)}>Cancel</button></div></section>}
       {running && <div className="ai-working"><span />{providerName} is working...</div>}
-      <div ref={endRef} />
     </div>
     <div className="ai-composer-resize-handle" onPointerDown={beginComposerResize} />
     <form className="ai-composer" style={{ height: composerHeight }} onSubmit={(event) => { event.preventDefault(); void send(); }}>
