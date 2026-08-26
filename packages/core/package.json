@@ -11,6 +11,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@remote-ide/acp": "0.1.0",
     "@remote-ide/protocol": "0.1.0",
     "chokidar": "^4.0.3",
     "fast-xml-parser": "^5.2.5",

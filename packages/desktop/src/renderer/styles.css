@@ -146,11 +146,42 @@ button { color: inherit; }
 .ai-status.done { color: #70b879; }
 .ai-status.error { color: #dc747c; }
 .ai-panel { min-height: 0; flex: 1; display: flex; flex-direction: column; }
-.ai-controls { padding: 6px; display: grid; grid-template-columns: 82px minmax(0, 1fr) 72px 27px; gap: 5px; border-bottom: 1px solid #393b40; }
-.ai-controls select { min-width: 0; height: 27px; padding: 0 5px; border: 1px solid #4b4d52; border-radius: 3px; background: #313338; color: #d7d9dc; font-size: 0.8462rem; }
-.ai-controls > button { width: 27px; height: 27px; display: grid; place-items: center; border: 0; border-radius: 3px; background: transparent; color: #a6a9ae; cursor: pointer; }
-.ai-controls > button:hover:not(:disabled) { background: #493033; color: #e2858b; }
-.ai-controls > button:disabled { opacity: .35; cursor: default; }
+.ai-toolbar { padding: 7px; display: grid; grid-template-columns: minmax(90px, .75fr) minmax(110px, 1fr) 38px 28px; gap: 6px; align-items: end; border-bottom: 1px solid #393b40; }
+.ai-provider-picker, .ai-model-picker { min-width: 0; display: grid; gap: 3px; }
+.ai-provider-picker > span, .ai-model-picker > span { color: #85888e; font-size: .6923rem; font-weight: 600; letter-spacing: .03em; text-transform: uppercase; }
+.ai-toolbar select, .ai-settings select, .ai-settings input[type="number"], .ai-settings input[type="text"] { min-width: 0; height: 29px; padding: 0 7px; border: 1px solid #4b4d52; border-radius: 4px; outline: none; background: #2b2d31; color: #d7d9dc; font: inherit; font-size: .8462rem; }
+.ai-toolbar select:focus, .ai-settings select:focus, .ai-settings input:focus { border-color: #579dff; }
+.ai-toolbar > button { height: 29px; display: flex; align-items: center; justify-content: center; gap: 1px; border: 0; border-radius: 4px; background: transparent; color: #a6a9ae; cursor: pointer; }
+.ai-toolbar > button:hover:not(:disabled), .ai-toolbar > button.active { background: #35383d; color: #e0e2e5; }
+.ai-toolbar > button.ai-clear:hover:not(:disabled) { background: #493033; color: #e2858b; }
+.ai-toolbar > button.ai-interrupt { background: #71383d; color: #ffdadd; }
+.ai-toolbar > button.ai-interrupt:hover { background: #91434a; color: white; }
+.ai-toolbar > button:disabled { opacity: .35; cursor: default; }
+.ai-settings-chevron { transition: transform .15s ease; }
+.ai-toolbar > button.active .ai-settings-chevron { transform: rotate(180deg); }
+.ai-settings { max-height: min(440px, 55%); overflow: auto; border-bottom: 1px solid #393b40; background: #222428; }
+.ai-settings > header { padding: 12px 12px 10px; border-bottom: 1px solid #34373b; }
+.ai-settings > header strong { color: #e0e2e5; font-size: .9231rem; }
+.ai-settings p { margin: 4px 0 0; color: #969aa1; font-size: .7692rem; line-height: 1.45; }
+.ai-setting-section { padding: 10px 12px; border-bottom: 1px solid #34373b; }
+.ai-setting-section-title { margin-bottom: 8px; display: grid; gap: 2px; }
+.ai-setting-section-title strong { color: #c9ccd1; font-size: .7692rem; text-transform: uppercase; letter-spacing: .04em; }
+.ai-setting-section-title span { color: #7f838a; font-size: .7308rem; line-height: 1.4; }
+.ai-setting-row { min-height: 46px; display: grid; grid-template-columns: minmax(0, 1fr) minmax(92px, 38%); gap: 12px; align-items: center; }
+.ai-setting-row + .ai-setting-row { border-top: 1px solid #303237; }
+.ai-setting-row > span:first-child { min-width: 0; display: grid; gap: 3px; padding: 7px 0; }
+.ai-setting-row strong { color: #d4d6da; font-size: .8462rem; font-weight: 500; }
+.ai-setting-row small { color: #858990; font-size: .7308rem; line-height: 1.35; }
+.ai-setting-control { display: flex; justify-content: flex-end; }
+.ai-setting-control select, .ai-setting-control input { width: 100%; }
+.ai-switch { position: relative; width: 30px; height: 17px; display: block; }
+.ai-switch input { position: absolute; opacity: 0; pointer-events: none; }
+.ai-switch span { position: absolute; inset: 0; border-radius: 10px; background: #4b4e54; cursor: pointer; transition: background .15s; }
+.ai-switch span::after { content: ""; position: absolute; top: 3px; left: 3px; width: 11px; height: 11px; border-radius: 50%; background: #d8dade; transition: transform .15s; }
+.ai-switch input:checked + span { background: #3574f0; }
+.ai-switch input:checked + span::after { transform: translateX(13px); background: white; }
+.ai-usage { padding: 8px 12px 10px; color: #92969d; font-size: .7692rem; }
+.ai-usage summary { cursor: pointer; color: #aeb1b6; }
 .ai-messages { min-height: 0; flex: 1; overflow: auto; padding: 8px; }
 .ai-empty { padding: 24px 8px; color: #85888e; text-align: center; line-height: 1.5; }
 .ai-message { margin: 0 0 9px; border-left: 2px solid #4a4d52; background: #25272a; }
@@ -577,7 +608,8 @@ button { color: inherit; }
 :root[data-theme="light"] .bottom-tool-bar,
 :root[data-theme="light"] .git-branch,
 :root[data-theme="light"] .java-project-meta,
-:root[data-theme="light"] .ai-controls,
+:root[data-theme="light"] .ai-toolbar,
+:root[data-theme="light"] .ai-settings,
 :root[data-theme="light"] .ai-composer { border-color: #d5d7da; color: #45484e; }
 :root[data-theme="light"] .tab.active,
 :root[data-theme="light"] .terminal-tab.active,
@@ -600,11 +632,23 @@ button { color: inherit; }
 :root[data-theme="light"] .task-row.selected .task-title strong,
 :root[data-theme="light"] .tree-row.selected { color: #17233a; }
 :root[data-theme="light"] .ai-message { background: #f5f6f7; }
+:root[data-theme="light"] .ai-settings { background: #f7f8fa; }
+:root[data-theme="light"] .ai-settings > header,
+:root[data-theme="light"] .ai-setting-section,
+:root[data-theme="light"] .ai-setting-row + .ai-setting-row { border-color: #dfe1e4; }
+:root[data-theme="light"] .ai-settings > header strong,
+:root[data-theme="light"] .ai-setting-row strong { color: #303236; }
+:root[data-theme="light"] .ai-setting-section-title strong { color: #55585e; }
+:root[data-theme="light"] .ai-settings p,
+:root[data-theme="light"] .ai-setting-section-title span,
+:root[data-theme="light"] .ai-setting-row small { color: #6f737a; }
 :root[data-theme="light"] .ai-message > div { color: #303236; }
 :root[data-theme="light"] .ai-activity,
 :root[data-theme="light"] .ai-attachment { background: #f2f3f5; color: #4b4d52; border-color: #c9cbd0; }
 :root[data-theme="light"] .ai-activity pre { background: #fafafa; color: #3c3f44; border-color: #d5d7da; }
-:root[data-theme="light"] .ai-controls select,
+:root[data-theme="light"] .ai-toolbar select,
+:root[data-theme="light"] .ai-settings select,
+:root[data-theme="light"] .ai-settings input,
 :root[data-theme="light"] .ai-composer textarea,
 :root[data-theme="light"] .top-java-run select,
 :root[data-theme="light"] .find-controls > input,

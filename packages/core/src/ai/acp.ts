@@ -1,23 +1,5 @@
-import type { AiAgent, AiConfiguration, AiMcpServer, AiModel, AiProviderDescriptor, AiSession, AiUsage } from "@remote-ide/protocol";
+import { AcpProvider, type AiProviderDescriptor } from "@remote-ide/acp";
 import { CoreError } from "../errors.js";
-
-/** Stable application-facing contract implemented by every AI provider plugin. */
-export type AcpSendRequest = {
-  prompt: string;
-  configuration: AiConfiguration;
-  mcpServers?: AiMcpServer[];
-  agent?: AiAgent;
-};
-
-export abstract class AcpProvider {
-  abstract readonly descriptor: AiProviderDescriptor;
-  abstract get(workspace: string): Promise<AiSession>;
-  abstract models(): Promise<AiModel[]>;
-  abstract configure(workspace: string, configuration: AiConfiguration): Promise<AiSession>;
-  abstract send(workspace: string, request: AcpSendRequest): Promise<AiSession>;
-  abstract clear(workspace: string): Promise<AiSession>;
-  async usage(): Promise<AiUsage> { return { supported: false, label: "Usage is not exposed by this provider" }; }
-}
 
 /** Runtime registry: new providers are added by registering one AcpProvider plugin. */
 export class AcpRegistry {
@@ -38,13 +20,5 @@ export class AcpRegistry {
   }
 }
 
-export function mergeConfiguration(session: AiSession, configuration: AiConfiguration): AiConfiguration {
-  return { model: session.model, reasoning: session.reasoning, ...session.configuration, ...configuration };
-}
-
-export function applyConfiguration(session: AiSession, configuration: AiConfiguration): void {
-  const merged = mergeConfiguration(session, configuration);
-  if (typeof merged.model === "string") session.model = merged.model;
-  if (typeof merged.reasoning === "string") session.reasoning = merged.reasoning;
-  session.configuration = merged;
-}
+export { AcpProvider, applyConfiguration, mergeConfiguration } from "@remote-ide/acp";
+export type { AcpSendRequest } from "@remote-ide/acp";

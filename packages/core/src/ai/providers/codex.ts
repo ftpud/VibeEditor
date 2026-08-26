@@ -12,11 +12,12 @@ const EMPTY: AiSession = { model: "gpt-5.6-sol", reasoning: "low", status: "idle
 
 export class CodexSessionManager extends AcpProvider {
   readonly descriptor: AiProviderDescriptor = {
-    id: "codex", name: "Codex CLI",
+    id: "codex", name: "Codex CLI", description: "OpenAI's coding agent running in your workspace.",
+    settings: { title: "Codex settings", description: "Control how Codex reasons and which workspace capabilities it can use.", sections: [{ id: "tools", name: "Tools & access", description: "Capabilities available while Codex works." }] },
     capabilities: { models: true, usage: false, mcp: true, agents: true, contextWindow: false },
     options: [
-      { id: "sandbox", name: "Sandbox", type: "select", defaultValue: "workspace-write", choices: [{ value: "read-only", name: "Read only" }, { value: "workspace-write", name: "Workspace write" }] },
-      { id: "webSearch", name: "Web search", type: "boolean", defaultValue: false },
+      { id: "sandbox", name: "Workspace access", description: "Choose whether Codex may edit project files or only inspect them.", section: "tools", type: "select", defaultValue: "workspace-write", choices: [{ value: "read-only", name: "Read only" }, { value: "workspace-write", name: "Allow edits" }] },
+      { id: "webSearch", name: "Web search", description: "Allow Codex to search the web when current external information is needed.", section: "tools", type: "boolean", defaultValue: false },
     ]
   };
   private readonly processes = new Map<string, ChildProcessWithoutNullStreams>();
@@ -84,6 +85,18 @@ export class CodexSessionManager extends AcpProvider {
     if (this.processes.has(workspace)) throw new CoreError("INVALID_REQUEST", "Codex is already working on this task");
     const session = await this.get(workspace);
     applyConfiguration(session, typeof configuration === "string" ? { model: configuration, reasoning: legacyReasoning ?? session.reasoning } : configuration);
+    await this.save(workspace, session); this.onChanged(workspace);
+    return session;
+  }
+
+  async interrupt(workspace: string): Promise<AiSession> {
+    const child = this.processes.get(workspace);
+    if (!child) throw new CoreError("INVALID_REQUEST", "Codex is not currently working");
+    this.processes.delete(workspace);
+    child.kill("SIGTERM");
+    const session = await this.get(workspace);
+    session.status = "idle";
+    session.messages.push(toMessage("activity", "Interrupted by user"));
     await this.save(workspace, session); this.onChanged(workspace);
     return session;
   }

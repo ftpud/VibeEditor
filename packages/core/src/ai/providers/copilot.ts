@@ -13,13 +13,14 @@ const FALLBACK_MODELS = ["claude-sonnet-4.6", "gpt-5.4", "claude-haiku-4.5", "gp
 
 export class CopilotSessionManager extends AcpProvider {
   readonly descriptor: AiProviderDescriptor = {
-    id: "copilot", name: "Copilot CLI",
+    id: "copilot", name: "Copilot CLI", description: "GitHub Copilot's coding agent running through the local CLI.",
+    settings: { title: "Copilot settings", description: "Tune how Copilot plans, reasons, and consumes context for this workspace.", sections: [{ id: "behavior", name: "Behavior", description: "How the agent approaches a task." }, { id: "limits", name: "Context & limits", description: "Resource and context safeguards." }, { id: "output", name: "Output", description: "Optional details shown in responses." }] },
     capabilities: { models: true, usage: true, mcp: true, agents: true, contextWindow: true },
     options: [
-      { id: "context", name: "Context window", type: "select", defaultValue: "default", choices: [{ value: "default", name: "Default" }, { value: "long_context", name: "Long context" }] },
-      { id: "mode", name: "Agent mode", type: "select", defaultValue: "interactive", choices: [{ value: "interactive", name: "Interactive" }, { value: "plan", name: "Plan" }, { value: "autopilot", name: "Autopilot" }] },
-      { id: "maxAiCredits", name: "Maximum AI credits", description: "Optional per-session spending guard (0 means provider default)", type: "number", defaultValue: 0, min: 0 },
-      { id: "reasoningSummaries", name: "Reasoning summaries", type: "boolean", defaultValue: false },
+      { id: "context", name: "Context window", description: "Use more project context for large tasks. Long context can consume more quota.", section: "limits", type: "select", defaultValue: "default", choices: [{ value: "default", name: "Default" }, { value: "long_context", name: "Long context" }] },
+      { id: "mode", name: "Agent mode", description: "Interactive works normally, Plan focuses on analysis, and Autopilot minimizes interruptions.", section: "behavior", type: "select", defaultValue: "interactive", choices: [{ value: "interactive", name: "Interactive" }, { value: "plan", name: "Plan" }, { value: "autopilot", name: "Autopilot" }] },
+      { id: "maxAiCredits", name: "Maximum AI credits", description: "Optional per-session spending guard. Set to 0 to use the provider default.", section: "limits", type: "number", defaultValue: 0, min: 0 },
+      { id: "reasoningSummaries", name: "Reasoning summaries", description: "Include concise reasoning summaries when the provider supports them.", section: "output", type: "boolean", defaultValue: false },
     ]
   };
   private readonly processes = new Map<string, ChildProcessWithoutNullStreams>();
@@ -82,6 +83,18 @@ export class CopilotSessionManager extends AcpProvider {
     if (this.processes.has(workspace)) throw new CoreError("INVALID_REQUEST", "Copilot is already working on this task");
     const session = await this.get(workspace);
     applyConfiguration(session, typeof configuration === "string" ? { model: configuration, reasoning: legacyReasoning ?? session.reasoning } : configuration);
+    await this.save(workspace, session); this.onChanged(workspace);
+    return session;
+  }
+
+  async interrupt(workspace: string): Promise<AiSession> {
+    const child = this.processes.get(workspace);
+    if (!child) throw new CoreError("INVALID_REQUEST", "Copilot is not currently working");
+    this.processes.delete(workspace); this.toolNames.delete(workspace);
+    child.kill("SIGTERM");
+    const session = await this.get(workspace);
+    session.status = "idle";
+    session.messages.push(toMessage("activity", "Interrupted by user"));
     await this.save(workspace, session); this.onChanged(workspace);
     return session;
   }
