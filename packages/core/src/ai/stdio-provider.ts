@@ -135,7 +135,7 @@ export abstract class StdioAcpProvider extends AcpProvider {
     const runtime = await this.ensureRuntime(workspace, session, allowedServers);
     const visible = [prompt, ...(request.content ?? []).map(contentLabel)].filter(Boolean).join("\n");
     runtime.session.messages.push({ ...this.message("user", visible), content: request.content });
-    this.runPrompt(workspace, runtime, this.withAgent(content, request.agent));
+    this.runPrompt(workspace, runtime, this.withSessionAgent(content, request.agent, runtime.session));
     await this.save(workspace, runtime.session); this.onChanged(workspace);
     return this.get(workspace);
   }
@@ -241,6 +241,15 @@ export abstract class StdioAcpProvider extends AcpProvider {
     const block = content[firstText] as Extract<ContentBlock, { type: "text" }>;
     const combined = { type: "text" as const, text: [...header, block.text, "</user_request>"].join("\n") };
     return content.map((item, index) => index === firstText ? combined : item);
+  }
+
+  /** Agent presets are durable session instructions, not per-turn user content. */
+  private withSessionAgent(content: ContentBlock[], agent: AcpSendRequest["agent"] | undefined, session: AiSession): ContentBlock[] {
+    if (!agent) { session.agent = undefined; return content; }
+    const fingerprint = crypto.createHash("sha256").update(JSON.stringify([agent.name, agent.description ?? "", agent.instructions.trim()])).digest("hex");
+    if (session.agent?.fingerprint === fingerprint) return content;
+    session.agent = { name: agent.name, fingerprint };
+    return this.withAgent(content, agent);
   }
 
   async resolvePermission(workspace: string, requestId: string, optionId?: string): Promise<AiSession> {
@@ -389,6 +398,9 @@ export abstract class StdioAcpProvider extends AcpProvider {
     }
     this.lastWorkspace = workspace;
     const connected = await this.connect(workspace, session.configuration ?? {}, servers, session.threadId);
+    // A fresh provider session has no prior prompt context, even when the local
+    // transcript still records which preset the previous session received.
+    if (!connected.resumed) session.agent = undefined;
     if (connected.resumeFailed) session.messages.push(this.message("activity", "The saved ACP session could not be resumed; a new agent session was started."));
     const runtime: Runtime = { child: connected.child, connection: connected.connection, sessionId: connected.sessionId, running: false, stderr: connected.stderr(), session, tools: new Map(), anchors: {}, generation: 0, steering: connected.steering, pending: [], configOptions: connected.configOptions, modes: connected.modes, mcpKey };
     connected.bind(runtime);

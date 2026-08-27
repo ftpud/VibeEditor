@@ -167,6 +167,31 @@ describe("ACP integration", () => {
     await provider.clear(workspace);
   });
 
+  it("injects selected agent instructions once per provider session and again when they change", async () => {
+    const state = await mkdtemp(path.join(os.tmpdir(), "remote-ide-ai-agent-preset-"));
+    const provider = new FakeProvider(() => undefined, state, { FAKE_ECHO_PROMPT: "on" });
+    const workspace = process.cwd();
+    const dispatcher = { name: "Dispatcher", description: "Coordinates work", instructions: "Delegate bounded tasks.", mcpServers: ["vibe-editor"] };
+
+    await provider.send(workspace, { prompt: "first", configuration: { model: "model-a" }, agent: dispatcher });
+    await settle(provider, workspace);
+    await provider.send(workspace, { prompt: "second", configuration: { model: "model-a" }, agent: dispatcher });
+    await settle(provider, workspace);
+    await provider.send(workspace, { prompt: "third", configuration: { model: "model-a" }, agent: { ...dispatcher, instructions: "Coordinate without waiting." } });
+    const session = await settle(provider, workspace);
+    const prompts = session.messages.filter((message) => message.role === "assistant" && message.text.startsWith("PROMPT:"));
+
+    expect(prompts).toHaveLength(3);
+    expect(prompts[0]!.text).toContain("<agent_instructions>");
+    expect(prompts[0]!.text).toContain("Delegate bounded tasks.");
+    expect(prompts[1]!.text).not.toContain("<agent_instructions>");
+    expect(prompts[1]!.text).toContain("second");
+    expect(prompts[2]!.text).toContain("<agent_instructions>");
+    expect(prompts[2]!.text).toContain("Coordinate without waiting.");
+    expect(session.agent?.name).toBe("Dispatcher");
+    await provider.clear(workspace);
+  });
+
   it("passes server-scoped Copilot model and reasoning configuration at launch", () => {
     const command = new CopilotSessionManager(() => undefined)["command"]({ model: "claude-haiku-4.5", reasoning: "medium", maxAiCredits: 5 });
     expect(command.args).toEqual(["--acp", "--stdio", "--model=claude-haiku-4.5", "--reasoning-effort=medium", "--max-ai-credits=5"]);

@@ -15,6 +15,7 @@ STEERING = os.environ.get("FAKE_STEERING") == "on"
 SLOW = os.environ.get("FAKE_SLOW") == "on"
 LOAD = os.environ.get("FAKE_LOAD") == "on"
 PERMISSION = os.environ.get("FAKE_PERMISSION") == "on"
+ECHO_PROMPT = os.environ.get("FAKE_ECHO_PROMPT") == "on"
 state = {"live": None, "model": "model-a", "effort": "medium", "cancelled": False}
 write_lock = threading.Lock()
 permission_event = threading.Event()
@@ -92,6 +93,8 @@ def handle(request):
     elif method == "session/prompt":
         session_id = params["sessionId"]
         state.update(live=session_id, cancelled=False)
+        if ECHO_PROMPT:
+            notify(session_id, {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "PROMPT:" + json.dumps(params.get("prompt", []), separators=(",", ":"))}})
         if PERMISSION:
             permission_event.clear()
             send({"jsonrpc": "2.0", "id": "permission-1", "method": "session/request_permission", "params": {"sessionId": session_id, "toolCall": {"toolCallId": "danger", "title": "Write protected file", "rawInput": {"command": "touch /protected"}}, "options": [{"optionId": "yes", "name": "Allow once", "kind": "allow_once"}, {"optionId": "no", "name": "Reject", "kind": "reject_once"}]}})
