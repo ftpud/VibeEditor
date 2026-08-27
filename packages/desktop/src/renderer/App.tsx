@@ -1,5 +1,5 @@
 import Editor, { DiffEditor, type Monaco } from "@monaco-editor/react";
-import { ArrowUp, ArrowUpRight, Bot, Braces, Bug, CaseSensitive, Check, ChevronDown, ChevronRight, ChevronUp, CircleAlert, Coffee, Columns2, Eye, EyeOff, File, FileCode2, FileDiff, FileJson, FileText, Folder, FolderOpen, GitBranch, GitCompareArrows, GitMerge, Hash, Library, ListTodo, ListTree, LoaderCircle, LogOut, MoreVertical, Package, Palette, Pencil, Play, Plus, RefreshCw, Save, Search, Settings, ShieldAlert, Square, SquareTerminal, Trash2, X } from "lucide-react";
+import { ArrowUp, ArrowUpRight, Bot, Braces, Bug, Check, ChevronDown, ChevronRight, ChevronUp, CircleAlert, Coffee, Columns2, Eye, EyeOff, File, FileCode2, FileDiff, FileJson, FileText, Folder, FolderOpen, GitBranch, GitCompareArrows, GitMerge, Hash, Library, ListTodo, ListTree, LoaderCircle, LogOut, MoreVertical, Package, Palette, Pencil, Play, Plus, RefreshCw, Save, Search, Settings, ShieldAlert, Square, SquareTerminal, Trash2, X } from "lucide-react";
 import { Children, isValidElement, useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
 import type { AgentFile, AgentFileScope, AiConfiguration, AiModel, AiProvider, AiProviderDescriptor, AiSession, AiStatus, AiTaskSummary, AiUsage, FileColor, FileTreeNode, GitBranch as GitBranchInfo, GitDiffHunk, GitStatusEntry, HttpResponse, JavaBreakpoint, JavaDebugState, JavaDiagnostic, JavaLspLocation, JavaMainClass, JavaProjectNode, JavaProjectOptions, JavaTypeSuggestion, SearchResult, UsefulFile, UsefulFileScope, WorkspaceOptions, WorkspaceTask } from "@remote-ide/protocol";
 import type { editor } from "monaco-editor";
@@ -20,6 +20,7 @@ import { openTaskFromSummary } from "./permission-navigation";
 import { configureMonacoThemes, monacoTheme, type HighlightTheme } from "./theme";
 import { CURSOR_POSITIONS_SETTING, CursorPositionStore, validateCursorPosition } from "./cursor-state";
 import { MarkdownPreview } from "./MarkdownPreview";
+import { FindInFilesDialog } from "./FindInFilesDialog";
 
 type ConnectionStatus = "idle" | "connecting" | "connected" | "failed" | "disconnected" | "workspace-error";
 type StatusKind = "progress" | "success" | "error";
@@ -2239,91 +2240,6 @@ function RunConfigurationDialog({ client, onClose, onSaved }: { client: CoreClie
         {error && <div className="find-error">{error}</div>}
         <footer><button type="button" onClick={onClose}>Cancel</button><button className="primary" disabled={saving || !name.trim() || !mainClass}>{saving ? "Saving..." : "Add"}</button></footer>
       </form>
-    </section>
-  </div>;
-}
-
-function FindInFilesDialog({ client, scope, onClose, onNavigate }: { client: CoreClient; scope: string; onClose(): void; onNavigate(result: SearchResult, matchLength: number): void }) {
-  const [query, setQuery] = useState("");
-  const [matchCase, setMatchCase] = useState(false);
-  const [matches, setMatches] = useState<SearchResult[]>([]);
-  const [selected, setSelected] = useState<SearchResult>();
-  const [previewContent, setPreviewContent] = useState("");
-  const [previewError, setPreviewError] = useState("");
-  const [truncated, setTruncated] = useState(false);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
-  const inputRef = useRef<HTMLInputElement>(null);
-  const previewEditorRef = useRef<editor.IStandaloneCodeEditor>();
-  const searchVersion = useRef(0);
-  useEffect(() => { inputRef.current?.focus(); }, []);
-  useEffect(() => {
-    const listener = (event: KeyboardEvent) => { if (event.key === "Escape") onClose(); };
-    window.addEventListener("keydown", listener); return () => window.removeEventListener("keydown", listener);
-  }, [onClose]);
-
-  useEffect(() => {
-    const version = ++searchVersion.current;
-    if (!query.trim()) { setMatches([]); setSelected(undefined); setLoading(false); setError(""); return; }
-    const timer = setTimeout(() => {
-      setLoading(true); setError("");
-      void client.request("filesystem.search", { query, path: scope, matchCase }).then((result) => {
-        if (version !== searchVersion.current) return;
-        setMatches(result.matches); setSelected(result.matches[0]); setTruncated(result.truncated);
-      }).catch((searchError: unknown) => {
-        if (version !== searchVersion.current) return;
-        setMatches([]); setSelected(undefined); setError(searchError instanceof Error ? searchError.message : "Search failed");
-      }).finally(() => { if (version === searchVersion.current) setLoading(false); });
-    }, 600);
-    return () => clearTimeout(timer);
-  }, [client, matchCase, query, scope]);
-
-  useEffect(() => {
-    if (!selected) { setPreviewContent(""); setPreviewError(""); return; }
-    let current = true;
-    setPreviewError("");
-    void client.request("filesystem.readFile", { path: selected.path }).then((result) => {
-      if (current) setPreviewContent(result.content);
-    }).catch((readError: unknown) => {
-      if (current) { setPreviewContent(""); setPreviewError(readError instanceof Error ? readError.message : "Could not load preview"); }
-    });
-    return () => { current = false; };
-  }, [client, selected]);
-
-  useEffect(() => {
-    if (!selected || !previewEditorRef.current) return;
-    previewEditorRef.current.setSelection({ startLineNumber: selected.line, startColumn: selected.column, endLineNumber: selected.line, endColumn: selected.column + query.length });
-    previewEditorRef.current.revealLineInCenter(selected.line);
-  }, [previewContent, query.length, selected]);
-
-  return <div className="dialog-overlay" onMouseDown={onClose}>
-    <section className="find-dialog" role="dialog" aria-modal="true" aria-label="Find in Files" onMouseDown={(event) => event.stopPropagation()}>
-      <header><div><h2>Find in Files</h2><span>{scope || "Remote workspace"}</span></div><button title="Close" onClick={onClose}><X size={15} /></button></header>
-      <div className="find-controls">
-        <input ref={inputRef} value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Text to find" maxLength={200} />
-        <label className="match-case" title="Match case"><input type="checkbox" checked={matchCase} onChange={(event) => setMatchCase(event.target.checked)} /><CaseSensitive size={17} /></label>
-        <span className="find-progress">{loading ? "Searching..." : query ? `${matches.length} matches` : ""}</span>
-      </div>
-      {error && <div className="find-error">{error}</div>}
-      <div className="find-split">
-        <section className="find-results-pane">
-          <div className="find-pane-header"><Search size={13} /><span>Occurrences</span>{truncated && <span>First 500</span>}</div>
-          <div className="find-results">
-            {!loading && !error && matches.length === 0 && query && <div className="find-empty">No matches</div>}
-            {matches.map((match, index) => <button className={selected === match ? "selected" : ""} key={`${match.path}:${match.line}:${index}`} title={match.path} onClick={() => setSelected(match)} onDoubleClick={() => onNavigate(match, query.length)}>
-              <code>{match.preview || " "}</code>
-              <span className="find-result-file">{match.path.split("/").pop()}</span>
-              <span className="find-location">{match.line}:{match.column}</span>
-            </button>)}
-          </div>
-        </section>
-        <section className="find-preview-pane">
-          <div className="find-pane-header"><FileCode2 size={13} /><span>Preview</span>{selected && <span className="find-preview-file">{selected.path.split("/").pop()}</span>}{selected && <button title="Open in editor" onClick={() => onNavigate(selected, query.length)}><ArrowUpRight size={14} /></button>}</div>
-          <div className="find-preview-editor">
-            {previewError ? <div className="find-empty">{previewError}</div> : selected ? <Editor value={previewContent} language={languageByExtension[selected.path.split(".").pop()?.toLowerCase() ?? ""] ?? "plaintext"} beforeMount={configureMonacoThemes} theme={monacoTheme()} onMount={(instance) => { previewEditorRef.current = instance; }} options={{ readOnly: true, automaticLayout: true, minimap: { enabled: false }, fontSize: 12, lineNumbersMinChars: 3, scrollBeyondLastLine: false, padding: { top: 6 }, renderLineHighlight: "all" }} /> : <div className="find-empty">Select a result</div>}
-          </div>
-        </section>
-      </div>
     </section>
   </div>;
 }
