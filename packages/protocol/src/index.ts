@@ -25,7 +25,8 @@ export type WorkspaceOptions = {
   gitCommitMessage?: string;
 };
 export type FileColor = "red" | "orange" | "yellow" | "green" | "blue" | "purple" | "gray";
-export type WorkspaceTerminalOptions = { tabs: { title: string }[]; activeTabIndex?: number; panelOpen: boolean };
+export type WorkspaceTerminalOptions = { tabs: { title: string; terminalId?: string }[]; activeTabIndex?: number; panelOpen: boolean };
+export type TerminalSessionSnapshot = { terminalId: string; status: "running" | "exited"; output: string; exitCode?: number };
 export type WorkspaceTask = { id: string; name: string; branch: string; baseBranch: string };
 export type { AiAgent, AiCommand, AiConfiguration, AiContentBlock, AiMessage, AiModel, AiMcpServer, AiOption, AiPermissionRequest, AiProvider, AiProviderCapabilities, AiProviderDescriptor, AiSession, AiSettingsLayout, AiSettingsSection, AiStatus, AiTaskSummary, AiUsage } from "@remote-ide/acp";
 import type { AiAgent, AiConfiguration, AiContentBlock, AiMcpServer, AiModel, AiProvider, AiProviderDescriptor, AiSession, AiTaskSummary, AiUsage } from "@remote-ide/acp";
@@ -133,7 +134,11 @@ export type ProtocolOperations = {
   };
   "terminal.create": {
     payload: { cols: number; rows: number };
-    result: { terminalId: string };
+    result: TerminalSessionSnapshot;
+  };
+  "terminal.attach": {
+    payload: { terminalId: string };
+    result: { session?: TerminalSessionSnapshot };
   };
   "terminal.input": {
     payload: { terminalId: string; data: string };
@@ -332,6 +337,7 @@ const requestTypeRegistry: Record<RequestType, true> = {
   "filesystem.writeFile": true,
   "filesystem.search": true,
   "terminal.create": true,
+  "terminal.attach": true,
   "terminal.input": true,
   "terminal.resize": true,
   "terminal.close": true,

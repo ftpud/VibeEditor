@@ -69,9 +69,16 @@ function validateFileColors(value: unknown): NonNullable<WorkspaceOptions["fileC
 function validateTerminalOptions(value: unknown): NonNullable<WorkspaceOptions["terminal"]> {
   if (!value || typeof value !== "object") throw new CoreError("INVALID_REQUEST", "Invalid terminal workspace options");
   const candidate = value as Record<string, unknown>;
-  if (!Array.isArray(candidate.tabs) || candidate.tabs.length > 20 || !candidate.tabs.every((tab) => tab && typeof tab === "object" && typeof (tab as Record<string, unknown>).title === "string" && ((tab as Record<string, unknown>).title as string).length <= 100)) throw new CoreError("INVALID_REQUEST", "Terminal tabs must contain at most 20 valid titles");
+  if (!Array.isArray(candidate.tabs) || candidate.tabs.length > 20 || !candidate.tabs.every((tab) => {
+    if (!tab || typeof tab !== "object") return false;
+    const item = tab as Record<string, unknown>;
+    return typeof item.title === "string" && item.title.length <= 100 && (item.terminalId === undefined || (typeof item.terminalId === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(item.terminalId)));
+  })) throw new CoreError("INVALID_REQUEST", "Terminal tabs must contain at most 20 valid entries");
   if (typeof candidate.panelOpen !== "boolean") throw new CoreError("INVALID_REQUEST", "Invalid terminal panel options");
-  const tabs = candidate.tabs.map((tab) => ({ title: ((tab as { title: string }).title.trim() || "Terminal").slice(0, 100) }));
+  const tabs = candidate.tabs.map((tab) => {
+    const item = tab as { title: string; terminalId?: string };
+    return { title: (item.title.trim() || "Terminal").slice(0, 100), ...(item.terminalId ? { terminalId: item.terminalId } : {}) };
+  });
   const activeTabIndex = Number.isInteger(candidate.activeTabIndex) && (candidate.activeTabIndex as number) >= 0 && (candidate.activeTabIndex as number) < tabs.length ? candidate.activeTabIndex as number : undefined;
   return { tabs, ...(activeTabIndex !== undefined ? { activeTabIndex } : {}), panelOpen: candidate.panelOpen };
 }
