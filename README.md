@@ -1,6 +1,6 @@
 # Vibe Editor
 
-> **VibeEditor is an experimental IDE sandbox and vibecoding experiment—not a production-ready product.**
+> **VibeEditor is an experimental testbed for remote-first, AI-first IDE ideas—not a production-ready product.**
 
 VibeEditor is a place to explore what a remote-first, AI-first development environment can become when features can be vibecoded and implemented quickly. It is deliberately hackable rather than finished: the repository provides a working foundation, but anyone can fork it, replace parts of it, or build whatever workflow and IDE experience they want on top.
 
