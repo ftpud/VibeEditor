@@ -73,7 +73,7 @@ describe("WorkspaceTaskStore", () => {
     expect(await readFile(path.join(selected.workspace, ".git"), "utf8")).toContain("gitdir:");
     expect((await execFileAsync("git", ["-C", root, "worktree", "list", "--porcelain"])).stdout).toContain(`worktree ${selected.workspace}`);
     expect((await execFileAsync("git", ["-C", selected.workspace, "branch", "--show-current"])).stdout.trim()).toBe("feature/task-one");
-    expect((await execFileAsync("git", ["-C", selected.workspace, "rev-parse", "--abbrev-ref", "@{upstream}"])).stdout.trim()).toBe(rootBranch);
+    await expect(execFileAsync("git", ["-C", selected.workspace, "rev-parse", "--abbrev-ref", "@{upstream}"])).rejects.toBeTruthy();
     await writeFile(path.join(selected.workspace, "tracked.txt"), "task\n");
     expect(await readFile(path.join(root, "tracked.txt"), "utf8")).toBe("root\n");
     await execFileAsync("git", ["-C", selected.workspace, "add", "tracked.txt"]);
@@ -85,6 +85,35 @@ describe("WorkspaceTaskStore", () => {
     expect((await store.list()).tasks).toEqual([]);
     await expect(access(path.dirname(selected.workspace))).rejects.toMatchObject({ code: "ENOENT" });
     await expect(execFileAsync("git", ["-C", root, "show-ref", "--verify", "refs/heads/feature/task-one"])).rejects.toBeTruthy();
+  });
+
+  it("creates a new task from the local root branch and configures push for the matching remote branch", async () => {
+    const parent = await mkdtemp(path.join(os.tmpdir(), "remote-ide-task-push-"));
+    const remote = path.join(parent, "remote.git");
+    const root = path.join(parent, "root");
+    const state = await mkdtemp(path.join(os.tmpdir(), "remote-ide-task-push-state-"));
+    await execFileAsync("git", ["init", "--bare", remote]);
+    await execFileAsync("git", ["clone", remote, root]);
+    await execFileAsync("git", ["-C", root, "config", "user.name", "Test"]);
+    await execFileAsync("git", ["-C", root, "config", "user.email", "test@example.com"]);
+    await writeFile(path.join(root, "tracked.txt"), "root\n");
+    await execFileAsync("git", ["-C", root, "add", "tracked.txt"]);
+    await execFileAsync("git", ["-C", root, "commit", "-m", "initial"]);
+    await execFileAsync("git", ["-C", root, "push", "-u", "origin", "HEAD"]);
+    const rootBranch = (await execFileAsync("git", ["-C", root, "branch", "--show-current"])).stdout.trim();
+    const rootHead = (await execFileAsync("git", ["-C", root, "rev-parse", "HEAD"])).stdout.trim();
+
+    const store = new WorkspaceTaskStore(root, state);
+    const task = await store.create("feature/pushable");
+    const workspace = store.taskPath(task.id);
+
+    expect(task.baseBranch).toBe(rootBranch);
+    expect((await execFileAsync("git", ["-C", workspace, "rev-parse", "HEAD"])).stdout.trim()).toBe(rootHead);
+    expect((await execFileAsync("git", ["-C", workspace, "config", "--get", "branch.feature/pushable.remote"])).stdout.trim()).toBe("origin");
+    expect((await execFileAsync("git", ["-C", workspace, "config", "--get", "branch.feature/pushable.merge"])).stdout.trim()).toBe("refs/heads/feature/pushable");
+    await execFileAsync("git", ["-C", workspace, "push"]);
+    expect((await execFileAsync("git", ["-C", remote, "show-ref", "--verify", "refs/heads/feature/pushable"])).stdout).toContain("refs/heads/feature/pushable");
+    await store.delete(task.id);
   });
 
   it("commits task changes and preserves uncommitted main workspace changes while rebasing", async () => {

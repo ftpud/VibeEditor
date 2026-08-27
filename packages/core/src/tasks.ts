@@ -55,14 +55,15 @@ export class WorkspaceTaskStore {
     let createdBranch = false;
     try {
       await mkdir(path.dirname(destination), { recursive: true });
+      await execFileAsync("git", ["-C", this.rootWorkspace, "worktree", "add", "--detach", destination, task.baseBranch], { encoding: "utf8" });
       if (remote) {
-        await execFileAsync("git", ["-C", this.rootWorkspace, "worktree", "add", "--track", "-b", name, destination, requested], { encoding: "utf8" });
+        await execFileAsync("git", ["-C", destination, "switch", "--track", "-c", name, requested], { encoding: "utf8" });
         createdBranch = true;
-      } else if (existing) await execFileAsync("git", ["-C", this.rootWorkspace, "worktree", "add", destination, name], { encoding: "utf8" });
+      } else if (existing) await execFileAsync("git", ["-C", destination, "switch", name], { encoding: "utf8" });
       else {
-        await execFileAsync("git", ["-C", this.rootWorkspace, "worktree", "add", "-b", name, destination, "HEAD"], { encoding: "utf8" });
+        await execFileAsync("git", ["-C", destination, "switch", "-C", name], { encoding: "utf8" });
         createdBranch = true;
-        if (task.baseBranch !== "HEAD") await execFileAsync("git", ["-C", this.rootWorkspace, "branch", "--set-upstream-to", task.baseBranch, name], { encoding: "utf8" });
+        await this.configureNewBranchPush(name);
       }
       await this.copyWorkspaceState(this.rootWorkspace, destination);
       await this.save({ tasks: [...registry.tasks, task], ...(select ? { selectedTaskId: task.id } : registry.selectedTaskId ? { selectedTaskId: registry.selectedTaskId } : {}) });
@@ -213,7 +214,6 @@ export class WorkspaceTaskStore {
       await rename(destination, backup);
       await execFileAsync("git", ["-C", this.rootWorkspace, "worktree", "add", destination, task.branch], { encoding: "utf8" });
       await this.copyWorkspaceState(backup, destination);
-      if (task.baseBranch !== "HEAD") await execFileAsync("git", ["-C", this.rootWorkspace, "branch", "--set-upstream-to", task.baseBranch, task.branch], { encoding: "utf8" });
       await rm(backup, { recursive: true, force: true });
       await execFileAsync("git", ["-C", this.rootWorkspace, "update-ref", "-d", migrationRef], { encoding: "utf8" });
     } catch (error) {
@@ -274,13 +274,22 @@ export class WorkspaceTaskStore {
 
   private async rootBranch(): Promise<string> {
     try {
-      try {
-        const upstream = (await execFileAsync("git", ["-C", this.rootWorkspace, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"], { encoding: "utf8" })).stdout.trim();
-        if (upstream) return upstream;
-      } catch { /* A local-only branch uses its current branch as the task base. */ }
       return (await execFileAsync("git", ["-C", this.rootWorkspace, "branch", "--show-current"], { encoding: "utf8" })).stdout.trim() || "HEAD";
     }
     catch (error) { throw new CoreError("GIT_FAILED", `Could not determine task base branch: ${gitError(error)}`); }
+  }
+
+  private async configureNewBranchPush(branch: string): Promise<void> {
+    if (branch === "HEAD") return;
+    let remote: string;
+    try {
+      remote = (await execFileAsync("git", ["-C", this.rootWorkspace, "config", "--get", `branch.${await this.rootBranch()}.remote`], { encoding: "utf8" })).stdout.trim();
+    } catch {
+      return;
+    }
+    if (!remote || remote === ".") return;
+    await execFileAsync("git", ["-C", this.rootWorkspace, "config", `branch.${branch}.remote`, remote], { encoding: "utf8" });
+    await execFileAsync("git", ["-C", this.rootWorkspace, "config", `branch.${branch}.merge`, `refs/heads/${branch}`], { encoding: "utf8" });
   }
 
   private async save(registry: Registry): Promise<void> {
