@@ -15,6 +15,7 @@ export type GitBranch = { name: string; current: boolean; remote: boolean };
 export type GitCommit = { hash: string; shortHash: string; author: string; date: string; subject: string; parents?: string[]; refs?: string[]; graph?: string };
 export type GitCommitFile = { path: string; status: string; originalPath?: string };
 export type GitDiffHunk = { originalStart: number; originalLines: number; modifiedStart: number; modifiedLines: number };
+export type GitRollbackFailure = { path: string; message: string };
 
 export type WorkspaceOptions = {
   openFiles: string[];
@@ -166,6 +167,7 @@ export type ProtocolOperations = {
   "git.compareFiles": { payload: { ref: string; path?: string }; result: { files: GitCommitFile[] } };
   "git.compareDiff": { payload: { ref: string; path: string; originalPath?: string }; result: { originalContent: string; modifiedContent: string } };
   "git.rollback": { payload: { path: string }; result: Record<string, never> };
+  "git.rollbackSelected": { payload: { paths: string[]; deleteUntracked: boolean }; result: { rolledBack: string[]; failures: GitRollbackFailure[] } };
   "git.commit": { payload: { paths: string[]; message: string }; result: { hash: string } };
   "git.push": { payload: Record<string, never>; result: Record<string, never> };
   "java.loadMavenProject": {
@@ -348,6 +350,7 @@ const requestTypeRegistry: Record<RequestType, true> = {
   "git.compareFiles": true,
   "git.compareDiff": true,
   "git.rollback": true,
+  "git.rollbackSelected": true,
   "git.commit": true,
   "git.push": true,
   "java.loadMavenProject": true,

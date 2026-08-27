@@ -60,6 +60,91 @@ describe("parseGitStatus", () => {
     await expect(access(path.join(root, "new.txt"))).rejects.toThrow();
   });
 
+  it("rolls back only selected staged, unstaged, partially staged, deleted, and renamed entries", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "remote-ide-git-rollback-selected-"));
+    await execFileAsync("git", ["-C", root, "init"]);
+    await execFileAsync("git", ["-C", root, "config", "user.email", "test@example.com"]);
+    await execFileAsync("git", ["-C", root, "config", "user.name", "Test"]);
+    for (const file of ["staged.txt", "unstaged.txt", "partial.txt", "deleted.txt", "old.txt", "untouched.txt"]) await writeFile(path.join(root, file), `${file} original\n`);
+    await execFileAsync("git", ["-C", root, "add", "."]);
+    await execFileAsync("git", ["-C", root, "commit", "-m", "initial"]);
+    await writeFile(path.join(root, "staged.txt"), "staged change\n");
+    await execFileAsync("git", ["-C", root, "add", "staged.txt"]);
+    await writeFile(path.join(root, "unstaged.txt"), "unstaged change\n");
+    await writeFile(path.join(root, "partial.txt"), "staged portion\n");
+    await execFileAsync("git", ["-C", root, "add", "partial.txt"]);
+    await writeFile(path.join(root, "partial.txt"), "worktree portion\n");
+    await execFileAsync("git", ["-C", root, "rm", "deleted.txt"]);
+    await execFileAsync("git", ["-C", root, "mv", "old.txt", "renamed.txt"]);
+    await writeFile(path.join(root, "untouched.txt"), "keep this change\n");
+
+    const service = new GitService(root);
+    const result = await service.rollbackSelected(["staged.txt", "unstaged.txt", "partial.txt", "deleted.txt", "renamed.txt"], false);
+
+    expect(result).toEqual({ rolledBack: ["staged.txt", "unstaged.txt", "partial.txt", "deleted.txt", "renamed.txt"], failures: [] });
+    for (const file of ["staged.txt", "unstaged.txt", "partial.txt", "deleted.txt", "old.txt"]) expect(await readFile(path.join(root, file), "utf8")).toBe(`${file} original\n`);
+    await expect(access(path.join(root, "renamed.txt"))).rejects.toThrow();
+    expect((await service.status()).entries.map((entry) => entry.path)).toEqual(["untouched.txt"]);
+  });
+
+  it("requires explicit permission before deleting selected untracked files and reports partial failures", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "remote-ide-git-rollback-untracked-"));
+    await execFileAsync("git", ["-C", root, "init"]);
+    await execFileAsync("git", ["-C", root, "config", "user.email", "test@example.com"]);
+    await execFileAsync("git", ["-C", root, "config", "user.name", "Test"]);
+    await writeFile(path.join(root, "tracked.txt"), "original\n");
+    await execFileAsync("git", ["-C", root, "add", "."]);
+    await execFileAsync("git", ["-C", root, "commit", "-m", "initial"]);
+    await writeFile(path.join(root, "tracked.txt"), "changed\n");
+    await writeFile(path.join(root, "untracked.txt"), "do not delete silently\n");
+    const service = new GitService(root);
+
+    await expect(service.rollbackSelected(["tracked.txt", "untracked.txt", "missing.txt"], false)).resolves.toEqual({
+      rolledBack: ["tracked.txt"],
+      failures: [
+        { path: "untracked.txt", message: "Untracked file deletion was not confirmed" },
+        { path: "missing.txt", message: "Path no longer has Git changes" }
+      ]
+    });
+    expect(await readFile(path.join(root, "untracked.txt"), "utf8")).toBe("do not delete silently\n");
+    await expect(service.rollbackSelected(["untracked.txt"], true)).resolves.toEqual({ rolledBack: ["untracked.txt"], failures: [] });
+    await expect(access(path.join(root, "untracked.txt"))).rejects.toThrow();
+  });
+
+  it("rolls back a staged new file in a repository without HEAD", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "remote-ide-git-rollback-unborn-"));
+    await execFileAsync("git", ["-C", root, "init"]);
+    await writeFile(path.join(root, "new.txt"), "new\n");
+    await execFileAsync("git", ["-C", root, "add", "new.txt"]);
+    const service = new GitService(root);
+    await expect(service.rollbackSelected(["new.txt"], false)).resolves.toEqual({ rolledBack: ["new.txt"], failures: [] });
+    await expect(access(path.join(root, "new.txt"))).rejects.toThrow();
+    expect((await service.status()).entries).toEqual([]);
+  });
+
+  it("rolls back a selected merge conflict to HEAD", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "remote-ide-git-rollback-conflict-"));
+    await execFileAsync("git", ["-C", root, "init"]);
+    await execFileAsync("git", ["-C", root, "config", "user.email", "test@example.com"]);
+    await execFileAsync("git", ["-C", root, "config", "user.name", "Test"]);
+    await writeFile(path.join(root, "conflict.txt"), "base\n");
+    await execFileAsync("git", ["-C", root, "add", "."]);
+    await execFileAsync("git", ["-C", root, "commit", "-m", "base"]);
+    const defaultBranch = (await execFileAsync("git", ["-C", root, "branch", "--show-current"])).stdout.trim();
+    await execFileAsync("git", ["-C", root, "switch", "-c", "other"]);
+    await writeFile(path.join(root, "conflict.txt"), "other\n");
+    await execFileAsync("git", ["-C", root, "commit", "-am", "other"]);
+    await execFileAsync("git", ["-C", root, "switch", defaultBranch]);
+    await writeFile(path.join(root, "conflict.txt"), "head\n");
+    await execFileAsync("git", ["-C", root, "commit", "-am", "head"]);
+    await expect(execFileAsync("git", ["-C", root, "merge", "other"])).rejects.toThrow();
+
+    const service = new GitService(root);
+    await expect(service.rollbackSelected(["conflict.txt"], false)).resolves.toEqual({ rolledBack: ["conflict.txt"], failures: [] });
+    expect(await readFile(path.join(root, "conflict.txt"), "utf8")).toBe("head\n");
+    expect((await service.status()).entries).toEqual([]);
+  });
+
   it("commits only selected files", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "remote-ide-git-commit-"));
     await execFileAsync("git", ["-C", root, "init"]);
