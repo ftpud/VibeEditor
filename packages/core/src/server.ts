@@ -22,6 +22,7 @@ import { createAcpRegistry, type AcpRegistry } from "./ai/index.js";
 import type { AiAgent, AiMcpServer } from "@remote-ide/acp";
 import { fileURLToPath } from "node:url";
 import { AppEventBridge } from "./app-events.js";
+import { AppToolService } from "./app-tools.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -75,6 +76,13 @@ export async function createServer(host: string, port: number, workspacePath: st
     for (const socket of activeSessions) if (socket.readyState === WebSocket.OPEN) socket.send(encoded);
   };
   const acp = createAcpRegistry(aiChanged);
+  const appToolService = new AppToolService(tasks, acp, async () => {
+    const encoded = JSON.stringify({ type: "tasks.changed", payload: {} } satisfies ServerEvent);
+    for (const socket of activeSessions) if (socket.readyState === WebSocket.OPEN) socket.send(encoded);
+  });
+  const appCommandWatcher = chokidar.watch(appEvents.commandsDirectory, { ignoreInitial: true, depth: 0 });
+  await new Promise<void>((resolve, reject) => { appCommandWatcher.once("ready", resolve); appCommandWatcher.once("error", reject); });
+  appCommandWatcher.on("add", (file) => { void appEvents.consumeCommand(file, (command) => appToolService.call(command.name, command.args)); });
   const gitIndexWatcher = chokidar.watch(await gitIndexPath(workspace), { ignoreInitial: true });
   gitIndexWatcher.on("all", () => {
     const encoded = JSON.stringify({ type: "git.changed", payload: {} } satisfies ServerEvent);
@@ -97,7 +105,7 @@ export async function createServer(host: string, port: number, workspacePath: st
     .on("addDir", (directory) => broadcastChange("addDir", directory))
     .on("unlinkDir", (directory) => broadcastChange("unlinkDir", directory))
     .on("error", (error) => console.error(`[core] watcher error: ${String(error)}`));
-  server.on("close", () => { void watcher.close(); void gitIndexWatcher.close(); void appEventWatcher.close(); });
+  server.on("close", () => { void watcher.close(); void gitIndexWatcher.close(); void appEventWatcher.close(); void appCommandWatcher.close(); });
   server.on("listening", () => console.log(`[core] listening on ws://${host}:${port}`));
   server.on("connection", (socket, request) => {
     const makeServices = async (nextWorkspace: string): Promise<SessionServices> => {

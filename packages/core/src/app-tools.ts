@@ -2,7 +2,7 @@ import { pathToFileURL } from "node:url";
 import { createInterface } from "node:readline";
 import type { AiConfiguration, AiProvider } from "@remote-ide/acp";
 import { WorkspaceTaskStore, type WorkspaceTask } from "./tasks.js";
-import { createAcpRegistry, type AcpRegistry } from "./ai/index.js";
+import type { AcpRegistry } from "./ai/index.js";
 import { summarizeAiSessions } from "./ai/summary.js";
 import { AppEventBridge } from "./app-events.js";
 
@@ -171,8 +171,7 @@ function requiredInteger(args: Record<string, unknown>, key: string, minimum: nu
 async function main() {
   const rootWorkspace = process.env.VIBE_EDITOR_ROOT_WORKSPACE;
   if (!rootWorkspace) throw new Error("VIBE_EDITOR_ROOT_WORKSPACE is required");
-  const events = new AppEventBridge(rootWorkspace);
-  const service = new AppToolService(new WorkspaceTaskStore(rootWorkspace), createAcpRegistry((workspace) => { void events.emit({ type: "ai.changed", workspace }); }), () => events.emit({ type: "tasks.changed" }));
+  const bridge = new AppEventBridge(rootWorkspace);
   const lines = createInterface({ input: process.stdin, terminal: false });
   for await (const line of lines) {
     if (!line.trim()) continue;
@@ -185,7 +184,7 @@ async function main() {
       else if (request.method === "tools/list") result = { tools: appToolDefinitions };
       else if (request.method === "tools/call") {
         const params = request.params ?? {};
-        const value = await service.call(requiredString(params, "name"), (params.arguments && typeof params.arguments === "object" ? params.arguments : {}) as Record<string, unknown>);
+        const value = await bridge.call({ name: requiredString(params, "name"), args: (params.arguments && typeof params.arguments === "object" ? params.arguments : {}) as Record<string, unknown> });
         result = toolResult(value);
       } else throw Object.assign(new Error(`Method not found: ${request.method}`), { code: -32601 });
       process.stdout.write(`${JSON.stringify({ jsonrpc: "2.0", id: request.id, result })}\n`);
