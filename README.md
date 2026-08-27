@@ -1,8 +1,16 @@
 # Vibe Editor
 
-Vibe Editor is an Electron desktop IDE for a local or remote workspace. A Node.js backend, Core, owns filesystem, terminal, Git, Java, HTTP, and AI operations; the React/Monaco desktop client talks to it over WebSockets and never receives an unrestricted server path.
+> **VibeEditor is an experimental IDE sandbox and vibecoding experiment—not a production-ready product.**
 
-This repository is under active development and currently targets source-based development and launches rather than packaged application releases.
+VibeEditor is a place to explore what a remote-first, AI-first development environment can become when features can be vibecoded and implemented quickly. It is deliberately hackable rather than finished: the repository provides a working foundation, but anyone can fork it, replace parts of it, or build whatever workflow and IDE experience they want on top.
+
+The experiment is built around a simple idea from [WHY.md](WHY.md): **the development machine is the server, and the local app is the control surface**.
+
+The repository, terminals, language servers, agents, builds, tests, and task state stay close to the compute. A lightweight React/Monaco desktop client provides the interaction layer over WebSockets. Tasks become durable workspaces—with their own Git worktree, editor state, terminals, AI sessions, notes, and Git state—rather than branches whose context must be reconstructed every time.
+
+Vibe Editor is AI-first, not AI-only: agents can do the initial work, while the editor, terminal, Git tooling, HTTP files, executable Markdown, and Java tooling keep a human in control. It is intended as a sandbox for implementing and reviewing updates and features quickly, not as a replacement for every deep debugging, profiling, or framework-specific capability of a heavyweight IDE.
+
+Expect rough edges, incomplete features, breaking changes, and assumptions tailored to the author's workflow. This repository is under active development and currently targets source-based development and launches rather than packaged application releases.
 
 ## Requirements
 
@@ -114,19 +122,39 @@ npm run desktop -- --host 127.0.0.1 --port 8733
 
 ### Vibe Gateway
 
-Gateway stores SSH connections and remote workspace definitions in its Electron application-data directory. Passwords are encrypted with Electron `safeStorage`; public-key and SSH-agent authentication are not implemented.
+Vibe Gateway automates both deployment and connection setup while preserving the remote-first model:
 
-- **Start server** clones or resets the `dev` branch in `~/.vibe`, conditionally installs dependencies/builds artifacts, selects a free loopback port if needed, and starts Core with workspace-specific PID and log files.
-- **Start client** downloads and caches the remote Desktop build by Git revision, opens a local SSH tunnel, and launches it with the local Electron runtime. Keep Gateway open while using that tunnel.
-- **Stop server** closes Gateway's tunnel and stops the Core process recorded for that workspace.
-
-Known Gateway limitation: the current remote provisioning command builds Protocol, Core, and Desktop but omits the new ACP workspace. A fresh remote checkout can therefore fail before Core is built. Until provisioning is corrected, build ACP once on the remote host and retry **Start server**:
-
-```bash
-ssh user@remote-host 'cd ~/.vibe && npm run build -w @remote-ide/acp'
+```text
+local Vibe Gateway
+    |
+    | SSH: provision, start, stop, and transfer client artifacts
+    v
+remote host
+    +-- ~/.vibe                         VibeEditor application checkout
+    +-- configured project directory    repository and development state
+    +-- Core on 127.0.0.1:<remote-port>
+    |
+    | SSH tunnel created by Gateway
+    v
+127.0.0.1:<temporary-local-port>
+    |
+    v
+local Electron/Monaco Desktop
 ```
 
-Gateway always resets its remote checkout to `origin/dev`; it does not deploy uncommitted local source changes.
+The deployment flow is:
+
+1. **Save a connection and workspace.** Gateway stores the SSH host and remote project directory in its Electron application-data directory. The SSH password is encrypted with Electron `safeStorage`; public-key and SSH-agent authentication are not currently implemented.
+2. **Provision the remote application.** **Start server** connects over SSH and clones `https://github.com/ftpud/VibeEditor` into `~/.vibe`, or fetches and force-resets an existing checkout to `origin/dev`. This is the application installation; the configured project workspace remains in its own remote directory.
+3. **Build only when needed.** Gateway records the deployed Git revision in `~/.vibe-build`. If the revision changed, dependencies or build outputs are missing, or `node_modules` is absent, it runs `npm install` and builds ACP, Protocol, Core, and Desktop. Otherwise it reuses the existing build.
+4. **Start remote Core.** Gateway tries the configured Core port and chooses a free fallback when it is occupied. It launches Core with `nohup`, bound only to remote loopback, and passes the configured project directory as the workspace root. Each Gateway workspace gets its own PID and log files in the remote home directory.
+5. **Prepare the local client.** **Start client** identifies the remote deployment by Git revision. If that Desktop build is not already cached locally, Gateway archives the remotely built Electron main process and renderer, downloads them over SFTP, and extracts them under Gateway's application-data directory.
+6. **Create the private connection.** Gateway opens an SSH connection and exposes a temporary port on local `127.0.0.1`. Connections to that port are forwarded to Core's remote loopback port, so Core does not need a public listener, authentication layer, or TLS endpoint.
+7. **Launch the UI locally.** Gateway starts the downloaded Desktop code with the local Electron runtime and passes the tunnel's host and port. The UI is rendered locally; filesystem access, terminals, Git, builds, language services, agents, and durable task state continue to run remotely.
+
+Keep Gateway open while using a client because it owns the SSH tunnel. Closing Gateway closes its tunnels but leaves remote Core running; **Stop server** closes the tunnel and terminates the Core process recorded for that workspace.
+
+Gateway deploys only committed code from the fixed `dev` branch. It always resets the remote application checkout to `origin/dev` and does not copy uncommitted local source changes.
 
 ## Features
 
@@ -149,7 +177,7 @@ The npm workspaces are:
 - `@remote-ide/desktop`: the Electron/React/Monaco IDE client.
 - `@remote-ide/gateway`: the Electron SSH provisioner, tunnel owner, and Desktop launcher.
 
-Each connected client is bound to the configured root or a Core-managed task worktree. Task switching replaces the active service context; clients cannot submit an arbitrary workspace path. Chokidar watches workspace and Git changes and Core sends typed refresh events to Desktop.
+This split follows the project's core rule: **the server owns the state; the client owns the interaction**. Each connected client is bound to the configured root or a Core-managed task worktree. Task switching replaces the active service context; clients cannot submit an arbitrary workspace path. Chokidar watches workspace and Git changes and Core sends typed refresh events to Desktop.
 
 Core state defaults to:
 
