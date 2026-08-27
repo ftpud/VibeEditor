@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import type { AiSession } from "@remote-ide/acp";
 import { AppToolService, appToolDefinitions } from "./app-tools.js";
 
 function harness() {
@@ -8,12 +9,15 @@ function harness() {
     taskPath: vi.fn(() => "/tasks/task-1/workspace"), list: vi.fn(async () => ({ tasks: [task] })),
     setCommitMessage: vi.fn(async (_workspace: string, message: string) => ({ task, message, overwritten: false }))
   };
-  const session = { status: "in_progress", model: "gpt-5", messages: [{ id: "one", role: "assistant", text: "First", timestamp: "2026-01-01" }, { id: "two", role: "assistant", text: "Latest", timestamp: "2026-01-02" }], reasoning: "medium", configuration: { model: "gpt-5", reasoning: "medium" } };
-  const provider = { send: vi.fn(async () => session), get: vi.fn(async () => session), steer: vi.fn(async () => session) };
+  const session: AiSession = { status: "in_progress", model: "gpt-5", messages: [{ id: "one", role: "assistant", text: "First", timestamp: "2026-01-01" }, { id: "two", role: "assistant", text: "Latest", timestamp: "2026-01-02" }], reasoning: "medium", configuration: { model: "gpt-5", reasoning: "medium", mode: "agent-full-access" } };
+  const provider = {
+    descriptor: { options: [{ id: "mode", name: "Agent mode", description: "", type: "select", defaultValue: "agent", choices: [{ value: "read-only", name: "Read only" }, { value: "agent", name: "Workspace agent" }, { value: "agent-full-access", name: "Full access" }] }] },
+    send: vi.fn(async () => session), get: vi.fn(async () => session), steer: vi.fn(async () => session)
+  };
   const acp = { get: vi.fn(() => provider), list: vi.fn(() => [{ id: "codex", name: "Codex" }]) };
   const onTasksChanged = vi.fn(async () => undefined);
   const onCommitMessageChanged = vi.fn(async () => undefined);
-  return { service: new AppToolService(tasks as never, acp as never, "/tasks/task-1/workspace", onTasksChanged, onCommitMessageChanged), tasks, provider, task, onTasksChanged, onCommitMessageChanged };
+  return { service: new AppToolService(tasks as never, acp as never, "/tasks/parent/workspace", onTasksChanged, onCommitMessageChanged), tasks, provider, task, onTasksChanged, onCommitMessageChanged };
 }
 
 describe("Vibe Editor app tools", () => {
@@ -35,8 +39,31 @@ describe("Vibe Editor app tools", () => {
     await expect(service.call("task_create_and_start", { branch: "feature/one", prompt: "Implement it", provider: "codex", model: "gpt-5" }))
       .resolves.toEqual({ task, session: { status: "in_progress", model: "gpt-5" } });
     expect(tasks.create).toHaveBeenCalledWith("feature/one", false, false, false);
-    expect(provider.send).toHaveBeenCalledWith("/tasks/task-1/workspace", { prompt: "Implement it", configuration: { model: "gpt-5" } });
+    expect(provider.get).toHaveBeenCalledWith("/tasks/parent/workspace");
+    expect(provider.send).toHaveBeenCalledWith("/tasks/task-1/workspace", { prompt: "Implement it", configuration: { mode: "agent-full-access", model: "gpt-5" } });
     expect(onTasksChanged).toHaveBeenCalledOnce();
+  });
+
+  it("inherits disabled autopilot without inheriting the parent model", async () => {
+    const { service, provider } = harness();
+    provider.get.mockResolvedValueOnce({ status: "in_progress", model: "parent-model", reasoning: "high", configuration: { model: "parent-model", mode: "agent" }, messages: [] });
+    await service.call("task_create_and_start", { prompt: "Implement it", provider: "codex", model: "child-model" });
+    expect(provider.send).toHaveBeenCalledWith("/tasks/task-1/workspace", { prompt: "Implement it", configuration: { mode: "agent", model: "child-model" } });
+  });
+
+  it("reads autopilot from the invoking provider while preserving the requested child provider", async () => {
+    const { tasks, provider: child, onTasksChanged, onCommitMessageChanged } = harness();
+    const parent = {
+      ...child,
+      get: vi.fn(async (): Promise<AiSession> => ({ status: "in_progress", model: "parent-model", reasoning: "high", configuration: { model: "parent-model", mode: "agent-full-access" }, messages: [] }))
+    };
+    const acp = { get: vi.fn((id: string) => id === "parent" ? parent : child), list: vi.fn(() => []) };
+    const service = new AppToolService(tasks as never, acp as never, "/tasks/parent/workspace", onTasksChanged, onCommitMessageChanged, "parent");
+
+    await service.call("task_create_and_start", { prompt: "Implement it", provider: "child", model: "child-model" });
+
+    expect(parent.get).toHaveBeenCalledWith("/tasks/parent/workspace");
+    expect(child.send).toHaveBeenCalledWith("/tasks/task-1/workspace", { prompt: "Implement it", configuration: { mode: "agent-full-access", model: "child-model" } });
   });
 
   it("lists aggregate and provider task status", async () => {
@@ -86,7 +113,7 @@ describe("Vibe Editor app tools", () => {
     await expect(service.call("set_commit_message", { message: "Add the first draft" })).resolves.toEqual({
       task_id: task.id, message: "Add the first draft", overwritten: false, committed: false
     });
-    expect(tasks.setCommitMessage).toHaveBeenCalledWith("/tasks/task-1/workspace", "Add the first draft");
+    expect(tasks.setCommitMessage).toHaveBeenCalledWith("/tasks/parent/workspace", "Add the first draft");
     expect(onCommitMessageChanged).toHaveBeenCalledWith("/tasks/task-1/workspace", "Add the first draft");
 
     tasks.setCommitMessage.mockResolvedValueOnce({ task, message: "Replace the draft", overwritten: true });
@@ -97,7 +124,7 @@ describe("Vibe Editor app tools", () => {
     const { service, tasks } = harness();
     const message = "Subject\n\nDetailed body.\n  Indented detail\n";
     await service.call("set_commit_message", { message });
-    expect(tasks.setCommitMessage).toHaveBeenCalledWith("/tasks/task-1/workspace", message);
+    expect(tasks.setCommitMessage).toHaveBeenCalledWith("/tasks/parent/workspace", message);
   });
 
   it("rejects missing, non-string, whitespace-only, and oversized commit messages", async () => {

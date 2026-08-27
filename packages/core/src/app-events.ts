@@ -7,7 +7,7 @@ export type AppEvent =
   | { type: "tasks.changed" }
   | { type: "ai.changed"; workspace: string }
   | { type: "commit-message.changed"; workspace: string; message: string };
-export type AppCommand = { name: string; args: Record<string, unknown>; currentWorkspace?: string };
+export type AppCommand = { name: string; args: Record<string, unknown>; currentWorkspace?: string; currentProvider?: string };
 
 export class AppEventBridge {
   readonly directory: string;

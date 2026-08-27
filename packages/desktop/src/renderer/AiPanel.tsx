@@ -2,11 +2,10 @@ import { Check, ChevronDown, ListPlus, MessageSquare, Paperclip, Plus, Send, Set
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { findAutopilotOption } from "@remote-ide/acp";
 import type { AiConfiguration, AiContentBlock, AiModel, AiProvider, AiProviderDescriptor, AiSession, AiUsage } from "@remote-ide/protocol";
 import { ModelPicker } from "./ModelPicker";
 import { PermissionRequestActions, type PermissionRequestOwner } from "./PermissionRequestActions";
-
-const AUTOPILOT = /autopilot|auto-?approve|yolo|full[- ]?access|bypass|danger|never ?ask/i;
 
 export type AiAttachment = { id: string; name: string; path?: string; content?: string; data?: string; mimeType?: string };
 
@@ -51,18 +50,7 @@ export function AiPanel({ provider, providers, session, sessions, models, usage,
   const providerName = descriptor?.name ?? provider;
   // Agents express "approve everything" differently: some advertise a dedicated boolean, others only
   // offer it as one choice of a broader mode option, so both shapes are folded into one switch.
-  const autopilot = useMemo(() => {
-    const toggle = effectiveOptions.find((option) => option.type === "boolean" && AUTOPILOT.test(`${option.id} ${option.name}`));
-    if (toggle) return { option: toggle, on: true as const, off: false as const };
-    for (const option of effectiveOptions) {
-      if (option.type !== "select" || !option.choices) continue;
-      const match = option.choices.find((choice) => AUTOPILOT.test(`${choice.value} ${choice.name}`));
-      if (!match) continue;
-      const fallback = option.choices.find((choice) => String(option.defaultValue) === choice.value && choice.value !== match.value) ?? option.choices.find((choice) => choice.value !== match.value);
-      if (fallback) return { option, on: match.value, off: fallback.value };
-    }
-    return undefined;
-  }, [effectiveOptions]);
+  const autopilot = useMemo(() => findAutopilotOption(effectiveOptions), [effectiveOptions]);
   const autopilotOn = autopilot ? String(configuration[autopilot.option.id] ?? autopilot.option.defaultValue) === String(autopilot.on) : false;
   const quickOptionIds = useMemo(() => new Set(autopilot?.option.type === "boolean" ? [autopilot.option.id] : []), [autopilot]);
   const updateConfiguration = (values: AiConfiguration) => { const next = { ...configuration, ...values }; setConfiguration(next); onConfigurationChange({ ...next, model, reasoning }); };

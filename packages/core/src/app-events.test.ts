@@ -22,7 +22,7 @@ describe("AppEventBridge", () => {
     const owner = new AppEventBridge("/workspace", state);
     await owner.ready();
 
-    const pending = caller.call({ name: "task_create_and_start", args: { provider: "codex" } });
+    const pending = caller.call({ name: "task_create_and_start", args: { provider: "codex" }, currentWorkspace: "/workspace/task", currentProvider: "codex" });
     let files: string[] = [];
     for (let attempt = 0; files.length === 0 && attempt < 100; attempt += 1) {
       files = await readdir(owner.commandsDirectory);
@@ -31,7 +31,7 @@ describe("AppEventBridge", () => {
     expect(files).toHaveLength(1);
     await owner.consumeCommand(path.join(owner.commandsDirectory, files[0]!), async (command) => ({ owner: "core", command }));
 
-    await expect(pending).resolves.toEqual({ owner: "core", command: { name: "task_create_and_start", args: { provider: "codex" } } });
+    await expect(pending).resolves.toEqual({ owner: "core", command: { name: "task_create_and_start", args: { provider: "codex" }, currentWorkspace: "/workspace/task", currentProvider: "codex" } });
     await expect(readdir(owner.commandsDirectory)).resolves.toEqual([]);
     await expect(readdir(owner.responsesDirectory)).resolves.toEqual([]);
   });

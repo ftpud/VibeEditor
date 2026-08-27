@@ -1,6 +1,6 @@
 import { pathToFileURL } from "node:url";
 import { createInterface } from "node:readline";
-import type { AiConfiguration, AiProvider } from "@remote-ide/acp";
+import { findAutopilotOption, type AiConfiguration, type AiOption, type AiProvider, type AiSession } from "@remote-ide/acp";
 import { WorkspaceTaskStore, type WorkspaceTask } from "./tasks.js";
 import type { AcpRegistry } from "./ai/index.js";
 import { summarizeAiSessions } from "./ai/summary.js";
@@ -91,7 +91,8 @@ export class AppToolService {
     private readonly acp: AcpRegistry,
     private readonly currentWorkspace: string,
     private readonly onTasksChanged: () => Promise<void> = async () => undefined,
-    private readonly onCommitMessageChanged: (workspace: string, message: string) => Promise<void> = async () => undefined
+    private readonly onCommitMessageChanged: (workspace: string, message: string) => Promise<void> = async () => undefined,
+    private readonly currentProvider?: AiProvider
   ) {}
 
   async call(name: string, args: Record<string, unknown>): Promise<unknown> {
@@ -108,8 +109,11 @@ export class AppToolService {
       const task = branch ? await this.tasks.create(branch, false, false, false) : await this.tasks.createRandom(false);
       await this.onTasksChanged();
       try {
-        const configuration: AiConfiguration = { model };
-        const session = await this.acp.get(provider).send(this.tasks.taskPath(task.id), { prompt, configuration });
+        const manager = this.acp.get(provider);
+        const parentManager = this.acp.get(this.currentProvider ?? provider);
+        const parent = await parentManager.get(this.currentWorkspace);
+        const configuration: AiConfiguration = { ...inheritedAutopilot(parentManager.descriptor.options, parent, manager.descriptor.options), model };
+        const session = await manager.send(this.tasks.taskPath(task.id), { prompt, configuration });
         return { task, session: { status: session.status, model: session.model } };
       } catch (error) {
         await this.tasks.delete(task.id).catch(() => undefined);
@@ -204,6 +208,7 @@ async function main() {
   if (!rootWorkspace) throw new Error("VIBE_EDITOR_ROOT_WORKSPACE is required");
   const currentWorkspace = process.env.VIBE_EDITOR_CURRENT_WORKSPACE;
   if (!currentWorkspace) throw new Error("VIBE_EDITOR_CURRENT_WORKSPACE is required");
+  const currentProvider = process.env.VIBE_EDITOR_CURRENT_PROVIDER;
   const bridge = new AppEventBridge(rootWorkspace);
   const lines = createInterface({ input: process.stdin, terminal: false });
   for await (const line of lines) {
@@ -217,7 +222,7 @@ async function main() {
       else if (request.method === "tools/list") result = { tools: appToolDefinitions };
       else if (request.method === "tools/call") {
         const params = request.params ?? {};
-        const value = await bridge.call({ name: requiredString(params, "name"), args: (params.arguments && typeof params.arguments === "object" ? params.arguments : {}) as Record<string, unknown>, currentWorkspace });
+        const value = await bridge.call({ name: requiredString(params, "name"), args: (params.arguments && typeof params.arguments === "object" ? params.arguments : {}) as Record<string, unknown>, currentWorkspace, ...(currentProvider ? { currentProvider } : {}) });
         result = toolResult(value);
       } else throw Object.assign(new Error(`Method not found: ${request.method}`), { code: -32601 });
       process.stdout.write(`${JSON.stringify({ jsonrpc: "2.0", id: request.id, result })}\n`);
@@ -231,6 +236,16 @@ async function main() {
 
 function toolResult(value: unknown, isError = false): ToolResult {
   return { content: [{ type: "text", text: typeof value === "string" ? value : JSON.stringify(value, null, 2) }], ...(isError ? { isError: true } : {}) };
+}
+
+function inheritedAutopilot(parentOptions: AiOption[], parent: AiSession, childOptions: AiOption[]): AiConfiguration {
+  const effectiveParentOptions = [...parentOptions.filter((option) => !parent.availableOptions?.some((candidate) => candidate.id === option.id)), ...(parent.availableOptions ?? [])];
+  const parentAutopilot = findAutopilotOption(effectiveParentOptions);
+  if (!parentAutopilot) return {};
+  const parentValue = parent.configuration?.[parentAutopilot.option.id] ?? parentAutopilot.option.defaultValue;
+  const enabled = String(parentValue) === String(parentAutopilot.on);
+  const childAutopilot = findAutopilotOption(childOptions) ?? parentAutopilot;
+  return { [childAutopilot.option.id]: enabled ? childAutopilot.on : childAutopilot.off };
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) void main();

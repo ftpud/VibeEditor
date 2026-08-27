@@ -38,6 +38,7 @@ export type AiModelDetails = {
 };
 export type AiModel = { id: string; name: string; defaultReasoning: string; reasoningLevels: string[] } & AiModelDetails;
 export type AiOption = { id: string; name: string; description: string; section?: string; type: "select" | "number" | "boolean" | "text"; defaultValue: string | number | boolean; choices?: { value: string; name: string; description?: string }[]; min?: number; max?: number; modelDependent?: boolean };
+export type AiAutopilotOption = { option: AiOption; on: string | boolean; off: string | boolean };
 export type AiSettingsSection = { id: string; name: string; description?: string };
 export type AiSettingsLayout = { title: string; description: string; sections: AiSettingsSection[] };
 export type AiProviderCapabilities = { models: boolean; usage: boolean; mcp: boolean; agents: boolean; contextWindow: boolean };
@@ -73,3 +74,19 @@ export abstract class AcpProvider {
 
 export function mergeConfiguration(session: AiSession, configuration: AiConfiguration): AiConfiguration { return { model: session.model, reasoning: session.reasoning, ...session.configuration, ...configuration }; }
 export function applyConfiguration(session: AiSession, configuration: AiConfiguration): void { const merged = mergeConfiguration(session, configuration); if (typeof merged.model === "string") session.model = merged.model; if (typeof merged.reasoning === "string") session.reasoning = merged.reasoning; session.configuration = merged; }
+
+const AUTOPILOT = /autopilot|auto-?approve|yolo|full[- ]?access|bypass|danger|never ?ask/i;
+
+/** Finds the provider option and values that the editor presents as its Autopilot switch. */
+export function findAutopilotOption(options: AiOption[]): AiAutopilotOption | undefined {
+  const toggle = options.find((option) => option.type === "boolean" && AUTOPILOT.test(`${option.id} ${option.name}`));
+  if (toggle) return { option: toggle, on: true, off: false };
+  for (const option of options) {
+    if (option.type !== "select" || !option.choices) continue;
+    const match = option.choices.find((choice) => AUTOPILOT.test(`${choice.value} ${choice.name}`));
+    if (!match) continue;
+    const fallback = option.choices.find((choice) => String(option.defaultValue) === choice.value && choice.value !== match.value) ?? option.choices.find((choice) => choice.value !== match.value);
+    if (fallback) return { option, on: match.value, off: fallback.value };
+  }
+  return undefined;
+}

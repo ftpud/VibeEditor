@@ -8,9 +8,9 @@ describe("built-in app tool access", () => {
   });
 
   it("adds the Vibe Editor server when explicitly allowed", () => {
-    const result = withAppTools("/workspace", "/workspace/task", [], { name: "Coordinator", instructions: "", mcpServers: ["vibe-editor"] });
+    const result = withAppTools("/workspace", "/workspace/task", [], { name: "Coordinator", instructions: "", mcpServers: ["vibe-editor"] }, "codex");
     expect(result.servers).toHaveLength(1);
-    expect(result.servers[0]).toMatchObject({ name: "vibe-editor", transport: "stdio", env: { VIBE_EDITOR_ROOT_WORKSPACE: "/workspace", VIBE_EDITOR_CURRENT_WORKSPACE: "/workspace/task" } });
+    expect(result.servers[0]).toMatchObject({ name: "vibe-editor", transport: "stdio", env: { VIBE_EDITOR_ROOT_WORKSPACE: "/workspace", VIBE_EDITOR_CURRENT_WORKSPACE: "/workspace/task", VIBE_EDITOR_CURRENT_PROVIDER: "codex" } });
     expect(result.agent?.mcpServers).toEqual(["vibe-editor"]);
   });
 });
