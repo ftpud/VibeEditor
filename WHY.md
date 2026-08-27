@@ -2,7 +2,7 @@
 
 VibeEditor started as a tool I wanted for my own day-to-day work.
 
-The problem is simple: my corporate laptop is slow, while I have access to a much more powerful remote server. Running a heavyweight IDE locally is painful, and even remote IDE setups can still be surprisingly resource-hungry on the client.
+The problem is simple: development increasingly happens on remote machines, while the local device should remain a lightweight and replaceable interface to that environment. The repository, compute, terminals, tools, and task state should live where the development environment actually runs — not be tied to a particular laptop.
 
 So VibeEditor follows a different model:
 
