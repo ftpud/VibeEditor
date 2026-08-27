@@ -10,6 +10,76 @@ import { WorkspaceStateStore } from "./workspace-state.js";
 const execFileAsync = promisify(execFile);
 
 describe("WorkspaceTaskStore", () => {
+  it("rewrites only an explicit task's unpushed tip message while preserving its contents and working state", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "remote-ide-task-git-message-root-"));
+    const state = await mkdtemp(path.join(os.tmpdir(), "remote-ide-task-git-message-state-"));
+    await execFileAsync("git", ["init", root]);
+    await execFileAsync("git", ["-C", root, "config", "user.name", "Test"]);
+    await execFileAsync("git", ["-C", root, "config", "user.email", "test@example.com"]);
+    await writeFile(path.join(root, "tracked.txt"), "root\n");
+    await execFileAsync("git", ["-C", root, "add", "tracked.txt"]);
+    await execFileAsync("git", ["-C", root, "commit", "-m", "initial"]);
+    const rootHead = (await execFileAsync("git", ["-C", root, "rev-parse", "HEAD"])).stdout.trim();
+    const store = new WorkspaceTaskStore(root, state);
+    const first = await store.create("feature/reword-one", false, false, false);
+    const second = await store.create("feature/reword-two", false, false, false);
+    const firstWorkspace = store.taskPath(first.id);
+    const secondWorkspace = store.taskPath(second.id);
+
+    await expect(store.updateGitCommitMessage(first.id, "Too early")).rejects.toThrow("has no task commit to update");
+    await writeFile(path.join(firstWorkspace, "tracked.txt"), "committed\n");
+    await execFileAsync("git", ["-C", firstWorkspace, "add", "tracked.txt"]);
+    await execFileAsync("git", ["-C", firstWorkspace, "commit", "-m", "Old message"]);
+    const oldCommit = (await execFileAsync("git", ["-C", firstWorkspace, "rev-parse", "HEAD"])).stdout.trim();
+    const oldTree = (await execFileAsync("git", ["-C", firstWorkspace, "show", "-s", "--format=%T", "HEAD"])).stdout.trim();
+    await writeFile(path.join(firstWorkspace, "staged.txt"), "staged\n");
+    await execFileAsync("git", ["-C", firstWorkspace, "add", "staged.txt"]);
+    await writeFile(path.join(firstWorkspace, "unstaged.txt"), "unstaged\n");
+    const statusBefore = (await execFileAsync("git", ["-C", firstWorkspace, "status", "--porcelain"])).stdout;
+    const message = "New subject\n\nDetailed body";
+
+    await expect(store.updateGitCommitMessage(first.id, message)).resolves.toEqual({
+      task: first, previousCommit: oldCommit, commit: expect.not.stringMatching(oldCommit), previousMessage: "Old message", message
+    });
+    expect((await execFileAsync("git", ["-C", firstWorkspace, "log", "-1", "--format=%B"])).stdout.trimEnd()).toBe(message);
+    expect((await execFileAsync("git", ["-C", firstWorkspace, "show", "-s", "--format=%T", "HEAD"])).stdout.trim()).toBe(oldTree);
+    expect((await execFileAsync("git", ["-C", firstWorkspace, "status", "--porcelain"])).stdout).toBe(statusBefore);
+    expect((await execFileAsync("git", ["-C", secondWorkspace, "rev-parse", "HEAD"])).stdout.trim()).toBe(rootHead);
+    expect((await execFileAsync("git", ["-C", root, "rev-parse", "HEAD"])).stdout.trim()).toBe(rootHead);
+    await expect(store.updateGitCommitMessage("missing-task", "Message")).rejects.toThrow("does not exist");
+    await expect(store.updateGitCommitMessage(first.id, " \n\t ")).rejects.toThrow("must contain at least one non-whitespace character");
+
+    await store.delete(first.id);
+    await store.delete(second.id);
+  });
+
+  it("refuses to rewrite a task tip already published to its upstream", async () => {
+    const parent = await mkdtemp(path.join(os.tmpdir(), "remote-ide-task-published-message-"));
+    const remote = path.join(parent, "remote.git");
+    const root = path.join(parent, "root");
+    const state = await mkdtemp(path.join(os.tmpdir(), "remote-ide-task-published-state-"));
+    await execFileAsync("git", ["init", "--bare", remote]);
+    await execFileAsync("git", ["clone", remote, root]);
+    await execFileAsync("git", ["-C", root, "config", "user.name", "Test"]);
+    await execFileAsync("git", ["-C", root, "config", "user.email", "test@example.com"]);
+    await writeFile(path.join(root, "tracked.txt"), "root\n");
+    await execFileAsync("git", ["-C", root, "add", "tracked.txt"]);
+    await execFileAsync("git", ["-C", root, "commit", "-m", "initial"]);
+    await execFileAsync("git", ["-C", root, "push", "-u", "origin", "HEAD"]);
+    const store = new WorkspaceTaskStore(root, state);
+    const task = await store.create("feature/published-message", false, false, false);
+    const workspace = store.taskPath(task.id);
+    await writeFile(path.join(workspace, "tracked.txt"), "task\n");
+    await execFileAsync("git", ["-C", workspace, "add", "tracked.txt"]);
+    await execFileAsync("git", ["-C", workspace, "commit", "-m", "Published message"]);
+    await execFileAsync("git", ["-C", workspace, "push", "-u", "origin", "HEAD"]);
+    const head = (await execFileAsync("git", ["-C", workspace, "rev-parse", "HEAD"])).stdout.trim();
+
+    await expect(store.updateGitCommitMessage(task.id, "Do not rewrite")).rejects.toThrow("already published");
+    expect((await execFileAsync("git", ["-C", workspace, "rev-parse", "HEAD"])).stdout.trim()).toBe(head);
+    await store.delete(task.id);
+  });
+
   it("sets, overwrites, and isolates multiline commit message drafts by current task workspace", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "remote-ide-task-message-root-"));
     const state = await mkdtemp(path.join(os.tmpdir(), "remote-ide-task-message-state-"));

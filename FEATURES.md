@@ -56,7 +56,7 @@ Vibe Editor is a remote-workspace IDE: an Electron/React/Monaco desktop client t
 - Sessions, logs, configuration, and continuation state persisted per task workspace; "Clear context" starts a fresh provider context without deleting the task workspace.
 - Attach local or workspace files to a prompt, including "Attach to AI" from the editor's right-click menu.
 - Long-running execution/output is collapsed into expandable activity blocks; task cards show in-progress, waiting-for-user, done, and error states.
-- **Vibe MCP tools**: built-in `vibe-editor` MCP server exposes tools for creating/listing/deleting task worktrees, starting task agents, appending prompts to running conversations, reading recent responses, and setting or replacing the current task's multiline commit-message draft without creating a commit. Enabled when an agent preset lists MCP servers.
+- **Vibe MCP tools**: built-in `vibe-editor` MCP server exposes tools for creating/listing/deleting task worktrees, starting task agents, appending prompts to running conversations, reading recent responses, setting or replacing the current task's multiline commit-message draft, and rewriting the latest unpushed commit message for a task selected by explicit ID. Published tips and tasks without their own commit are rejected. Enabled when an agent preset lists MCP servers.
 
 ## Java & Maven
 

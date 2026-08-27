@@ -82,6 +82,18 @@ export const appToolDefinitions = [
       },
       required: ["message"]
     }
+  },
+  {
+    name: "task_update_commit_message",
+    description: "Rewrite the latest unpushed commit message on a specific Vibe Editor task branch. Does not change commit contents or working-tree changes and refuses unsafe published-history rewrites.",
+    inputSchema: {
+      type: "object", additionalProperties: false,
+      properties: {
+        task_id: { type: "string", minLength: 1, description: "Task id returned by task_create or task_list." },
+        message: { type: "string", minLength: 1, maxLength: 10_000, pattern: "\\S", description: "New Git commit message. May contain multiple lines; must contain at least one non-whitespace character." }
+      },
+      required: ["task_id", "message"]
+    }
   }
 ] as const;
 
@@ -161,6 +173,15 @@ export class AppToolService {
       const workspace = this.tasks.taskPath(update.task.id);
       await this.onCommitMessageChanged(workspace, message);
       return { task_id: update.task.id, message: update.message, overwritten: update.overwritten, committed: false };
+    }
+    if (name === "task_update_commit_message") {
+      const taskId = requiredString(args, "task_id");
+      const message = requiredCommitMessage(args, "message");
+      const update = await this.tasks.updateGitCommitMessage(taskId, message);
+      return {
+        task_id: update.task.id, branch: update.task.branch, previous_commit: update.previousCommit,
+        commit: update.commit, previous_message: update.previousMessage, message: update.message, rewritten: true
+      };
     }
     throw new Error(`Unknown tool '${name}'`);
   }

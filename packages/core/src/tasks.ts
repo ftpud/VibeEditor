@@ -10,6 +10,7 @@ import { WorkspaceStateStore } from "./workspace-state.js";
 const execFileAsync = promisify(execFile);
 export type WorkspaceTask = { id: string; name: string; branch: string; baseBranch: string };
 export type TaskCommitMessageUpdate = { task: WorkspaceTask; message: string; overwritten: boolean };
+export type TaskGitCommitMessageUpdate = { task: WorkspaceTask; previousCommit: string; commit: string; previousMessage: string; message: string };
 type Registry = { selectedTaskId?: string; tasks: WorkspaceTask[] };
 
 export class WorkspaceTaskStore {
@@ -104,6 +105,61 @@ export class WorkspaceTaskStore {
     const overwritten = options.gitCommitMessage !== undefined;
     await state.save({ ...options, gitCommitMessage: message });
     return { task, message, overwritten };
+  }
+
+  async updateGitCommitMessage(taskId: string, message: string): Promise<TaskGitCommitMessageUpdate> {
+    validateCommitMessage(message);
+    const registry = await this.list();
+    const task = registry.tasks.find((item) => item.id === taskId);
+    if (!task) throw new CoreError("INVALID_REQUEST", `Task '${taskId}' does not exist`);
+    const workspace = this.taskPath(task.id);
+    try {
+      const branch = (await execFileAsync("git", ["-C", workspace, "branch", "--show-current"], { encoding: "utf8" })).stdout.trim();
+      if (branch !== task.branch) throw new CoreError("GIT_FAILED", `Task '${taskId}' worktree is not on its registered branch '${task.branch}'`);
+
+      let previousCommit: string;
+      try { previousCommit = (await execFileAsync("git", ["-C", workspace, "rev-parse", "--verify", "HEAD"], { encoding: "utf8" })).stdout.trim(); }
+      catch { throw new CoreError("INVALID_REQUEST", `Task '${taskId}' has no commit to update`); }
+
+      const taskCommitCount = Number((await execFileAsync("git", ["-C", workspace, "rev-list", "--count", `${task.baseBranch}..HEAD`], { encoding: "utf8" })).stdout.trim());
+      if (!taskCommitCount) throw new CoreError("INVALID_REQUEST", `Task '${taskId}' has no task commit to update`);
+
+      if (await gitRefExists(workspace, "@{upstream}")) {
+        try {
+          await execFileAsync("git", ["-C", workspace, "merge-base", "--is-ancestor", "HEAD", "@{upstream}"], { encoding: "utf8" });
+          throw new CoreError("INVALID_REQUEST", `Task '${taskId}' tip is already published to its upstream; refusing to rewrite it`);
+        } catch (error) {
+          if (error instanceof CoreError) throw error;
+          if ((error as { code?: number }).code !== 1) throw error;
+        }
+      }
+
+      const [tree, parents, author, previousMessage] = await Promise.all([
+        execFileAsync("git", ["-C", workspace, "show", "-s", "--format=%T", "HEAD"], { encoding: "utf8" }),
+        execFileAsync("git", ["-C", workspace, "show", "-s", "--format=%P", "HEAD"], { encoding: "utf8" }),
+        execFileAsync("git", ["-C", workspace, "show", "-s", "--format=%an%x00%ae%x00%aI", "HEAD"], { encoding: "utf8" }),
+        execFileAsync("git", ["-C", workspace, "show", "-s", "--format=%B", "HEAD"], { encoding: "utf8" })
+      ]);
+      const [authorName, authorEmail, authorDate] = author.stdout.trimEnd().split("\0");
+      if (!authorName || !authorEmail || !authorDate) throw new Error("Could not read the current commit author");
+      const messageFile = path.join(path.dirname(workspace), `commit-message-${process.pid}-${crypto.randomUUID()}.txt`);
+      await writeFile(messageFile, message, "utf8");
+      let commit: string;
+      try {
+        const parentArgs = parents.stdout.trim().split(/\s+/).filter(Boolean).flatMap((parent) => ["-p", parent]);
+        commit = (await execFileAsync("git", ["-C", workspace, "commit-tree", tree.stdout.trim(), ...parentArgs, "-F", messageFile], {
+          encoding: "utf8",
+          env: { ...process.env, GIT_AUTHOR_NAME: authorName, GIT_AUTHOR_EMAIL: authorEmail, GIT_AUTHOR_DATE: authorDate }
+        })).stdout.trim();
+      } finally {
+        await rm(messageFile, { force: true });
+      }
+      await execFileAsync("git", ["-C", workspace, "update-ref", "-m", "vibe-editor: update task commit message", `refs/heads/${task.branch}`, commit, previousCommit], { encoding: "utf8" });
+      return { task, previousCommit, commit, previousMessage: previousMessage.stdout.replace(/\n+$/, ""), message };
+    } catch (error) {
+      if (error instanceof CoreError) throw error;
+      throw new CoreError("GIT_FAILED", `Could not update commit message for task '${taskId}': ${gitError(error)}`);
+    }
   }
 
   async merge(taskId: string, strategy: "merge" | "smart" = "smart"): Promise<{ targetBranch: string }> {
@@ -311,6 +367,17 @@ async function exists(target: string): Promise<boolean> {
 function gitError(error: unknown): string {
   const detail = error as { stderr?: string | Buffer; stdout?: string | Buffer; message?: string };
   return String(detail.stderr || detail.stdout || detail.message || error).trim();
+}
+
+async function gitRefExists(workspace: string, ref: string): Promise<boolean> {
+  try { await execFileAsync("git", ["-C", workspace, "rev-parse", "--verify", "--quiet", ref], { encoding: "utf8" }); return true; }
+  catch { return false; }
+}
+
+function validateCommitMessage(message: string): void {
+  if (typeof message !== "string" || !message.trim()) throw new CoreError("INVALID_REQUEST", "Commit message must contain at least one non-whitespace character");
+  if (message.length > 10_000) throw new CoreError("INVALID_REQUEST", "Commit message must be at most 10000 characters");
+  if (message.includes("\0")) throw new CoreError("INVALID_REQUEST", "Commit message must not contain NUL characters");
 }
 
 function isTask(value: unknown): value is WorkspaceTask {

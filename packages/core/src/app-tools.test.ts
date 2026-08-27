@@ -7,7 +7,10 @@ function harness() {
   const tasks = {
     create: vi.fn(async () => task), createRandom: vi.fn(async () => task), delete: vi.fn(async () => ({ tasks: [] })),
     taskPath: vi.fn(() => "/tasks/task-1/workspace"), list: vi.fn(async () => ({ tasks: [task] })),
-    setCommitMessage: vi.fn(async (_workspace: string, message: string) => ({ task, message, overwritten: false }))
+    setCommitMessage: vi.fn(async (_workspace: string, message: string) => ({ task, message, overwritten: false })),
+    updateGitCommitMessage: vi.fn(async (_taskId: string, message: string) => ({
+      task, previousCommit: "old-sha", commit: "new-sha", previousMessage: "Old message", message
+    }))
   };
   const session: AiSession = { status: "in_progress", model: "gpt-5", messages: [{ id: "one", role: "assistant", text: "First", timestamp: "2026-01-01" }, { id: "two", role: "assistant", text: "Latest", timestamp: "2026-01-02" }], reasoning: "medium", configuration: { model: "gpt-5", reasoning: "medium", mode: "agent-full-access" } };
   const provider = {
@@ -22,7 +25,7 @@ function harness() {
 
 describe("Vibe Editor app tools", () => {
   it("publishes the requested task commands and provider/model parameters", () => {
-    expect(appToolDefinitions.map((tool) => tool.name)).toEqual(["task_create", "task_create_and_start", "task_list", "task_delete", "task_ai_response_tail", "task_append_prompt", "set_commit_message"]);
+    expect(appToolDefinitions.map((tool) => tool.name)).toEqual(["task_create", "task_create_and_start", "task_list", "task_delete", "task_ai_response_tail", "task_append_prompt", "set_commit_message", "task_update_commit_message"]);
     expect(appToolDefinitions[1].inputSchema.required).toEqual(["prompt", "provider", "model"]);
     expect(appToolDefinitions[6]).toMatchObject({
       name: "set_commit_message",
@@ -30,6 +33,17 @@ describe("Vibe Editor app tools", () => {
         additionalProperties: false,
         required: ["message"],
         properties: { message: { type: "string", minLength: 1, maxLength: 10_000, pattern: "\\S" } }
+      }
+    });
+    expect(appToolDefinitions[7]).toMatchObject({
+      name: "task_update_commit_message",
+      inputSchema: {
+        additionalProperties: false,
+        required: ["task_id", "message"],
+        properties: {
+          task_id: { type: "string", minLength: 1 },
+          message: { type: "string", minLength: 1, maxLength: 10_000, pattern: "\\S" }
+        }
       }
     });
   });
@@ -134,5 +148,17 @@ describe("Vibe Editor app tools", () => {
     await expect(service.call("set_commit_message", { message: " \n\t " })).rejects.toThrow("message must contain at least one non-whitespace character");
     await expect(service.call("set_commit_message", { message: "x".repeat(10_001) })).rejects.toThrow("message must be at most 10000 characters");
     expect(tasks.setCommitMessage).not.toHaveBeenCalled();
+  });
+
+  it("updates the Git commit message for an explicit task and returns rewrite details", async () => {
+    const { service, tasks, task } = harness();
+    const message = "New subject\n\nNew body";
+    await expect(service.call("task_update_commit_message", { task_id: task.id, message })).resolves.toEqual({
+      task_id: task.id, branch: task.branch, previous_commit: "old-sha", commit: "new-sha",
+      previous_message: "Old message", message, rewritten: true
+    });
+    expect(tasks.updateGitCommitMessage).toHaveBeenCalledWith(task.id, message);
+    await expect(service.call("task_update_commit_message", { task_id: " ", message })).rejects.toThrow("task_id must be a non-empty string");
+    await expect(service.call("task_update_commit_message", { task_id: task.id, message: " \n " })).rejects.toThrow("message must contain at least one non-whitespace character");
   });
 });
