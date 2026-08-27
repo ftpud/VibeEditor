@@ -13,6 +13,7 @@ import { JavaPanel } from "./JavaPanel";
 import { ProblemsPanel } from "./ProblemsPanel";
 import { GitLogPanel } from "./GitLogPanel";
 import { GitHistoryDialog } from "./GitHistoryDialog";
+import { GitToolbarActions, RollbackSelectedDialog, executeRollbackSelection, isUntrackedGitEntry, selectedGitEntries } from "./GitRollbackControls";
 import { AiPanel, type AiAttachment } from "./AiPanel";
 import type { PermissionRequestOwner } from "./PermissionRequestActions";
 import { openTaskFromSummary } from "./permission-navigation";
@@ -158,6 +159,8 @@ export function App() {
   const [gitCommitMessage, setGitCommitMessage] = useState("");
   const [gitCommitting, setGitCommitting] = useState(false);
   const [gitPushing, setGitPushing] = useState(false);
+  const [gitRollingBack, setGitRollingBack] = useState(false);
+  const [gitRollbackDialog, setGitRollbackDialog] = useState<GitStatusEntry[]>();
   const [taskGitEntries, setTaskGitEntries] = useState<GitStatusEntry[]>([]);
   const [taskGitError, setTaskGitError] = useState("");
   const [gitError, setGitError] = useState("");
@@ -185,6 +188,7 @@ export function App() {
   const [searchScope, setSearchScope] = useState<string>();
   const [pendingNavigation, setPendingNavigation] = useState<{ result: SearchResult; matchLength: number }>();
   const clientRef = useRef<CoreClient>();
+  const gitRollbackRunningRef = useRef(false);
   const aiProviderRef = useRef<AiProvider>(readSetting("aiProvider") === "copilot" ? "copilot" : "codex");
   const didAutoConnect = useRef(false);
   const layoutRef = useRef(layout);
@@ -619,6 +623,9 @@ export function App() {
 
   useEffect(() => setSelectedGitPaths((current) => new Set([...current].filter((path) => gitEntries.some((entry) => entry.path === path)))), [gitEntries]);
 
+  const selectedRollbackEntries = useMemo(() => selectedGitEntries(gitEntries, selectedGitPaths), [gitEntries, selectedGitPaths]);
+  const gitOperationRunning = gitCommitting || gitPushing || gitRollingBack;
+
   const openFile = async (node: FileTreeNode) => {
     const existing = group.tabs.find((tab) => tab.type === "file" && tab.path === node.path);
     if (existing) { updateGroup((tabs) => ({ tabs, activeTabId: existing.id })); return; }
@@ -707,7 +714,8 @@ export function App() {
 
   const rollbackFile = async (entry: GitStatusEntry) => {
     setGitRollbackMenu(undefined);
-    if (!window.confirm(`Rollback all local changes in ${entry.path}? This cannot be undone.`)) return;
+    if (gitOperationRunning || gitRollbackRunningRef.current || !window.confirm(isUntrackedGitEntry(entry) ? `Permanently delete untracked file ${entry.path}? This cannot be undone.` : `Rollback all staged and unstaged changes in ${entry.path} to HEAD? This cannot be undone.`)) return;
+    gitRollbackRunningRef.current = true; setGitRollingBack(true);
     try {
       await clientRef.current!.request("git.rollback", { path: entry.path });
       let restoredContent: string | undefined;
@@ -722,10 +730,44 @@ export function App() {
       await Promise.all([refreshGit(), refreshTree()]);
       showStatus(`Rolled back ${entry.path}`, "success");
     } catch (error) { setStatusMessage(error instanceof Error ? error.message : "Could not rollback file"); }
+    finally { gitRollbackRunningRef.current = false; setGitRollingBack(false); }
+  };
+
+  const openRollbackSelected = () => {
+    if (gitOperationRunning || selectedRollbackEntries.length === 0) return;
+    setGitRollbackDialog(selectedRollbackEntries);
+  };
+
+  const rollbackSelected = async (deleteUntracked: boolean) => {
+    if (!clientRef.current || !gitRollbackDialog?.length || gitRollbackRunningRef.current || gitCommitting || gitPushing) return;
+    gitRollbackRunningRef.current = true;
+    setGitRollingBack(true); showStatus(`Rolling back ${gitRollbackDialog.length} selected change${gitRollbackDialog.length === 1 ? "" : "s"}...`, "progress");
+    const requestedEntries = gitRollbackDialog;
+    try {
+      const result = await executeRollbackSelection(requestedEntries, deleteUntracked, (paths, confirmed) => clientRef.current!.request("git.rollbackSelected", { paths, deleteUntracked: confirmed }), async (rollbackResult) => {
+        const rolledBack = new Set(rollbackResult.rolledBack);
+        const affectedPaths = new Set(requestedEntries.filter((entry) => rolledBack.has(entry.path)).flatMap((entry) => entry.originalPath && (entry.indexStatus === "R" || entry.worktreeStatus === "R") ? [entry.path, entry.originalPath] : [entry.path]));
+        const contents = new Map<string, string>();
+        await Promise.all([...affectedPaths].map(async (path) => { try { contents.set(path, (await clientRef.current!.request("filesystem.readFile", { path })).content); } catch { /* Deleted and renamed-away paths have no content to refresh. */ } }));
+        updateGroup((tabs, active) => {
+          const next = tabs.filter((tab) => !affectedPaths.has(tab.path) || (tab.type === "file" && contents.has(tab.path))).map((tab) => affectedPaths.has(tab.path) && tab.type === "file" ? { ...tab, content: contents.get(tab.path)!, savedContent: contents.get(tab.path)!, dirty: false, error: undefined } : tab);
+          return { tabs: next, activeTabId: next.some((tab) => tab.id === active) ? active : next.at(-1)?.id };
+        });
+        await Promise.all([refreshGit(), refreshTaskGit(), refreshTree()]);
+      });
+      const rolledBack = new Set(result.rolledBack);
+      setSelectedGitPaths((current) => new Set([...current].filter((path) => !rolledBack.has(path))));
+      setGitRollbackDialog(undefined);
+      if (result.failures.length > 0) {
+        const detail = result.failures.slice(0, 3).map((failure) => `${failure.path}: ${failure.message}`).join("; ");
+        showStatus(`${result.rolledBack.length} rolled back; ${result.failures.length} failed. ${detail}${result.failures.length > 3 ? `; and ${result.failures.length - 3} more` : ""}`, "error");
+      } else showStatus(`Rolled back ${result.rolledBack.length} selected change${result.rolledBack.length === 1 ? "" : "s"}`, "success");
+    } catch (error) { setStatusMessage(error instanceof Error ? error.message : "Could not rollback selected changes"); }
+    finally { gitRollbackRunningRef.current = false; setGitRollingBack(false); }
   };
 
   const commitSelectedFiles = async () => {
-    if (!clientRef.current || gitCommitting || selectedGitPaths.size === 0 || !gitCommitMessage.trim()) return;
+    if (!clientRef.current || gitOperationRunning || selectedGitPaths.size === 0 || !gitCommitMessage.trim()) return;
     setGitCommitting(true); showStatus("Committing selected changes...", "progress");
     try {
       await clientRef.current.request("git.commit", { paths: [...selectedGitPaths], message: gitCommitMessage });
@@ -737,7 +779,7 @@ export function App() {
   };
 
   const pushGit = async () => {
-    if (!clientRef.current || gitPushing) return;
+    if (!clientRef.current || gitOperationRunning) return;
     setGitPushing(true); showStatus("Pushing changes...", "progress");
     try {
       await clientRef.current.request("git.push", {});
@@ -1619,9 +1661,9 @@ export function App() {
           <div className="workspace-name" onContextMenu={(event) => { event.preventDefault(); setTreeContextMenu({ x: Math.min(event.clientX, window.innerWidth - 220), y: Math.min(event.clientY, window.innerHeight - 110), node: { name: "REMOTE WORKSPACE", path: "", type: "directory" } }); }}><ChevronDown size={13} />REMOTE WORKSPACE</div>
           <div className="tree">{filteredTree.length > 0 ? <Tree nodes={filteredTree} activePath={activeTab?.path} fileColors={fileColors} gitStatuses={projectGitStatuses} expandAll={Boolean(projectFilter.trim())} onOpen={openFile} onContextMenu={(event, node) => { event.preventDefault(); setTreeContextMenu({ x: Math.min(event.clientX, window.innerWidth - 220), y: Math.min(event.clientY, window.innerHeight - 110), node }); }} /> : <div className="filter-empty">No matching files</div>}</div>
         </> : classicSideView === "git" ? <>
-          <header className="panel-header"><span>Git Changes</span><div className="panel-header-actions"><button title={gitPushing ? "Pushing changes" : "Push"} disabled={gitPushing} onClick={() => void pushGit()}>{gitPushing ? <LoaderCircle className="status-toast-spinner" size={14} /> : <ArrowUp size={14} />}</button><button title="Refresh Git status" onClick={() => void refreshGit()}><RefreshCw size={14} /></button></div></header><div className="git-branch"><GitBranch size={13} /><span>{gitBranch}</span></div>
+          <header className="panel-header"><span>Git Changes</span><GitToolbarActions selectedCount={selectedRollbackEntries.length} operationRunning={gitOperationRunning} pushing={gitPushing} rollingBack={gitRollingBack} onRollbackSelected={openRollbackSelected} onPush={() => void pushGit()} onRefresh={() => void refreshGit()} /></header><div className="git-branch"><GitBranch size={13} /><span>{gitBranch}</span></div>
           <GitChangesView entries={gitEntries} error={gitError} selectedPaths={selectedGitPaths} onTogglePath={(path) => setSelectedGitPaths((current) => { const next = new Set(current); next.has(path) ? next.delete(path) : next.add(path); return next; })} activePath={activeTab?.path} onOpenDiff={openDiff} onOpenFile={(entry) => void openFile({ name: entry.path.split("/").pop() ?? entry.path, path: entry.path, type: "file" })} onContextMenu={(event, entry) => { event.preventDefault(); setGitRollbackMenu({ x: Math.min(event.clientX, window.innerWidth - 220), y: Math.min(event.clientY, window.innerHeight - 50), entry }); }} />
-          <form className="git-commit-panel" onSubmit={(event) => { event.preventDefault(); void commitSelectedFiles(); }}><textarea aria-label="Commit message" placeholder="Commit message" value={gitCommitMessage} disabled={gitCommitting} onChange={(event) => setGitCommitMessage(event.target.value)} /><footer><span>{selectedGitPaths.size} selected</span><button disabled={gitCommitting || selectedGitPaths.size === 0 || !gitCommitMessage.trim()}>{gitCommitting ? "Committing..." : "Commit"}</button></footer></form>
+          <form className="git-commit-panel" onSubmit={(event) => { event.preventDefault(); void commitSelectedFiles(); }}><textarea aria-label="Commit message" placeholder="Commit message" value={gitCommitMessage} disabled={gitOperationRunning} onChange={(event) => setGitCommitMessage(event.target.value)} /><footer><span>{selectedGitPaths.size} selected</span><button disabled={gitOperationRunning || selectedGitPaths.size === 0 || !gitCommitMessage.trim()}>{gitCommitting ? "Committing..." : "Commit"}</button></footer></form>
         </> : classicSideView === "taskGit" && selectedTaskId ? <><header className="panel-header"><span>Task Git</span><button title="Refresh task comparison" onClick={() => void refreshTaskGit()}><RefreshCw size={14} /></button></header><div className="git-branch"><GitCompareArrows size={13} /><span>{tasks.find((task) => task.id === selectedTaskId)?.baseBranch ?? "Base branch"}</span></div><GitChangesView entries={taskGitEntries} error={taskGitError} emptyMessage="No changes from base branch" groupTitle="Changes from Base" activePath={activeTab?.path} onOpenDiff={openTaskDiff} onOpenFile={(entry) => void openFile({ name: entry.path.split("/").pop() ?? entry.path, path: entry.path, type: "file" })} /></> : classicSideView === "useful" ? <><header className="panel-header"><span>Useful Files</span><button title="Refresh useful files" onClick={() => void refreshUsefulFiles()}><RefreshCw size={14} /></button></header><div className="useful-files-list"><UsefulFileSection title="Global" scope="global" files={usefulFiles} activeTab={activeTab} onOpen={openUsefulFile} onCreate={(scope) => setUsefulDialog({ mode: "create", scope })} onRename={(file) => setUsefulDialog({ mode: "rename", scope: file.scope, file })} onDelete={(file) => void deleteUsefulFile(file)} /><UsefulFileSection title="Local" scope="local" files={usefulFiles} activeTab={activeTab} onOpen={openUsefulFile} onCreate={(scope) => setUsefulDialog({ mode: "create", scope })} onRename={(file) => setUsefulDialog({ mode: "rename", scope: file.scope, file })} onDelete={(file) => void deleteUsefulFile(file)} /></div></> : classicSideView === "agents" ? <AgentsPanel agents={agents} activeTab={activeTab} onRefresh={() => void refreshAgents()} onOpen={(file) => void openAgentFile(file)} onCreate={(scope) => setAgentDialog({ mode: "create", scope })} onRename={(file) => { if (file.scope !== "workspace") setAgentDialog({ mode: "rename", scope: file.scope, file }); }} onDelete={(file) => void deleteAgent(file)} /> : <><header className="panel-header"><span>Java Project</span><button title="Refresh Java project" onClick={() => void refreshJavaTree()}><RefreshCw size={14} /></button></header><div className="java-project-meta"><Coffee size={13} /><span>{javaOptions?.pomPath}</span></div><div className="tree java-tree">{javaOptions && <JavaProjectTree nodes={javaTree} activePath={activeTab?.path} onOpen={openFile} />}</div></>}
       </aside><div className="resize-handle" onPointerDown={beginClassicLeftResize} />
       </>}
@@ -1675,10 +1717,10 @@ export function App() {
           <div className="tree">{filteredTree.length > 0 ? <Tree nodes={filteredTree} activePath={activeTab?.path} fileColors={fileColors} gitStatuses={projectGitStatuses} expandAll={Boolean(projectFilter.trim())} onOpen={openFile} onContextMenu={(event, node) => { event.preventDefault(); setTreeContextMenu({ x: Math.min(event.clientX, window.innerWidth - 220), y: Math.min(event.clientY, window.innerHeight - 110), node }); }} /> : <div className="filter-empty">No matching files</div>}</div>
         </section>}
         {rightPanels.git && <section key="git" className="stacked-panel">
-          <header className="panel-header"><span>Git Changes</span><div className="panel-header-actions"><button title={gitPushing ? "Pushing changes" : "Push"} disabled={gitPushing} onClick={() => void pushGit()}>{gitPushing ? <LoaderCircle className="status-toast-spinner" size={14} /> : <ArrowUp size={14} />}</button><button title="Refresh Git status" onClick={() => void refreshGit()}><RefreshCw size={14} /></button></div></header>
+          <header className="panel-header"><span>Git Changes</span><GitToolbarActions selectedCount={selectedRollbackEntries.length} operationRunning={gitOperationRunning} pushing={gitPushing} rollingBack={gitRollingBack} onRollbackSelected={openRollbackSelected} onPush={() => void pushGit()} onRefresh={() => void refreshGit()} /></header>
           <div className="git-branch"><GitBranch size={13} /><span>{gitBranch}</span></div>
           <GitChangesView entries={gitEntries} error={gitError} selectedPaths={selectedGitPaths} onTogglePath={(path) => setSelectedGitPaths((current) => { const next = new Set(current); next.has(path) ? next.delete(path) : next.add(path); return next; })} activePath={activeTab?.path} onOpenDiff={openDiff} onOpenFile={(entry) => void openFile({ name: entry.path.split("/").pop() ?? entry.path, path: entry.path, type: "file" })} onContextMenu={(event, entry) => { event.preventDefault(); setGitRollbackMenu({ x: Math.min(event.clientX, window.innerWidth - 220), y: Math.min(event.clientY, window.innerHeight - 50), entry }); }} />
-          <form className="git-commit-panel" onSubmit={(event) => { event.preventDefault(); void commitSelectedFiles(); }}><textarea aria-label="Commit message" placeholder="Commit message" value={gitCommitMessage} disabled={gitCommitting} onChange={(event) => setGitCommitMessage(event.target.value)} /><footer><span>{selectedGitPaths.size} selected</span><button disabled={gitCommitting || selectedGitPaths.size === 0 || !gitCommitMessage.trim()}>{gitCommitting ? "Committing..." : "Commit"}</button></footer></form>
+          <form className="git-commit-panel" onSubmit={(event) => { event.preventDefault(); void commitSelectedFiles(); }}><textarea aria-label="Commit message" placeholder="Commit message" value={gitCommitMessage} disabled={gitOperationRunning} onChange={(event) => setGitCommitMessage(event.target.value)} /><footer><span>{selectedGitPaths.size} selected</span><button disabled={gitOperationRunning || selectedGitPaths.size === 0 || !gitCommitMessage.trim()}>{gitCommitting ? "Committing..." : "Commit"}</button></footer></form>
         </section>}
         {rightPanels.taskGit && selectedTaskId && <section key="taskGit" className="stacked-panel"><header className="panel-header"><span>Task Git</span><button title="Refresh task comparison" onClick={() => void refreshTaskGit()}><RefreshCw size={14} /></button></header><div className="git-branch"><GitCompareArrows size={13} /><span>{tasks.find((task) => task.id === selectedTaskId)?.baseBranch ?? "Base branch"}</span></div><GitChangesView entries={taskGitEntries} error={taskGitError} emptyMessage="No changes from base branch" groupTitle="Changes from Base" activePath={activeTab?.path} onOpenDiff={openTaskDiff} onOpenFile={(entry) => void openFile({ name: entry.path.split("/").pop() ?? entry.path, path: entry.path, type: "file" })} /></section>}
         {rightPanels.java && javaOptions && <section key="java" className="stacked-panel"><header className="panel-header"><span>Java Project</span><button title="Refresh Java project" onClick={() => void refreshJavaTree()}><RefreshCw size={14} /></button></header><div className="java-project-meta"><Coffee size={13} /><span>{javaOptions.pomPath}</span></div><div className="tree java-tree"><JavaProjectTree nodes={javaTree} activePath={activeTab?.path} onOpen={openFile} /></div></section>}
@@ -1725,12 +1767,13 @@ export function App() {
       </div>
     </div>}
     {editorGitMenu && <div className="context-menu-layer" onMouseDown={() => setEditorGitMenu(undefined)}><div className="context-menu editor-git-menu" style={{ left: editorGitMenu.x, top: editorGitMenu.y }} onMouseDown={(event) => event.stopPropagation()}><button onClick={() => attachWorkspaceFile(editorGitMenu.path)}><Bot size={14} /><span>Attach to AI</span></button><div className="context-submenu-trigger"><button><GitBranch size={14} /><span>Git</span><ChevronRight size={13} /></button><div className="context-menu context-submenu"><button onClick={() => { setGitHistory({ path: editorGitMenu.path }); setEditorGitMenu(undefined); }}><FileDiff size={14} /><span>Show file changes</span></button><button disabled={editorGitMenu.startLine === undefined} onClick={() => { setGitHistory({ path: editorGitMenu.path, startLine: editorGitMenu.startLine, endLine: editorGitMenu.endLine }); setEditorGitMenu(undefined); }}><ListTree size={14} /><span>Show selection changes</span></button></div></div></div></div>}
-    {gitRollbackMenu && <div className="context-menu-layer" onMouseDown={() => setGitRollbackMenu(undefined)}><div className="context-menu" style={{ left: gitRollbackMenu.x, top: gitRollbackMenu.y }} onMouseDown={(event) => event.stopPropagation()}><button className="danger" onClick={() => void rollbackFile(gitRollbackMenu.entry)}><RefreshCw size={14} /><span>Rollback</span></button></div></div>}
+    {gitRollbackMenu && <div className="context-menu-layer" onMouseDown={() => setGitRollbackMenu(undefined)}><div className="context-menu" style={{ left: gitRollbackMenu.x, top: gitRollbackMenu.y }} onMouseDown={(event) => event.stopPropagation()}><button className="danger" disabled={gitOperationRunning} onClick={() => void rollbackFile(gitRollbackMenu.entry)}><RefreshCw size={14} /><span>Rollback</span></button></div></div>}
     {tabContextMenu && <div className="context-menu-layer" onMouseDown={() => setTabContextMenu(undefined)}><div className="context-menu tab-context-menu" style={{ left: tabContextMenu.x, top: tabContextMenu.y }} onMouseDown={(event) => event.stopPropagation()}><button onClick={() => closeTabs(tabContextMenu.tab, "all")}><X size={14} /><span>Close All</span></button><button disabled={group.tabs.findIndex((tab) => tab.id === tabContextMenu.tab.id) === group.tabs.length - 1} onClick={() => closeTabs(tabContextMenu.tab, "right")}><ArrowUpRight className="close-right-icon" size={14} /><span>Close All to the Right</span></button><button disabled={tabContextMenu.tab.type === "diff" || tabContextMenu.tab.type === "agent"} onClick={() => void openTabInWindow(tabContextMenu.tab)}><Columns2 size={14} /><span>Open in New Window</span></button></div></div>}
     {searchScope !== undefined && <FindInFilesDialog client={clientRef.current!} scope={searchScope} onClose={() => setSearchScope(undefined)} onNavigate={(result, matchLength) => void navigateToSearchResult(result, matchLength)} />}
     {importChoices && <div className="dialog-overlay" onMouseDown={() => setImportChoices(undefined)}><section className="import-chooser" role="dialog" aria-modal="true" aria-label="Choose Java import" onMouseDown={(event) => event.stopPropagation()}><header><span>Import class</span><button title="Close" onClick={() => setImportChoices(undefined)}><X size={15} /></button></header><div>{importChoices.suggestions.map((suggestion) => <button key={suggestion.qualifiedName} onClick={() => applyJavaImport(suggestion)}><span>{suggestion.simpleName}</span><code>{suggestion.qualifiedName}</code><small>{suggestion.source}</small></button>)}</div></section></div>}
     {javaUsages && <div className="dialog-overlay" onMouseDown={() => setJavaUsages(undefined)}><section className="import-chooser usage-chooser" role="dialog" aria-modal="true" aria-label="Java usages" onMouseDown={(event) => event.stopPropagation()}><header><span>Usages ({javaUsages.length})</span><button title="Close" onClick={() => setJavaUsages(undefined)}><X size={15} /></button></header><div>{javaUsages.length === 0 ? <div className="problems-empty">No project usages found</div> : javaUsages.map((location, index) => <button key={`${location.path}:${location.startLine}:${location.startColumn}:${index}`} onClick={() => void openJavaLocation(location)}><span>{location.path.split("/").pop()}</span><code>{location.path}</code><small>{location.startLine}:{location.startColumn}</small></button>)}</div></section></div>}
     {gitHistory && <GitHistoryDialog client={clientRef.current!} path={gitHistory.path} startLine={gitHistory.startLine} endLine={gitHistory.endLine} onClose={() => setGitHistory(undefined)} />}
+    {gitRollbackDialog && <RollbackSelectedDialog entries={gitRollbackDialog} busy={gitRollingBack} onClose={() => { if (!gitRollingBack) setGitRollbackDialog(undefined); }} onConfirm={(deleteUntracked) => void rollbackSelected(deleteUntracked)} />}
     {gitHunkDialog && <div className="context-menu-layer" onMouseDown={() => setGitHunkDialog(undefined)}><section className="git-hunk-popup" role="dialog" aria-label={`Previous content in ${gitHunkDialog.path}`} style={{ left: gitHunkDialog.x, top: gitHunkDialog.y }} onMouseDown={(event) => event.stopPropagation()}><header><div><strong>Before this change</strong><span>{gitHunkDialog.path.split("/").pop()} · line {gitHunkDialog.hunk.originalStart}</span></div><button title="Close" onClick={() => setGitHunkDialog(undefined)}><X size={14} /></button></header>{gitHunkDialog.error && <div className="git-hunk-error">{gitHunkDialog.error}</div>}<pre>{gitHunkDialog.hunk.originalLines === 0 ? "This block did not exist before." : gitHunkDialog.originalContent.split("\n").slice(Math.max(0, gitHunkDialog.hunk.originalStart - 1), Math.max(0, gitHunkDialog.hunk.originalStart - 1) + gitHunkDialog.hunk.originalLines).join("\n")}</pre><footer><button className="danger" onClick={() => void rollbackGitHunk()}><RefreshCw size={13} /><span>Rollback</span></button></footer></section></div>}
     {showRunConfigurationDialog && <RunConfigurationDialog client={clientRef.current!} onClose={() => setShowRunConfigurationDialog(false)} onSaved={(options) => { setJavaOptions(options); javaOptionsRef.current = options; setShowRunConfigurationDialog(false); }} />}
     {showCreateTaskDialog && <CreateTaskDialog client={clientRef.current!} onClose={() => setShowCreateTaskDialog(false)} onCreate={createTask} />}
@@ -1965,12 +2008,12 @@ function GitChangesView({ entries, error, emptyMessage = "No local changes", gro
 
 function GitChangeGroup({ title, entries, selectedPaths, onTogglePath, activePath, onOpenDiff, onOpenFile, onContextMenu }: { title: string; entries: GitStatusEntry[]; selectedPaths?: Set<string>; onTogglePath?(path: string): void; activePath?: string; onOpenDiff(entry: GitStatusEntry): void; onOpenFile(entry: GitStatusEntry): void; onContextMenu?(event: ReactMouseEvent, entry: GitStatusEntry): void }) {
   const [expanded, setExpanded] = useState(true);
-  const selectable = Boolean(onTogglePath && (title === "Changes" || title === "Untracked"));
+  const selectable = Boolean(onTogglePath);
   const selectedCount = entries.filter((entry) => selectedPaths?.has(entry.path)).length;
   const allSelected = entries.length > 0 && selectedCount === entries.length;
   return <section className={`git-group git-group-${title.toLowerCase()}`}>
     <button className="git-group-title" aria-expanded={expanded} onClick={() => setExpanded((current) => !current)}>
-      {expanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />}{selectable && <input type="checkbox" aria-label={`Select all ${title.toLowerCase()} files for commit`} checked={allSelected} ref={(input) => { if (input) input.indeterminate = selectedCount > 0 && !allSelected; }} onClick={(event) => event.stopPropagation()} onChange={() => entries.forEach((entry) => { if ((selectedPaths?.has(entry.path) ?? false) === allSelected) onTogglePath?.(entry.path); })} />}<span>{title}</span><span className="git-count">{entries.length}</span>
+      {expanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />}{selectable && <input type="checkbox" aria-label={`Select all ${title.toLowerCase()} files`} checked={allSelected} ref={(input) => { if (input) input.indeterminate = selectedCount > 0 && !allSelected; }} onClick={(event) => event.stopPropagation()} onChange={() => entries.forEach((entry) => { if ((selectedPaths?.has(entry.path) ?? false) === allSelected) onTogglePath?.(entry.path); })} />}<span>{title}</span><span className="git-count">{entries.length}</span>
     </button>
     {expanded && <GitStatusTree entries={entries} selectedPaths={selectedPaths} onTogglePath={onTogglePath} activePath={activePath} onOpenDiff={onOpenDiff} onOpenFile={onOpenFile} onContextMenu={onContextMenu} />}
   </section>;
@@ -1993,7 +2036,7 @@ function GitStatusTree({ entries, selectedPaths, onTogglePath, activePath, onOpe
       const allSelected = descendantPaths.length > 0 && selectedCount === descendantPaths.length;
       return <div key={node.path}>
         <button className="git-file-row git-directory-row" style={{ paddingLeft: (onTogglePath ? 9 : 27) + depth * 13 }} onClick={() => setExpanded((current) => { const next = new Set(current); open ? next.delete(node.path) : next.add(node.path); return next; })}>
-          {onTogglePath && <input type="checkbox" aria-label={`Select all changes under ${node.path} for commit`} checked={allSelected} ref={(input) => { if (input) input.indeterminate = selectedCount > 0 && !allSelected; }} onClick={(event) => event.stopPropagation()} onChange={() => descendantPaths.forEach((path) => { if ((selectedPaths?.has(path) ?? false) === allSelected) onTogglePath(path); })} />}
+          {onTogglePath && <input type="checkbox" aria-label={`Select all changes under ${node.path}`} checked={allSelected} ref={(input) => { if (input) input.indeterminate = selectedCount > 0 && !allSelected; }} onClick={(event) => event.stopPropagation()} onChange={() => descendantPaths.forEach((path) => { if ((selectedPaths?.has(path) ?? false) === allSelected) onTogglePath(path); })} />}
           {open ? <ChevronDown size={13} /> : <ChevronRight size={13} />}{open ? <FolderOpen size={14} /> : <Folder size={14} />}<span className="git-file-name">{node.name}</span>
         </button>
         {open && renderNodes(node.children, depth + 1)}
@@ -2004,7 +2047,7 @@ function GitStatusTree({ entries, selectedPaths, onTogglePath, activePath, onOpe
     const status = entry.indexStatus === "?" ? "U" : `${entry.indexStatus}${entry.worktreeStatus}`.trim();
     const kind = entry.indexStatus === "U" || entry.worktreeStatus === "U" ? "conflict" : entry.indexStatus === "?" ? "untracked" : deleted ? "deleted" : entry.indexStatus === "A" ? "added" : "modified";
     return <button key={node.path} className={`git-file-row ${activePath === entry.path ? "selected" : ""}`} style={{ paddingLeft: (onTogglePath ? 9 : 27) + depth * 13 }} title={deleted ? `${entry.path} (deleted)` : `${entry.path} - double-click to open file`} onClick={() => onOpenDiff(entry)} onDoubleClick={() => { if (!deleted) onOpenFile(entry); }} onContextMenu={onContextMenu ? (event) => onContextMenu(event, entry) : undefined}>
-      {onTogglePath && <input type="checkbox" aria-label={`Select ${entry.path} for commit`} checked={selectedPaths?.has(entry.path) ?? false} onClick={(event) => event.stopPropagation()} onChange={() => onTogglePath(entry.path)} />}
+      {onTogglePath && <input type="checkbox" aria-label={`Select ${entry.path}`} checked={selectedPaths?.has(entry.path) ?? false} onClick={(event) => event.stopPropagation()} onChange={() => onTogglePath(entry.path)} />}
       <FileCode2 size={14} /><span className="git-file-name">{node.name}</span><span className={`git-status ${kind}`}>{status}</span>
     </button>;
   });

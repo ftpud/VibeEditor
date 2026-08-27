@@ -2,7 +2,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import path from "node:path";
 import { readFile } from "node:fs/promises";
-import type { GitBranch, GitCommit, GitCommitFile, GitDiffHunk, GitStatusEntry } from "@remote-ide/protocol";
+import type { GitBranch, GitCommit, GitCommitFile, GitDiffHunk, GitRollbackFailure, GitStatusEntry } from "@remote-ide/protocol";
 import { CoreError } from "./errors.js";
 import { WorkspaceFileSystem } from "./filesystem.js";
 
@@ -121,8 +121,24 @@ export class GitService {
     validatePath(filePath);
     const entry = (await this.status()).entries.find((item) => item.path === filePath);
     if (!entry) throw new CoreError("GIT_FAILED", `Path has no Git changes: ${filePath}`);
-    if (entry.indexStatus === "?" && entry.worktreeStatus === "?") await this.git(["clean", "-f", "--", filePath]);
-    else await this.git(["restore", "--source=HEAD", "--staged", "--worktree", "--", filePath]);
+    await this.rollbackEntry(entry);
+  }
+
+  async rollbackSelected(paths: string[], deleteUntracked: boolean): Promise<{ rolledBack: string[]; failures: GitRollbackFailure[] }> {
+    if (!Array.isArray(paths) || paths.length === 0 || paths.length > 500) throw new CoreError("INVALID_REQUEST", "Select at least one file to rollback");
+    const uniquePaths = [...new Set(paths)];
+    for (const filePath of uniquePaths) validatePath(filePath);
+    const entries = (await this.status()).entries;
+    const rolledBack: string[] = [];
+    const failures: GitRollbackFailure[] = [];
+    for (const filePath of uniquePaths) {
+      const entry = entries.find((item) => item.path === filePath);
+      if (!entry) { failures.push({ path: filePath, message: "Path no longer has Git changes" }); continue; }
+      if (isUntracked(entry) && !deleteUntracked) { failures.push({ path: filePath, message: "Untracked file deletion was not confirmed" }); continue; }
+      try { await this.rollbackEntry(entry); rolledBack.push(filePath); }
+      catch (error) { failures.push({ path: filePath, message: error instanceof Error ? error.message : String(error) }); }
+    }
+    return { rolledBack, failures };
   }
 
   async commit(paths: string[], message: string): Promise<string> {
@@ -162,10 +178,23 @@ export class GitService {
     catch (error) { throw new CoreError("GIT_FAILED", error instanceof Error ? error.message : String(error)); }
   }
 
+  private async rollbackEntry(entry: GitStatusEntry): Promise<void> {
+    if (isUntracked(entry)) { await this.git(["clean", "-f", "--", entry.path]); return; }
+    if (entry.indexStatus === "A" && !await this.hasHead()) { await this.git(["rm", "-f", "--", entry.path]); return; }
+    const paths = entry.originalPath && (entry.indexStatus === "R" || entry.worktreeStatus === "R") ? [entry.originalPath, entry.path] : [entry.path];
+    await this.git(["restore", "--source=HEAD", "--staged", "--worktree", "--", ...paths]);
+  }
+
+  private async hasHead(): Promise<boolean> {
+    try { await this.git(["rev-parse", "--verify", "HEAD"]); return true; } catch { return false; }
+  }
+
   private async show(spec: string): Promise<string> {
     try { return await this.git(["show", spec]); } catch { return ""; }
   }
 }
+
+function isUntracked(entry: GitStatusEntry): boolean { return entry.indexStatus === "?" && entry.worktreeStatus === "?"; }
 
 export function parseDiffHunks(output: string): GitDiffHunk[] {
   return [...output.matchAll(/^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/gm)].map((match) => ({ originalStart: Number(match[1]), originalLines: Number(match[2] ?? 1), modifiedStart: Number(match[3]), modifiedLines: Number(match[4] ?? 1) }));

@@ -390,6 +390,10 @@ async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStor
     case "git.compareFiles": return { files: await git.compareFiles(request.payload.ref, request.payload.path) };
     case "git.compareDiff": return git.compareDiff(request.payload.ref, request.payload.path, filesystem, request.payload.originalPath);
     case "git.rollback": await git.rollback(request.payload.path); return {};
+    case "git.rollbackSelected": {
+      if (!Array.isArray(request.payload.paths) || typeof request.payload.deleteUntracked !== "boolean") throw new CoreError("INVALID_REQUEST", "paths and deleteUntracked are required");
+      return git.rollbackSelected(request.payload.paths, request.payload.deleteUntracked);
+    }
     case "git.commit": return { hash: await git.commit(request.payload.paths, request.payload.message) };
     case "git.push": await git.push(); return {};
     case "java.loadMavenProject": {
