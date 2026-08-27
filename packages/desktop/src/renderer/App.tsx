@@ -15,6 +15,7 @@ import { GitLogPanel } from "./GitLogPanel";
 import { GitHistoryDialog } from "./GitHistoryDialog";
 import { AiPanel, type AiAttachment } from "./AiPanel";
 import { configureMonacoThemes, monacoTheme, type HighlightTheme } from "./theme";
+import { CURSOR_POSITIONS_SETTING, CursorPositionStore, validateCursorPosition } from "./cursor-state";
 
 type ConnectionStatus = "idle" | "connecting" | "connected" | "failed" | "disconnected" | "workspace-error";
 type StatusKind = "progress" | "success" | "error";
@@ -201,6 +202,11 @@ export function App() {
   const activeGitHunksRef = useRef<GitDiffHunk[]>([]);
   const diffRollbackTimer = useRef<ReturnType<typeof setTimeout>>();
   const javaLanguageDisposables = useRef<{ dispose(): void }[]>([]);
+  const cursorPositionsRef = useRef<CursorPositionStore>();
+  const cursorPositions = cursorPositionsRef.current ??= new CursorPositionStore({
+    read: (workspace) => readSetting(workspaceSettingKey(workspace, CURSOR_POSITIONS_SETTING)),
+    write: (workspace, value) => writeSetting(workspaceSettingKey(workspace, CURSOR_POSITIONS_SETTING), value)
+  });
 
   useEffect(() => {
     if (status !== "connected" || !workspaceOptionsReady || !workspaceKeyRef.current) return;
@@ -247,6 +253,7 @@ export function App() {
     if (javaRefreshTimer.current) clearTimeout(javaRefreshTimer.current);
     if (javaCheckTimer.current) clearTimeout(javaCheckTimer.current);
     if (diffRollbackTimer.current) clearTimeout(diffRollbackTimer.current);
+    cursorPositions.dispose();
     for (const disposable of javaLanguageDisposables.current) disposable.dispose();
   }, []);
 
@@ -493,6 +500,7 @@ export function App() {
         // Load workspace-specific settings
         const key = result.workspace;
         workspaceKeyRef.current = key;
+        cursorPositions.setWorkspace(result.workspace);
         const setting = (name: string) => readWorkspaceSetting(key, name);
         const wsTheme = setting("theme");
         if (wsTheme === "light" || wsTheme === "dark") setTheme(wsTheme);
@@ -569,6 +577,7 @@ export function App() {
     if (hasDirtyTabs && !window.confirm("Disconnect and discard unsaved changes?")) return;
     clientRef.current?.disconnect(); clientRef.current = undefined;
     workspaceKeyRef.current = "";
+    cursorPositions.setWorkspace("");
     setWorkspaceOptionsReady(false);
     setTasks([]); setSelectedTaskId(undefined);
     setJavaOptions(undefined); setJavaTree([]); setJavaRunning(false); setJavaLog("");
@@ -854,6 +863,7 @@ export function App() {
         setClassicSideView((current) => current === "taskGit" ? "project" : current);
       }
       setActiveWorkspace(result.workspace); activeWorkspaceRef.current = result.workspace;
+      cursorPositions.setWorkspace(result.workspace);
       setProjectName(result.projectName);
       setJavaOptions(result.options.javaProject); setJavaTree([]); setJavaRunning(false); setJavaLog(""); setJavaDiagnostics([]);
       if (result.options.javaProject) setJavaTree((await clientRef.current.request("java.getProjectTree", {})).tree);
@@ -1381,6 +1391,10 @@ export function App() {
     for (const disposable of javaLanguageDisposables.current) disposable.dispose();
     javaLanguageDisposables.current = [];
     if (activeTab?.type !== "file" && activeTab?.type !== "useful" && activeTab?.type !== "agent") return;
+    const model = instance.getModel();
+    const savedCursor = model ? validateCursorPosition(cursorPositions.get(activeTab), model) : undefined;
+    if (savedCursor) instance.setPosition(savedCursor);
+    javaLanguageDisposables.current.push(instance.onDidChangeCursorPosition((event) => cursorPositions.update(activeTab, event.position)));
     const filePath = activeTab.path;
     if (activeTab.type === "file") javaLanguageDisposables.current.push(instance.onContextMenu((event) => {
       event.event.preventDefault();
@@ -1455,6 +1469,13 @@ export function App() {
 
   const mountWorkingDiff = (instance: editor.IStandaloneDiffEditor) => {
     monacoDiffEditorRef.current = instance;
+    if (activeTab?.type === "diff") {
+      const modifiedEditor = instance.getModifiedEditor();
+      const model = modifiedEditor.getModel();
+      const savedCursor = model ? validateCursorPosition(cursorPositions.get(activeTab), model) : undefined;
+      if (savedCursor) modifiedEditor.setPosition(savedCursor);
+      modifiedEditor.onDidChangeCursorPosition((event) => cursorPositions.update(activeTab, event.position));
+    }
     instance.getModifiedEditor().onDidChangeModelContent(() => {
       if (diffRollbackTimer.current) clearTimeout(diffRollbackTimer.current);
       diffRollbackTimer.current = setTimeout(async () => {
