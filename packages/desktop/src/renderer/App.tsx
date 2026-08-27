@@ -17,6 +17,7 @@ import { AiPanel, type AiAttachment } from "./AiPanel";
 import type { PermissionRequestOwner } from "./PermissionRequestActions";
 import { openTaskFromSummary } from "./permission-navigation";
 import { configureMonacoThemes, monacoTheme, type HighlightTheme } from "./theme";
+import { CURSOR_POSITIONS_SETTING, CursorPositionStore, validateCursorPosition } from "./cursor-state";
 
 type ConnectionStatus = "idle" | "connecting" | "connected" | "failed" | "disconnected" | "workspace-error";
 type StatusKind = "progress" | "success" | "error";
@@ -203,6 +204,11 @@ export function App() {
   const activeGitHunksRef = useRef<GitDiffHunk[]>([]);
   const diffRollbackTimer = useRef<ReturnType<typeof setTimeout>>();
   const javaLanguageDisposables = useRef<{ dispose(): void }[]>([]);
+  const cursorPositionsRef = useRef<CursorPositionStore>();
+  const cursorPositions = cursorPositionsRef.current ??= new CursorPositionStore({
+    read: (workspace) => readSetting(workspaceSettingKey(workspace, CURSOR_POSITIONS_SETTING)),
+    write: (workspace, value) => writeSetting(workspaceSettingKey(workspace, CURSOR_POSITIONS_SETTING), value)
+  });
 
   useEffect(() => {
     if (status !== "connected" || !workspaceOptionsReady || !workspaceKeyRef.current) return;
@@ -249,6 +255,7 @@ export function App() {
     if (javaRefreshTimer.current) clearTimeout(javaRefreshTimer.current);
     if (javaCheckTimer.current) clearTimeout(javaCheckTimer.current);
     if (diffRollbackTimer.current) clearTimeout(diffRollbackTimer.current);
+    cursorPositions.dispose();
     for (const disposable of javaLanguageDisposables.current) disposable.dispose();
   }, []);
 
@@ -277,7 +284,7 @@ export function App() {
     if (!writer) { terminalWriters.current.delete(terminalId); return; }
     terminalWriters.current.set(terminalId, writer);
     const buffered = terminalBuffers.current.get(terminalId);
-    if (buffered) { writer(buffered); terminalBuffers.current.delete(terminalId); }
+    if (buffered) writer(buffered);
   }, []);
 
   const refreshGit = useCallback(async (client = clientRef.current) => {
@@ -368,12 +375,22 @@ export function App() {
       }
     }));
     const activeTabId = tabs.find((tab) => tab.path === options.activeFile)?.id ?? tabs[0]?.id;
-    const restoredTerminals = (await Promise.all((options.terminal?.tabs ?? []).map(async (saved, index) => {
+    const restoredTerminals = await Promise.all((options.terminal?.tabs ?? []).map(async (saved, index) => {
       try {
-        const result = await client.request("terminal.create", { cols: 80, rows: 24 });
-        return { index, tab: { id: crypto.randomUUID(), terminalId: result.terminalId, title: saved.title, exited: false } };
-      } catch { return undefined; }
-    }))).filter((item): item is NonNullable<typeof item> => Boolean(item));
+        const session = saved.terminalId ? (await client.request("terminal.attach", { terminalId: saved.terminalId })).session : await client.request("terminal.create", { cols: 80, rows: 24 });
+        if (!session) {
+          const terminalId = saved.terminalId!;
+          terminalBuffers.current.set(terminalId, "\r\n[terminal session is no longer available]\r\n");
+          return { index, tab: { id: crypto.randomUUID(), terminalId, title: saved.title, status: "unavailable" as const } };
+        }
+        terminalBuffers.current.set(session.terminalId, `${session.output}${session.status === "exited" ? `\r\n[process exited${session.exitCode === undefined ? "" : ` with code ${session.exitCode}`}]\r\n` : ""}`);
+        return { index, tab: { id: crypto.randomUUID(), terminalId: session.terminalId, title: saved.title, status: session.status } };
+      } catch {
+        const terminalId = saved.terminalId ?? crypto.randomUUID();
+        terminalBuffers.current.set(terminalId, "\r\n[terminal session could not be restored]\r\n");
+        return { index, tab: { id: crypto.randomUUID(), terminalId, title: saved.title, status: "unavailable" as const } };
+      }
+    }));
     const activeTerminal = restoredTerminals.find((item) => item.index === options.terminal?.activeTabIndex)?.tab ?? restoredTerminals[0]?.tab;
     const savedBottomPanel = workspaceKeyRef.current ? readWorkspaceSetting(workspaceKeyRef.current, "bottom.activePanel") : null;
     const validBottomPanel = savedBottomPanel === "gitlog"
@@ -398,15 +415,17 @@ export function App() {
     client.onDisconnected = (message) => { setStatus("disconnected"); setStatusMessage(message); };
     client.onServerEvent = (event) => {
       if (event.type === "terminal.output") {
+        terminalBuffers.current.set(event.payload.terminalId, ((terminalBuffers.current.get(event.payload.terminalId) ?? "") + event.payload.data).slice(-1_000_000));
         const writer = terminalWriters.current.get(event.payload.terminalId);
         if (writer) writer(event.payload.data);
-        else terminalBuffers.current.set(event.payload.terminalId, (terminalBuffers.current.get(event.payload.terminalId) ?? "") + event.payload.data);
         return;
       }
       if (event.type === "terminal.exit") {
+        const exitMessage = `\r\n[process exited with code ${event.payload.exitCode}]\r\n`;
+        terminalBuffers.current.set(event.payload.terminalId, ((terminalBuffers.current.get(event.payload.terminalId) ?? "") + exitMessage).slice(-1_000_000));
         const writer = terminalWriters.current.get(event.payload.terminalId);
-        writer?.(`\r\n[process exited with code ${event.payload.exitCode}]\r\n`);
-        updateTerminalGroup((current) => ({ ...current, tabs: current.tabs.map((tab) => tab.terminalId === event.payload.terminalId ? { ...tab, exited: true } : tab) }));
+        writer?.(exitMessage);
+        updateTerminalGroup((current) => ({ ...current, tabs: current.tabs.map((tab) => tab.terminalId === event.payload.terminalId ? { ...tab, status: "exited" } : tab) }));
         return;
       }
       if (event.type === "java.output") {
@@ -430,6 +449,10 @@ export function App() {
       }
       if (event.type === "tasks.changed") {
         void Promise.all([refreshTasks(client), refreshAiStatuses(client)]).catch(() => undefined);
+        return;
+      }
+      if (event.type === "commit-message.changed") {
+        if (event.payload.workspace === activeWorkspaceRef.current) setGitCommitMessage(event.payload.message);
         return;
       }
       if (gitRefreshTimer.current) clearTimeout(gitRefreshTimer.current);
@@ -495,6 +518,7 @@ export function App() {
         // Load workspace-specific settings
         const key = result.workspace;
         workspaceKeyRef.current = key;
+        cursorPositions.setWorkspace(result.workspace);
         const setting = (name: string) => readWorkspaceSetting(key, name);
         const wsTheme = setting("theme");
         if (wsTheme === "light" || wsTheme === "dark") setTheme(wsTheme);
@@ -571,6 +595,7 @@ export function App() {
     if (hasDirtyTabs && !window.confirm("Disconnect and discard unsaved changes?")) return;
     clientRef.current?.disconnect(); clientRef.current = undefined;
     workspaceKeyRef.current = "";
+    cursorPositions.setWorkspace("");
     setWorkspaceOptionsReady(false);
     setTasks([]); setSelectedTaskId(undefined);
     setJavaOptions(undefined); setJavaTree([]); setJavaRunning(false); setJavaLog("");
@@ -582,7 +607,7 @@ export function App() {
   const persistedActiveTab = activeTab?.type === "file" ? activeTab : undefined;
   const terminalPanelOpen = layout.panels.some((panel) => panel.type === "terminal");
   const activeTerminalIndex = layout.terminalGroup.tabs.findIndex((tab) => tab.id === layout.terminalGroup.activeTabId);
-  const terminalOptions: NonNullable<WorkspaceOptions["terminal"]> = { tabs: layout.terminalGroup.tabs.map((tab) => ({ title: tab.title })), ...(activeTerminalIndex >= 0 ? { activeTabIndex: activeTerminalIndex } : {}), panelOpen: terminalPanelOpen };
+  const terminalOptions: NonNullable<WorkspaceOptions["terminal"]> = { tabs: layout.terminalGroup.tabs.map((tab) => ({ title: tab.title, terminalId: tab.terminalId })), ...(activeTerminalIndex >= 0 ? { activeTabIndex: activeTerminalIndex } : {}), panelOpen: terminalPanelOpen };
   const workspaceOptionsSignature = `${persistedFileTabs.map((tab) => tab.path).join("\0")}\n${persistedActiveTab?.path ?? ""}\n${JSON.stringify(javaOptions)}\n${JSON.stringify(terminalOptions)}\n${JSON.stringify(fileColors)}\n${gitCommitMessage}`;
   useEffect(() => {
     if (status !== "connected" || !workspaceOptionsReady || !clientRef.current) return;
@@ -846,7 +871,7 @@ export function App() {
       const currentFiles = currentGroup.tabs.filter((tab) => tab.type === "file");
       const currentTerminal = layoutRef.current.terminalGroup;
       const currentActiveTerminalIndex = currentTerminal.tabs.findIndex((tab) => tab.id === currentTerminal.activeTabId);
-      await clientRef.current.request("workspace.saveOptions", { options: { openFiles: currentFiles.map((tab) => tab.path), ...(currentFiles.find((tab) => tab.id === currentGroup.activeTabId) ? { activeFile: currentFiles.find((tab) => tab.id === currentGroup.activeTabId)!.path } : {}), ...(javaOptionsRef.current ? { javaProject: javaOptionsRef.current } : {}), terminal: { tabs: currentTerminal.tabs.map((tab) => ({ title: tab.title })), ...(currentActiveTerminalIndex >= 0 ? { activeTabIndex: currentActiveTerminalIndex } : {}), panelOpen: layoutRef.current.panels.some((panel) => panel.type === "terminal") }, ...(Object.keys(fileColors).length ? { fileColors } : {}), ...(gitCommitMessage ? { gitCommitMessage } : {}) } });
+      await clientRef.current.request("workspace.saveOptions", { options: { openFiles: currentFiles.map((tab) => tab.path), ...(currentFiles.find((tab) => tab.id === currentGroup.activeTabId) ? { activeFile: currentFiles.find((tab) => tab.id === currentGroup.activeTabId)!.path } : {}), ...(javaOptionsRef.current ? { javaProject: javaOptionsRef.current } : {}), terminal: { tabs: currentTerminal.tabs.map((tab) => ({ title: tab.title, terminalId: tab.terminalId })), ...(currentActiveTerminalIndex >= 0 ? { activeTabIndex: currentActiveTerminalIndex } : {}), panelOpen: layoutRef.current.panels.some((panel) => panel.type === "terminal") }, ...(Object.keys(fileColors).length ? { fileColors } : {}), ...(gitCommitMessage ? { gitCommitMessage } : {}) } });
       const result = await clientRef.current.request("tasks.switch", { ...(taskId ? { taskId } : {}), includeIgnored: showIgnoredRef.current });
       terminalWriters.current.clear(); terminalBuffers.current.clear(); markdownBlockTerminals.current.clear();
       setLayout((current) => ({ ...current, panels: current.panels.filter((panel) => !["terminal", "java", "problems"].includes(panel.type)), terminalGroup: { ...current.terminalGroup, tabs: [], activeTabId: undefined } }));
@@ -856,6 +881,7 @@ export function App() {
         setClassicSideView((current) => current === "taskGit" ? "project" : current);
       }
       setActiveWorkspace(result.workspace); activeWorkspaceRef.current = result.workspace;
+      cursorPositions.setWorkspace(result.workspace);
       setProjectName(result.projectName);
       setJavaOptions(result.options.javaProject); setJavaTree([]); setJavaRunning(false); setJavaLog(""); setJavaDiagnostics([]);
       if (result.options.javaProject) setJavaTree((await clientRef.current.request("java.getProjectTree", {})).tree);
@@ -1144,7 +1170,7 @@ export function App() {
       const result = await client.request("terminal.create", { cols: 80, rows: 24 });
       updateTerminalGroup((current) => {
         const id = crypto.randomUUID();
-        const tab = { id, terminalId: result.terminalId, title: `Terminal ${current.tabs.length + 1}`, exited: false };
+        const tab = { id, terminalId: result.terminalId, title: `Terminal ${current.tabs.length + 1}`, status: "running" as const };
         return { ...current, tabs: [...current.tabs, tab], activeTabId: id };
       });
       setLayout((current) => ({ ...current, panels: [...current.panels.filter((panel) => !["terminal", "java", "problems", "gitlog"].includes(panel.type)), { id: "terminal", type: "terminal" }] }));
@@ -1158,7 +1184,7 @@ export function App() {
 
   const runMarkdownCommand = async (blockId: string, command: string) => {
     const terminalId = markdownBlockTerminals.current.get(blockId);
-    const existing = terminalId ? layoutRef.current.terminalGroup.tabs.find((tab) => tab.terminalId === terminalId && !tab.exited) : undefined;
+    const existing = terminalId ? layoutRef.current.terminalGroup.tabs.find((tab) => tab.terminalId === terminalId && tab.status === "running") : undefined;
     if (existing && clientRef.current) {
       updateTerminalGroup((current) => ({ ...current, activeTabId: existing.id }));
       setLayout((current) => ({ ...current, panels: [...current.panels.filter((panel) => !["terminal", "java", "problems", "gitlog"].includes(panel.type)), { id: "terminal", type: "terminal" }] }));
@@ -1191,7 +1217,7 @@ export function App() {
   };
 
   const closeTerminal = (tab: LayoutModel["terminalGroup"]["tabs"][number]) => {
-    if (!tab.exited) void clientRef.current?.request("terminal.close", { terminalId: tab.terminalId }).catch(() => undefined);
+    if (tab.status !== "unavailable") void clientRef.current?.request("terminal.close", { terminalId: tab.terminalId }).catch(() => undefined);
     terminalBuffers.current.delete(tab.terminalId);
     for (const [blockId, terminalId] of markdownBlockTerminals.current) if (terminalId === tab.terminalId) markdownBlockTerminals.current.delete(blockId);
     setLayout((current) => {
@@ -1397,6 +1423,10 @@ export function App() {
     for (const disposable of javaLanguageDisposables.current) disposable.dispose();
     javaLanguageDisposables.current = [];
     if (activeTab?.type !== "file" && activeTab?.type !== "useful" && activeTab?.type !== "agent") return;
+    const model = instance.getModel();
+    const savedCursor = model ? validateCursorPosition(cursorPositions.get(activeTab), model) : undefined;
+    if (savedCursor) instance.setPosition(savedCursor);
+    javaLanguageDisposables.current.push(instance.onDidChangeCursorPosition((event) => cursorPositions.update(activeTab, event.position)));
     const filePath = activeTab.path;
     if (activeTab.type === "file") javaLanguageDisposables.current.push(instance.onContextMenu((event) => {
       event.event.preventDefault();
@@ -1471,6 +1501,13 @@ export function App() {
 
   const mountWorkingDiff = (instance: editor.IStandaloneDiffEditor) => {
     monacoDiffEditorRef.current = instance;
+    if (activeTab?.type === "diff") {
+      const modifiedEditor = instance.getModifiedEditor();
+      const model = modifiedEditor.getModel();
+      const savedCursor = model ? validateCursorPosition(cursorPositions.get(activeTab), model) : undefined;
+      if (savedCursor) modifiedEditor.setPosition(savedCursor);
+      modifiedEditor.onDidChangeCursorPosition((event) => cursorPositions.update(activeTab, event.position));
+    }
     instance.getModifiedEditor().onDidChangeModelContent(() => {
       if (diffRollbackTimer.current) clearTimeout(diffRollbackTimer.current);
       diffRollbackTimer.current = setTimeout(async () => {

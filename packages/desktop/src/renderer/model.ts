@@ -19,7 +19,7 @@ export type EditorTab = {
   agentScope?: "global" | "local";
 };
 export type EditorGroup = { id: string; tabs: EditorTab[]; activeTabId?: string };
-export type TerminalTab = { id: string; terminalId: string; title: string; exited: boolean };
+export type TerminalTab = { id: string; terminalId: string; title: string; status: "running" | "exited" | "unavailable" };
 export type TerminalGroup = { id: string; tabs: TerminalTab[]; activeTabId?: string };
 export type LayoutModel = { panels: Panel[]; editorGroups: EditorGroup[]; terminalGroup: TerminalGroup };
 

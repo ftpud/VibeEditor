@@ -35,4 +35,12 @@ describe("AppEventBridge", () => {
     await expect(readdir(owner.commandsDirectory)).resolves.toEqual([]);
     await expect(readdir(owner.responsesDirectory)).resolves.toEqual([]);
   });
+
+  it("passes commit message changes with their task workspace", async () => {
+    const state = await mkdtemp(path.join(os.tmpdir(), "vibe-editor-events-"));
+    const bridge = new AppEventBridge("/workspace", state);
+    await bridge.emit({ type: "commit-message.changed", workspace: "/workspace/task", message: "Subject\n\nBody" });
+    const [file] = await readdir(bridge.directory);
+    await expect(bridge.consume(path.join(bridge.directory, file!))).resolves.toEqual({ type: "commit-message.changed", workspace: "/workspace/task", message: "Subject\n\nBody" });
+  });
 });

@@ -3,8 +3,11 @@ import os from "node:os";
 import path from "node:path";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 
-export type AppEvent = { type: "tasks.changed" } | { type: "ai.changed"; workspace: string };
-export type AppCommand = { name: string; args: Record<string, unknown> };
+export type AppEvent =
+  | { type: "tasks.changed" }
+  | { type: "ai.changed"; workspace: string }
+  | { type: "commit-message.changed"; workspace: string; message: string };
+export type AppCommand = { name: string; args: Record<string, unknown>; currentWorkspace?: string };
 
 export class AppEventBridge {
   readonly directory: string;
@@ -31,6 +34,7 @@ export class AppEventBridge {
       const value = JSON.parse(await readFile(file, "utf8")) as Partial<AppEvent>;
       if (value.type === "tasks.changed") return { type: value.type };
       if (value.type === "ai.changed" && typeof value.workspace === "string") return { type: value.type, workspace: value.workspace };
+      if (value.type === "commit-message.changed" && typeof value.workspace === "string" && typeof value.message === "string") return { type: value.type, workspace: value.workspace, message: value.message };
       return undefined;
     } finally { await rm(file, { force: true }).catch(() => undefined); }
   }

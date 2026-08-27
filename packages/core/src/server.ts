@@ -7,7 +7,7 @@ import { promisify } from "node:util";
 import { requestTypes, type FileChangeKind, type Request, type RequestType, type Response, type ServerEvent } from "@remote-ide/protocol";
 import { CoreError } from "./errors.js";
 import { WorkspaceFileSystem } from "./filesystem.js";
-import { PtyProcessManager } from "./process-manager.js";
+import { TerminalSessionHost } from "./process-manager.js";
 import { GitService } from "./git.js";
 import { WorkspaceStateStore } from "./workspace-state.js";
 import { WorkspaceSearch } from "./search.js";
@@ -30,7 +30,6 @@ type SessionServices = {
   workspacePath: string;
   filesystem: WorkspaceFileSystem;
   search: WorkspaceSearch;
-  processManager: PtyProcessManager;
   git: GitService;
   java: JavaProjectService;
   jdt: JdtLanguageService;
@@ -59,6 +58,16 @@ export async function createServer(host: string, port: number, workspacePath: st
   });
   const server = new WebSocketServer({ host, port });
   const activeSessions = new Set<WebSocket>();
+  const terminalSubscriptions = new Map<WebSocket, { workspace: string; terminalIds: Set<string> }>();
+  const terminalHost = new TerminalSessionHost((event) => {
+    const message: ServerEvent = event.type === "output"
+      ? { type: "terminal.output", payload: { terminalId: event.terminalId, data: event.data } }
+      : { type: "terminal.exit", payload: { terminalId: event.terminalId, exitCode: event.exitCode } };
+    const encoded = JSON.stringify(message);
+    for (const [socket, subscription] of terminalSubscriptions) {
+      if (subscription.workspace === event.workspace && subscription.terminalIds.has(event.terminalId) && socket.readyState === WebSocket.OPEN) socket.send(encoded);
+    }
+  });
   const appEvents = new AppEventBridge(rootWorkspace);
   await appEvents.ready();
   const appEventWatcher = chokidar.watch(appEvents.directory, { ignoreInitial: true, depth: 0 });
@@ -66,7 +75,9 @@ export async function createServer(host: string, port: number, workspacePath: st
   appEventWatcher.on("add", (file) => {
     void appEvents.consume(file).then((event) => {
       if (!event) return;
-      const message: ServerEvent = event.type === "tasks.changed" ? { type: "tasks.changed", payload: {} } : { type: "ai.changed", payload: { workspace: event.workspace } };
+      const message: ServerEvent = event.type === "tasks.changed" ? { type: "tasks.changed", payload: {} }
+        : event.type === "ai.changed" ? { type: "ai.changed", payload: { workspace: event.workspace } }
+        : { type: "commit-message.changed", payload: { workspace: event.workspace, message: event.message } };
       const encoded = JSON.stringify(message);
       for (const socket of activeSessions) if (socket.readyState === WebSocket.OPEN) socket.send(encoded);
     }).catch((error) => console.error(`[core] app event error: ${error instanceof Error ? error.message : String(error)}`));
@@ -76,13 +87,25 @@ export async function createServer(host: string, port: number, workspacePath: st
     for (const socket of activeSessions) if (socket.readyState === WebSocket.OPEN) socket.send(encoded);
   };
   const acp = createAcpRegistry(aiChanged);
-  const appToolService = new AppToolService(tasks, acp, async () => {
+  const onTasksChanged = async () => {
     const encoded = JSON.stringify({ type: "tasks.changed", payload: {} } satisfies ServerEvent);
     for (const socket of activeSessions) if (socket.readyState === WebSocket.OPEN) socket.send(encoded);
-  });
+  };
+  const onCommitMessageChanged = async (changedWorkspace: string, message: string) => {
+    const encoded = JSON.stringify({ type: "commit-message.changed", payload: { workspace: changedWorkspace, message } } satisfies ServerEvent);
+    for (const socket of activeSessions) if (socket.readyState === WebSocket.OPEN) socket.send(encoded);
+  };
   const appCommandWatcher = chokidar.watch(appEvents.commandsDirectory, { ignoreInitial: true, depth: 0 });
   await new Promise<void>((resolve, reject) => { appCommandWatcher.once("ready", resolve); appCommandWatcher.once("error", reject); });
-  appCommandWatcher.on("add", (file) => { void appEvents.consumeCommand(file, (command) => appToolService.call(command.name, command.args)); });
+  appCommandWatcher.on("add", (file) => {
+    void appEvents.consumeCommand(file, (command) => new AppToolService(
+      tasks,
+      acp,
+      command.currentWorkspace ?? rootWorkspace,
+      onTasksChanged,
+      onCommitMessageChanged
+    ).call(command.name, command.args));
+  });
   const gitIndexWatcher = chokidar.watch(await gitIndexPath(workspace), { ignoreInitial: true });
   gitIndexWatcher.on("all", () => {
     const encoded = JSON.stringify({ type: "git.changed", payload: {} } satisfies ServerEvent);
@@ -105,7 +128,7 @@ export async function createServer(host: string, port: number, workspacePath: st
     .on("addDir", (directory) => broadcastChange("addDir", directory))
     .on("unlinkDir", (directory) => broadcastChange("unlinkDir", directory))
     .on("error", (error) => console.error(`[core] watcher error: ${String(error)}`));
-  server.on("close", () => { void watcher.close(); void gitIndexWatcher.close(); void appEventWatcher.close(); void appCommandWatcher.close(); });
+  server.on("close", () => { terminalHost.closeAll(); void watcher.close(); void gitIndexWatcher.close(); void appEventWatcher.close(); void appCommandWatcher.close(); });
   server.on("listening", () => console.log(`[core] listening on ws://${host}:${port}`));
   server.on("connection", (socket, request) => {
     const makeServices = async (nextWorkspace: string): Promise<SessionServices> => {
@@ -122,15 +145,9 @@ export async function createServer(host: string, port: number, workspacePath: st
       socket.send(JSON.stringify(message));
       });
       const jdt = new JdtLanguageService(filesystem);
-      const processManager = new PtyProcessManager(nextWorkspace, (event) => {
-      if (socket.readyState !== WebSocket.OPEN) return;
-      const message: ServerEvent = event.type === "output"
-        ? { type: "terminal.output", payload: { terminalId: event.terminalId, data: event.data } }
-        : { type: "terminal.exit", payload: { terminalId: event.terminalId, exitCode: event.exitCode } };
-      socket.send(JSON.stringify(message));
-      });
-      return { workspacePath: nextWorkspace, filesystem, search, git, java, jdt, processManager, workspaceState };
+      return { workspacePath: nextWorkspace, filesystem, search, git, java, jdt, workspaceState };
     };
+    terminalSubscriptions.set(socket, { workspace, terminalIds: new Set() });
     let servicesPromise = makeServices(workspace);
     /** Resolves once no task switch is in flight for this connection. */
     let switching: Promise<void> = Promise.resolve();
@@ -184,13 +201,18 @@ export async function createServer(host: string, port: number, workspacePath: st
           services = await servicesPromise;
           if (parsed.type === "tasks.switch" || (parsed.type === "tasks.delete" && (await tasks.list()).selectedTaskId === parsed.payload.taskId)) {
             const selected = await tasks.select(parsed.type === "tasks.switch" ? parsed.payload.taskId : undefined);
-            services.processManager.closeAll(); services.java.close(); services.jdt.close();
+            services.java.close(); services.jdt.close();
             servicesPromise = makeServices(selected.workspace);
             services = await servicesPromise;
+            terminalSubscriptions.set(socket, { workspace: selected.workspace, terminalIds: new Set() });
             await watchSwitchedWorkspace(selected.workspace);
           }
         } finally { release?.(); }
-        const result = await handleRequest(services, tasks, acp, usefulFiles, agents, rootWorkspace, parsed);
+        const result = await handleRequest(services, tasks, acp, usefulFiles, agents, terminalHost, rootWorkspace, parsed);
+        const terminalSubscription = terminalSubscriptions.get(socket);
+        if (terminalSubscription && parsed.type === "terminal.create") terminalSubscription.terminalIds.add((result as { terminalId: string }).terminalId);
+        if (terminalSubscription && parsed.type === "terminal.attach" && (result as { session?: { terminalId: string } }).session) terminalSubscription.terminalIds.add(parsed.payload.terminalId);
+        if (terminalSubscription && parsed.type === "terminal.close") terminalSubscription.terminalIds.delete(parsed.payload.terminalId);
         if (parsed.type === "workspace.open") activeSessions.add(socket);
         socket.send(JSON.stringify({ id, ok: true, result }));
       } catch (error) {
@@ -201,7 +223,8 @@ export async function createServer(host: string, port: number, workspacePath: st
     });
     socket.on("close", () => {
       activeSessions.delete(socket);
-      void servicesPromise.then((services) => { services.processManager.closeAll(); services.java.close(); services.jdt.close(); });
+      terminalSubscriptions.delete(socket);
+      void servicesPromise.then((services) => { services.java.close(); services.jdt.close(); });
       void switchedWatcher?.close();
       void switchedGitIndexWatcher?.close();
       console.log(`[core] disconnected: ${client}`);
@@ -227,8 +250,8 @@ function parseRequest(data: RawData): Request {
   return value as Request;
 }
 
-async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStore, acp: AcpRegistry, usefulFiles: UsefulFilesStore, agents: AgentsStore, rootWorkspace: string, request: Request): Promise<unknown> {
-  const { filesystem, search, processManager, git, java, jdt, workspaceState, workspacePath } = services;
+async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStore, acp: AcpRegistry, usefulFiles: UsefulFilesStore, agents: AgentsStore, terminalHost: TerminalSessionHost, rootWorkspace: string, request: Request): Promise<unknown> {
+  const { filesystem, search, git, java, jdt, workspaceState, workspacePath } = services;
   if (request.type !== "workspace.open") filesystem.getWorkspace();
   switch (request.type) {
     case "workspace.open": {
@@ -245,7 +268,7 @@ async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStor
       if (workspacePath !== rootWorkspace) throw new CoreError("INVALID_REQUEST", "New tasks can only be started from the root workspace");
       const task = await tasks.createRandom(false);
       try {
-        const appTools = withAppTools(rootWorkspace, request.payload.mcpServers, request.payload.agent);
+        const appTools = withAppTools(rootWorkspace, tasks.taskPath(task.id), request.payload.mcpServers, request.payload.agent);
         await acp.get(request.payload.provider).send(tasks.taskPath(task.id), {
           prompt: request.payload.prompt,
           content: request.payload.content,
@@ -260,7 +283,11 @@ async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStor
       }
     }
     case "tasks.merge": return tasks.merge(request.payload.taskId, request.payload.strategy);
-    case "tasks.delete": return tasks.delete(request.payload.taskId);
+    case "tasks.delete": {
+      const result = await tasks.delete(request.payload.taskId);
+      terminalHost.closeWorkspace(tasks.taskPath(request.payload.taskId));
+      return result;
+    }
     case "tasks.switch": {
       const registry = await tasks.list();
       return { workspace: workspacePath, projectName: path.basename(path.resolve(rootWorkspace)), tree: await filesystem.listTree(request.payload.includeIgnored === true), options: await workspaceState.load(), ...registry };
@@ -270,7 +297,7 @@ async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStor
     case "ai.models": return { models: await acp.get(request.payload.provider).models() };
     case "ai.configure": return { session: await acp.get(request.payload.provider).configure(workspacePath, { ...request.payload.configuration, ...(request.payload.model ? { model: request.payload.model } : {}), ...(request.payload.reasoning ? { reasoning: request.payload.reasoning } : {}) }) };
     case "ai.send": {
-      const appTools = withAppTools(rootWorkspace, request.payload.mcpServers, request.payload.agent);
+      const appTools = withAppTools(rootWorkspace, workspacePath, request.payload.mcpServers, request.payload.agent);
       return { session: await acp.get(request.payload.provider).send(workspacePath, { prompt: request.payload.prompt, content: request.payload.content, configuration: { ...request.payload.configuration, ...(request.payload.model ? { model: request.payload.model } : {}), ...(request.payload.reasoning ? { reasoning: request.payload.reasoning } : {}) }, mcpServers: appTools.servers, agent: appTools.agent }) };
     }
     case "ai.permission.resolve": {
@@ -326,21 +353,25 @@ async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStor
       return search.search(request.payload.query, request.payload.path, request.payload.matchCase);
     }
     case "terminal.create": {
-      return { terminalId: processManager.create(request.payload.cols, request.payload.rows) };
+      return terminalHost.create(workspacePath, request.payload.cols, request.payload.rows);
+    }
+    case "terminal.attach": {
+      if (typeof request.payload.terminalId !== "string") throw new CoreError("INVALID_REQUEST", "terminalId must be a string");
+      return { session: terminalHost.attach(workspacePath, request.payload.terminalId) };
     }
     case "terminal.input": {
       if (typeof request.payload.terminalId !== "string" || typeof request.payload.data !== "string") throw new CoreError("INVALID_REQUEST", "terminalId and data must be strings");
-      processManager.input(request.payload.terminalId, request.payload.data);
+      terminalHost.input(workspacePath, request.payload.terminalId, request.payload.data);
       return {};
     }
     case "terminal.resize": {
       if (typeof request.payload.terminalId !== "string") throw new CoreError("INVALID_REQUEST", "terminalId must be a string");
-      processManager.resize(request.payload.terminalId, request.payload.cols, request.payload.rows);
+      terminalHost.resize(workspacePath, request.payload.terminalId, request.payload.cols, request.payload.rows);
       return {};
     }
     case "terminal.close": {
       if (typeof request.payload.terminalId !== "string") throw new CoreError("INVALID_REQUEST", "terminalId must be a string");
-      processManager.close(request.payload.terminalId);
+      terminalHost.close(workspacePath, request.payload.terminalId);
       return {};
     }
     case "git.status": return git.status();
@@ -403,14 +434,14 @@ export async function permissionTargetWorkspace(tasks: Pick<WorkspaceTaskStore, 
   return tasks.taskPath(taskId);
 }
 
-export function withAppTools(rootWorkspace: string, servers?: AiMcpServer[], agent?: AiAgent): { servers: AiMcpServer[]; agent?: AiAgent } {
+export function withAppTools(rootWorkspace: string, currentWorkspace: string, servers?: AiMcpServer[], agent?: AiAgent): { servers: AiMcpServer[]; agent?: AiAgent } {
   if (!agent?.mcpServers?.includes("vibe-editor")) return { servers: servers ?? [], ...(agent ? { agent } : {}) };
   const compiled = fileURLToPath(new URL("app-tools.js", import.meta.url));
   const source = fileURLToPath(new URL("app-tools.ts", import.meta.url));
   const runningFromSource = import.meta.url.endsWith("/src/server.ts");
   const appServer: AiMcpServer = runningFromSource
-    ? { transport: "stdio", name: "vibe-editor", command: process.execPath, args: ["--import", "tsx", source], env: { VIBE_EDITOR_ROOT_WORKSPACE: rootWorkspace } }
-    : { transport: "stdio", name: "vibe-editor", command: process.execPath, args: [compiled], env: { VIBE_EDITOR_ROOT_WORKSPACE: rootWorkspace } };
+    ? { transport: "stdio", name: "vibe-editor", command: process.execPath, args: ["--import", "tsx", source], env: { VIBE_EDITOR_ROOT_WORKSPACE: rootWorkspace, VIBE_EDITOR_CURRENT_WORKSPACE: currentWorkspace } }
+    : { transport: "stdio", name: "vibe-editor", command: process.execPath, args: [compiled], env: { VIBE_EDITOR_ROOT_WORKSPACE: rootWorkspace, VIBE_EDITOR_CURRENT_WORKSPACE: currentWorkspace } };
   const filtered = (servers ?? []).filter((server) => server.name !== appServer.name);
   return { servers: [...filtered, appServer], agent };
 }

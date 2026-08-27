@@ -5,10 +5,38 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
 import { WorkspaceTaskStore } from "./tasks.js";
+import { WorkspaceStateStore } from "./workspace-state.js";
 
 const execFileAsync = promisify(execFile);
 
 describe("WorkspaceTaskStore", () => {
+  it("sets, overwrites, and isolates multiline commit message drafts by current task workspace", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "remote-ide-task-message-root-"));
+    const state = await mkdtemp(path.join(os.tmpdir(), "remote-ide-task-message-state-"));
+    await execFileAsync("git", ["init", root]);
+    await writeFile(path.join(root, "tracked.txt"), "root\n");
+    await execFileAsync("git", ["-C", root, "add", "tracked.txt"]);
+    await execFileAsync("git", ["-C", root, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "initial"]);
+    const store = new WorkspaceTaskStore(root, state);
+    const first = await store.create("feature/message-one", false, false, false);
+    const second = await store.create("feature/message-two", false, false, false);
+    const firstState = new WorkspaceStateStore(store.taskPath(first.id), state);
+    const secondState = new WorkspaceStateStore(store.taskPath(second.id), state);
+
+    await expect(store.setCommitMessage(store.taskPath(first.id), "Initial draft")).resolves.toMatchObject({ task: first, overwritten: false });
+    const multiline = "Subject\n\nBody line one\n  Body line two\n";
+    await expect(store.setCommitMessage(store.taskPath(first.id), multiline)).resolves.toEqual({ task: first, message: multiline, overwritten: true });
+    await expect(firstState.load()).resolves.toMatchObject({ gitCommitMessage: multiline });
+    await expect(secondState.load()).resolves.toEqual({ openFiles: [] });
+    await expect(store.setCommitMessage(root, "Wrong task")).rejects.toThrow("requires a current Vibe Editor task workspace");
+    await expect(store.setCommitMessage(store.taskPath(first.id), " \n\t ")).rejects.toThrow("must contain at least one non-whitespace character");
+    await expect(store.setCommitMessage(store.taskPath(first.id), "x".repeat(10_001))).rejects.toThrow("must be at most 10000 characters");
+    await expect(secondState.load()).resolves.toEqual({ openFiles: [] });
+
+    await store.delete(first.id);
+    await store.delete(second.id);
+  });
+
   it("creates a random task without changing the selected workspace", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "remote-ide-task-random-root-"));
     const state = await mkdtemp(path.join(os.tmpdir(), "remote-ide-task-random-state-"));

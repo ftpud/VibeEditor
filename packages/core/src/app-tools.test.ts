@@ -5,19 +5,29 @@ function harness() {
   const task = { id: "task-1", name: "feature/one", branch: "feature/one", baseBranch: "main" };
   const tasks = {
     create: vi.fn(async () => task), createRandom: vi.fn(async () => task), delete: vi.fn(async () => ({ tasks: [] })),
-    taskPath: vi.fn(() => "/tasks/task-1/workspace"), list: vi.fn(async () => ({ tasks: [task] }))
+    taskPath: vi.fn(() => "/tasks/task-1/workspace"), list: vi.fn(async () => ({ tasks: [task] })),
+    setCommitMessage: vi.fn(async (_workspace: string, message: string) => ({ task, message, overwritten: false }))
   };
   const session = { status: "in_progress", model: "gpt-5", messages: [{ id: "one", role: "assistant", text: "First", timestamp: "2026-01-01" }, { id: "two", role: "assistant", text: "Latest", timestamp: "2026-01-02" }], reasoning: "medium", configuration: { model: "gpt-5", reasoning: "medium" } };
   const provider = { send: vi.fn(async () => session), get: vi.fn(async () => session), steer: vi.fn(async () => session) };
   const acp = { get: vi.fn(() => provider), list: vi.fn(() => [{ id: "codex", name: "Codex" }]) };
   const onTasksChanged = vi.fn(async () => undefined);
-  return { service: new AppToolService(tasks as never, acp as never, onTasksChanged), tasks, provider, task, onTasksChanged };
+  const onCommitMessageChanged = vi.fn(async () => undefined);
+  return { service: new AppToolService(tasks as never, acp as never, "/tasks/task-1/workspace", onTasksChanged, onCommitMessageChanged), tasks, provider, task, onTasksChanged, onCommitMessageChanged };
 }
 
 describe("Vibe Editor app tools", () => {
   it("publishes the requested task commands and provider/model parameters", () => {
-    expect(appToolDefinitions.map((tool) => tool.name)).toEqual(["task_create", "task_create_and_start", "task_list", "task_delete", "task_ai_response_tail", "task_append_prompt"]);
+    expect(appToolDefinitions.map((tool) => tool.name)).toEqual(["task_create", "task_create_and_start", "task_list", "task_delete", "task_ai_response_tail", "task_append_prompt", "set_commit_message"]);
     expect(appToolDefinitions[1].inputSchema.required).toEqual(["prompt", "provider", "model"]);
+    expect(appToolDefinitions[6]).toMatchObject({
+      name: "set_commit_message",
+      inputSchema: {
+        additionalProperties: false,
+        required: ["message"],
+        properties: { message: { type: "string", minLength: 1, maxLength: 10_000, pattern: "\\S" } }
+      }
+    });
   });
 
   it("creates and starts a task with the requested provider and model", async () => {
@@ -69,5 +79,33 @@ describe("Vibe Editor app tools", () => {
     provider.get.mockResolvedValueOnce({ status: "done", model: "gpt-5", reasoning: "high", configuration: { model: "gpt-5", reasoning: "high" }, messages: [] });
     await service.call("task_append_prompt", { task_id: "task-1", provider: "codex", prompt: "Fix the remaining issue" });
     expect(provider.send).toHaveBeenCalledWith("/tasks/task-1/workspace", { prompt: "Fix the remaining issue", configuration: { model: "gpt-5", reasoning: "high" } });
+  });
+
+  it("sets and reports replacement of the current task commit message without committing", async () => {
+    const { service, tasks, task, onCommitMessageChanged } = harness();
+    await expect(service.call("set_commit_message", { message: "Add the first draft" })).resolves.toEqual({
+      task_id: task.id, message: "Add the first draft", overwritten: false, committed: false
+    });
+    expect(tasks.setCommitMessage).toHaveBeenCalledWith("/tasks/task-1/workspace", "Add the first draft");
+    expect(onCommitMessageChanged).toHaveBeenCalledWith("/tasks/task-1/workspace", "Add the first draft");
+
+    tasks.setCommitMessage.mockResolvedValueOnce({ task, message: "Replace the draft", overwritten: true });
+    await expect(service.call("set_commit_message", { message: "Replace the draft" })).resolves.toMatchObject({ overwritten: true, committed: false });
+  });
+
+  it("preserves multiline commit messages verbatim", async () => {
+    const { service, tasks } = harness();
+    const message = "Subject\n\nDetailed body.\n  Indented detail\n";
+    await service.call("set_commit_message", { message });
+    expect(tasks.setCommitMessage).toHaveBeenCalledWith("/tasks/task-1/workspace", message);
+  });
+
+  it("rejects missing, non-string, whitespace-only, and oversized commit messages", async () => {
+    const { service, tasks } = harness();
+    await expect(service.call("set_commit_message", {})).rejects.toThrow("message must contain at least one non-whitespace character");
+    await expect(service.call("set_commit_message", { message: 42 })).rejects.toThrow("message must contain at least one non-whitespace character");
+    await expect(service.call("set_commit_message", { message: " \n\t " })).rejects.toThrow("message must contain at least one non-whitespace character");
+    await expect(service.call("set_commit_message", { message: "x".repeat(10_001) })).rejects.toThrow("message must be at most 10000 characters");
+    expect(tasks.setCommitMessage).not.toHaveBeenCalled();
   });
 });

@@ -5,16 +5,18 @@ import { cp, lstat, mkdir, readdir, readFile, readlink, rename, rm, writeFile } 
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { CoreError } from "./errors.js";
+import { WorkspaceStateStore } from "./workspace-state.js";
 
 const execFileAsync = promisify(execFile);
 export type WorkspaceTask = { id: string; name: string; branch: string; baseBranch: string };
+export type TaskCommitMessageUpdate = { task: WorkspaceTask; message: string; overwritten: boolean };
 type Registry = { selectedTaskId?: string; tasks: WorkspaceTask[] };
 
 export class WorkspaceTaskStore {
   private readonly directory: string;
   private readonly registryFile: string;
 
-  constructor(private readonly rootWorkspace: string, stateDirectory = process.env.REMOTE_IDE_STATE_DIR ?? path.join(os.homedir(), ".remote-ide", "workspaces")) {
+  constructor(private readonly rootWorkspace: string, private readonly stateDirectory = process.env.REMOTE_IDE_STATE_DIR ?? path.join(os.homedir(), ".remote-ide", "workspaces")) {
     const key = crypto.createHash("sha256").update(rootWorkspace).digest("hex");
     this.directory = path.join(stateDirectory, `${key}-tasks`);
     this.registryFile = path.join(this.directory, "tasks.json");
@@ -87,6 +89,20 @@ export class WorkspaceTaskStore {
     const next = { tasks: registry.tasks, ...(taskId ? { selectedTaskId: taskId } : {}) };
     await this.save(next);
     return { workspace: taskId ? this.taskPath(taskId) : this.rootWorkspace, registry: next };
+  }
+
+  async setCommitMessage(workspace: string, message: string): Promise<TaskCommitMessageUpdate> {
+    if (typeof message !== "string" || !message.trim()) throw new CoreError("INVALID_REQUEST", "Commit message must contain at least one non-whitespace character");
+    if (message.length > 10_000) throw new CoreError("INVALID_REQUEST", "Commit message must be at most 10000 characters");
+    const registry = await this.list();
+    const resolvedWorkspace = path.resolve(workspace);
+    const task = registry.tasks.find((item) => path.resolve(this.taskPath(item.id)) === resolvedWorkspace);
+    if (!task) throw new CoreError("INVALID_REQUEST", "set_commit_message requires a current Vibe Editor task workspace");
+    const state = new WorkspaceStateStore(this.taskPath(task.id), this.stateDirectory);
+    const options = await state.load();
+    const overwritten = options.gitCommitMessage !== undefined;
+    await state.save({ ...options, gitCommitMessage: message });
+    return { task, message, overwritten };
   }
 
   async merge(taskId: string, strategy: "merge" | "smart" = "smart"): Promise<{ targetBranch: string }> {
