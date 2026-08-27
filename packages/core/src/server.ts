@@ -19,10 +19,8 @@ import { AgentsStore } from "./agents.js";
 import { executeHttpRequest } from "./http.js";
 import { summarizeAiSessions } from "./ai/summary.js";
 import { createAcpRegistry, type AcpRegistry } from "./ai/index.js";
-import type { AiAgent, AiMcpServer, AiProvider } from "@remote-ide/acp";
-import { fileURLToPath } from "node:url";
 import { AppEventBridge } from "./app-events.js";
-import { AppToolService } from "./app-tools.js";
+import { AppToolService, withAppTools } from "./app-tools.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -119,7 +117,9 @@ export async function createServer(host: string, port: number, workspacePath: st
       command.currentWorkspace ?? rootWorkspace,
       onTasksChanged,
       onCommitMessageChanged,
-      command.currentProvider
+      command.currentProvider,
+      agents,
+      rootWorkspace
     ).call(command.name, command.args));
   });
   const gitIndexWatcher = chokidar.watch(await gitIndexPath(workspace), { ignoreInitial: true });
@@ -452,16 +452,4 @@ export async function permissionTargetWorkspace(tasks: Pick<WorkspaceTaskStore, 
   if (!taskId) return rootWorkspace;
   if (!(await tasks.list()).tasks.some((task) => task.id === taskId)) throw new CoreError("INVALID_REQUEST", "Task does not exist");
   return tasks.taskPath(taskId);
-}
-
-export function withAppTools(rootWorkspace: string, currentWorkspace: string, servers?: AiMcpServer[], agent?: AiAgent, currentProvider?: AiProvider): { servers: AiMcpServer[]; agent?: AiAgent } {
-  if (!agent?.mcpServers?.includes("vibe-editor")) return { servers: servers ?? [], ...(agent ? { agent } : {}) };
-  const compiled = fileURLToPath(new URL("app-tools.js", import.meta.url));
-  const source = fileURLToPath(new URL("app-tools.ts", import.meta.url));
-  const runningFromSource = import.meta.url.endsWith("/src/server.ts");
-  const appServer: AiMcpServer = runningFromSource
-    ? { transport: "stdio", name: "vibe-editor", command: process.execPath, args: ["--import", "tsx", source], env: { VIBE_EDITOR_ROOT_WORKSPACE: rootWorkspace, VIBE_EDITOR_CURRENT_WORKSPACE: currentWorkspace, ...(currentProvider ? { VIBE_EDITOR_CURRENT_PROVIDER: currentProvider } : {}) } }
-    : { transport: "stdio", name: "vibe-editor", command: process.execPath, args: [compiled], env: { VIBE_EDITOR_ROOT_WORKSPACE: rootWorkspace, VIBE_EDITOR_CURRENT_WORKSPACE: currentWorkspace, ...(currentProvider ? { VIBE_EDITOR_CURRENT_PROVIDER: currentProvider } : {}) } };
-  const filtered = (servers ?? []).filter((server) => server.name !== appServer.name);
-  return { servers: [...filtered, appServer], agent };
 }

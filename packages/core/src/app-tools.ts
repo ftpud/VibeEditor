@@ -1,10 +1,13 @@
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { createInterface } from "node:readline";
-import { findAutopilotOption, type AiConfiguration, type AiOption, type AiProvider, type AiSession } from "@remote-ide/acp";
+import { findAutopilotOption, type AiAgent, type AiConfiguration, type AiMcpServer, type AiModel, type AiOption, type AiProvider, type AiSession } from "@remote-ide/acp";
+import type { AgentFileReference } from "@remote-ide/protocol";
 import { WorkspaceTaskStore, type WorkspaceTask } from "./tasks.js";
 import type { AcpRegistry } from "./ai/index.js";
 import { summarizeAiSessions } from "./ai/summary.js";
 import { AppEventBridge } from "./app-events.js";
+import type { AgentsStore } from "./agents.js";
+import { agentFingerprint } from "./agent-profile.js";
 
 type ToolResult = { content: { type: "text"; text: string }[]; isError?: boolean };
 
@@ -20,14 +23,29 @@ export const appToolDefinitions = [
   },
   {
     name: "task_create_and_start",
-    description: "Create an isolated Vibe Editor task and start an AI agent in it.",
+    description: "Create an isolated Vibe Editor task and start a provider/model session in it, optionally selecting an agent preset and reasoning effort.",
     inputSchema: {
       type: "object", additionalProperties: false,
       properties: {
         branch: { type: "string", description: "Git branch name for the task. Omit to generate one." },
-        prompt: { type: "string", description: "Work to give the new task's agent." },
+        prompt: { type: "string", description: "Work to give the new task's AI session." },
         provider: { type: "string", description: "AI provider id, for example codex or copilot." },
-        model: { type: "string", description: "Model id supported by the selected provider." }
+        model: { type: "string", description: "Model id supported by the selected provider." },
+        agent: {
+          oneOf: [
+            {
+              type: "object", additionalProperties: false,
+              properties: {
+                scope: { type: "string", enum: ["global", "local", "workspace"], description: "Configured agent-preset scope." },
+                name: { type: "string", minLength: 1, description: "Agent preset Markdown file name, for example reviewer.md." }
+              },
+              required: ["scope", "name"]
+            },
+            { type: "null" }
+          ],
+          description: "Configured agent preset to apply. Omit to inherit the invoking session's preset; pass null to start with no agent preset. This does not select the AI provider."
+        },
+        reasoning: { type: "string", minLength: 1, description: "Reasoning effort advertised for the selected model, for example low, medium, or high. Omit to use the provider/model default." }
       },
       required: ["prompt", "provider", "model"]
     }
@@ -104,7 +122,9 @@ export class AppToolService {
     private readonly currentWorkspace: string,
     private readonly onTasksChanged: () => Promise<void> = async () => undefined,
     private readonly onCommitMessageChanged: (workspace: string, message: string) => Promise<void> = async () => undefined,
-    private readonly currentProvider?: AiProvider
+    private readonly currentProvider?: AiProvider,
+    private readonly agents?: Pick<AgentsStore, "list">,
+    private readonly rootWorkspace?: string
   ) {}
 
   async call(name: string, args: Record<string, unknown>): Promise<unknown> {
@@ -118,14 +138,20 @@ export class AppToolService {
       const provider = requiredString(args, "provider") as AiProvider;
       const model = requiredString(args, "model");
       const branch = optionalString(args, "branch");
+      const requestedAgent = agentReference(args);
+      const reasoning = optionalString(args, "reasoning");
+      const manager = this.acp.get(provider);
+      const parentManager = this.acp.get(this.currentProvider ?? provider);
+      const parent = await parentManager.get(this.currentWorkspace);
+      const selectedAgent = await this.resolveAgent(requestedAgent, parent);
+      if (reasoning !== undefined) await validateReasoning(await manager.models(), model, reasoning);
+      const configuration: AiConfiguration = { ...inheritedAutopilot(parentManager.descriptor.options, parent, manager.descriptor.options), model, ...(reasoning !== undefined ? { reasoning } : {}) };
       const task = branch ? await this.tasks.create(branch, false, false, false) : await this.tasks.createRandom(false);
       await this.onTasksChanged();
       try {
-        const manager = this.acp.get(provider);
-        const parentManager = this.acp.get(this.currentProvider ?? provider);
-        const parent = await parentManager.get(this.currentWorkspace);
-        const configuration: AiConfiguration = { ...inheritedAutopilot(parentManager.descriptor.options, parent, manager.descriptor.options), model };
-        const session = await manager.send(this.tasks.taskPath(task.id), { prompt, configuration });
+        const workspace = this.tasks.taskPath(task.id);
+        const appTools = this.rootWorkspace ? withAppTools(this.rootWorkspace, workspace, [], selectedAgent, provider) : { servers: [], agent: selectedAgent };
+        const session = await manager.send(workspace, { prompt, configuration, ...(appTools.servers.length > 0 ? { mcpServers: appTools.servers } : {}), ...(appTools.agent ? { agent: appTools.agent } : {}) });
         return { task, session: { status: session.status, model: session.model } };
       } catch (error) {
         await this.tasks.delete(task.id).catch(() => undefined);
@@ -197,6 +223,46 @@ export class AppToolService {
     const summary = summarizeAiSessions(sessions);
     return { status: summary.status, providers: Object.fromEntries(this.acp.list().map((provider, index) => [provider.id, sessions[index]!.status])) };
   }
+
+  private async resolveAgent(requested: AgentFileReference | null | undefined, parent: AiSession): Promise<AiAgent | undefined> {
+    if (requested === null) return undefined;
+    if (!this.agents) {
+      if (requested !== undefined || parent.agent) throw new Error("Agent presets are not available");
+      return undefined;
+    }
+    const configured = await this.agents.list(this.currentWorkspace);
+    if (requested) {
+      const match = configured.find((file) => file.scope === requested.scope && file.name === requested.name);
+      if (!match) throw new Error(`Agent preset '${requested.scope}:${requested.name}' does not exist`);
+      return match.agent;
+    }
+    if (!parent.agent) return undefined;
+    const inherited = configured.find((file) => file.agent.name === parent.agent!.name && agentFingerprint(file.agent) === parent.agent!.fingerprint);
+    if (!inherited) throw new Error(`Invoking agent preset '${parent.agent.name}' is no longer available; pass agent: null to start without it`);
+    return inherited.agent;
+  }
+}
+
+type AgentArgument = AgentFileReference | null | undefined;
+
+function agentReference(args: Record<string, unknown>): AgentArgument {
+  if (!("agent" in args)) return undefined;
+  const value = args.agent;
+  if (value === null) return null;
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("agent must be a configured agent reference or null");
+  const record = value as Record<string, unknown>;
+  if (Object.keys(record).some((key) => key !== "scope" && key !== "name")) throw new Error("agent contains unsupported properties");
+  if (record.scope !== "global" && record.scope !== "local" && record.scope !== "workspace") throw new Error("agent.scope must be global, local, or workspace");
+  return { scope: record.scope, name: requiredString(record, "name") };
+}
+
+async function validateReasoning(models: AiModel[], modelId: string, reasoning: string): Promise<void> {
+  const model = models.find((item) => item.id === modelId);
+  if (!model) throw new Error(`Model '${modelId}' is not advertised by the selected provider`);
+  if (!model.reasoningLevels.includes(reasoning)) {
+    const supported = model.reasoningLevels.length > 0 ? model.reasoningLevels.join(", ") : "none (omit reasoning to use this model)";
+    throw new Error(`reasoning '${reasoning}' is not supported by model '${modelId}'; supported values: ${supported}`);
+  }
 }
 
 function requiredString(args: Record<string, unknown>, key: string): string {
@@ -267,6 +333,18 @@ function inheritedAutopilot(parentOptions: AiOption[], parent: AiSession, childO
   const enabled = String(parentValue) === String(parentAutopilot.on);
   const childAutopilot = findAutopilotOption(childOptions) ?? parentAutopilot;
   return { [childAutopilot.option.id]: enabled ? childAutopilot.on : childAutopilot.off };
+}
+
+export function withAppTools(rootWorkspace: string, currentWorkspace: string, servers?: AiMcpServer[], agent?: AiAgent, currentProvider?: AiProvider): { servers: AiMcpServer[]; agent?: AiAgent } {
+  if (!agent?.mcpServers?.includes("vibe-editor")) return { servers: servers ?? [], ...(agent ? { agent } : {}) };
+  const compiled = fileURLToPath(new URL("app-tools.js", import.meta.url));
+  const source = fileURLToPath(new URL("app-tools.ts", import.meta.url));
+  const runningFromSource = import.meta.url.endsWith("/src/app-tools.ts");
+  const appServer: AiMcpServer = runningFromSource
+    ? { transport: "stdio", name: "vibe-editor", command: process.execPath, args: ["--import", "tsx", source], env: { VIBE_EDITOR_ROOT_WORKSPACE: rootWorkspace, VIBE_EDITOR_CURRENT_WORKSPACE: currentWorkspace, ...(currentProvider ? { VIBE_EDITOR_CURRENT_PROVIDER: currentProvider } : {}) } }
+    : { transport: "stdio", name: "vibe-editor", command: process.execPath, args: [compiled], env: { VIBE_EDITOR_ROOT_WORKSPACE: rootWorkspace, VIBE_EDITOR_CURRENT_WORKSPACE: currentWorkspace, ...(currentProvider ? { VIBE_EDITOR_CURRENT_PROVIDER: currentProvider } : {}) } };
+  const filtered = (servers ?? []).filter((server) => server.name !== appServer.name);
+  return { servers: [...filtered, appServer], agent };
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) void main();

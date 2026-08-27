@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import type { AiSession } from "@remote-ide/acp";
+import type { AgentFile } from "@remote-ide/protocol";
 import { AppToolService, appToolDefinitions } from "./app-tools.js";
+import { agentFingerprint } from "./agent-profile.js";
 
 function harness() {
   const task = { id: "task-1", name: "feature/one", branch: "feature/one", baseBranch: "main" };
@@ -15,18 +17,24 @@ function harness() {
   const session: AiSession = { status: "in_progress", model: "gpt-5", messages: [{ id: "one", role: "assistant", text: "First", timestamp: "2026-01-01" }, { id: "two", role: "assistant", text: "Latest", timestamp: "2026-01-02" }], reasoning: "medium", configuration: { model: "gpt-5", reasoning: "medium", mode: "agent-full-access" } };
   const provider = {
     descriptor: { options: [{ id: "mode", name: "Agent mode", description: "", type: "select", defaultValue: "agent", choices: [{ value: "read-only", name: "Read only" }, { value: "agent", name: "Workspace agent" }, { value: "agent-full-access", name: "Full access" }] }] },
-    send: vi.fn(async () => session), get: vi.fn(async () => session), steer: vi.fn(async () => session)
+    send: vi.fn(async () => session), get: vi.fn(async () => session), steer: vi.fn(async () => session),
+    models: vi.fn(async () => [{ id: "gpt-5", name: "GPT-5", defaultReasoning: "medium", reasoningLevels: ["low", "medium", "high"] }, { id: "child-model", name: "Child", defaultReasoning: "low", reasoningLevels: ["low", "high"] }])
   };
   const acp = { get: vi.fn(() => provider), list: vi.fn(() => [{ id: "codex", name: "Codex" }]) };
+  const agents = { list: vi.fn(async (): Promise<AgentFile[]> => []) };
   const onTasksChanged = vi.fn(async () => undefined);
   const onCommitMessageChanged = vi.fn(async () => undefined);
-  return { service: new AppToolService(tasks as never, acp as never, "/tasks/parent/workspace", onTasksChanged, onCommitMessageChanged), tasks, provider, task, onTasksChanged, onCommitMessageChanged };
+  return { service: new AppToolService(tasks as never, acp as never, "/tasks/parent/workspace", onTasksChanged, onCommitMessageChanged, undefined, agents as never, "/workspace"), tasks, provider, agents, task, onTasksChanged, onCommitMessageChanged };
 }
 
 describe("Vibe Editor app tools", () => {
-  it("publishes the requested task commands and provider/model parameters", () => {
+  it("publishes task start agent and reasoning parameters", () => {
     expect(appToolDefinitions.map((tool) => tool.name)).toEqual(["task_create", "task_create_and_start", "task_list", "task_delete", "task_ai_response_tail", "task_append_prompt", "set_commit_message", "task_update_commit_message"]);
     expect(appToolDefinitions[1].inputSchema.required).toEqual(["prompt", "provider", "model"]);
+    expect(appToolDefinitions[1].inputSchema.properties.agent).toMatchObject({
+      oneOf: [{ type: "object", required: ["scope", "name"] }, { type: "null" }]
+    });
+    expect(appToolDefinitions[1].inputSchema.properties.reasoning).toMatchObject({ type: "string", minLength: 1 });
     expect(appToolDefinitions[6]).toMatchObject({
       name: "set_commit_message",
       inputSchema: {
@@ -65,6 +73,61 @@ describe("Vibe Editor app tools", () => {
     expect(provider.send).toHaveBeenCalledWith("/tasks/task-1/workspace", { prompt: "Implement it", configuration: { mode: "agent", model: "child-model" } });
   });
 
+  it("applies a configured agent preset by scope and file name", async () => {
+    const { service, provider, agents } = harness();
+    const reviewer = { name: "Reviewer", instructions: "Review carefully." };
+    agents.list.mockResolvedValueOnce([{ scope: "workspace", name: "reviewer.md", agent: reviewer }]);
+
+    await service.call("task_create_and_start", { prompt: "Implement it", provider: "codex", model: "gpt-5", agent: { scope: "workspace", name: "reviewer.md" } });
+
+    expect(provider.send).toHaveBeenCalledWith("/tasks/task-1/workspace", expect.objectContaining({ agent: reviewer }));
+  });
+
+  it("inherits the invoking session's configured agent when agent is omitted", async () => {
+    const { service, provider, agents } = harness();
+    const coordinator = { name: "Coordinator", instructions: "Coordinate tasks.", mcpServers: ["vibe-editor"] };
+    provider.get.mockResolvedValueOnce({ ...await provider.get(), agent: { name: coordinator.name, fingerprint: agentFingerprint(coordinator) } });
+    agents.list.mockResolvedValueOnce([{ scope: "global", name: "coordinator.md", agent: coordinator }]);
+
+    await service.call("task_create_and_start", { prompt: "Implement it", provider: "codex", model: "gpt-5" });
+
+    expect(provider.send).toHaveBeenCalledWith("/tasks/task-1/workspace", expect.objectContaining({ agent: coordinator, mcpServers: [expect.objectContaining({ name: "vibe-editor" })] }));
+  });
+
+  it("uses explicit null to suppress inherited agent instructions", async () => {
+    const { service, provider, agents } = harness();
+    const coordinator = { name: "Coordinator", instructions: "Coordinate tasks." };
+    provider.get.mockResolvedValueOnce({ ...await provider.get(), agent: { name: coordinator.name, fingerprint: agentFingerprint(coordinator) } });
+    agents.list.mockResolvedValueOnce([{ scope: "global", name: "coordinator.md", agent: coordinator }]);
+
+    await service.call("task_create_and_start", { prompt: "Implement it", provider: "codex", model: "gpt-5", agent: null });
+
+    expect(provider.send).toHaveBeenCalledWith("/tasks/task-1/workspace", { prompt: "Implement it", configuration: { mode: "agent-full-access", model: "gpt-5" } });
+    expect(agents.list).not.toHaveBeenCalled();
+  });
+
+  it("forwards an advertised reasoning effort", async () => {
+    const { service, provider } = harness();
+    await service.call("task_create_and_start", { prompt: "Implement it", provider: "codex", model: "gpt-5", reasoning: "high" });
+    expect(provider.models).toHaveBeenCalledOnce();
+    expect(provider.send).toHaveBeenCalledWith("/tasks/task-1/workspace", { prompt: "Implement it", configuration: { mode: "agent-full-access", model: "gpt-5", reasoning: "high" } });
+  });
+
+  it("rejects reasoning not advertised for the selected model before creating a task", async () => {
+    const { service, tasks, provider } = harness();
+    await expect(service.call("task_create_and_start", { prompt: "Implement it", provider: "codex", model: "gpt-5", reasoning: "extreme" }))
+      .rejects.toThrow("reasoning 'extreme' is not supported by model 'gpt-5'; supported values: low, medium, high");
+    expect(tasks.createRandom).not.toHaveBeenCalled();
+    expect(provider.send).not.toHaveBeenCalled();
+  });
+
+  it("omits reasoning to preserve the provider/model default", async () => {
+    const { service, provider } = harness();
+    await service.call("task_create_and_start", { prompt: "Implement it", provider: "codex", model: "gpt-5" });
+    expect(provider.models).not.toHaveBeenCalled();
+    expect(provider.send).toHaveBeenCalledWith("/tasks/task-1/workspace", { prompt: "Implement it", configuration: { mode: "agent-full-access", model: "gpt-5" } });
+  });
+
   it("reads autopilot from the invoking provider while preserving the requested child provider", async () => {
     const { tasks, provider: child, onTasksChanged, onCommitMessageChanged } = harness();
     const parent = {
@@ -72,7 +135,7 @@ describe("Vibe Editor app tools", () => {
       get: vi.fn(async (): Promise<AiSession> => ({ status: "in_progress", model: "parent-model", reasoning: "high", configuration: { model: "parent-model", mode: "agent-full-access" }, messages: [] }))
     };
     const acp = { get: vi.fn((id: string) => id === "parent" ? parent : child), list: vi.fn(() => []) };
-    const service = new AppToolService(tasks as never, acp as never, "/tasks/parent/workspace", onTasksChanged, onCommitMessageChanged, "parent");
+    const service = new AppToolService(tasks as never, acp as never, "/tasks/parent/workspace", onTasksChanged, onCommitMessageChanged, "parent", { list: vi.fn(async () => []) } as never, "/workspace");
 
     await service.call("task_create_and_start", { prompt: "Implement it", provider: "child", model: "child-model" });
 

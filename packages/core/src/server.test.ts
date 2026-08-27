@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { WebSocket } from "ws";
-import { permissionTargetWorkspace, sendWebSocketData, withAppTools } from "./server.js";
+import { permissionTargetWorkspace, sendWebSocketData } from "./server.js";
+import { withAppTools } from "./app-tools.js";
 
 describe("built-in app tool access", () => {
   it("does not grant tools without an explicit agent allowlist entry", () => {

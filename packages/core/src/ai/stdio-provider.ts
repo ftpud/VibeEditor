@@ -8,6 +8,7 @@ import { Readable, Writable } from "node:stream";
 import { ClientSideConnection, PROTOCOL_VERSION, ndJsonStream, type Client, type ContentBlock, type McpServer, type RequestPermissionRequest, type RequestPermissionResponse, type SessionConfigOption, type SessionNotification } from "@agentclientprotocol/sdk";
 import { AcpProvider, applyConfiguration, type AcpSendRequest, type AiConfiguration, type AiContentBlock, type AiMessage, type AiModel, type AiModelDetails, type AiOption, type AiProviderDescriptor, type AiSession, type AiUsage } from "@remote-ide/acp";
 import { CoreError } from "../errors.js";
+import { agentFingerprint } from "../agent-profile.js";
 
 type ToolState = { title: string; name?: string; status?: string; command?: string; body: string[]; content: AiContentBlock[]; completion?: string };
 type Runtime = {
@@ -246,7 +247,7 @@ export abstract class StdioAcpProvider extends AcpProvider {
   /** Agent presets are durable session instructions, not per-turn user content. */
   private withSessionAgent(content: ContentBlock[], agent: AcpSendRequest["agent"] | undefined, session: AiSession): ContentBlock[] {
     if (!agent) { session.agent = undefined; return content; }
-    const fingerprint = crypto.createHash("sha256").update(JSON.stringify([agent.name, agent.description ?? "", agent.instructions.trim()])).digest("hex");
+    const fingerprint = agentFingerprint(agent);
     if (session.agent?.fingerprint === fingerprint) return content;
     session.agent = { name: agent.name, fingerprint };
     return this.withAgent(content, agent);

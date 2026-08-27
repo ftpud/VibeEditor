@@ -34,6 +34,7 @@ import type { AiAgent, AiConfiguration, AiContentBlock, AiMcpServer, AiModel, Ai
 export type UsefulFileScope = "global" | "local";
 export type UsefulFile = { scope: UsefulFileScope; name: string };
 export type AgentFileScope = "global" | "local" | "workspace";
+export type AgentFileReference = { scope: AgentFileScope; name: string };
 export type AgentFile = { scope: AgentFileScope; name: string; agent: AiAgent };
 export type HttpResponse = { status: number; statusText: string; headers: Record<string, string>; body: string; durationMs: number };
 
