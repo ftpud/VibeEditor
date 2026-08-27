@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { permissionTargetWorkspace, withAppTools } from "./server.js";
+import { WebSocket } from "ws";
+import { permissionTargetWorkspace, sendWebSocketData, withAppTools } from "./server.js";
 
 describe("built-in app tool access", () => {
   it("does not grant tools without an explicit agent allowlist entry", () => {
@@ -29,5 +30,33 @@ describe("permission request task routing", () => {
 
   it("rejects stale task ownership instead of falling back to the active workspace", async () => {
     await expect(permissionTargetWorkspace(tasks, "/root", "deleted-task")).rejects.toMatchObject({ code: "INVALID_REQUEST", message: "Task does not exist" });
+  });
+});
+
+describe("WebSocket stream delivery", () => {
+  it("drops a response that completes after the client disconnected", async () => {
+    let readyState: number = WebSocket.OPEN;
+    let finish!: () => void;
+    const operation = new Promise<void>((resolve) => { finish = resolve; });
+    const socket = {
+      get readyState() { return readyState; },
+      send: () => { throw new Error("WebSocket is not open"); }
+    } as unknown as WebSocket;
+
+    const lateResponse = operation.then(() => sendWebSocketData(socket, JSON.stringify({ id: "ai-send", ok: true, result: {} })));
+    readyState = WebSocket.CLOSED;
+    finish();
+
+    await expect(lateResponse).resolves.toBe(false);
+  });
+
+  it("contains a close race between the ready-state check and send", () => {
+    const socket = {
+      readyState: WebSocket.OPEN,
+      send: () => { throw new Error("WebSocket is not open: readyState 2 (CLOSING)"); }
+    } as unknown as WebSocket;
+
+    expect(() => sendWebSocketData(socket, "late event")).not.toThrow();
+    expect(sendWebSocketData(socket, "late event")).toBe(false);
   });
 });

@@ -5,7 +5,7 @@ import type { AgentFile, AgentFileScope, AiConfiguration, AiModel, AiProvider, A
 import type { editor } from "monaco-editor";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { CoreClient } from "./client";
+import { CoalescedAsyncAction, CoreClient } from "./client";
 import { readSetting, readSettingNumber, readWorkspaceSetting, workspaceSettingKey, writeSetting, writeWorkspaceSetting } from "./settings";
 import { initialLayout, type EditorTab, type LayoutModel, type Panel } from "./model";
 import { TerminalPanel } from "./TerminalPanel";
@@ -348,6 +348,14 @@ export function App() {
     const [session] = await Promise.all([client.request("ai.get", { provider: aiProviderRef.current }), refreshAiStatuses(client)]);
     applyAiSession(session.session, token);
   }, [aiToken, applyAiSession, refreshAiStatuses]);
+  const refreshAiRef = useRef(refreshAi);
+  const refreshAiStatusesRef = useRef(refreshAiStatuses);
+  refreshAiRef.current = refreshAi;
+  refreshAiStatusesRef.current = refreshAiStatuses;
+  const streamedAiRefresh = useRef<CoalescedAsyncAction>();
+  streamedAiRefresh.current ??= new CoalescedAsyncAction(async () => { await refreshAiRef.current(clientRef.current); });
+  const backgroundAiRefresh = useRef<CoalescedAsyncAction>();
+  backgroundAiRefresh.current ??= new CoalescedAsyncAction(async () => { await refreshAiStatusesRef.current(clientRef.current); });
   // The listing only changes when a conversation starts, is switched or is removed, so it is kept
   // out of `refreshAi`, which also runs for every chunk the agent streams.
   const refreshAiSessions = useCallback(async (client = clientRef.current) => {
@@ -417,7 +425,31 @@ export function App() {
     setWorkspaceOptionsReady(false);
     setStatus("connecting"); setStatusMessage("Connecting...");
     const client = new CoreClient();
-    client.onDisconnected = (message) => { setStatus("disconnected"); setStatusMessage(message); };
+    let connectionReady = false;
+    client.onDisconnected = (message) => {
+      if (!connectionReady || clientRef.current !== client) return;
+      showStatus(`${message}; reconnecting…`, "progress");
+      void (async () => {
+        let retryDelay = 250;
+        while (clientRef.current === client) {
+          await new Promise((resolve) => setTimeout(resolve, retryDelay));
+          if (clientRef.current !== client) return;
+          try {
+            await client.connect(host.trim(), Number(port));
+            if (clientRef.current !== client) { client.disconnect(); return; }
+            const result = await client.request("workspace.open", { includeIgnored: showIgnoredRef.current });
+            setActiveWorkspace(result.workspace); activeWorkspaceRef.current = result.workspace;
+            setTree(result.tree);
+            await Promise.all([refreshTasks(client), refreshAi(client)]);
+            showStatus("Backend connection restored", "success");
+            return;
+          } catch {
+            retryDelay = Math.min(retryDelay * 2, 5_000);
+            showStatus("Backend unavailable; retrying…", "progress");
+          }
+        }
+      })();
+    };
     client.onServerEvent = (event) => {
       if (event.type === "terminal.output") {
         terminalBuffers.current.set(event.payload.terminalId, ((terminalBuffers.current.get(event.payload.terminalId) ?? "") + event.payload.data).slice(-1_000_000));
@@ -448,8 +480,8 @@ export function App() {
         return;
       }
       if (event.type === "ai.changed") {
-        if (event.payload.workspace === activeWorkspaceRef.current) void refreshAi(client).catch(() => undefined);
-        else void refreshAiStatuses(client).catch(() => undefined);
+        if (event.payload.workspace === activeWorkspaceRef.current) streamedAiRefresh.current!.trigger();
+        else backgroundAiRefresh.current!.trigger();
         return;
       }
       if (event.type === "tasks.changed") {
@@ -579,11 +611,14 @@ export function App() {
         setAiSessions((await client.request("ai.sessions", { provider })).sessions);
         await refreshAiStatuses(client);
         await Promise.all([refreshUsefulFiles(client), refreshAgents(client, taskResult.selectedTaskId)]);
-        setTree(result.tree); setStatus("connected"); setStatusMessage("");
+        setTree(result.tree); connectionReady = true; setStatus("connected"); setStatusMessage("");
         void refreshGit(client); void refreshTaskGit(activeTaskRef.current, client);
         writeSetting("connection", JSON.stringify({ host, port }));
       } catch (error) {
-        client.disconnect(); setStatus("workspace-error"); setStatusMessage(error instanceof Error ? error.message : "Workspace could not be opened");
+        connectionReady = false;
+        client.disconnect();
+        if (clientRef.current === client) clientRef.current = undefined;
+        setStatus("workspace-error"); setStatusMessage(error instanceof Error ? error.message : "Workspace could not be opened");
       }
     } catch (error) {
       setStatus("failed"); setStatusMessage(error instanceof Error ? error.message : "Connection failed");

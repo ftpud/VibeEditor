@@ -36,6 +36,21 @@ type SessionServices = {
   workspaceState: WorkspaceStateStore;
 };
 
+/**
+ * `readyState` can change between the check and `send`. Supplying a callback keeps
+ * ws from surfacing that race as an uncaught error, while the try/catch also makes
+ * this safe for implementations that throw synchronously.
+ */
+export function sendWebSocketData(socket: WebSocket, data: string): boolean {
+  if (socket.readyState !== WebSocket.OPEN) return false;
+  try {
+    socket.send(data, () => undefined);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export async function createServer(host: string, port: number, workspacePath: string): Promise<WebSocketServer> {
   const rootWorkspace = workspacePath;
   const tasks = new WorkspaceTaskStore(rootWorkspace);
@@ -65,7 +80,7 @@ export async function createServer(host: string, port: number, workspacePath: st
       : { type: "terminal.exit", payload: { terminalId: event.terminalId, exitCode: event.exitCode } };
     const encoded = JSON.stringify(message);
     for (const [socket, subscription] of terminalSubscriptions) {
-      if (subscription.workspace === event.workspace && subscription.terminalIds.has(event.terminalId) && socket.readyState === WebSocket.OPEN) socket.send(encoded);
+      if (subscription.workspace === event.workspace && subscription.terminalIds.has(event.terminalId)) sendWebSocketData(socket, encoded);
     }
   });
   const appEvents = new AppEventBridge(rootWorkspace);
@@ -79,21 +94,21 @@ export async function createServer(host: string, port: number, workspacePath: st
         : event.type === "ai.changed" ? { type: "ai.changed", payload: { workspace: event.workspace } }
         : { type: "commit-message.changed", payload: { workspace: event.workspace, message: event.message } };
       const encoded = JSON.stringify(message);
-      for (const socket of activeSessions) if (socket.readyState === WebSocket.OPEN) socket.send(encoded);
+      for (const socket of activeSessions) sendWebSocketData(socket, encoded);
     }).catch((error) => console.error(`[core] app event error: ${error instanceof Error ? error.message : String(error)}`));
   });
   const aiChanged = (changedWorkspace: string) => {
     const encoded = JSON.stringify({ type: "ai.changed", payload: { workspace: changedWorkspace } } satisfies ServerEvent);
-    for (const socket of activeSessions) if (socket.readyState === WebSocket.OPEN) socket.send(encoded);
+    for (const socket of activeSessions) sendWebSocketData(socket, encoded);
   };
   const acp = createAcpRegistry(aiChanged);
   const onTasksChanged = async () => {
     const encoded = JSON.stringify({ type: "tasks.changed", payload: {} } satisfies ServerEvent);
-    for (const socket of activeSessions) if (socket.readyState === WebSocket.OPEN) socket.send(encoded);
+    for (const socket of activeSessions) sendWebSocketData(socket, encoded);
   };
   const onCommitMessageChanged = async (changedWorkspace: string, message: string) => {
     const encoded = JSON.stringify({ type: "commit-message.changed", payload: { workspace: changedWorkspace, message } } satisfies ServerEvent);
-    for (const socket of activeSessions) if (socket.readyState === WebSocket.OPEN) socket.send(encoded);
+    for (const socket of activeSessions) sendWebSocketData(socket, encoded);
   };
   const appCommandWatcher = chokidar.watch(appEvents.commandsDirectory, { ignoreInitial: true, depth: 0 });
   await new Promise<void>((resolve, reject) => { appCommandWatcher.once("ready", resolve); appCommandWatcher.once("error", reject); });
@@ -110,7 +125,7 @@ export async function createServer(host: string, port: number, workspacePath: st
   const gitIndexWatcher = chokidar.watch(await gitIndexPath(workspace), { ignoreInitial: true });
   gitIndexWatcher.on("all", () => {
     const encoded = JSON.stringify({ type: "git.changed", payload: {} } satisfies ServerEvent);
-    for (const socket of activeSessions) if (socket.readyState === WebSocket.OPEN) socket.send(encoded);
+    for (const socket of activeSessions) sendWebSocketData(socket, encoded);
   });
   const broadcastChange = (kind: FileChangeKind, absolutePath: string) => {
     const relativePath = absolutePath.slice(workspace.length + 1).split("\\").join("/");
@@ -118,7 +133,7 @@ export async function createServer(host: string, port: number, workspacePath: st
     const event: ServerEvent = { type: "filesystem.changed", payload: { path: relativePath, kind } };
     const encoded = JSON.stringify(event);
     for (const socket of activeSessions) {
-      if (socket.readyState === WebSocket.OPEN) socket.send(encoded);
+      sendWebSocketData(socket, encoded);
     }
     console.log(`[core] filesystem ${kind}: ${relativePath}`);
   };
@@ -143,7 +158,7 @@ export async function createServer(host: string, port: number, workspacePath: st
       const message: ServerEvent = event.type === "output" ? { type: "java.output", payload: { data: event.data } }
         : event.type === "debug" ? { type: "java.debug.state", payload: event.state }
         : { type: "java.exit", payload: { exitCode: event.exitCode, signal: event.signal } };
-      socket.send(JSON.stringify(message));
+      sendWebSocketData(socket, JSON.stringify(message));
       });
       const jdt = new JdtLanguageService(filesystem);
       return { workspacePath: nextWorkspace, filesystem, search, git, java, jdt, workspaceState };
@@ -172,13 +187,13 @@ export async function createServer(host: string, port: number, workspacePath: st
       });
       const sendChange = (kind: FileChangeKind, absolutePath: string) => {
         const relativePath = path.relative(nextWorkspace, absolutePath).split(path.sep).join("/");
-        if (!relativePath || socket.readyState !== WebSocket.OPEN) return;
-        socket.send(JSON.stringify({ type: "filesystem.changed", payload: { path: relativePath, kind } } satisfies ServerEvent));
+        if (!relativePath) return;
+        sendWebSocketData(socket, JSON.stringify({ type: "filesystem.changed", payload: { path: relativePath, kind } } satisfies ServerEvent));
       };
       switchedWatcher.on("add", (file) => sendChange("add", file)).on("change", (file) => sendChange("change", file)).on("unlink", (file) => sendChange("unlink", file)).on("addDir", (directory) => sendChange("addDir", directory)).on("unlinkDir", (directory) => sendChange("unlinkDir", directory));
       switchedGitIndexWatcher = chokidar.watch(await gitIndexPath(nextWorkspace), { ignoreInitial: true });
       switchedGitIndexWatcher.on("all", () => {
-        if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: "git.changed", payload: {} } satisfies ServerEvent));
+        sendWebSocketData(socket, JSON.stringify({ type: "git.changed", payload: {} } satisfies ServerEvent));
       });
       await watcherReady;
     };
@@ -215,11 +230,11 @@ export async function createServer(host: string, port: number, workspacePath: st
         if (terminalSubscription && parsed.type === "terminal.attach" && (result as { session?: { terminalId: string } }).session) terminalSubscription.terminalIds.add(parsed.payload.terminalId);
         if (terminalSubscription && parsed.type === "terminal.close") terminalSubscription.terminalIds.delete(parsed.payload.terminalId);
         if (parsed.type === "workspace.open") activeSessions.add(socket);
-        socket.send(JSON.stringify({ id, ok: true, result }));
+        sendWebSocketData(socket, JSON.stringify({ id, ok: true, result }));
       } catch (error) {
         const coreError = error instanceof CoreError ? error : new CoreError("INVALID_REQUEST", error instanceof Error ? error.message : "Invalid request");
         console.error(`[core] error ${id}: ${coreError.code} ${coreError.message}`);
-        socket.send(JSON.stringify({ id, ok: false, error: { code: coreError.code, message: coreError.message } } satisfies Response));
+        sendWebSocketData(socket, JSON.stringify({ id, ok: false, error: { code: coreError.code, message: coreError.message } } satisfies Response));
       }
     });
     socket.on("close", () => {
