@@ -71,11 +71,28 @@ export const appToolDefinitions = [
       },
       required: ["task_id", "provider", "prompt"]
     }
+  },
+  {
+    name: "set_commit_message",
+    description: "Set or replace the Git commit message draft for the current Vibe Editor task. Preserves multiline text and does not create a commit.",
+    inputSchema: {
+      type: "object", additionalProperties: false,
+      properties: {
+        message: { type: "string", minLength: 1, maxLength: 10_000, pattern: "\\S", description: "Commit message draft. May contain multiple lines; must contain at least one non-whitespace character." }
+      },
+      required: ["message"]
+    }
   }
 ] as const;
 
 export class AppToolService {
-  constructor(private readonly tasks: WorkspaceTaskStore, private readonly acp: AcpRegistry, private readonly onTasksChanged: () => Promise<void> = async () => undefined) {}
+  constructor(
+    private readonly tasks: WorkspaceTaskStore,
+    private readonly acp: AcpRegistry,
+    private readonly currentWorkspace: string,
+    private readonly onTasksChanged: () => Promise<void> = async () => undefined,
+    private readonly onCommitMessageChanged: (workspace: string, message: string) => Promise<void> = async () => undefined
+  ) {}
 
   async call(name: string, args: Record<string, unknown>): Promise<unknown> {
     if (name === "task_create") {
@@ -134,6 +151,13 @@ export class AppToolService {
         : await manager.send(workspace, { prompt, configuration: current.configuration ?? { model: current.model, reasoning: current.reasoning } });
       return { task_id: task.id, provider, session: { status: session.status, model: session.model } };
     }
+    if (name === "set_commit_message") {
+      const message = requiredCommitMessage(args, "message");
+      const update = await this.tasks.setCommitMessage(this.currentWorkspace, message);
+      const workspace = this.tasks.taskPath(update.task.id);
+      await this.onCommitMessageChanged(workspace, message);
+      return { task_id: update.task.id, message: update.message, overwritten: update.overwritten, committed: false };
+    }
     throw new Error(`Unknown tool '${name}'`);
   }
 
@@ -168,11 +192,26 @@ function requiredInteger(args: Record<string, unknown>, key: string, minimum: nu
   return value as number;
 }
 
+function requiredCommitMessage(args: Record<string, unknown>, key: string): string {
+  const value = args[key];
+  if (typeof value !== "string" || !value.trim()) throw new Error(`${key} must contain at least one non-whitespace character`);
+  if (value.length > 10_000) throw new Error(`${key} must be at most 10000 characters`);
+  return value;
+}
+
 async function main() {
   const rootWorkspace = process.env.VIBE_EDITOR_ROOT_WORKSPACE;
   if (!rootWorkspace) throw new Error("VIBE_EDITOR_ROOT_WORKSPACE is required");
+  const currentWorkspace = process.env.VIBE_EDITOR_CURRENT_WORKSPACE;
+  if (!currentWorkspace) throw new Error("VIBE_EDITOR_CURRENT_WORKSPACE is required");
   const events = new AppEventBridge(rootWorkspace);
-  const service = new AppToolService(new WorkspaceTaskStore(rootWorkspace), createAcpRegistry((workspace) => { void events.emit({ type: "ai.changed", workspace }); }), () => events.emit({ type: "tasks.changed" }));
+  const service = new AppToolService(
+    new WorkspaceTaskStore(rootWorkspace),
+    createAcpRegistry((workspace) => { void events.emit({ type: "ai.changed", workspace }); }),
+    currentWorkspace,
+    () => events.emit({ type: "tasks.changed" }),
+    (workspace, message) => events.emit({ type: "commit-message.changed", workspace, message })
+  );
   const lines = createInterface({ input: process.stdin, terminal: false });
   for await (const line of lines) {
     if (!line.trim()) continue;

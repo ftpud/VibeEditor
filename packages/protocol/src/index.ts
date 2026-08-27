@@ -288,8 +288,9 @@ export type JavaExitEvent = { type: "java.exit"; payload: { exitCode: number | n
 export type JavaDebugStateEvent = { type: "java.debug.state"; payload: JavaDebugState };
 export type AiChangedEvent = { type: "ai.changed"; payload: { workspace: string } };
 export type TasksChangedEvent = { type: "tasks.changed"; payload: Record<string, never> };
+export type CommitMessageChangedEvent = { type: "commit-message.changed"; payload: { workspace: string; message: string } };
 
-export type ServerEvent = FilesystemChangedEvent | TerminalOutputEvent | TerminalExitEvent | GitChangedEvent | JavaOutputEvent | JavaExitEvent | JavaDebugStateEvent | AiChangedEvent | TasksChangedEvent;
+export type ServerEvent = FilesystemChangedEvent | TerminalOutputEvent | TerminalExitEvent | GitChangedEvent | JavaOutputEvent | JavaExitEvent | JavaDebugStateEvent | AiChangedEvent | TasksChangedEvent | CommitMessageChangedEvent;
 
 /**
  * Every request the core accepts. Declaring it as a fully keyed record makes TypeScript

@@ -74,7 +74,9 @@ export async function createServer(host: string, port: number, workspacePath: st
   appEventWatcher.on("add", (file) => {
     void appEvents.consume(file).then((event) => {
       if (!event) return;
-      const message: ServerEvent = event.type === "tasks.changed" ? { type: "tasks.changed", payload: {} } : { type: "ai.changed", payload: { workspace: event.workspace } };
+      const message: ServerEvent = event.type === "tasks.changed" ? { type: "tasks.changed", payload: {} }
+        : event.type === "ai.changed" ? { type: "ai.changed", payload: { workspace: event.workspace } }
+        : { type: "commit-message.changed", payload: { workspace: event.workspace, message: event.message } };
       const encoded = JSON.stringify(message);
       for (const socket of activeSessions) if (socket.readyState === WebSocket.OPEN) socket.send(encoded);
     }).catch((error) => console.error(`[core] app event error: ${error instanceof Error ? error.message : String(error)}`));
@@ -246,7 +248,7 @@ async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStor
       if (workspacePath !== rootWorkspace) throw new CoreError("INVALID_REQUEST", "New tasks can only be started from the root workspace");
       const task = await tasks.createRandom(false);
       try {
-        const appTools = withAppTools(rootWorkspace, request.payload.mcpServers, request.payload.agent);
+        const appTools = withAppTools(rootWorkspace, tasks.taskPath(task.id), request.payload.mcpServers, request.payload.agent);
         await acp.get(request.payload.provider).send(tasks.taskPath(task.id), {
           prompt: request.payload.prompt,
           content: request.payload.content,
@@ -275,7 +277,7 @@ async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStor
     case "ai.models": return { models: await acp.get(request.payload.provider).models() };
     case "ai.configure": return { session: await acp.get(request.payload.provider).configure(workspacePath, { ...request.payload.configuration, ...(request.payload.model ? { model: request.payload.model } : {}), ...(request.payload.reasoning ? { reasoning: request.payload.reasoning } : {}) }) };
     case "ai.send": {
-      const appTools = withAppTools(rootWorkspace, request.payload.mcpServers, request.payload.agent);
+      const appTools = withAppTools(rootWorkspace, workspacePath, request.payload.mcpServers, request.payload.agent);
       return { session: await acp.get(request.payload.provider).send(workspacePath, { prompt: request.payload.prompt, content: request.payload.content, configuration: { ...request.payload.configuration, ...(request.payload.model ? { model: request.payload.model } : {}), ...(request.payload.reasoning ? { reasoning: request.payload.reasoning } : {}) }, mcpServers: appTools.servers, agent: appTools.agent }) };
     }
     case "ai.permission.resolve": return { session: await acp.get(request.payload.provider).resolvePermission(workspacePath, request.payload.requestId, request.payload.optionId) };
@@ -394,14 +396,14 @@ async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStor
   }
 }
 
-export function withAppTools(rootWorkspace: string, servers?: AiMcpServer[], agent?: AiAgent): { servers: AiMcpServer[]; agent?: AiAgent } {
+export function withAppTools(rootWorkspace: string, currentWorkspace: string, servers?: AiMcpServer[], agent?: AiAgent): { servers: AiMcpServer[]; agent?: AiAgent } {
   if (!agent?.mcpServers?.includes("vibe-editor")) return { servers: servers ?? [], ...(agent ? { agent } : {}) };
   const compiled = fileURLToPath(new URL("app-tools.js", import.meta.url));
   const source = fileURLToPath(new URL("app-tools.ts", import.meta.url));
   const runningFromSource = import.meta.url.endsWith("/src/server.ts");
   const appServer: AiMcpServer = runningFromSource
-    ? { transport: "stdio", name: "vibe-editor", command: process.execPath, args: ["--import", "tsx", source], env: { VIBE_EDITOR_ROOT_WORKSPACE: rootWorkspace } }
-    : { transport: "stdio", name: "vibe-editor", command: process.execPath, args: [compiled], env: { VIBE_EDITOR_ROOT_WORKSPACE: rootWorkspace } };
+    ? { transport: "stdio", name: "vibe-editor", command: process.execPath, args: ["--import", "tsx", source], env: { VIBE_EDITOR_ROOT_WORKSPACE: rootWorkspace, VIBE_EDITOR_CURRENT_WORKSPACE: currentWorkspace } }
+    : { transport: "stdio", name: "vibe-editor", command: process.execPath, args: [compiled], env: { VIBE_EDITOR_ROOT_WORKSPACE: rootWorkspace, VIBE_EDITOR_CURRENT_WORKSPACE: currentWorkspace } };
   const filtered = (servers ?? []).filter((server) => server.name !== appServer.name);
   return { servers: [...filtered, appServer], agent };
 }

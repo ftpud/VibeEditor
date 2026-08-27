@@ -449,6 +449,10 @@ export function App() {
         void Promise.all([refreshTasks(client), refreshAiStatuses(client)]).catch(() => undefined);
         return;
       }
+      if (event.type === "commit-message.changed") {
+        if (event.payload.workspace === activeWorkspaceRef.current) setGitCommitMessage(event.payload.message);
+        return;
+      }
       if (gitRefreshTimer.current) clearTimeout(gitRefreshTimer.current);
       gitRefreshTimer.current = setTimeout(() => { void refreshGit(client); void refreshTaskGit(activeTaskRef.current, client); void refreshAiStatuses(client).catch(() => undefined); }, 200);
       const refreshDiffs = (changedPath?: string) => {
