@@ -8,10 +8,12 @@ import { Client, type ConnectConfig } from "ssh2";
 
 type Connection = { id: string; name: string; host: string; port: number; username: string; password: string };
 type Workspace = { id: string; connectionId: string; name: string; directory: string; remotePort: number };
+type PortTunnel = { id: string; connectionId: string; port: number };
 type StoredConnection = Omit<Connection, "password"> & { password: string };
-type State = { connections: StoredConnection[]; workspaces: Workspace[] };
-type PublicState = { connections: Omit<Connection, "password">[]; workspaces: Workspace[] };
+type State = { connections: StoredConnection[]; workspaces: Workspace[]; portTunnels: PortTunnel[] };
+type PublicState = { connections: Omit<Connection, "password">[]; workspaces: Workspace[]; portTunnels: PortTunnel[] };
 type Runtime = { status: "idle" | "working" | "server" | "client" | "error"; message: string };
+type TunnelRuntime = { status: "idle" | "working" | "running" | "error"; message: string };
 
 const directory = path.dirname(fileURLToPath(import.meta.url));
 const appIcon = path.join(directory, "../assets/app-icon.png");
@@ -20,6 +22,8 @@ const repositoryBranch = "dev";
 const remoteNodeEnvironment = `export PATH="$HOME/.local/bin:$HOME/.volta/bin:$HOME/.fnm:$HOME/.nvm/versions/node/current/bin:/usr/local/bin:$PATH"; export NVM_DIR="$HOME/.nvm"; if [ -s "$NVM_DIR/nvm.sh" ]; then . "$NVM_DIR/nvm.sh"; fi; command -v npm >/dev/null 2>&1 || { echo "npm was not found on the SSH host. Install Node.js 20+ for this user or configure NVM in ~/.bashrc." >&2; exit 127; }`;
 const runtimes = new Map<string, Runtime>();
 const tunnels = new Map<string, { ssh: Client; server: Server }>();
+const portTunnelRuntimes = new Map<string, TunnelRuntime>();
+const portTunnels = new Map<string, { ssh: Client; server: Server }>();
 
 app.name = "Vibe Gateway";
 app.setName("Vibe Gateway");
@@ -29,8 +33,11 @@ app.commandLine.appendSwitch("class", "VibeGateway");
 
 function stateFile(): string { return path.join(app.getPath("userData"), "gateway.json"); }
 async function readState(): Promise<State> {
-  try { return JSON.parse(await readFile(stateFile(), "utf8")) as State; }
-  catch { return { connections: [], workspaces: [] }; }
+  try {
+    const state = JSON.parse(await readFile(stateFile(), "utf8")) as Partial<State>;
+    return { connections: state.connections ?? [], workspaces: state.workspaces ?? [], portTunnels: state.portTunnels ?? [] };
+  }
+  catch { return { connections: [], workspaces: [], portTunnels: [] }; }
 }
 async function saveState(state: State): Promise<void> {
   await mkdir(path.dirname(stateFile()), { recursive: true });
@@ -42,13 +49,17 @@ function encrypt(password: string): string {
 }
 function decrypt(password: string): string { return safeStorage.decryptString(Buffer.from(password, "base64")); }
 function publicState(state: State): PublicState {
-  return { connections: state.connections.map(({ password: _password, ...item }) => item), workspaces: state.workspaces };
+  return { connections: state.connections.map(({ password: _password, ...item }) => item), workspaces: state.workspaces, portTunnels: state.portTunnels };
 }
 function id(): string { return crypto.randomUUID(); }
 function shell(value: string): string { return `'${value.replaceAll("'", `'"'"'`)}'`; }
 function runtime(workspaceId: string, status: Runtime["status"], message: string): void {
   const value = { status, message }; runtimes.set(workspaceId, value);
   for (const window of BrowserWindow.getAllWindows()) window.webContents.send("gateway:status", workspaceId, value);
+}
+function portTunnelRuntime(tunnelId: string, status: TunnelRuntime["status"], message: string): void {
+  const value = { status, message }; portTunnelRuntimes.set(tunnelId, value);
+  for (const window of BrowserWindow.getAllWindows()) window.webContents.send("gateway:tunnelStatus", tunnelId, value);
 }
 async function credentials(connectionId: string): Promise<Connection> {
   const item = (await readState()).connections.find((connection) => connection.id === connectionId);
@@ -156,6 +167,46 @@ async function createTunnel(workspaceId: string, connection: Connection, remoteP
   const address = server.address(); if (!address || typeof address === "string") throw new Error("Could not allocate local tunnel port");
   return address.port;
 }
+async function startPortTunnel(tunnelId: string): Promise<void> {
+  const state = await readState();
+  const tunnel = state.portTunnels.find((item) => item.id === tunnelId);
+  if (!tunnel) throw new Error("Port tunnel was not found");
+  if (!Number.isInteger(tunnel.port) || tunnel.port < 1 || tunnel.port > 65535) throw new Error("Tunnel port must be between 1 and 65535");
+  portTunnelRuntime(tunnelId, "working", "Connecting over SSH...");
+  stopPortTunnel(tunnelId, false);
+  let ssh: Client | undefined;
+  try {
+    ssh = await connect(await credentials(tunnel.connectionId));
+    const server = createServer((socket) => ssh!.forwardOut("127.0.0.1", socket.remotePort ?? 0, "127.0.0.1", tunnel.port, (error, stream) => {
+      if (error) { socket.destroy(error); return; }
+      socket.pipe(stream).pipe(socket);
+    }));
+    await new Promise<void>((resolve, reject) => server.once("error", reject).listen(tunnel.port, "127.0.0.1", resolve));
+    portTunnels.set(tunnelId, { ssh, server });
+    server.on("error", (error) => {
+      if (portTunnels.has(tunnelId)) portTunnelRuntime(tunnelId, "error", error.message);
+    });
+    ssh.on("close", () => {
+      if (portTunnels.delete(tunnelId)) {
+        server.close();
+        portTunnelRuntime(tunnelId, "error", "SSH connection closed");
+      }
+    });
+    portTunnelRuntime(tunnelId, "running", `127.0.0.1:${tunnel.port} → remote 127.0.0.1:${tunnel.port}`);
+  } catch (error) {
+    ssh?.end();
+    const message = error instanceof Error ? error.message : String(error);
+    portTunnelRuntime(tunnelId, "error", message);
+    throw error;
+  }
+}
+function stopPortTunnel(tunnelId: string, notify = true): void {
+  const active = portTunnels.get(tunnelId);
+  portTunnels.delete(tunnelId);
+  active?.server.close();
+  active?.ssh.end();
+  if (notify) portTunnelRuntime(tunnelId, "idle", "Stopped");
+}
 async function startClient(workspaceId: string): Promise<void> {
   const { workspace, connection } = await withWorkspace(workspaceId); runtime(workspaceId, "working", "Checking remote client build...");
   const client = await connect(connection);
@@ -208,7 +259,7 @@ async function startClient(workspaceId: string): Promise<void> {
 ipcMain.handle("gateway:get", async () => {
   const state = await readState();
   setTimeout(() => { void refreshStatuses(); }, 0);
-  return { state: publicState(state), runtimes: Object.fromEntries(runtimes) };
+  return { state: publicState(state), runtimes: Object.fromEntries(runtimes), tunnelRuntimes: Object.fromEntries(portTunnelRuntimes) };
 });
 ipcMain.handle("gateway:refreshStatuses", (_event, connectionId?: string) => refreshStatuses(connectionId));
 ipcMain.handle("gateway:saveConnection", async (_event, input: Omit<Connection, "id"> & { id?: string }) => {
@@ -216,9 +267,13 @@ ipcMain.handle("gateway:saveConnection", async (_event, input: Omit<Connection, 
   const item: StoredConnection = { id: input.id ?? id(), name: input.name, host: input.host, port: input.port, username: input.username, password: input.password ? encrypt(input.password) : existing?.password ?? "" };
   if (!item.password) throw new Error("Password is required"); state.connections = [...state.connections.filter((value) => value.id !== item.id), item]; await saveState(state); return publicState(state);
 });
-ipcMain.handle("gateway:deleteConnection", async (_event, connectionId: string) => { const state = await readState(); state.connections = state.connections.filter((item) => item.id !== connectionId); state.workspaces = state.workspaces.filter((item) => item.connectionId !== connectionId); await saveState(state); return publicState(state); });
+ipcMain.handle("gateway:deleteConnection", async (_event, connectionId: string) => { const state = await readState(); for (const tunnel of state.portTunnels.filter((item) => item.connectionId === connectionId)) stopPortTunnel(tunnel.id, false); state.connections = state.connections.filter((item) => item.id !== connectionId); state.workspaces = state.workspaces.filter((item) => item.connectionId !== connectionId); state.portTunnels = state.portTunnels.filter((item) => item.connectionId !== connectionId); await saveState(state); return publicState(state); });
 ipcMain.handle("gateway:saveWorkspace", async (_event, input: Omit<Workspace, "id"> & { id?: string }) => { const state = await readState(); const item = { ...input, id: input.id ?? id() } as Workspace; state.workspaces = [...state.workspaces.filter((value) => value.id !== item.id), item]; await saveState(state); return publicState(state); });
 ipcMain.handle("gateway:deleteWorkspace", async (_event, workspaceId: string) => { const state = await readState(); state.workspaces = state.workspaces.filter((item) => item.id !== workspaceId); await saveState(state); return publicState(state); });
+ipcMain.handle("gateway:savePortTunnel", async (_event, input: Omit<PortTunnel, "id"> & { id?: string }) => { if (!Number.isInteger(input.port) || input.port < 1 || input.port > 65535) throw new Error("Tunnel port must be between 1 and 65535"); const state = await readState(); if (!state.connections.some((item) => item.id === input.connectionId)) throw new Error("SSH connection was not found"); const item = { ...input, id: input.id ?? id() } as PortTunnel; if (state.portTunnels.some((value) => value.id !== item.id && value.connectionId === item.connectionId && value.port === item.port)) throw new Error(`Port ${item.port} is already configured for this connection`); if (input.id) stopPortTunnel(input.id, false); state.portTunnels = [...state.portTunnels.filter((value) => value.id !== item.id), item]; await saveState(state); return publicState(state); });
+ipcMain.handle("gateway:deletePortTunnel", async (_event, tunnelId: string) => { stopPortTunnel(tunnelId, false); const state = await readState(); state.portTunnels = state.portTunnels.filter((item) => item.id !== tunnelId); await saveState(state); portTunnelRuntimes.delete(tunnelId); return publicState(state); });
+ipcMain.handle("gateway:startPortTunnel", (_event, tunnelId: string) => startPortTunnel(tunnelId));
+ipcMain.handle("gateway:stopPortTunnel", (_event, tunnelId: string) => stopPortTunnel(tunnelId));
 ipcMain.handle("gateway:startServer", (_event, workspaceId: string) => startServer(workspaceId));
 ipcMain.handle("gateway:stopServer", (_event, workspaceId: string) => stopServer(workspaceId));
 ipcMain.handle("gateway:startClient", (_event, workspaceId: string) => startClient(workspaceId));
@@ -233,5 +288,5 @@ app.whenReady().then(() => {
   if (process.platform === "darwin") app.dock.setIcon(nativeImage.createFromPath(appIcon));
   createWindow();
 });
-app.on("window-all-closed", () => { for (const tunnel of tunnels.values()) { tunnel.server.close(); tunnel.ssh.end(); } if (process.platform !== "darwin") app.quit(); });
+app.on("window-all-closed", () => { for (const tunnel of tunnels.values()) { tunnel.server.close(); tunnel.ssh.end(); } for (const tunnel of portTunnels.values()) { tunnel.server.close(); tunnel.ssh.end(); } if (process.platform !== "darwin") app.quit(); });
 app.on("activate", () => { if (!BrowserWindow.getAllWindows().length) createWindow(); });

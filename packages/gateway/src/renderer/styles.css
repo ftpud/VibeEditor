@@ -30,7 +30,7 @@ main { min-width: 0; display: flex; flex-direction: column; background: #202124;
 h1, h2, p { margin: 0; }
 h1 { font-size: 18px; font-weight: 600; }
 .workspace-view > header p { margin-top: 4px; color: #92959b; }
-.workspace-list { min-height: 0; padding: 0 22px 22px; overflow: auto; }
+.workspace-list { min-height: 0; flex: 1; padding: 0 22px 14px; overflow: auto; }
 .workspace-list article { margin-bottom: 10px; border: 1px solid #414349; border-radius: 6px; background: #292a2d; }
 .workspace-info { min-height: 84px; padding: 14px 16px; display: grid; grid-template-columns: 9px minmax(0, 1fr) minmax(180px, .45fr); align-items: center; gap: 12px; }
 .status-dot { width: 8px; height: 8px; border-radius: 50%; background: #777a80; }
@@ -48,6 +48,27 @@ h1 { font-size: 18px; font-weight: 600; }
 .workspace-buttons button.stop { color: #ef9a9a; }
 .workspace-buttons button:disabled { opacity: .45; cursor: default; }
 .workspace-empty { padding: 40px; border: 1px dashed #45474c; color: #85888e; text-align: center; }
+.tunnel-section { flex: 0 0 auto; max-height: 255px; margin: 0 22px 18px; border: 1px solid #414349; border-radius: 6px; background: #292a2d; overflow: hidden; }
+.tunnel-section > header { min-height: 58px; padding: 9px 10px 9px 14px; display: flex; align-items: center; justify-content: space-between; gap: 14px; border-bottom: 1px solid #3c3e42; }
+.tunnel-section > header > div { min-width: 0; display: flex; align-items: center; gap: 10px; }
+.tunnel-section h2 { margin-bottom: 3px; font-size: 13px; }
+.tunnel-section p { color: #85888e; font-size: 10px; }
+.tunnel-section form { display: flex; align-items: center; gap: 7px; }
+.tunnel-section input { width: 92px; height: 31px; padding: 0 8px; border: 1px solid #55585e; border-radius: 3px; outline: none; background: #1f2022; }
+.tunnel-section input:focus { border-color: #3574f0; }
+.tunnel-section button { height: 31px; padding: 0 9px; display: flex; align-items: center; justify-content: center; gap: 5px; border: 1px solid #4a4d52; border-radius: 3px; background: #34363a; }
+.tunnel-section button.primary { border-color: #3574f0; background: #3574f0; color: white; }
+.tunnel-section button:hover:not(:disabled) { filter: brightness(1.12); }
+.tunnel-section button.stop { color: #ef9a9a; }
+.tunnel-section button:disabled { opacity: .45; cursor: default; }
+.tunnel-list { max-height: 195px; overflow: auto; }
+.tunnel-row { min-height: 50px; padding: 8px 10px 8px 14px; display: grid; grid-template-columns: 8px minmax(150px, 1fr) minmax(145px, .8fr) 66px 66px 31px; align-items: center; gap: 9px; border-bottom: 1px solid #383a3e; }
+.tunnel-row:last-child { border-bottom: 0; }
+.tunnel-address, .tunnel-status { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.tunnel-address small, .tunnel-status small { overflow: hidden; color: #85888e; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.tunnel-status { align-items: flex-end; text-align: right; }
+.status-dot.running { background: #59a869; box-shadow: 0 0 0 3px rgba(89, 168, 105, .15); }
+.tunnel-empty { padding: 16px; color: #85888e; text-align: center; }
 .error-banner { margin: 0 22px 12px; padding: 8px 10px; display: flex; justify-content: space-between; align-items: center; border: 1px solid #743f43; background: #3d292b; color: #f0b1b5; }
 .error-banner button { border: 0; background: transparent; }
 .dialog-layer { position: fixed; inset: 0; z-index: 20; display: grid; place-items: center; background: rgba(0, 0, 0, .45); }
@@ -62,4 +83,4 @@ h1 { font-size: 18px; font-weight: 600; }
 .dialog footer button { height: 31px; padding: 0 12px; border: 1px solid #51545a; border-radius: 3px; background: #37393d; }
 .dialog footer button.primary { border-color: #3574f0; background: #3574f0; color: white; }
 .form-error { padding: 7px; background: #3d292b; color: #f0b1b5; }
-@media (max-width: 860px) { .gateway-shell { grid-template-columns: 210px minmax(0, 1fr); } .workspace-info { grid-template-columns: 9px 1fr; } .status { grid-column: 2; align-items: flex-start; text-align: left; } }
+@media (max-width: 860px) { .gateway-shell { grid-template-columns: 210px minmax(0, 1fr); } .workspace-info { grid-template-columns: 9px 1fr; } .status { grid-column: 2; align-items: flex-start; text-align: left; } .tunnel-row { grid-template-columns: 8px minmax(130px, 1fr) 60px 60px 31px; } .tunnel-status { display: none; } }
