@@ -93,7 +93,7 @@ export type ProtocolOperations = {
   "ai.models": { payload: { provider?: AiProvider }; result: { models: AiModel[] } };
   "ai.configure": { payload: { provider?: AiProvider; model?: string; reasoning?: string; configuration?: AiConfiguration }; result: { session: AiSession } };
   "ai.send": { payload: { provider?: AiProvider; prompt: string; content?: AiContentBlock[]; model?: string; reasoning?: string; configuration?: AiConfiguration; mcpServers?: AiMcpServer[]; agent?: AiAgent }; result: { session: AiSession } };
-  "ai.permission.resolve": { payload: { provider?: AiProvider; requestId: string; optionId?: string }; result: { session: AiSession } };
+  "ai.permission.resolve": { payload: { provider?: AiProvider; requestId: string; optionId?: string; target?: { taskId?: string; sessionId?: string } }; result: { session: AiSession } };
   "ai.interrupt": { payload: { provider?: AiProvider }; result: { session: AiSession } };
   "ai.steer": { payload: { provider?: AiProvider; prompt: string }; result: { session: AiSession } };
   "ai.clear": { payload: { provider?: AiProvider }; result: { session: AiSession } };

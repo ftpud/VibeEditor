@@ -299,8 +299,10 @@ button { color: inherit; }
 .ai-permission { margin: 8px; padding: 10px; display: grid; gap: 7px; border: 1px solid #d49b36; border-radius: 5px; background: #30291d; color: #ecd9b4; }
 .ai-permission pre, .ai-permission strong, .ai-permission span { color: inherit; }
 .ai-permission pre { max-height: 150px; overflow: auto; margin: 0; white-space: pre-wrap; }
+.ai-permission-error { padding: 6px 7px; border-radius: 3px; background: #552d2d; color: #ffd1d1; font-size: .8462rem; }
 .ai-permission > div { display: flex; flex-wrap: wrap; gap: 6px; }
 .ai-permission button { padding: 4px 8px; border: 1px solid #60636a; border-radius: 3px; cursor: pointer; }
+.ai-permission button:disabled { opacity: .55; cursor: wait; }
 .ai-permission button.allow { background: #315d3b; color: white; }
 .ai-permission button.reject { background: #5e3434; color: white; }
 .ai-command-menu { position: absolute; left: 8px; right: 8px; bottom: calc(100% + 4px); z-index: 4; display: grid; max-height: 240px; overflow: auto; border: 1px solid #55585f; background: #25272b; box-shadow: 0 5px 18px #0008; }

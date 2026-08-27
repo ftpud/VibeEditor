@@ -265,7 +265,19 @@ async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStor
       const appTools = withAppTools(rootWorkspace, request.payload.mcpServers, request.payload.agent);
       return { session: await acp.get(request.payload.provider).send(workspacePath, { prompt: request.payload.prompt, content: request.payload.content, configuration: { ...request.payload.configuration, ...(request.payload.model ? { model: request.payload.model } : {}), ...(request.payload.reasoning ? { reasoning: request.payload.reasoning } : {}) }, mcpServers: appTools.servers, agent: appTools.agent }) };
     }
-    case "ai.permission.resolve": return { session: await acp.get(request.payload.provider).resolvePermission(workspacePath, request.payload.requestId, request.payload.optionId) };
+    case "ai.permission.resolve": {
+      // Permission cards can remain mounted while the user changes tasks. A target supplied by the
+      // renderer must therefore win over this connection's selected workspace, which may already
+      // point somewhere else by the time the click reaches the server.
+      const targetWorkspace = request.payload.target
+        ? await permissionTargetWorkspace(tasks, rootWorkspace, request.payload.target.taskId)
+        : workspacePath;
+      const provider = acp.get(request.payload.provider);
+      const session = await provider.get(targetWorkspace);
+      if (request.payload.target?.sessionId && session.id !== request.payload.target.sessionId) throw new CoreError("INVALID_REQUEST", "Permission request belongs to a different conversation");
+      if (session.pendingPermission?.id !== request.payload.requestId) throw new CoreError("INVALID_REQUEST", "Permission request is no longer pending");
+      return { session: await provider.resolvePermission(targetWorkspace, request.payload.requestId, request.payload.optionId) };
+    }
     case "ai.interrupt": return { session: await acp.get(request.payload.provider).interrupt(workspacePath) };
     case "ai.steer": return { session: await acp.get(request.payload.provider).steer(workspacePath, request.payload.prompt) };
     case "ai.clear": return { session: await acp.get(request.payload.provider).clear(workspacePath) };
@@ -375,6 +387,12 @@ async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStor
     case "java.references": return { locations: await jdt.references(request.payload.path, request.payload.content, request.payload.line, request.payload.column) };
     case "java.semanticTokens": return { tokens: await jdt.semanticTokens(request.payload.path, request.payload.content) };
   }
+}
+
+export async function permissionTargetWorkspace(tasks: Pick<WorkspaceTaskStore, "list" | "taskPath">, rootWorkspace: string, taskId?: string): Promise<string> {
+  if (!taskId) return rootWorkspace;
+  if (!(await tasks.list()).tasks.some((task) => task.id === taskId)) throw new CoreError("INVALID_REQUEST", "Task does not exist");
+  return tasks.taskPath(taskId);
 }
 
 export function withAppTools(rootWorkspace: string, servers?: AiMcpServer[], agent?: AiAgent): { servers: AiMcpServer[]; agent?: AiAgent } {
