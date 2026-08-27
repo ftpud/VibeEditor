@@ -68,7 +68,11 @@ function execute(client: Client, command: string): Promise<string> {
     let stdout = ""; let stderr = "";
     stream.on("data", (data: Buffer) => { stdout += data.toString(); });
     stream.stderr.on("data", (data: Buffer) => { stderr += data.toString(); });
-    stream.on("close", (code: number) => code === 0 ? resolve(stdout) : reject(new Error(stderr.trim() || stdout.trim() || `Remote command exited with ${code}`)));
+    stream.on("close", (code: number) => {
+      if (code === 0) { resolve(stdout); return; }
+      const output = [stdout.trim(), stderr.trim()].filter(Boolean).join("\n");
+      reject(new Error(output || `Remote command exited with ${code}`));
+    });
   }));
 }
 async function withWorkspace(workspaceId: string): Promise<{ workspace: Workspace; connection: Connection }> {
@@ -98,7 +102,7 @@ async function refreshStatuses(connectionId?: string): Promise<void> {
   }));
 }
 async function provision(client: Client): Promise<{ commit: string; rebuilt: boolean }> {
-  const command = `set -e; ${remoteNodeEnvironment}; if [ -d ~/.vibe/.git ]; then git -C ~/.vibe fetch origin ${repositoryBranch}; git -C ~/.vibe checkout --force -B ${repositoryBranch} origin/${repositoryBranch}; else rm -rf ~/.vibe; git clone --branch ${repositoryBranch} --single-branch ${repository} ~/.vibe; fi; cd ~/.vibe; head=$(git rev-parse HEAD); rebuilt=0; if [ ! -f ~/.vibe-build ] || [ "$(cat ~/.vibe-build)" != "$head" ] || [ ! -f packages/core/dist/index.js ] || [ ! -f packages/desktop/dist-electron/main.js ] || [ ! -f packages/desktop/dist-renderer/index.html ] || [ ! -d node_modules ]; then VIBE_SKIP_JDTLS=1 npm install; npm run build -w @remote-ide/protocol; npm run build -w @remote-ide/core; npm run build -w @remote-ide/desktop; printf '%s' "$head" > ~/.vibe-build; rebuilt=1; fi; printf '\nVIBE_RESULT:%s:%s\n' "$head" "$rebuilt"`;
+  const command = `set -e; ${remoteNodeEnvironment}; if [ -d ~/.vibe/.git ]; then git -C ~/.vibe fetch origin ${repositoryBranch}; git -C ~/.vibe checkout --force -B ${repositoryBranch} origin/${repositoryBranch}; else rm -rf ~/.vibe; git clone --branch ${repositoryBranch} --single-branch ${repository} ~/.vibe; fi; cd ~/.vibe; head=$(git rev-parse HEAD); rebuilt=0; if [ ! -f ~/.vibe-build ] || [ "$(cat ~/.vibe-build)" != "$head" ] || [ ! -f packages/core/dist/index.js ] || [ ! -f packages/desktop/dist-electron/main.js ] || [ ! -f packages/desktop/dist-renderer/index.html ] || [ ! -d node_modules ]; then VIBE_SKIP_JDTLS=1 npm install; rm -rf packages/acp/dist packages/protocol/dist packages/core/dist packages/desktop/dist-electron packages/desktop/dist-renderer; npm run build -w @remote-ide/acp; npm run build -w @remote-ide/protocol; npm run build -w @remote-ide/core; npm run build -w @remote-ide/desktop; printf '%s' "$head" > ~/.vibe-build; rebuilt=1; fi; printf '\nVIBE_RESULT:%s:%s\n' "$head" "$rebuilt"`;
   const output = await execute(client, `bash -lc ${shell(command)}`);
   const match = output.match(/VIBE_RESULT:([0-9a-f]{40,64}):([01])/);
   if (!match?.[1]) throw new Error("Remote Git revision could not be determined");
