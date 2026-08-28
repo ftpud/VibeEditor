@@ -190,7 +190,8 @@ button { color: inherit; }
 .task-progress-spinner { flex: 0 0 auto; animation: task-progress-spin .8s linear infinite; }
 @keyframes task-progress-spin { to { transform: rotate(360deg); } }
 .task-ai-status.user_prompt { color: #e3b762; }
-.task-checkpoint-history { position: absolute; z-index: 12; right: 32px; top: 74px; width: min(430px, calc(100vw - 64px)); max-height: calc(100vh - 130px); overflow: auto; background: #24262a; border: 1px solid #41444a; border-radius: 6px; box-shadow: 0 10px 30px #0008; }
+.prompt-history-side-panel { width: 360px; min-width: 260px; max-width: min(520px, 45vw); border-left: 1px solid #3a3d42; }
+.task-checkpoint-history { min-height: 0; height: 100%; overflow: auto; background: #24262a; }
 .task-checkpoint-history > header { position: sticky; top: 0; z-index: 1; display: flex; justify-content: space-between; padding: 9px 11px; background: #292b30; border-bottom: 1px solid #3b3e43; }
 .task-checkpoint-history > header > span { display: flex; align-items: center; gap: 8px; }.task-checkpoint-history > header button { display: grid; place-items: center; border: 0; background: transparent; }
 .task-checkpoint-history header small, .task-checkpoint-prompt small, .task-checkpoint-files > small { color: #8f949c; }
