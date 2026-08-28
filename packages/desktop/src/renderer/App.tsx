@@ -129,6 +129,8 @@ export function App() {
   const activeTaskRef = useRef<WorkspaceTask>();
   const selectedTaskIdRef = useRef<string>();
   const [taskSwitching, setTaskSwitching] = useState(false);
+  const taskSwitchSequence = useRef(0);
+  const taskSwitchActive = useRef(false);
   const [terminalHeight, setTerminalHeight] = useState(240);
   const [usefulFiles, setUsefulFiles] = useState<UsefulFile[]>([]);
   const [agents, setAgents] = useState<AgentFile[]>([]);
@@ -429,6 +431,10 @@ export function App() {
     let connectionReady = false;
     client.onDisconnected = (message) => {
       if (!connectionReady || clientRef.current !== client) return;
+      taskSwitchSequence.current += 1;
+      taskSwitchActive.current = false;
+      setTaskSwitching(false);
+      setWorkspaceOptionsReady(true);
       showStatus(`${message}; reconnecting…`, "progress");
       void (async () => {
         let retryDelay = 250;
@@ -439,9 +445,14 @@ export function App() {
             await client.connect(host.trim(), Number(port));
             if (clientRef.current !== client) { client.disconnect(); return; }
             const result = await client.request("workspace.open", { includeIgnored: showIgnoredRef.current });
+            if (clientRef.current !== client) return;
             setActiveWorkspace(result.workspace); activeWorkspaceRef.current = result.workspace;
+            setProjectName(result.projectName);
             setTree(result.tree);
-            await Promise.all([refreshTasks(client), refreshAi(client)]);
+            setJavaOptions(result.options.javaProject);
+            await restoreWorkspaceOptions(result.options, client);
+            await Promise.all([refreshTasks(client), refreshAi(client), refreshAiSessions(client), refreshUsefulFiles(client), refreshAgents(client)]);
+            if (clientRef.current !== client) return;
             showStatus("Backend connection restored", "success");
             return;
           } catch {
@@ -942,7 +953,11 @@ export function App() {
   }, [aiToken, applyAiSession, refreshAiSessions]);
 
   const switchTask = useCallback(async (taskId?: string) => {
-    if (!clientRef.current || taskId === selectedTaskId) return;
+    if (!clientRef.current || taskId === selectedTaskId || taskSwitchActive.current) return;
+    const client = clientRef.current;
+    const sequence = ++taskSwitchSequence.current;
+    const isCurrent = () => taskSwitchSequence.current === sequence && clientRef.current === client;
+    taskSwitchActive.current = true;
     setTaskSwitching(true); setWorkspaceOptionsReady(false); setStatusMessage("");
     try {
       const currentGroup = layoutRef.current.editorGroups[0]!;
@@ -950,8 +965,10 @@ export function App() {
       const currentFiles = currentGroup.tabs.filter((tab) => tab.type === "file");
       const currentTerminal = layoutRef.current.terminalGroup;
       const currentActiveTerminalIndex = currentTerminal.tabs.findIndex((tab) => tab.id === currentTerminal.activeTabId);
-      await clientRef.current.request("workspace.saveOptions", { options: { openFiles: currentFiles.map((tab) => tab.path), ...(currentFiles.find((tab) => tab.id === currentGroup.activeTabId) ? { activeFile: currentFiles.find((tab) => tab.id === currentGroup.activeTabId)!.path } : {}), ...(javaOptionsRef.current ? { javaProject: javaOptionsRef.current } : {}), terminal: { tabs: currentTerminal.tabs.map((tab) => ({ title: tab.title, terminalId: tab.terminalId })), ...(currentActiveTerminalIndex >= 0 ? { activeTabIndex: currentActiveTerminalIndex } : {}), panelOpen: layoutRef.current.panels.some((panel) => panel.type === "terminal") }, ...(Object.keys(fileColors).length ? { fileColors } : {}), ...(gitCommitMessage ? { gitCommitMessage } : {}) } });
-      const result = await clientRef.current.request("tasks.switch", { ...(taskId ? { taskId } : {}), includeIgnored: showIgnoredRef.current });
+      await client.request("workspace.saveOptions", { options: { openFiles: currentFiles.map((tab) => tab.path), ...(currentFiles.find((tab) => tab.id === currentGroup.activeTabId) ? { activeFile: currentFiles.find((tab) => tab.id === currentGroup.activeTabId)!.path } : {}), ...(javaOptionsRef.current ? { javaProject: javaOptionsRef.current } : {}), terminal: { tabs: currentTerminal.tabs.map((tab) => ({ title: tab.title, terminalId: tab.terminalId })), ...(currentActiveTerminalIndex >= 0 ? { activeTabIndex: currentActiveTerminalIndex } : {}), panelOpen: layoutRef.current.panels.some((panel) => panel.type === "terminal") }, ...(Object.keys(fileColors).length ? { fileColors } : {}), ...(gitCommitMessage ? { gitCommitMessage } : {}) } });
+      if (!isCurrent()) return;
+      const result = await client.request("tasks.switch", { ...(taskId ? { taskId } : {}), includeIgnored: showIgnoredRef.current });
+      if (!isCurrent()) return;
       terminalWriters.current.clear(); terminalBuffers.current.clear(); markdownBlockTerminals.current.clear();
       setLayout((current) => ({ ...current, panels: current.panels.filter((panel) => !["terminal", "java", "problems"].includes(panel.type)), terminalGroup: { ...current.terminalGroup, tabs: [], activeTabId: undefined } }));
       setTasks(result.tasks); setSelectedTaskId(result.selectedTaskId); selectedTaskIdRef.current = result.selectedTaskId; activeTaskRef.current = result.tasks.find((task) => task.id === result.selectedTaskId); setTree(result.tree);
@@ -963,17 +980,25 @@ export function App() {
       cursorPositions.setWorkspace(result.workspace);
       setProjectName(result.projectName);
       setJavaOptions(result.options.javaProject); setJavaTree([]); setJavaRunning(false); setJavaLog(""); setJavaDiagnostics([]);
-      if (result.options.javaProject) setJavaTree((await clientRef.current.request("java.getProjectTree", {})).tree);
-      await restoreWorkspaceOptions(result.options, clientRef.current);
+      if (result.options.javaProject) setJavaTree((await client.request("java.getProjectTree", {})).tree);
+      if (!isCurrent()) return;
+      await restoreWorkspaceOptions(result.options, client);
+      if (!isCurrent()) return;
       const nextTask = result.tasks.find((task) => task.id === result.selectedTaskId);
       const savedProvider = workspaceKeyRef.current ? (readSetting(workspaceSettingKey(workspaceKeyRef.current, aiProviderTaskKey(result.selectedTaskId))) as AiProvider | null) : null;
       const nextProvider = savedProvider && aiProviders.some((item) => item.id === savedProvider) ? savedProvider : aiProviderRef.current;
       await switchAiProvider(nextProvider, result.selectedTaskId);
       await Promise.all([refreshGit(), refreshAi(), refreshAiSessions(), refreshTaskGit(nextTask), refreshAgents(clientRef.current, result.selectedTaskId)]);
     } catch (error) {
+      if (!isCurrent()) return;
       setWorkspaceOptionsReady(true);
       setStatusMessage(error instanceof Error ? error.message : "Could not switch task");
-    } finally { setTaskSwitching(false); }
+    } finally {
+      if (isCurrent()) {
+        taskSwitchActive.current = false;
+        setTaskSwitching(false);
+      }
+    }
   }, [aiProviders, fileColors, gitCommitMessage, refreshAgents, refreshAi, refreshAiSessions, refreshGit, refreshTaskGit, restoreWorkspaceOptions, saveFileTab, selectedTaskId, switchAiProvider]);
 
   const openTask = useCallback((taskId?: string, pendingPermission = false) => {

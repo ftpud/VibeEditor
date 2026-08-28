@@ -58,6 +58,66 @@ describe("CoreClient streaming disconnects", () => {
 
     await expect(restoring).resolves.toMatchObject({ session: { status: "in_progress", messages: [{ text: "still streaming" }] } });
   });
+
+  it("rejects requests belonging to a connection that is replaced before its close event", async () => {
+    const client = new CoreClient();
+    const firstConnect = client.connect("core", 7331);
+    const first = FakeWebSocket.instances[0]!;
+    first.open();
+    await firstConnect;
+    const interrupted = client.request("tasks.list", {});
+
+    const secondConnect = client.connect("core", 7331);
+    FakeWebSocket.instances[1]!.open();
+    await secondConnect;
+
+    await expect(interrupted).rejects.toThrow("Connection replaced");
+  });
+
+  it("settles task-switch loading after loss and completes a switch on the reconnected socket", async () => {
+    const client = new CoreClient();
+    const connecting = client.connect("core", 7331);
+    const first = FakeWebSocket.instances[0]!;
+    first.open();
+    await connecting;
+    let loading = true;
+    const interrupted = client.request("tasks.switch", { taskId: "task-a", includeIgnored: false })
+      .finally(() => { loading = false; });
+
+    first.close();
+    await expect(interrupted).rejects.toThrow("Connection closed");
+    expect(loading).toBe(false);
+
+    const reconnecting = client.connect("core", 7331);
+    const second = FakeWebSocket.instances[1]!;
+    second.open();
+    await reconnecting;
+    loading = true;
+    const switched = client.request("tasks.switch", { taskId: "task-b", includeIgnored: false })
+      .finally(() => { loading = false; });
+    const request = JSON.parse(second.sent[0]!) as { id: string };
+    second.receive({ id: request.id, ok: true, result: { workspace: "/task-b", projectName: "project", tree: [], options: {}, tasks: [], selectedTaskId: "task-b" } });
+
+    await expect(switched).resolves.toMatchObject({ selectedTaskId: "task-b" });
+    expect(loading).toBe(false);
+  });
+
+  it("times out a request when a sleep-like half-open socket never answers or closes", async () => {
+    vi.useFakeTimers();
+    const client = new CoreClient(1_000);
+    const connecting = client.connect("core", 7331);
+    FakeWebSocket.instances[0]!.open();
+    await connecting;
+    const switching = client.request("tasks.switch", { taskId: "task-b", includeIgnored: false });
+    let loading = true;
+    const settled = switching.finally(() => { loading = false; });
+    const rejection = expect(settled).rejects.toThrow("Request tasks.switch timed out after 1000ms");
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    await rejection;
+    expect(loading).toBe(false);
+    vi.useRealTimers();
+  });
 });
 
 describe("CoalescedAsyncAction", () => {

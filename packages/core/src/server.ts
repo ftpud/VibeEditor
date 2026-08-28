@@ -163,8 +163,7 @@ export async function createServer(host: string, port: number, workspacePath: st
       const jdt = new JdtLanguageService(filesystem);
       return { workspacePath: nextWorkspace, filesystem, search, git, java, jdt, workspaceState };
     };
-    terminalSubscriptions.set(socket, { workspace, terminalIds: new Set() });
-    let servicesPromise = makeServices(workspace);
+    let servicesPromise: Promise<SessionServices>;
     /** Resolves once no task switch is in flight for this connection. */
     let switching: Promise<void> = Promise.resolve();
     let switchedWatcher: ReturnType<typeof chokidar.watch> | undefined;
@@ -197,6 +196,17 @@ export async function createServer(host: string, port: number, workspacePath: st
       });
       await watcherReady;
     };
+    // Task selection is durable server state and may have changed since Core started. A fresh
+    // post-sleep socket must be routed to that selected worktree before workspace.open runs.
+    // Otherwise the renderer restores the selected task label while requests still hit the old
+    // startup workspace until another explicit task switch happens.
+    servicesPromise = (async () => {
+      const registry = await tasks.list();
+      const selectedWorkspace = registry.selectedTaskId ? tasks.taskPath(registry.selectedTaskId) : rootWorkspace;
+      terminalSubscriptions.set(socket, { workspace: selectedWorkspace, terminalIds: new Set() });
+      await watchSwitchedWorkspace(selectedWorkspace);
+      return makeServices(selectedWorkspace);
+    })();
     const client = request.socket.remoteAddress ?? "unknown";
     console.log(`[core] connected: ${client}`);
     socket.on("message", async (data) => {
