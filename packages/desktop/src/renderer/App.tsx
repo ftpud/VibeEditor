@@ -103,6 +103,7 @@ export function App() {
   const [rightSidebarWidth, setRightSidebarWidth] = useState(360);
   const [leftPanels, setLeftPanels] = useState({ tasks: true, ai: true });
   const [rightPanels, setRightPanels] = useState({ project: true, git: true, taskGit: false, java: false, useful: false, agents: false });
+  const [promptHistoryOpen, setPromptHistoryOpen] = useState(false);
   const [classicSideView, setClassicSideView] = useState<"project" | "git" | "taskGit" | "java" | "useful" | "agents">("project");
   const [classicLeftWidth, setClassicLeftWidth] = useState(260);
   const [classicRightWidth, setClassicRightWidth] = useState(300);
@@ -980,7 +981,7 @@ export function App() {
     const sequence = ++taskSwitchSequence.current;
     const isCurrent = () => taskSwitchSequence.current === sequence && clientRef.current === client;
     taskSwitchActive.current = true;
-    setTaskSwitching(true); setWorkspaceOptionsReady(false); setStatusMessage("");
+    setTaskSwitching(true); setPromptHistoryOpen(false); setWorkspaceOptionsReady(false); setStatusMessage("");
     try {
       const currentGroup = layoutRef.current.editorGroups[0]!;
       for (const tab of currentGroup.tabs) if (tab.type === "file" && tab.dirty) await saveFileTab(tab);
@@ -1734,6 +1735,7 @@ export function App() {
         <button className={`tool-stripe-button ${classicSideView === "project" ? "active" : ""}`} title="Project" onClick={() => setClassicSideView("project")}><Folder size={15} /><span>Project</span></button>
         <button className={`tool-stripe-button ${classicSideView === "git" ? "active" : ""}`} title="Git changes" onClick={() => { setClassicSideView("git"); void refreshGit(); }}><GitBranch size={15} /><span>Git</span>{gitEntries.length > 0 && <span className="tool-badge">{gitEntries.length > 99 ? "99+" : gitEntries.length}</span>}</button>
         {selectedTaskId && <button className={`tool-stripe-button ${classicSideView === "taskGit" ? "active" : ""}`} title="Changes from task base branch" onClick={() => { setClassicSideView("taskGit"); void refreshTaskGit(); }}><GitCompareArrows size={15} /><span>Task Git</span>{taskGitEntries.length > 0 && <span className="tool-badge">{taskGitEntries.length > 99 ? "99+" : taskGitEntries.length}</span>}</button>}
+        {selectedTaskId && <button className={`tool-stripe-button ${promptHistoryOpen ? "active" : ""}`} title={promptHistoryOpen ? "Hide Prompt History" : "Show Prompt History"} onClick={() => { setPromptHistoryOpen((open) => !open); if (!promptHistoryOpen) void refreshTaskGit(); }}><ListTree size={15} /><span>History</span>{taskCheckpoints.length > 0 && <span className="tool-badge">{taskCheckpoints.length > 99 ? "99+" : taskCheckpoints.length}</span>}</button>}
         <button className={`tool-stripe-button ${classicSideView === "useful" ? "active" : ""}`} title="Useful Files" onClick={() => { setClassicSideView("useful"); void refreshUsefulFiles(); }}><Library size={15} /><span>Useful</span></button>
         <button className={`tool-stripe-button ${classicSideView === "agents" ? "active" : ""}`} title="Agents" onClick={() => { setClassicSideView("agents"); void refreshAgents(); }}><Bot size={15} /><span>Agents</span></button>
         {javaOptions && <button className={`tool-stripe-button ${classicSideView === "java" ? "active" : ""}`} title="Java project" onClick={() => { setClassicSideView("java"); void refreshJavaTree(); }}><Coffee size={15} /><span>Java</span></button>}
@@ -1815,6 +1817,7 @@ export function App() {
         <button className={`tool-stripe-button right ${rightPanels.project ? "active" : ""}`} title={rightPanels.project ? "Hide Project" : "Show Project"} onClick={() => setRightPanels((current) => ({ ...current, project: !current.project }))}><Folder size={15} /><span>Project</span></button>
         <button className={`tool-stripe-button right ${rightPanels.git ? "active" : ""}`} title={rightPanels.git ? "Hide Git changes" : "Show Git changes"} onClick={() => setRightPanels((current) => { if (!current.git) void refreshGit(); return { ...current, git: !current.git }; })}><GitBranch size={15} /><span>Git</span>{gitEntries.length > 0 && <span className="tool-badge">{gitEntries.length > 99 ? "99+" : gitEntries.length}</span>}</button>
         {selectedTaskId && <button className={`tool-stripe-button right ${rightPanels.taskGit ? "active" : ""}`} title={rightPanels.taskGit ? "Hide Task Git" : "Show Task Git"} onClick={() => setRightPanels((current) => { if (!current.taskGit) void refreshTaskGit(); return { ...current, taskGit: !current.taskGit }; })}><GitCompareArrows size={15} /><span>Task Git</span>{taskGitEntries.length > 0 && <span className="tool-badge">{taskGitEntries.length > 99 ? "99+" : taskGitEntries.length}</span>}</button>}
+        {selectedTaskId && <button className={`tool-stripe-button right ${promptHistoryOpen ? "active" : ""}`} title={promptHistoryOpen ? "Hide Prompt History" : "Show Prompt History"} onClick={() => { setPromptHistoryOpen((open) => !open); if (!promptHistoryOpen) void refreshTaskGit(); }}><ListTree size={15} /><span>History</span>{taskCheckpoints.length > 0 && <span className="tool-badge">{taskCheckpoints.length > 99 ? "99+" : taskCheckpoints.length}</span>}</button>}
         {javaOptions && <button className={`tool-stripe-button right ${rightPanels.java ? "active" : ""}`} title={rightPanels.java ? "Hide Java project" : "Show Java project"} onClick={() => setRightPanels((current) => { if (!current.java) void refreshJavaTree(); return { ...current, java: !current.java }; })}><Coffee size={15} /><span>Java</span></button>}
         <button className={`tool-stripe-button right ${rightPanels.useful ? "active" : ""}`} title={rightPanels.useful ? "Hide Useful Files" : "Show Useful Files"} onClick={() => setRightPanels((current) => { if (!current.useful) void refreshUsefulFiles(); return { ...current, useful: !current.useful }; })}><Library size={15} /><span>Useful</span></button>
         <button className={`tool-stripe-button right ${rightPanels.agents ? "active" : ""}`} title={rightPanels.agents ? "Hide Agents" : "Show Agents"} onClick={() => setRightPanels((current) => { if (!current.agents) void refreshAgents(); return { ...current, agents: !current.agents }; })}><Bot size={15} /><span>Agents</span></button>
@@ -1864,13 +1867,13 @@ export function App() {
     {mergeDialog && <MergeTaskDialog task={mergeDialog} onClose={() => setMergeDialog(undefined)} onMerge={(strategy) => void mergeTask(mergeDialog, strategy)} />}
     {usefulDialog && <UsefulFileDialog mode={usefulDialog.mode} initialName={usefulDialog.file?.name ?? ""} scope={usefulDialog.scope} onClose={() => setUsefulDialog(undefined)} onSave={saveUsefulFileDialog} />}
     {agentDialog && <AgentDialog mode={agentDialog.mode} initialName={agentDialog.file?.name ?? ""} scope={agentDialog.scope} onClose={() => setAgentDialog(undefined)} onSave={saveAgentDialog} />}
-    {selectedTaskId && ((sideLayout === "classic" && classicSideView === "taskGit") || (sideLayout !== "classic" && rightPanels.taskGit)) && <TaskCheckpointHistory checkpoints={taskCheckpoints} onOpen={openCheckpointDiff} onRestore={restoreCheckpoint} />}
+    {selectedTaskId && promptHistoryOpen && <TaskCheckpointHistory checkpoints={taskCheckpoints} onOpen={openCheckpointDiff} onRestore={restoreCheckpoint} onClose={() => setPromptHistoryOpen(false)} />}
   </div>;
 }
 
-export function TaskCheckpointHistory({ checkpoints, onOpen, onRestore }: { checkpoints: TaskCheckpoint[]; onOpen(checkpoint: TaskCheckpoint, file: TaskCheckpointFile): void; onRestore(checkpoint: TaskCheckpoint): void }) {
+export function TaskCheckpointHistory({ checkpoints, onOpen, onRestore, onClose }: { checkpoints: TaskCheckpoint[]; onOpen(checkpoint: TaskCheckpoint, file: TaskCheckpointFile): void; onRestore(checkpoint: TaskCheckpoint): void; onClose?(): void }) {
   const [expanded, setExpanded] = useState<string>();
-  return <aside className="task-checkpoint-history" aria-label="Prompt change history"><header><strong>Prompt History</strong><small>{checkpoints.length} recorded</small></header>
+  return <aside className="task-checkpoint-history" aria-label="Prompt change history"><header><strong>Prompt History</strong><span><small>{checkpoints.length} recorded</small>{onClose && <button title="Close Prompt History" onClick={onClose}><X size={14} /></button>}</span></header>
     {checkpoints.length === 0 ? <div className="git-empty">Prompt checkpoints appear after an agent turn starts.</div> : checkpoints.map((checkpoint) => <section key={checkpoint.id} className={`task-checkpoint ${checkpoint.status}`}>
       <button className="task-checkpoint-prompt" onClick={() => setExpanded((current) => current === checkpoint.id ? undefined : checkpoint.id)}>{expanded === checkpoint.id ? <ChevronDown size={13} /> : <ChevronRight size={13} />}<span><strong>{checkpoint.prompt || "Prompt"}</strong><small>{checkpoint.provider} · {new Date(checkpoint.startedAt).toLocaleString()} · {checkpoint.status}</small></span><em>{checkpoint.files.length}</em></button>
       {expanded === checkpoint.id && <div className="task-checkpoint-files">{checkpoint.files.length === 0 ? <small>No filesystem changes recorded</small> : checkpoint.files.map((file) => <button key={`${file.originalPath ?? ""}:${file.path}`} onClick={() => onOpen(checkpoint, file)}><code>{file.status}</code><span>{file.originalPath ? `${file.originalPath} → ${file.path}` : file.path}</span>{file.binary && <small>binary</small>}</button>)}<button className="task-checkpoint-restore" disabled={checkpoint.status === "running"} onClick={() => onRestore(checkpoint)}><RefreshCw size={12} />Restore this point</button></div>}
