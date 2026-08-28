@@ -193,6 +193,8 @@ REMOTE_IDE_STATE_DIR=/var/lib/vibe-editor npm run core -- --workspace /srv/proje
 
 Core stores task registries/worktrees, workspace options, useful files, managed agent presets, AI session data, terminal restoration metadata, file colors, and commit drafts there. Workspace `.agents/*.md` presets remain in the project. Desktop stores UI settings in `settings.json` under its Electron application-data directory.
 
+Task Git prompt checkpoints are also stored there as content-addressed snapshots outside the repository. See [Task Git prompt history](docs/TASK_GIT_HISTORY.md).
+
 ## Current limitations and security
 
 - Core exposes one root workspace per process and has no authentication, authorization, or TLS. Anyone who can reach its port can modify files and run commands with Core's operating-system permissions. Do not expose it to the public internet.

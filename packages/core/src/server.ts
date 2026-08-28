@@ -21,6 +21,8 @@ import { summarizeAiSessions } from "./ai/summary.js";
 import { createAcpRegistry, type AcpRegistry } from "./ai/index.js";
 import { AppEventBridge } from "./app-events.js";
 import { AppToolService, withAppTools } from "./app-tools.js";
+import { TaskCheckpointStore } from "./task-checkpoints.js";
+import type { AiProvider } from "@remote-ide/protocol";
 
 const execFileAsync = promisify(execFile);
 
@@ -32,6 +34,7 @@ type SessionServices = {
   java: JavaProjectService;
   jdt: JdtLanguageService;
   workspaceState: WorkspaceStateStore;
+  checkpoints: TaskCheckpointStore;
 };
 
 /**
@@ -99,7 +102,14 @@ export async function createServer(host: string, port: number, workspacePath: st
     const encoded = JSON.stringify({ type: "ai.changed", payload: { workspace: changedWorkspace } } satisfies ServerEvent);
     for (const socket of activeSessions) sendWebSocketData(socket, encoded);
   };
-  const acp = createAcpRegistry(aiChanged);
+  const checkpointStores = new Map<string, TaskCheckpointStore>();
+  const checkpointStore = (target: string) => { const key = path.resolve(target); let store = checkpointStores.get(key); if (!store) { store = new TaskCheckpointStore(key); checkpointStores.set(key, store); } return store; };
+  await Promise.all([rootWorkspace, ...savedTasks.tasks.map((task) => tasks.taskPath(task.id))].map((target) => checkpointStore(target).recover()));
+  const taskGitChanged = (changedWorkspace: string) => { const encoded = JSON.stringify({ type: "taskGit.changed", payload: { workspace: changedWorkspace } } satisfies ServerEvent); for (const socket of activeSessions) sendWebSocketData(socket, encoded); };
+  const acp = createAcpRegistry(aiChanged, {
+    begin: async (target, provider, prompt, sessionId) => { const id = await checkpointStore(target).begin(provider as AiProvider, prompt, sessionId); taskGitChanged(target); return id; },
+    complete: async (target, ids, status) => { await Promise.all(ids.map((id) => checkpointStore(target).complete(id, status))); taskGitChanged(target); }
+  });
   const onTasksChanged = async () => {
     const encoded = JSON.stringify({ type: "tasks.changed", payload: {} } satisfies ServerEvent);
     for (const socket of activeSessions) sendWebSocketData(socket, encoded);
@@ -161,7 +171,7 @@ export async function createServer(host: string, port: number, workspacePath: st
       sendWebSocketData(socket, JSON.stringify(message));
       });
       const jdt = new JdtLanguageService(filesystem);
-      return { workspacePath: nextWorkspace, filesystem, search, git, java, jdt, workspaceState };
+      return { workspacePath: nextWorkspace, filesystem, search, git, java, jdt, workspaceState, checkpoints: checkpointStore(nextWorkspace) };
     };
     let servicesPromise: Promise<SessionServices>;
     /** Resolves once no task switch is in flight for this connection. */
@@ -277,7 +287,7 @@ function parseRequest(data: RawData): Request {
 }
 
 async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStore, acp: AcpRegistry, usefulFiles: UsefulFilesStore, agents: AgentsStore, terminalHost: TerminalSessionHost, rootWorkspace: string, request: Request): Promise<unknown> {
-  const { filesystem, search, git, java, jdt, workspaceState, workspacePath } = services;
+  const { filesystem, search, git, java, jdt, workspaceState, workspacePath, checkpoints } = services;
   if (request.type !== "workspace.open") filesystem.getWorkspace();
   switch (request.type) {
     case "workspace.open": {
@@ -422,6 +432,13 @@ async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStor
     }
     case "git.commit": return { hash: await git.commit(request.payload.paths, request.payload.message) };
     case "git.push": await git.push(); return {};
+    case "taskGit.history": return { checkpoints: await checkpoints.history() };
+    case "taskGit.diff": return checkpoints.diff(request.payload.checkpointId, request.payload.path);
+    case "taskGit.restore": {
+      const sessions = await Promise.all(acp.list().map((provider) => acp.get(provider.id).get(workspacePath)));
+      if (sessions.some((session) => session.status === "in_progress" || session.status === "user_prompt")) throw new CoreError("INVALID_REQUEST", "Stop the running task agent before restoring a checkpoint");
+      return { restored: await checkpoints.restore(request.payload.checkpointId) };
+    }
     case "java.loadMavenProject": {
       if (typeof request.payload.pomPath !== "string") throw new CoreError("INVALID_REQUEST", "pomPath must be a string");
       return java.loadMavenProject(request.payload.pomPath);

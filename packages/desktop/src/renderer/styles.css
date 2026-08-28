@@ -190,6 +190,20 @@ button { color: inherit; }
 .task-progress-spinner { flex: 0 0 auto; animation: task-progress-spin .8s linear infinite; }
 @keyframes task-progress-spin { to { transform: rotate(360deg); } }
 .task-ai-status.user_prompt { color: #e3b762; }
+.task-checkpoint-history { position: absolute; z-index: 12; right: 32px; top: 74px; width: min(430px, calc(100vw - 64px)); max-height: calc(100vh - 130px); overflow: auto; background: #24262a; border: 1px solid #41444a; border-radius: 6px; box-shadow: 0 10px 30px #0008; }
+.task-checkpoint-history > header { position: sticky; top: 0; z-index: 1; display: flex; justify-content: space-between; padding: 9px 11px; background: #292b30; border-bottom: 1px solid #3b3e43; }
+.task-checkpoint-history header small, .task-checkpoint-prompt small, .task-checkpoint-files > small { color: #8f949c; }
+.task-checkpoint { border-bottom: 1px solid #34373b; }
+.task-checkpoint-prompt { width: 100%; display: flex; align-items: center; gap: 6px; padding: 9px; border: 0; background: transparent; color: inherit; text-align: left; }
+.task-checkpoint-prompt > span { min-width: 0; flex: 1; display: grid; gap: 3px; }
+.task-checkpoint-prompt strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .82rem; }
+.task-checkpoint-prompt em { font-style: normal; color: #8f949c; }
+.task-checkpoint.running .task-checkpoint-prompt em { color: #e3b762; }
+.task-checkpoint-files { padding: 0 9px 9px 28px; display: grid; }
+.task-checkpoint-files > button { min-width: 0; display: flex; align-items: center; gap: 7px; padding: 5px 6px; border: 0; background: transparent; color: #c8cbd0; text-align: left; }
+.task-checkpoint-files > button:hover:not(:disabled) { background: #34373b; }
+.task-checkpoint-files code { color: #73b7ff; }.task-checkpoint-files span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.task-checkpoint-files .task-checkpoint-restore { margin-top: 6px; justify-content: center; border: 1px solid #4a4e55; border-radius: 4px; }
 .task-ai-status.done { color: #70b879; }
 .task-ai-status.error { color: #dc747c; }
 .task-ai-status.permission { color: #e3b762; }

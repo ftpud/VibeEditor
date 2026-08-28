@@ -16,6 +16,12 @@ export type GitCommit = { hash: string; shortHash: string; author: string; date:
 export type GitCommitFile = { path: string; status: string; originalPath?: string };
 export type GitDiffHunk = { originalStart: number; originalLines: number; modifiedStart: number; modifiedLines: number };
 export type GitRollbackFailure = { path: string; message: string };
+export type TaskCheckpointFile = { path: string; status: "A" | "M" | "D" | "R"; originalPath?: string; binary: boolean; size: number };
+export type TaskCheckpoint = {
+  id: string; promptId: string; sessionId?: string; provider: AiProvider; prompt: string;
+  startedAt: string; completedAt?: string; status: "running" | "completed" | "interrupted" | "error";
+  files: TaskCheckpointFile[];
+};
 
 export type WorkspaceOptions = {
   openFiles: string[];
@@ -176,6 +182,9 @@ export type ProtocolOperations = {
   "git.rollbackSelected": { payload: { paths: string[]; deleteUntracked: boolean }; result: { rolledBack: string[]; failures: GitRollbackFailure[] } };
   "git.commit": { payload: { paths: string[]; message: string }; result: { hash: string } };
   "git.push": { payload: Record<string, never>; result: Record<string, never> };
+  "taskGit.history": { payload: Record<string, never>; result: { checkpoints: TaskCheckpoint[] } };
+  "taskGit.diff": { payload: { checkpointId: string; path: string }; result: { originalContent: string; modifiedContent: string; binary: boolean } };
+  "taskGit.restore": { payload: { checkpointId: string }; result: { restored: string[] } };
   "java.loadMavenProject": {
     payload: { pomPath: string };
     result: { options: JavaProjectOptions; tree: JavaProjectNode[] };
@@ -285,6 +294,7 @@ export type TerminalExitEvent = {
 };
 
 export type GitChangedEvent = { type: "git.changed"; payload: Record<string, never> };
+export type TaskGitChangedEvent = { type: "taskGit.changed"; payload: { workspace: string } };
 
 export type JavaOutputEvent = { type: "java.output"; payload: { data: string } };
 export type JavaExitEvent = { type: "java.exit"; payload: { exitCode: number | null; signal: string | null } };
@@ -293,7 +303,7 @@ export type AiChangedEvent = { type: "ai.changed"; payload: { workspace: string 
 export type TasksChangedEvent = { type: "tasks.changed"; payload: Record<string, never> };
 export type CommitMessageChangedEvent = { type: "commit-message.changed"; payload: { workspace: string; message: string } };
 
-export type ServerEvent = FilesystemChangedEvent | TerminalOutputEvent | TerminalExitEvent | GitChangedEvent | JavaOutputEvent | JavaExitEvent | JavaDebugStateEvent | AiChangedEvent | TasksChangedEvent | CommitMessageChangedEvent;
+export type ServerEvent = FilesystemChangedEvent | TerminalOutputEvent | TerminalExitEvent | GitChangedEvent | TaskGitChangedEvent | JavaOutputEvent | JavaExitEvent | JavaDebugStateEvent | AiChangedEvent | TasksChangedEvent | CommitMessageChangedEvent;
 
 /**
  * Every request the core accepts. Declaring it as a fully keyed record makes TypeScript
@@ -361,6 +371,9 @@ const requestTypeRegistry: Record<RequestType, true> = {
   "git.rollbackSelected": true,
   "git.commit": true,
   "git.push": true,
+  "taskGit.history": true,
+  "taskGit.diff": true,
+  "taskGit.restore": true,
   "java.loadMavenProject": true,
   "java.getOptions": true,
   "java.addSourceRoot": true,

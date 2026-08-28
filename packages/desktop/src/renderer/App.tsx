@@ -1,7 +1,7 @@
 import Editor, { DiffEditor, type Monaco } from "@monaco-editor/react";
 import { ArrowUp, ArrowUpRight, Bot, Braces, Bug, Check, ChevronDown, ChevronRight, ChevronUp, CircleAlert, Coffee, Columns2, Eye, EyeOff, File, FileCode2, FileDiff, FileJson, FileText, Folder, FolderOpen, GitBranch, GitCompareArrows, GitMerge, Hash, Library, ListTodo, ListTree, LoaderCircle, LogOut, MoreVertical, Package, Palette, Pencil, Play, Plus, RefreshCw, Save, Search, Settings, ShieldAlert, Square, SquareTerminal, Trash2, X } from "lucide-react";
 import { Children, isValidElement, useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
-import type { AgentFile, AgentFileScope, AiConfiguration, AiModel, AiProvider, AiProviderDescriptor, AiSession, AiStatus, AiTaskSummary, AiUsage, FileColor, FileTreeNode, GitBranch as GitBranchInfo, GitDiffHunk, GitStatusEntry, HttpResponse, JavaBreakpoint, JavaDebugState, JavaDiagnostic, JavaLspLocation, JavaMainClass, JavaProjectNode, JavaProjectOptions, JavaTypeSuggestion, SearchResult, UsefulFile, UsefulFileScope, WorkspaceOptions, WorkspaceTask } from "@remote-ide/protocol";
+import type { AgentFile, AgentFileScope, AiConfiguration, AiModel, AiProvider, AiProviderDescriptor, AiSession, AiStatus, AiTaskSummary, AiUsage, FileColor, FileTreeNode, GitBranch as GitBranchInfo, GitDiffHunk, GitStatusEntry, HttpResponse, JavaBreakpoint, JavaDebugState, JavaDiagnostic, JavaLspLocation, JavaMainClass, JavaProjectNode, JavaProjectOptions, JavaTypeSuggestion, SearchResult, TaskCheckpoint, TaskCheckpointFile, UsefulFile, UsefulFileScope, WorkspaceOptions, WorkspaceTask } from "@remote-ide/protocol";
 import type { editor } from "monaco-editor";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -166,6 +166,7 @@ export function App() {
   const [gitRollingBack, setGitRollingBack] = useState(false);
   const [gitRollbackDialog, setGitRollbackDialog] = useState<GitStatusEntry[]>();
   const [taskGitEntries, setTaskGitEntries] = useState<GitStatusEntry[]>([]);
+  const [taskCheckpoints, setTaskCheckpoints] = useState<TaskCheckpoint[]>([]);
   const [taskGitError, setTaskGitError] = useState("");
   const [gitError, setGitError] = useState("");
   const [workspaceOptionsReady, setWorkspaceOptionsReady] = useState(false);
@@ -306,12 +307,13 @@ export function App() {
   }, []);
 
   const refreshTaskGit = useCallback(async (task = activeTaskRef.current, client = clientRef.current) => {
-    if (!client || !task) { setTaskGitEntries([]); setTaskGitError(""); return; }
+    if (!client || !task) { setTaskGitEntries([]); setTaskCheckpoints([]); setTaskGitError(""); return; }
     try {
-      const result = await client.request("git.compareFiles", { ref: task.baseBranch });
+      const [result, history] = await Promise.all([client.request("git.compareFiles", { ref: task.baseBranch }), client.request("taskGit.history", {})]);
       setTaskGitEntries(result.files.map((file) => ({ path: file.path, ...(file.originalPath ? { originalPath: file.originalPath } : {}), indexStatus: file.status === "?" ? "?" : file.status[0] ?? "M", worktreeStatus: file.status === "?" ? "?" : " " })));
+      setTaskCheckpoints(history.checkpoints);
       setTaskGitError("");
-    } catch (error) { setTaskGitEntries([]); setTaskGitError(error instanceof Error ? error.message : "Could not compare task with its base branch"); }
+    } catch (error) { setTaskGitEntries([]); setTaskCheckpoints([]); setTaskGitError(error instanceof Error ? error.message : "Could not load Task Git"); }
   }, []);
 
   // Several ai.statuses requests can be in flight at once (AI activity emits a burst of ai.changed
@@ -502,6 +504,10 @@ export function App() {
       }
       if (event.type === "commit-message.changed") {
         if (event.payload.workspace === activeWorkspaceRef.current) setGitCommitMessage(event.payload.message);
+        return;
+      }
+      if (event.type === "taskGit.changed") {
+        if (event.payload.workspace === activeWorkspaceRef.current) void refreshTaskGit(activeTaskRef.current, client);
         return;
       }
       if (gitRefreshTimer.current) clearTimeout(gitRefreshTimer.current);
@@ -712,6 +718,22 @@ export function App() {
       const result = await clientRef.current!.request("git.compareDiff", { ref: task.baseBranch, path: entry.path, ...(entry.originalPath ? { originalPath: entry.originalPath } : {}) });
       updateGroup((tabs, active) => ({ tabs: tabs.map((item) => item.id === tab.id ? { ...item, originalContent: result.originalContent, content: result.modifiedContent, savedContent: result.modifiedContent, loading: false } : item), activeTabId: active }));
     } catch (error) { updateGroup((tabs, active) => ({ tabs: tabs.map((item) => item.id === tab.id ? { ...item, loading: false, error: error instanceof Error ? error.message : "Could not load task diff" } : item), activeTabId: active })); }
+  };
+
+  const openCheckpointDiff = async (checkpoint: TaskCheckpoint, file: TaskCheckpointFile) => {
+    const tabPath = `task-checkpoint:${checkpoint.id}:${file.path}`;
+    const existing = group.tabs.find((tab) => tab.type === "diff" && tab.path === tabPath);
+    if (existing) { updateGroup((tabs) => ({ tabs, activeTabId: existing.id })); return; }
+    const tab: EditorTab = { id: crypto.randomUUID(), type: "diff", title: `${file.path.split("/").pop() ?? file.path} (${checkpoint.prompt.slice(0, 24)})`, path: tabPath, dirty: false, content: "", savedContent: "", originalContent: "", diffMode: "unified", loading: true };
+    updateGroup((tabs) => ({ tabs: [...tabs, tab], activeTabId: tab.id }));
+    try { const result = await clientRef.current!.request("taskGit.diff", { checkpointId: checkpoint.id, path: file.path }); updateGroup((tabs, active) => ({ tabs: tabs.map((item) => item.id === tab.id ? { ...item, originalContent: result.binary ? "Binary file" : result.originalContent, content: result.binary ? "Binary file" : result.modifiedContent, savedContent: result.modifiedContent, loading: false } : item), activeTabId: active })); }
+    catch (error) { updateGroup((tabs, active) => ({ tabs: tabs.map((item) => item.id === tab.id ? { ...item, loading: false, error: error instanceof Error ? error.message : "Could not load checkpoint diff" } : item), activeTabId: active })); }
+  };
+
+  const restoreCheckpoint = async (checkpoint: TaskCheckpoint) => {
+    if (!confirm(`Restore the task files to the point after “${checkpoint.prompt.slice(0, 80)}”? Current task file changes will be replaced.`)) return;
+    try { await clientRef.current!.request("taskGit.restore", { checkpointId: checkpoint.id }); await Promise.all([refreshTaskGit(), refreshGit(), refreshTree()]); setStatusMessage("Task checkpoint restored; Git commit history was not changed"); }
+    catch (error) { setStatusMessage(error instanceof Error ? error.message : "Could not restore checkpoint"); }
   };
 
   const activateEditorTab = useCallback(async (tab: EditorTab) => {
@@ -1842,7 +1864,17 @@ export function App() {
     {mergeDialog && <MergeTaskDialog task={mergeDialog} onClose={() => setMergeDialog(undefined)} onMerge={(strategy) => void mergeTask(mergeDialog, strategy)} />}
     {usefulDialog && <UsefulFileDialog mode={usefulDialog.mode} initialName={usefulDialog.file?.name ?? ""} scope={usefulDialog.scope} onClose={() => setUsefulDialog(undefined)} onSave={saveUsefulFileDialog} />}
     {agentDialog && <AgentDialog mode={agentDialog.mode} initialName={agentDialog.file?.name ?? ""} scope={agentDialog.scope} onClose={() => setAgentDialog(undefined)} onSave={saveAgentDialog} />}
+    {selectedTaskId && ((sideLayout === "classic" && classicSideView === "taskGit") || (sideLayout !== "classic" && rightPanels.taskGit)) && <TaskCheckpointHistory checkpoints={taskCheckpoints} onOpen={openCheckpointDiff} onRestore={restoreCheckpoint} />}
   </div>;
+}
+
+export function TaskCheckpointHistory({ checkpoints, onOpen, onRestore }: { checkpoints: TaskCheckpoint[]; onOpen(checkpoint: TaskCheckpoint, file: TaskCheckpointFile): void; onRestore(checkpoint: TaskCheckpoint): void }) {
+  const [expanded, setExpanded] = useState<string>();
+  return <aside className="task-checkpoint-history" aria-label="Prompt change history"><header><strong>Prompt History</strong><small>{checkpoints.length} recorded</small></header>
+    {checkpoints.length === 0 ? <div className="git-empty">Prompt checkpoints appear after an agent turn starts.</div> : checkpoints.map((checkpoint) => <section key={checkpoint.id} className={`task-checkpoint ${checkpoint.status}`}>
+      <button className="task-checkpoint-prompt" onClick={() => setExpanded((current) => current === checkpoint.id ? undefined : checkpoint.id)}>{expanded === checkpoint.id ? <ChevronDown size={13} /> : <ChevronRight size={13} />}<span><strong>{checkpoint.prompt || "Prompt"}</strong><small>{checkpoint.provider} · {new Date(checkpoint.startedAt).toLocaleString()} · {checkpoint.status}</small></span><em>{checkpoint.files.length}</em></button>
+      {expanded === checkpoint.id && <div className="task-checkpoint-files">{checkpoint.files.length === 0 ? <small>No filesystem changes recorded</small> : checkpoint.files.map((file) => <button key={`${file.originalPath ?? ""}:${file.path}`} onClick={() => onOpen(checkpoint, file)}><code>{file.status}</code><span>{file.originalPath ? `${file.originalPath} → ${file.path}` : file.path}</span>{file.binary && <small>binary</small>}</button>)}<button className="task-checkpoint-restore" disabled={checkpoint.status === "running"} onClick={() => onRestore(checkpoint)}><RefreshCw size={12} />Restore this point</button></div>}
+    </section>)}</aside>;
 }
 
 function BranchSelectorGroup({ title, branches, selected, onSelect, onCheckout, onRename }: { title: string; branches: GitBranchInfo[]; selected?: string; onSelect(name: string): void; onCheckout(branch: GitBranchInfo): void; onRename(branch: GitBranchInfo): void }) {

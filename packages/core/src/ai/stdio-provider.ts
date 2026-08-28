@@ -26,6 +26,7 @@ type Runtime = {
   steering: boolean;
   /** Follow-ups typed mid-turn that agents without steering run next. */
   pending: string[];
+  checkpointIds: string[];
   configOptions: SessionConfigOption[];
   modes: ModeState;
   mcpKey: string;
@@ -54,6 +55,10 @@ const CONVERSATION_UPDATES = new Set(["agent_message_chunk", "agent_thought_chun
 const TERMINAL_ONLY_COMMANDS = new Set(["/diff", "/resume", "/theme", "/settings", "/login", "/help", "/tasks", "/undo"]);
 
 /** Genuine ACP v1 client transport over NDJSON/stdio. */
+export type AcpTurnObserver = {
+  begin(workspace: string, provider: string, prompt: string, sessionId?: string): Promise<string>;
+  complete(workspace: string, ids: string[], status: "completed" | "interrupted" | "error"): Promise<void>;
+};
 export abstract class StdioAcpProvider extends AcpProvider {
   abstract readonly descriptor: AiProviderDescriptor;
   protected abstract command(configuration: AiConfiguration): { command: string; args: string[]; env?: NodeJS.ProcessEnv };
@@ -68,7 +73,7 @@ export abstract class StdioAcpProvider extends AcpProvider {
   private readonly blankSessions = new Map<string, AiSession>();
   private readonly archiveIndex = new Map<string, { at: number; sessions: AiSession[] }>();
 
-  constructor(private readonly onChanged: (workspace: string) => void, private readonly stateDirectory = process.env.REMOTE_IDE_STATE_DIR ?? path.join(os.homedir(), ".remote-ide", "workspaces")) { super(); }
+  constructor(private readonly onChanged: (workspace: string) => void, private readonly stateDirectory = process.env.REMOTE_IDE_STATE_DIR ?? path.join(os.homedir(), ".remote-ide", "workspaces"), private readonly turns?: AcpTurnObserver) { super(); }
 
   async get(workspace: string): Promise<AiSession> {
     const live = this.runtimes.get(workspace);
@@ -136,6 +141,7 @@ export abstract class StdioAcpProvider extends AcpProvider {
     const runtime = await this.ensureRuntime(workspace, session, allowedServers);
     const visible = [prompt, ...(request.content ?? []).map(contentLabel)].filter(Boolean).join("\n");
     runtime.session.messages.push({ ...this.message("user", visible), content: request.content });
+    if (this.turns) try { runtime.checkpointIds.push(await this.turns.begin(workspace, this.descriptor.id, visible, runtime.session.id)); } catch (error) { runtime.session.messages.push(this.message("activity", `Prompt checkpoint could not be created: ${error instanceof Error ? error.message : String(error)}`)); }
     this.runPrompt(workspace, runtime, this.withSessionAgent(content, request.agent, runtime.session));
     await this.save(workspace, runtime.session); this.onChanged(workspace);
     return this.get(workspace);
@@ -151,6 +157,7 @@ export abstract class StdioAcpProvider extends AcpProvider {
     const runtime = this.runtimes.get(workspace);
     if (!runtime?.running) throw new CoreError("INVALID_REQUEST", `${this.descriptor.name} is not currently working`);
     runtime.session.messages.push(this.message("user", prompt));
+    if (this.turns) try { runtime.checkpointIds.push(await this.turns.begin(workspace, this.descriptor.id, prompt, runtime.session.id)); } catch (error) { runtime.session.messages.push(this.message("activity", `Prompt checkpoint could not be created: ${error instanceof Error ? error.message : String(error)}`)); }
     runtime.anchors = {};
     if (runtime.steering) {
       try { await runtime.connection.extMethod(STEERING_METHOD, { sessionId: runtime.sessionId, prompt: [{ type: "text", text: prompt }] }); }
@@ -170,6 +177,7 @@ export abstract class StdioAcpProvider extends AcpProvider {
     try { await runtime.connection.cancel({ sessionId: runtime.sessionId }); }
     catch (error) { runtime.session.messages.push(this.message("activity", `Cancel request failed: ${error instanceof Error ? error.message : String(error)}`)); }
     runtime.session.status = "idle"; runtime.session.messages.push(this.message("activity", "Interrupted by user"));
+    await this.completeCheckpoints(workspace, runtime, "interrupted");
     await this.save(workspace, runtime.session); this.onChanged(workspace); return this.get(workspace);
   }
 
@@ -193,11 +201,13 @@ export abstract class StdioAcpProvider extends AcpProvider {
         if (result.stopReason === "max_tokens" || result.stopReason === "max_turn_requests") runtime.session.messages.push(this.message("activity", `Turn stopped early: ${result.stopReason}`));
         if (result.stopReason === "refusal") runtime.session.messages.push(this.message("error", "The agent refused to continue this turn."));
       }
+      if (queued === undefined) await this.completeCheckpoints(workspace, runtime, result.stopReason === "cancelled" ? "interrupted" : result.stopReason === "refusal" ? "error" : "completed");
       await this.save(workspace, runtime.session); this.onChanged(workspace);
     })).catch((error: unknown) => this.queue(workspace, async () => {
       if (runtime.generation !== generation) return;
       runtime.running = false; runtime.anchors = {}; runtime.pending = [];
       runtime.session.status = "error"; runtime.session.messages.push(this.message("error", this.describe(error, runtime)));
+      await this.completeCheckpoints(workspace, runtime, "error");
       await this.save(workspace, runtime.session); this.onChanged(workspace);
     }));
   }
@@ -205,6 +215,11 @@ export abstract class StdioAcpProvider extends AcpProvider {
   private validate(prompt: string): string {
     if (!prompt.trim() || prompt.length > 100_000) throw new CoreError("INVALID_REQUEST", "Prompt must contain at most 100,000 characters");
     return prompt.trim();
+  }
+
+  private async completeCheckpoints(workspace: string, runtime: Runtime, status: "completed" | "interrupted" | "error"): Promise<void> {
+    const ids = runtime.checkpointIds.splice(0); if (!this.turns || ids.length === 0) return;
+    try { await this.turns.complete(workspace, ids, status); } catch (error) { runtime.session.messages.push(this.message("activity", `Prompt checkpoint could not be completed: ${error instanceof Error ? error.message : String(error)}`)); }
   }
 
   private promptContent(workspace: string, prompt: string, blocks?: AiContentBlock[]): ContentBlock[] {
@@ -403,7 +418,7 @@ export abstract class StdioAcpProvider extends AcpProvider {
     // transcript still records which preset the previous session received.
     if (!connected.resumed) session.agent = undefined;
     if (connected.resumeFailed) session.messages.push(this.message("activity", "The saved ACP session could not be resumed; a new agent session was started."));
-    const runtime: Runtime = { child: connected.child, connection: connected.connection, sessionId: connected.sessionId, running: false, stderr: connected.stderr(), session, tools: new Map(), anchors: {}, generation: 0, steering: connected.steering, pending: [], configOptions: connected.configOptions, modes: connected.modes, mcpKey };
+    const runtime: Runtime = { child: connected.child, connection: connected.connection, sessionId: connected.sessionId, running: false, stderr: connected.stderr(), session, tools: new Map(), anchors: {}, generation: 0, steering: connected.steering, pending: [], checkpointIds: [], configOptions: connected.configOptions, modes: connected.modes, mcpKey };
     connected.bind(runtime);
     session.threadId = connected.sessionId;
     session.steering = connected.steering;

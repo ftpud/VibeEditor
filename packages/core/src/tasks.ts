@@ -235,6 +235,7 @@ export class WorkspaceTaskStore {
       await this.removeWorktree(this.taskPath(taskId));
       if (await this.branchExists(task.branch)) await execFileAsync("git", ["-C", this.rootWorkspace, "branch", "-D", task.branch], { encoding: "utf8" });
       await rm(path.dirname(this.taskPath(taskId)), { recursive: true, force: true });
+      await rm(path.join(this.stateDirectory, `${crypto.createHash("sha256").update(path.resolve(this.taskPath(taskId))).digest("hex")}-task-history`), { recursive: true, force: true });
       await this.save(next);
       return next;
     } catch (error) {
