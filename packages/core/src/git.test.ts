@@ -188,6 +188,30 @@ describe("parseGitStatus", () => {
   });
 });
 
+describe("Git upstream status", () => {
+  it("reports no upstream, zero ahead, ahead commits, and clears after push", async () => {
+    const parent = await mkdtemp(path.join(tmpdir(), "remote-ide-git-upstream-"));
+    const remote = path.join(parent, "remote.git");
+    const root = path.join(parent, "repo");
+    await execFileAsync("git", ["init", "--bare", remote]);
+    await execFileAsync("git", ["clone", remote, root]);
+    await execFileAsync("git", ["-C", root, "config", "user.email", "test@example.com"]);
+    await execFileAsync("git", ["-C", root, "config", "user.name", "Test"]);
+    await writeFile(path.join(root, "file.txt"), "initial\n");
+    await execFileAsync("git", ["-C", root, "add", "file.txt"]);
+    await execFileAsync("git", ["-C", root, "commit", "-m", "initial"]);
+    const service = new GitService(root);
+    expect((await service.status()).upstream).toBeUndefined();
+    await execFileAsync("git", ["-C", root, "push", "-u", "origin", "HEAD"]);
+    expect((await service.status()).upstream).toMatchObject({ ahead: 0 });
+    await writeFile(path.join(root, "file.txt"), "next\n");
+    await execFileAsync("git", ["-C", root, "commit", "-am", "next"]);
+    expect((await service.status()).upstream).toMatchObject({ ahead: 1 });
+    await service.push();
+    expect((await service.status()).upstream).toMatchObject({ ahead: 0 });
+  });
+});
+
 describe("Git history parsing", () => {
   it("parses null-delimited commit metadata", () => {
     const hash = "a".repeat(40);

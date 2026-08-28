@@ -1,4 +1,4 @@
-import type { GitStatusEntry } from "@remote-ide/protocol";
+import type { GitStatusEntry, GitUpstreamStatus } from "@remote-ide/protocol";
 import { ArrowUp, LoaderCircle, RefreshCw, RotateCcw, X } from "lucide-react";
 import { useEffect, useState } from "react";
 
@@ -25,18 +25,23 @@ export async function executeRollbackSelection<T extends { rolledBack: string[];
   return result;
 }
 
-export function GitToolbarActions({ selectedCount, operationRunning, pushing, rollingBack, onRollbackSelected, onPush, onRefresh }: {
+export function shouldApplyGitStatus(requestId: number, latestRequestId: number, requestedWorkspace: string, activeWorkspace: string): boolean {
+  return requestId === latestRequestId && requestedWorkspace === activeWorkspace;
+}
+
+export function GitToolbarActions({ selectedCount, operationRunning, pushing, rollingBack, upstream, onRollbackSelected, onPush, onRefresh }: {
   selectedCount: number;
   operationRunning: boolean;
   pushing: boolean;
   rollingBack: boolean;
+  upstream?: GitUpstreamStatus;
   onRollbackSelected(): void;
   onPush(): void;
   onRefresh(): void;
 }) {
   return <div className="panel-header-actions git-toolbar-actions">
     <button className="git-rollback-selected" aria-label="Rollback Selected" title={selectedCount ? `Rollback ${selectedCount} selected change${selectedCount === 1 ? "" : "s"}` : "Rollback Selected"} disabled={operationRunning || selectedCount === 0} onClick={onRollbackSelected}>{rollingBack ? <LoaderCircle className="status-toast-spinner" size={14} /> : <RotateCcw size={14} />}<span>Rollback Selected</span></button>
-    <button aria-label="Push" title={pushing ? "Pushing changes" : "Push"} disabled={operationRunning} onClick={onPush}>{pushing ? <LoaderCircle className="status-toast-spinner" size={14} /> : <ArrowUp size={14} />}</button>
+    <button className="git-push-button" aria-label={upstream && upstream.ahead > 0 ? `Push ${upstream.ahead} unpushed commit${upstream.ahead === 1 ? "" : "s"}` : "Push"} title={pushing ? "Pushing changes" : upstream && upstream.ahead > 0 ? `${upstream.ahead} commit${upstream.ahead === 1 ? "" : "s"} ahead of ${upstream.upstream}` : upstream ? `Push (up to date with ${upstream.upstream})` : "Push (branch is not published)"} disabled={operationRunning} onClick={onPush}>{pushing ? <LoaderCircle className="status-toast-spinner" size={14} /> : <ArrowUp size={14} />}{upstream && upstream.ahead > 0 && <span className="git-push-badge" aria-hidden="true">{upstream.ahead > 99 ? "99+" : upstream.ahead}</span>}</button>
     <button aria-label="Refresh Git status" title="Refresh Git status" disabled={operationRunning} onClick={onRefresh}><RefreshCw size={14} /></button>
   </div>;
 }

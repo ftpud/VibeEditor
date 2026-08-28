@@ -11,6 +11,7 @@ export type GitStatusEntry = {
   indexStatus: string;
   worktreeStatus: string;
 };
+export type GitUpstreamStatus = { upstream: string; ahead: number };
 export type GitBranch = { name: string; current: boolean; remote: boolean };
 export type GitCommit = { hash: string; shortHash: string; author: string; date: string; subject: string; parents?: string[]; refs?: string[]; graph?: string };
 export type GitCommitFile = { path: string; status: string; originalPath?: string };
@@ -162,7 +163,7 @@ export type ProtocolOperations = {
   };
   "git.status": {
     payload: Record<string, never>;
-    result: { branch: string; entries: GitStatusEntry[] };
+    result: { branch: string; entries: GitStatusEntry[]; upstream?: GitUpstreamStatus };
   };
   "git.diff": {
     payload: { path: string };

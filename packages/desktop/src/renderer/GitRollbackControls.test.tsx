@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import type { GitStatusEntry } from "@remote-ide/protocol";
-import { GitToolbarActions, RollbackSelectedDialog, executeRollbackSelection, selectedGitEntries } from "./GitRollbackControls";
+import { GitToolbarActions, RollbackSelectedDialog, executeRollbackSelection, selectedGitEntries, shouldApplyGitStatus } from "./GitRollbackControls";
 
 const noop = () => {};
 const entry = (path: string, indexStatus = " ", worktreeStatus = "M"): GitStatusEntry => ({ path, indexStatus, worktreeStatus });
@@ -17,6 +17,28 @@ describe("Git rollback controls", () => {
     const markup = renderToStaticMarkup(<GitToolbarActions selectedCount={2} operationRunning pushing={false} rollingBack onRollbackSelected={noop} onPush={noop} onRefresh={noop} />);
     expect(markup.match(/disabled/g)).toHaveLength(3);
     expect(markup).toContain("status-toast-spinner");
+  });
+
+  it("shows an accessible ahead badge only for unpushed commits", () => {
+    const ahead = renderToStaticMarkup(<GitToolbarActions selectedCount={0} operationRunning={false} pushing={false} rollingBack={false} upstream={{ upstream: "origin/main", ahead: 2 }} onRollbackSelected={noop} onPush={noop} onRefresh={noop} />);
+    expect(ahead).toContain('aria-label="Push 2 unpushed commits"');
+    expect(ahead).toContain('class="git-push-badge"');
+    expect(ahead).toContain("2 commits ahead of origin/main");
+    const synchronized = renderToStaticMarkup(<GitToolbarActions selectedCount={0} operationRunning={false} pushing={false} rollingBack={false} upstream={{ upstream: "origin/main", ahead: 0 }} onRollbackSelected={noop} onPush={noop} onRefresh={noop} />);
+    expect(synchronized).not.toContain("git-push-badge");
+    expect(synchronized).toContain("up to date with origin/main");
+  });
+
+  it("distinguishes a branch without an upstream without showing an ahead indicator", () => {
+    const markup = renderToStaticMarkup(<GitToolbarActions selectedCount={0} operationRunning={false} pushing={false} rollingBack={false} onRollbackSelected={noop} onPush={noop} onRefresh={noop} />);
+    expect(markup).not.toContain("git-push-badge");
+    expect(markup).toContain("branch is not published");
+  });
+
+  it("rejects Git status that completed after a task workspace switch", () => {
+    expect(shouldApplyGitStatus(4, 4, "/tasks/old", "/tasks/new")).toBe(false);
+    expect(shouldApplyGitStatus(3, 4, "/tasks/new", "/tasks/new")).toBe(false);
+    expect(shouldApplyGitStatus(4, 4, "/tasks/new", "/tasks/new")).toBe(true);
   });
 
   it("targets only entries whose paths are selected", () => {

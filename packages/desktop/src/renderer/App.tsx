@@ -1,7 +1,7 @@
 import Editor, { DiffEditor, type Monaco } from "@monaco-editor/react";
 import { ArrowUp, ArrowUpRight, Bot, Braces, Bug, Check, ChevronDown, ChevronRight, ChevronUp, CircleAlert, Coffee, Columns2, Eye, EyeOff, File, FileCode2, FileDiff, FileJson, FileText, Folder, FolderOpen, GitBranch, GitCompareArrows, GitMerge, Hash, Library, ListTodo, ListTree, LoaderCircle, LogOut, MoreVertical, Package, Palette, Pencil, Play, Plus, RefreshCw, Save, Search, Settings, ShieldAlert, Square, SquareTerminal, Trash2, X } from "lucide-react";
 import { Children, isValidElement, useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
-import type { AgentFile, AgentFileScope, AiConfiguration, AiModel, AiProvider, AiProviderDescriptor, AiSession, AiStatus, AiTaskSummary, AiUsage, FileColor, FileTreeNode, GitBranch as GitBranchInfo, GitDiffHunk, GitStatusEntry, HttpResponse, JavaBreakpoint, JavaDebugState, JavaDiagnostic, JavaLspLocation, JavaMainClass, JavaProjectNode, JavaProjectOptions, JavaTypeSuggestion, SearchResult, TaskCheckpoint, TaskCheckpointFile, UsefulFile, UsefulFileScope, WorkspaceOptions, WorkspaceTask } from "@remote-ide/protocol";
+import type { AgentFile, AgentFileScope, AiConfiguration, AiModel, AiProvider, AiProviderDescriptor, AiSession, AiStatus, AiTaskSummary, AiUsage, FileColor, FileTreeNode, GitBranch as GitBranchInfo, GitDiffHunk, GitStatusEntry, GitUpstreamStatus, HttpResponse, JavaBreakpoint, JavaDebugState, JavaDiagnostic, JavaLspLocation, JavaMainClass, JavaProjectNode, JavaProjectOptions, JavaTypeSuggestion, SearchResult, TaskCheckpoint, TaskCheckpointFile, UsefulFile, UsefulFileScope, WorkspaceOptions, WorkspaceTask } from "@remote-ide/protocol";
 import type { editor } from "monaco-editor";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -13,7 +13,7 @@ import { JavaPanel } from "./JavaPanel";
 import { ProblemsPanel } from "./ProblemsPanel";
 import { GitLogPanel } from "./GitLogPanel";
 import { GitHistoryDialog } from "./GitHistoryDialog";
-import { GitToolbarActions, RollbackSelectedDialog, executeRollbackSelection, isUntrackedGitEntry, selectedGitEntries } from "./GitRollbackControls";
+import { GitToolbarActions, RollbackSelectedDialog, executeRollbackSelection, isUntrackedGitEntry, selectedGitEntries, shouldApplyGitStatus } from "./GitRollbackControls";
 import { AiPanel, type AiAttachment } from "./AiPanel";
 import type { PermissionRequestOwner } from "./PermissionRequestActions";
 import { openTaskFromSummary } from "./permission-navigation";
@@ -160,6 +160,8 @@ export function App() {
   const [gitBranch, setGitBranch] = useState("HEAD");
   const [branchMenu, setBranchMenu] = useState<{ branches: GitBranchInfo[]; selected?: string; loading: boolean }>();
   const [gitEntries, setGitEntries] = useState<GitStatusEntry[]>([]);
+  const [gitUpstream, setGitUpstream] = useState<GitUpstreamStatus>();
+  const gitStatusRequested = useRef(0);
   const [selectedGitPaths, setSelectedGitPaths] = useState<Set<string>>(new Set());
   const [gitCommitMessage, setGitCommitMessage] = useState("");
   const [gitCommitting, setGitCommitting] = useState(false);
@@ -299,11 +301,15 @@ export function App() {
 
   const refreshGit = useCallback(async (client = clientRef.current) => {
     if (!client) return;
+    const requestId = ++gitStatusRequested.current;
+    const requestedWorkspace = activeWorkspaceRef.current;
     try {
       const result = await client.request("git.status", {});
-      setGitBranch(result.branch); setGitEntries(result.entries); setGitError("");
+      if (!shouldApplyGitStatus(requestId, gitStatusRequested.current, requestedWorkspace, activeWorkspaceRef.current) || clientRef.current !== client) return;
+      setGitBranch(result.branch); setGitEntries(result.entries); setGitUpstream(result.upstream); setGitError("");
     } catch (error) {
-      setGitEntries([]); setGitError(error instanceof Error ? error.message : "Could not read Git status");
+      if (!shouldApplyGitStatus(requestId, gitStatusRequested.current, requestedWorkspace, activeWorkspaceRef.current) || clientRef.current !== client) return;
+      setGitEntries([]); setGitUpstream(undefined); setGitError(error instanceof Error ? error.message : "Could not read Git status");
     }
   }, []);
 
@@ -454,7 +460,7 @@ export function App() {
             setTree(result.tree);
             setJavaOptions(result.options.javaProject);
             await restoreWorkspaceOptions(result.options, client);
-            await Promise.all([refreshTasks(client), refreshAi(client), refreshAiSessions(client), refreshUsefulFiles(client), refreshAgents(client)]);
+            await Promise.all([refreshTasks(client), refreshGit(client), refreshAi(client), refreshAiSessions(client), refreshUsefulFiles(client), refreshAgents(client)]);
             if (clientRef.current !== client) return;
             showStatus("Backend connection restored", "success");
             return;
@@ -854,6 +860,7 @@ export function App() {
     setGitPushing(true); showStatus("Pushing changes...", "progress");
     try {
       await clientRef.current.request("git.push", {});
+      await refreshGit();
       showStatus("Changes pushed successfully", "success");
     } catch (error) { setStatusMessage(error instanceof Error ? error.message : "Could not push"); }
     finally { setGitPushing(false); }
@@ -981,6 +988,7 @@ export function App() {
     const sequence = ++taskSwitchSequence.current;
     const isCurrent = () => taskSwitchSequence.current === sequence && clientRef.current === client;
     taskSwitchActive.current = true;
+    gitStatusRequested.current += 1; setGitEntries([]); setGitUpstream(undefined); setGitError("");
     setTaskSwitching(true); setPromptHistoryOpen(false); setWorkspaceOptionsReady(false); setStatusMessage("");
     try {
       const currentGroup = layoutRef.current.editorGroups[0]!;
@@ -1747,7 +1755,7 @@ export function App() {
           <div className="workspace-name" onContextMenu={(event) => { event.preventDefault(); setTreeContextMenu({ x: Math.min(event.clientX, window.innerWidth - 220), y: Math.min(event.clientY, window.innerHeight - 110), node: { name: "REMOTE WORKSPACE", path: "", type: "directory" } }); }}><ChevronDown size={13} />REMOTE WORKSPACE</div>
           <div className="tree">{filteredTree.length > 0 ? <Tree nodes={filteredTree} activePath={activeTab?.path} fileColors={fileColors} gitStatuses={projectGitStatuses} expandAll={Boolean(projectFilter.trim())} onOpen={openFile} onContextMenu={(event, node) => { event.preventDefault(); setTreeContextMenu({ x: Math.min(event.clientX, window.innerWidth - 220), y: Math.min(event.clientY, window.innerHeight - 110), node }); }} /> : <div className="filter-empty">No matching files</div>}</div>
         </> : classicSideView === "git" ? <>
-          <header className="panel-header"><span>Git Changes</span><GitToolbarActions selectedCount={selectedRollbackEntries.length} operationRunning={gitOperationRunning} pushing={gitPushing} rollingBack={gitRollingBack} onRollbackSelected={openRollbackSelected} onPush={() => void pushGit()} onRefresh={() => void refreshGit()} /></header><div className="git-branch"><GitBranch size={13} /><span>{gitBranch}</span></div>
+          <header className="panel-header"><span>Git Changes</span><GitToolbarActions selectedCount={selectedRollbackEntries.length} operationRunning={gitOperationRunning} pushing={gitPushing} rollingBack={gitRollingBack} upstream={gitUpstream} onRollbackSelected={openRollbackSelected} onPush={() => void pushGit()} onRefresh={() => void refreshGit()} /></header><div className="git-branch"><GitBranch size={13} /><span>{gitBranch}</span></div>
           <GitChangesView entries={gitEntries} error={gitError} selectedPaths={selectedGitPaths} onTogglePath={(path) => setSelectedGitPaths((current) => { const next = new Set(current); next.has(path) ? next.delete(path) : next.add(path); return next; })} activePath={activeTab?.path} onOpenDiff={openDiff} onOpenFile={(entry) => void openFile({ name: entry.path.split("/").pop() ?? entry.path, path: entry.path, type: "file" })} onContextMenu={(event, entry) => { event.preventDefault(); setGitRollbackMenu({ x: Math.min(event.clientX, window.innerWidth - 220), y: Math.min(event.clientY, window.innerHeight - 50), entry }); }} />
           <form className="git-commit-panel" onSubmit={(event) => { event.preventDefault(); void commitSelectedFiles(); }}><textarea aria-label="Commit message" placeholder="Commit message" value={gitCommitMessage} disabled={gitOperationRunning} onChange={(event) => setGitCommitMessage(event.target.value)} /><footer><span>{selectedGitPaths.size} selected</span><button disabled={gitOperationRunning || selectedGitPaths.size === 0 || !gitCommitMessage.trim()}>{gitCommitting ? "Committing..." : "Commit"}</button></footer></form>
         </> : classicSideView === "taskGit" && selectedTaskId ? <><header className="panel-header"><span>Task Git</span><button title="Refresh task comparison" onClick={() => void refreshTaskGit()}><RefreshCw size={14} /></button></header><div className="git-branch"><GitCompareArrows size={13} /><span>{tasks.find((task) => task.id === selectedTaskId)?.baseBranch ?? "Base branch"}</span></div><GitChangesView entries={taskGitEntries} error={taskGitError} emptyMessage="No changes from base branch" groupTitle="Changes from Base" activePath={activeTab?.path} onOpenDiff={openTaskDiff} onOpenFile={(entry) => void openFile({ name: entry.path.split("/").pop() ?? entry.path, path: entry.path, type: "file" })} /></> : classicSideView === "useful" ? <><header className="panel-header"><span>Useful Files</span><button title="Refresh useful files" onClick={() => void refreshUsefulFiles()}><RefreshCw size={14} /></button></header><div className="useful-files-list"><UsefulFileSection title="Global" scope="global" files={usefulFiles} activeTab={activeTab} onOpen={openUsefulFile} onCreate={(scope) => setUsefulDialog({ mode: "create", scope })} onRename={(file) => setUsefulDialog({ mode: "rename", scope: file.scope, file })} onDelete={(file) => void deleteUsefulFile(file)} /><UsefulFileSection title="Local" scope="local" files={usefulFiles} activeTab={activeTab} onOpen={openUsefulFile} onCreate={(scope) => setUsefulDialog({ mode: "create", scope })} onRename={(file) => setUsefulDialog({ mode: "rename", scope: file.scope, file })} onDelete={(file) => void deleteUsefulFile(file)} /></div></> : classicSideView === "agents" ? <AgentsPanel agents={agents} activeTab={activeTab} onRefresh={() => void refreshAgents()} onOpen={(file) => void openAgentFile(file)} onCreate={(scope) => setAgentDialog({ mode: "create", scope })} onRename={(file) => { if (file.scope !== "workspace") setAgentDialog({ mode: "rename", scope: file.scope, file }); }} onDelete={(file) => void deleteAgent(file)} /> : <><header className="panel-header"><span>Java Project</span><button title="Refresh Java project" onClick={() => void refreshJavaTree()}><RefreshCw size={14} /></button></header><div className="java-project-meta"><Coffee size={13} /><span>{javaOptions?.pomPath}</span></div><div className="tree java-tree">{javaOptions && <JavaProjectTree nodes={javaTree} activePath={activeTab?.path} onOpen={openFile} />}</div></>}
@@ -1804,7 +1812,7 @@ export function App() {
           <div className="tree">{filteredTree.length > 0 ? <Tree nodes={filteredTree} activePath={activeTab?.path} fileColors={fileColors} gitStatuses={projectGitStatuses} expandAll={Boolean(projectFilter.trim())} onOpen={openFile} onContextMenu={(event, node) => { event.preventDefault(); setTreeContextMenu({ x: Math.min(event.clientX, window.innerWidth - 220), y: Math.min(event.clientY, window.innerHeight - 110), node }); }} /> : <div className="filter-empty">No matching files</div>}</div>
         </section>}
         {rightPanels.git && <section key="git" className="stacked-panel">
-          <header className="panel-header"><span>Git Changes</span><GitToolbarActions selectedCount={selectedRollbackEntries.length} operationRunning={gitOperationRunning} pushing={gitPushing} rollingBack={gitRollingBack} onRollbackSelected={openRollbackSelected} onPush={() => void pushGit()} onRefresh={() => void refreshGit()} /></header>
+          <header className="panel-header"><span>Git Changes</span><GitToolbarActions selectedCount={selectedRollbackEntries.length} operationRunning={gitOperationRunning} pushing={gitPushing} rollingBack={gitRollingBack} upstream={gitUpstream} onRollbackSelected={openRollbackSelected} onPush={() => void pushGit()} onRefresh={() => void refreshGit()} /></header>
           <div className="git-branch"><GitBranch size={13} /><span>{gitBranch}</span></div>
           <GitChangesView entries={gitEntries} error={gitError} selectedPaths={selectedGitPaths} onTogglePath={(path) => setSelectedGitPaths((current) => { const next = new Set(current); next.has(path) ? next.delete(path) : next.add(path); return next; })} activePath={activeTab?.path} onOpenDiff={openDiff} onOpenFile={(entry) => void openFile({ name: entry.path.split("/").pop() ?? entry.path, path: entry.path, type: "file" })} onContextMenu={(event, entry) => { event.preventDefault(); setGitRollbackMenu({ x: Math.min(event.clientX, window.innerWidth - 220), y: Math.min(event.clientY, window.innerHeight - 50), entry }); }} />
           <form className="git-commit-panel" onSubmit={(event) => { event.preventDefault(); void commitSelectedFiles(); }}><textarea aria-label="Commit message" placeholder="Commit message" value={gitCommitMessage} disabled={gitOperationRunning} onChange={(event) => setGitCommitMessage(event.target.value)} /><footer><span>{selectedGitPaths.size} selected</span><button disabled={gitOperationRunning || selectedGitPaths.size === 0 || !gitCommitMessage.trim()}>{gitCommitting ? "Committing..." : "Commit"}</button></footer></form>

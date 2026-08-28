@@ -2,7 +2,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import path from "node:path";
 import { readFile } from "node:fs/promises";
-import type { GitBranch, GitCommit, GitCommitFile, GitDiffHunk, GitRollbackFailure, GitStatusEntry } from "@remote-ide/protocol";
+import type { GitBranch, GitCommit, GitCommitFile, GitDiffHunk, GitRollbackFailure, GitStatusEntry, GitUpstreamStatus } from "@remote-ide/protocol";
 import { CoreError } from "./errors.js";
 import { WorkspaceFileSystem } from "./filesystem.js";
 
@@ -11,17 +11,30 @@ const execFileAsync = promisify(execFile);
 export class GitService {
   constructor(private readonly workspace: string) {}
 
-  async status(): Promise<{ branch: string; entries: GitStatusEntry[] }> {
+  async status(): Promise<{ branch: string; entries: GitStatusEntry[]; upstream?: GitUpstreamStatus }> {
     try {
       const { stdout } = await execFileAsync("git", ["-C", this.workspace, "status", "--porcelain=v1", "--branch", "-z", "--untracked-files=all"], {
         encoding: "utf8",
         maxBuffer: 4 * 1024 * 1024
       });
-      return parseGitStatus(stdout);
+      const status = parseGitStatus(stdout);
+      const upstream = await this.upstreamStatus();
+      return { ...status, ...(upstream ? { upstream } : {}) };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       if (message.includes("not a git repository")) throw new CoreError("GIT_NOT_REPOSITORY", "Workspace is not a Git repository");
       throw new CoreError("GIT_FAILED", `Could not read Git status: ${message}`);
+    }
+  }
+
+  private async upstreamStatus(): Promise<GitUpstreamStatus | undefined> {
+    try {
+      const upstream = (await this.git(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"])).trim();
+      const ahead = Number((await this.git(["rev-list", "--count", `${upstream}..HEAD`])).trim());
+      return upstream && Number.isSafeInteger(ahead) && ahead >= 0 ? { upstream, ahead } : undefined;
+    } catch {
+      // A detached HEAD or a branch without a configured, resolvable upstream is unpublished.
+      return undefined;
     }
   }
 

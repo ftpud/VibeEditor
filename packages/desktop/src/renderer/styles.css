@@ -59,6 +59,8 @@ button { color: inherit; }
 .panel-header:has(> .ai-agent-picker) .ai-status { margin-left: auto; }
 .panel-header-actions { margin-left: auto; display: flex; align-items: center; gap: 2px; }
 .git-toolbar-actions { min-width: 0; }
+.panel-header .git-push-button { position: relative; overflow: visible; }
+.git-push-badge { position: absolute; top: -3px; right: -4px; min-width: 13px; height: 13px; padding: 0 3px; display: grid; place-items: center; border: 1px solid #2b2d30; border-radius: 7px; background: #3574f0; color: white; font-size: 8px; font-weight: 700; line-height: 1; }
 .panel-header .git-rollback-selected { width: auto; max-width: 150px; padding: 0 7px; display: flex; gap: 5px; color: #e2858b; white-space: nowrap; }
 .git-rollback-selected span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .panel-header .git-rollback-selected:hover:not(:disabled) { background: #6a3035; }
