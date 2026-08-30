@@ -1,6 +1,6 @@
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { createInterface } from "node:readline";
-import { findAutopilotOption, type AiAgent, type AiConfiguration, type AiMcpServer, type AiModel, type AiOption, type AiProvider, type AiSession } from "@remote-ide/acp";
+import { findAutopilotOption, type AiAgent, type AiConfiguration, type AiMcpServer, type AiModel, type AiOption, type AiProvider, type AiSession, type AiUsage } from "@remote-ide/acp";
 import type { AgentFileReference } from "@remote-ide/protocol";
 import { WorkspaceTaskStore, type WorkspaceTask } from "./tasks.js";
 import type { AcpRegistry } from "./ai/index.js";
@@ -12,6 +12,14 @@ import { agentFingerprint } from "./agent-profile.js";
 type ToolResult = { content: { type: "text"; text: string }[]; isError?: boolean };
 
 export const appToolDefinitions = [
+  {
+    name: "ai_usage",
+    description: "Report the current AI session's token usage, remaining reported capacity, and reset time when the provider exposes one. Context-window capacity and account quota are identified separately.",
+    inputSchema: {
+      type: "object", additionalProperties: false,
+      properties: { provider: { type: "string", description: "AI provider id. Omit to use the provider running this agent." } }
+    }
+  },
   {
     name: "task_create",
     description: "Create an isolated Vibe Editor task worktree without starting an agent.",
@@ -128,6 +136,11 @@ export class AppToolService {
   ) {}
 
   async call(name: string, args: Record<string, unknown>): Promise<unknown> {
+    if (name === "ai_usage") {
+      const provider = optionalString(args, "provider") ?? this.currentProvider;
+      if (!provider) throw new Error("provider is required when the invoking AI provider is not known");
+      return usageResult(provider, await this.acp.get(provider).usage(this.currentWorkspace));
+    }
     if (name === "task_create") {
       const task = await this.tasks.create(requiredString(args, "branch"), false, false, false);
       await this.onTasksChanged();
@@ -241,6 +254,25 @@ export class AppToolService {
     if (!inherited) throw new Error(`Invoking agent preset '${parent.agent.name}' is no longer available; pass agent: null to start without it`);
     return inherited.agent;
   }
+}
+
+function usageResult(provider: AiProvider, usage: AiUsage) {
+  const remaining = usage.used !== undefined && usage.limit !== undefined ? Math.max(0, usage.limit - usage.used) : undefined;
+  return {
+    provider,
+    supported: usage.supported,
+    kind: usage.label === "Context window" ? "context_window" : "provider_usage",
+    label: usage.label ?? null,
+    used: usage.used ?? null,
+    limit: usage.limit ?? null,
+    remaining: remaining ?? null,
+    unit: usage.unit ?? null,
+    resets_at: usage.resetsAt ?? null,
+    details: usage.details ?? {},
+    note: usage.resetsAt === undefined
+      ? "This provider has not exposed a quota reset time through ACP. A context-window limit is conversation capacity, not an account rate-limit quota."
+      : undefined
+  };
 }
 
 type AgentArgument = AgentFileReference | null | undefined;

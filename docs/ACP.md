@@ -93,3 +93,5 @@ Create a task with no agent preset and the provider/model's default reasoning:
 ```
 
 Existing callers that send only `prompt`, `provider`, and `model` remain valid. There is currently no separate MCP tool for starting an existing idle task: `task_append_prompt` steers a running task or starts a follow-up turn with that task's persisted session configuration, so it does not accept a new `agent` or `reasoning` selection.
+
+Agents with the `vibe-editor` MCP server can call `ai_usage` to inspect the invoking provider's current session. The result contains `used`, `limit`, computed `remaining`, `unit`, and `resets_at`; unavailable values are returned as `null`. `kind: "context_window"` means the numbers describe conversation capacity rather than account quota. ACP does not currently require providers to publish account rate-limit windows, so `resets_at` remains `null` unless the selected provider exposes one.
