@@ -12,6 +12,12 @@ import type { AiTimerService } from "./ai-timers.js";
 
 type ToolResult = { content: { type: "text"; text: string }[]; isError?: boolean };
 
+function requiredTaskStatus(args: Record<string, unknown>): WorkspaceTask["status"] {
+  const status = requiredString(args, "status");
+  if (status !== "active" && status !== "finished") throw new Error("status must be active or finished");
+  return status;
+}
+
 export const appToolDefinitions = [
   {
     name: "ai_usage",
@@ -95,6 +101,18 @@ export const appToolDefinitions = [
       type: "object", additionalProperties: false,
       properties: { task_id: { type: "string", description: "Task id returned by task_create or task_list." } },
       required: ["task_id"]
+    }
+  },
+  {
+    name: "task_set_status",
+    description: "Mark a Vibe Editor task as finished or restore it to active.",
+    inputSchema: {
+      type: "object", additionalProperties: false,
+      properties: {
+        task_id: { type: "string", description: "Task id returned by task_create or task_list." },
+        status: { type: "string", enum: ["active", "finished"], description: "Set finished when the task is complete; set active to restore it." }
+      },
+      required: ["task_id", "status"]
     }
   },
   {
@@ -229,6 +247,11 @@ export class AppToolService {
       await this.tasks.delete(task.id);
       await this.onTasksChanged();
       return { deleted: task };
+    }
+    if (name === "task_set_status") {
+      const task = await this.tasks.setStatus(requiredString(args, "task_id"), requiredTaskStatus(args));
+      await this.onTasksChanged();
+      return { task };
     }
     if (name === "task_ai_response_tail") {
       const task = await this.task(requiredString(args, "task_id"));

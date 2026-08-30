@@ -10,6 +10,7 @@ function harness() {
     create: vi.fn(async () => task), createRandom: vi.fn(async () => task), delete: vi.fn(async () => ({ tasks: [] })),
     taskPath: vi.fn(() => "/tasks/task-1/workspace"), list: vi.fn(async () => ({ tasks: [task] })),
     setCommitMessage: vi.fn(async (_workspace: string, message: string) => ({ task, message, overwritten: false })),
+    setStatus: vi.fn(async (_taskId: string, status: "active" | "finished") => ({ ...task, status })),
     updateGitCommitMessage: vi.fn(async (_taskId: string, message: string) => ({
       task, previousCommit: "old-sha", commit: "new-sha", previousMessage: "Old message", message
     }))
@@ -30,7 +31,7 @@ function harness() {
 
 describe("Vibe Editor app tools", () => {
   it("publishes task start agent and reasoning parameters", () => {
-    expect(appToolDefinitions.map((tool) => tool.name)).toEqual(["ai_usage", "timer_set", "model_switch_next", "task_create", "task_create_and_start", "task_list", "task_delete", "task_ai_response_tail", "task_append_prompt", "set_commit_message", "task_update_commit_message"]);
+    expect(appToolDefinitions.map((tool) => tool.name)).toEqual(["ai_usage", "timer_set", "model_switch_next", "task_create", "task_create_and_start", "task_list", "task_delete", "task_set_status", "task_ai_response_tail", "task_append_prompt", "set_commit_message", "task_update_commit_message"]);
     expect(appToolDefinitions[1]).toMatchObject({ name: "timer_set", inputSchema: { required: ["seconds", "prompt"] } });
     expect(appToolDefinitions[2]).toMatchObject({ name: "model_switch_next", inputSchema: { required: ["model", "reasoning"] } });
     expect(appToolDefinitions[4].inputSchema.required).toEqual(["prompt", "provider", "model"]);
@@ -38,7 +39,8 @@ describe("Vibe Editor app tools", () => {
       oneOf: [{ type: "object", required: ["scope", "name"] }, { type: "null" }]
     });
     expect(appToolDefinitions[4].inputSchema.properties.reasoning).toMatchObject({ type: "string", minLength: 1 });
-    expect(appToolDefinitions[9]).toMatchObject({
+    expect(appToolDefinitions[7]).toMatchObject({ name: "task_set_status", inputSchema: { required: ["task_id", "status"], properties: { status: { enum: ["active", "finished"] } } } });
+    expect(appToolDefinitions[10]).toMatchObject({
       name: "set_commit_message",
       inputSchema: {
         additionalProperties: false,
@@ -46,7 +48,7 @@ describe("Vibe Editor app tools", () => {
         properties: { message: { type: "string", minLength: 1, maxLength: 10_000, pattern: "\\S" } }
       }
     });
-    expect(appToolDefinitions[10]).toMatchObject({
+    expect(appToolDefinitions[11]).toMatchObject({
       name: "task_update_commit_message",
       inputSchema: {
         additionalProperties: false,
@@ -126,6 +128,14 @@ describe("Vibe Editor app tools", () => {
     expect(provider.get).toHaveBeenCalledWith("/tasks/parent/workspace");
     expect(provider.send).toHaveBeenCalledWith("/tasks/task-1/workspace", { prompt: "Implement it", configuration: { mode: "agent-full-access", model: "gpt-5" } });
     expect(onTasksChanged).toHaveBeenCalledOnce();
+  });
+
+  it("sets and restores a task's finished status", async () => {
+    const { service, tasks, task, onTasksChanged } = harness();
+    await expect(service.call("task_set_status", { task_id: task.id, status: "finished" })).resolves.toEqual({ task: { ...task, status: "finished" } });
+    expect(tasks.setStatus).toHaveBeenCalledWith(task.id, "finished");
+    expect(onTasksChanged).toHaveBeenCalledOnce();
+    await expect(service.call("task_set_status", { task_id: task.id, status: "archived" })).rejects.toThrow("status must be active or finished");
   });
 
   it("inherits disabled autopilot without inheriting the parent model", async () => {

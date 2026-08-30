@@ -349,6 +349,7 @@ async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStor
       const target = await permissionTargetWorkspace(tasks, rootWorkspace, request.payload.taskId);
       return { fired: await aiTimers.fireNext(target) };
     }
+    case "tasks.status": return { task: await tasks.setStatus(request.payload.taskId, request.payload.status) };
     case "tasks.delete": {
       await aiTimers.cancelWorkspace(tasks.taskPath(request.payload.taskId));
       const result = await tasks.delete(request.payload.taskId);

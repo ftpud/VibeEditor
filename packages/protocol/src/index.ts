@@ -35,7 +35,7 @@ export type WorkspaceOptions = {
 export type FileColor = "red" | "orange" | "yellow" | "green" | "blue" | "purple" | "gray";
 export type WorkspaceTerminalOptions = { tabs: { title: string; terminalId?: string }[]; activeTabIndex?: number; panelOpen: boolean };
 export type TerminalSessionSnapshot = { terminalId: string; status: "running" | "exited"; output: string; exitCode?: number };
-export type WorkspaceTask = { id: string; name: string; branch: string; baseBranch: string };
+export type WorkspaceTask = { id: string; name: string; branch: string; baseBranch: string; status: "active" | "finished" };
 export type { AiAgent, AiCommand, AiConfiguration, AiContentBlock, AiMessage, AiModel, AiMcpServer, AiOption, AiPermissionRequest, AiProvider, AiProviderCapabilities, AiProviderDescriptor, AiSession, AiSettingsLayout, AiSettingsSection, AiStatus, AiTaskSummary, AiUsage } from "@remote-ide/acp";
 import type { AiAgent, AiConfiguration, AiContentBlock, AiMcpServer, AiModel, AiProvider, AiProviderDescriptor, AiSession, AiTaskSummary, AiUsage } from "@remote-ide/acp";
 export type UsefulFileScope = "global" | "local";
@@ -101,6 +101,7 @@ export type ProtocolOperations = {
   "tasks.merge": { payload: { taskId: string; strategy?: "merge" | "smart" }; result: { targetBranch: string } };
   "tasks.timer.cancel": { payload: { taskId?: string }; result: { cancelled: boolean } };
   "tasks.timer.fire": { payload: { taskId?: string }; result: { fired: boolean } };
+  "tasks.status": { payload: { taskId: string; status: "active" | "finished" }; result: { task: WorkspaceTask } };
   "tasks.switch": { payload: { taskId?: string; includeIgnored?: boolean }; result: { workspace: string; projectName: string; tree: FileTreeNode[]; options: WorkspaceOptions; tasks: WorkspaceTask[]; selectedTaskId?: string } };
   "tasks.delete": { payload: { taskId: string }; result: { tasks: WorkspaceTask[]; selectedTaskId?: string } };
   "ai.providers": { payload: Record<string, never>; result: { providers: AiProviderDescriptor[] } };
@@ -351,6 +352,7 @@ const requestTypeRegistry: Record<RequestType, true> = {
   "tasks.merge": true,
   "tasks.timer.cancel": true,
   "tasks.timer.fire": true,
+  "tasks.status": true,
   "tasks.switch": true,
   "tasks.delete": true,
   "ai.providers": true,

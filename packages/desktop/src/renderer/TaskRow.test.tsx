@@ -40,4 +40,17 @@ describe("task timer context actions", () => {
     expect(screen.queryByRole("button", { name: "Run timer now" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Cancel timer" })).toBeNull();
   });
+
+  it("marks a task finished and offers restore from its context menu", () => {
+    const setFinished = vi.fn();
+    const { container, rerender } = render(<TaskRow icon={null} name="Task" summary={{ ...summary, status: "idle", waitingUntil: undefined }} selected={false} disabled={false} onClick={vi.fn()} onSetFinished={setFinished} />);
+    fireEvent.contextMenu(container.querySelector(".task-row")!, { clientX: 40, clientY: 50 });
+    fireEvent.click(screen.getByRole("button", { name: "Mark as Finished" }));
+    expect(setFinished).toHaveBeenCalledOnce();
+
+    rerender(<TaskRow icon={null} name="Task" summary={{ ...summary, status: "idle", waitingUntil: undefined }} finished selected={false} disabled={false} onClick={vi.fn()} onSetFinished={setFinished} />);
+    fireEvent.contextMenu(container.querySelector(".task-row")!, { clientX: 40, clientY: 50 });
+    expect(screen.getByRole("button", { name: "Restore task" })).toBeTruthy();
+    expect(container.querySelector(".task-row.finished")).toBeTruthy();
+  });
 });

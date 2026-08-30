@@ -176,6 +176,7 @@ button { color: inherit; }
 .task-row { width: 100%; min-height: 56px; position: relative; display: flex; align-items: stretch; border-left: 2px solid transparent; border-bottom: 1px solid #35373b; background: transparent; color: #bfc1c5; }
 .task-row:hover { background: #34363a; color: #e4e5e7; }
 .task-row.selected { border-left-color: #3574f0; background: #2e436e; color: white; }
+.task-row.finished:not(.selected) { opacity: .52; }
 .task-open { min-width: 0; flex: 1; padding: 7px 8px; display: flex; align-items: flex-start; gap: 8px; border: 0; background: transparent; color: inherit; text-align: left; cursor: pointer; }
 .task-open:disabled, .task-actions:disabled { opacity: .55; cursor: wait; }
 .task-actions { width: 28px; flex: 0 0 28px; margin: 5px 4px 5px 0; display: grid; place-items: center; align-self: stretch; border: 0; border-radius: 3px; background: transparent; color: #85888e; opacity: 0; cursor: pointer; }
@@ -196,6 +197,7 @@ button { color: inherit; }
 .task-diff-stat small:last-child { color: #dc747c; }
 .task-ai-status { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 4px; color: #85888e; font-size: 0.7692rem; white-space: nowrap; }
 .task-ai-status.in_progress { color: #6ea8fe; }
+.task-finished-status { flex: 0 0 auto; color: #85888e; font-size: .7692rem; font-weight: 500; }
 .task-progress-spinner { flex: 0 0 auto; animation: task-progress-spin .8s linear infinite; }
 @keyframes task-progress-spin { to { transform: rotate(360deg); } }
 .task-ai-status.user_prompt { color: #e3b762; }

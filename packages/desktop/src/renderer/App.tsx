@@ -1239,6 +1239,14 @@ export function App() {
     finally { setTaskSwitching(false); }
   }, [selectedTaskId, switchTask, taskSwitching]);
 
+  const setTaskStatus = useCallback(async (task: WorkspaceTask, status: WorkspaceTask["status"]) => {
+    if (!clientRef.current || taskSwitching) return;
+    try {
+      const result = await clientRef.current.request("tasks.status", { taskId: task.id, status });
+      setTasks((current) => current.map((item) => item.id === task.id ? result.task : item));
+    } catch (error) { setStatusMessage(error instanceof Error ? error.message : `Could not mark task ${status}`); }
+  }, [taskSwitching]);
+
   const timerAction = useCallback(async (task: WorkspaceTask | undefined, action: "cancel" | "fire") => {
     if (!clientRef.current || taskSwitching) return;
     try {
@@ -1869,10 +1877,10 @@ export function App() {
   const editorFontFamily = uiFontFamily === "jetbrains" ? "JetBrains Mono Variable" : "Inter Variable";
   const editorLineHeight = Math.round(uiFontSize * uiLineHeight);
   const normalizedTaskFilter = taskFilter.trim().toLowerCase();
-  const filteredTasks = useMemo(() => normalizedTaskFilter ? tasks.filter((task) => {
+  const filteredTasks = useMemo(() => (normalizedTaskFilter ? tasks.filter((task) => {
     const summary = aiStatuses.tasks[task.id] ?? emptyAiSummary;
-    return `${task.name} ${summary.status} ${summary.preview}`.toLowerCase().includes(normalizedTaskFilter);
-  }) : tasks, [aiStatuses.tasks, normalizedTaskFilter, tasks]);
+    return `${task.name} ${task.status} ${summary.status} ${summary.preview}`.toLowerCase().includes(normalizedTaskFilter);
+  }) : tasks).slice().sort((left, right) => Number(left.status === "finished") - Number(right.status === "finished")), [aiStatuses.tasks, normalizedTaskFilter, tasks]);
   const showRootTask = !normalizedTaskFilter || `root workspace ${aiStatuses.root.status} ${aiStatuses.root.preview}`.toLowerCase().includes(normalizedTaskFilter);
   const selectedTaskTimerActive = Boolean(selectedTaskId && aiStatuses.tasks[selectedTaskId]?.waitingUntil);
   const rightSidebarOpen = rightPanels.project || rightPanels.git || rightPanels.useful || rightPanels.agents || ((rightPanels.taskGit || rightPanels.promptHistory) && Boolean(selectedTaskId)) || (rightPanels.java && Boolean(javaOptions));
@@ -1894,7 +1902,7 @@ export function App() {
       {(leftPanels.tasks || leftPanels.ai) && <><aside className="side-panel side-panel-left" style={{ width: leftSidebarWidth }}><ResizablePanelStack workspace={activeWorkspace} setting="focused.leftSizes" ids={[...(leftPanels.tasks ? ["tasks"] : []), ...(leftPanels.ai ? ["ai"] : [])]}>
         {leftPanels.tasks && <section key="tasks" className="stacked-panel"><header className="panel-header"><span>Tasks</span><button title="Create task" disabled={taskSwitching} onClick={() => setShowCreateTaskDialog(true)}><Plus size={15} /></button></header><QuickFilter value={taskFilter} placeholder="Filter tasks" label="Filter tasks" onChange={setTaskFilter} /><div className="tasks-list">
           {showRootTask && <TaskRow icon={<Folder size={15} />} name="Root workspace" summary={aiStatuses.root} selected={selectedTaskId === undefined} disabled={taskSwitching} onClick={() => openTask(undefined, aiStatuses.root.pendingPermission)} onCancelTimer={() => void timerAction(undefined, "cancel")} onFireTimer={() => void timerAction(undefined, "fire")} />}
-          {filteredTasks.map((task) => { const summary = aiStatuses.tasks[task.id] ?? emptyAiSummary; return <TaskRow key={task.id} icon={<ListTodo size={15} />} name={task.name} summary={summary} selected={selectedTaskId === task.id} disabled={taskSwitching} onClick={() => openTask(task.id, summary.pendingPermission)} onMerge={() => setMergeDialog(task)} onDelete={() => void deleteTask(task)} onCancelTimer={() => void timerAction(task, "cancel")} onFireTimer={() => void timerAction(task, "fire")} />; })}
+          {filteredTasks.map((task) => { const summary = aiStatuses.tasks[task.id] ?? emptyAiSummary; return <TaskRow key={task.id} icon={<ListTodo size={15} />} name={task.name} summary={summary} finished={task.status === "finished"} selected={selectedTaskId === task.id} disabled={taskSwitching} onClick={() => openTask(task.id, summary.pendingPermission)} onSetFinished={() => void setTaskStatus(task, task.status === "finished" ? "active" : "finished")} onMerge={() => setMergeDialog(task)} onDelete={() => void deleteTask(task)} onCancelTimer={() => void timerAction(task, "cancel")} onFireTimer={() => void timerAction(task, "fire")} />; })}
           {!showRootTask && filteredTasks.length === 0 && <div className="filter-empty">No matching tasks</div>}
         </div></section>}
         {leftPanels.ai && <section key="ai" className="stacked-panel"><header className="panel-header"><span>AI</span><AgentPicker agents={agents} value={selectedAgentKey} disabled={aiSession.status === "in_progress"} onChange={selectAgent} /><span className={`ai-status ${aiSession.status}`}>{formatAiStatus(aiSession.status)}</span></header><AiPanel key={`${activeWorkspace}:${aiProvider}:${aiSession.id ?? "legacy"}`} provider={aiProvider} providers={aiProviders} session={aiSession} sessions={aiSessions} models={aiModels} usage={aiUsage} attachments={currentAiAttachments} permissionOwner={{ provider: aiProvider, ...(selectedTaskId ? { taskId: selectedTaskId } : {}), ...(aiSession.id ? { sessionId: aiSession.id } : {}) }} permissionActionsDisabled={taskSwitching} sessionChangesDisabled={selectedTaskTimerActive} onProviderChange={(provider) => void switchAiProvider(provider)} onConfigurationChange={configureAi} onAttachmentsChange={updateAiAttachments} onSend={sendAiPrompt} onSendAsTask={selectedTaskId ? undefined : sendAiPromptAsTask} onSteer={steerAiPrompt} onInterrupt={() => void interruptAi()} onNewSession={() => void newAiSession()} onSwitchSession={(session) => void switchAiSession(session)} onRemoveSession={(session) => void removeAiSession(session)} onResolvePermission={resolveAiPermission} /></section>}
@@ -1997,7 +2005,7 @@ export function App() {
       {(classicTasksOpen || classicAiOpen || (rightPanels.promptHistory && selectedTaskId)) && <><div className="right-resize-handle" onPointerDown={beginClassicRightResize} /><aside className="side-panel classic-right-panel" style={{ width: classicRightWidth }}>
         {classicTasksOpen && <section className="stacked-panel" style={classicAiOpen ? { flex: `0 0 ${classicSplit}%` } : undefined}><header className="panel-header"><span>Tasks</span><button title="Create task" disabled={taskSwitching} onClick={() => setShowCreateTaskDialog(true)}><Plus size={15} /></button></header><QuickFilter value={taskFilter} placeholder="Filter tasks" label="Filter tasks" onChange={setTaskFilter} /><div className="tasks-list">
           {showRootTask && <TaskRow icon={<Folder size={15} />} name="Root workspace" summary={aiStatuses.root} selected={selectedTaskId === undefined} disabled={taskSwitching} onClick={() => openTask(undefined, aiStatuses.root.pendingPermission)} onCancelTimer={() => void timerAction(undefined, "cancel")} onFireTimer={() => void timerAction(undefined, "fire")} />}
-          {filteredTasks.map((task) => { const summary = aiStatuses.tasks[task.id] ?? emptyAiSummary; return <TaskRow key={task.id} icon={<ListTodo size={15} />} name={task.name} summary={summary} selected={selectedTaskId === task.id} disabled={taskSwitching} onClick={() => openTask(task.id, summary.pendingPermission)} onMerge={() => setMergeDialog(task)} onDelete={() => void deleteTask(task)} onCancelTimer={() => void timerAction(task, "cancel")} onFireTimer={() => void timerAction(task, "fire")} />; })}
+          {filteredTasks.map((task) => { const summary = aiStatuses.tasks[task.id] ?? emptyAiSummary; return <TaskRow key={task.id} icon={<ListTodo size={15} />} name={task.name} summary={summary} finished={task.status === "finished"} selected={selectedTaskId === task.id} disabled={taskSwitching} onClick={() => openTask(task.id, summary.pendingPermission)} onSetFinished={() => void setTaskStatus(task, task.status === "finished" ? "active" : "finished")} onMerge={() => setMergeDialog(task)} onDelete={() => void deleteTask(task)} onCancelTimer={() => void timerAction(task, "cancel")} onFireTimer={() => void timerAction(task, "fire")} />; })}
           {!showRootTask && filteredTasks.length === 0 && <div className="filter-empty">No matching tasks</div>}
         </div></section>}
         {classicTasksOpen && classicAiOpen && <div className="classic-panel-divider" onPointerDown={beginClassicSplitResize} />}
@@ -2163,7 +2171,7 @@ function JavaProjectTree({ nodes, activePath, onOpen }: { nodes: JavaProjectNode
   return <>{render(nodes, 0)}</>;
 }
 
-export function TaskRow({ icon, name, summary, selected, disabled, onClick, onMerge, onDelete, onCancelTimer, onFireTimer }: { icon: ReactNode; name: string; summary: AiTaskSummary; selected: boolean; disabled: boolean; onClick(): void; onMerge?(): void; onDelete?(): void; onCancelTimer?(): void; onFireTimer?(): void }) {
+export function TaskRow({ icon, name, summary, finished = false, selected, disabled, onClick, onSetFinished, onMerge, onDelete, onCancelTimer, onFireTimer }: { icon: ReactNode; name: string; summary: AiTaskSummary; finished?: boolean; selected: boolean; disabled: boolean; onClick(): void; onSetFinished?(): void; onMerge?(): void; onDelete?(): void; onCancelTimer?(): void; onFireTimer?(): void }) {
   const [menu, setMenu] = useState<{ x: number; y: number }>();
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
@@ -2174,15 +2182,16 @@ export function TaskRow({ icon, name, summary, selected, disabled, onClick, onMe
   }, [summary.status, summary.waitingUntil]);
   const waiting = summary.status === "waiting" && summary.waitingUntil ? `Waiting · ${formatCountdown(new Date(summary.waitingUntil).getTime() - now)}` : undefined;
   const hasTimer = Boolean(summary.waitingUntil);
-  const hasActions = Boolean(onDelete || (hasTimer && (onCancelTimer || onFireTimer)));
+  const hasActions = Boolean(onSetFinished || onDelete || (hasTimer && (onCancelTimer || onFireTimer)));
   const preview = summary.pendingPermission ? "Waiting for permission approval" : (waiting ? `Continuation scheduled in ${formatCountdown(new Date(summary.waitingUntil!).getTime() - now)}` : summary.preview || "No AI activity yet");
   const openMenu = (x: number, y: number) => setMenu({ x: Math.max(8, Math.min(x, window.innerWidth - 220)), y: Math.max(8, Math.min(y, window.innerHeight - 170)) });
-  return <div className={`task-row ${selected ? "selected" : ""}`} onContextMenu={(event) => { if (!hasActions || disabled) return; event.preventDefault(); openMenu(event.clientX, event.clientY); }}><button className="task-open" disabled={disabled} title={`${name}\n${preview}`} onClick={onClick}>
+  return <div className={`task-row ${selected ? "selected" : ""} ${finished ? "finished" : ""}`} onContextMenu={(event) => { if (!hasActions || disabled) return; event.preventDefault(); openMenu(event.clientX, event.clientY); }}><button className="task-open" disabled={disabled} title={`${name}\n${preview}`} onClick={onClick}>
     <span className="task-icon">{icon}</span>
-    <span className="task-content"><span className="task-title"><strong>{name}</strong>{(summary.additions > 0 || summary.deletions > 0) && <span className="task-diff-stat"><small>+{summary.additions}</small><small>-{summary.deletions}</small></span>}{summary.pendingPermission ? <small className="task-ai-status permission"><ShieldAlert size={13} /> Permission needed</small> : summary.status !== "idle" && <small className={`task-ai-status ${summary.status}`}>{summary.status === "in_progress" && <LoaderCircle className="task-progress-spinner" size={13} />}{waiting ?? formatAiStatus(summary.status)}</small>}</span><span className="task-preview"><TaskPreviewMarkdown>{preview}</TaskPreviewMarkdown></span></span>
+    <span className="task-content"><span className="task-title"><strong>{name}</strong>{finished && <small className="task-finished-status">Finished</small>}{(summary.additions > 0 || summary.deletions > 0) && <span className="task-diff-stat"><small>+{summary.additions}</small><small>-{summary.deletions}</small></span>}{summary.pendingPermission ? <small className="task-ai-status permission"><ShieldAlert size={13} /> Permission needed</small> : summary.status !== "idle" && <small className={`task-ai-status ${summary.status}`}>{summary.status === "in_progress" && <LoaderCircle className="task-progress-spinner" size={13} />}{waiting ?? formatAiStatus(summary.status)}</small>}</span><span className="task-preview"><TaskPreviewMarkdown>{preview}</TaskPreviewMarkdown></span></span>
     {selected && <Check className="task-check" size={13} />}
   </button>{hasActions && <button className="task-actions" title={`Actions for ${name}`} disabled={disabled} onClick={(event) => { event.stopPropagation(); const bounds = event.currentTarget.getBoundingClientRect(); openMenu(bounds.right - 180, bounds.bottom + 2); }}><MoreVertical size={14} /></button>}
     {menu && <div className="context-menu-layer" onMouseDown={() => setMenu(undefined)}><div className="context-menu task-actions-menu" style={{ left: menu.x, top: menu.y }} onMouseDown={(event) => event.stopPropagation()}>
+      {onSetFinished && <button onClick={() => { setMenu(undefined); onSetFinished(); }}><Check size={14} /><span>{finished ? "Restore task" : "Mark as Finished"}</span></button>}
       {hasTimer && <button onClick={() => { setMenu(undefined); onFireTimer?.(); }}><Play size={14} /><span>Run timer now</span></button>}
       {hasTimer && <button onClick={() => { setMenu(undefined); onCancelTimer?.(); }}><Square size={14} /><span>Cancel timer</span></button>}
       {onMerge && <button onClick={() => { setMenu(undefined); onMerge(); }}><GitMerge size={14} /><span>Merge to main workspace</span></button>}
