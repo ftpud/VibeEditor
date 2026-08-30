@@ -28,6 +28,13 @@ describe("WorkspaceStateStore", () => {
     expect(() => validateWorkspaceOptions({ openFiles: ["src/a.ts"], pinnedFiles: ["src/missing.ts"] })).toThrowError(expect.objectContaining({ code: "INVALID_REQUEST" }));
   });
 
+  it("retains only compact, bounded and deduplicated search metadata", () => {
+    const search = { query: "  component ", path: "src", matchCase: true };
+    expect(validateWorkspaceOptions({ openFiles: [], searchQueries: { recent: [search, search], saved: [search] } }).searchQueries).toEqual({ recent: [{ query: "component", path: "src", matchCase: true }], saved: [{ query: "component", path: "src", matchCase: true }] });
+    expect(() => validateWorkspaceOptions({ openFiles: [], searchQueries: { recent: Array.from({ length: 11 }, () => search) } })).toThrowError(expect.objectContaining({ code: "INVALID_REQUEST" }));
+    expect(() => validateWorkspaceOptions({ openFiles: [], searchQueries: { saved: [{ ...search, path: "../private" }] } })).toThrowError(expect.objectContaining({ code: "INVALID_REQUEST" }));
+  });
+
   it("rejects unsafe and absolute tab paths", () => {
     expect(() => validateWorkspaceOptions({ openFiles: ["../secret"] })).toThrowError(expect.objectContaining({ code: "INVALID_REQUEST" }));
     expect(() => validateWorkspaceOptions({ openFiles: [path.resolve("/tmp/secret")] })).toThrowError(expect.objectContaining({ code: "INVALID_REQUEST" }));

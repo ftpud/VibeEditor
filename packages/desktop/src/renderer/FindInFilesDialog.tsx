@@ -1,7 +1,7 @@
 import Editor from "@monaco-editor/react";
-import { ArrowUpRight, CaseSensitive, ChevronDown, ChevronRight, FileCode2, Search, X } from "lucide-react";
+import { ArrowUpRight, Bookmark, CaseSensitive, ChevronDown, ChevronRight, FileCode2, Search, Trash2, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { SearchResult } from "@remote-ide/protocol";
+import type { SearchResult, WorkspaceSearchQueries, WorkspaceSearchQuery } from "@remote-ide/protocol";
 import type { editor } from "monaco-editor";
 import type { CoreClient } from "./client";
 import { configureMonacoThemes, monacoTheme } from "./theme";
@@ -28,9 +28,13 @@ function contextLine(line: { line: number; text: string; truncated: boolean }) {
   return <span className="find-context-line" key={line.line}><span>{line.line}</span><code title={line.text}>{line.text}{line.truncated && "…"}</code></span>;
 }
 
-export function FindInFilesDialog({ client, scope, onClose, onNavigate }: { client: CoreClient; scope: string; onClose(): void; onNavigate(result: SearchResult, matchLength: number): void }) {
+const searchKey = (search: WorkspaceSearchQuery) => `${search.query}\0${search.path}\0${search.matchCase ? "1" : "0"}`;
+const sameSearch = (left: WorkspaceSearchQuery, right: WorkspaceSearchQuery) => searchKey(left) === searchKey(right);
+
+export function FindInFilesDialog({ client, scope, queries = {}, onQueriesChange, onClose, onNavigate }: { client: CoreClient; scope: string; queries?: WorkspaceSearchQueries; onQueriesChange?(queries: WorkspaceSearchQueries): void; onClose(): void; onNavigate(result: SearchResult, matchLength: number): void }) {
   const [query, setQuery] = useState("");
   const [matchCase, setMatchCase] = useState(false);
+  const [searchPath, setSearchPath] = useState(scope);
   const [matches, setMatches] = useState<SearchResult[]>([]);
   const [selected, setSelected] = useState<SearchResult>();
   const [previewContent, setPreviewContent] = useState("");
@@ -47,7 +51,13 @@ export function FindInFilesDialog({ client, scope, onClose, onNavigate }: { clie
     for (const match of matches) byPath.set(match.path, [...(byPath.get(match.path) ?? []), match]);
     return [...byPath.entries()];
   }, [matches]);
+  const currentSearch = (): WorkspaceSearchQuery | undefined => query.trim() ? { query: query.trim(), path: searchPath, ...(matchCase ? { matchCase: true } : {}) } : undefined;
+  const reuse = (saved: WorkspaceSearchQuery) => { setQuery(saved.query); setMatchCase(Boolean(saved.matchCase)); setSearchPath(saved.path); };
+  const addRecent = (saved: WorkspaceSearchQuery) => onQueriesChange?.({ ...queries, recent: [saved, ...(queries.recent ?? []).filter((item) => !sameSearch(item, saved))].slice(0, 10) });
+  const saveCurrent = () => { const saved = currentSearch(); if (!saved) return; onQueriesChange?.({ ...queries, saved: [saved, ...(queries.saved ?? []).filter((item) => !sameSearch(item, saved))].slice(0, 20) }); };
+  const remove = (kind: "recent" | "saved", saved: WorkspaceSearchQuery) => onQueriesChange?.({ ...queries, [kind]: (queries[kind] ?? []).filter((item) => !sameSearch(item, saved)) });
   useEffect(() => { inputRef.current?.focus(); }, []);
+  useEffect(() => setSearchPath(scope), [scope]);
   useEffect(() => {
     const listener = (event: KeyboardEvent) => { if (event.key === "Escape") onClose(); };
     window.addEventListener("keydown", listener); return () => window.removeEventListener("keydown", listener);
@@ -58,16 +68,16 @@ export function FindInFilesDialog({ client, scope, onClose, onNavigate }: { clie
     if (!query.trim()) { setMatches([]); setSelected(undefined); setTruncated(false); setLoading(false); setError(""); return; }
     const timer = setTimeout(() => {
       setLoading(true); setError("");
-      void client.request("filesystem.search", { query, path: scope, matchCase }).then((result) => {
+      void client.request("filesystem.search", { query, path: searchPath, matchCase }).then((result) => {
         if (version !== searchVersion.current) return;
-        setMatches(result.matches); setSelected(result.matches[0]); setCollapsedPaths(new Set()); setTruncated(result.truncated);
+        setMatches(result.matches); setSelected(result.matches[0]); setCollapsedPaths(new Set()); setTruncated(result.truncated); const saved = currentSearch(); if (saved) addRecent(saved);
       }).catch((searchError: unknown) => {
         if (version !== searchVersion.current) return;
         setMatches([]); setSelected(undefined); setTruncated(false); setError(searchError instanceof Error ? searchError.message : "Search failed");
       }).finally(() => { if (version === searchVersion.current) setLoading(false); });
     }, 600);
     return () => clearTimeout(timer);
-  }, [client, matchCase, query, scope]);
+  }, [client, matchCase, query, searchPath]);
 
   useEffect(() => {
     if (!selected) { setPreviewContent(""); setPreviewError(""); return; }
@@ -90,11 +100,15 @@ export function FindInFilesDialog({ client, scope, onClose, onNavigate }: { clie
   const selectedParts = selected ? resultParts(selected.path) : undefined;
   return <div className="dialog-overlay find-dialog-overlay" onMouseDown={onClose}>
     <section className="find-dialog" role="dialog" aria-modal="true" aria-label="Find in Files" onMouseDown={(event) => event.stopPropagation()}>
-      <header><div className="find-dialog-heading"><h2>Find in Files</h2><span title={scope || "Remote workspace"}>{scope || "Remote workspace"}</span></div><button type="button" title="Close" aria-label="Close" onClick={onClose}><X size={15} /></button></header>
+      <header><div className="find-dialog-heading"><h2>Find in Files</h2><span title={searchPath || "Remote workspace"}>{searchPath || "Remote workspace"}</span></div><button type="button" title="Close" aria-label="Close" onClick={onClose}><X size={15} /></button></header>
       <div className="find-controls">
         <input ref={inputRef} value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Text to find" aria-label="Text to find" maxLength={200} />
         <label className="match-case" title="Match case"><input type="checkbox" aria-label="Match case" checked={matchCase} onChange={(event) => setMatchCase(event.target.checked)} /><CaseSensitive size={17} /></label>
         <span className="find-progress" role="status" aria-live="polite">{loading ? "Searching..." : query ? `${matches.length} matches` : ""}</span>
+      </div>
+      <div className="find-query-library" aria-label="Search history and saved searches">
+        <div><span>Recent</span>{queries.recent?.map((saved) => <span className="find-query" key={`recent:${searchKey(saved)}`}><button type="button" onClick={() => reuse(saved)}>{saved.query}</button><button type="button" aria-label={`Remove recent search ${saved.query}`} title="Remove" onClick={() => remove("recent", saved)}><Trash2 size={12} /></button></span>)}</div>
+        <div><span>Saved</span><button type="button" aria-label="Save current search" title="Save current search" disabled={!query.trim()} onClick={saveCurrent}><Bookmark size={13} /></button>{queries.saved?.map((saved) => <span className="find-query" key={`saved:${searchKey(saved)}`}><button type="button" onClick={() => reuse(saved)}>{saved.query}</button><button type="button" aria-label={`Delete saved search ${saved.query}`} title="Delete" onClick={() => remove("saved", saved)}><Trash2 size={12} /></button></span>)}</div>
       </div>
       {error && <div className="find-error" role="alert">{error}</div>}
       <div className="find-split">
