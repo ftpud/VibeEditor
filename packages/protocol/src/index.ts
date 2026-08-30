@@ -26,6 +26,8 @@ export type TaskCheckpoint = {
 
 export type WorkspaceOptions = {
   openFiles: string[];
+  /** Pinned file paths, in their leading tab-strip order. */
+  pinnedFiles?: string[];
   activeFile?: string;
   javaProject?: JavaProjectOptions;
   terminal?: WorkspaceTerminalOptions;

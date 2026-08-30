@@ -77,7 +77,7 @@ multi-surface work).
 
 ### Editor and navigation
 
-- [ ] **Pin tabs and preserve preview intent — Small.** Value: keep reference files
+- [x] **Pin tabs and preserve preview intent — Small.** Value: keep reference files
   stable while navigating rapidly with Quick Open and search. Constraint: define
   pinned-tab ordering and persistence before adding preview-tab replacement; never
   close or replace dirty tabs implicitly.
