@@ -28,4 +28,22 @@ describe("WorkspaceSearch", () => {
     expect(result.matches).toHaveLength(1);
     expect(result.matches[0]).toMatchObject({ line: 1, column: 1 });
   });
+
+  it("returns every non-overlapping occurrence on a line", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "remote-ide-search-"));
+    await writeFile(path.join(root, "a.txt"), "target target TARGET\ntargettarget\n");
+    const filesystem = new WorkspaceFileSystem();
+    await filesystem.open(root);
+
+    const result = await new WorkspaceSearch(filesystem).search("target", "", false);
+
+    expect(result.truncated).toBe(false);
+    expect(result.matches.map(({ line, column }) => ({ line, column }))).toEqual([
+      { line: 1, column: 1 },
+      { line: 1, column: 8 },
+      { line: 1, column: 15 },
+      { line: 2, column: 1 },
+      { line: 2, column: 7 }
+    ]);
+  });
 });

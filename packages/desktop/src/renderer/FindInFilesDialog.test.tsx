@@ -87,6 +87,28 @@ describe("FindInFilesDialog responsive result layout", () => {
     expect(screen.getByTestId("preview-editor").textContent).toBe(`preview:${matches[0]!.path}`);
   });
 
+  it("keeps every occurrence from a file available in its result group", async () => {
+    const sameLineMatches = [
+      { path: "src/repeated.ts", line: 4, column: 1, preview: "needle needle" },
+      { path: "src/repeated.ts", line: 4, column: 8, preview: "needle needle" }
+    ];
+    const onNavigate = vi.fn();
+    render(<FindInFilesDialog client={clientWith({ matches: sameLineMatches, truncated: false })} scope="" onClose={vi.fn()} onNavigate={onNavigate} />);
+    await search();
+
+    const group = screen.getByRole("region", { name: "Search results" }).querySelector<HTMLElement>(".find-result-group")!;
+    expect(within(group).getByText("2").classList.contains("find-group-count")).toBe(true);
+    const occurrences = within(group).getAllByRole("button").slice(1);
+    expect(occurrences).toHaveLength(2);
+    expect(occurrences.map((button) => button.getAttribute("aria-label"))).toEqual([
+      "src/repeated.ts, line 4, column 1",
+      "src/repeated.ts, line 4, column 8"
+    ]);
+
+    fireEvent.doubleClick(occurrences[1]!);
+    expect(onNavigate).toHaveBeenCalledWith(sameLineMatches[1], "needle".length);
+  });
+
   it("keeps result actions usable and exposes full selected paths while metadata is visually truncated", async () => {
     const onNavigate = vi.fn();
     render(<FindInFilesDialog client={clientWith({ matches: matches.slice(0, 2), truncated: false })} scope="" onClose={vi.fn()} onNavigate={onNavigate} />);
