@@ -118,6 +118,8 @@ button { color: inherit; }
 .git-commit-panel textarea { width: 100%; min-height: 62px; max-height: 150px; box-sizing: border-box; resize: vertical; padding: 7px; border: 1px solid #4b4d52; border-radius: 3px; outline: none; background: #1e1f22; color: #e2e3e5; font: inherit; }
 .git-commit-panel textarea:focus { border-color: #3574f0; }
 .git-commit-panel footer { height: 31px; padding-top: 5px; display: flex; align-items: center; justify-content: space-between; color: #85888e; font-size: 0.7692rem; }
+.git-commit-shortcut { margin-left: auto; padding-right: 7px; white-space: nowrap; }
+.git-commit-shortcut kbd { font: inherit; }
 .git-commit-panel footer button { min-width: 72px; height: 27px; padding: 0 10px; border: 0; border-radius: 3px; background: #3574f0; color: white; cursor: pointer; }
 .git-commit-panel footer button:disabled { opacity: .45; cursor: default; }
 .git-file-name { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
