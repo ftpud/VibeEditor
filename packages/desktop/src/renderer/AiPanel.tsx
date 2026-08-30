@@ -9,6 +9,23 @@ import { PermissionRequestActions, type PermissionRequestOwner } from "./Permiss
 
 export type AiAttachment = { id: string; name: string; path?: string; content?: string; data?: string; mimeType?: string };
 
+export type ContextUsage = { used: number; limit: number; percent: number };
+
+/** Context accounting belongs to the active agent session, never account-rate quotas. */
+export function contextUsage(session: AiSession): ContextUsage | undefined {
+  const { contextUsed: used, contextLimit: limit } = session;
+  if (!Number.isFinite(used) || !Number.isFinite(limit) || used! < 0 || limit! <= 0) return undefined;
+  return { used: used!, limit: limit!, percent: Math.min(100, Math.max(0, (used! / limit!) * 100)) };
+}
+
+export function ContextUsageIndicator({ session }: { session: AiSession }) {
+  const value = contextUsage(session);
+  if (!value) return null;
+  const percent = Math.round(value.percent);
+  const label = `Context window: ${percent}% used (${value.used.toLocaleString()} of ${value.limit.toLocaleString()} tokens)`;
+  return <span className={`ai-context-usage${percent >= 80 ? " near-full" : ""}`} role="img" aria-label={label} title={label} style={{ "--context-usage": `${value.percent}%` } as React.CSSProperties} />;
+}
+
 export function AiPanel({ provider, providers, session, sessions, models, usage, attachments, draft = "", permissionOwner, permissionActionsDisabled, sessionChangesDisabled, onProviderChange, onConfigurationChange, onAttachmentsChange, onDraftChange = () => undefined, onSend, onSendAsTask, onSteer, onInterrupt, onNewSession, onSwitchSession, onRemoveSession, onResolvePermission }: { provider: AiProvider; providers: AiProviderDescriptor[]; session: AiSession; sessions: AiSession[]; models: AiModel[]; usage?: AiUsage; attachments: AiAttachment[]; draft?: string; permissionOwner: PermissionRequestOwner; permissionActionsDisabled?: boolean; sessionChangesDisabled?: boolean; onProviderChange(provider: AiProvider): void; onConfigurationChange(configuration: AiConfiguration): void; onAttachmentsChange(attachments: AiAttachment[]): void; onDraftChange?(draft: string): void; onSend(prompt: string, configuration: AiConfiguration, attachments: AiAttachment[]): Promise<void>; onSendAsTask?: (prompt: string, configuration: AiConfiguration, attachments: AiAttachment[]) => Promise<void>; onSteer(prompt: string): Promise<void>; onInterrupt(): void; onNewSession(): void; onSwitchSession(session: AiSession): void; onRemoveSession(session: AiSession): void; onResolvePermission(owner: PermissionRequestOwner, requestId: string, optionId?: string): Promise<void> }) {
   const [prompt, setPrompt] = useState(draft);
   const [model, setModel] = useState(session.model);
@@ -128,7 +145,7 @@ export function AiPanel({ provider, providers, session, sessions, models, usage,
       {matchingCommands.length > 0 && <div className="ai-command-menu">{matchingCommands.map((command) => <button type="button" key={command.name} onClick={() => { const value = `/${command.name.replace(/^\//, "")} `; setPrompt(value); onDraftChange(value); }}><strong>/{command.name.replace(/^\//, "")}</strong><span>{command.description}{command.inputHint ? ` · ${command.inputHint}` : ""}</span></button>)}</div>}
       {attachments.length > 0 && <div className="ai-attachments">{attachments.map((attachment) => <span className="ai-attachment" key={attachment.id} title={attachment.path ?? attachment.name}><span>{attachment.path ?? attachment.name}</span><button type="button" title={`Remove ${attachment.name}`} onClick={() => onAttachmentsChange(attachments.filter((item) => item.id !== attachment.id))}><X size={12} /></button></span>)}</div>}
       <textarea value={prompt} placeholder={submitting ? `Connecting to ${providerName}...` : running ? (session.steering ? `Steer ${providerName} while it works...` : `Queue a follow-up for ${providerName}...`) : `Ask ${providerName}...`} onChange={(event) => { setPrompt(event.target.value); onDraftChange(event.target.value); }} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void send(); } }} />
-      <div className="ai-composer-actions"><input ref={fileInputRef} type="file" multiple onChange={(event) => void addFiles(event.target.files)} /><button type="button" title="Attach files" disabled={busy} onClick={() => fileInputRef.current?.click()}><Paperclip size={15} /></button>{onSendAsTask && <button type="button" title={taskSubmitting ? "Creating task..." : "Send prompt as a new task"} disabled={submitting || taskSubmitting || (!prompt.trim() && attachments.length === 0)} onClick={() => void sendAsTask()}><ListPlus size={15} /></button>}<button title={submitting ? `Connecting to ${providerName}` : running ? (session.steering ? "Add input to the running turn" : "Queue this for the next turn") : "Send prompt"} disabled={submitting || taskSubmitting || (!prompt.trim() && (running || attachments.length === 0))}><Send size={15} /></button></div>
+      <div className="ai-composer-actions"><ContextUsageIndicator session={session} /><input ref={fileInputRef} type="file" multiple onChange={(event) => void addFiles(event.target.files)} /><button type="button" title="Attach files" disabled={busy} onClick={() => fileInputRef.current?.click()}><Paperclip size={15} /></button>{onSendAsTask && <button type="button" title={taskSubmitting ? "Creating task..." : "Send prompt as a new task"} disabled={submitting || taskSubmitting || (!prompt.trim() && attachments.length === 0)} onClick={() => void sendAsTask()}><ListPlus size={15} /></button>}<button title={submitting ? `Connecting to ${providerName}` : running ? (session.steering ? "Add input to the running turn" : "Queue this for the next turn") : "Send prompt"} disabled={submitting || taskSubmitting || (!prompt.trim() && (running || attachments.length === 0))}><Send size={15} /></button></div>
     </form>
   </div>;
 }
