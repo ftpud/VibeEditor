@@ -26,6 +26,7 @@ import { initialTaskPanel, switchedTaskPanel, taskPanelPreferenceKey, type Class
 import { ProjectTree } from "./ProjectTree";
 import { QuickOpenDialog, workspaceFiles } from "./QuickOpenDialog";
 import { EditorStatusBar, type EditorStatusBarHandle } from "./EditorStatusBar";
+import { adjacentEditorTabId, editorShortcutEligible, editorTabShortcut } from "./editor-shortcuts";
 
 type ConnectionStatus = "idle" | "connecting" | "connected" | "failed" | "disconnected" | "workspace-error";
 type StatusKind = "progress" | "success" | "error";
@@ -1320,6 +1321,27 @@ export function App() {
     window.addEventListener("keydown", listener); return () => window.removeEventListener("keydown", listener);
   }, [quickOpen, status]);
 
+  useEffect(() => {
+    const listener = (event: KeyboardEvent) => {
+      const shortcut = editorTabShortcut(event);
+      if (!shortcut || !editorShortcutEligible(event.target, document)) return;
+      const currentGroup = layoutRef.current.editorGroups[0];
+      if (!currentGroup?.tabs.length) return;
+      if (shortcut === "close") {
+        const current = currentGroup.tabs.find((tab) => tab.id === currentGroup.activeTabId);
+        if (!current) return;
+        event.preventDefault();
+        closeTab(current);
+        return;
+      }
+      const nextId = adjacentEditorTabId(currentGroup.tabs.map((tab) => tab.id), currentGroup.activeTabId, shortcut === "previous");
+      if (!nextId) return;
+      event.preventDefault();
+      updateGroup((tabs) => ({ tabs, activeTabId: nextId }));
+    };
+    window.addEventListener("keydown", listener); return () => window.removeEventListener("keydown", listener);
+  }, [updateGroup]);
+
   const refreshTree = async (includeIgnored = showIgnoredRef.current) => {
     try { setTree((await clientRef.current!.request("filesystem.listTree", { includeIgnored })).tree); }
     catch (error) { setStatusMessage(error instanceof Error ? error.message : "Refresh failed"); }
@@ -1869,8 +1891,8 @@ export function App() {
           </div>}
           <span className="connection-dot" />{host}:{port}<div className="settings-anchor"><button title="Settings" onClick={() => setSettingsOpen((open) => !open)}><Settings size={15} /></button>{settingsOpen && <div className="settings-menu"><header>Settings</header><div className="settings-row"><span>Layout</span><div className="theme-switch"><button className={sideLayout === "classic" ? "active" : ""} onClick={() => changeSideLayout("classic")}>Classic</button><button className={sideLayout === "ai-focused" ? "active" : ""} onClick={() => changeSideLayout("ai-focused")}>AI focused</button></div></div><div className="settings-row"><span>Theme</span><div className="theme-switch"><button className={theme === "dark" ? "active" : ""} onClick={() => setTheme("dark")}>Dark</button><button className={theme === "light" ? "active" : ""} onClick={() => setTheme("light")}>Light</button></div></div><div className="settings-row"><span>Highlighting</span><div className="theme-switch"><button className={highlightTheme === "default" ? "active" : ""} onClick={() => setHighlightTheme("default")}>Default</button><button className={highlightTheme === "ftpud" ? "active" : ""} onClick={() => setHighlightTheme("ftpud")}>Ftpud</button></div></div><div className="settings-row font-setting"><label htmlFor="ui-font-family">Font</label><select id="ui-font-family" value={uiFontFamily} onChange={(event) => setUiFontFamily(event.target.value as "jetbrains" | "inter")}><option value="jetbrains">JetBrains Mono</option><option value="inter">Inter</option></select></div><div className="settings-row font-setting"><label htmlFor="ui-font-size">Size</label><input id="ui-font-size" type="number" min="10" max="20" step="1" value={uiFontSize} onChange={(event) => setUiFontSize(Math.min(20, Math.max(10, Number(event.target.value) || 13)))} /></div><div className="settings-row font-setting"><label htmlFor="ui-line-height">Line height</label><input id="ui-line-height" type="number" min="1" max="2" step="0.05" value={uiLineHeight} onChange={(event) => setUiLineHeight(Math.min(2, Math.max(1, Number(event.target.value) || 1.2)))} /></div></div>}</div><button title="Disconnect" onClick={disconnect}><LogOut size={15} /></button>
         </div>
-        <div className="tabs" role="tablist">
-          {group.tabs.map((tab) => <button className={`tab ${tab.id === group.activeTabId ? "active" : ""} ${tab.id === draggedTabId ? "dragging" : ""}`} key={tab.id} draggable onDragStart={(event) => { setDraggedTabId(tab.id); event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/plain", tab.id); }} onDragEnd={() => setDraggedTabId(undefined)} onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = "move"; }} onDrop={(event) => { event.preventDefault(); moveTab(tab.id); }} onContextMenu={(event) => { event.preventDefault(); setTabContextMenu({ x: Math.min(event.clientX, window.innerWidth - 220), y: Math.min(event.clientY, window.innerHeight - 125), tab }); }} onMouseDown={(event) => { if (event.button === 1) event.preventDefault(); }} onAuxClick={(event) => { if (event.button === 1) { event.preventDefault(); closeTab(tab); } }} onClick={() => void activateEditorTab(tab)}>
+        <div className="tabs" role="tablist" aria-label="Open editors">
+          {group.tabs.map((tab) => <button className={`tab ${tab.id === group.activeTabId ? "active" : ""} ${tab.id === draggedTabId ? "dragging" : ""}`} role="tab" aria-selected={tab.id === group.activeTabId} tabIndex={tab.id === group.activeTabId ? 0 : -1} title={`${tab.title} · Ctrl+Tab to switch · Ctrl/Cmd+W to close`} key={tab.id} draggable onDragStart={(event) => { setDraggedTabId(tab.id); event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/plain", tab.id); }} onDragEnd={() => setDraggedTabId(undefined)} onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = "move"; }} onDrop={(event) => { event.preventDefault(); moveTab(tab.id); }} onContextMenu={(event) => { event.preventDefault(); setTabContextMenu({ x: Math.min(event.clientX, window.innerWidth - 220), y: Math.min(event.clientY, window.innerHeight - 125), tab }); }} onMouseDown={(event) => { if (event.button === 1) event.preventDefault(); }} onAuxClick={(event) => { if (event.button === 1) { event.preventDefault(); closeTab(tab); } }} onClick={() => void activateEditorTab(tab)}>
             {tab.type === "diff" ? <GitCompareArrows size={14} /> : <File size={14} />}<span className={tab.type === "file" && projectGitStatuses[tab.path] ? `tab-file-name git-${projectGitStatuses[tab.path] === "C" ? "created" : "modified"}` : "tab-file-name"}>{tab.title}</span>{tab.dirty && <span className="dirty" title="Unsaved changes" />}<span className="close" title={`Close ${tab.title}`} onClick={(event) => { event.stopPropagation(); closeTab(tab); }}><X size={13} /></span>
           </button>)}
           <div className="tab-spacer" />
