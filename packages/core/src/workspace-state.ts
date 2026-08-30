@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
-import type { JavaProjectOptions, JavaRunConfiguration, WorkspaceOptions } from "@remote-ide/protocol";
+import type { JavaProjectOptions, JavaRunConfiguration, WorkspaceOptions, WorkspaceSearchQuery, WorkspaceSearchQueries } from "@remote-ide/protocol";
 import { CoreError } from "./errors.js";
 
 const EMPTY_OPTIONS: WorkspaceOptions = { openFiles: [] };
@@ -58,9 +58,30 @@ export function validateWorkspaceOptions(value: unknown): WorkspaceOptions {
   const javaProject = candidate.javaProject === undefined ? undefined : validateJavaProjectOptions(candidate.javaProject);
   const terminal = candidate.terminal === undefined ? undefined : validateTerminalOptions(candidate.terminal);
   const fileColors = candidate.fileColors === undefined ? undefined : validateFileColors(candidate.fileColors);
+  const searchQueries = candidate.searchQueries === undefined ? undefined : validateSearchQueries(candidate.searchQueries);
   if (candidate.gitCommitMessage !== undefined && (typeof candidate.gitCommitMessage !== "string" || candidate.gitCommitMessage.length > 10_000)) throw new CoreError("INVALID_REQUEST", "Invalid Git commit message draft");
   const gitCommitMessage = typeof candidate.gitCommitMessage === "string" ? candidate.gitCommitMessage : undefined;
-  return { openFiles, ...(pinnedFiles?.length ? { pinnedFiles } : {}), ...(activeFile ? { activeFile } : {}), ...(javaProject ? { javaProject } : {}), ...(terminal ? { terminal } : {}), ...(fileColors && Object.keys(fileColors).length ? { fileColors } : {}), ...(gitCommitMessage ? { gitCommitMessage } : {}) };
+  return { openFiles, ...(pinnedFiles?.length ? { pinnedFiles } : {}), ...(activeFile ? { activeFile } : {}), ...(javaProject ? { javaProject } : {}), ...(terminal ? { terminal } : {}), ...(fileColors && Object.keys(fileColors).length ? { fileColors } : {}), ...(gitCommitMessage ? { gitCommitMessage } : {}), ...(searchQueries ? { searchQueries } : {}) };
+}
+
+function validateSearchQueries(value: unknown): WorkspaceSearchQueries {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new CoreError("INVALID_REQUEST", "Invalid saved search metadata");
+  const candidate = value as Record<string, unknown>;
+  const validateList = (list: unknown, limit: number, label: string): WorkspaceSearchQuery[] | undefined => {
+    if (list === undefined) return undefined;
+    if (!Array.isArray(list) || list.length > limit) throw new CoreError("INVALID_REQUEST", `Invalid ${label} searches`);
+    const seen = new Set<string>(); const result: WorkspaceSearchQuery[] = [];
+    for (const item of list) {
+      if (!item || typeof item !== "object" || Array.isArray(item)) throw new CoreError("INVALID_REQUEST", `Invalid ${label} search`);
+      const query = (item as Record<string, unknown>).query; const searchPath = (item as Record<string, unknown>).path; const matchCase = (item as Record<string, unknown>).matchCase;
+      if (typeof query !== "string" || !query.trim() || query.length > 200 || typeof searchPath !== "string" || (searchPath !== "" && !isSafeRelativePath(searchPath)) || (matchCase !== undefined && typeof matchCase !== "boolean")) throw new CoreError("INVALID_REQUEST", `Invalid ${label} search`);
+      const normalized = { query: query.trim(), path: searchPath, ...(matchCase ? { matchCase: true } : {}) };
+      const key = JSON.stringify(normalized); if (!seen.has(key)) { seen.add(key); result.push(normalized); }
+    }
+    return result;
+  };
+  const recent = validateList(candidate.recent, 10, "recent"); const saved = validateList(candidate.saved, 20, "saved");
+  return { ...(recent?.length ? { recent } : {}), ...(saved?.length ? { saved } : {}) };
 }
 
 function validateFileColors(value: unknown): NonNullable<WorkspaceOptions["fileColors"]> {
