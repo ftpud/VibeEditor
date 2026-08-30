@@ -155,7 +155,7 @@ multi-surface work).
   a recreated shell after reconnect/task switch. Constraint: Core remains process
   owner; show exit/recreation reason and working-directory limitations instead of
   implying shell state was restored.
-- [ ] **Command/task terminal links — Small.** Value: jump from run, build, or AI
+- [x] **Command/task terminal links — Small.** Value: jump from run, build, or AI
   activity to its exact terminal. Constraint: references are workspace-scoped and
   tolerate expired terminal IDs.
 

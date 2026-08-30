@@ -26,7 +26,7 @@ export function ContextUsageIndicator({ session }: { session: AiSession }) {
   return <span className={`ai-context-usage${percent >= 80 ? " near-full" : ""}`} role="img" aria-label={label} title={label} style={{ "--context-usage": `${value.percent}%` } as React.CSSProperties} />;
 }
 
-export function AiPanel({ provider, providers, session, sessions, models, usage, attachments, draft = "", permissionOwner, permissionActionsDisabled, sessionChangesDisabled, onProviderChange, onConfigurationChange, onAttachmentsChange, onDraftChange = () => undefined, onSend, onSendAsTask, onSteer, onInterrupt, onNewSession, onSwitchSession, onRemoveSession, onResolvePermission }: { provider: AiProvider; providers: AiProviderDescriptor[]; session: AiSession; sessions: AiSession[]; models: AiModel[]; usage?: AiUsage; attachments: AiAttachment[]; draft?: string; permissionOwner: PermissionRequestOwner; permissionActionsDisabled?: boolean; sessionChangesDisabled?: boolean; onProviderChange(provider: AiProvider): void; onConfigurationChange(configuration: AiConfiguration): void; onAttachmentsChange(attachments: AiAttachment[]): void; onDraftChange?(draft: string): void; onSend(prompt: string, configuration: AiConfiguration, attachments: AiAttachment[]): Promise<void>; onSendAsTask?: (prompt: string, configuration: AiConfiguration, attachments: AiAttachment[]) => Promise<void>; onSteer(prompt: string): Promise<void>; onInterrupt(): void; onNewSession(): void; onSwitchSession(session: AiSession): void; onRemoveSession(session: AiSession): void; onResolvePermission(owner: PermissionRequestOwner, requestId: string, optionId?: string): Promise<void> }) {
+export function AiPanel({ provider, providers, session, sessions, models, usage, attachments, draft = "", permissionOwner, permissionActionsDisabled, sessionChangesDisabled, onProviderChange, onConfigurationChange, onAttachmentsChange, onDraftChange = () => undefined, onSend, onSendAsTask, onSteer, onInterrupt, onNewSession, onSwitchSession, onRemoveSession, onResolvePermission, onOpenTerminal = (terminalId) => new Promise<boolean>((resolve) => window.dispatchEvent(new CustomEvent("vibe:open-terminal", { detail: { terminalId, resolve } }))) }: { provider: AiProvider; providers: AiProviderDescriptor[]; session: AiSession; sessions: AiSession[]; models: AiModel[]; usage?: AiUsage; attachments: AiAttachment[]; draft?: string; permissionOwner: PermissionRequestOwner; permissionActionsDisabled?: boolean; sessionChangesDisabled?: boolean; onProviderChange(provider: AiProvider): void; onConfigurationChange(configuration: AiConfiguration): void; onAttachmentsChange(attachments: AiAttachment[]): void; onDraftChange?(draft: string): void; onSend(prompt: string, configuration: AiConfiguration, attachments: AiAttachment[]): Promise<void>; onSendAsTask?: (prompt: string, configuration: AiConfiguration, attachments: AiAttachment[]) => Promise<void>; onSteer(prompt: string): Promise<void>; onInterrupt(): void; onNewSession(): void; onSwitchSession(session: AiSession): void; onRemoveSession(session: AiSession): void; onResolvePermission(owner: PermissionRequestOwner, requestId: string, optionId?: string): Promise<void>; onOpenTerminal?(terminalId: string): Promise<boolean> }) {
   const [prompt, setPrompt] = useState(draft);
   const [model, setModel] = useState(session.model);
   const [reasoning, setReasoning] = useState(session.reasoning);
@@ -134,7 +134,7 @@ export function AiPanel({ provider, providers, session, sessions, models, usage,
     </section>}
     <div className="ai-messages" ref={messagesRef} onScroll={(event) => { const element = event.currentTarget; pinnedRef.current = element.scrollHeight - element.scrollTop - element.clientHeight < 40; }}>
       {session.messages.length === 0 && !submitting && <div className="ai-empty">Start a {providerName} task for this workspace.</div>}
-      {session.messages.map((message, index) => message.role === "activity" ? <ActivityMessage key={`${message.id}:${index}`} text={message.text} content={message.content} /> : <article key={`${message.id}:${index}`} className={`ai-message ${message.role}`}><header>{message.role === "user" ? (message.senderModel ? modelName(models, message.senderModel) : "You") : message.role === "assistant" ? `${providerName} · ${modelName(models, message.model ?? session.model)}` : "Error"}</header><div>{message.role === "assistant" ? <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.text}</ReactMarkdown> : <pre>{message.text}</pre>}<RichContent content={message.content} /></div></article>)}
+      {session.messages.map((message, index) => message.role === "activity" ? <ActivityMessage key={`${message.id}:${index}`} text={message.text} content={message.content} terminalId={message.terminalId} onOpenTerminal={onOpenTerminal} /> : <article key={`${message.id}:${index}`} className={`ai-message ${message.role}`}><header>{message.role === "user" ? (message.senderModel ? modelName(models, message.senderModel) : "You") : message.role === "assistant" ? `${providerName} · ${modelName(models, message.model ?? session.model)}` : "Error"}</header><div>{message.role === "assistant" ? <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.text}</ReactMarkdown> : <pre>{message.text}</pre>}<RichContent content={message.content} /></div></article>)}
       {session.pendingPermission && <PermissionRequestActions request={session.pendingPermission} owner={permissionOwner} disabled={permissionActionsDisabled} onResolve={onResolvePermission} />}
       {submitting && !running && <div className="ai-working ai-connecting" role="status" aria-live="polite"><span />Connecting to {providerName}...</div>}
       {running && <div className="ai-working" role="status" aria-live="polite"><span />{providerName} is working...</div>}
@@ -175,7 +175,8 @@ function selectValue(option: { choices?: { value: string }[]; defaultValue: stri
   return option.choices?.some((choice) => choice.value === current) ? current : String(option.defaultValue);
 }
 
-function ActivityMessage({ text, content }: { text: string; content?: AiContentBlock[] }) {
+function ActivityMessage({ text, content, terminalId, onOpenTerminal }: { text: string; content?: AiContentBlock[]; terminalId?: string; onOpenTerminal(terminalId: string): Promise<boolean> }) {
+  const [stale, setStale] = useState(false);
   const [firstLine, ...output] = text.split("\n");
   const summary = firstLine?.trim() || "Execution details";
   const reasoning = summary === "Reasoning";
@@ -189,7 +190,7 @@ function ActivityMessage({ text, content }: { text: string; content?: AiContentB
     </details>;
   }
   return <><details className="ai-activity">
-    <summary><span>Execution</span><code>{summary}</code></summary>
+    <summary><span>Execution</span><code>{summary}</code>{terminalId && <button type="button" title={stale ? "Terminal is no longer available" : "Open this activity's terminal"} disabled={stale} onClick={(event) => { event.preventDefault(); event.stopPropagation(); void onOpenTerminal(terminalId).then((opened) => { if (!opened) setStale(true); }); }}>Terminal{stale ? " unavailable" : ""}</button>}</summary>
     <pre>{output.length > 0 ? output.join("\n") : text}</pre>
   </details><RichContent content={content} /></>;
 }

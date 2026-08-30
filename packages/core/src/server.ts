@@ -266,7 +266,7 @@ export async function createServer(host: string, port: number, workspacePath: st
         const result = await handleRequest(services, tasks, acp, usefulFiles, agents, terminalHost, runConfigs, aiTimers, rootWorkspace, parsed);
         const terminalSubscription = terminalSubscriptions.get(socket);
         if (terminalSubscription && parsed.type === "terminal.create") terminalSubscription.terminalIds.add((result as { terminalId: string }).terminalId);
-        if (terminalSubscription && parsed.type === "terminal.attach" && (result as { session?: { terminalId: string } }).session) terminalSubscription.terminalIds.add(parsed.payload.terminalId);
+        if (terminalSubscription && parsed.type === "terminal.attach" && (result as { state: string }).state === "available") terminalSubscription.terminalIds.add(parsed.payload.terminalId);
         if (terminalSubscription && parsed.type === "terminal.close") terminalSubscription.terminalIds.delete(parsed.payload.terminalId);
         if (terminalSubscription && (parsed.type === "runConfig.run" || parsed.type === "runConfig.restart" || parsed.type === "runConfig.openTerminal")) {
           const terminalId = (result as { config: { terminalId?: string } }).config.terminalId; if (terminalId) terminalSubscription.terminalIds.add(terminalId);
@@ -470,7 +470,8 @@ async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStor
     }
     case "terminal.attach": {
       if (typeof request.payload.terminalId !== "string") throw new CoreError("INVALID_REQUEST", "terminalId must be a string");
-      return { session: terminalHost.attach(workspacePath, request.payload.terminalId) };
+      const session = terminalHost.attach(workspacePath, request.payload.terminalId);
+      return session ? { state: "available" as const, session } : { state: "stale" as const };
     }
     case "terminal.input": {
       if (typeof request.payload.terminalId !== "string" || typeof request.payload.data !== "string") throw new CoreError("INVALID_REQUEST", "terminalId and data must be strings");

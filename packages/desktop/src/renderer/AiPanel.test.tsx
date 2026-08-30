@@ -59,3 +59,14 @@ describe("response provenance", () => {
     expect(screen.getByText("Codex · Model B")).toBeTruthy();
   });
 });
+
+describe("activity terminal links", () => {
+  it("opens an activity terminal by its opaque reference and disables a stale link", async () => {
+    const onOpenTerminal = vi.fn().mockResolvedValue(false);
+    const conversation: AiSession = { id: "one", model: "model-a", reasoning: "low", status: "done", messages: [{ id: "tool", role: "activity", text: "Run build", terminalId: "terminal-1", timestamp: "2026-08-30T12:00:00.000Z" }] };
+    render(<AiPanel provider="codex" providers={[]} session={conversation} sessions={[conversation]} models={[]} attachments={[]} permissionOwner={{ provider: "codex" }} onProviderChange={vi.fn()} onConfigurationChange={vi.fn()} onAttachmentsChange={vi.fn()} onSend={vi.fn()} onSteer={vi.fn()} onInterrupt={vi.fn()} onNewSession={vi.fn()} onSwitchSession={vi.fn()} onRemoveSession={vi.fn()} onResolvePermission={vi.fn()} onOpenTerminal={onOpenTerminal} />);
+    fireEvent.click(screen.getByTitle("Open this activity's terminal"));
+    await vi.waitFor(() => expect(onOpenTerminal).toHaveBeenCalledWith("terminal-1"));
+    await vi.waitFor(() => expect(screen.getByRole("button", { name: "Terminal unavailable" })).toBeDisabled());
+  });
+});
