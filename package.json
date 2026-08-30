@@ -3,6 +3,9 @@
   "private": true,
   "version": "0.1.0",
   "license": "MIT",
+  "allowScripts": {
+    "node-pty@1.1.0": true
+  },
   "workspaces": ["packages/*"],
   "scripts": {
     "core": "npm run start -w @remote-ide/core --",

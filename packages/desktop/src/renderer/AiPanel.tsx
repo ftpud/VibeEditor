@@ -9,8 +9,25 @@ import { PermissionRequestActions, type PermissionRequestOwner } from "./Permiss
 
 export type AiAttachment = { id: string; name: string; path?: string; content?: string; data?: string; mimeType?: string };
 
-export function AiPanel({ provider, providers, session, sessions, models, usage, attachments, permissionOwner, permissionActionsDisabled, onProviderChange, onConfigurationChange, onAttachmentsChange, onSend, onSendAsTask, onSteer, onInterrupt, onNewSession, onSwitchSession, onRemoveSession, onResolvePermission }: { provider: AiProvider; providers: AiProviderDescriptor[]; session: AiSession; sessions: AiSession[]; models: AiModel[]; usage?: AiUsage; attachments: AiAttachment[]; permissionOwner: PermissionRequestOwner; permissionActionsDisabled?: boolean; onProviderChange(provider: AiProvider): void; onConfigurationChange(configuration: AiConfiguration): void; onAttachmentsChange(attachments: AiAttachment[]): void; onSend(prompt: string, configuration: AiConfiguration, attachments: AiAttachment[]): Promise<void>; onSendAsTask?: (prompt: string, configuration: AiConfiguration, attachments: AiAttachment[]) => Promise<void>; onSteer(prompt: string): Promise<void>; onInterrupt(): void; onNewSession(): void; onSwitchSession(session: AiSession): void; onRemoveSession(session: AiSession): void; onResolvePermission(owner: PermissionRequestOwner, requestId: string, optionId?: string): Promise<void> }) {
-  const [prompt, setPrompt] = useState("");
+export type ContextUsage = { used: number; limit: number; percent: number };
+
+/** Context accounting belongs to the active agent session, never account-rate quotas. */
+export function contextUsage(session: AiSession): ContextUsage | undefined {
+  const { contextUsed: used, contextLimit: limit } = session;
+  if (!Number.isFinite(used) || !Number.isFinite(limit) || used! < 0 || limit! <= 0) return undefined;
+  return { used: used!, limit: limit!, percent: Math.min(100, Math.max(0, (used! / limit!) * 100)) };
+}
+
+export function ContextUsageIndicator({ session }: { session: AiSession }) {
+  const value = contextUsage(session);
+  if (!value) return null;
+  const percent = Math.round(value.percent);
+  const label = `Context window: ${percent}% used (${value.used.toLocaleString()} of ${value.limit.toLocaleString()} tokens)`;
+  return <span className={`ai-context-usage${percent >= 80 ? " near-full" : ""}`} role="img" aria-label={label} title={label} style={{ "--context-usage": `${value.percent}%` } as React.CSSProperties} />;
+}
+
+export function AiPanel({ provider, providers, session, sessions, models, usage, attachments, draft = "", permissionOwner, permissionActionsDisabled, sessionChangesDisabled, onProviderChange, onConfigurationChange, onAttachmentsChange, onDraftChange = () => undefined, onSend, onSendAsTask, onSteer, onInterrupt, onNewSession, onSwitchSession, onRemoveSession, onResolvePermission }: { provider: AiProvider; providers: AiProviderDescriptor[]; session: AiSession; sessions: AiSession[]; models: AiModel[]; usage?: AiUsage; attachments: AiAttachment[]; draft?: string; permissionOwner: PermissionRequestOwner; permissionActionsDisabled?: boolean; sessionChangesDisabled?: boolean; onProviderChange(provider: AiProvider): void; onConfigurationChange(configuration: AiConfiguration): void; onAttachmentsChange(attachments: AiAttachment[]): void; onDraftChange?(draft: string): void; onSend(prompt: string, configuration: AiConfiguration, attachments: AiAttachment[]): Promise<void>; onSendAsTask?: (prompt: string, configuration: AiConfiguration, attachments: AiAttachment[]) => Promise<void>; onSteer(prompt: string): Promise<void>; onInterrupt(): void; onNewSession(): void; onSwitchSession(session: AiSession): void; onRemoveSession(session: AiSession): void; onResolvePermission(owner: PermissionRequestOwner, requestId: string, optionId?: string): Promise<void> }) {
+  const [prompt, setPrompt] = useState(draft);
   const [model, setModel] = useState(session.model);
   const [reasoning, setReasoning] = useState(session.reasoning);
   const [configuration, setConfiguration] = useState<AiConfiguration>(session.configuration ?? {});
@@ -24,6 +41,7 @@ export function AiPanel({ provider, providers, session, sessions, models, usage,
   const pinnedRef = useRef(true);
   const shownSessionRef = useRef(session.id);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  useEffect(() => { setPrompt(draft); }, [draft]);
   useEffect(() => { setModel(session.model); setReasoning(session.reasoning); setConfiguration(session.configuration ?? {}); }, [session.model, session.reasoning, session.configuration]);
   const lastMessage = session.messages[session.messages.length - 1];
   // `scrollIntoView` on a trailing anchor scrolls whichever ancestor it finds first, which after a
@@ -43,6 +61,7 @@ export function AiPanel({ provider, providers, session, sessions, models, usage,
   useEffect(() => { if (selectedModel && selectedModel.reasoningLevels.length > 0 && !selectedModel.reasoningLevels.includes(reasoning)) { setReasoning(selectedModel.defaultReasoning); onConfigurationChange({ ...configuration, model: selectedModel.id, reasoning: selectedModel.defaultReasoning }); } }, [onConfigurationChange, reasoning, selectedModel]);
   const running = session.status === "in_progress";
   const busy = running || submitting || taskSubmitting;
+  const sessionControlsDisabled = submitting || sessionChangesDisabled;
   const reasoningLevels = useMemo(() => selectedModel?.reasoningLevels ?? (reasoning ? [reasoning] : []), [reasoning, selectedModel]);
   const descriptor = providers.find((item) => item.id === provider);
   const effectiveOptions = useMemo(() => { const advertised = session.availableOptions ?? []; return [...(descriptor?.options ?? []).filter((option) => !advertised.some((candidate) => candidate.id === option.id)), ...advertised]; }, [descriptor, session.availableOptions]);
@@ -61,7 +80,7 @@ export function AiPanel({ provider, providers, session, sessions, models, usage,
     const value = prompt;
     setPrompt("");
     setSubmitting(true);
-    try { if (running) await onSteer(value); else { await onSend(value, { ...configuration, model, reasoning }, attachments); onAttachmentsChange([]); } }
+    try { if (running) await onSteer(value); else { await onSend(value, { ...configuration, model, reasoning }, attachments); onAttachmentsChange([]); } onDraftChange(""); }
     catch { setPrompt(value); }
     finally { setSubmitting(false); }
   };
@@ -70,7 +89,7 @@ export function AiPanel({ provider, providers, session, sessions, models, usage,
     const value = prompt;
     setPrompt("");
     setTaskSubmitting(true);
-    try { await onSendAsTask(value, { ...configuration, model, reasoning }, attachments); onAttachmentsChange([]); }
+    try { await onSendAsTask(value, { ...configuration, model, reasoning }, attachments); onAttachmentsChange([]); onDraftChange(""); }
     catch { setPrompt(value); }
     finally { setTaskSubmitting(false); }
   };
@@ -101,11 +120,11 @@ export function AiPanel({ provider, providers, session, sessions, models, usage,
       <ModelPicker models={models} value={model} label={`${providerName} model`} disabled={busy} onChange={changeModel} />
       {autopilot && <div className="ai-autopilot" title={`${autopilot.option.name}: approve every action without asking.`}><span>Auto</span><label className="ai-switch"><input type="checkbox" aria-label="Autopilot" disabled={busy} checked={autopilotOn} onChange={(event) => updateConfiguration({ [autopilot.option.id]: event.target.checked ? autopilot.on : autopilot.off })} /><span /></label></div>}
       <button className={settingsOpen ? "active" : ""} title={`${providerName} settings`} aria-expanded={settingsOpen} disabled={submitting} onClick={() => setSettingsOpen((open) => !open)}><Settings2 size={14} /><ChevronDown className="ai-settings-chevron" size={12} /></button>
-      {running ? <button className="ai-interrupt" title={`Stop ${providerName}`} onClick={onInterrupt}><Square size={12} fill="currentColor" /></button> : <button className={sessionsOpen ? "active" : ""} title="Manage sessions" aria-expanded={sessionsOpen} disabled={submitting} onClick={() => { setSettingsOpen(false); setSessionsOpen((open) => !open); }}><MessageSquare size={14} /></button>}
+      <div className="ai-session-control">{running ? <button className="ai-interrupt" title={`Stop ${providerName}`} onClick={onInterrupt}><Square size={12} fill="currentColor" /></button> : <button className={sessionsOpen ? "active" : ""} title="Manage sessions" aria-expanded={sessionsOpen} disabled={submitting} onClick={() => { setSettingsOpen(false); setSessionsOpen((open) => !open); }}><MessageSquare size={14} /></button>}<ContextUsageIndicator session={session} /></div>
     </div>
     {sessionsOpen && <section className="ai-sessions">
-      <header><strong>Sessions</strong><button disabled={submitting} onClick={() => { setSessionsOpen(false); onNewSession(); }}><Plus size={13} /> New</button></header>
-      <div>{sessions.filter((item) => item.id).map((item, index) => <div className="ai-session-row" key={item.id ?? index}><button className="ai-session-select" disabled={submitting} onClick={() => { setSessionsOpen(false); onSwitchSession(item); }}>{item.id === session.id && <Check size={13} />}<span><strong>{sessionTitle(item)}</strong><small>{sessionDate(item)}</small></span></button><button className="ai-session-remove" title="Remove session" disabled={submitting || sessions.length === 1} onClick={() => onRemoveSession(item)}><Trash2 size={13} /></button></div>)}</div>
+      <header><strong>Sessions</strong><button disabled={sessionControlsDisabled} title={sessionChangesDisabled ? "Cancel or run the active task timer before changing sessions" : undefined} onClick={() => { setSessionsOpen(false); onNewSession(); }}><Plus size={13} /> New</button></header>
+      <div>{sessions.filter((item) => item.id).map((item, index) => <div className="ai-session-row" key={item.id ?? index}><button className="ai-session-select" disabled={sessionControlsDisabled} title={sessionChangesDisabled ? "Cancel or run the active task timer before changing sessions" : undefined} onClick={() => { setSessionsOpen(false); onSwitchSession(item); }}>{item.id === session.id && <Check size={13} />}<span><strong>{sessionTitle(item)}</strong><small>{modelName(models, item.model)} · {sessionDate(item)}</small></span></button><button className="ai-session-remove" title={sessionChangesDisabled ? "Cancel or run the active task timer before changing sessions" : "Remove session"} disabled={sessionControlsDisabled || sessions.length === 1} onClick={() => onRemoveSession(item)}><Trash2 size={13} /></button></div>)}</div>
     </section>}
     {settingsOpen && descriptor && <section className="ai-settings">
       <header><strong>{descriptor.settings.title}</strong><p>{descriptor.settings.description}</p></header>
@@ -115,7 +134,7 @@ export function AiPanel({ provider, providers, session, sessions, models, usage,
     </section>}
     <div className="ai-messages" ref={messagesRef} onScroll={(event) => { const element = event.currentTarget; pinnedRef.current = element.scrollHeight - element.scrollTop - element.clientHeight < 40; }}>
       {session.messages.length === 0 && !submitting && <div className="ai-empty">Start a {providerName} task for this workspace.</div>}
-      {session.messages.map((message, index) => message.role === "activity" ? <ActivityMessage key={`${message.id}:${index}`} text={message.text} content={message.content} /> : <article key={`${message.id}:${index}`} className={`ai-message ${message.role}`}><header>{message.role === "user" ? "You" : message.role === "assistant" ? providerName : "Error"}</header><div>{message.role === "assistant" ? <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.text}</ReactMarkdown> : <pre>{message.text}</pre>}<RichContent content={message.content} /></div></article>)}
+      {session.messages.map((message, index) => message.role === "activity" ? <ActivityMessage key={`${message.id}:${index}`} text={message.text} content={message.content} /> : <article key={`${message.id}:${index}`} className={`ai-message ${message.role}`}><header>{message.role === "user" ? (message.senderModel ? modelName(models, message.senderModel) : "You") : message.role === "assistant" ? `${providerName} · ${modelName(models, message.model ?? session.model)}` : "Error"}</header><div>{message.role === "assistant" ? <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.text}</ReactMarkdown> : <pre>{message.text}</pre>}<RichContent content={message.content} /></div></article>)}
       {session.pendingPermission && <PermissionRequestActions request={session.pendingPermission} owner={permissionOwner} disabled={permissionActionsDisabled} onResolve={onResolvePermission} />}
       {submitting && !running && <div className="ai-working ai-connecting" role="status" aria-live="polite"><span />Connecting to {providerName}...</div>}
       {running && <div className="ai-working" role="status" aria-live="polite"><span />{providerName} is working...</div>}
@@ -123,9 +142,9 @@ export function AiPanel({ provider, providers, session, sessions, models, usage,
     <div className="ai-composer-resize-handle" onPointerDown={beginComposerResize} />
     <form className="ai-composer" style={{ height: composerHeight }} onSubmit={(event) => { event.preventDefault(); void send(); }}>
       {attachmentError && <div className="ai-attachment-error">{attachmentError}</div>}
-      {matchingCommands.length > 0 && <div className="ai-command-menu">{matchingCommands.map((command) => <button type="button" key={command.name} onClick={() => setPrompt(`/${command.name.replace(/^\//, "")} `)}><strong>/{command.name.replace(/^\//, "")}</strong><span>{command.description}{command.inputHint ? ` · ${command.inputHint}` : ""}</span></button>)}</div>}
+      {matchingCommands.length > 0 && <div className="ai-command-menu">{matchingCommands.map((command) => <button type="button" key={command.name} onClick={() => { const value = `/${command.name.replace(/^\//, "")} `; setPrompt(value); onDraftChange(value); }}><strong>/{command.name.replace(/^\//, "")}</strong><span>{command.description}{command.inputHint ? ` · ${command.inputHint}` : ""}</span></button>)}</div>}
       {attachments.length > 0 && <div className="ai-attachments">{attachments.map((attachment) => <span className="ai-attachment" key={attachment.id} title={attachment.path ?? attachment.name}><span>{attachment.path ?? attachment.name}</span><button type="button" title={`Remove ${attachment.name}`} onClick={() => onAttachmentsChange(attachments.filter((item) => item.id !== attachment.id))}><X size={12} /></button></span>)}</div>}
-      <textarea value={prompt} placeholder={submitting ? `Connecting to ${providerName}...` : running ? (session.steering ? `Steer ${providerName} while it works...` : `Queue a follow-up for ${providerName}...`) : `Ask ${providerName}...`} onChange={(event) => setPrompt(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void send(); } }} />
+      <textarea value={prompt} placeholder={submitting ? `Connecting to ${providerName}...` : running ? (session.steering ? `Steer ${providerName} while it works...` : `Queue a follow-up for ${providerName}...`) : `Ask ${providerName}...`} onChange={(event) => { setPrompt(event.target.value); onDraftChange(event.target.value); }} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void send(); } }} />
       <div className="ai-composer-actions"><input ref={fileInputRef} type="file" multiple onChange={(event) => void addFiles(event.target.files)} /><button type="button" title="Attach files" disabled={busy} onClick={() => fileInputRef.current?.click()}><Paperclip size={15} /></button>{onSendAsTask && <button type="button" title={taskSubmitting ? "Creating task..." : "Send prompt as a new task"} disabled={submitting || taskSubmitting || (!prompt.trim() && attachments.length === 0)} onClick={() => void sendAsTask()}><ListPlus size={15} /></button>}<button title={submitting ? `Connecting to ${providerName}` : running ? (session.steering ? "Add input to the running turn" : "Queue this for the next turn") : "Send prompt"} disabled={submitting || taskSubmitting || (!prompt.trim() && (running || attachments.length === 0))}><Send size={15} /></button></div>
     </form>
   </div>;
@@ -140,6 +159,8 @@ function sessionDate(session: AiSession): string {
   const value = session.updatedAt ?? session.createdAt;
   return value ? new Date(value).toLocaleString() : "";
 }
+
+function modelName(models: AiModel[], id: string): string { return models.find((model) => model.id === id)?.name ?? id; }
 
 function isTextFile(file: File): boolean { return file.type.startsWith("text/") || /(?:json|xml|yaml|javascript|typescript|markdown|csv|toml|sql)$/.test(file.type) || /\.(?:txt|md|json|jsonl|ya?ml|xml|csv|toml|ini|log|tsx?|jsx?|css|html?|sql|py|java|c|cc|cpp|h|hpp|rs|go|sh)$/i.test(file.name); }
 function readBase64(file: File): Promise<string> { return new Promise((resolve, reject) => { const reader = new FileReader(); reader.onerror = () => reject(reader.error); reader.onload = () => resolve(String(reader.result).split(",", 2)[1] ?? ""); reader.readAsDataURL(file); }); }

@@ -6,43 +6,57 @@ VibeEditor is a place to explore what a remote-first, AI-first development envir
 
 The experiment is built around a simple idea from [WHY.md](WHY.md): **the development machine is the server, and the local app is the control surface**.
 
+<img width="1469" height="925" alt="screenshot" src="https://github.com/user-attachments/assets/5cef4748-aab8-4869-9cc6-a98c6fc1e81d" />
+
+
 The repository, terminals, language servers, agents, builds, tests, and task state stay close to the compute. A lightweight React/Monaco desktop client provides the interaction layer over WebSockets. Tasks become durable workspaces—with their own Git worktree, editor state, terminals, AI sessions, notes, and Git state—rather than branches whose context must be reconstructed every time.
 
 Vibe Editor is AI-first, not AI-only: agents can do the initial work, while the editor, terminal, Git tooling, HTTP files, executable Markdown, and Java tooling keep a human in control. It is intended as a sandbox for implementing and reviewing updates and features quickly, not as a replacement for every deep debugging, profiling, or framework-specific capability of a heavyweight IDE.
 
 Expect rough edges, incomplete features, breaking changes, and assumptions tailored to the author's workflow. This repository is under active development and currently targets source-based development and launches rather than packaged application releases.
 
-## Requirements
+## Quick start: Vibe Gateway (recommended)
 
-- Node.js 20 or newer and npm.
-- Git.
-- A compiler toolchain supported by `node-pty` if npm cannot use a prebuilt binary.
-- The platform libraries required by Electron.
+Use Gateway for the normal remote-first workflow. It installs and runs Core next to your project on the remote machine, then opens the Desktop UI locally through a private SSH tunnel. You do not need to manually clone Vibe Editor or start Core on the remote host.
+
+Before starting, make sure the two machines have the following:
+
+| Machine | Required for Gateway |
+| --- | --- |
+| **Local client** | Node.js 20+ and npm, Git (to clone this repository), `tar`, and the platform libraries required by Electron. A `node-pty` compiler toolchain is needed only if npm cannot use its prebuilt binary. |
+| **Remote server** | A Unix-like SSH host reachable with a username and either a password or an already-authorized SSH private key, Node.js 20+ and npm for that SSH user, Git, `bash`, `tar`, standard process utilities (`nohup`, `kill`, `sleep`, and `tail`), and permission to create `~/.vibe`, run processes, and modify the selected project directory. It must be able to reach the Git repository selected in Gateway settings. A C/C++ compiler, `make`, and Python 3 are needed only if `node-pty` must be rebuilt. |
+
+On the **local client**, clone this repository, install dependencies, build, and launch Gateway:
+
+```bash
+git clone https://github.com/ftpud/VibeEditor.git
+cd VibeEditor
+VIBE_SKIP_JDTLS=1 npm install
+npm run build
+npm run gateway
+```
+
+`VIBE_SKIP_JDTLS=1` skips the optional Java language-server download. Omit it if you want Java tooling; its requirements are listed below.
+
+In Gateway's first run:
+
+1. Add an SSH connection with host, port, and username. Choose **Password**, or choose **Private key**, select the local private-key file, and enter its optional passphrase. The matching public key must already be in the remote user's `~/.ssh/authorized_keys`; Gateway does not install or copy public keys. Use **Test connection** to verify the current form values before saving.
+2. Review **Gateway repository settings**. The default repository is `https://github.com/ftpud/VibeEditor` on branch `main`; choose a different repository or branch if needed. Auto-update is enabled by default.
+3. Add a remote workspace using the absolute path to an existing project directory on that server.
+4. Click **Start server**. Gateway clones the selected repository and branch into `~/.vibe`, installs/builds what changed, and starts remote Core on loopback.
+5. Click **Start client** and keep Gateway open while using the editor; it owns the SSH tunnel.
+
+For deployment details, caching behavior, and lifecycle notes, see [Vibe Gateway](#vibe-gateway). Use the direct Core/Desktop commands below only for local development, debugging, or when you intentionally manage Core and its connection yourself.
+
+## Optional capabilities
 
 Optional features have additional requirements:
 
 - Java: Maven and a project JDK that provides `java`, `jdb`, `jimage`, and related tools. The installer downloads JDT LS and a Temurin 21 JRE used only to run the language server.
 - Codex: valid Codex authentication/configuration in the account running Core. The Codex ACP server itself is an npm dependency of this repository; a separate `codex` executable is not required.
 - Copilot: an installed and authenticated `copilot` CLI, or `COPILOT_CLI_PATH` pointing to it.
-- Gateway: password-based SSH access to a host with Node.js 20+, npm, Git, and permission to run processes and modify the selected workspace. The local machine must also provide `tar` and Electron's platform dependencies.
 
-## Install
-
-Gateway is hard-coded to provision the `dev` branch, so use that branch when following the remote workflow:
-
-```bash
-git clone --branch dev https://github.com/ftpud/VibeEditor.git
-cd VibeEditor
-npm install
-```
-
-`npm install` attempts to download the pinned JDT LS and Temurin runtime. A download failure is reported as a warning because Java tooling is optional. Skip both downloads on a desktop-only installation with:
-
-```bash
-VIBE_SKIP_JDTLS=1 npm install
-```
-
-Install or repair them later on the machine running Core:
+An `npm install` without `VIBE_SKIP_JDTLS=1` attempts to download the pinned JDT LS and Temurin runtime. A download failure is reported as a warning because Java tooling is optional. If you skipped that download, install or repair it later on the machine running Core:
 
 ```bash
 npm run install:jdtls
@@ -144,8 +158,8 @@ local Electron/Monaco Desktop
 
 The deployment flow is:
 
-1. **Save a connection and workspace.** Gateway stores the SSH host and remote project directory in its Electron application-data directory. The SSH password is encrypted with Electron `safeStorage`; public-key and SSH-agent authentication are not currently implemented.
-2. **Provision the remote application.** **Start server** connects over SSH and clones `https://github.com/ftpud/VibeEditor` into `~/.vibe`, or fetches and force-resets an existing checkout to `origin/dev`. This is the application installation; the configured project workspace remains in its own remote directory.
+1. **Save a connection and workspace.** Gateway supports password or local SSH private-key authentication. Select a private-key file in the connection dialog and optionally provide its passphrase; the file remains local and is read only by the Electron main process when connecting. The matching public key must already be authorized for the remote user in `~/.ssh/authorized_keys`; Gateway does not install or copy public keys. Passwords and passphrases are encrypted with Electron `safeStorage` and are not shown after saving. Use **Test connection** in the dialog to test the unsaved host, port, username, and selected authentication values before saving. SSH-agent authentication is not currently implemented.
+2. **Provision the remote application.** **Start server** connects over SSH and clones the repository and branch saved in Gateway repository settings into `~/.vibe`. The defaults are `https://github.com/ftpud/VibeEditor` and `main`. With auto-update enabled (the default), an existing checkout is updated and force-reset to the configured branch; with it disabled, Gateway retains the existing checkout. This is the application installation; the configured project workspace remains in its own remote directory.
 3. **Build only when needed.** Gateway records the deployed Git revision in `~/.vibe-build`. If the revision changed, dependencies or build outputs are missing, or `node_modules` is absent, it runs `npm install` and builds ACP, Protocol, Core, and Desktop. Otherwise it reuses the existing build.
 4. **Start remote Core.** Gateway tries the configured Core port and chooses a free fallback when it is occupied. It launches Core with `nohup`, bound only to remote loopback, and passes the configured project directory as the workspace root. Each Gateway workspace gets its own PID and log files in the remote home directory.
 5. **Prepare the local client.** **Start client** identifies the remote deployment by Git revision. If that Desktop build is not already cached locally, Gateway archives the remotely built Electron main process and renderer, downloads them over SFTP, and extracts them under Gateway's application-data directory.
@@ -154,7 +168,7 @@ The deployment flow is:
 
 Keep Gateway open while using a client because it owns the SSH tunnel. Closing Gateway closes its tunnels but leaves remote Core running; **Stop server** closes the tunnel and terminates the Core process recorded for that workspace.
 
-Gateway deploys only committed code from the fixed `dev` branch. It always resets the remote application checkout to `origin/dev` and does not copy uncommitted local source changes.
+Gateway deploys committed code from the repository and branch saved in its settings. With auto-update enabled, it resets the remote application checkout to the configured branch; it never copies uncommitted local source changes.
 
 ## Features
 
@@ -163,7 +177,7 @@ Gateway deploys only committed code from the fixed `dev` branch. It always reset
 - **Git:** status and diffs, selective commits, push, checkout and branch rename, searchable graph/history, file/selection history, compare-with-ref, cherry-pick, and file or hunk rollback.
 - **Task workspaces:** isolated Git worktrees on new, existing, or remote branches. A new task copies the root's staged, unstaged, untracked, ignored, and deleted-file state but excludes `node_modules`. Tasks can be compared with their recorded base and merged back with normal or smart merge.
 - **AI:** a shared AI Capability Provider layer with Codex ACP and Copilot ACP adapters, model/configuration discovery, resumable sessions, permission prompts, usage data, attachments, steering, MCP servers, and global/local/workspace agent presets. See [docs/ACP.md](docs/ACP.md).
-- **Vibe MCP tools:** an agent preset may opt into the built-in `vibe-editor` MCP server to create/list/delete task worktrees, start provider/model sessions with an inherited, configured, or explicitly absent agent preset and validated reasoning effort, append prompts, inspect recent responses, set the current task's commit-message draft, and safely update the latest unpushed commit message for an explicit task ID. It is not enabled when `mcpServers` is empty or omitted; task-start examples are in [docs/ACP.md](docs/ACP.md#starting-tasks-through-the-vibe-editor-mcp-server).
+- **Vibe MCP tools:** an agent preset may opt into the built-in `vibe-editor` MCP server to create/list/delete task worktrees, start provider/model sessions with an inherited, configured, or explicitly absent agent preset and validated reasoning effort, select a validated model/reasoning pair for its next turn, append prompts, inspect recent responses, set the current task's commit-message draft, and safely update the latest unpushed commit message for an explicit task ID. It is not enabled when `mcpServers` is empty or omitted; task-start examples are in [docs/ACP.md](docs/ACP.md#starting-tasks-through-the-vibe-editor-mcp-server).
 - **Java/Maven:** Maven project loading, source roots, JDT LS completion/navigation/diagnostics/semantic tokens, main-class run configurations, and `jdb` debugging.
 - **HTTP and notes:** executable requests in `.http` files, executable shell blocks in Markdown, and global or workspace-local Useful Files.
 
@@ -200,7 +214,8 @@ Task Git prompt checkpoints are also stored there as content-addressed snapshots
 - Core exposes one root workspace per process and has no authentication, authorization, or TLS. Anyone who can reach its port can modify files and run commands with Core's operating-system permissions. Do not expose it to the public internet.
 - Filesystem methods reject parent traversal and symlinks escaping the active workspace, but this boundary does not make an exposed Core safe. Text files, useful files, agent files, HTTP bodies, and HTTP responses are limited to 2 MB where applicable; HTTP requests time out after 30 seconds.
 - Task workspaces require the root to be a Git repository. Each task has an independent dependency tree, so run its package installation after switching when needed. Deleting a task forcibly removes its worktree and local task branch. Merging first commits all task changes; smart merge may stash and restore root changes.
-- Gateway accepts username/password authentication only, depends on the fixed public repository and `dev` branch, and owns non-persistent tunnels. Closing Gateway closes its tunnels but does not stop remote Core unless **Stop server** is used.
+- Gateway supports password and local private-key authentication, but not SSH-agent authentication or host-key verification UX. It deploys the saved repository and branch and owns non-persistent tunnels. Closing Gateway closes its tunnels but does not stop remote Core unless **Stop server** is used.
+- If private-key authentication fails, select the private key itself (such as `~/.ssh/id_ed25519`), not its `.pub` companion. Gateway validates RSA, ECDSA, Ed25519, and OpenSSH key files locally and reports missing or incorrect passphrases before connecting. If the server rejects a valid key, verify that its matching public key is present in the selected remote user's `~/.ssh/authorized_keys`.
 - Java support is Maven-specific. The downloaded JRE runs JDT LS only; builds, runs, and debugging still depend on suitable project Java/Maven tools on the Core host.
 - The editor opens existing UTF-8 text files only; binary and invalid UTF-8 files are rejected.
 

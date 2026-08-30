@@ -10,6 +10,23 @@ import { WorkspaceStateStore } from "./workspace-state.js";
 const execFileAsync = promisify(execFile);
 
 describe("WorkspaceTaskStore", () => {
+  it("persists finished task status", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "remote-ide-task-status-root-"));
+    const state = await mkdtemp(path.join(os.tmpdir(), "remote-ide-task-status-state-"));
+    await execFileAsync("git", ["init", root]);
+    await execFileAsync("git", ["-C", root, "config", "user.name", "Test"]);
+    await execFileAsync("git", ["-C", root, "config", "user.email", "test@example.com"]);
+    await writeFile(path.join(root, "tracked.txt"), "root\n");
+    await execFileAsync("git", ["-C", root, "add", "tracked.txt"]);
+    await execFileAsync("git", ["-C", root, "commit", "-m", "initial"]);
+    const store = new WorkspaceTaskStore(root, state);
+    const task = await store.create("feature/status", false, false, false);
+    expect(task.status).toBe("active");
+    await expect(store.setStatus(task.id, "finished")).resolves.toMatchObject({ id: task.id, status: "finished" });
+    await expect(store.list()).resolves.toMatchObject({ tasks: [expect.objectContaining({ id: task.id, status: "finished" })] });
+    await store.delete(task.id);
+  });
+
   it("rewrites only an explicit task's unpushed tip message while preserving its contents and working state", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "remote-ide-task-git-message-root-"));
     const state = await mkdtemp(path.join(os.tmpdir(), "remote-ide-task-git-message-state-"));

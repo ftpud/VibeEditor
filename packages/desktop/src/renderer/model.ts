@@ -8,6 +8,7 @@ export type EditorTab = {
   content: string;
   savedContent: string;
   loading: boolean;
+  pinned?: boolean;
   error?: string;
   originalContent?: string;
   diffMode?: "split" | "unified";

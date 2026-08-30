@@ -21,6 +21,7 @@ import { executeHttpRequest } from "./http.js";
 import { summarizeAiSessions } from "./ai/summary.js";
 import { createAcpRegistry, type AcpRegistry } from "./ai/index.js";
 import { AppEventBridge } from "./app-events.js";
+import { AiTimerService, AiTimerStore } from "./ai-timers.js";
 import { AppToolService, withAppTools } from "./app-tools.js";
 import { TaskCheckpointStore } from "./task-checkpoints.js";
 import type { AiProvider } from "@remote-ide/protocol";
@@ -125,6 +126,8 @@ export async function createServer(host: string, port: number, workspacePath: st
     begin: async (target, provider, prompt, sessionId) => { const id = await checkpointStore(target).begin(provider as AiProvider, prompt, sessionId); taskGitChanged(target); return id; },
     complete: async (target, ids, status) => { await Promise.all(ids.map((id) => checkpointStore(target).complete(id, status))); taskGitChanged(target); }
   });
+  const aiTimers = new AiTimerService(new AiTimerStore(rootWorkspace), acp, rootWorkspace, aiChanged);
+  await aiTimers.start();
   const onTasksChanged = async () => {
     const encoded = JSON.stringify({ type: "tasks.changed", payload: {} } satisfies ServerEvent);
     for (const socket of activeSessions) sendWebSocketData(socket, encoded);
@@ -144,7 +147,8 @@ export async function createServer(host: string, port: number, workspacePath: st
       onCommitMessageChanged,
       command.currentProvider,
       agents,
-      rootWorkspace
+      rootWorkspace,
+      aiTimers
     ).call(command.name, command.args));
   });
   const gitIndexWatcher = chokidar.watch(await gitIndexPath(workspace), { ignoreInitial: true });
@@ -259,7 +263,7 @@ export async function createServer(host: string, port: number, workspacePath: st
             await watchSwitchedWorkspace(selected.workspace);
           }
         } finally { release?.(); }
-        const result = await handleRequest(services, tasks, acp, usefulFiles, agents, terminalHost, runConfigs, rootWorkspace, parsed);
+        const result = await handleRequest(services, tasks, acp, usefulFiles, agents, terminalHost, runConfigs, aiTimers, rootWorkspace, parsed);
         const terminalSubscription = terminalSubscriptions.get(socket);
         if (terminalSubscription && parsed.type === "terminal.create") terminalSubscription.terminalIds.add((result as { terminalId: string }).terminalId);
         if (terminalSubscription && parsed.type === "terminal.attach" && (result as { session?: { terminalId: string } }).session) terminalSubscription.terminalIds.add(parsed.payload.terminalId);
@@ -304,7 +308,7 @@ function parseRequest(data: RawData): Request {
   return value as Request;
 }
 
-async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStore, acp: AcpRegistry, usefulFiles: UsefulFilesStore, agents: AgentsStore, terminalHost: TerminalSessionHost, runConfigs: RunConfigService, rootWorkspace: string, request: Request): Promise<unknown> {
+async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStore, acp: AcpRegistry, usefulFiles: UsefulFilesStore, agents: AgentsStore, terminalHost: TerminalSessionHost, runConfigs: RunConfigService, aiTimers: AiTimerService, rootWorkspace: string, request: Request): Promise<unknown> {
   const { filesystem, search, git, java, jdt, workspaceState, workspacePath, checkpoints } = services;
   if (request.type !== "workspace.open") filesystem.getWorkspace();
   switch (request.type) {
@@ -337,7 +341,17 @@ async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStor
       }
     }
     case "tasks.merge": return tasks.merge(request.payload.taskId, request.payload.strategy);
+    case "tasks.timer.cancel": {
+      const target = await permissionTargetWorkspace(tasks, rootWorkspace, request.payload.taskId);
+      return { cancelled: await aiTimers.cancelNext(target) };
+    }
+    case "tasks.timer.fire": {
+      const target = await permissionTargetWorkspace(tasks, rootWorkspace, request.payload.taskId);
+      return { fired: await aiTimers.fireNext(target) };
+    }
+    case "tasks.status": return { task: await tasks.setStatus(request.payload.taskId, request.payload.status) };
     case "tasks.delete": {
+      await aiTimers.cancelWorkspace(tasks.taskPath(request.payload.taskId));
       const result = await tasks.delete(request.payload.taskId);
       terminalHost.closeWorkspace(tasks.taskPath(request.payload.taskId));
       return result;
@@ -369,14 +383,30 @@ async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStor
     }
     case "ai.interrupt": return { session: await acp.get(request.payload.provider).interrupt(workspacePath) };
     case "ai.steer": return { session: await acp.get(request.payload.provider).steer(workspacePath, request.payload.prompt) };
-    case "ai.clear": return { session: await acp.get(request.payload.provider).clear(workspacePath) };
+    case "ai.clear": {
+      const provider = acp.get(request.payload.provider);
+      await assertSessionChangeAllowed(aiTimers, workspacePath, provider.descriptor.id);
+      return { session: await provider.clear(workspacePath) };
+    }
     case "ai.sessions": return { sessions: await acp.get(request.payload.provider).sessions(workspacePath) };
-    case "ai.restore": return { session: await acp.get(request.payload.provider).restore(workspacePath, request.payload.sessionId) };
-    case "ai.remove": return { session: await acp.get(request.payload.provider).remove(workspacePath, request.payload.sessionId) };
+    case "ai.restore": {
+      const provider = acp.get(request.payload.provider);
+      await assertSessionChangeAllowed(aiTimers, workspacePath, provider.descriptor.id);
+      return { session: await provider.restore(workspacePath, request.payload.sessionId) };
+    }
+    case "ai.remove": {
+      const provider = acp.get(request.payload.provider);
+      await assertSessionChangeAllowed(aiTimers, workspacePath, provider.descriptor.id);
+      return { session: await provider.remove(workspacePath, request.payload.sessionId) };
+    }
     case "ai.usage": return { usage: await acp.get(request.payload.provider).usage(workspacePath) };
     case "ai.statuses": {
       const registry = await tasks.list();
-      const summarize = async (target: string) => { const summary = summarizeAiSessions(await Promise.all(acp.list().map((item) => acp.get(item.id).get(target)))); return { ...summary, ...await new GitService(target).diffStats() }; };
+      const summarize = async (target: string) => {
+        const summary = summarizeAiSessions(await Promise.all(acp.list().map((item) => acp.get(item.id).get(target))));
+        const timer = await aiTimers.next(target);
+        return { ...summary, ...(timer ? { ...(summary.status !== "in_progress" && summary.status !== "user_prompt" ? { status: "waiting" as const } : {}), waitingUntil: timer.dueAt } : {}), ...await new GitService(target).diffStats() };
+      };
       const entries = await Promise.all(registry.tasks.map(async (task) => [task.id, await summarize(tasks.taskPath(task.id))] as const));
       return { root: await summarize(rootWorkspace), tasks: Object.fromEntries(entries) };
     }
@@ -411,6 +441,18 @@ async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStor
     case "filesystem.writeFile": {
       if (typeof request.payload.path !== "string" || typeof request.payload.content !== "string") throw new CoreError("INVALID_REQUEST", "path and content must be strings");
       return { path: request.payload.path, bytesWritten: await filesystem.write(request.payload.path, request.payload.content) };
+    }
+    case "filesystem.createFile": {
+      if (typeof request.payload.path !== "string") throw new CoreError("INVALID_REQUEST", "path must be a string");
+      await filesystem.createFile(request.payload.path); return { path: request.payload.path };
+    }
+    case "filesystem.createDirectory": {
+      if (typeof request.payload.path !== "string") throw new CoreError("INVALID_REQUEST", "path must be a string");
+      await filesystem.createDirectory(request.payload.path); return { path: request.payload.path };
+    }
+    case "filesystem.rename": {
+      if (typeof request.payload.path !== "string" || typeof request.payload.newPath !== "string") throw new CoreError("INVALID_REQUEST", "path and newPath must be strings");
+      await filesystem.rename(request.payload.path, request.payload.newPath); return { path: request.payload.newPath };
     }
     case "filesystem.search": {
       if (typeof request.payload.query !== "string" || typeof request.payload.path !== "string" || typeof request.payload.matchCase !== "boolean") throw new CoreError("INVALID_REQUEST", "query, path, and matchCase are required");
@@ -508,4 +550,8 @@ export async function permissionTargetWorkspace(tasks: Pick<WorkspaceTaskStore, 
   if (!taskId) return rootWorkspace;
   if (!(await tasks.list()).tasks.some((task) => task.id === taskId)) throw new CoreError("INVALID_REQUEST", "Task does not exist");
   return tasks.taskPath(taskId);
+}
+
+export async function assertSessionChangeAllowed(timers: Pick<AiTimerService, "next">, workspace: string, provider: AiProvider): Promise<void> {
+  if (await timers.next(workspace, provider)) throw new CoreError("INVALID_REQUEST", "Cancel or run the active task timer before changing its AI session");
 }

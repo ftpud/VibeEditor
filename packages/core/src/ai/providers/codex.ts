@@ -2,8 +2,9 @@ import os from "node:os";
 import path from "node:path";
 import { readFile } from "node:fs/promises";
 import { createRequire } from "node:module";
-import type { AiConfiguration, AiModel, AiProviderDescriptor } from "@remote-ide/acp";
+import type { AiConfiguration, AiModel, AiProviderDescriptor, AiUsage } from "@remote-ide/acp";
 import { StdioAcpProvider } from "../stdio-provider.js";
+import { readCodexAccountQuota } from "./codex-usage.js";
 
 const require = createRequire(import.meta.url);
 const WEB_SEARCH_MODES = ["live", "indexed", "cached", "disabled"];
@@ -27,6 +28,12 @@ export class CodexSessionManager extends StdioAcpProvider {
     const webSearch = String(configuration.webSearch ?? "default");
     const config = WEB_SEARCH_MODES.includes(webSearch) ? { web_search: webSearch } : {};
     return { command: process.execPath, args: [require.resolve("@agentclientprotocol/codex-acp")], env: { INITIAL_AGENT_MODE: String(configuration.mode ?? "agent"), CODEX_CONFIG: JSON.stringify(config) } };
+  }
+
+  async usage(workspace?: string): Promise<AiUsage> {
+    const usage = await super.usage(workspace);
+    const accountQuota = await readCodexAccountQuota(process.execPath, [require.resolve("@openai/codex/bin/codex.js"), "app-server", "--stdio"]).catch(() => undefined);
+    return accountQuota ? { ...usage, accountQuota } : usage;
   }
 
   /** Codex publishes context windows and retirement notices only in its own cache. */

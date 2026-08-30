@@ -26,6 +26,8 @@ export type TaskCheckpoint = {
 
 export type WorkspaceOptions = {
   openFiles: string[];
+  /** Pinned file paths, in their leading tab-strip order. */
+  pinnedFiles?: string[];
   activeFile?: string;
   javaProject?: JavaProjectOptions;
   terminal?: WorkspaceTerminalOptions;
@@ -35,7 +37,7 @@ export type WorkspaceOptions = {
 export type FileColor = "red" | "orange" | "yellow" | "green" | "blue" | "purple" | "gray";
 export type WorkspaceTerminalOptions = { tabs: { title: string; terminalId?: string }[]; activeTabIndex?: number; panelOpen: boolean };
 export type TerminalSessionSnapshot = { terminalId: string; status: "running" | "exited"; output: string; exitCode?: number };
-export type WorkspaceTask = { id: string; name: string; branch: string; baseBranch: string };
+export type WorkspaceTask = { id: string; name: string; branch: string; baseBranch: string; status: "active" | "finished" };
 export type { AiAgent, AiCommand, AiConfiguration, AiContentBlock, AiMessage, AiModel, AiMcpServer, AiOption, AiPermissionRequest, AiProvider, AiProviderCapabilities, AiProviderDescriptor, AiSession, AiSettingsLayout, AiSettingsSection, AiStatus, AiTaskSummary, AiUsage } from "@remote-ide/acp";
 import type { AiAgent, AiConfiguration, AiContentBlock, AiMcpServer, AiModel, AiProvider, AiProviderDescriptor, AiSession, AiTaskSummary, AiUsage } from "@remote-ide/acp";
 export type UsefulFileScope = "global" | "local";
@@ -84,7 +86,9 @@ export type JavaProjectNode = {
   children?: JavaProjectNode[];
 };
 
-export type SearchResult = { path: string; line: number; column: number; preview: string };
+export type SearchContextLine = { line: number; text: string; truncated: boolean };
+export type SearchMatchContext = { before: SearchContextLine[]; after: SearchContextLine[]; truncatedBefore: boolean; truncatedAfter: boolean };
+export type SearchResult = { path: string; line: number; column: number; preview: string; previewTruncated?: boolean; context?: SearchMatchContext };
 
 export type ProtocolOperations = {
   "workspace.open": {
@@ -99,6 +103,9 @@ export type ProtocolOperations = {
   "tasks.create": { payload: { branch: string; existing?: boolean; remote?: boolean }; result: { task: WorkspaceTask } };
   "tasks.createFromPrompt": { payload: { provider?: AiProvider; prompt: string; content?: AiContentBlock[]; configuration: AiConfiguration; mcpServers?: AiMcpServer[]; agent?: AiAgent }; result: { task: WorkspaceTask } };
   "tasks.merge": { payload: { taskId: string; strategy?: "merge" | "smart" }; result: { targetBranch: string } };
+  "tasks.timer.cancel": { payload: { taskId?: string }; result: { cancelled: boolean } };
+  "tasks.timer.fire": { payload: { taskId?: string }; result: { fired: boolean } };
+  "tasks.status": { payload: { taskId: string; status: "active" | "finished" }; result: { task: WorkspaceTask } };
   "tasks.switch": { payload: { taskId?: string; includeIgnored?: boolean }; result: { workspace: string; projectName: string; tree: FileTreeNode[]; options: WorkspaceOptions; tasks: WorkspaceTask[]; selectedTaskId?: string } };
   "tasks.delete": { payload: { taskId: string }; result: { tasks: WorkspaceTask[]; selectedTaskId?: string } };
   "ai.providers": { payload: Record<string, never>; result: { providers: AiProviderDescriptor[] } };
@@ -149,6 +156,18 @@ export type ProtocolOperations = {
   "filesystem.writeFile": {
     payload: { path: string; content: string };
     result: { path: string; bytesWritten: number };
+  };
+  "filesystem.createFile": {
+    payload: { path: string };
+    result: { path: string };
+  };
+  "filesystem.createDirectory": {
+    payload: { path: string };
+    result: { path: string };
+  };
+  "filesystem.rename": {
+    payload: { path: string; newPath: string };
+    result: { path: string };
   };
   "filesystem.search": {
     payload: { query: string; path: string; matchCase: boolean };
@@ -335,6 +354,9 @@ const requestTypeRegistry: Record<RequestType, true> = {
   "tasks.create": true,
   "tasks.createFromPrompt": true,
   "tasks.merge": true,
+  "tasks.timer.cancel": true,
+  "tasks.timer.fire": true,
+  "tasks.status": true,
   "tasks.switch": true,
   "tasks.delete": true,
   "ai.providers": true,
@@ -377,6 +399,9 @@ const requestTypeRegistry: Record<RequestType, true> = {
   "filesystem.listTree": true,
   "filesystem.readFile": true,
   "filesystem.writeFile": true,
+  "filesystem.createFile": true,
+  "filesystem.createDirectory": true,
+  "filesystem.rename": true,
   "filesystem.search": true,
   "terminal.create": true,
   "terminal.attach": true,

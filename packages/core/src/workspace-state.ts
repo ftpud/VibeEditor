@@ -50,13 +50,17 @@ export function validateWorkspaceOptions(value: unknown): WorkspaceOptions {
     throw new CoreError("INVALID_REQUEST", "activeFile must be a safe relative path");
   }
   const openFiles = [...new Set(candidate.openFiles as string[])];
+  if (candidate.pinnedFiles !== undefined && (!Array.isArray(candidate.pinnedFiles) || candidate.pinnedFiles.length > 100 || !candidate.pinnedFiles.every((filePath) => typeof filePath === "string" && openFiles.includes(filePath)))) {
+    throw new CoreError("INVALID_REQUEST", "pinnedFiles must contain open file paths");
+  }
+  const pinnedFiles = candidate.pinnedFiles === undefined ? undefined : [...new Set(candidate.pinnedFiles as string[])];
   const activeFile = typeof candidate.activeFile === "string" && openFiles.includes(candidate.activeFile) ? candidate.activeFile : undefined;
   const javaProject = candidate.javaProject === undefined ? undefined : validateJavaProjectOptions(candidate.javaProject);
   const terminal = candidate.terminal === undefined ? undefined : validateTerminalOptions(candidate.terminal);
   const fileColors = candidate.fileColors === undefined ? undefined : validateFileColors(candidate.fileColors);
   if (candidate.gitCommitMessage !== undefined && (typeof candidate.gitCommitMessage !== "string" || candidate.gitCommitMessage.length > 10_000)) throw new CoreError("INVALID_REQUEST", "Invalid Git commit message draft");
   const gitCommitMessage = typeof candidate.gitCommitMessage === "string" ? candidate.gitCommitMessage : undefined;
-  return { openFiles, ...(activeFile ? { activeFile } : {}), ...(javaProject ? { javaProject } : {}), ...(terminal ? { terminal } : {}), ...(fileColors && Object.keys(fileColors).length ? { fileColors } : {}), ...(gitCommitMessage ? { gitCommitMessage } : {}) };
+  return { openFiles, ...(pinnedFiles?.length ? { pinnedFiles } : {}), ...(activeFile ? { activeFile } : {}), ...(javaProject ? { javaProject } : {}), ...(terminal ? { terminal } : {}), ...(fileColors && Object.keys(fileColors).length ? { fileColors } : {}), ...(gitCommitMessage ? { gitCommitMessage } : {}) };
 }
 
 function validateFileColors(value: unknown): NonNullable<WorkspaceOptions["fileColors"]> {

@@ -12,7 +12,7 @@ aside button, .topbar button { border: 0; border-radius: 3px; background: transp
 aside > header button, .topbar button { width: 28px; height: 28px; display: grid; place-items: center; }
 aside button:hover, .topbar button:hover { background: #383a3f; }
 .connection-list { padding: 6px; overflow: auto; }
-.connection-list > button { width: 100%; height: 50px; padding: 0 9px; display: flex; align-items: center; gap: 10px; text-align: left; }
+.connection-list > button { width: 100%; height: 50px; padding: 0 9px; display: flex; align-items: center; gap: 8px; text-align: left; }
 .connection-list > button.selected { background: #2f568a; color: white; }
 .connection-list span { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
 .connection-list strong, .connection-list small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -22,6 +22,16 @@ main { min-width: 0; display: flex; flex-direction: column; background: #202124;
 .topbar { padding: 0 8px 0 14px; background: #292a2d; }
 .connection-actions { color: #aeb1b6; }
 .connection-actions span { margin-right: 2px; }
+.connection-health { padding: 3px 6px; border-radius: 10px; background: #3c3e42; color: #c5c7ca; font-size: 10px; }
+.connection-health.online { background: #294c31; color: #a7d7ae; }
+.connection-health.slow, .connection-health.reconnecting { background: #5c4725; color: #f0ce8a; }
+.connection-health.offline { background: #5d3033; color: #f1afb3; }
+.file-picker { display: flex; gap: 6px; }
+.file-picker input { min-width: 0; flex: 1; }
+.form-success { color: #a7d7ae; }
+.status-dot.connection-online { background: #59a869; }
+.status-dot.connection-slow, .status-dot.connection-reconnecting { background: #e2a33a; }
+.status-dot.connection-offline { background: #d65c5c; }
 .empty { height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; color: #8f9298; }
 .empty strong { color: #d8d9dc; font-size: 15px; }
 .empty button, .workspace-view > header button { height: 31px; padding: 0 11px; display: flex; align-items: center; gap: 6px; border: 1px solid #3574f0; border-radius: 3px; background: #3574f0; color: white; }
@@ -78,6 +88,9 @@ h1 { font-size: 18px; font-weight: 600; }
 .dialog label { margin-bottom: 11px; display: flex; flex-direction: column; gap: 5px; color: #b7b9bd; }
 .dialog input { width: 100%; height: 31px; padding: 0 8px; border: 1px solid #55585e; border-radius: 3px; outline: none; background: #1f2022; }
 .dialog input:focus { border-color: #3574f0; }
+.dialog-help { margin: -2px 0 13px; color: #92959b; line-height: 1.45; }
+.dialog .checkbox-field { flex-direction: row; align-items: center; gap: 8px; }
+.dialog .checkbox-field input { width: 15px; height: 15px; }
 .field-row { display: grid; grid-template-columns: 1fr 92px; gap: 10px; }
 .dialog footer { margin-top: 15px; display: flex; justify-content: flex-end; gap: 7px; }
 .dialog footer button { height: 31px; padding: 0 12px; border: 1px solid #51545a; border-radius: 3px; background: #37393d; }

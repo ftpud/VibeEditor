@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { AiSession } from "@remote-ide/acp";
+import type { AiSession, AiUsage } from "@remote-ide/acp";
 import type { AgentFile } from "@remote-ide/protocol";
 import { AppToolService, appToolDefinitions } from "./app-tools.js";
 import { agentFingerprint } from "./agent-profile.js";
@@ -10,6 +10,7 @@ function harness() {
     create: vi.fn(async () => task), createRandom: vi.fn(async () => task), delete: vi.fn(async () => ({ tasks: [] })),
     taskPath: vi.fn(() => "/tasks/task-1/workspace"), list: vi.fn(async () => ({ tasks: [task] })),
     setCommitMessage: vi.fn(async (_workspace: string, message: string) => ({ task, message, overwritten: false })),
+    setStatus: vi.fn(async (_taskId: string, status: "active" | "finished") => ({ ...task, status })),
     updateGitCommitMessage: vi.fn(async (_taskId: string, message: string) => ({
       task, previousCommit: "old-sha", commit: "new-sha", previousMessage: "Old message", message
     }))
@@ -17,8 +18,9 @@ function harness() {
   const session: AiSession = { status: "in_progress", model: "gpt-5", messages: [{ id: "one", role: "assistant", text: "First", timestamp: "2026-01-01" }, { id: "two", role: "assistant", text: "Latest", timestamp: "2026-01-02" }], reasoning: "medium", configuration: { model: "gpt-5", reasoning: "medium", mode: "agent-full-access" } };
   const provider = {
     descriptor: { options: [{ id: "mode", name: "Agent mode", description: "", type: "select", defaultValue: "agent", choices: [{ value: "read-only", name: "Read only" }, { value: "agent", name: "Workspace agent" }, { value: "agent-full-access", name: "Full access" }] }] },
-    send: vi.fn(async () => session), get: vi.fn(async () => session), steer: vi.fn(async () => session),
-    models: vi.fn(async () => [{ id: "gpt-5", name: "GPT-5", defaultReasoning: "medium", reasoningLevels: ["low", "medium", "high"] }, { id: "child-model", name: "Child", defaultReasoning: "low", reasoningLevels: ["low", "high"] }])
+    send: vi.fn(async () => session), get: vi.fn(async () => session), steer: vi.fn(async () => session), configureNext: vi.fn(async (_workspace: string, configuration: Record<string, string>) => ({ ...session, nextConfiguration: configuration })),
+    usage: vi.fn(async (): Promise<AiUsage> => ({ supported: true, label: "Context window", used: 120, limit: 1000, unit: "tokens" })),
+    models: vi.fn(async () => [{ id: "gpt-5", name: "GPT-5", defaultReasoning: "medium", reasoningLevels: ["low", "medium", "high"] }, { id: "child-model", name: "Child", defaultReasoning: "low", reasoningLevels: ["low", "high"] }, { id: "unavailable", name: "Unavailable", available: false, defaultReasoning: "low", reasoningLevels: ["low"] }])
   };
   const acp = { get: vi.fn(() => provider), list: vi.fn(() => [{ id: "codex", name: "Codex" }]) };
   const agents = { list: vi.fn(async (): Promise<AgentFile[]> => []) };
@@ -29,13 +31,16 @@ function harness() {
 
 describe("Vibe Editor app tools", () => {
   it("publishes task start agent and reasoning parameters", () => {
-    expect(appToolDefinitions.map((tool) => tool.name)).toEqual(["task_create", "task_create_and_start", "task_list", "task_delete", "task_ai_response_tail", "task_append_prompt", "set_commit_message", "task_update_commit_message"]);
-    expect(appToolDefinitions[1].inputSchema.required).toEqual(["prompt", "provider", "model"]);
-    expect(appToolDefinitions[1].inputSchema.properties.agent).toMatchObject({
+    expect(appToolDefinitions.map((tool) => tool.name)).toEqual(["ai_usage", "timer_set", "model_switch_next", "task_create", "task_create_and_start", "task_list", "task_delete", "task_set_status", "task_ai_response_tail", "task_append_prompt", "set_commit_message", "task_update_commit_message"]);
+    expect(appToolDefinitions[1]).toMatchObject({ name: "timer_set", inputSchema: { required: ["seconds", "prompt"] } });
+    expect(appToolDefinitions[2]).toMatchObject({ name: "model_switch_next", inputSchema: { required: ["model", "reasoning"] } });
+    expect(appToolDefinitions[4].inputSchema.required).toEqual(["prompt", "provider", "model"]);
+    expect(appToolDefinitions[4].inputSchema.properties.agent).toMatchObject({
       oneOf: [{ type: "object", required: ["scope", "name"] }, { type: "null" }]
     });
-    expect(appToolDefinitions[1].inputSchema.properties.reasoning).toMatchObject({ type: "string", minLength: 1 });
-    expect(appToolDefinitions[6]).toMatchObject({
+    expect(appToolDefinitions[4].inputSchema.properties.reasoning).toMatchObject({ type: "string", minLength: 1 });
+    expect(appToolDefinitions[7]).toMatchObject({ name: "task_set_status", inputSchema: { required: ["task_id", "status"], properties: { status: { enum: ["active", "finished"] } } } });
+    expect(appToolDefinitions[10]).toMatchObject({
       name: "set_commit_message",
       inputSchema: {
         additionalProperties: false,
@@ -43,7 +48,7 @@ describe("Vibe Editor app tools", () => {
         properties: { message: { type: "string", minLength: 1, maxLength: 10_000, pattern: "\\S" } }
       }
     });
-    expect(appToolDefinitions[7]).toMatchObject({
+    expect(appToolDefinitions[11]).toMatchObject({
       name: "task_update_commit_message",
       inputSchema: {
         additionalProperties: false,
@@ -56,6 +61,65 @@ describe("Vibe Editor app tools", () => {
     });
   });
 
+  it("queues a validated model and reasoning override for the next turn", async () => {
+    const { tasks, provider, onTasksChanged, onCommitMessageChanged, agents } = harness();
+    const service = new AppToolService(tasks as never, { get: vi.fn(() => provider), list: vi.fn(() => []) } as never, "/tasks/parent/workspace", onTasksChanged, onCommitMessageChanged, "codex", agents as never, "/workspace");
+    await expect(service.call("model_switch_next", { model: "gpt-5", reasoning: "high" })).resolves.toEqual({ provider: "codex", model: "gpt-5", reasoning: "high", applies_to: "next_turn", continuation: "queued" });
+    expect(provider.configureNext).toHaveBeenCalledWith("/tasks/parent/workspace", { model: "gpt-5", reasoning: "high" });
+    expect(provider.steer).toHaveBeenCalledWith("/tasks/parent/workspace", "Continue the current task using the newly selected model and reasoning effort.", { senderModel: "gpt-5", queue: true });
+  });
+
+  it("rejects an unadvertised next-turn model or reasoning without queuing it", async () => {
+    const { tasks, provider, onTasksChanged, onCommitMessageChanged } = harness();
+    const service = new AppToolService(tasks as never, { get: vi.fn(() => provider), list: vi.fn(() => []) } as never, "/tasks/parent/workspace", onTasksChanged, onCommitMessageChanged, "codex");
+    await expect(service.call("model_switch_next", { model: "missing", reasoning: "high" })).rejects.toThrow("Model 'missing' is not advertised");
+    await expect(service.call("model_switch_next", { model: "unavailable", reasoning: "low" })).rejects.toThrow("is not available for the selected provider account");
+    await expect(service.call("model_switch_next", { model: "gpt-5", reasoning: "ultra" })).rejects.toThrow("supported values: low, medium, high");
+    expect(provider.configureNext).not.toHaveBeenCalled();
+  });
+
+  it("sets a continuation timer for the invoking provider", async () => {
+    const { tasks, provider, onTasksChanged, onCommitMessageChanged, agents } = harness();
+    const timer = { id: "timer-1", workspace: "/tasks/parent/workspace", provider: "codex", prompt: "Check again", createdAt: "2026-08-30T12:00:00.000Z", dueAt: "2026-08-30T12:00:30.000Z" };
+    const timers = { schedule: vi.fn(async () => timer), next: vi.fn(async () => undefined) };
+    const service = new AppToolService(tasks as never, { get: vi.fn(() => provider), list: vi.fn(() => []) } as never, "/tasks/parent/workspace", onTasksChanged, onCommitMessageChanged, "codex", agents as never, "/workspace", timers as never);
+
+    await expect(service.call("timer_set", { seconds: 30, prompt: "Check again" })).resolves.toEqual({ timer_id: "timer-1", status: "waiting", due_at: timer.dueAt, continuation_prompt: "Check again" });
+    expect(timers.schedule).toHaveBeenCalledWith("/tasks/parent/workspace", "codex", "Check again", 30);
+  });
+
+  it("reports usage and computes remaining capacity for the invoking provider", async () => {
+    const { tasks, provider, onTasksChanged, onCommitMessageChanged } = harness();
+    const acp = { get: vi.fn(() => provider), list: vi.fn(() => []) };
+    const service = new AppToolService(tasks as never, acp as never, "/tasks/parent/workspace", onTasksChanged, onCommitMessageChanged, "codex");
+
+    await expect(service.call("ai_usage", {})).resolves.toMatchObject({
+      provider: "codex", supported: true, kind: "context_window", used: 120, limit: 1000,
+      remaining: 880, unit: "tokens", resets_at: null
+    });
+    expect(provider.usage).toHaveBeenCalledWith("/tasks/parent/workspace");
+  });
+
+  it("preserves provider reset timestamps and accepts an explicit provider", async () => {
+    const { service, provider } = harness();
+    provider.usage.mockResolvedValueOnce({ supported: true, label: "Plan quota", used: 80, limit: 100, unit: "percent", resetsAt: "2026-09-01T12:00:00.000Z" });
+    await expect(service.call("ai_usage", { provider: "copilot" })).resolves.toMatchObject({
+      provider: "copilot", kind: "provider_usage", remaining: 20, resets_at: "2026-09-01T12:00:00.000Z"
+    });
+  });
+
+  it("reports account quota separately from context usage", async () => {
+    const { service, provider } = harness();
+    provider.usage.mockResolvedValueOnce({
+      supported: true, label: "Context window", used: 120, limit: 1000, unit: "tokens",
+      accountQuota: { plan: "plus", primary: { usedPercent: 27, remainingPercent: 73, windowMinutes: 300, resetsAt: "2026-08-30T13:55:22.000Z" } }
+    });
+    await expect(service.call("ai_usage", { provider: "codex" })).resolves.toMatchObject({
+      kind: "context_window", remaining: 880,
+      account_quota: { plan: "plus", primary: { used_percent: 27, remaining_percent: 73, window_minutes: 300, resets_at: "2026-08-30T13:55:22.000Z" } }
+    });
+  });
+
   it("creates and starts a task with the requested provider and model", async () => {
     const { service, tasks, provider, task, onTasksChanged } = harness();
     await expect(service.call("task_create_and_start", { branch: "feature/one", prompt: "Implement it", provider: "codex", model: "gpt-5" }))
@@ -64,6 +128,14 @@ describe("Vibe Editor app tools", () => {
     expect(provider.get).toHaveBeenCalledWith("/tasks/parent/workspace");
     expect(provider.send).toHaveBeenCalledWith("/tasks/task-1/workspace", { prompt: "Implement it", configuration: { mode: "agent-full-access", model: "gpt-5" } });
     expect(onTasksChanged).toHaveBeenCalledOnce();
+  });
+
+  it("sets and restores a task's finished status", async () => {
+    const { service, tasks, task, onTasksChanged } = harness();
+    await expect(service.call("task_set_status", { task_id: task.id, status: "finished" })).resolves.toEqual({ task: { ...task, status: "finished" } });
+    expect(tasks.setStatus).toHaveBeenCalledWith(task.id, "finished");
+    expect(onTasksChanged).toHaveBeenCalledOnce();
+    await expect(service.call("task_set_status", { task_id: task.id, status: "archived" })).rejects.toThrow("status must be active or finished");
   });
 
   it("inherits disabled autopilot without inheriting the parent model", async () => {

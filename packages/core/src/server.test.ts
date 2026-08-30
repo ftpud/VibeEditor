@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { WebSocket } from "ws";
-import { permissionTargetWorkspace, sendWebSocketData } from "./server.js";
+import { assertSessionChangeAllowed, permissionTargetWorkspace, sendWebSocketData } from "./server.js";
 import { withAppTools } from "./app-tools.js";
+import type { WorkspaceTaskStore } from "./tasks.js";
 
 describe("built-in app tool access", () => {
   it("does not grant tools without an explicit agent allowlist entry", () => {
@@ -19,9 +20,9 @@ describe("built-in app tool access", () => {
 
 describe("permission request task routing", () => {
   const tasks = {
-    list: async () => ({ tasks: [{ id: "task-a", name: "A", branch: "a", baseBranch: "main" }, { id: "task-b", name: "B", branch: "b", baseBranch: "main" }] }),
+    list: async () => ({ tasks: [{ id: "task-a", name: "A", branch: "a", baseBranch: "main", status: "active" as const }, { id: "task-b", name: "B", branch: "b", baseBranch: "main", status: "active" as const }] }),
     taskPath: (taskId: string) => `/tasks/${taskId}/workspace`
-  };
+  } satisfies Pick<WorkspaceTaskStore, "list" | "taskPath">;
 
   it("routes root and simultaneous task requests independently of the selected task", async () => {
     await expect(permissionTargetWorkspace(tasks, "/root")).resolves.toBe("/root");
@@ -31,6 +32,14 @@ describe("permission request task routing", () => {
 
   it("rejects stale task ownership instead of falling back to the active workspace", async () => {
     await expect(permissionTargetWorkspace(tasks, "/root", "deleted-task")).rejects.toMatchObject({ code: "INVALID_REQUEST", message: "Task does not exist" });
+  });
+});
+
+describe("timer session ownership", () => {
+  it("rejects session changes for the provider owning an active timer", async () => {
+    const timers = { next: async (_workspace: string, provider?: string) => provider === "codex" ? { id: "timer" } : undefined };
+    await expect(assertSessionChangeAllowed(timers as never, "/tasks/a/workspace", "codex")).rejects.toMatchObject({ code: "INVALID_REQUEST" });
+    await expect(assertSessionChangeAllowed(timers as never, "/tasks/a/workspace", "copilot")).resolves.toBeUndefined();
   });
 });
 

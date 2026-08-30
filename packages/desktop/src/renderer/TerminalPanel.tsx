@@ -28,16 +28,34 @@ export function TerminalPanel({ theme, fontFamily, fontSize, lineHeight, client,
   return <section className="terminal-panel" style={{ height }}>
     <div className="terminal-resize-handle" onPointerDown={onResizeStart} />
     <div className="terminal-tabs" role="tablist">
-      {group.tabs.map((tab) => <button key={tab.id} className={`terminal-tab ${tab.id === group.activeTabId ? "active" : ""} ${highlightedTerminalIds?.has(tab.terminalId) ? "run-config-running" : ""}`} onClick={() => onActivate(tab.id)}>
-        <span>{tab.title}{tab.status === "exited" ? " (exited)" : tab.status === "unavailable" ? " (unavailable)" : ""}</span>
-        <span className="close" title={`Close ${tab.title}`} onClick={(event) => { event.stopPropagation(); onClose(tab); }}><X size={13} /></span>
-      </button>)}
+      {group.tabs.map((tab) => <TerminalTabButton key={tab.id} tab={tab} active={tab.id === group.activeTabId} highlighted={highlightedTerminalIds?.has(tab.terminalId)} onActivate={onActivate} onClose={onClose} />)}
       <button className="terminal-action" title="New terminal" onClick={onCreate}><Plus size={15} /></button>
     </div>
     <div className="terminal-content">
       {group.tabs.map((tab) => <TerminalView key={tab.id} theme={theme} fontFamily={fontFamily} fontSize={fontSize} lineHeight={lineHeight} client={client} tab={tab} active={tab.id === group.activeTabId} registerWriter={registerWriter} />)}
     </div>
   </section>;
+}
+
+export function TerminalTabButton({ tab, active, highlighted, onActivate, onClose }: { tab: TerminalTab; active: boolean; highlighted?: boolean; onActivate(id: string): void; onClose(tab: TerminalTab): void }) {
+  const statusLabel = tab.status === "running" ? "running" : tab.status;
+  const visibleStatus = tab.status === "running" ? "" : ` (${tab.status})`;
+  return <button
+    className={`terminal-tab ${active ? "active" : ""} ${highlighted ? "run-config-running" : ""}`}
+    role="tab"
+    aria-selected={active}
+    title={`${tab.title} — ${statusLabel}. Middle-click to close.`}
+    onMouseDown={(event) => {
+      if (event.button !== 1) return;
+      event.preventDefault();
+      event.stopPropagation();
+      onClose(tab);
+    }}
+    onClick={(event) => { if (event.button === 0) onActivate(tab.id); }}
+  >
+    <span>{tab.title}{visibleStatus}</span>
+    <span className="close" title={`Close ${tab.title}`} onClick={(event) => { event.stopPropagation(); onClose(tab); }}><X size={13} /></span>
+  </button>;
 }
 
 function TerminalView({ theme, fontFamily, fontSize, lineHeight, client, tab, active, registerWriter }: { theme: AppTheme; fontFamily: string; fontSize: number; lineHeight: number; client: CoreClient; tab: TerminalTab; active: boolean; registerWriter: Props["registerWriter"] }) {

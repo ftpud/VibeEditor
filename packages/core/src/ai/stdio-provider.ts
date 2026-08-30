@@ -25,7 +25,7 @@ type Runtime = {
   /** True when the agent implements the `_session/steering` extension. */
   steering: boolean;
   /** Follow-ups typed mid-turn that agents without steering run next. */
-  pending: string[];
+  pending: { prompt: string; senderModel?: string }[];
   checkpointIds: string[];
   configOptions: SessionConfigOption[];
   modes: ModeState;
@@ -129,6 +129,12 @@ export abstract class StdioAcpProvider extends AcpProvider {
     await this.save(workspace, session); this.onChanged(workspace); return session;
   }
 
+  async configureNext(workspace: string, configuration: AiConfiguration): Promise<AiSession> {
+    const session = this.runtimes.get(workspace)?.session ?? await this.get(workspace);
+    session.nextConfiguration = { ...configuration };
+    await this.save(workspace, session); this.onChanged(workspace); return session;
+  }
+
   async send(workspace: string, request: AcpSendRequest): Promise<AiSession> {
     const prompt = request.prompt.trim();
     const command = prompt.split(/\s/, 1)[0]?.toLowerCase();
@@ -136,9 +142,13 @@ export abstract class StdioAcpProvider extends AcpProvider {
     const content = this.promptContent(workspace, prompt, request.content);
     if (this.runtimes.get(workspace)?.running) throw new CoreError("INVALID_REQUEST", `${this.descriptor.name} is already working`);
     const session = await this.get(workspace);
-    applyConfiguration(session, request.configuration);
+    const nextConfiguration = session.nextConfiguration;
+    applyConfiguration(session, { ...request.configuration, ...nextConfiguration });
+    // The override belongs to exactly one newly started turn. Steering an active
+    // turn never consumes it; a failed runtime/prompt start leaves it queued.
     const allowedServers = request.agent?.mcpServers ? request.mcpServers?.filter((server) => request.agent!.mcpServers!.includes(server.name)) : request.mcpServers;
     const runtime = await this.ensureRuntime(workspace, session, allowedServers);
+    if (nextConfiguration) runtime.session.nextConfiguration = undefined;
     const visible = [prompt, ...(request.content ?? []).map(contentLabel)].filter(Boolean).join("\n");
     runtime.session.messages.push({ ...this.message("user", visible), content: request.content });
     if (this.turns) try { runtime.checkpointIds.push(await this.turns.begin(workspace, this.descriptor.id, visible, runtime.session.id)); } catch (error) { runtime.session.messages.push(this.message("activity", `Prompt checkpoint could not be created: ${error instanceof Error ? error.message : String(error)}`)); }
@@ -152,17 +162,17 @@ export abstract class StdioAcpProvider extends AcpProvider {
    * `_session/steering` extension fold it into the live turn; for the rest the
    * follow-up is queued and dispatched the moment the current turn ends.
    */
-  async steer(workspace: string, text: string): Promise<AiSession> {
+  async steer(workspace: string, text: string, options?: { senderModel?: string; queue?: boolean }): Promise<AiSession> {
     const prompt = this.validate(text);
     const runtime = this.runtimes.get(workspace);
     if (!runtime?.running) throw new CoreError("INVALID_REQUEST", `${this.descriptor.name} is not currently working`);
-    runtime.session.messages.push(this.message("user", prompt));
+    runtime.session.messages.push({ ...this.message("user", prompt), ...(options?.senderModel ? { senderModel: options.senderModel } : {}) });
     if (this.turns) try { runtime.checkpointIds.push(await this.turns.begin(workspace, this.descriptor.id, prompt, runtime.session.id)); } catch (error) { runtime.session.messages.push(this.message("activity", `Prompt checkpoint could not be created: ${error instanceof Error ? error.message : String(error)}`)); }
     runtime.anchors = {};
-    if (runtime.steering) {
+    if (runtime.steering && !options?.queue) {
       try { await runtime.connection.extMethod(STEERING_METHOD, { sessionId: runtime.sessionId, prompt: [{ type: "text", text: prompt }] }); }
-      catch (error) { runtime.session.messages.push(this.message("activity", `Could not steer the running turn, queued instead: ${error instanceof Error ? error.message : String(error)}`)); runtime.pending.push(prompt); }
-    } else runtime.pending.push(prompt);
+      catch (error) { runtime.session.messages.push(this.message("activity", `Could not steer the running turn, queued instead: ${error instanceof Error ? error.message : String(error)}`)); runtime.pending.push({ prompt, senderModel: options?.senderModel }); }
+    } else runtime.pending.push({ prompt, senderModel: options?.senderModel });
     await this.save(workspace, runtime.session); this.onChanged(workspace);
     return this.get(workspace);
   }
@@ -195,7 +205,16 @@ export abstract class StdioAcpProvider extends AcpProvider {
       const usage = result.usage;
       if (usage) runtime.session.tokens = { total: usage.totalTokens, input: usage.inputTokens, output: usage.outputTokens, ...(usage.thoughtTokens != null ? { thought: usage.thoughtTokens } : {}), ...(usage.cachedReadTokens != null ? { cachedRead: usage.cachedReadTokens } : {}), ...(usage.cachedWriteTokens != null ? { cachedWrite: usage.cachedWriteTokens } : {}) };
       const queued = result.stopReason === "cancelled" ? undefined : runtime.pending.shift();
-      if (queued !== undefined) this.runPrompt(workspace, runtime, [{ type: "text", text: queued }]);
+      if (queued !== undefined) {
+        const nextConfiguration = runtime.session.nextConfiguration;
+        if (nextConfiguration) {
+          applyConfiguration(runtime.session, nextConfiguration);
+          runtime.session.nextConfiguration = undefined;
+          const warnings = await this.applyAcpConfiguration(runtime, runtime.configOptions, runtime.modes);
+          if (warnings.length > 0) runtime.session.messages.push(this.message("activity", `Session configuration\n${warnings.join("\n")}`));
+        }
+        this.runPrompt(workspace, runtime, [{ type: "text", text: queued.prompt }]);
+      }
       else {
         runtime.session.status = result.stopReason === "cancelled" ? "idle" : result.stopReason === "end_turn" ? "done" : result.stopReason === "refusal" ? "error" : "user_prompt";
         if (result.stopReason === "max_tokens" || result.stopReason === "max_turn_requests") runtime.session.messages.push(this.message("activity", `Turn stopped early: ${result.stopReason}`));
@@ -561,7 +580,7 @@ export abstract class StdioAcpProvider extends AcpProvider {
           const content = fromAcpContent(update.content);
           if (!content) break;
           runtime.anchors.assistant = undefined;
-          session.messages.push({ ...this.message("assistant", contentLabel(content)), content: [content] });
+          session.messages.push({ ...this.message("assistant", contentLabel(content), session), content: [content] });
         }
         runtime.anchors.thought = undefined;
         break;
@@ -698,7 +717,7 @@ export abstract class StdioAcpProvider extends AcpProvider {
     const existing = anchor ? session.messages.find((message) => message.id === anchor && message.role === role) : undefined;
     if (existing) { existing.text += text; return existing.id; }
     const id = anchor ?? crypto.randomUUID();
-    session.messages.push({ id, role, text: heading ? `${heading}\n${text}` : text, timestamp: new Date().toISOString() });
+    session.messages.push({ id, role, text: heading ? `${heading}\n${text}` : text, timestamp: new Date().toISOString(), ...(role === "assistant" ? { model: session.model, reasoning: session.reasoning } : {}) });
     return id;
   }
 
@@ -728,7 +747,7 @@ export abstract class StdioAcpProvider extends AcpProvider {
     }
     return result;
   }
-  private message(role: AiMessage["role"], text: string): AiMessage { return { id: crypto.randomUUID(), role, text, timestamp: new Date().toISOString() }; }
+  private message(role: AiMessage["role"], text: string, session?: AiSession): AiMessage { return { id: crypto.randomUUID(), role, text, timestamp: new Date().toISOString(), ...(role === "assistant" && session ? { model: session.model, reasoning: session.reasoning } : {}) }; }
   private file(workspace: string): string { return path.join(this.stateDirectory, `${crypto.createHash("sha256").update(workspace).digest("hex")}-${this.descriptor.id}.json`); }
   private async save(workspace: string, session: AiSession): Promise<void> {
     const serialized = `${JSON.stringify({ ...session, messages: session.messages.slice(-1000), ...(session.status === "in_progress" ? { _ownerPid: process.pid } : {}) }, null, 2)}\n`;
