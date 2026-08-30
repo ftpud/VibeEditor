@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { mkdtemp, mkdir, readFile, symlink, writeFile } from "node:fs/promises";
+import { access, mkdtemp, mkdir, readFile, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
@@ -70,6 +70,25 @@ describe("WorkspaceFileSystem", () => {
     await fs.createFile("one.txt");
     await fs.createFile("two.txt");
     await expect(fs.rename("one.txt", "two.txt")).rejects.toMatchObject({ code: "WRITE_FAILED" });
+  });
+
+  it("previews, trashes, and restores a directory without exposing trash in the tree", async () => {
+    await fs.open(root);
+    const preview = await fs.previewDelete("src");
+    expect(preview).toMatchObject({ path: "src", type: "directory", childCount: 1, children: ["src/index.ts"], recoverable: true });
+    const deleted = await fs.delete("src");
+    expect(deleted.permanentlyDeleted).toBe(false);
+    await expect(access(path.join(root, "src"))).rejects.toMatchObject({ code: "ENOENT" });
+    expect((await fs.listTree(true)).some((node) => node.name === ".vibe-trash")).toBe(false);
+    expect(await fs.restore(deleted.recoveryId!)).toBe("src");
+    expect(await readFile(path.join(root, "src", "index.ts"), "utf8")).toContain("value = 1");
+  });
+
+  it("supports explicit permanent delete and rejects the workspace trash namespace", async () => {
+    await fs.open(root);
+    expect(await fs.delete("src/index.ts", true)).toEqual({ path: "src/index.ts", permanentlyDeleted: true });
+    await expect(access(path.join(root, "src", "index.ts"))).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.createFile(".vibe-trash/nope")).rejects.toMatchObject({ code: "PATH_OUTSIDE_WORKSPACE" });
   });
 
   it("blocks parent traversal", async () => {

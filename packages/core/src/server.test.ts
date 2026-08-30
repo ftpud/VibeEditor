@@ -1,8 +1,15 @@
 import { describe, expect, it } from "vitest";
 import { WebSocket } from "ws";
-import { assertSessionChangeAllowed, permissionTargetWorkspace, sendWebSocketData } from "./server.js";
+import { assertSessionChangeAllowed, permissionTargetWorkspace, renameWorkspacePaths, sendWebSocketData } from "./server.js";
 import { withAppTools } from "./app-tools.js";
 import type { WorkspaceTaskStore } from "./tasks.js";
+
+describe("workspace paths after filesystem moves", () => {
+  it("updates tabs, colors, and Java project paths under a moved directory", () => {
+    const result = renameWorkspacePaths({ openFiles: ["src/App.java", "README.md"], pinnedFiles: ["src/App.java"], activeFile: "src/App.java", fileColors: { "src/App.java": "blue" }, javaProject: { type: "maven", pomPath: "src/pom.xml", mavenExecutable: "mvn", sourceRoots: ["src/main/java"], outputPath: "src/target/classes", testOutputPath: "src/target/test-classes", runConfigurations: [] } }, "src", "app");
+    expect(result).toMatchObject({ openFiles: ["app/App.java", "README.md"], pinnedFiles: ["app/App.java"], activeFile: "app/App.java", fileColors: { "app/App.java": "blue" }, javaProject: { pomPath: "app/pom.xml", sourceRoots: ["app/main/java"], outputPath: "app/target/classes" } });
+  });
+});
 
 describe("built-in app tool access", () => {
   it("does not grant tools without an explicit agent allowlist entry", () => {

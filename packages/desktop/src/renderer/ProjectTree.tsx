@@ -112,6 +112,7 @@ export function ProjectTree({ nodes, query, activePath, fileColors, gitStatuses,
     else if ((event.ctrlKey || event.metaKey) && event.altKey && event.key.toLowerCase() === "c" && projectTreeActions({ node: item.node }).copyRelativePath) onAction("copyRelativePath", item.node);
     else if (event.key === "Enter" || event.key === " ") item.node.type === "file" ? onAction("open", item.node) : toggle(item.node.path);
     else if (event.key === "F2" && projectTreeActions({ node: item.node }).rename) onAction("rename", item.node);
+    else if ((event.key === "Delete" || event.key === "Backspace" && (event.metaKey || event.ctrlKey)) && projectTreeActions({ node: item.node }).delete) onAction("delete", item.node);
     else if (event.key === "ContextMenu" || event.key === "F10" && event.shiftKey) {
       const bounds = rowRefs.current.get(item.node.path)?.getBoundingClientRect();
       onContextMenu(item.node, bounds?.left ?? 0, bounds?.bottom ?? 0);

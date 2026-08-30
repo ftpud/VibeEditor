@@ -4,7 +4,7 @@ import chokidar from "chokidar";
 import path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { requestTypes, type FileChangeKind, type Request, type RequestType, type Response, type ServerEvent } from "@remote-ide/protocol";
+import { requestTypes, type FileChangeKind, type Request, type RequestType, type Response, type ServerEvent, type WorkspaceOptions } from "@remote-ide/protocol";
 import { CoreError } from "./errors.js";
 import { WorkspaceFileSystem } from "./filesystem.js";
 import { TerminalSessionHost } from "./process-manager.js";
@@ -452,8 +452,15 @@ async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStor
     }
     case "filesystem.rename": {
       if (typeof request.payload.path !== "string" || typeof request.payload.newPath !== "string") throw new CoreError("INVALID_REQUEST", "path and newPath must be strings");
-      await filesystem.rename(request.payload.path, request.payload.newPath); return { path: request.payload.newPath };
+      const options = await workspaceState.load();
+      await filesystem.rename(request.payload.path, request.payload.newPath);
+      try { await workspaceState.save(renameWorkspacePaths(options, request.payload.path, request.payload.newPath)); }
+      catch (error) { await filesystem.rename(request.payload.newPath, request.payload.path).catch(() => undefined); throw error; }
+      return { path: request.payload.newPath };
     }
+    case "filesystem.previewDelete": return filesystem.previewDelete(request.payload.path);
+    case "filesystem.delete": return filesystem.delete(request.payload.path, request.payload.permanent === true);
+    case "filesystem.restore": return { path: await filesystem.restore(request.payload.recoveryId) };
     case "filesystem.search": {
       if (typeof request.payload.query !== "string" || typeof request.payload.path !== "string" || typeof request.payload.matchCase !== "boolean") throw new CoreError("INVALID_REQUEST", "query, path, and matchCase are required");
       return search.search(request.payload.query, request.payload.path, request.payload.matchCase);
@@ -547,6 +554,14 @@ async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStor
     case "java.references": return { locations: await jdt.references(request.payload.path, request.payload.content, request.payload.line, request.payload.column) };
     case "java.semanticTokens": return { tokens: await jdt.semanticTokens(request.payload.path, request.payload.content) };
   }
+}
+
+export function renameWorkspacePaths(options: WorkspaceOptions, oldPath: string, newPath: string): WorkspaceOptions {
+  const oldPrefix = `${oldPath}/`; const newPrefix = `${newPath}/`;
+  const moved = (value: string) => value === oldPath ? newPath : value.startsWith(oldPrefix) ? newPrefix + value.slice(oldPrefix.length) : value;
+  const javaProject = options.javaProject ? { ...options.javaProject, pomPath: moved(options.javaProject.pomPath), sourceRoots: options.javaProject.sourceRoots.map(moved), outputPath: moved(options.javaProject.outputPath), testOutputPath: moved(options.javaProject.testOutputPath) } : undefined;
+  const fileColors = options.fileColors ? Object.fromEntries(Object.entries(options.fileColors).map(([filePath, color]) => [moved(filePath), color])) : undefined;
+  return { ...options, openFiles: options.openFiles.map(moved), ...(options.pinnedFiles ? { pinnedFiles: options.pinnedFiles.map(moved) } : {}), ...(options.activeFile ? { activeFile: moved(options.activeFile) } : {}), ...(javaProject ? { javaProject } : {}), ...(fileColors ? { fileColors } : {}) };
 }
 
 export async function permissionTargetWorkspace(tasks: Pick<WorkspaceTaskStore, "list" | "taskPath">, rootWorkspace: string, taskId?: string): Promise<string> {
