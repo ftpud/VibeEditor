@@ -1,19 +1,20 @@
-import { app, BrowserWindow, ipcMain, nativeImage, safeStorage } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, nativeImage, safeStorage } from "electron";
 import { spawn } from "node:child_process";
 import { createServer, type Server } from "node:net";
 import { access, copyFile, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { Client, type ConnectConfig } from "ssh2";
+import { Client } from "ssh2";
 import { connectionHealthForLatency, type ConnectionRuntime } from "./connection-health.js";
+import { connectionConfig, normalizeStoredAuthentication, testSshConnection, type AuthenticationMethod, type ConnectionAuth, type ConnectionDetails } from "./connection-auth.js";
 import { defaultRepositorySettings, normalizeRepositorySettings, provisionCommand, repositorySettingsOrDefault, type RepositorySettings } from "./repository-settings.js";
 
-type Connection = { id: string; name: string; host: string; port: number; username: string; password: string };
+type Connection = { id: string; name: string; host: string; port: number; username: string } & ConnectionAuth;
 type Workspace = { id: string; connectionId: string; name: string; directory: string; remotePort: number };
 type PortTunnel = { id: string; connectionId: string; port: number };
-type StoredConnection = Omit<Connection, "password"> & { password: string };
+type StoredConnection = { id: string; name: string; host: string; port: number; username: string; authenticationMethod?: AuthenticationMethod; password: string; privateKeyPath?: string; passphrase?: string };
 type State = { connections: StoredConnection[]; workspaces: Workspace[]; portTunnels: PortTunnel[]; repository: RepositorySettings };
-type PublicState = { connections: Omit<Connection, "password">[]; workspaces: Workspace[]; portTunnels: PortTunnel[] };
+type PublicState = { connections: { id: string; name: string; host: string; port: number; username: string; authenticationMethod: AuthenticationMethod; privateKeyPath?: string }[]; workspaces: Workspace[]; portTunnels: PortTunnel[] };
 type Runtime = { status: "idle" | "working" | "server" | "client" | "error"; message: string };
 type TunnelRuntime = { status: "idle" | "working" | "running" | "error"; message: string };
 
@@ -36,7 +37,7 @@ function stateFile(): string { return path.join(app.getPath("userData"), "gatewa
 async function readState(): Promise<State> {
   try {
     const state = JSON.parse(await readFile(stateFile(), "utf8")) as Partial<State>;
-    return { connections: state.connections ?? [], workspaces: state.workspaces ?? [], portTunnels: state.portTunnels ?? [], repository: repositorySettingsOrDefault(state.repository) };
+    return { connections: (state.connections ?? []).map(normalizeStoredAuthentication), workspaces: state.workspaces ?? [], portTunnels: state.portTunnels ?? [], repository: repositorySettingsOrDefault(state.repository) };
   }
   catch { return { connections: [], workspaces: [], portTunnels: [], repository: defaultRepositorySettings }; }
 }
@@ -50,7 +51,7 @@ function encrypt(password: string): string {
 }
 function decrypt(password: string): string { return safeStorage.decryptString(Buffer.from(password, "base64")); }
 function publicState(state: State): PublicState {
-  return { connections: state.connections.map(({ password: _password, ...item }) => item), workspaces: state.workspaces, portTunnels: state.portTunnels };
+  return { connections: state.connections.map((connection) => { const item = normalizeStoredAuthentication(connection); return { id: item.id, name: item.name, host: item.host, port: item.port, username: item.username, authenticationMethod: item.authenticationMethod, ...(item.privateKeyPath ? { privateKeyPath: item.privateKeyPath } : {}) }; }), workspaces: state.workspaces, portTunnels: state.portTunnels };
 }
 function id(): string { return crypto.randomUUID(); }
 function shell(value: string): string { return `'${value.replaceAll("'", `'"'"'`)}'`; }
@@ -69,15 +70,17 @@ function connectionRuntime(connectionId: string, value: ConnectionRuntime): void
 async function credentials(connectionId: string): Promise<Connection> {
   const item = (await readState()).connections.find((connection) => connection.id === connectionId);
   if (!item) throw new Error("SSH connection was not found");
-  return { ...item, password: decrypt(item.password) };
+  const normalized = normalizeStoredAuthentication(item);
+  if (normalized.authenticationMethod === "privateKey") return { ...normalized, authenticationMethod: "privateKey", privateKeyPath: normalized.privateKeyPath ?? "", ...(normalized.passphrase ? { passphrase: decrypt(normalized.passphrase) } : {}) };
+  return { ...normalized, authenticationMethod: "password", password: decrypt(normalized.password) };
 }
-function connect(connection: Connection): Promise<Client> {
+function connectWithConfig(config: Parameters<Client["connect"]>[0]): Promise<Client> {
   return new Promise((resolve, reject) => {
     const client = new Client();
-    const config: ConnectConfig = { host: connection.host, port: connection.port, username: connection.username, password: connection.password, readyTimeout: 20_000, keepaliveInterval: 10_000 };
     client.once("ready", () => resolve(client)).once("error", reject).connect(config);
   });
 }
+async function connect(connection: ConnectionDetails): Promise<Client> { return connectWithConfig(await connectionConfig(connection, readFile)); }
 function execute(client: Client, command: string): Promise<string> {
   return new Promise((resolve, reject) => client.exec(command, (error, stream) => {
     if (error) { reject(error); return; }
@@ -274,10 +277,24 @@ ipcMain.handle("gateway:get", async () => {
 });
 ipcMain.handle("gateway:saveRepository", async (_event, input: Partial<RepositorySettings>) => { if (!input.repository?.trim() || !input.branch?.trim()) throw new Error("Repository URL and branch are required"); const state = await readState(); state.repository = normalizeRepositorySettings(input); await saveState(state); return state.repository; });
 ipcMain.handle("gateway:refreshStatuses", (_event, connectionId?: string) => refreshStatuses(connectionId));
-ipcMain.handle("gateway:saveConnection", async (_event, input: Omit<Connection, "id"> & { id?: string }) => {
+ipcMain.handle("gateway:pickPrivateKey", async () => {
+  const selected = await dialog.showOpenDialog({ title: "Choose SSH private key", properties: ["openFile"], filters: [{ name: "SSH private keys", extensions: ["pem", "key", "ppk"] }, { name: "All files", extensions: ["*"] }] });
+  return selected.canceled ? undefined : selected.filePaths[0];
+});
+ipcMain.handle("gateway:testConnection", async (_event, input: { host: string; port: number; username: string; authenticationMethod: AuthenticationMethod; password?: string; privateKeyPath?: string; passphrase?: string }) => {
+  const authenticationMethod = input.authenticationMethod === "privateKey" ? "privateKey" : "password";
+  if (!input.host.trim() || !input.username.trim() || !Number.isInteger(input.port) || input.port < 1 || input.port > 65535) throw new Error("Host, username, and a valid SSH port are required");
+  const connection = authenticationMethod === "privateKey" ? { host: input.host.trim(), port: input.port, username: input.username.trim(), authenticationMethod, privateKeyPath: input.privateKeyPath?.trim() ?? "", ...(input.passphrase ? { passphrase: input.passphrase } : {}) } as const : { host: input.host.trim(), port: input.port, username: input.username.trim(), authenticationMethod, password: input.password ?? "" } as const;
+  if (authenticationMethod === "password" && !connection.password) throw new Error("Password is required");
+  await testSshConnection(await connectionConfig(connection, readFile), connectWithConfig);
+  return { message: "SSH connection succeeded" };
+});
+ipcMain.handle("gateway:saveConnection", async (_event, input: { id?: string; name: string; host: string; port: number; username: string; authenticationMethod: AuthenticationMethod; password?: string; privateKeyPath?: string; passphrase?: string }) => {
   const state = await readState(); const existing = input.id ? state.connections.find((item) => item.id === input.id) : undefined;
-  const item: StoredConnection = { id: input.id ?? id(), name: input.name, host: input.host, port: input.port, username: input.username, password: input.password ? encrypt(input.password) : existing?.password ?? "" };
-  if (!item.password) throw new Error("Password is required"); state.connections = [...state.connections.filter((value) => value.id !== item.id), item]; await saveState(state); return publicState(state);
+  const item: StoredConnection = { id: input.id ?? id(), name: input.name, host: input.host, port: input.port, username: input.username, authenticationMethod: input.authenticationMethod, password: "" };
+  if (input.authenticationMethod === "password") { item.password = input.password ? encrypt(input.password) : existing?.authenticationMethod !== "privateKey" ? existing?.password ?? "" : ""; if (!item.password) throw new Error("Password is required"); }
+  else { item.privateKeyPath = input.privateKeyPath?.trim() || (existing?.authenticationMethod === "privateKey" ? existing.privateKeyPath : ""); if (!item.privateKeyPath) throw new Error("A private key file is required for key authentication"); item.passphrase = input.passphrase ? encrypt(input.passphrase) : existing?.authenticationMethod === "privateKey" ? existing.passphrase : undefined; }
+  state.connections = [...state.connections.filter((value) => value.id !== item.id), item]; await saveState(state); return publicState(state);
 });
 ipcMain.handle("gateway:deleteConnection", async (_event, connectionId: string) => { const state = await readState(); for (const tunnel of state.portTunnels.filter((item) => item.connectionId === connectionId)) stopPortTunnel(tunnel.id, false); state.connections = state.connections.filter((item) => item.id !== connectionId); state.workspaces = state.workspaces.filter((item) => item.connectionId !== connectionId); state.portTunnels = state.portTunnels.filter((item) => item.connectionId !== connectionId); await saveState(state); return publicState(state); });
 ipcMain.handle("gateway:saveWorkspace", async (_event, input: Omit<Workspace, "id"> & { id?: string }) => { const state = await readState(); const item = { ...input, id: input.id ?? id() } as Workspace; state.workspaces = [...state.workspaces.filter((value) => value.id !== item.id), item]; await saveState(state); return publicState(state); });
