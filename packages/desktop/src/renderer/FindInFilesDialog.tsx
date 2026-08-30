@@ -1,6 +1,6 @@
 import Editor from "@monaco-editor/react";
-import { ArrowUpRight, CaseSensitive, FileCode2, Search, X } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { ArrowUpRight, CaseSensitive, ChevronDown, ChevronRight, FileCode2, Search, X } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { SearchResult } from "@remote-ide/protocol";
 import type { editor } from "monaco-editor";
 import type { CoreClient } from "./client";
@@ -17,6 +17,13 @@ function resultParts(path: string): { filename: string; directory: string } {
   return separator < 0 ? { filename: path, directory: "" } : { filename: path.slice(separator + 1) || path, directory: path.slice(0, separator) };
 }
 
+function highlightMatch(preview: string, query: string, matchCase: boolean) {
+  if (!query) return preview || " ";
+  const index = (matchCase ? preview : preview.toLocaleLowerCase()).indexOf(matchCase ? query : query.toLocaleLowerCase());
+  if (index < 0) return preview || " ";
+  return <>{preview.slice(0, index)}<mark>{preview.slice(index, index + query.length)}</mark>{preview.slice(index + query.length)}</>;
+}
+
 export function FindInFilesDialog({ client, scope, onClose, onNavigate }: { client: CoreClient; scope: string; onClose(): void; onNavigate(result: SearchResult, matchLength: number): void }) {
   const [query, setQuery] = useState("");
   const [matchCase, setMatchCase] = useState(false);
@@ -27,9 +34,15 @@ export function FindInFilesDialog({ client, scope, onClose, onNavigate }: { clie
   const [truncated, setTruncated] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [collapsedPaths, setCollapsedPaths] = useState<Set<string>>(() => new Set());
   const inputRef = useRef<HTMLInputElement>(null);
   const previewEditorRef = useRef<editor.IStandaloneCodeEditor>();
   const searchVersion = useRef(0);
+  const groups = useMemo(() => {
+    const byPath = new Map<string, SearchResult[]>();
+    for (const match of matches) byPath.set(match.path, [...(byPath.get(match.path) ?? []), match]);
+    return [...byPath.entries()];
+  }, [matches]);
   useEffect(() => { inputRef.current?.focus(); }, []);
   useEffect(() => {
     const listener = (event: KeyboardEvent) => { if (event.key === "Escape") onClose(); };
@@ -43,7 +56,7 @@ export function FindInFilesDialog({ client, scope, onClose, onNavigate }: { clie
       setLoading(true); setError("");
       void client.request("filesystem.search", { query, path: scope, matchCase }).then((result) => {
         if (version !== searchVersion.current) return;
-        setMatches(result.matches); setSelected(result.matches[0]); setTruncated(result.truncated);
+        setMatches(result.matches); setSelected(result.matches[0]); setCollapsedPaths(new Set()); setTruncated(result.truncated);
       }).catch((searchError: unknown) => {
         if (version !== searchVersion.current) return;
         setMatches([]); setSelected(undefined); setTruncated(false); setError(searchError instanceof Error ? searchError.message : "Search failed");
@@ -85,16 +98,21 @@ export function FindInFilesDialog({ client, scope, onClose, onNavigate }: { clie
           <div className="find-pane-header"><Search size={13} /><span className="find-pane-title">Occurrences</span>{truncated && <span className="find-pane-meta">First 500</span>}</div>
           <div className="find-results">
             {!loading && !error && matches.length === 0 && query && <div className="find-empty">No matches</div>}
-            {matches.map((match, index) => {
-              const { filename, directory } = resultParts(match.path);
-              return <button type="button" className={selected === match ? "selected" : ""} key={`${match.path}:${match.line}:${index}`} title={match.path} aria-label={`${match.path}, line ${match.line}, column ${match.column}`} onClick={() => setSelected(match)} onDoubleClick={() => onNavigate(match, query.length)}>
-                <code title={match.preview}>{match.preview || " "}</code>
-                <span className="find-result-source">
+            {groups.map(([path, group]) => {
+              const { filename, directory } = resultParts(path);
+              const collapsed = collapsedPaths.has(path);
+              return <section className="find-result-group" key={path} aria-label={`${path}, ${group.length} match${group.length === 1 ? "" : "es"}`}>
+                <button type="button" className="find-result-group-header" aria-expanded={!collapsed} onClick={() => setCollapsedPaths((paths) => { const next = new Set(paths); if (next.has(path)) next.delete(path); else next.add(path); return next; })}>
+                  {collapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} />}
                   <span className="find-result-file" title={filename}>{filename}</span>
                   {directory && <span className="find-result-path" title={directory}>{directory}</span>}
-                </span>
-                <span className="find-location">{match.line}:{match.column}</span>
-              </button>;
+                  <span className="find-group-count">{group.length}</span>
+                </button>
+                {!collapsed && group.map((match, index) => <button type="button" className={selected === match ? "selected" : ""} key={`${match.line}:${match.column}:${index}`} title={path} aria-label={`${path}, line ${match.line}, column ${match.column}`} onClick={() => setSelected(match)} onDoubleClick={() => onNavigate(match, query.length)}>
+                  <code title={match.preview}>{highlightMatch(match.preview, query, matchCase)}</code>
+                  <span className="find-location">{match.line}:{match.column}</span>
+                </button>)}
+              </section>;
             })}
           </div>
         </section>

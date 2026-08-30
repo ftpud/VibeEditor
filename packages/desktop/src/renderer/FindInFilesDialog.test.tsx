@@ -47,10 +47,10 @@ describe("FindInFilesDialog responsive result layout", () => {
     expect(screen.getByRole("region", { name: "Search results" }).getAttribute("aria-busy")).toBe("true");
   });
 
-  it("contains long filenames, parent paths, previews, locations, and a large result set in dedicated elements", async () => {
+  it("groups results by file while containing long metadata and match context", async () => {
     const scope = `workspace/${longSegment.repeat(3)}`;
     render(<FindInFilesDialog client={clientWith()} scope={scope} onClose={vi.fn()} onNavigate={vi.fn()} />);
-    await search();
+    await search(longSegment);
 
     const dialog = screen.getByRole("dialog", { name: "Find in Files" });
     expect(dialog.parentElement?.classList.contains("find-dialog-overlay")).toBe(true);
@@ -59,14 +59,32 @@ describe("FindInFilesDialog responsive result layout", () => {
     expect(within(dialog).getByText("First 500").classList.contains("find-pane-meta")).toBe(true);
 
     const results = within(dialog).getByRole("region", { name: "Search results" });
-    const resultButtons = within(results).getAllByRole("button");
-    expect(resultButtons).toHaveLength(80);
-    expect(resultButtons[0]!.getAttribute("title")).toBe(matches[0]!.path);
-    expect(resultButtons[0]!.getAttribute("aria-label")).toBe(`${matches[0]!.path}, line 1, column 123456`);
-    expect(within(resultButtons[0]!).getByTitle(`${longSegment}-0.tsx`).classList.contains("find-result-file")).toBe(true);
-    expect(within(resultButtons[0]!).getByTitle(`packages/desktop/src/renderer/features/deeply/nested`).classList.contains("find-result-path")).toBe(true);
-    expect(within(resultButtons[0]!).getByTitle(matches[0]!.preview)).toBeTruthy();
+    const groups = results.querySelectorAll<HTMLElement>(".find-result-group");
+    expect(groups).toHaveLength(80);
+    const firstGroup = groups[0]!;
+    const [groupHeader, resultButton] = within(firstGroup).getAllByRole("button");
+    expect(groupHeader?.getAttribute("aria-expanded")).toBe("true");
+    expect(resultButton?.getAttribute("title")).toBe(matches[0]!.path);
+    expect(resultButton?.getAttribute("aria-label")).toBe(`${matches[0]!.path}, line 1, column 123456`);
+    expect(within(firstGroup).getByTitle(`${longSegment}-0.tsx`).classList.contains("find-result-file")).toBe(true);
+    expect(within(firstGroup).getByTitle(`packages/desktop/src/renderer/features/deeply/nested`).classList.contains("find-result-path")).toBe(true);
+    expect(within(resultButton!).getByTitle(matches[0]!.preview)).toBeTruthy();
+    expect(within(resultButton!).getByText(longSegment).tagName).toBe("MARK");
     expect(within(results).getByText("1:123456").classList.contains("find-location")).toBe(true);
+  });
+
+  it("collapses a file group without changing the selected preview", async () => {
+    const sameFileMatches = [{ ...matches[0]!, line: 1 }, { ...matches[0]!, line: 2, column: 4 }];
+    render(<FindInFilesDialog client={clientWith({ matches: sameFileMatches, truncated: false })} scope="" onClose={vi.fn()} onNavigate={vi.fn()} />);
+    await search();
+
+    const group = document.querySelector<HTMLElement>(".find-result-group")!;
+    const header = group.querySelector<HTMLButtonElement>(".find-result-group-header")!;
+    expect(within(group).getAllByRole("button")).toHaveLength(3);
+    fireEvent.click(header);
+    expect(header.getAttribute("aria-expanded")).toBe("false");
+    expect(within(group).getAllByRole("button")).toHaveLength(1);
+    expect(screen.getByTestId("preview-editor").textContent).toBe(`preview:${matches[0]!.path}`);
   });
 
   it("keeps result actions usable and exposes full selected paths while metadata is visually truncated", async () => {
@@ -75,7 +93,7 @@ describe("FindInFilesDialog responsive result layout", () => {
     await search("long query");
 
     const results = screen.getByRole("region", { name: "Search results" });
-    const second = within(results).getAllByRole("button")[1]!;
+    const second = within(results.querySelectorAll<HTMLElement>(".find-result-group")[1]!).getAllByRole("button")[1]!;
     fireEvent.click(second);
     expect(second.classList.contains("selected")).toBe(true);
     expect(document.querySelector<HTMLElement>(`.find-preview-file[title="${matches[1]!.path}"]`)?.textContent).toBe(`${longSegment}-1.tsx`);
