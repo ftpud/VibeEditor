@@ -199,7 +199,7 @@ multi-surface work).
 - [ ] **Merge branch/tag from history — Project.** Value: complete the graph-to-action
   workflow. Constraint: preview merge base and incoming commits, never auto-commit
   unresolved conflicts, and expose abort/recovery. Depends on conflict resolution.
-- [ ] **Saved searches and search history — Small.** Value: retain useful remote
+- [x] **Saved searches and search history — Small.** Value: retain useful remote
   investigation queries per workspace. Constraint: store compact query metadata,
   not result contents or sensitive file excerpts.
 - [ ] **Multi-root workspace model — Project.** Value: support related repositories

@@ -36,6 +36,23 @@ beforeEach(() => vi.useFakeTimers());
 afterEach(() => { cleanup(); vi.useRealTimers(); });
 
 describe("FindInFilesDialog responsive result layout", () => {
+  it("records compact recent searches and lets saved searches be reused or deleted", async () => {
+    const onQueriesChange = vi.fn();
+    const saved = { query: "saved query", path: "src", matchCase: true };
+    render(<FindInFilesDialog client={clientWith({ matches: [], truncated: false })} scope="src" queries={{ saved: [saved] }} onQueriesChange={onQueriesChange} onClose={vi.fn()} onNavigate={vi.fn()} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "saved query" }));
+    expect(screen.getByRole<HTMLInputElement>("textbox", { name: "Text to find" }).value).toBe("saved query");
+    expect(screen.getByRole<HTMLInputElement>("checkbox", { name: "Match case" }).checked).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "Delete saved search saved query" }));
+    expect(onQueriesChange).toHaveBeenLastCalledWith({ saved: [] });
+
+    await search("needle");
+    expect(onQueriesChange).toHaveBeenLastCalledWith({ saved: [saved], recent: [{ query: "needle", path: "src", matchCase: true }] });
+    fireEvent.click(screen.getByRole("button", { name: "Save current search" }));
+    expect(onQueriesChange).toHaveBeenLastCalledWith({ saved: [{ query: "needle", path: "src", matchCase: true }, saved] });
+  });
+
   it("keeps loading status and controls accessible while a search is pending", () => {
     const pendingClient = { request: vi.fn(() => new Promise(() => undefined)) } as unknown as CoreClient;
     render(<FindInFilesDialog client={pendingClient} scope="src" onClose={vi.fn()} onNavigate={vi.fn()} />);

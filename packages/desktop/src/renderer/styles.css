@@ -766,6 +766,14 @@ button { color: inherit; }
 .find-controls { height: 46px; flex: 0 0 46px; padding: 7px 10px; display: flex; gap: 6px; border-bottom: 1px solid #3d3f44; }
 .find-controls > input { min-width: 0; flex: 1; padding: 0 9px; border: 1px solid #55585e; border-radius: 3px; outline: none; background: #1e1f22; color: #f0f0f0; }
 .find-controls > input:focus { border-color: #3574f0; box-shadow: 0 0 0 1px #3574f0; }
+.find-query-library { flex: 0 0 auto; max-height: 72px; padding: 5px 10px; overflow: auto; border-bottom: 1px solid #3d3f44; color: #a8aaaf; font-size: .8462rem; }
+.find-query-library > div { display: flex; align-items: center; gap: 4px; min-width: max-content; }
+.find-query-library > div + div { margin-top: 3px; }
+.find-query-library > div > span:first-child { width: 44px; color: #898c92; }
+.find-query-library button { border: 0; border-radius: 3px; background: transparent; color: inherit; cursor: pointer; }
+.find-query-library > div > button:hover, .find-query button:hover { background: #3b3d42; color: #fff; }
+.find-query { display: inline-flex; align-items: center; max-width: 180px; border: 1px solid #4a4d52; border-radius: 3px; }
+.find-query button:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .match-case { width: 32px; flex: 0 0 32px; position: relative; display: grid; place-items: center; border: 1px solid #4a4d52; border-radius: 3px; color: #a8aaaf; cursor: pointer; }
 .match-case:has(input:checked) { border-color: #3574f0; background: #2e436e; color: white; }
 .match-case input { position: absolute; opacity: 0; pointer-events: none; }
