@@ -35,7 +35,11 @@ export type WorkspaceOptions = {
   terminal?: WorkspaceTerminalOptions;
   fileColors?: Record<string, FileColor>;
   gitCommitMessage?: string;
+  searchQueries?: WorkspaceSearchQueries;
 };
+/** Compact Find in Files metadata. Search results and file contents are never persisted. */
+export type WorkspaceSearchQuery = { query: string; path: string; matchCase?: boolean };
+export type WorkspaceSearchQueries = { recent?: WorkspaceSearchQuery[]; saved?: WorkspaceSearchQuery[] };
 export type FileColor = "red" | "orange" | "yellow" | "green" | "blue" | "purple" | "gray";
 /** Durable terminal-tab metadata. The display name is UI state, not a PTY identity. */
 export type WorkspaceTerminalOptions = { tabs: { displayName: string; terminalId?: string }[]; activeTabIndex?: number; panelOpen: boolean };
