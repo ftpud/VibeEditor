@@ -35,4 +35,26 @@ describe("TerminalTabButton", () => {
     expect(tabButton.getAttribute("aria-selected")).toBe("true");
     expect(tabButton.getAttribute("title")).toBe(`${tab.title} — running. Middle-click to close.`);
   });
+
+  it("offers rename and duplicate actions from the tab menu", () => {
+    const onRename = vi.fn();
+    const onDuplicate = vi.fn();
+    render(<TerminalTabButton tab={tab} active={false} onActivate={vi.fn()} onClose={vi.fn()} onRename={onRename} onDuplicate={onDuplicate} />);
+
+    fireEvent.contextMenu(screen.getByRole("tab"));
+    fireEvent.click(screen.getByText("Rename"));
+    expect(onRename).toHaveBeenCalledWith(tab);
+
+    fireEvent.contextMenu(screen.getByRole("tab"));
+    fireEvent.click(screen.getByText("Duplicate"));
+    expect(onDuplicate).toHaveBeenCalledWith(tab);
+  });
+
+  it("moves a tab when dropped onto another tab", () => {
+    const onMove = vi.fn();
+    render(<TerminalTabButton tab={tab} active={false} onActivate={vi.fn()} onClose={vi.fn()} onMove={onMove} />);
+    const dataTransfer = { effectAllowed: "", dropEffect: "", getData: vi.fn(() => "tab-2"), setData: vi.fn() };
+    fireEvent.drop(screen.getByRole("tab"), { dataTransfer });
+    expect(onMove).toHaveBeenCalledWith("tab-2", tab.id);
+  });
 });
