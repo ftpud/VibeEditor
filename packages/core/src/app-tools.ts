@@ -181,8 +181,9 @@ export class AppToolService {
       const reasoning = requiredString(args, "reasoning");
       const manager = this.acp.get(this.currentProvider);
       await validateReasoning(await manager.models(), model, reasoning);
+      const current = await manager.get(this.currentWorkspace);
       await manager.configureNext(this.currentWorkspace, { model, reasoning });
-      await manager.steer(this.currentWorkspace, "Continue the current task using the newly selected model and reasoning effort.");
+      await manager.steer(this.currentWorkspace, "Continue the current task using the newly selected model and reasoning effort.", { senderModel: current.model, queue: true });
       return { provider: this.currentProvider, model, reasoning, applies_to: "next_turn", continuation: "queued" };
     }
     if (name === "task_create") {

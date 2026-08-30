@@ -26,4 +26,14 @@ describe("response provenance", () => {
     render(<AiPanel provider="codex" providers={[{ id: "codex", name: "Codex", description: "", settings: { title: "", description: "", sections: [] }, options: [], capabilities: { models: true, usage: true, mcp: true, agents: true, contextWindow: true } }]} session={conversation} sessions={[conversation]} models={[{ id: "model-a", name: "Model A", defaultReasoning: "low", reasoningLevels: ["low"] }]} attachments={[]} permissionOwner={{ provider: "codex" }} onProviderChange={vi.fn()} onConfigurationChange={vi.fn()} onAttachmentsChange={vi.fn()} onSend={vi.fn()} onSteer={vi.fn()} onInterrupt={vi.fn()} onNewSession={vi.fn()} onSwitchSession={vi.fn()} onRemoveSession={vi.fn()} onResolvePermission={vi.fn()} />);
     expect(screen.getByText("Codex · Model A")).toBeTruthy();
   });
+
+  it("labels automated prompts with their sender model and always labels responses with their effective model", () => {
+    const conversation: AiSession = { id: "one", model: "model-b", reasoning: "high", status: "done", messages: [
+      { id: "prompt", role: "user", text: "Continue", senderModel: "model-a", timestamp: "2026-08-30T12:00:00.000Z" },
+      { id: "answer", role: "assistant", text: "Done", timestamp: "2026-08-30T12:00:01.000Z" }
+    ] };
+    render(<AiPanel provider="codex" providers={[{ id: "codex", name: "Codex", description: "", settings: { title: "", description: "", sections: [] }, options: [], capabilities: { models: true, usage: true, mcp: true, agents: true, contextWindow: true } }]} session={conversation} sessions={[conversation]} models={[{ id: "model-a", name: "Model A", defaultReasoning: "low", reasoningLevels: ["low"] }, { id: "model-b", name: "Model B", defaultReasoning: "high", reasoningLevels: ["high"] }]} attachments={[]} permissionOwner={{ provider: "codex" }} onProviderChange={vi.fn()} onConfigurationChange={vi.fn()} onAttachmentsChange={vi.fn()} onSend={vi.fn()} onSteer={vi.fn()} onInterrupt={vi.fn()} onNewSession={vi.fn()} onSwitchSession={vi.fn()} onRemoveSession={vi.fn()} onResolvePermission={vi.fn()} />);
+    expect(screen.getByText("Model A")).toBeTruthy();
+    expect(screen.getByText("Codex · Model B")).toBeTruthy();
+  });
 });

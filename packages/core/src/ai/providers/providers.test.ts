@@ -110,6 +110,21 @@ describe("ACP integration", () => {
     await provider.clear(workspace);
   });
 
+  it("forces a model-authored continuation into a new turn that consumes the queued model", async () => {
+    const state = await mkdtemp(path.join(os.tmpdir(), "remote-ide-ai-model-continuation-"));
+    const provider = new FakeProvider(() => undefined, state, { FAKE_SLOW: "on" });
+    const workspace = process.cwd();
+    await provider.send(workspace, { prompt: "first", configuration: { model: "model-b", reasoning: "" } });
+    await provider.configureNext(workspace, { model: "model-a", reasoning: "high" });
+    await provider.steer(workspace, "continue", { senderModel: "model-b", queue: true });
+    const session = await settle(provider, workspace);
+    expect(session).toMatchObject({ model: "model-a", reasoning: "high" });
+    expect(session.messages.find((message) => message.text === "continue")).toMatchObject({ role: "user", senderModel: "model-b" });
+    expect(session.messages.filter((message) => message.text.startsWith("working"))).toHaveLength(2);
+    expect(session.messages.filter((message) => message.role === "assistant").at(-1)).toMatchObject({ model: "model-a", reasoning: "high" });
+    await provider.clear(workspace);
+  });
+
   it("archives conversations so they can be listed, switched back to and removed", async () => {
     const state = await mkdtemp(path.join(os.tmpdir(), "remote-ide-ai-sessions-"));
     const provider = new FakeProvider(() => undefined, state);

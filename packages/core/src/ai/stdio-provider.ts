@@ -25,7 +25,7 @@ type Runtime = {
   /** True when the agent implements the `_session/steering` extension. */
   steering: boolean;
   /** Follow-ups typed mid-turn that agents without steering run next. */
-  pending: string[];
+  pending: { prompt: string; senderModel?: string }[];
   checkpointIds: string[];
   configOptions: SessionConfigOption[];
   modes: ModeState;
@@ -162,17 +162,17 @@ export abstract class StdioAcpProvider extends AcpProvider {
    * `_session/steering` extension fold it into the live turn; for the rest the
    * follow-up is queued and dispatched the moment the current turn ends.
    */
-  async steer(workspace: string, text: string): Promise<AiSession> {
+  async steer(workspace: string, text: string, options?: { senderModel?: string; queue?: boolean }): Promise<AiSession> {
     const prompt = this.validate(text);
     const runtime = this.runtimes.get(workspace);
     if (!runtime?.running) throw new CoreError("INVALID_REQUEST", `${this.descriptor.name} is not currently working`);
-    runtime.session.messages.push(this.message("user", prompt));
+    runtime.session.messages.push({ ...this.message("user", prompt), ...(options?.senderModel ? { senderModel: options.senderModel } : {}) });
     if (this.turns) try { runtime.checkpointIds.push(await this.turns.begin(workspace, this.descriptor.id, prompt, runtime.session.id)); } catch (error) { runtime.session.messages.push(this.message("activity", `Prompt checkpoint could not be created: ${error instanceof Error ? error.message : String(error)}`)); }
     runtime.anchors = {};
-    if (runtime.steering) {
+    if (runtime.steering && !options?.queue) {
       try { await runtime.connection.extMethod(STEERING_METHOD, { sessionId: runtime.sessionId, prompt: [{ type: "text", text: prompt }] }); }
-      catch (error) { runtime.session.messages.push(this.message("activity", `Could not steer the running turn, queued instead: ${error instanceof Error ? error.message : String(error)}`)); runtime.pending.push(prompt); }
-    } else runtime.pending.push(prompt);
+      catch (error) { runtime.session.messages.push(this.message("activity", `Could not steer the running turn, queued instead: ${error instanceof Error ? error.message : String(error)}`)); runtime.pending.push({ prompt, senderModel: options?.senderModel }); }
+    } else runtime.pending.push({ prompt, senderModel: options?.senderModel });
     await this.save(workspace, runtime.session); this.onChanged(workspace);
     return this.get(workspace);
   }
@@ -213,7 +213,7 @@ export abstract class StdioAcpProvider extends AcpProvider {
           const warnings = await this.applyAcpConfiguration(runtime, runtime.configOptions, runtime.modes);
           if (warnings.length > 0) runtime.session.messages.push(this.message("activity", `Session configuration\n${warnings.join("\n")}`));
         }
-        this.runPrompt(workspace, runtime, [{ type: "text", text: queued }]);
+        this.runPrompt(workspace, runtime, [{ type: "text", text: queued.prompt }]);
       }
       else {
         runtime.session.status = result.stopReason === "cancelled" ? "idle" : result.stopReason === "end_turn" ? "done" : result.stopReason === "refusal" ? "error" : "user_prompt";

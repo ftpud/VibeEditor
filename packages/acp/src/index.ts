@@ -6,7 +6,7 @@ export type AiContentBlock =
   | { type: "image"; data: string; mimeType: string; name?: string }
   | { type: "resource"; uri: string; mimeType?: string; text: string; name?: string }
   | { type: "resource_link"; uri: string; name: string; mimeType?: string; size?: number };
-export type AiMessage = { id: string; role: "user" | "assistant" | "activity" | "error"; text: string; content?: AiContentBlock[]; timestamp: string; /** Effective model for this generated message. */ model?: string; reasoning?: string };
+export type AiMessage = { id: string; role: "user" | "assistant" | "activity" | "error"; text: string; content?: AiContentBlock[]; timestamp: string; /** Effective model for a generated response. */ model?: string; reasoning?: string; /** Model that originated an automated prompt; absent for human prompts. */ senderModel?: string };
 export type AiCommand = { name: string; description: string; inputHint?: string };
 export type AiPermissionOption = { optionId: string; name: string; kind: "allow_once" | "allow_always" | "reject_once" | "reject_always" };
 export type AiPermissionRequest = { id: string; title: string; toolCallId: string; details?: string; options: AiPermissionOption[] };
@@ -71,8 +71,8 @@ export abstract class AcpProvider {
   abstract send(workspace: string, request: AcpSendRequest): Promise<AiSession>;
   abstract interrupt(workspace: string): Promise<AiSession>;
   abstract resolvePermission(workspace: string, requestId: string, optionId?: string): Promise<AiSession>;
-  /** Adds input to a turn that is already running. */
-  abstract steer(workspace: string, prompt: string): Promise<AiSession>;
+  /** Adds input to a turn that is already running, optionally forcing a distinct follow-up turn. */
+  abstract steer(workspace: string, prompt: string, options?: { senderModel?: string; queue?: boolean }): Promise<AiSession>;
   abstract clear(workspace: string): Promise<AiSession>;
   /** Every session recorded for the workspace, most recently updated first. */
   abstract sessions(workspace: string): Promise<AiSession[]>;
