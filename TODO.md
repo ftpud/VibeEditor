@@ -13,6 +13,7 @@ multi-surface work).
   editor navigation.
 - **Editor status bar:** live cursor, selection, language, and indentation details.
 - **Keyboard tab navigation:** wraparound `Ctrl+Tab` / `Ctrl+Shift+Tab` navigation.
+- **Find in Files:** grouped results with every occurrence reported per matching line.
 
 ## Now
 
@@ -95,8 +96,8 @@ multi-surface work).
   make repository-scale refactors practical. Constraint: Core owns glob/ignore
   evaluation; replacements require a per-file preview, changed-file/version checks,
   binary exclusion, and one confirmed batch write.
-- [ ] **Search result grouping and match context — Small.** Value: scan large result
-  sets faster. Constraint: preserve truncation visibility and stream/page results
+- [ ] **Search match context — Small.** Value: make individual search hits easier to
+  interpret. Constraint: preserve truncation visibility and stream/page results
   before raising current limits.
 
 ## Next
