@@ -6,7 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { Client, type ConnectConfig } from "ssh2";
 import { connectionHealthForLatency, type ConnectionRuntime } from "./connection-health.js";
-import { defaultRepositorySettings, normalizeRepositorySettings, provisionCommand, type RepositorySettings } from "./repository-settings.js";
+import { defaultRepositorySettings, normalizeRepositorySettings, provisionCommand, repositorySettingsOrDefault, type RepositorySettings } from "./repository-settings.js";
 
 type Connection = { id: string; name: string; host: string; port: number; username: string; password: string };
 type Workspace = { id: string; connectionId: string; name: string; directory: string; remotePort: number };
@@ -36,7 +36,7 @@ function stateFile(): string { return path.join(app.getPath("userData"), "gatewa
 async function readState(): Promise<State> {
   try {
     const state = JSON.parse(await readFile(stateFile(), "utf8")) as Partial<State>;
-    return { connections: state.connections ?? [], workspaces: state.workspaces ?? [], portTunnels: state.portTunnels ?? [], repository: normalizeRepositorySettings(state.repository) };
+    return { connections: state.connections ?? [], workspaces: state.workspaces ?? [], portTunnels: state.portTunnels ?? [], repository: repositorySettingsOrDefault(state.repository) };
   }
   catch { return { connections: [], workspaces: [], portTunnels: [], repository: defaultRepositorySettings }; }
 }
