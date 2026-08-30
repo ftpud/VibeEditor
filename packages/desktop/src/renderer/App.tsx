@@ -27,10 +27,12 @@ import { FindInFilesDialog } from "./FindInFilesDialog";
 import { initialTaskPanel, switchedTaskPanel, taskPanelPreferenceKey, type ClassicTaskPanel } from "./task-panel-state";
 import { ProjectTree } from "./ProjectTree";
 import { projectTreeActions, type ProjectTreeAction } from "./project-tree-actions";
+import { copyProjectTreeActions } from "./project-context-menu";
 import { QuickOpenDialog, workspaceFiles } from "./QuickOpenDialog";
 import { EditorStatusBar, type EditorStatusBarHandle } from "./EditorStatusBar";
 import { adjacentEditorTabId, editorShortcutEligible, editorTabShortcut } from "./editor-shortcuts";
 import { orderPinnedTabs, pinnedFilePaths, togglePinnedTab } from "./pinned-tabs";
+import { EditorViewStateStore } from "./editor-view-state";
 
 type ConnectionStatus = "idle" | "connecting" | "connected" | "failed" | "disconnected" | "workspace-error";
 type StatusKind = "progress" | "success" | "error";
@@ -228,6 +230,8 @@ export function App() {
   const terminalBuffers = useRef(new Map<string, string>());
   const markdownBlockTerminals = useRef(new Map<string, string>());
   const monacoEditorRef = useRef<editor.IStandaloneCodeEditor>();
+  const editorViewStatesRef = useRef<EditorViewStateStore>();
+  const editorViewStates = editorViewStatesRef.current ??= new EditorViewStateStore();
   const monacoDiffEditorRef = useRef<editor.IStandaloneDiffEditor>();
   const editorStatusBarRef = useRef<EditorStatusBarHandle>(null);
   const monacoRef = useRef<Monaco>();
@@ -292,8 +296,13 @@ export function App() {
   }, []);
 
   const updateGroup = useCallback((update: (tabs: EditorTab[], active?: string) => { tabs: EditorTab[]; activeTabId?: string }) => {
-    setLayout((current) => ({ ...current, editorGroups: current.editorGroups.map((item, index) => index === 0 ? { ...item, ...update(item.tabs, item.activeTabId) } : item) }));
-  }, []);
+    setLayout((current) => ({ ...current, editorGroups: current.editorGroups.map((item, index) => {
+      if (index !== 0) return item;
+      const next = update(item.tabs, item.activeTabId);
+      if (next.activeTabId !== item.activeTabId) editorViewStates.capture(monacoEditorRef.current);
+      return { ...item, ...next };
+    }) }));
+  }, [editorViewStates]);
 
   const updateTerminalGroup = useCallback((update: (group: LayoutModel["terminalGroup"]) => LayoutModel["terminalGroup"]) => {
     setLayout((current) => ({ ...current, terminalGroup: update(current.terminalGroup) }));
@@ -1735,6 +1744,7 @@ export function App() {
 
   const mountEditor = (instance: editor.IStandaloneCodeEditor, api: Monaco) => {
     monacoEditorRef.current = instance;
+    const restoredViewState = activeTab ? editorViewStates.mount(activeTab.id, instance) : false;
     editorStatusBarRef.current?.attach(instance);
     monacoRef.current = api;
     gitDecorationsRef.current = instance.deltaDecorations([], gitHunkDecorations(activeTab?.type === "file" ? activeGitHunksRef.current : []));
@@ -1743,7 +1753,7 @@ export function App() {
     if (activeTab?.type !== "file" && activeTab?.type !== "useful" && activeTab?.type !== "runConfig" && activeTab?.type !== "agent") return;
     const model = instance.getModel();
     const savedCursor = model ? validateCursorPosition(cursorPositions.get(activeTab), model) : undefined;
-    if (savedCursor) instance.setPosition(savedCursor);
+    if (savedCursor && !restoredViewState) instance.setPosition(savedCursor);
     javaLanguageDisposables.current.push(instance.onDidChangeCursorPosition((event) => cursorPositions.update(activeTab, event.position)));
     const filePath = activeTab.path;
     if (activeTab.type === "file") javaLanguageDisposables.current.push(instance.onContextMenu((event) => {
@@ -1818,6 +1828,7 @@ export function App() {
   };
 
   const mountWorkingDiff = (instance: editor.IStandaloneDiffEditor) => {
+    editorViewStates.clearMounted();
     monacoDiffEditorRef.current = instance;
     editorStatusBarRef.current?.attach(instance.getModifiedEditor());
     if (activeTab?.type === "diff") {
@@ -1975,8 +1986,8 @@ export function App() {
           <span className="connection-dot" />{host}:{port}<div className="settings-anchor"><button title="Settings" onClick={() => setSettingsOpen((open) => !open)}><Settings size={15} /></button>{settingsOpen && <div className="settings-menu"><header>Settings</header><div className="settings-row"><span>Layout</span><div className="theme-switch"><button className={sideLayout === "classic" ? "active" : ""} onClick={() => changeSideLayout("classic")}>Classic</button><button className={sideLayout === "ai-focused" ? "active" : ""} onClick={() => changeSideLayout("ai-focused")}>AI focused</button></div></div><div className="settings-row"><span>Theme</span><div className="theme-switch"><button className={theme === "dark" ? "active" : ""} onClick={() => setTheme("dark")}>Dark</button><button className={theme === "light" ? "active" : ""} onClick={() => setTheme("light")}>Light</button></div></div><div className="settings-row"><span>Highlighting</span><div className="theme-switch"><button className={highlightTheme === "default" ? "active" : ""} onClick={() => setHighlightTheme("default")}>Default</button><button className={highlightTheme === "ftpud" ? "active" : ""} onClick={() => setHighlightTheme("ftpud")}>Ftpud</button></div></div><div className="settings-row font-setting"><label htmlFor="ui-font-family">Font</label><select id="ui-font-family" value={uiFontFamily} onChange={(event) => setUiFontFamily(event.target.value as "jetbrains" | "inter")}><option value="jetbrains">JetBrains Mono</option><option value="inter">Inter</option></select></div><div className="settings-row font-setting"><label htmlFor="ui-font-size">Size</label><input id="ui-font-size" type="number" min="10" max="20" step="1" value={uiFontSize} onChange={(event) => setUiFontSize(Math.min(20, Math.max(10, Number(event.target.value) || 13)))} /></div><div className="settings-row font-setting"><label htmlFor="ui-line-height">Line height</label><input id="ui-line-height" type="number" min="1" max="2" step="0.05" value={uiLineHeight} onChange={(event) => setUiLineHeight(Math.min(2, Math.max(1, Number(event.target.value) || 1.2)))} /></div></div>}</div><button title="Disconnect" onClick={disconnect}><LogOut size={15} /></button>
         </div>
         <div className="tabs" role="tablist" aria-label="Open editors">
-          {group.tabs.map((tab) => <div className={`tab ${tab.id === group.activeTabId ? "active" : ""} ${tab.id === draggedTabId ? "dragging" : ""}`} role="tab" aria-selected={tab.id === group.activeTabId} tabIndex={tab.id === group.activeTabId ? 0 : -1} title={`${tab.title} · Ctrl+Tab to switch · Ctrl/Cmd+W to close`} key={tab.id} draggable onDragStart={(event) => { setDraggedTabId(tab.id); event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/plain", tab.id); }} onDragEnd={() => setDraggedTabId(undefined)} onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = "move"; }} onDrop={(event) => { event.preventDefault(); moveTab(tab.id); }} onContextMenu={(event) => { event.preventDefault(); setTabContextMenu({ x: Math.min(event.clientX, window.innerWidth - 220), y: Math.min(event.clientY, window.innerHeight - 125), tab }); }} onMouseDown={(event) => { if (event.button === 1) event.preventDefault(); }} onAuxClick={(event) => { if (event.button === 1) { event.preventDefault(); closeTab(tab); } }} onClick={() => void activateEditorTab(tab)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); void activateEditorTab(tab); } }}>
-            {tab.type === "diff" ? <GitCompareArrows size={14} /> : <File size={14} />}<span className={tab.type === "file" && projectGitStatuses[tab.path] ? `tab-file-name git-${projectGitStatuses[tab.path] === "C" ? "created" : "modified"}` : "tab-file-name"}>{tab.title}</span>{tab.pinned && <Pin className="tab-pinned-icon" size={13} aria-label="Pinned" />}{tab.dirty && <span className="dirty" title="Unsaved changes" />}{tab.type === "file" && <button type="button" className="tab-action" aria-label={`${tab.pinned ? "Unpin" : "Pin"} ${tab.title}`} title={`${tab.pinned ? "Unpin" : "Pin"} ${tab.title}`} onClick={(event) => { event.stopPropagation(); toggleTabPin(tab); }}>{tab.pinned ? <PinOff size={13} /> : <Pin size={13} />}</button>}<button type="button" className="close" aria-label={`Close ${tab.title}`} title={`Close ${tab.title}`} onClick={(event) => { event.stopPropagation(); closeTab(tab); }}><X size={13} /></button>
+          {group.tabs.map((tab) => <div className={`tab ${tab.pinned ? "pinned" : ""} ${tab.id === group.activeTabId ? "active" : ""} ${tab.id === draggedTabId ? "dragging" : ""}`} role="tab" aria-selected={tab.id === group.activeTabId} aria-label={tab.pinned ? `${tab.title} (pinned)` : tab.title} tabIndex={tab.id === group.activeTabId ? 0 : -1} title={`${tab.title}${tab.pinned ? " · Pinned" : ""} · Ctrl+Tab to switch · Ctrl/Cmd+W to close`} key={tab.id} draggable onDragStart={(event) => { setDraggedTabId(tab.id); event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/plain", tab.id); }} onDragEnd={() => setDraggedTabId(undefined)} onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = "move"; }} onDrop={(event) => { event.preventDefault(); moveTab(tab.id); }} onContextMenu={(event) => { event.preventDefault(); setTabContextMenu({ x: Math.min(event.clientX, window.innerWidth - 220), y: Math.min(event.clientY, window.innerHeight - 125), tab }); }} onMouseDown={(event) => { if (event.button === 1) event.preventDefault(); }} onAuxClick={(event) => { if (event.button === 1) { event.preventDefault(); closeTab(tab); } }} onClick={() => void activateEditorTab(tab)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); void activateEditorTab(tab); } }}>
+            {tab.type === "diff" ? <GitCompareArrows size={14} /> : <File size={14} />}<span className={tab.type === "file" && projectGitStatuses[tab.path] ? `tab-file-name git-${projectGitStatuses[tab.path] === "C" ? "created" : "modified"}` : "tab-file-name"}>{tab.title}</span>{tab.dirty && <span className="dirty" title="Unsaved changes" />}<button type="button" className="close" aria-label={`Close ${tab.title}`} title={`Close ${tab.title}`} onClick={(event) => { event.stopPropagation(); closeTab(tab); }}><X size={13} /></button>
           </div>)}
           <div className="tab-spacer" />
           {activeTab?.type === "diff" && <div className="editor-mode-switch" aria-label="Diff layout">
@@ -2059,19 +2070,22 @@ export function App() {
       <button className={`bottom-tool-button ${layout.panels.some((panel) => panel.type === "gitlog") ? "active" : ""}`} onClick={toggleGitLogPanel}><GitBranch size={14} /><span>Git</span></button>
       {runConfigs.map((config, index) => <button key={`${config.scope}:${config.name}`} className={`bottom-tool-button run-config-entry ${index === 0 ? "first" : ""} ${["starting", "running", "stopping"].includes(config.status) ? "active-run" : ""}`} aria-label={`${config.name}, ${config.scope}, ${config.status}`} title={`${config.scope} Run Config: ${config.name} (${config.status})`} onClick={() => void runConfigAction(config, config.terminalId ? "openTerminal" : "run")} onContextMenu={(event) => { event.preventDefault(); setRunConfigMenu({ x: Math.min(event.clientX, window.innerWidth - 218), y: Math.min(event.clientY, window.innerHeight - 126), config }); }}><Play size={12} /><span>{config.name}</span><span className={`run-config-indicator ${config.status}`} aria-hidden="true" /></button>)}
     </footer>
-    {treeContextMenu && <div className="context-menu-layer" onMouseDown={() => setTreeContextMenu(undefined)}>
-      <div className="context-menu" style={{ left: treeContextMenu.x, top: treeContextMenu.y }} onMouseDown={(event) => event.stopPropagation()}>
-        <button disabled={!projectTreeActions({ node: treeContextMenu.node }).createFile} onClick={() => { runProjectTreeAction("createFile", treeContextMenu.node); setTreeContextMenu(undefined); }}><File size={14} /><span>New File...</span></button>
+      {treeContextMenu && <div className="context-menu-layer" onMouseDown={() => setTreeContextMenu(undefined)}>
+      <div className="context-menu" aria-label={`Actions for ${treeContextMenu.node.name}`} style={{ left: treeContextMenu.x, top: treeContextMenu.y }} onMouseDown={(event) => event.stopPropagation()}>
+        <button role="menuitem" disabled={!projectTreeActions({ node: treeContextMenu.node }).createFile} onClick={() => { runProjectTreeAction("createFile", treeContextMenu.node); setTreeContextMenu(undefined); }}><File size={14} /><span>New File...</span></button>
         <button disabled={!projectTreeActions({ node: treeContextMenu.node }).createDirectory} onClick={() => { runProjectTreeAction("createDirectory", treeContextMenu.node); setTreeContextMenu(undefined); }}><Folder size={14} /><span>New Directory...</span></button>
+        <div className="context-menu-separator" role="separator" />
         <button disabled={!projectTreeActions({ node: treeContextMenu.node }).rename} onClick={() => { runProjectTreeAction("rename", treeContextMenu.node); setTreeContextMenu(undefined); }}><Pencil size={14} /><span>Rename...</span></button>
         <button disabled={!projectTreeActions({ node: treeContextMenu.node }).open} onClick={() => { runProjectTreeAction("open", treeContextMenu.node); setTreeContextMenu(undefined); }}><FileText size={14} /><span>Open</span></button>
-        <button disabled={!projectTreeActions({ node: treeContextMenu.node }).copyRelativePath} onClick={() => { runProjectTreeAction("copyRelativePath", treeContextMenu.node); setTreeContextMenu(undefined); }}><ClipboardCopy size={14} /><span>Copy Workspace-Relative Path</span></button>
-        <button disabled={!projectTreeActions({ node: treeContextMenu.node }).copyAbsolutePath} onClick={() => { runProjectTreeAction("copyAbsolutePath", treeContextMenu.node); setTreeContextMenu(undefined); }}><ClipboardCopy size={14} /><span>Copy Remote Absolute Path</span></button>
-        <button className="danger" disabled={!projectTreeActions({ node: treeContextMenu.node }).delete}><Trash2 size={14} /><span>Delete</span></button>
+        <div className="context-menu-separator" role="separator" />
+        <div className="context-submenu-trigger"><button role="menuitem" aria-haspopup="menu" aria-label="Copy"><ClipboardCopy size={14} /><span>Copy</span><ChevronRight size={13} /></button><div className="context-menu context-submenu copy-submenu" role="menu" aria-label="Copy actions">{copyProjectTreeActions.map(({ action, label }) => <button key={action} role="menuitem" disabled={!projectTreeActions({ node: treeContextMenu.node })[action]} onClick={() => { runProjectTreeAction(action, treeContextMenu.node); setTreeContextMenu(undefined); }}><ClipboardCopy size={14} /><span>{label}</span></button>)}</div></div>
+        <div className="context-menu-separator" role="separator" />
         <button onClick={() => openSearchForNode(treeContextMenu.node)}><Search size={14} /><span>Find in Files</span></button>
         {treeContextMenu.node.type === "file" && treeContextMenu.node.name === "pom.xml" && <button onClick={() => void loadMavenProject(treeContextMenu.node.path)}><Package size={14} /><span>Load as Maven Project</span></button>}
         {javaOptions && treeContextMenu.node.type === "directory" && treeContextMenu.node.path && <button onClick={() => void addJavaSourceRoot(treeContextMenu.node.path)}><Coffee size={14} /><span>Mark as Sources Root</span></button>}
         {treeContextMenu.node.path && <div className="context-submenu-trigger"><button><Palette size={14} /><span>Color</span><ChevronRight size={13} /></button><div className="context-menu context-submenu color-submenu">{fileColorChoices.map((color) => <button key={color.id} onClick={() => { setFileColors((current) => ({ ...current, [treeContextMenu.node.path]: color.id })); setTreeContextMenu(undefined); }}><span className={`file-color-swatch ${color.id}`} /><span>{color.label}</span>{fileColors[treeContextMenu.node.path] === color.id && <Check size={13} />}</button>)}<button disabled={!fileColors[treeContextMenu.node.path]} onClick={() => { setFileColors((current) => { const next = { ...current }; delete next[treeContextMenu.node.path]; return next; }); setTreeContextMenu(undefined); }}><X size={14} /><span>Clear Color</span></button></div></div>}
+        <div className="context-menu-separator" role="separator" />
+        <button className="danger" disabled={!projectTreeActions({ node: treeContextMenu.node }).delete}><Trash2 size={14} /><span>Delete</span></button>
       </div>
     </div>}
     {editorGitMenu && <div className="context-menu-layer" onMouseDown={() => setEditorGitMenu(undefined)}><div className="context-menu editor-git-menu" style={{ left: editorGitMenu.x, top: editorGitMenu.y }} onMouseDown={(event) => event.stopPropagation()}><button onClick={() => attachWorkspaceFile(editorGitMenu.path)}><Bot size={14} /><span>Attach to AI</span></button><div className="context-submenu-trigger"><button><GitBranch size={14} /><span>Git</span><ChevronRight size={13} /></button><div className="context-menu context-submenu"><button onClick={() => { setGitHistory({ path: editorGitMenu.path }); setEditorGitMenu(undefined); }}><FileDiff size={14} /><span>Show file changes</span></button><button disabled={editorGitMenu.startLine === undefined} onClick={() => { setGitHistory({ path: editorGitMenu.path, startLine: editorGitMenu.startLine, endLine: editorGitMenu.endLine }); setEditorGitMenu(undefined); }}><ListTree size={14} /><span>Show selection changes</span></button></div></div></div></div>}
