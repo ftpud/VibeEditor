@@ -2,6 +2,7 @@ import { spawn, spawnSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import waitOn from "wait-on";
+import { electronExecutable } from "../../../scripts/electron-runtime.mjs";
 
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const rootBin = path.resolve(packageRoot, "../../node_modules/.bin");
@@ -15,7 +16,8 @@ if (compile.status !== 0) process.exit(compile.status ?? 1);
 
 const vite = spawn(executable("vite"), [], { cwd: packageRoot, stdio: "inherit" });
 await waitOn({ resources: ["tcp:5173"], timeout: 30_000 });
-const electron = spawn(executable("electron"), [".", ...process.argv.slice(2)], {
+const electronRuntime = await electronExecutable({ packageRoot, productName: "Vibe Editor", bundleId: "com.vibe-editor.desktop" });
+const electron = spawn(electronRuntime, [packageRoot, ...process.argv.slice(2)], {
   cwd: packageRoot,
   env: { ...process.env, VITE_DEV_SERVER_URL: "http://localhost:5173" },
   stdio: "inherit"

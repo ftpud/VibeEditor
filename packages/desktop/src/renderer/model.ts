@@ -1,7 +1,7 @@
 export type Panel = { id: string; type: "explorer" | "editor" | "terminal" | "java" | "problems" | "gitlog" };
 export type EditorTab = {
   id: string;
-  type: "file" | "diff" | "useful";
+  type: "file" | "diff" | "useful" | "agent" | "runConfig";
   title: string;
   path: string;
   dirty: boolean;
@@ -16,9 +16,11 @@ export type EditorTab = {
   diffOriginalPath?: string;
   markdownMode?: "edit" | "preview";
   usefulScope?: "global" | "local";
+  agentScope?: "global" | "local";
+  runConfigScope?: "global" | "local";
 };
 export type EditorGroup = { id: string; tabs: EditorTab[]; activeTabId?: string };
-export type TerminalTab = { id: string; terminalId: string; title: string; exited: boolean };
+export type TerminalTab = { id: string; terminalId: string; title: string; status: "running" | "exited" | "unavailable" };
 export type TerminalGroup = { id: string; tabs: TerminalTab[]; activeTabId?: string };
 export type LayoutModel = { panels: Panel[]; editorGroups: EditorGroup[]; terminalGroup: TerminalGroup };
 

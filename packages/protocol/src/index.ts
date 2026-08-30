@@ -11,10 +11,18 @@ export type GitStatusEntry = {
   indexStatus: string;
   worktreeStatus: string;
 };
+export type GitUpstreamStatus = { upstream: string; ahead: number };
 export type GitBranch = { name: string; current: boolean; remote: boolean };
 export type GitCommit = { hash: string; shortHash: string; author: string; date: string; subject: string; parents?: string[]; refs?: string[]; graph?: string };
 export type GitCommitFile = { path: string; status: string; originalPath?: string };
 export type GitDiffHunk = { originalStart: number; originalLines: number; modifiedStart: number; modifiedLines: number };
+export type GitRollbackFailure = { path: string; message: string };
+export type TaskCheckpointFile = { path: string; status: "A" | "M" | "D" | "R"; originalPath?: string; binary: boolean; size: number };
+export type TaskCheckpoint = {
+  id: string; promptId: string; sessionId?: string; provider: AiProvider; prompt: string;
+  startedAt: string; completedAt?: string; status: "running" | "completed" | "interrupted" | "error";
+  files: TaskCheckpointFile[];
+};
 
 export type WorkspaceOptions = {
   openFiles: string[];
@@ -25,16 +33,19 @@ export type WorkspaceOptions = {
   gitCommitMessage?: string;
 };
 export type FileColor = "red" | "orange" | "yellow" | "green" | "blue" | "purple" | "gray";
-export type WorkspaceTerminalOptions = { tabs: { title: string }[]; activeTabIndex?: number; panelOpen: boolean };
+export type WorkspaceTerminalOptions = { tabs: { title: string; terminalId?: string }[]; activeTabIndex?: number; panelOpen: boolean };
+export type TerminalSessionSnapshot = { terminalId: string; status: "running" | "exited"; output: string; exitCode?: number };
 export type WorkspaceTask = { id: string; name: string; branch: string; baseBranch: string };
-export type AiStatus = "idle" | "in_progress" | "user_prompt" | "done" | "error";
-export type AiProvider = "codex" | "copilot";
-export type AiMessage = { id: string; role: "user" | "assistant" | "activity" | "error"; text: string; timestamp: string };
-export type AiSession = { threadId?: string; model: string; reasoning: string; status: AiStatus; messages: AiMessage[] };
-export type AiModel = { id: string; name: string; defaultReasoning: string; reasoningLevels: string[] };
-export type AiTaskSummary = { status: AiStatus; preview: string; additions: number; deletions: number };
+export type { AiAgent, AiCommand, AiConfiguration, AiContentBlock, AiMessage, AiModel, AiMcpServer, AiOption, AiPermissionRequest, AiProvider, AiProviderCapabilities, AiProviderDescriptor, AiSession, AiSettingsLayout, AiSettingsSection, AiStatus, AiTaskSummary, AiUsage } from "@remote-ide/acp";
+import type { AiAgent, AiConfiguration, AiContentBlock, AiMcpServer, AiModel, AiProvider, AiProviderDescriptor, AiSession, AiTaskSummary, AiUsage } from "@remote-ide/acp";
 export type UsefulFileScope = "global" | "local";
 export type UsefulFile = { scope: UsefulFileScope; name: string };
+export type RunConfigScope = "global" | "local";
+export type RunConfigStatus = "idle" | "starting" | "running" | "stopping" | "succeeded" | "failed";
+export type RunConfig = { scope: RunConfigScope; name: string; commands: string; status: RunConfigStatus; terminalId?: string; exitCode?: number };
+export type AgentFileScope = "global" | "local" | "workspace";
+export type AgentFileReference = { scope: AgentFileScope; name: string };
+export type AgentFile = { scope: AgentFileScope; name: string; agent: AiAgent };
 export type HttpResponse = { status: number; statusText: string; headers: Record<string, string>; body: string; durationMs: number };
 
 export type JavaProjectOptions = {
@@ -77,21 +88,32 @@ export type SearchResult = { path: string; line: number; column: number; preview
 
 export type ProtocolOperations = {
   "workspace.open": {
-    payload: Record<string, never>;
-    result: { workspace: string; tree: FileTreeNode[]; options: WorkspaceOptions };
+    payload: { includeIgnored?: boolean };
+    result: { workspace: string; projectName: string; tree: FileTreeNode[]; options: WorkspaceOptions };
   };
   "workspace.saveOptions": {
     payload: { options: WorkspaceOptions };
     result: Record<string, never>;
   };
   "tasks.list": { payload: Record<string, never>; result: { tasks: WorkspaceTask[]; selectedTaskId?: string } };
-  "tasks.create": { payload: { branch: string }; result: { task: WorkspaceTask } };
-  "tasks.switch": { payload: { taskId?: string }; result: { workspace: string; tree: FileTreeNode[]; options: WorkspaceOptions; tasks: WorkspaceTask[]; selectedTaskId?: string } };
+  "tasks.create": { payload: { branch: string; existing?: boolean; remote?: boolean }; result: { task: WorkspaceTask } };
+  "tasks.createFromPrompt": { payload: { provider?: AiProvider; prompt: string; content?: AiContentBlock[]; configuration: AiConfiguration; mcpServers?: AiMcpServer[]; agent?: AiAgent }; result: { task: WorkspaceTask } };
+  "tasks.merge": { payload: { taskId: string; strategy?: "merge" | "smart" }; result: { targetBranch: string } };
+  "tasks.switch": { payload: { taskId?: string; includeIgnored?: boolean }; result: { workspace: string; projectName: string; tree: FileTreeNode[]; options: WorkspaceOptions; tasks: WorkspaceTask[]; selectedTaskId?: string } };
   "tasks.delete": { payload: { taskId: string }; result: { tasks: WorkspaceTask[]; selectedTaskId?: string } };
+  "ai.providers": { payload: Record<string, never>; result: { providers: AiProviderDescriptor[] } };
   "ai.get": { payload: { provider?: AiProvider }; result: { session: AiSession } };
   "ai.models": { payload: { provider?: AiProvider }; result: { models: AiModel[] } };
-  "ai.send": { payload: { provider?: AiProvider; prompt: string; model: string; reasoning: string }; result: { session: AiSession } };
+  "ai.configure": { payload: { provider?: AiProvider; model?: string; reasoning?: string; configuration?: AiConfiguration }; result: { session: AiSession } };
+  "ai.send": { payload: { provider?: AiProvider; prompt: string; content?: AiContentBlock[]; model?: string; reasoning?: string; configuration?: AiConfiguration; mcpServers?: AiMcpServer[]; agent?: AiAgent }; result: { session: AiSession } };
+  "ai.permission.resolve": { payload: { provider?: AiProvider; requestId: string; optionId?: string; target?: { taskId?: string; sessionId?: string } }; result: { session: AiSession } };
+  "ai.interrupt": { payload: { provider?: AiProvider }; result: { session: AiSession } };
+  "ai.steer": { payload: { provider?: AiProvider; prompt: string }; result: { session: AiSession } };
   "ai.clear": { payload: { provider?: AiProvider }; result: { session: AiSession } };
+  "ai.sessions": { payload: { provider?: AiProvider }; result: { sessions: AiSession[] } };
+  "ai.restore": { payload: { provider?: AiProvider; sessionId: string }; result: { session: AiSession } };
+  "ai.remove": { payload: { provider?: AiProvider; sessionId: string }; result: { session: AiSession } };
+  "ai.usage": { payload: { provider?: AiProvider }; result: { usage: AiUsage } };
   "ai.statuses": { payload: Record<string, never>; result: { root: AiTaskSummary; tasks: Record<string, AiTaskSummary> } };
   "useful.list": { payload: Record<string, never>; result: { files: UsefulFile[] } };
   "useful.read": { payload: { scope: UsefulFileScope; name: string }; result: { content: string } };
@@ -99,9 +121,25 @@ export type ProtocolOperations = {
   "useful.write": { payload: { scope: UsefulFileScope; name: string; content: string }; result: Record<string, never> };
   "useful.rename": { payload: { scope: UsefulFileScope; name: string; newName: string }; result: Record<string, never> };
   "useful.delete": { payload: { scope: UsefulFileScope; name: string }; result: Record<string, never> };
+  "runConfig.list": { payload: Record<string, never>; result: { configs: RunConfig[] } };
+  "runConfig.create": { payload: { scope: RunConfigScope; name: string; commands: string }; result: { config: RunConfig } };
+  "runConfig.read": { payload: { scope: RunConfigScope; name: string }; result: { config: RunConfig } };
+  "runConfig.write": { payload: { scope: RunConfigScope; name: string; commands: string }; result: { config: RunConfig } };
+  "runConfig.rename": { payload: { scope: RunConfigScope; name: string; newName: string }; result: { config: RunConfig } };
+  "runConfig.delete": { payload: { scope: RunConfigScope; name: string }; result: Record<string, never> };
+  "runConfig.run": { payload: { scope: RunConfigScope; name: string }; result: { config: RunConfig } };
+  "runConfig.stop": { payload: { scope: RunConfigScope; name: string }; result: { config: RunConfig } };
+  "runConfig.restart": { payload: { scope: RunConfigScope; name: string }; result: { config: RunConfig } };
+  "runConfig.openTerminal": { payload: { scope: RunConfigScope; name: string }; result: { config: RunConfig } };
+  "agents.list": { payload: Record<string, never>; result: { agents: AgentFile[] } };
+  "agents.read": { payload: { scope: AgentFileScope; name: string }; result: { content: string } };
+  "agents.create": { payload: { scope: Exclude<AgentFileScope, "workspace">; name: string }; result: Record<string, never> };
+  "agents.write": { payload: { scope: AgentFileScope; name: string; content: string }; result: Record<string, never> };
+  "agents.rename": { payload: { scope: Exclude<AgentFileScope, "workspace">; name: string; newName: string }; result: { name: string } };
+  "agents.delete": { payload: { scope: Exclude<AgentFileScope, "workspace">; name: string }; result: Record<string, never> };
   "http.execute": { payload: { method: string; url: string; headers: Record<string, string>; body?: string }; result: HttpResponse };
   "filesystem.listTree": {
-    payload: Record<string, never>;
+    payload: { includeIgnored?: boolean };
     result: { tree: FileTreeNode[] };
   };
   "filesystem.readFile": {
@@ -118,7 +156,11 @@ export type ProtocolOperations = {
   };
   "terminal.create": {
     payload: { cols: number; rows: number };
-    result: { terminalId: string };
+    result: TerminalSessionSnapshot;
+  };
+  "terminal.attach": {
+    payload: { terminalId: string };
+    result: { session?: TerminalSessionSnapshot };
   };
   "terminal.input": {
     payload: { terminalId: string; data: string };
@@ -134,7 +176,7 @@ export type ProtocolOperations = {
   };
   "git.status": {
     payload: Record<string, never>;
-    result: { branch: string; entries: GitStatusEntry[] };
+    result: { branch: string; entries: GitStatusEntry[]; upstream?: GitUpstreamStatus };
   };
   "git.diff": {
     payload: { path: string };
@@ -146,11 +188,17 @@ export type ProtocolOperations = {
   "git.log": { payload: { branch: string; limit?: number }; result: { commits: GitCommit[] } };
   "git.commitFiles": { payload: { hash: string }; result: { files: GitCommitFile[] } };
   "git.commitDiff": { payload: { hash: string; path: string; originalPath?: string }; result: { originalContent: string; modifiedContent: string } };
+  "git.cherryPick": { payload: { hash: string; commit: boolean }; result: { branch: string } };
   "git.fileHistory": { payload: { path: string; startLine?: number; endLine?: number }; result: { commits: GitCommit[] } };
   "git.compareFiles": { payload: { ref: string; path?: string }; result: { files: GitCommitFile[] } };
   "git.compareDiff": { payload: { ref: string; path: string; originalPath?: string }; result: { originalContent: string; modifiedContent: string } };
   "git.rollback": { payload: { path: string }; result: Record<string, never> };
+  "git.rollbackSelected": { payload: { paths: string[]; deleteUntracked: boolean }; result: { rolledBack: string[]; failures: GitRollbackFailure[] } };
   "git.commit": { payload: { paths: string[]; message: string }; result: { hash: string } };
+  "git.push": { payload: Record<string, never>; result: Record<string, never> };
+  "taskGit.history": { payload: Record<string, never>; result: { checkpoints: TaskCheckpoint[] } };
+  "taskGit.diff": { payload: { checkpointId: string; path: string }; result: { originalContent: string; modifiedContent: string; binary: boolean } };
+  "taskGit.restore": { payload: { checkpointId: string }; result: { restored: string[] } };
   "java.loadMavenProject": {
     payload: { pomPath: string };
     result: { options: JavaProjectOptions; tree: JavaProjectNode[] };
@@ -230,6 +278,9 @@ export type ErrorCode =
   | "READ_FAILED"
   | "WRITE_FAILED"
   | "TERMINAL_FAILED"
+  | "RUN_CONFIG_NOT_FOUND"
+  | "RUN_CONFIG_RUNNING"
+  | "RUN_CONFIG_FAILED"
   | "GIT_NOT_REPOSITORY"
   | "GIT_FAILED"
   | "JAVA_NOT_CONFIGURED"
@@ -260,70 +311,115 @@ export type TerminalExitEvent = {
 };
 
 export type GitChangedEvent = { type: "git.changed"; payload: Record<string, never> };
+export type TaskGitChangedEvent = { type: "taskGit.changed"; payload: { workspace: string } };
 
 export type JavaOutputEvent = { type: "java.output"; payload: { data: string } };
 export type JavaExitEvent = { type: "java.exit"; payload: { exitCode: number | null; signal: string | null } };
 export type JavaDebugStateEvent = { type: "java.debug.state"; payload: JavaDebugState };
 export type AiChangedEvent = { type: "ai.changed"; payload: { workspace: string } };
+export type TasksChangedEvent = { type: "tasks.changed"; payload: Record<string, never> };
+export type CommitMessageChangedEvent = { type: "commit-message.changed"; payload: { workspace: string; message: string } };
+export type RunConfigChangedEvent = { type: "runConfig.changed"; payload: { workspace: string; configs: RunConfig[] } };
 
-export type ServerEvent = FilesystemChangedEvent | TerminalOutputEvent | TerminalExitEvent | GitChangedEvent | JavaOutputEvent | JavaExitEvent | JavaDebugStateEvent | AiChangedEvent;
+export type ServerEvent = FilesystemChangedEvent | TerminalOutputEvent | TerminalExitEvent | GitChangedEvent | TaskGitChangedEvent | JavaOutputEvent | JavaExitEvent | JavaDebugStateEvent | AiChangedEvent | TasksChangedEvent | CommitMessageChangedEvent | RunConfigChangedEvent;
 
-export const requestTypes: RequestType[] = [
-  "workspace.open",
-  "workspace.saveOptions",
-  "tasks.list",
-  "tasks.create",
-  "tasks.switch",
-  "tasks.delete",
-  "ai.get",
-  "ai.models",
-  "ai.send",
-  "ai.clear",
-  "ai.statuses",
-  "useful.list",
-  "useful.read",
-  "useful.create",
-  "useful.write",
-  "useful.rename",
-  "useful.delete",
-  "http.execute",
-  "filesystem.listTree",
-  "filesystem.readFile",
-  "filesystem.writeFile",
-  "filesystem.search",
-  "terminal.create",
-  "terminal.input",
-  "terminal.resize",
-  "terminal.close",
-  "git.status",
-  "git.diff",
-  "git.branches",
-  "git.checkoutBranch",
-  "git.renameBranch",
-  "git.log",
-  "git.commitFiles",
-  "git.commitDiff",
-  "git.fileHistory",
-  "git.compareFiles",
-  "git.compareDiff",
-  "git.rollback",
-  "git.commit",
-  "java.loadMavenProject",
-  "java.getOptions",
-  "java.addSourceRoot",
-  "java.getProjectTree",
-  "java.listMainClasses",
-  "java.addRunConfiguration",
-  "java.selectRunConfiguration",
-  "java.build",
-  "java.run",
-  "java.stop",
-  "java.debug.start",
-  "java.debug.command",
-  "java.check",
-  "java.completeType",
-  "java.completion",
-  "java.definition",
-  "java.references",
-  "java.semanticTokens"
-];
+/**
+ * Every request the core accepts. Declaring it as a fully keyed record makes TypeScript
+ * fail the build when an operation is added to `ProtocolOperations` without being
+ * registered here, which would otherwise reject the request at runtime.
+ */
+const requestTypeRegistry: Record<RequestType, true> = {
+  "workspace.open": true,
+  "workspace.saveOptions": true,
+  "tasks.list": true,
+  "tasks.create": true,
+  "tasks.createFromPrompt": true,
+  "tasks.merge": true,
+  "tasks.switch": true,
+  "tasks.delete": true,
+  "ai.providers": true,
+  "ai.get": true,
+  "ai.models": true,
+  "ai.configure": true,
+  "ai.send": true,
+  "ai.permission.resolve": true,
+  "ai.interrupt": true,
+  "ai.steer": true,
+  "ai.clear": true,
+  "ai.sessions": true,
+  "ai.restore": true,
+  "ai.remove": true,
+  "ai.usage": true,
+  "ai.statuses": true,
+  "useful.list": true,
+  "useful.read": true,
+  "useful.create": true,
+  "useful.write": true,
+  "useful.rename": true,
+  "useful.delete": true,
+  "runConfig.list": true,
+  "runConfig.create": true,
+  "runConfig.read": true,
+  "runConfig.write": true,
+  "runConfig.rename": true,
+  "runConfig.delete": true,
+  "runConfig.run": true,
+  "runConfig.stop": true,
+  "runConfig.restart": true,
+  "runConfig.openTerminal": true,
+  "agents.list": true,
+  "agents.read": true,
+  "agents.create": true,
+  "agents.write": true,
+  "agents.rename": true,
+  "agents.delete": true,
+  "http.execute": true,
+  "filesystem.listTree": true,
+  "filesystem.readFile": true,
+  "filesystem.writeFile": true,
+  "filesystem.search": true,
+  "terminal.create": true,
+  "terminal.attach": true,
+  "terminal.input": true,
+  "terminal.resize": true,
+  "terminal.close": true,
+  "git.status": true,
+  "git.diff": true,
+  "git.branches": true,
+  "git.checkoutBranch": true,
+  "git.renameBranch": true,
+  "git.log": true,
+  "git.commitFiles": true,
+  "git.commitDiff": true,
+  "git.cherryPick": true,
+  "git.fileHistory": true,
+  "git.compareFiles": true,
+  "git.compareDiff": true,
+  "git.rollback": true,
+  "git.rollbackSelected": true,
+  "git.commit": true,
+  "git.push": true,
+  "taskGit.history": true,
+  "taskGit.diff": true,
+  "taskGit.restore": true,
+  "java.loadMavenProject": true,
+  "java.getOptions": true,
+  "java.addSourceRoot": true,
+  "java.getProjectTree": true,
+  "java.listMainClasses": true,
+  "java.addRunConfiguration": true,
+  "java.selectRunConfiguration": true,
+  "java.build": true,
+  "java.run": true,
+  "java.stop": true,
+  "java.debug.start": true,
+  "java.debug.command": true,
+  "java.check": true,
+  "java.completeType": true,
+  "java.completion": true,
+  "java.definition": true,
+  "java.references": true,
+  "java.semanticTokens": true,
+};
+
+export const requestTypes: RequestType[] = Object.keys(requestTypeRegistry) as RequestType[];

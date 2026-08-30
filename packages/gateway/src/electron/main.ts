@@ -1,32 +1,43 @@
-import { app, BrowserWindow, ipcMain, safeStorage } from "electron";
+import { app, BrowserWindow, ipcMain, nativeImage, safeStorage } from "electron";
 import { spawn } from "node:child_process";
 import { createServer, type Server } from "node:net";
-import { access, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { access, copyFile, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { Client, type ConnectConfig } from "ssh2";
 
 type Connection = { id: string; name: string; host: string; port: number; username: string; password: string };
 type Workspace = { id: string; connectionId: string; name: string; directory: string; remotePort: number };
+type PortTunnel = { id: string; connectionId: string; port: number };
 type StoredConnection = Omit<Connection, "password"> & { password: string };
-type State = { connections: StoredConnection[]; workspaces: Workspace[] };
-type PublicState = { connections: Omit<Connection, "password">[]; workspaces: Workspace[] };
+type State = { connections: StoredConnection[]; workspaces: Workspace[]; portTunnels: PortTunnel[] };
+type PublicState = { connections: Omit<Connection, "password">[]; workspaces: Workspace[]; portTunnels: PortTunnel[] };
 type Runtime = { status: "idle" | "working" | "server" | "client" | "error"; message: string };
+type TunnelRuntime = { status: "idle" | "working" | "running" | "error"; message: string };
 
 const directory = path.dirname(fileURLToPath(import.meta.url));
+const appIcon = path.join(directory, "../assets/app-icon.png");
 const repository = "https://github.com/ftpud/VibeEditor";
 const repositoryBranch = "dev";
 const remoteNodeEnvironment = `export PATH="$HOME/.local/bin:$HOME/.volta/bin:$HOME/.fnm:$HOME/.nvm/versions/node/current/bin:/usr/local/bin:$PATH"; export NVM_DIR="$HOME/.nvm"; if [ -s "$NVM_DIR/nvm.sh" ]; then . "$NVM_DIR/nvm.sh"; fi; command -v npm >/dev/null 2>&1 || { echo "npm was not found on the SSH host. Install Node.js 20+ for this user or configure NVM in ~/.bashrc." >&2; exit 127; }`;
 const runtimes = new Map<string, Runtime>();
 const tunnels = new Map<string, { ssh: Client; server: Server }>();
+const portTunnelRuntimes = new Map<string, TunnelRuntime>();
+const portTunnels = new Map<string, { ssh: Client; server: Server }>();
 
 app.name = "Vibe Gateway";
+app.setName("Vibe Gateway");
 app.setAppUserModelId("com.vibe-editor.gateway");
+process.title = "Vibe Gateway";
+app.commandLine.appendSwitch("class", "VibeGateway");
 
 function stateFile(): string { return path.join(app.getPath("userData"), "gateway.json"); }
 async function readState(): Promise<State> {
-  try { return JSON.parse(await readFile(stateFile(), "utf8")) as State; }
-  catch { return { connections: [], workspaces: [] }; }
+  try {
+    const state = JSON.parse(await readFile(stateFile(), "utf8")) as Partial<State>;
+    return { connections: state.connections ?? [], workspaces: state.workspaces ?? [], portTunnels: state.portTunnels ?? [] };
+  }
+  catch { return { connections: [], workspaces: [], portTunnels: [] }; }
 }
 async function saveState(state: State): Promise<void> {
   await mkdir(path.dirname(stateFile()), { recursive: true });
@@ -38,13 +49,17 @@ function encrypt(password: string): string {
 }
 function decrypt(password: string): string { return safeStorage.decryptString(Buffer.from(password, "base64")); }
 function publicState(state: State): PublicState {
-  return { connections: state.connections.map(({ password: _password, ...item }) => item), workspaces: state.workspaces };
+  return { connections: state.connections.map(({ password: _password, ...item }) => item), workspaces: state.workspaces, portTunnels: state.portTunnels };
 }
 function id(): string { return crypto.randomUUID(); }
 function shell(value: string): string { return `'${value.replaceAll("'", `'"'"'`)}'`; }
 function runtime(workspaceId: string, status: Runtime["status"], message: string): void {
   const value = { status, message }; runtimes.set(workspaceId, value);
   for (const window of BrowserWindow.getAllWindows()) window.webContents.send("gateway:status", workspaceId, value);
+}
+function portTunnelRuntime(tunnelId: string, status: TunnelRuntime["status"], message: string): void {
+  const value = { status, message }; portTunnelRuntimes.set(tunnelId, value);
+  for (const window of BrowserWindow.getAllWindows()) window.webContents.send("gateway:tunnelStatus", tunnelId, value);
 }
 async function credentials(connectionId: string): Promise<Connection> {
   const item = (await readState()).connections.find((connection) => connection.id === connectionId);
@@ -64,7 +79,11 @@ function execute(client: Client, command: string): Promise<string> {
     let stdout = ""; let stderr = "";
     stream.on("data", (data: Buffer) => { stdout += data.toString(); });
     stream.stderr.on("data", (data: Buffer) => { stderr += data.toString(); });
-    stream.on("close", (code: number) => code === 0 ? resolve(stdout) : reject(new Error(stderr.trim() || stdout.trim() || `Remote command exited with ${code}`)));
+    stream.on("close", (code: number) => {
+      if (code === 0) { resolve(stdout); return; }
+      const output = [stdout.trim(), stderr.trim()].filter(Boolean).join("\n");
+      reject(new Error(output || `Remote command exited with ${code}`));
+    });
   }));
 }
 async function withWorkspace(workspaceId: string): Promise<{ workspace: Workspace; connection: Connection }> {
@@ -94,7 +113,7 @@ async function refreshStatuses(connectionId?: string): Promise<void> {
   }));
 }
 async function provision(client: Client): Promise<{ commit: string; rebuilt: boolean }> {
-  const command = `set -e; ${remoteNodeEnvironment}; if [ -d ~/.vibe/.git ]; then git -C ~/.vibe fetch origin ${repositoryBranch}; git -C ~/.vibe checkout -B ${repositoryBranch} origin/${repositoryBranch}; else rm -rf ~/.vibe; git clone --branch ${repositoryBranch} --single-branch ${repository} ~/.vibe; fi; cd ~/.vibe; head=$(git rev-parse HEAD); rebuilt=0; if [ ! -f ~/.vibe-build ] || [ "$(cat ~/.vibe-build)" != "$head" ] || [ ! -f packages/core/dist/index.js ] || [ ! -f packages/desktop/dist-electron/main.js ] || [ ! -f packages/desktop/dist-renderer/index.html ] || [ ! -d node_modules ]; then VIBE_SKIP_JDTLS=1 npm install; npm run build -w @remote-ide/protocol; npm run build -w @remote-ide/core; npm run build -w @remote-ide/desktop; printf '%s' "$head" > ~/.vibe-build; rebuilt=1; fi; printf '\nVIBE_RESULT:%s:%s\n' "$head" "$rebuilt"`;
+  const command = `set -e; ${remoteNodeEnvironment}; if [ -d ~/.vibe/.git ]; then git -C ~/.vibe fetch origin ${repositoryBranch}; git -C ~/.vibe checkout --force -B ${repositoryBranch} origin/${repositoryBranch}; else rm -rf ~/.vibe; git clone --branch ${repositoryBranch} --single-branch ${repository} ~/.vibe; fi; cd ~/.vibe; head=$(git rev-parse HEAD); rebuilt=0; if [ ! -f ~/.vibe-build ] || [ "$(cat ~/.vibe-build)" != "$head" ] || [ ! -f packages/core/dist/index.js ] || [ ! -f packages/desktop/dist-electron/main.js ] || [ ! -f packages/desktop/dist-renderer/index.html ] || [ ! -d node_modules ]; then VIBE_SKIP_JDTLS=1 npm install; rm -rf packages/acp/dist packages/protocol/dist packages/core/dist packages/desktop/dist-electron packages/desktop/dist-renderer; npm run build -w @remote-ide/acp; npm run build -w @remote-ide/protocol; npm run build -w @remote-ide/core; npm run build -w @remote-ide/desktop; printf '%s' "$head" > ~/.vibe-build; rebuilt=1; fi; printf '\nVIBE_RESULT:%s:%s\n' "$head" "$rebuilt"`;
   const output = await execute(client, `bash -lc ${shell(command)}`);
   const match = output.match(/VIBE_RESULT:([0-9a-f]{40,64}):([01])/);
   if (!match?.[1]) throw new Error("Remote Git revision could not be determined");
@@ -148,6 +167,46 @@ async function createTunnel(workspaceId: string, connection: Connection, remoteP
   const address = server.address(); if (!address || typeof address === "string") throw new Error("Could not allocate local tunnel port");
   return address.port;
 }
+async function startPortTunnel(tunnelId: string): Promise<void> {
+  const state = await readState();
+  const tunnel = state.portTunnels.find((item) => item.id === tunnelId);
+  if (!tunnel) throw new Error("Port tunnel was not found");
+  if (!Number.isInteger(tunnel.port) || tunnel.port < 1 || tunnel.port > 65535) throw new Error("Tunnel port must be between 1 and 65535");
+  portTunnelRuntime(tunnelId, "working", "Connecting over SSH...");
+  stopPortTunnel(tunnelId, false);
+  let ssh: Client | undefined;
+  try {
+    ssh = await connect(await credentials(tunnel.connectionId));
+    const server = createServer((socket) => ssh!.forwardOut("127.0.0.1", socket.remotePort ?? 0, "127.0.0.1", tunnel.port, (error, stream) => {
+      if (error) { socket.destroy(error); return; }
+      socket.pipe(stream).pipe(socket);
+    }));
+    await new Promise<void>((resolve, reject) => server.once("error", reject).listen(tunnel.port, "127.0.0.1", resolve));
+    portTunnels.set(tunnelId, { ssh, server });
+    server.on("error", (error) => {
+      if (portTunnels.has(tunnelId)) portTunnelRuntime(tunnelId, "error", error.message);
+    });
+    ssh.on("close", () => {
+      if (portTunnels.delete(tunnelId)) {
+        server.close();
+        portTunnelRuntime(tunnelId, "error", "SSH connection closed");
+      }
+    });
+    portTunnelRuntime(tunnelId, "running", `127.0.0.1:${tunnel.port} → remote 127.0.0.1:${tunnel.port}`);
+  } catch (error) {
+    ssh?.end();
+    const message = error instanceof Error ? error.message : String(error);
+    portTunnelRuntime(tunnelId, "error", message);
+    throw error;
+  }
+}
+function stopPortTunnel(tunnelId: string, notify = true): void {
+  const active = portTunnels.get(tunnelId);
+  portTunnels.delete(tunnelId);
+  active?.server.close();
+  active?.ssh.end();
+  if (notify) portTunnelRuntime(tunnelId, "idle", "Stopped");
+}
 async function startClient(workspaceId: string): Promise<void> {
   const { workspace, connection } = await withWorkspace(workspaceId); runtime(workspaceId, "working", "Checking remote client build...");
   const client = await connect(connection);
@@ -166,7 +225,7 @@ async function startClient(workspaceId: string): Promise<void> {
   catch { clientBuilt = false; }
   if (!clientBuilt) {
   try {
-    await execute(client, `bash -lc ${shell(`set -e; test -f ~/.vibe/packages/desktop/package.json; test -f ~/.vibe/packages/desktop/dist-electron/main.js; test -f ~/.vibe/packages/desktop/dist-renderer/index.html; cd ~/.vibe/packages/desktop; tar -czf /tmp/vibe-${workspace.id}.tar.gz package.json dist-electron dist-renderer`)}`);
+    await execute(client, `bash -lc ${shell(`set -e; test -f ~/.vibe/packages/desktop/package.json || { echo "Desktop package is missing; start the server to provision it first." >&2; exit 1; }; test -f ~/.vibe/packages/desktop/dist-electron/main.js || { echo "Desktop Electron build is missing; start the server to rebuild it first." >&2; exit 1; }; test -f ~/.vibe/packages/desktop/dist-renderer/index.html || { echo "Desktop renderer build is missing; start the server to rebuild it first." >&2; exit 1; }; cd ~/.vibe/packages/desktop; files="package.json dist-electron dist-renderer"; if [ -d assets ]; then files="$files assets"; fi; tar -czf /tmp/vibe-${workspace.id}.tar.gz $files`)}`);
     await mkdir(path.dirname(archive), { recursive: true }); await download(client, `/tmp/vibe-${workspace.id}.tar.gz`, archive);
     await execute(client, `rm -f /tmp/vibe-${workspace.id}.tar.gz`);
   } finally { client.end(); }
@@ -175,16 +234,32 @@ async function startClient(workspaceId: string): Promise<void> {
     await runLocal("tar", ["-xzf", archive, "-C", clientRoot], clientRoot); await rm(archive, { force: true });
     await writeFile(buildMarker, `${expectedMarker}\n`, "utf8");
   } else { client.end(); runtime(workspaceId, "working", "Reusing local client build..."); }
+  const localIcon = process.env.VIBE_DESKTOP_ICON;
+  if (localIcon) {
+    await mkdir(path.join(clientRoot, "assets"), { recursive: true });
+    try { await access(path.join(clientRoot, "assets", "app-icon.png")); }
+    catch { await copyFile(localIcon, path.join(clientRoot, "assets", "app-icon.png")); }
+  }
   const localPort = await createTunnel(workspaceId, connection, workspace.remotePort);
   const desktopMain = path.join(clientRoot, "dist-electron", "main.js");
-  const child = spawn(process.execPath, [desktopMain, "--host", "127.0.0.1", "--port", String(localPort)], { cwd: clientRoot, env: { ...process.env, VITE_DEV_SERVER_URL: "" }, detached: true, stdio: "ignore" });
+  const desktopExecutable = process.env.VIBE_DESKTOP_EXECUTABLE || process.execPath;
+  const child = spawn(desktopExecutable, [desktopMain, "--host", "127.0.0.1", "--port", String(localPort)], { cwd: clientRoot, env: { ...process.env, VITE_DEV_SERVER_URL: "" }, detached: true, stdio: "ignore" });
+  try {
+    await new Promise<void>((resolve, reject) => {
+      child.once("spawn", resolve);
+      child.once("error", (error) => reject(new Error(`Could not launch Vibe Editor using ${desktopExecutable}: ${error.message}`)));
+    });
+  } catch (error) {
+    tunnels.get(workspaceId)?.server.close(); tunnels.get(workspaceId)?.ssh.end(); tunnels.delete(workspaceId);
+    throw error;
+  }
   child.unref(); runtime(workspaceId, "client", `Client connected through local port ${localPort}${clientBuilt ? " (artifacts reused)" : " (artifacts downloaded)"}`);
 }
 
 ipcMain.handle("gateway:get", async () => {
   const state = await readState();
   setTimeout(() => { void refreshStatuses(); }, 0);
-  return { state: publicState(state), runtimes: Object.fromEntries(runtimes) };
+  return { state: publicState(state), runtimes: Object.fromEntries(runtimes), tunnelRuntimes: Object.fromEntries(portTunnelRuntimes) };
 });
 ipcMain.handle("gateway:refreshStatuses", (_event, connectionId?: string) => refreshStatuses(connectionId));
 ipcMain.handle("gateway:saveConnection", async (_event, input: Omit<Connection, "id"> & { id?: string }) => {
@@ -192,18 +267,26 @@ ipcMain.handle("gateway:saveConnection", async (_event, input: Omit<Connection, 
   const item: StoredConnection = { id: input.id ?? id(), name: input.name, host: input.host, port: input.port, username: input.username, password: input.password ? encrypt(input.password) : existing?.password ?? "" };
   if (!item.password) throw new Error("Password is required"); state.connections = [...state.connections.filter((value) => value.id !== item.id), item]; await saveState(state); return publicState(state);
 });
-ipcMain.handle("gateway:deleteConnection", async (_event, connectionId: string) => { const state = await readState(); state.connections = state.connections.filter((item) => item.id !== connectionId); state.workspaces = state.workspaces.filter((item) => item.connectionId !== connectionId); await saveState(state); return publicState(state); });
+ipcMain.handle("gateway:deleteConnection", async (_event, connectionId: string) => { const state = await readState(); for (const tunnel of state.portTunnels.filter((item) => item.connectionId === connectionId)) stopPortTunnel(tunnel.id, false); state.connections = state.connections.filter((item) => item.id !== connectionId); state.workspaces = state.workspaces.filter((item) => item.connectionId !== connectionId); state.portTunnels = state.portTunnels.filter((item) => item.connectionId !== connectionId); await saveState(state); return publicState(state); });
 ipcMain.handle("gateway:saveWorkspace", async (_event, input: Omit<Workspace, "id"> & { id?: string }) => { const state = await readState(); const item = { ...input, id: input.id ?? id() } as Workspace; state.workspaces = [...state.workspaces.filter((value) => value.id !== item.id), item]; await saveState(state); return publicState(state); });
 ipcMain.handle("gateway:deleteWorkspace", async (_event, workspaceId: string) => { const state = await readState(); state.workspaces = state.workspaces.filter((item) => item.id !== workspaceId); await saveState(state); return publicState(state); });
+ipcMain.handle("gateway:savePortTunnel", async (_event, input: Omit<PortTunnel, "id"> & { id?: string }) => { if (!Number.isInteger(input.port) || input.port < 1 || input.port > 65535) throw new Error("Tunnel port must be between 1 and 65535"); const state = await readState(); if (!state.connections.some((item) => item.id === input.connectionId)) throw new Error("SSH connection was not found"); const item = { ...input, id: input.id ?? id() } as PortTunnel; if (state.portTunnels.some((value) => value.id !== item.id && value.connectionId === item.connectionId && value.port === item.port)) throw new Error(`Port ${item.port} is already configured for this connection`); if (input.id) stopPortTunnel(input.id, false); state.portTunnels = [...state.portTunnels.filter((value) => value.id !== item.id), item]; await saveState(state); return publicState(state); });
+ipcMain.handle("gateway:deletePortTunnel", async (_event, tunnelId: string) => { stopPortTunnel(tunnelId, false); const state = await readState(); state.portTunnels = state.portTunnels.filter((item) => item.id !== tunnelId); await saveState(state); portTunnelRuntimes.delete(tunnelId); return publicState(state); });
+ipcMain.handle("gateway:startPortTunnel", (_event, tunnelId: string) => startPortTunnel(tunnelId));
+ipcMain.handle("gateway:stopPortTunnel", (_event, tunnelId: string) => stopPortTunnel(tunnelId));
 ipcMain.handle("gateway:startServer", (_event, workspaceId: string) => startServer(workspaceId));
 ipcMain.handle("gateway:stopServer", (_event, workspaceId: string) => stopServer(workspaceId));
 ipcMain.handle("gateway:startClient", (_event, workspaceId: string) => startClient(workspaceId));
 
 function createWindow(): void {
-  const window = new BrowserWindow({ width: 1040, height: 720, minWidth: 820, minHeight: 560, backgroundColor: "#202124", webPreferences: { preload: path.join(directory, "preload.cjs"), contextIsolation: true, nodeIntegration: false } });
+  const window = new BrowserWindow({ width: 1040, height: 720, minWidth: 820, minHeight: 560, icon: appIcon, backgroundColor: "#202124", webPreferences: { preload: path.join(directory, "preload.cjs"), contextIsolation: true, nodeIntegration: false } });
   window.removeMenu(); const devUrl = process.env.VITE_DEV_SERVER_URL;
   void (devUrl ? window.loadURL(devUrl) : window.loadFile(path.join(directory, "../dist-renderer/index.html")));
 }
-app.whenReady().then(createWindow);
-app.on("window-all-closed", () => { for (const tunnel of tunnels.values()) { tunnel.server.close(); tunnel.ssh.end(); } if (process.platform !== "darwin") app.quit(); });
+app.whenReady().then(() => {
+  app.setName("Vibe Gateway"); process.title = "Vibe Gateway";
+  if (process.platform === "darwin") app.dock.setIcon(nativeImage.createFromPath(appIcon));
+  createWindow();
+});
+app.on("window-all-closed", () => { for (const tunnel of tunnels.values()) { tunnel.server.close(); tunnel.ssh.end(); } for (const tunnel of portTunnels.values()) { tunnel.server.close(); tunnel.ssh.end(); } if (process.platform !== "darwin") app.quit(); });
 app.on("activate", () => { if (!BrowserWindow.getAllWindows().length) createWindow(); });

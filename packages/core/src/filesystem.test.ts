@@ -1,8 +1,12 @@
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { mkdtemp, mkdir, readFile, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
 import { MAX_FILE_SIZE, WorkspaceFileSystem } from "./filesystem.js";
+
+const execFileAsync = promisify(execFile);
 
 describe("WorkspaceFileSystem", () => {
   let root: string;
@@ -19,6 +23,19 @@ describe("WorkspaceFileSystem", () => {
     const tree = await fs.open(root);
     expect(tree[0]).toMatchObject({ name: "src", type: "directory" });
     expect(tree[0]?.children?.[0]).toMatchObject({ path: "src/index.ts", type: "file" });
+  });
+
+  it("skips git-ignored files unless they are requested", async () => {
+    await execFileAsync("git", ["-C", root, "init", "-q"]);
+    await writeFile(path.join(root, ".gitignore"), "node_modules/\n");
+    await mkdir(path.join(root, "node_modules", "pkg"), { recursive: true });
+    await writeFile(path.join(root, "node_modules", "pkg", "index.js"), "module.exports = 1;\n");
+    await fs.open(root);
+    const filtered = await fs.listTree();
+    expect(filtered.map((node) => node.name)).not.toContain("node_modules");
+    expect(filtered.map((node) => node.name)).toEqual(expect.arrayContaining([".gitignore", "src"]));
+    const full = await fs.listTree(true);
+    expect(full.map((node) => node.name)).toContain("node_modules");
   });
 
   it("rejects a missing workspace", async () => {

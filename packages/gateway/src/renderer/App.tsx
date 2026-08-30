@@ -1,23 +1,28 @@
 import { useEffect, useMemo, useState, type FormEvent } from "react";
-import { CircleStop, HardDrive, Laptop, Network, Pencil, Play, Plus, RefreshCw, Server, Trash2, X } from "lucide-react";
+import { Cable, CircleStop, HardDrive, Laptop, Network, Pencil, Play, Plus, RefreshCw, Server, Trash2, X } from "lucide-react";
 
-const emptyState: GatewayState = { connections: [], workspaces: [] };
+const emptyState: GatewayState = { connections: [], workspaces: [], portTunnels: [] };
 
 export function App() {
   const [state, setState] = useState(emptyState);
   const [selected, setSelected] = useState<string>();
   const [runtimes, setRuntimes] = useState<Record<string, GatewayRuntime>>({});
+  const [tunnelRuntimes, setTunnelRuntimes] = useState<Record<string, GatewayTunnelRuntime>>({});
+  const [newTunnelPort, setNewTunnelPort] = useState("");
   const [connectionDialog, setConnectionDialog] = useState<Partial<GatewayConnection> & { password: string }>();
   const [workspaceDialog, setWorkspaceDialog] = useState<Partial<GatewayWorkspace>>();
   const [error, setError] = useState("");
   const bridgeReady = Boolean(window.gateway);
   useEffect(() => {
     if (!window.gateway) { setError("Gateway preload failed to initialize. Rebuild and restart the application."); return; }
-    void window.gateway.get().then((result) => { setState(result.state); setRuntimes(result.runtimes); setSelected(result.state.connections[0]?.id); }).catch((reason) => setError(reason instanceof Error ? reason.message : String(reason)));
-    return window.gateway.onStatus((id, status) => setRuntimes((current) => ({ ...current, [id]: status })));
+    void window.gateway.get().then((result) => { setState(result.state); setRuntimes(result.runtimes); setTunnelRuntimes(result.tunnelRuntimes); setSelected(result.state.connections[0]?.id); }).catch((reason) => setError(reason instanceof Error ? reason.message : String(reason)));
+    const stopStatusListener = window.gateway.onStatus((id, status) => setRuntimes((current) => ({ ...current, [id]: status })));
+    const stopTunnelListener = window.gateway.onTunnelStatus((id, status) => setTunnelRuntimes((current) => ({ ...current, [id]: status })));
+    return () => { stopStatusListener(); stopTunnelListener(); };
   }, []);
   const connection = state.connections.find((item) => item.id === selected);
   const workspaces = useMemo(() => state.workspaces.filter((item) => item.connectionId === selected), [state.workspaces, selected]);
+  const connectionTunnels = useMemo(() => state.portTunnels.filter((item) => item.connectionId === selected), [state.portTunnels, selected]);
 
   const action = async (workspace: GatewayWorkspace, operation: "startServer" | "stopServer" | "startClient") => {
     setError("");
@@ -29,6 +34,24 @@ export function App() {
   };
   const removeConnection = async (item: GatewayConnection) => { if (confirm(`Delete ${item.name} and its workspaces?`)) { const next = await window.gateway.deleteConnection(item.id); setState(next); setSelected(next.connections[0]?.id); } };
   const removeWorkspace = async (item: GatewayWorkspace) => { if (confirm(`Delete workspace ${item.name}?`)) setState(await window.gateway.deleteWorkspace(item.id)); };
+  const addPortTunnel = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!connection) return;
+    const port = Number(newTunnelPort);
+    setError("");
+    try { setState(await window.gateway.savePortTunnel({ connectionId: connection.id, port })); setNewTunnelPort(""); }
+    catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
+  };
+  const tunnelAction = async (item: GatewayPortTunnel, operation: "startPortTunnel" | "stopPortTunnel") => {
+    setError("");
+    try { await window.gateway[operation](item.id); }
+    catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
+  };
+  const removePortTunnel = async (item: GatewayPortTunnel) => {
+    setError("");
+    try { setState(await window.gateway.deletePortTunnel(item.id)); setTunnelRuntimes((current) => { const next = { ...current }; delete next[item.id]; return next; }); }
+    catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
+  };
 
   return <div className="gateway-shell">
     <aside>
@@ -44,6 +67,10 @@ export function App() {
           <div className="workspace-info"><div className={`status-dot ${current.status}`} /><div><h2>{workspace.name}</h2><code>{workspace.directory}</code><span>Remote port {workspace.remotePort}</span></div><div className="status"><strong>{statusName(current.status)}</strong><small>{current.message}</small></div></div>
           <div className="workspace-buttons"><button title={serverRunning ? "Server is already running" : "Start server"} disabled={busy || serverRunning} onClick={() => void action(workspace, "startServer")}><Play size={14} /> Start server</button><button disabled={busy} onClick={() => void action(workspace, "startClient")}><Laptop size={14} /> Start client</button><button className="stop" disabled={busy} onClick={() => void action(workspace, "stopServer")}><CircleStop size={14} /> Stop server</button><span /><button title="Edit workspace" onClick={() => setWorkspaceDialog(workspace)}><Pencil size={14} /></button><button title="Delete workspace" onClick={() => void removeWorkspace(workspace)}><Trash2 size={14} /></button></div>
         </article>; })}{workspaces.length === 0 && <div className="workspace-empty">No workspaces configured for this connection.</div>}</div>
+        <section className="tunnel-section">
+          <header><div><Cable size={16} /><div><h2>SSH port tunnels</h2><p>Forward a local port to the same port on {connection.host}.</p></div></div><form onSubmit={(event) => void addPortTunnel(event)}><input aria-label="Tunnel port" required type="number" min="1" max="65535" value={newTunnelPort} onChange={(event) => setNewTunnelPort(event.target.value)} placeholder="Port" /><button className="primary"><Plus size={14} /> Add port</button></form></header>
+          <div className="tunnel-list">{connectionTunnels.map((item) => { const current = tunnelRuntimes[item.id] ?? { status: "idle", message: "Stopped" }; const busy = current.status === "working"; const running = current.status === "running"; return <div className="tunnel-row" key={item.id}><div className={`status-dot ${current.status}`} /><div className="tunnel-address"><strong>localhost:{item.port}</strong><small>→ remote localhost:{item.port}</small></div><div className="tunnel-status"><strong>{tunnelStatusName(current.status)}</strong><small>{current.message}</small></div><button disabled={busy || running} onClick={() => void tunnelAction(item, "startPortTunnel")}><Play size={14} /> Run</button><button className="stop" disabled={busy || !running} onClick={() => void tunnelAction(item, "stopPortTunnel")}><CircleStop size={14} /> Stop</button><button title="Delete tunnel" disabled={busy} onClick={() => void removePortTunnel(item)}><Trash2 size={14} /></button></div>; })}{connectionTunnels.length === 0 && <div className="tunnel-empty">No ports configured.</div>}</div>
+        </section>
       </section>}
     </main>
     {bridgeReady && connectionDialog && <ConnectionDialog value={connectionDialog} onClose={() => setConnectionDialog(undefined)} onSave={async (value) => { const next = await window.gateway.saveConnection(value); setState(next); setSelected(value.id ?? next.connections.at(-1)?.id); setConnectionDialog(undefined); }} />}
@@ -64,3 +91,4 @@ function WorkspaceDialog({ value, connectionId, onClose, onSave }: { value: Part
 }
 
 function statusName(status: GatewayRuntime["status"]): string { return { idle: "Stopped", working: "In progress", server: "Server ready", client: "Client running", error: "Failed" }[status]; }
+function tunnelStatusName(status: GatewayTunnelRuntime["status"]): string { return { idle: "Stopped", working: "Connecting", running: "Running", error: "Failed" }[status]; }

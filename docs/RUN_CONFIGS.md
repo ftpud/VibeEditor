@@ -1,0 +1,9 @@
+# Run Configurations
+
+Run Configurations are UTF-8 shell-script files stored by Core alongside Useful Files; no files are added to the workspace. Workspace-local configurations live in `$REMOTE_IDE_STATE_DIR/run-configs/local/<workspace-hash>/<name>.sh` and global configurations in `$REMOTE_IDE_STATE_DIR/run-configs/global/<name>.sh`. When `REMOTE_IDE_STATE_DIR` is unset, the state root is `~/.remote-ide/workspaces`. The workspace hash is SHA-256 of the root workspace path, so local configurations remain shared across that workspace's tasks. The file body is passed faithfully to the user's interactive terminal shell. Merely listing or opening a configuration never executes it.
+
+Names are plain file names (no directory separators); `.sh` is added by Vibe Editor and omitted from the displayed name. Global and local configurations with the same name are both retained and identified by scope; neither silently overrides the other.
+
+Local configurations run with the active workspace/task as their current directory. Global configurations run from the user's home directory. They inherit Core's environment and use the same cross-platform PTY implementation as ordinary terminals. Each configuration owns one dedicated terminal. Run rejects a duplicate active invocation; Stop terminates its PTY/process tree; Restart waits for that terminal to exit and then starts exactly one new run. Completed terminal output remains attachable for the lifetime of Core, including renderer reconnects.
+
+Create configurations from the play-plus button beside the existing `+` in either Global or Local section of Useful Files. Every discovered configuration is pinned to the right of the bottom tool bar. Click it to open its terminal (or run it when it has no terminal); right-click for Open Terminal, Run, Stop, and Restart.

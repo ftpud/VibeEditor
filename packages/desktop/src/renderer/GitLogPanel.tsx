@@ -1,5 +1,5 @@
 import { DiffEditor } from "@monaco-editor/react";
-import { ChevronDown, ChevronRight, FileDiff, GitBranch, GitCompareArrows, RefreshCw, Search } from "lucide-react";
+import { ChevronDown, ChevronRight, ClipboardPaste, FileDiff, GitBranch, GitCommitVertical, GitCompareArrows, RefreshCw, Search } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import type { GitBranch as Branch, GitCommit, GitCommitFile } from "@remote-ide/protocol";
 import type { CoreClient } from "./client";
@@ -19,11 +19,13 @@ export function GitLogPanel({ client, height, onResizeStart }: Props) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [query, setQuery] = useState("");
-  const [menu, setMenu] = useState<{ x: number; y: number; reference: string; label: string; path?: string }>();
+  const [branchQuery, setBranchQuery] = useState("");
+  const [menu, setMenu] = useState<{ x: number; y: number; reference: string; label: string; path?: string; commit?: boolean }>();
   const [compare, setCompare] = useState<{ reference: string; label: string; path?: string }>();
   const [hoveredLane, setHoveredLane] = useState<string>();
   const filteredCommits = commits.filter((item) => `${item.subject} ${item.shortHash} ${item.hash} ${item.author} ${(item.refs ?? []).join(" ")}`.toLowerCase().includes(query.trim().toLowerCase()));
   const graph = useMemo(() => buildCommitGraph(commits), [commits]);
+  const visibleBranches = branches.filter((item) => item.name.toLowerCase().includes(branchQuery.trim().toLowerCase()));
 
   const loadBranches = async () => {
     setLoading(true);
@@ -53,13 +55,24 @@ export function GitLogPanel({ client, height, onResizeStart }: Props) {
     try { setDiff(await client.request("git.commitDiff", { hash: commit.hash, path: selected.path, ...(selected.originalPath ? { originalPath: selected.originalPath } : {}) })); }
     catch (reason) { setError(reason instanceof Error ? reason.message : "Could not load commit diff"); }
   };
+  const applyCommit = async (hash: string, createCommit: boolean) => {
+    setLoading(true); setError(""); setMenu(undefined);
+    try {
+      await client.request("git.cherryPick", { hash, commit: createCommit });
+      if (createCommit) {
+        const result = await client.request("git.log", { branch, limit: 300 });
+        setCommits(result.commits);
+      }
+    } catch (reason) { setError(reason instanceof Error ? reason.message : `Could not ${createCommit ? "cherry-pick" : "apply"} commit`); }
+    finally { setLoading(false); }
+  };
 
   return <section className="git-log-panel" style={{ height }}>
     <div className="terminal-resize-handle" onPointerDown={onResizeStart} />
-    <aside className="git-log-branches"><header><span>Branches</span><button title="Refresh branches" disabled={loading} onClick={() => void loadBranches()}><RefreshCw size={13} /></button></header><BranchGroup title="Local" branches={branches.filter((item) => !item.remote)} selected={branch} onSelect={setBranch} onContextMenu={(event, item) => { event.preventDefault(); setMenu({ x: event.clientX, y: event.clientY, reference: item.name, label: item.name }); }} /><BranchGroup title="Remote" branches={branches.filter((item) => item.remote)} selected={branch} onSelect={setBranch} onContextMenu={(event, item) => { event.preventDefault(); setMenu({ x: event.clientX, y: event.clientY, reference: item.name, label: item.name }); }} /></aside>
-    <section className="git-log-commits"><header><span>Log {branch}</span><label className="git-commit-search"><Search size={12} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search commits" /></label></header><div>{filteredCommits.map((item) => <button className={commit?.hash === item.hash ? "selected" : ""} key={item.hash} onClick={() => void selectCommit(item)} onContextMenu={(event) => { event.preventDefault(); setMenu({ x: event.clientX, y: event.clientY, reference: item.hash, label: `${item.shortHash} ${item.subject}` }); }}><CommitGraph row={graph.rows.get(item.hash)} width={graph.width} hoveredLane={hoveredLane} onHover={setHoveredLane} /><span className="commit-subject"><span>{item.subject}</span>{item.refs?.map((ref) => <small className="commit-ref" key={ref}>{ref}</small>)}</span><span className="commit-meta">{item.shortHash} · {item.author}</span><time>{new Date(item.date).toLocaleString()}</time></button>)}</div></section>
-    <section className="git-log-details"><header>{commit ? <><span>{commit.subject}</span><code>{commit.shortHash}</code></> : <span>Commit details</span>}</header>{error && <div className="git-log-error">{error}</div>}<div className="commit-files">{files.map((item) => <button className={file?.path === item.path ? "selected" : ""} key={`${item.status}:${item.path}`} onClick={() => void selectFile(item)} onContextMenu={(event) => { event.preventDefault(); if (commit) setMenu({ x: event.clientX, y: event.clientY, reference: commit.hash, label: `${commit.shortHash} · ${item.path}`, path: item.path }); }}><FileDiff size={13} /><span>{item.path}</span><code>{item.status}</code></button>)}</div><div className="commit-diff">{file && diff ? <DiffEditor original={diff.originalContent} modified={diff.modifiedContent} language={languageFor(file.path)} beforeMount={configureMonacoThemes} theme={monacoTheme()} options={{ automaticLayout: true, readOnly: true, renderSideBySide: true, minimap: { enabled: false }, fontSize: 11, scrollBeyondLastLine: false }} /> : <div className="git-log-empty">{commit ? "Select a changed file" : "Select a commit"}</div>}</div></section>
-    {menu && <div className="context-menu-layer" onMouseDown={() => setMenu(undefined)}><div className="context-menu" style={{ left: Math.min(menu.x, window.innerWidth - 220), top: Math.min(menu.y, window.innerHeight - 50) }} onMouseDown={(event) => event.stopPropagation()}><button onClick={() => { setCompare({ reference: menu.reference, label: menu.label, ...(menu.path ? { path: menu.path } : {}) }); setMenu(undefined); }}><GitCompareArrows size={14} /><span>Compare with Local</span></button></div></div>}
+    <aside className="git-log-branches"><header><span>Branches</span><button title="Refresh branches" disabled={loading} onClick={() => void loadBranches()}><RefreshCw size={13} /></button></header><label className="git-branch-search"><Search size={12} /><input value={branchQuery} onChange={(event) => setBranchQuery(event.target.value)} placeholder="Find branch" /></label><div className="git-branch-tree"><BranchGroup title="Local" branches={visibleBranches.filter((item) => !item.remote)} selected={branch} onSelect={setBranch} onContextMenu={(event, item) => { event.preventDefault(); setMenu({ x: event.clientX, y: event.clientY, reference: item.name, label: item.name }); }} /><BranchGroup title="Remote" branches={visibleBranches.filter((item) => item.remote)} selected={branch} onSelect={setBranch} onContextMenu={(event, item) => { event.preventDefault(); setMenu({ x: event.clientX, y: event.clientY, reference: item.name, label: item.name }); }} /></div></aside>
+    <section className="git-log-commits"><header><span>Log {branch}</span><label className="git-commit-search"><Search size={12} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search commits" /></label></header><div>{filteredCommits.map((item) => <button className={commit?.hash === item.hash ? "selected" : ""} key={item.hash} onClick={() => void selectCommit(item)} onContextMenu={(event) => { event.preventDefault(); setMenu({ x: event.clientX, y: event.clientY, reference: item.hash, label: `${item.shortHash} ${item.subject}`, commit: true }); }}><CommitGraph row={graph.rows.get(item.hash)} width={graph.width} hoveredLane={hoveredLane} onHover={setHoveredLane} /><span className="commit-subject"><span>{item.subject}</span>{item.refs?.map((ref) => <small className="commit-ref" key={ref}>{ref}</small>)}</span><span className="commit-meta">{item.shortHash} · {item.author}</span><time>{new Date(item.date).toLocaleString()}</time></button>)}</div></section>
+    <section className="git-log-details"><header>{commit ? <><span>{commit.subject}</span><code>{commit.shortHash}</code></> : <span>Commit details</span>}</header>{error && <div className="git-log-error">{error}</div>}<div className="commit-files">{files.map((item) => <button className={file?.path === item.path ? "selected" : ""} key={`${item.status}:${item.path}`} onClick={() => void selectFile(item)} onContextMenu={(event) => { event.preventDefault(); if (commit) setMenu({ x: event.clientX, y: event.clientY, reference: commit.hash, label: `${commit.shortHash} · ${item.path}`, path: item.path }); }}><FileDiff size={13} /><span>{item.path}</span><code>{item.status}</code></button>)}</div><div className="commit-diff">{file && diff ? <DiffEditor original={diff.originalContent} modified={diff.modifiedContent} language={languageFor(file.path)} beforeMount={configureMonacoThemes} theme={monacoTheme()} options={{ automaticLayout: true, readOnly: true, renderSideBySide: false, minimap: { enabled: false }, fontSize: 11, scrollBeyondLastLine: false }} /> : <div className="git-log-empty">{commit ? "Select a changed file" : "Select a commit"}</div>}</div></section>
+    {menu && <div className="context-menu-layer" onMouseDown={() => setMenu(undefined)}><div className="context-menu" style={{ left: Math.min(menu.x, window.innerWidth - 220), top: Math.min(menu.y, window.innerHeight - (menu.commit ? 105 : 50)) }} onMouseDown={(event) => event.stopPropagation()}>{menu.commit && <><button disabled={loading} onClick={() => void applyCommit(menu.reference, true)}><GitCommitVertical size={14} /><span>Cherry-pick Commit</span></button><button disabled={loading} onClick={() => void applyCommit(menu.reference, false)}><ClipboardPaste size={14} /><span>Apply to Working Tree</span></button></>}<button onClick={() => { setCompare({ reference: menu.reference, label: menu.label, ...(menu.path ? { path: menu.path } : {}) }); setMenu(undefined); }}><GitCompareArrows size={14} /><span>Compare with Local</span></button></div></div>}
     {compare && <GitCompareDialog client={client} reference={compare.reference} label={compare.label} path={compare.path} onClose={() => setCompare(undefined)} />}
   </section>;
 }
@@ -116,7 +129,31 @@ function CommitGraph({ row, width, hoveredLane, onHover }: { row?: CommitGraphRo
 
 function BranchGroup({ title, branches, selected, onSelect, onContextMenu }: { title: string; branches: Branch[]; selected: string; onSelect(name: string): void; onContextMenu(event: React.MouseEvent, branch: Branch): void }) {
   const [open, setOpen] = useState(true);
-  return <div className="branch-group"><button className="branch-group-title" onClick={() => setOpen((value) => !value)}>{open ? <ChevronDown size={13} /> : <ChevronRight size={13} />}<span>{title}</span><small>{branches.length}</small></button>{open && branches.map((item) => <button className={`branch-row ${selected === item.name ? "selected" : ""}`} key={item.name} onClick={() => onSelect(item.name)} onContextMenu={(event) => onContextMenu(event, item)}><GitBranch size={13} /><span>{item.name}</span>{item.current && <small>current</small>}</button>)}</div>;
+  const tree = useMemo(() => branchTree(branches), [branches]);
+  return <div className="branch-group"><button className="branch-group-title" onClick={() => setOpen((value) => !value)}>{open ? <ChevronDown size={13} /> : <ChevronRight size={13} />}<span>{title}</span><small>{branches.length}</small></button>{open && tree.map((node) => <BranchTreeNode key={node.path} node={node} depth={0} selected={selected} onSelect={onSelect} onContextMenu={onContextMenu} />)}</div>;
+}
+
+type BranchNode = { name: string; path: string; branch?: Branch; children: BranchNode[] };
+
+function branchTree(branches: Branch[]): BranchNode[] {
+  const roots: BranchNode[] = [];
+  for (const branch of [...branches].sort((left, right) => left.name.localeCompare(right.name))) {
+    let nodes = roots; let path = "";
+    for (const [index, part] of branch.name.split("/").entries()) {
+      path = path ? `${path}/${part}` : part;
+      let node = nodes.find((item) => item.name === part);
+      if (!node) { node = { name: part, path, children: [] }; nodes.push(node); }
+      if (index === branch.name.split("/").length - 1) node.branch = branch;
+      nodes = node.children;
+    }
+  }
+  return roots;
+}
+
+function BranchTreeNode({ node, depth, selected, onSelect, onContextMenu }: { node: BranchNode; depth: number; selected: string; onSelect(name: string): void; onContextMenu(event: React.MouseEvent, branch: Branch): void }) {
+  const [open, setOpen] = useState(true);
+  const folder = node.children.length > 0;
+  return <>{<button className={`branch-row ${node.branch && selected === node.branch.name ? "selected" : ""}`} style={{ paddingLeft: 18 + depth * 13 }} onClick={() => node.branch ? onSelect(node.branch.name) : setOpen((value) => !value)} onContextMenu={(event) => { if (node.branch) onContextMenu(event, node.branch); }}>{folder ? (open ? <ChevronDown size={13} /> : <ChevronRight size={13} />) : <GitBranch size={13} />}<span>{node.name}</span>{node.branch?.current && <small>current</small>}</button>}{folder && open && node.children.map((child) => <BranchTreeNode key={child.path} node={child} depth={depth + 1} selected={selected} onSelect={onSelect} onContextMenu={onContextMenu} />)}</>;
 }
 
 function languageFor(filePath: string): string {

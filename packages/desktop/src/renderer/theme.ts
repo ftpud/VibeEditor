@@ -1,14 +1,15 @@
 import type { Monaco } from "@monaco-editor/react";
+import { readSetting } from "./settings";
 
 export type AppTheme = "dark" | "light";
 export type HighlightTheme = "default" | "ftpud";
 
 export function currentTheme(): AppTheme {
-  return localStorage.getItem("theme") === "light" ? "light" : "dark";
+  return readSetting("theme") === "light" ? "light" : "dark";
 }
 
 export function currentHighlightTheme(): HighlightTheme {
-  return localStorage.getItem("highlightTheme") === "ftpud" ? "ftpud" : "default";
+  return readSetting("highlightTheme") === "ftpud" ? "ftpud" : "default";
 }
 
 export function monacoTheme(appTheme = currentTheme(), highlightTheme = currentHighlightTheme()): "light" | "vs-dark" | "ftpud" {

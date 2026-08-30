@@ -11,6 +11,9 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@agentclientprotocol/codex-acp": "^1.6.2",
+    "@agentclientprotocol/sdk": "^1.4.0",
+    "@remote-ide/acp": "0.1.0",
     "@remote-ide/protocol": "0.1.0",
     "chokidar": "^4.0.3",
     "fast-xml-parser": "^5.2.5",

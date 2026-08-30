@@ -21,14 +21,15 @@ type Props = {
   onClose(tab: TerminalTab): void;
   onResizeStart(event: React.PointerEvent): void;
   registerWriter(terminalId: string, writer?: (data: string) => void): void;
+  highlightedTerminalIds?: Set<string>;
 };
 
-export function TerminalPanel({ theme, fontFamily, fontSize, lineHeight, client, group, height, onActivate, onCreate, onClose, onResizeStart, registerWriter }: Props) {
+export function TerminalPanel({ theme, fontFamily, fontSize, lineHeight, client, group, height, onActivate, onCreate, onClose, onResizeStart, registerWriter, highlightedTerminalIds }: Props) {
   return <section className="terminal-panel" style={{ height }}>
     <div className="terminal-resize-handle" onPointerDown={onResizeStart} />
     <div className="terminal-tabs" role="tablist">
-      {group.tabs.map((tab) => <button key={tab.id} className={`terminal-tab ${tab.id === group.activeTabId ? "active" : ""}`} onClick={() => onActivate(tab.id)}>
-        <span>{tab.title}{tab.exited ? " (exited)" : ""}</span>
+      {group.tabs.map((tab) => <button key={tab.id} className={`terminal-tab ${tab.id === group.activeTabId ? "active" : ""} ${highlightedTerminalIds?.has(tab.terminalId) ? "run-config-running" : ""}`} onClick={() => onActivate(tab.id)}>
+        <span>{tab.title}{tab.status === "exited" ? " (exited)" : tab.status === "unavailable" ? " (unavailable)" : ""}</span>
         <span className="close" title={`Close ${tab.title}`} onClick={(event) => { event.stopPropagation(); onClose(tab); }}><X size={13} /></span>
       </button>)}
       <button className="terminal-action" title="New terminal" onClick={onCreate}><Plus size={15} /></button>
@@ -47,7 +48,7 @@ function TerminalView({ theme, fontFamily, fontSize, lineHeight, client, tab, ac
 
   const paste = (text: string) => {
     const cleaned = text.replace(/[\u0000\uFEFF]/g, "").replace(/(?:\r\n|\r|\n)+$/, "");
-    if (cleaned) void client.request("terminal.input", { terminalId: tab.terminalId, data: cleaned });
+    if (cleaned && tab.status === "running") void client.request("terminal.input", { terminalId: tab.terminalId, data: cleaned });
     terminalRef.current?.focus();
   };
 
@@ -68,7 +69,8 @@ function TerminalView({ theme, fontFamily, fontSize, lineHeight, client, tab, ac
     terminal.open(container);
     terminal.attachCustomKeyEventHandler((event) => {
       if (event.type !== "keydown" || (!event.ctrlKey && !event.metaKey)) return true;
-      if (event.key.toLowerCase() === "c" && terminal.hasSelection()) { void window.desktop?.writeClipboard(terminal.getSelection()); return false; }
+      if (event.key.toLowerCase() === "c" && terminal.hasSelection()) { event.preventDefault(); void window.desktop?.writeClipboard(terminal.getSelection()); return false; }
+      if (event.key.toLowerCase() === "v") { event.preventDefault(); void window.desktop?.readClipboard().then(paste); return false; }
       return true;
     });
     const handlePaste = (event: ClipboardEvent) => {
@@ -80,11 +82,11 @@ function TerminalView({ theme, fontFamily, fontSize, lineHeight, client, tab, ac
     terminalRef.current = terminal;
     fitRef.current = fit;
     registerWriter(tab.terminalId, (data) => terminal.write(data));
-    const input = terminal.onData((data) => { void client.request("terminal.input", { terminalId: tab.terminalId, data }); });
+    const input = terminal.onData((data) => { if (tab.status === "running") void client.request("terminal.input", { terminalId: tab.terminalId, data }); });
     const observer = new ResizeObserver(() => {
       if (!container.offsetParent) return;
       fit.fit();
-      if (terminal.cols > 0 && terminal.rows > 0) void client.request("terminal.resize", { terminalId: tab.terminalId, cols: terminal.cols, rows: terminal.rows });
+      if (tab.status === "running" && terminal.cols > 0 && terminal.rows > 0) void client.request("terminal.resize", { terminalId: tab.terminalId, cols: terminal.cols, rows: terminal.rows });
     });
     observer.observe(container);
     requestAnimationFrame(() => { fit.fit(); terminal.focus(); });
@@ -92,7 +94,7 @@ function TerminalView({ theme, fontFamily, fontSize, lineHeight, client, tab, ac
       container.removeEventListener("paste", handlePaste, true);
       observer.disconnect(); input.dispose(); registerWriter(tab.terminalId); terminal.dispose();
     };
-  }, [client, fontFamily, fontSize, lineHeight, registerWriter, tab.terminalId, theme]);
+  }, [client, fontFamily, fontSize, lineHeight, registerWriter, tab.status, tab.terminalId, theme]);
 
   useEffect(() => {
     if (!active) return;
