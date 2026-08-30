@@ -424,11 +424,11 @@ button { color: inherit; }
 .tabs { height: 35px; flex: 0 0 35px; display: flex; background: #2b2d30; border-bottom: 1px solid #393b40; overflow-x: auto; overflow-y: hidden; }
 .tab { height: 34px; max-width: 180px; min-width: 100px; display: flex; align-items: center; gap: 6px; padding: 0 7px 0 10px; border: 0; border-right: 1px solid #393b40; background: #2b2d30; color: #a8aaaf; cursor: pointer; }
 .tab:focus-visible { outline: 2px solid #3574f0; outline-offset: -2px; }
-.tab-action, .tab .close { display: inline-flex; flex: 0 0 auto; align-items: center; justify-content: center; padding: 2px; border: 0; background: transparent; color: inherit; cursor: pointer; }
-.tab-action:hover, .tab .close:hover { color: #f0f0f0; }
-.tab-pinned-icon { flex: 0 0 auto; color: #e2b86b; }
+.tab .close { display: inline-flex; flex: 0 0 auto; align-items: center; justify-content: center; padding: 2px; border: 0; background: transparent; color: inherit; cursor: pointer; }
+.tab .close:hover { color: #f0f0f0; }
 .tab:hover { background: #323438; color: #d5d7da; }
 .tab.active { background: #1e1f22; color: #f0f0f0; border-bottom: 2px solid #3574f0; }
+.tab.pinned { box-shadow: inset 0 2px 0 #c49a4a; }
 .tab.dragging { opacity: .4; }
 .tab-file-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .tab-file-name.git-modified { color: #e2b86b; }
@@ -691,12 +691,14 @@ button { color: inherit; }
 .context-menu button:disabled { opacity: .4; cursor: default; }
 .context-menu button.danger { color: #e2858b; }
 .context-menu button.danger:hover { background: #6a3035; color: white; }
+.context-menu-separator { height: 1px; margin: 4px 5px; background: #45484e; }
 .editor-git-menu { width: 220px; }
 .context-submenu-trigger { position: relative; }
 .context-submenu-trigger > button > span { flex: 1; }
 .context-submenu { display: none; position: absolute; top: -4px; left: calc(100% - 2px); }
-.context-submenu-trigger:hover > .context-submenu { display: block; }
+.context-submenu-trigger:hover > .context-submenu, .context-submenu-trigger:focus-within > .context-submenu { display: block; }
 .color-submenu { width: 170px; }
+.copy-submenu { width: 238px; }
 .file-color-swatch { width: 12px; height: 12px; flex: 0 0 12px; border: 1px solid rgba(255,255,255,.18); border-radius: 2px; }
 .file-color-swatch.red { background: #b94f57; }
 .file-color-swatch.orange { background: #c1743f; }
