@@ -229,8 +229,8 @@ button { color: inherit; }
 .ai-status.done { color: #70b879; }
 .ai-status.error { color: #dc747c; }
 .ai-panel { min-height: 0; flex: 1; display: flex; flex-direction: column; }
-.ai-toolbar { padding: 7px; display: grid; grid-template-columns: minmax(0, .7fr) minmax(0, 1fr) 38px 28px; gap: 6px; align-items: end; border-bottom: 1px solid #393b40; }
-.ai-toolbar.with-autopilot { grid-template-columns: minmax(0, .7fr) minmax(0, 1fr) 38px 38px 28px; }
+.ai-toolbar { padding: 7px; display: grid; grid-template-columns: minmax(0, .7fr) minmax(0, 1fr) 38px 52px; gap: 6px; align-items: end; border-bottom: 1px solid #393b40; }
+.ai-toolbar.with-autopilot { grid-template-columns: minmax(0, .7fr) minmax(0, 1fr) 38px 38px 52px; }
 .ai-autopilot { min-width: 0; display: grid; gap: 3px; justify-items: center; }
 .ai-autopilot > span { color: #85888e; font-size: .6923rem; font-weight: 600; letter-spacing: .03em; text-transform: uppercase; }
 .ai-autopilot .ai-switch { margin: 6px 0; }
@@ -272,6 +272,12 @@ button { color: inherit; }
 .ai-toolbar > button.ai-interrupt { background: #71383d; color: #ffdadd; }
 .ai-toolbar > button.ai-interrupt:hover { background: #91434a; color: white; }
 .ai-toolbar > button:disabled { opacity: .35; cursor: default; }
+.ai-session-control { height: 29px; display: flex; align-items: center; gap: 6px; }
+.ai-session-control > button { width: 28px; height: 29px; display: flex; align-items: center; justify-content: center; gap: 1px; border: 0; border-radius: 4px; background: transparent; color: #a6a9ae; cursor: pointer; }
+.ai-session-control > button:hover:not(:disabled), .ai-session-control > button.active { background: #35383d; color: #e0e2e5; }
+.ai-session-control > button.ai-interrupt { background: #71383d; color: #ffdadd; }
+.ai-session-control > button.ai-interrupt:hover { background: #91434a; color: white; }
+.ai-session-control > button:disabled { opacity: .35; cursor: default; }
 .ai-settings-chevron { transition: transform .15s ease; }
 .ai-toolbar > button.active .ai-settings-chevron { transform: rotate(180deg); }
 .ai-settings { max-height: min(440px, 55%); overflow: auto; border-bottom: 1px solid #393b40; background: #222428; }
