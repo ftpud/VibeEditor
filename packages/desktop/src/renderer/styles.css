@@ -549,15 +549,25 @@ button { color: inherit; }
 .problems-panel { min-height: 120px; max-height: 520px; flex: 0 0 auto; position: relative; display: flex; flex-direction: column; border-top: 1px solid #393b40; background: #1e1f22; }
 .problems-panel > header { height: 30px; flex: 0 0 30px; padding: 0 7px 0 10px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid #393b40; background: #2b2d30; color: #c8cace; font-size: 0.8462rem; font-weight: 600; }
 .problems-panel > header > div { display: flex; align-items: center; gap: 8px; }
-.problem-count { display: flex; align-items: center; gap: 3px; font-weight: 400; }
-.problem-count.error, .problems-list .error { color: #df666d; }
-.problem-count.warning, .problems-list .warning { color: #d5aa5f; }
+.problem-toggle { gap: 3px; font-weight: 400; opacity: .5; }
+.problem-toggle.active { opacity: 1; }
+.problem-toggle.error, .problems-list .error { color: #df666d; }
+.problem-toggle.warning, .problems-list .warning { color: #d5aa5f; }
 .problems-panel header button { width: 26px; height: 25px; display: grid; place-items: center; border: 0; border-radius: 3px; background: transparent; color: #afb2b7; cursor: pointer; }
+.problems-panel header .problem-toggle { width: auto; padding: 0 5px; display: flex; }
 .problems-panel header button:hover:not(:disabled) { background: #3a3c41; color: white; }
 .problems-panel header button:disabled { opacity: .4; }
-.problems-list { min-height: 0; flex: 1; overflow: auto; }
+.problems-filter { height: 30px; flex: 0 0 30px; padding: 4px 8px; display: flex; align-items: center; gap: 5px; border-bottom: 1px solid #393b40; color: #85888e; }
+.problems-filter input { min-width: 0; flex: 1; height: 21px; padding: 0; border: 0; outline: 0; background: transparent; color: #d4d6d9; font: inherit; }
+.problems-filter input::placeholder { color: #777a80; }
+.problems-filter button { width: 21px; height: 21px; display: grid; place-items: center; border: 0; border-radius: 3px; background: transparent; color: #8d9096; cursor: pointer; }
+.problems-filter button:hover { background: #34363a; color: white; }
+.problems-filter:focus-within { box-shadow: inset 0 0 0 1px #3574f0; }
+.problems-list { min-height: 0; flex: 1; overflow: auto; outline: none; }
 .problems-list > button { width: 100%; min-height: 27px; padding: 4px 9px; display: grid; grid-template-columns: 16px minmax(0, 1fr) auto; gap: 7px; align-items: center; border: 0; border-bottom: 1px solid #292b2f; background: transparent; color: #c8cace; text-align: left; cursor: pointer; }
-.problems-list > button:hover { background: #34363a; }
+.problems-list > button:hover, .problems-list > button[aria-selected="true"] { background: #34363a; }
+.problems-list:focus-visible { box-shadow: inset 0 0 0 2px #6ea2f5; }
+.problems-panel button:focus-visible { outline: 2px solid #6ea2f5; outline-offset: -2px; }
 .problem-message { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .problem-location { color: #85888e; font: 10px Menlo, Monaco, Consolas, monospace; white-space: nowrap; }
 .problems-empty { padding: 14px 10px; color: #7f8288; font-size: 0.8462rem; }
@@ -987,6 +997,7 @@ button { color: inherit; }
 :root[data-theme="light"] .git-log-commits > div > button,
 :root[data-theme="light"] .git-history-content > aside > button { color: #3c3f44; border-color: #e0e2e5; }
 :root[data-theme="light"] .problems-list > button:hover,
+:root[data-theme="light"] .problems-list > button[aria-selected="true"],
 :root[data-theme="light"] .branch-row:hover,
 :root[data-theme="light"] .branch-row.selected,
 :root[data-theme="light"] .git-log-commits > div > button:hover,
@@ -995,6 +1006,9 @@ button { color: inherit; }
 :root[data-theme="light"] .commit-files > button.selected,
 :root[data-theme="light"] .git-history-content > aside > button:hover,
 :root[data-theme="light"] .git-history-content > aside > button.selected { background: #e7edf7; }
+:root[data-theme="light"] .problems-filter { border-color: #d5d7da; color: #70747b; }
+:root[data-theme="light"] .problems-filter input { color: #2b2d30; }
+:root[data-theme="light"] .problems-filter button:hover { background: #e1e3e6; color: #202124; }
 :root[data-theme="light"] .git-log-branches,
 :root[data-theme="light"] .git-log-commits,
 :root[data-theme="light"] .commit-files,

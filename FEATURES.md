@@ -65,7 +65,7 @@ Vibe Editor is a remote-workspace IDE: an Electron/React/Monaco desktop client t
 - JDT Language Server integration: diagnostics, semantic highlighting, completion (objects/methods/fields/local variables), import edits, go-to-declaration, and find-usages.
 - Java run configuration discovery (classes with `public static void main`), plus Run/Debug/Stop actions.
 - Debugging via `jdb`: breakpoints, stepping, local variable inspection.
-- Java and Problems tool windows show Maven build/run output, debugger controls, and compiler diagnostics.
+- Java and Problems tool windows show Maven build/run output, debugger controls, and compiler diagnostics; Problems supports text/severity filtering and keyboard navigation.
 - A pinned Temurin Java 21 runtime (under `.tools/`) is bundled specifically to run JDT LS.
 
 ## Markdown, Useful Files & HTTP
