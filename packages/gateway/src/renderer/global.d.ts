@@ -5,10 +5,12 @@ type GatewayState = { connections: GatewayConnection[]; workspaces: GatewayWorks
 type GatewayRuntime = { status: "idle" | "working" | "server" | "client" | "error"; message: string };
 type GatewayTunnelRuntime = { status: "idle" | "working" | "running" | "error"; message: string };
 type GatewayConnectionRuntime = { status: "unknown" | "reconnecting" | "online" | "slow" | "offline"; message: string; latencyMs?: number };
+type GatewayRepositorySettings = { repository: string; branch: string; autoUpdate: boolean };
 
 interface Window {
   gateway: {
-    get(): Promise<{ state: GatewayState; runtimes: Record<string, GatewayRuntime>; tunnelRuntimes: Record<string, GatewayTunnelRuntime>; connectionRuntimes: Record<string, GatewayConnectionRuntime> }>;
+    get(): Promise<{ state: GatewayState; repository: GatewayRepositorySettings; runtimes: Record<string, GatewayRuntime>; tunnelRuntimes: Record<string, GatewayTunnelRuntime>; connectionRuntimes: Record<string, GatewayConnectionRuntime> }>;
+    saveRepository(value: GatewayRepositorySettings): Promise<GatewayRepositorySettings>;
     refreshStatuses(connectionId?: string): Promise<void>;
     saveConnection(value: Partial<GatewayConnection> & { name: string; host: string; port: number; username: string; password: string }): Promise<GatewayState>;
     deleteConnection(id: string): Promise<GatewayState>;
