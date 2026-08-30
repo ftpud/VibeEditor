@@ -8,6 +8,7 @@ contextBridge.exposeInMainWorld("gateway", {
   testConnection: (value: unknown) => ipcRenderer.invoke("gateway:testConnection", value),
   saveConnection: (value: unknown) => ipcRenderer.invoke("gateway:saveConnection", value),
   deleteConnection: (id: string) => ipcRenderer.invoke("gateway:deleteConnection", id),
+  discoverWorkspaceDirectories: (connectionId: string) => ipcRenderer.invoke("gateway:discoverWorkspaceDirectories", connectionId),
   saveWorkspace: (value: unknown) => ipcRenderer.invoke("gateway:saveWorkspace", value),
   deleteWorkspace: (id: string) => ipcRenderer.invoke("gateway:deleteWorkspace", id),
   savePortTunnel: (value: unknown) => ipcRenderer.invoke("gateway:savePortTunnel", value),
