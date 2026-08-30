@@ -78,6 +78,24 @@ export class AiTimerService {
 
   next(workspace: string): Promise<AiContinuationTimer | undefined> { return this.store.next(workspace); }
 
+  async cancelNext(workspace: string): Promise<boolean> {
+    const timer = await this.store.next(workspace);
+    if (!timer) return false;
+    await this.store.remove(timer.id);
+    const handle = this.handles.get(timer.id);
+    if (handle) clearTimeout(handle);
+    this.handles.delete(timer.id);
+    this.onChanged(timer.workspace);
+    return true;
+  }
+
+  async fireNext(workspace: string): Promise<boolean> {
+    const timer = await this.store.next(workspace);
+    if (!timer) return false;
+    await this.fire(timer, true);
+    return true;
+  }
+
   async cancelWorkspace(workspace: string): Promise<void> {
     for (const timer of await this.store.removeWorkspace(workspace)) {
       const handle = this.handles.get(timer.id);
@@ -93,9 +111,11 @@ export class AiTimerService {
     this.handles.set(timer.id, setTimeout(() => { void this.fire(timer); }, Math.min(delay, 2_147_483_647)));
   }
 
-  private async fire(timer: AiContinuationTimer): Promise<void> {
+  private async fire(timer: AiContinuationTimer, immediately = false): Promise<void> {
+    const handle = this.handles.get(timer.id);
+    if (immediately && handle) clearTimeout(handle);
     this.handles.delete(timer.id);
-    if (new Date(timer.dueAt).getTime() > Date.now()) { this.arm(timer); return; }
+    if (!immediately && new Date(timer.dueAt).getTime() > Date.now()) { this.arm(timer); return; }
     const current = (await this.store.list()).find((item) => item.id === timer.id);
     if (!current) return;
     await this.store.remove(timer.id);

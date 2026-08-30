@@ -341,6 +341,14 @@ async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStor
       }
     }
     case "tasks.merge": return tasks.merge(request.payload.taskId, request.payload.strategy);
+    case "tasks.timer.cancel": {
+      const target = await permissionTargetWorkspace(tasks, rootWorkspace, request.payload.taskId);
+      return { cancelled: await aiTimers.cancelNext(target) };
+    }
+    case "tasks.timer.fire": {
+      const target = await permissionTargetWorkspace(tasks, rootWorkspace, request.payload.taskId);
+      return { fired: await aiTimers.fireNext(target) };
+    }
     case "tasks.delete": {
       await aiTimers.cancelWorkspace(tasks.taskPath(request.payload.taskId));
       const result = await tasks.delete(request.payload.taskId);
@@ -384,7 +392,7 @@ async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStor
       const summarize = async (target: string) => {
         const summary = summarizeAiSessions(await Promise.all(acp.list().map((item) => acp.get(item.id).get(target))));
         const timer = await aiTimers.next(target);
-        return { ...summary, ...(timer && summary.status !== "in_progress" && summary.status !== "user_prompt" ? { status: "waiting" as const, waitingUntil: timer.dueAt } : {}), ...await new GitService(target).diffStats() };
+        return { ...summary, ...(timer ? { ...(summary.status !== "in_progress" && summary.status !== "user_prompt" ? { status: "waiting" as const } : {}), waitingUntil: timer.dueAt } : {}), ...await new GitService(target).diffStats() };
       };
       const entries = await Promise.all(registry.tasks.map(async (task) => [task.id, await summarize(tasks.taskPath(task.id))] as const));
       return { root: await summarize(rootWorkspace), tasks: Object.fromEntries(entries) };
