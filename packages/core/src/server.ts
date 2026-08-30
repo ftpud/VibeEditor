@@ -487,6 +487,9 @@ async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStor
       return git.diff(request.payload.path, filesystem);
     }
     case "git.branches": return { branches: await git.branches() };
+    case "git.tags": return { tags: await git.tags() };
+    case "git.createTag": return { tag: await git.createTag(request.payload.name, request.payload.target) };
+    case "git.deleteTag": await git.deleteTag(request.payload.name); return {};
     case "git.checkoutBranch": return { branch: await git.checkoutBranch(request.payload.branch, request.payload.remote) };
     case "git.renameBranch": return { branch: await git.renameBranch(request.payload.branch, request.payload.newName) };
     case "git.log": return { commits: await git.log(request.payload.branch, request.payload.limit) };
