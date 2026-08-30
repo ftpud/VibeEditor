@@ -1,5 +1,5 @@
 import Editor, { DiffEditor, type Monaco } from "@monaco-editor/react";
-import { ArrowUp, ArrowUpRight, Bot, Bug, Check, ChevronDown, ChevronRight, ChevronUp, CircleAlert, Coffee, Columns2, Eye, EyeOff, File, FileCode2, FileDiff, FileText, Folder, FolderOpen, GitBranch, GitCompareArrows, GitMerge, Library, ListTodo, ListTree, LoaderCircle, LogOut, MoreVertical, Package, Palette, Pencil, Play, Plus, RefreshCw, Save, Search, Settings, ShieldAlert, Square, SquareTerminal, Trash2, X } from "lucide-react";
+import { ArrowUp, ArrowUpRight, Bot, Bug, Check, ChevronDown, ChevronRight, ChevronUp, CircleAlert, ClipboardCopy, Coffee, Columns2, Eye, EyeOff, File, FileCode2, FileDiff, FileText, Folder, FolderOpen, GitBranch, GitCompareArrows, GitMerge, Library, ListTodo, ListTree, LoaderCircle, LogOut, MoreVertical, Package, Palette, Pencil, Play, Plus, RefreshCw, Save, Search, Settings, ShieldAlert, Square, SquareTerminal, Trash2, X } from "lucide-react";
 import { Children, isValidElement, useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
 import type { AgentFile, AgentFileScope, AiConfiguration, AiModel, AiProvider, AiProviderDescriptor, AiSession, AiStatus, AiTaskSummary, AiUsage, FileColor, FileTreeNode, GitBranch as GitBranchInfo, GitDiffHunk, GitStatusEntry, GitUpstreamStatus, HttpResponse, JavaBreakpoint, JavaDebugState, JavaDiagnostic, JavaLspLocation, JavaMainClass, JavaProjectNode, JavaProjectOptions, JavaTypeSuggestion, RunConfig, RunConfigScope, SearchResult, TaskCheckpoint, TaskCheckpointFile, UsefulFile, UsefulFileScope, WorkspaceOptions, WorkspaceTask } from "@remote-ide/protocol";
 import type { editor } from "monaco-editor";
@@ -1844,6 +1844,14 @@ export function App() {
     const actions = projectTreeActions({ node });
     if (!actions[action]) return;
     if (action === "open") { void openFile(node); return; }
+    if (action === "copyRelativePath" || action === "copyAbsolutePath") {
+      const separator = activeWorkspace.includes("\\") ? "\\" : "/";
+      const absolutePath = activeWorkspace ? `${activeWorkspace.replace(/[\\/]+$/, "")}${separator}${node.path.split("/").join(separator)}` : node.path;
+      const value = action === "copyRelativePath" ? node.path : absolutePath;
+      if (!window.desktop?.writeClipboard) { setStatusMessage("Electron clipboard bridge is unavailable"); return; }
+      void window.desktop.writeClipboard(value).then(() => setStatusMessage(action === "copyRelativePath" ? "Copied workspace-relative path" : "Copied remote workspace absolute path")).catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : "Could not copy path"));
+      return;
+    }
     const parentPath = node.type === "directory" ? node.path : node.path.split("/").slice(0, -1).join("/");
     if (action === "createFile") setProjectPathDialog({ mode: "file", node, parentPath });
     else if (action === "createDirectory") setProjectPathDialog({ mode: "directory", node, parentPath });
@@ -2043,6 +2051,8 @@ export function App() {
         <button disabled={!projectTreeActions({ node: treeContextMenu.node }).createDirectory} onClick={() => { runProjectTreeAction("createDirectory", treeContextMenu.node); setTreeContextMenu(undefined); }}><Folder size={14} /><span>New Directory...</span></button>
         <button disabled={!projectTreeActions({ node: treeContextMenu.node }).rename} onClick={() => { runProjectTreeAction("rename", treeContextMenu.node); setTreeContextMenu(undefined); }}><Pencil size={14} /><span>Rename...</span></button>
         <button disabled={!projectTreeActions({ node: treeContextMenu.node }).open} onClick={() => { runProjectTreeAction("open", treeContextMenu.node); setTreeContextMenu(undefined); }}><FileText size={14} /><span>Open</span></button>
+        <button disabled={!projectTreeActions({ node: treeContextMenu.node }).copyRelativePath} onClick={() => { runProjectTreeAction("copyRelativePath", treeContextMenu.node); setTreeContextMenu(undefined); }}><ClipboardCopy size={14} /><span>Copy Workspace-Relative Path</span></button>
+        <button disabled={!projectTreeActions({ node: treeContextMenu.node }).copyAbsolutePath} onClick={() => { runProjectTreeAction("copyAbsolutePath", treeContextMenu.node); setTreeContextMenu(undefined); }}><ClipboardCopy size={14} /><span>Copy Remote Absolute Path</span></button>
         <button className="danger" disabled={!projectTreeActions({ node: treeContextMenu.node }).delete}><Trash2 size={14} /><span>Delete</span></button>
         <button onClick={() => openSearchForNode(treeContextMenu.node)}><Search size={14} /><span>Find in Files</span></button>
         {treeContextMenu.node.type === "file" && treeContextMenu.node.name === "pom.xml" && <button onClick={() => void loadMavenProject(treeContextMenu.node.path)}><Package size={14} /><span>Load as Maven Project</span></button>}

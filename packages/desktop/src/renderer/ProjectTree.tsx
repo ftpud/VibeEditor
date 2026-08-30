@@ -1,4 +1,4 @@
-import { Braces, ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, Coffee, File, FileCode2, FileJson, FileText, Folder, FolderOpen, Hash } from "lucide-react";
+import { Braces, ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, Coffee, File, FileCode2, FileJson, FileText, Folder, FolderOpen, Hash, LocateFixed } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import type { FileColor, FileTreeNode } from "@remote-ide/protocol";
 import { projectTreeActions, type ProjectTreeAction } from "./project-tree-actions";
@@ -54,6 +54,7 @@ export function ProjectTree({ nodes, query, activePath, fileColors, gitStatuses,
   const effectiveExpanded = useMemo(() => filtering ? new Set(directoryPaths(filtered)) : expanded, [expanded, filtered, filtering]);
   const visible = useMemo(() => visibleNodes(filtered, effectiveExpanded), [effectiveExpanded, filtered]);
   const [focusedPath, setFocusedPath] = useState<string>();
+  const [revealTarget, setRevealTarget] = useState<string>();
   const rowRefs = useRef(new Map<string, HTMLButtonElement>());
 
   useEffect(() => {
@@ -65,6 +66,20 @@ export function ProjectTree({ nodes, query, activePath, fileColors, gitStatuses,
   useEffect(() => {
     if (focusedPath && !visible.some(({ node }) => node.path === focusedPath)) setFocusedPath(visible[0]?.node.path);
   }, [focusedPath, visible]);
+
+  useEffect(() => {
+    if (!revealTarget || !visible.some(({ node }) => node.path === revealTarget)) return;
+    const row = rowRefs.current.get(revealTarget);
+    setFocusedPath(revealTarget); row?.focus(); row?.scrollIntoView({ block: "nearest" }); setRevealTarget(undefined);
+  }, [revealTarget, visible]);
+
+  const revealActiveFile = () => {
+    if (!activePath) return;
+    const ancestors = ancestorPaths(nodes, activePath);
+    if (!ancestors) return; // The active tab may not be represented by this loaded tree.
+    setExpanded((current) => new Set([...current, ...ancestors]));
+    setRevealTarget(activePath);
+  };
 
   const focusAt = (index: number) => {
     const item = visible[Math.max(0, Math.min(index, visible.length - 1))];
@@ -93,7 +108,9 @@ export function ProjectTree({ nodes, query, activePath, fileColors, gitStatuses,
         const parent = [...visible.slice(0, index)].reverse().find((candidate) => candidate.depth < item.depth);
         if (parent) focusAt(visible.indexOf(parent));
       }
-    } else if (event.key === "Enter" || event.key === " ") item.node.type === "file" ? onAction("open", item.node) : toggle(item.node.path);
+    } else if ((event.ctrlKey || event.metaKey) && event.shiftKey && event.key.toLowerCase() === "c" && projectTreeActions({ node: item.node }).copyAbsolutePath) onAction("copyAbsolutePath", item.node);
+    else if ((event.ctrlKey || event.metaKey) && event.altKey && event.key.toLowerCase() === "c" && projectTreeActions({ node: item.node }).copyRelativePath) onAction("copyRelativePath", item.node);
+    else if (event.key === "Enter" || event.key === " ") item.node.type === "file" ? onAction("open", item.node) : toggle(item.node.path);
     else if (event.key === "F2" && projectTreeActions({ node: item.node }).rename) onAction("rename", item.node);
     else if (event.key === "ContextMenu" || event.key === "F10" && event.shiftKey) {
       const bounds = rowRefs.current.get(item.node.path)?.getBoundingClientRect();
@@ -106,6 +123,7 @@ export function ProjectTree({ nodes, query, activePath, fileColors, gitStatuses,
   return <>
     <div className="project-tree-actions">
       <span>{filtering ? `${countFiles(filtered)} matching file${countFiles(filtered) === 1 ? "" : "s"}` : `${countFiles(nodes)} files`}</span>
+      <button title="Reveal active file" aria-label="Reveal active file" disabled={!activePath || !ancestorPaths(nodes, activePath)} onClick={revealActiveFile}><LocateFixed size={13} /></button>
       <button title="Expand all folders" aria-label="Expand all folders" disabled={filtering || allDirectories.every((path) => expanded.has(path))} onClick={() => setExpanded(new Set(allDirectories))}><ChevronsUpDown size={13} /></button>
       <button title="Collapse all folders" aria-label="Collapse all folders" disabled={filtering || expanded.size === 0} onClick={() => setExpanded(new Set())}><ChevronsDownUp size={13} /></button>
     </div>
