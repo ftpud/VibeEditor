@@ -13,7 +13,7 @@ interface Window {
     saveRepository(value: GatewayRepositorySettings): Promise<GatewayRepositorySettings>;
     refreshStatuses(connectionId?: string): Promise<void>;
     pickPrivateKey(): Promise<string | undefined>;
-    testConnection(value: { host: string; port: number; username: string; authenticationMethod: "password" | "privateKey"; password?: string; privateKeyPath?: string; passphrase?: string }): Promise<{ message: string }>;
+    testConnection(value: { id?: string; host: string; port: number; username: string; authenticationMethod: "password" | "privateKey"; password?: string; privateKeyPath?: string; passphrase?: string }): Promise<{ message: string }>;
     saveConnection(value: Partial<GatewayConnection> & { name: string; host: string; port: number; username: string; authenticationMethod: "password" | "privateKey"; password?: string; passphrase?: string }): Promise<GatewayState>;
     deleteConnection(id: string): Promise<GatewayState>;
     saveWorkspace(value: Partial<GatewayWorkspace> & { connectionId: string; name: string; directory: string; remotePort: number }): Promise<GatewayState>;

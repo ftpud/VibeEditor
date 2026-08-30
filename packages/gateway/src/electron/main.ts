@@ -6,7 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { Client } from "ssh2";
 import { connectionHealthForLatency, type ConnectionRuntime } from "./connection-health.js";
-import { connectionConfig, normalizeStoredAuthentication, testSshConnection, type AuthenticationMethod, type ConnectionAuth, type ConnectionDetails } from "./connection-auth.js";
+import { connectionConfig, normalizeStoredAuthentication, sshConnectionError, testSshConnection, validatePrivateKey, validatePrivateKeyPath, type AuthenticationMethod, type ConnectionAuth, type ConnectionDetails } from "./connection-auth.js";
 import { defaultRepositorySettings, normalizeRepositorySettings, provisionCommand, repositorySettingsOrDefault, type RepositorySettings } from "./repository-settings.js";
 
 type Connection = { id: string; name: string; host: string; port: number; username: string } & ConnectionAuth;
@@ -77,7 +77,7 @@ async function credentials(connectionId: string): Promise<Connection> {
 function connectWithConfig(config: Parameters<Client["connect"]>[0]): Promise<Client> {
   return new Promise((resolve, reject) => {
     const client = new Client();
-    client.once("ready", () => resolve(client)).once("error", reject).connect(config);
+    client.once("ready", () => resolve(client)).once("error", (error) => reject(sshConnectionError(error, config.privateKey ? "privateKey" : "password"))).connect(config);
   });
 }
 async function connect(connection: ConnectionDetails): Promise<Client> { return connectWithConfig(await connectionConfig(connection, readFile)); }
@@ -279,12 +279,27 @@ ipcMain.handle("gateway:saveRepository", async (_event, input: Partial<Repositor
 ipcMain.handle("gateway:refreshStatuses", (_event, connectionId?: string) => refreshStatuses(connectionId));
 ipcMain.handle("gateway:pickPrivateKey", async () => {
   const selected = await dialog.showOpenDialog({ title: "Choose SSH private key", properties: ["openFile"], filters: [{ name: "SSH private keys", extensions: ["pem", "key", "ppk"] }, { name: "All files", extensions: ["*"] }] });
-  return selected.canceled ? undefined : selected.filePaths[0];
+  if (selected.canceled || !selected.filePaths[0]) return undefined;
+  const selectedPath = selected.filePaths[0];
+  validatePrivateKeyPath(selectedPath);
+  let key: Buffer;
+  try { key = await readFile(selectedPath); }
+  catch { throw new Error(`Could not read the private key file at ${selectedPath}`); }
+  try { validatePrivateKey(key); }
+  catch (error) {
+    // A passphrase is entered in the form after selecting an encrypted key.
+    if (!(error instanceof Error) || !/requires its passphrase/.test(error.message)) throw error;
+  }
+  return selectedPath;
 });
-ipcMain.handle("gateway:testConnection", async (_event, input: { host: string; port: number; username: string; authenticationMethod: AuthenticationMethod; password?: string; privateKeyPath?: string; passphrase?: string }) => {
+ipcMain.handle("gateway:testConnection", async (_event, input: { id?: string; host: string; port: number; username: string; authenticationMethod: AuthenticationMethod; password?: string; privateKeyPath?: string; passphrase?: string }) => {
   const authenticationMethod = input.authenticationMethod === "privateKey" ? "privateKey" : "password";
   if (!input.host.trim() || !input.username.trim() || !Number.isInteger(input.port) || input.port < 1 || input.port > 65535) throw new Error("Host, username, and a valid SSH port are required");
-  const connection = authenticationMethod === "privateKey" ? { host: input.host.trim(), port: input.port, username: input.username.trim(), authenticationMethod, privateKeyPath: input.privateKeyPath?.trim() ?? "", ...(input.passphrase ? { passphrase: input.passphrase } : {}) } as const : { host: input.host.trim(), port: input.port, username: input.username.trim(), authenticationMethod, password: input.password ?? "" } as const;
+  const existing = input.id ? (await readState()).connections.find((item) => item.id === input.id) : undefined;
+  const saved = existing && normalizeStoredAuthentication(existing).authenticationMethod === authenticationMethod ? await credentials(input.id!) : undefined;
+  const connection = authenticationMethod === "privateKey"
+    ? { host: input.host.trim(), port: input.port, username: input.username.trim(), authenticationMethod, privateKeyPath: input.privateKeyPath?.trim() || (saved?.authenticationMethod === "privateKey" ? saved.privateKeyPath : ""), ...(input.passphrase ? { passphrase: input.passphrase } : saved?.authenticationMethod === "privateKey" && saved.passphrase ? { passphrase: saved.passphrase } : {}) } as const
+    : { host: input.host.trim(), port: input.port, username: input.username.trim(), authenticationMethod, password: input.password || (saved?.authenticationMethod === "password" ? saved.password : "") } as const;
   if (authenticationMethod === "password" && !connection.password) throw new Error("Password is required");
   await testSshConnection(await connectionConfig(connection, readFile), connectWithConfig);
   return { message: "SSH connection succeeded" };
@@ -293,7 +308,7 @@ ipcMain.handle("gateway:saveConnection", async (_event, input: { id?: string; na
   const state = await readState(); const existing = input.id ? state.connections.find((item) => item.id === input.id) : undefined;
   const item: StoredConnection = { id: input.id ?? id(), name: input.name, host: input.host, port: input.port, username: input.username, authenticationMethod: input.authenticationMethod, password: "" };
   if (input.authenticationMethod === "password") { item.password = input.password ? encrypt(input.password) : existing?.authenticationMethod !== "privateKey" ? existing?.password ?? "" : ""; if (!item.password) throw new Error("Password is required"); }
-  else { item.privateKeyPath = input.privateKeyPath?.trim() || (existing?.authenticationMethod === "privateKey" ? existing.privateKeyPath : ""); if (!item.privateKeyPath) throw new Error("A private key file is required for key authentication"); item.passphrase = input.passphrase ? encrypt(input.passphrase) : existing?.authenticationMethod === "privateKey" ? existing.passphrase : undefined; }
+  else { item.privateKeyPath = input.privateKeyPath?.trim() || (existing?.authenticationMethod === "privateKey" ? existing.privateKeyPath : ""); if (!item.privateKeyPath) throw new Error("A private key file is required for key authentication"); validatePrivateKeyPath(item.privateKeyPath); let key: Buffer; try { key = await readFile(item.privateKeyPath); } catch { throw new Error(`Could not read the private key file at ${item.privateKeyPath}`); } validatePrivateKey(key, input.passphrase || (existing?.authenticationMethod === "privateKey" && existing.passphrase ? decrypt(existing.passphrase) : undefined)); item.passphrase = input.passphrase ? encrypt(input.passphrase) : existing?.authenticationMethod === "privateKey" ? existing.passphrase : undefined; }
   state.connections = [...state.connections.filter((value) => value.id !== item.id), item]; await saveState(state); return publicState(state);
 });
 ipcMain.handle("gateway:deleteConnection", async (_event, connectionId: string) => { const state = await readState(); for (const tunnel of state.portTunnels.filter((item) => item.connectionId === connectionId)) stopPortTunnel(tunnel.id, false); state.connections = state.connections.filter((item) => item.id !== connectionId); state.workspaces = state.workspaces.filter((item) => item.connectionId !== connectionId); state.portTunnels = state.portTunnels.filter((item) => item.connectionId !== connectionId); await saveState(state); return publicState(state); });
