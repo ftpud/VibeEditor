@@ -382,10 +382,22 @@ async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStor
     }
     case "ai.interrupt": return { session: await acp.get(request.payload.provider).interrupt(workspacePath) };
     case "ai.steer": return { session: await acp.get(request.payload.provider).steer(workspacePath, request.payload.prompt) };
-    case "ai.clear": return { session: await acp.get(request.payload.provider).clear(workspacePath) };
+    case "ai.clear": {
+      const provider = acp.get(request.payload.provider);
+      await assertSessionChangeAllowed(aiTimers, workspacePath, provider.descriptor.id);
+      return { session: await provider.clear(workspacePath) };
+    }
     case "ai.sessions": return { sessions: await acp.get(request.payload.provider).sessions(workspacePath) };
-    case "ai.restore": return { session: await acp.get(request.payload.provider).restore(workspacePath, request.payload.sessionId) };
-    case "ai.remove": return { session: await acp.get(request.payload.provider).remove(workspacePath, request.payload.sessionId) };
+    case "ai.restore": {
+      const provider = acp.get(request.payload.provider);
+      await assertSessionChangeAllowed(aiTimers, workspacePath, provider.descriptor.id);
+      return { session: await provider.restore(workspacePath, request.payload.sessionId) };
+    }
+    case "ai.remove": {
+      const provider = acp.get(request.payload.provider);
+      await assertSessionChangeAllowed(aiTimers, workspacePath, provider.descriptor.id);
+      return { session: await provider.remove(workspacePath, request.payload.sessionId) };
+    }
     case "ai.usage": return { usage: await acp.get(request.payload.provider).usage(workspacePath) };
     case "ai.statuses": {
       const registry = await tasks.list();
@@ -525,4 +537,8 @@ export async function permissionTargetWorkspace(tasks: Pick<WorkspaceTaskStore, 
   if (!taskId) return rootWorkspace;
   if (!(await tasks.list()).tasks.some((task) => task.id === taskId)) throw new CoreError("INVALID_REQUEST", "Task does not exist");
   return tasks.taskPath(taskId);
+}
+
+export async function assertSessionChangeAllowed(timers: Pick<AiTimerService, "next">, workspace: string, provider: AiProvider): Promise<void> {
+  if (await timers.next(workspace, provider)) throw new CoreError("INVALID_REQUEST", "Cancel or run the active task timer before changing its AI session");
 }

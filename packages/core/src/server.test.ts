@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { WebSocket } from "ws";
-import { permissionTargetWorkspace, sendWebSocketData } from "./server.js";
+import { assertSessionChangeAllowed, permissionTargetWorkspace, sendWebSocketData } from "./server.js";
 import { withAppTools } from "./app-tools.js";
 
 describe("built-in app tool access", () => {
@@ -31,6 +31,14 @@ describe("permission request task routing", () => {
 
   it("rejects stale task ownership instead of falling back to the active workspace", async () => {
     await expect(permissionTargetWorkspace(tasks, "/root", "deleted-task")).rejects.toMatchObject({ code: "INVALID_REQUEST", message: "Task does not exist" });
+  });
+});
+
+describe("timer session ownership", () => {
+  it("rejects session changes for the provider owning an active timer", async () => {
+    const timers = { next: async (_workspace: string, provider?: string) => provider === "codex" ? { id: "timer" } : undefined };
+    await expect(assertSessionChangeAllowed(timers as never, "/tasks/a/workspace", "codex")).rejects.toMatchObject({ code: "INVALID_REQUEST" });
+    await expect(assertSessionChangeAllowed(timers as never, "/tasks/a/workspace", "copilot")).resolves.toBeUndefined();
   });
 });
 

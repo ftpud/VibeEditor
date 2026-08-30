@@ -45,9 +45,9 @@ export class AiTimerStore {
     return removed;
   }
 
-  async next(workspace: string): Promise<AiContinuationTimer | undefined> {
+  async next(workspace: string, provider?: AiProvider): Promise<AiContinuationTimer | undefined> {
     const resolved = path.resolve(workspace);
-    return (await this.list()).filter((timer) => timer.workspace === resolved).sort((left, right) => left.dueAt.localeCompare(right.dueAt))[0];
+    return (await this.list()).filter((timer) => timer.workspace === resolved && (!provider || timer.provider === provider)).sort((left, right) => left.dueAt.localeCompare(right.dueAt))[0];
   }
 
   private async save(timers: AiContinuationTimer[]): Promise<void> {
@@ -76,7 +76,7 @@ export class AiTimerService {
     return timer;
   }
 
-  next(workspace: string): Promise<AiContinuationTimer | undefined> { return this.store.next(workspace); }
+  next(workspace: string, provider?: AiProvider): Promise<AiContinuationTimer | undefined> { return this.store.next(workspace, provider); }
 
   async cancelNext(workspace: string): Promise<boolean> {
     const timer = await this.store.next(workspace);
