@@ -442,8 +442,12 @@ button { color: inherit; }
 .editor-mode-switch button:last-child { border-right: 0; }
 .editor-mode-switch button:hover { background: #3a3c41; color: #e2e3e5; }
 .editor-mode-switch button.active { background: #2e5792; color: white; }
-.editor-area { min-height: 0; flex: 1; position: relative; }
-.diff-navigation { position: absolute; z-index: 8; right: 18px; bottom: 16px; display: flex; overflow: hidden; border: 1px solid #4a4d52; border-radius: 5px; background: #2b2d30; box-shadow: 0 5px 16px rgba(0,0,0,.35); }
+.editor-area { min-height: 0; flex: 1; position: relative; display: grid; grid-template-rows: minmax(0, 1fr) auto; }
+.editor-status-bar { height: 22px; z-index: 7; display: flex; align-items: center; justify-content: flex-end; border-top: 1px solid #393b40; background: #25272a; color: #a9acb2; font-size: 0.7692rem; }
+.editor-status-bar span, .editor-status-bar button { height: 100%; padding: 0 9px; display: inline-flex; align-items: center; border: 0; border-left: 1px solid transparent; background: transparent; color: inherit; font: inherit; white-space: nowrap; }
+.editor-status-bar button { cursor: pointer; }
+.editor-status-bar button:hover, .editor-status-bar button:focus-visible { background: #35383d; color: #f0f1f2; }
+.diff-navigation { position: absolute; z-index: 8; right: 18px; bottom: 38px; display: flex; overflow: hidden; border: 1px solid #4a4d52; border-radius: 5px; background: #2b2d30; box-shadow: 0 5px 16px rgba(0,0,0,.35); }
 .diff-navigation button { width: 34px; height: 32px; display: grid; place-items: center; border: 0; border-right: 1px solid #4a4d52; background: transparent; color: #d2d4d7; cursor: pointer; }
 .diff-navigation button:last-child { border-right: 0; }
 .diff-navigation button:hover { background: #3574f0; color: white; }
@@ -821,6 +825,9 @@ button { color: inherit; }
 :root[data-theme="light"] .git-log-panel,
 :root[data-theme="light"] .http-response-panel,
 :root[data-theme="light"] .find-preview-editor { background: #ffffff; color: #2b2d30; }
+:root[data-theme="light"] .editor-status-bar { border-color: #d7d9dc; background: #f3f4f5; color: #55585e; }
+:root[data-theme="light"] .editor-status-bar button:hover,
+:root[data-theme="light"] .editor-status-bar button:focus-visible { background: #e1e3e6; color: #202124; }
 :root[data-theme="light"] .tool-stripe,
 :root[data-theme="light"] .right-tool-stripe,
 :root[data-theme="light"] .side-panel,
