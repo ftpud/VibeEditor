@@ -541,7 +541,6 @@ export function App() {
         }).catch(() => undefined);
       };
       if (event.type === "git.changed") { refreshDiffs(); return; }
-      if (event.payload.path.startsWith(".vibe/run-configs/")) void refreshRunConfigs(client);
       refreshDiffs(event.payload.path);
       if (javaOptionsRef.current && (event.payload.path.endsWith(".java") || event.payload.kind === "addDir" || event.payload.kind === "unlinkDir")) {
         if (javaRefreshTimer.current) clearTimeout(javaRefreshTimer.current);

@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
@@ -11,11 +12,17 @@ const key = (workspace: string, scope: RunConfigScope, name: string) => `${path.
 /** File-backed shell run configurations. Discovery only reads text; execution is always explicit. */
 export class RunConfigService {
   private readonly runtime = new Map<string, Runtime>();
-  constructor(private readonly terminals: TerminalSessionHost, private readonly changed: (workspace: string) => void, private readonly globalDirectory = path.join(process.env.REMOTE_IDE_STATE_DIR ?? path.join(os.homedir(), ".remote-ide"), "run-configs")) {}
+  private readonly storageRoot: string;
+  private readonly localDirectory: string;
+  constructor(private readonly terminals: TerminalSessionHost, private readonly changed: (workspace: string) => void, rootWorkspace: string, stateDirectory = process.env.REMOTE_IDE_STATE_DIR ?? path.join(os.homedir(), ".remote-ide", "workspaces")) {
+    this.storageRoot = path.join(stateDirectory, "run-configs");
+    const workspaceKey = crypto.createHash("sha256").update(rootWorkspace).digest("hex");
+    this.localDirectory = path.join(this.storageRoot, "local", workspaceKey);
+  }
 
   directory(workspace: string, scope: RunConfigScope): string {
     if (scope !== "local" && scope !== "global") throw new CoreError("INVALID_REQUEST", "Invalid run configuration scope");
-    return scope === "local" ? path.join(path.resolve(workspace), ".vibe", "run-configs") : this.globalDirectory;
+    return scope === "local" ? this.localDirectory : path.join(this.storageRoot, "global");
   }
   private target(workspace: string, scope: RunConfigScope, name: string): string {
     if (!name || name.length > 120 || name !== path.basename(name) || name === "." || name === ".." || name.includes("\0") || /[\\/]/.test(name)) throw new CoreError("INVALID_REQUEST", "Run configuration name must be a plain file name");

@@ -9,15 +9,15 @@ const roots: string[] = [];
 afterEach(async () => { await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true }))); });
 async function fixture() {
   const root = await mkdtemp(path.join(os.tmpdir(), "vibe-run-config-")); roots.push(root);
-  const workspace = path.join(root, "workspace"); const global = path.join(root, "global"); await mkdir(workspace);
+  const workspace = path.join(root, "workspace"); const state = path.join(root, "state"); await mkdir(workspace);
   const terminal = { create: vi.fn(() => ({ terminalId: "terminal-1", status: "running", output: "" })), input: vi.fn(), terminate: vi.fn() } as unknown as TerminalSessionHost;
-  const changed = vi.fn(); return { root, workspace, global, terminal, changed, service: new RunConfigService(terminal, changed, global) };
+  const changed = vi.fn(); const service = new RunConfigService(terminal, changed, workspace, state); return { root, workspace, global: service.directory(workspace, "global"), local: service.directory(workspace, "local"), terminal, changed, service };
 }
 
 describe("RunConfigService", () => {
   it("discovers both scopes without executing and preserves colliding names", async () => {
-    const { service, workspace, global, terminal } = await fixture(); await mkdir(global, { recursive: true }); await mkdir(path.join(workspace, ".vibe/run-configs"), { recursive: true });
-    await writeFile(path.join(global, "dev.sh"), "echo global\n"); await writeFile(path.join(workspace, ".vibe/run-configs/dev.sh"), "echo local\n");
+    const { service, workspace, global, local, terminal } = await fixture(); await mkdir(global, { recursive: true }); await mkdir(local, { recursive: true });
+    await writeFile(path.join(global, "dev.sh"), "echo global\n"); await writeFile(path.join(local, "dev.sh"), "echo local\n");
     expect(await service.list(workspace)).toMatchObject([{ name: "dev", scope: "global", commands: "echo global\n" }, { name: "dev", scope: "local", commands: "echo local\n" }]);
     expect(terminal.create).not.toHaveBeenCalled();
   });

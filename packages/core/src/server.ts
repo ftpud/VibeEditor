@@ -92,9 +92,9 @@ export async function createServer(host: string, port: number, workspacePath: st
       const encoded = JSON.stringify({ type: "runConfig.changed", payload: { workspace: changedWorkspace, configs } } satisfies ServerEvent);
       for (const [socket, subscription] of terminalSubscriptions) if (subscription.workspace === path.resolve(changedWorkspace)) sendWebSocketData(socket, encoded);
     });
-  });
-  const globalRunConfigWatcher = chokidar.watch(runConfigs.directory(rootWorkspace, "global"), { ignoreInitial: true, depth: 0, awaitWriteFinish: { stabilityThreshold: 150, pollInterval: 50 } });
-  globalRunConfigWatcher.on("all", () => {
+  }, rootWorkspace);
+  const runConfigWatcher = chokidar.watch([runConfigs.directory(rootWorkspace, "global"), runConfigs.directory(rootWorkspace, "local")], { ignoreInitial: true, depth: 0, awaitWriteFinish: { stabilityThreshold: 150, pollInterval: 50 } });
+  runConfigWatcher.on("all", () => {
     for (const changedWorkspace of new Set([...terminalSubscriptions.values()].map((subscription) => subscription.workspace))) {
       void runConfigs.list(changedWorkspace).then((configs) => { const encoded = JSON.stringify({ type: "runConfig.changed", payload: { workspace: changedWorkspace, configs } } satisfies ServerEvent); for (const [socket, subscription] of terminalSubscriptions) if (subscription.workspace === changedWorkspace) sendWebSocketData(socket, encoded); });
     }
@@ -169,7 +169,7 @@ export async function createServer(host: string, port: number, workspacePath: st
     .on("addDir", (directory) => broadcastChange("addDir", directory))
     .on("unlinkDir", (directory) => broadcastChange("unlinkDir", directory))
     .on("error", (error) => console.error(`[core] watcher error: ${String(error)}`));
-  server.on("close", () => { terminalHost.closeAll(); void watcher.close(); void gitIndexWatcher.close(); void globalRunConfigWatcher.close(); void appEventWatcher.close(); void appCommandWatcher.close(); });
+  server.on("close", () => { terminalHost.closeAll(); void watcher.close(); void gitIndexWatcher.close(); void runConfigWatcher.close(); void appEventWatcher.close(); void appCommandWatcher.close(); });
   server.on("listening", () => console.log(`[core] listening on ws://${host}:${port}`));
   server.on("connection", (socket, request) => {
     const makeServices = async (nextWorkspace: string): Promise<SessionServices> => {

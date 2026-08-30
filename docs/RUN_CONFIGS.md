@@ -1,6 +1,6 @@
 # Run Configurations
 
-Run Configurations are UTF-8 shell-script files. Workspace-local configurations live in `.vibe/run-configs/<name>.sh`; global configurations live in `$REMOTE_IDE_STATE_DIR/run-configs/<name>.sh`, or `~/.remote-ide/run-configs/<name>.sh` when that variable is unset. The file body is passed faithfully to the user's interactive terminal shell. Merely listing or opening a configuration never executes it.
+Run Configurations are UTF-8 shell-script files stored by Core alongside Useful Files; no files are added to the workspace. Workspace-local configurations live in `$REMOTE_IDE_STATE_DIR/run-configs/local/<workspace-hash>/<name>.sh` and global configurations in `$REMOTE_IDE_STATE_DIR/run-configs/global/<name>.sh`. When `REMOTE_IDE_STATE_DIR` is unset, the state root is `~/.remote-ide/workspaces`. The workspace hash is SHA-256 of the root workspace path, so local configurations remain shared across that workspace's tasks. The file body is passed faithfully to the user's interactive terminal shell. Merely listing or opening a configuration never executes it.
 
 Names are plain file names (no directory separators); `.sh` is added by Vibe Editor and omitted from the displayed name. Global and local configurations with the same name are both retained and identified by scope; neither silently overrides the other.
 
