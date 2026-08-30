@@ -21,6 +21,7 @@ import { configureMonacoThemes, monacoTheme, type HighlightTheme } from "./theme
 import { CURSOR_POSITIONS_SETTING, CursorPositionStore, validateCursorPosition } from "./cursor-state";
 import { MarkdownPreview } from "./MarkdownPreview";
 import { FindInFilesDialog } from "./FindInFilesDialog";
+import { initialTaskPanel, switchedTaskPanel, taskPanelPreferenceKey, type ClassicTaskPanel } from "./task-panel-state";
 
 type ConnectionStatus = "idle" | "connecting" | "connected" | "failed" | "disconnected" | "workspace-error";
 type StatusKind = "progress" | "success" | "error";
@@ -103,7 +104,7 @@ export function App() {
   const [rightSidebarWidth, setRightSidebarWidth] = useState(360);
   const [leftPanels, setLeftPanels] = useState({ tasks: true, ai: true });
   const [rightPanels, setRightPanels] = useState({ project: true, git: true, taskGit: false, promptHistory: false, java: false, useful: false, agents: false });
-  const [classicSideView, setClassicSideView] = useState<"project" | "git" | "taskGit" | "java" | "useful" | "agents">("project");
+  const [classicSideView, setClassicSideView] = useState<ClassicTaskPanel>("project");
   const [classicLeftWidth, setClassicLeftWidth] = useState(260);
   const [classicRightWidth, setClassicRightWidth] = useState(300);
   const [classicTasksOpen, setClassicTasksOpen] = useState(true);
@@ -131,6 +132,8 @@ export function App() {
   const [taskSwitching, setTaskSwitching] = useState(false);
   const taskSwitchSequence = useRef(0);
   const taskSwitchActive = useRef(false);
+  const queuedTaskSwitch = useRef<string | undefined | null>(null);
+  const switchTaskRef = useRef<(taskId?: string) => void>(() => undefined);
   const [terminalHeight, setTerminalHeight] = useState(240);
   const [usefulFiles, setUsefulFiles] = useState<UsefulFile[]>([]);
   const [agents, setAgents] = useState<AgentFile[]>([]);
@@ -316,10 +319,14 @@ export function App() {
     if (!client || !task) { setTaskGitEntries([]); setTaskCheckpoints([]); setTaskGitError(""); return; }
     try {
       const [result, history] = await Promise.all([client.request("git.compareFiles", { ref: task.baseBranch }), client.request("taskGit.history", {})]);
+      if (clientRef.current !== client || activeTaskRef.current?.id !== task.id) return;
       setTaskGitEntries(result.files.map((file) => ({ path: file.path, ...(file.originalPath ? { originalPath: file.originalPath } : {}), indexStatus: file.status === "?" ? "?" : file.status[0] ?? "M", worktreeStatus: file.status === "?" ? "?" : " " })));
       setTaskCheckpoints(history.checkpoints);
       setTaskGitError("");
-    } catch (error) { setTaskGitEntries([]); setTaskCheckpoints([]); setTaskGitError(error instanceof Error ? error.message : "Could not load Task Git"); }
+    } catch (error) {
+      if (clientRef.current !== client || activeTaskRef.current?.id !== task.id) return;
+      setTaskGitEntries([]); setTaskCheckpoints([]); setTaskGitError(error instanceof Error ? error.message : "Could not load Task Git");
+    }
   }, []);
 
   // Several ai.statuses requests can be in flight at once (AI activity emits a burst of ai.changed
@@ -615,6 +622,9 @@ export function App() {
         await restoreWorkspaceOptions(result.options, client);
         const taskResult = await client.request("tasks.list", {});
         setTasks(taskResult.tasks); setSelectedTaskId(taskResult.selectedTaskId); selectedTaskIdRef.current = taskResult.selectedTaskId; activeTaskRef.current = taskResult.tasks.find((task) => task.id === taskResult.selectedTaskId);
+        const initialPanel = initialTaskPanel(sideLayout, taskResult.selectedTaskId, setting);
+        if (initialPanel.classic) setClassicSideView(initialPanel.classic);
+        if (initialPanel.focusedTaskGit !== undefined) setRightPanels((current) => ({ ...current, taskGit: initialPanel.focusedTaskGit! }));
         // The provider is remembered per task, so it can only be resolved once the selected task is known.
         const taskProvider = setting(aiProviderTaskKey(taskResult.selectedTaskId)) as AiProvider | null;
         const wsProvider = setting("aiProvider") as AiProvider | null;
@@ -982,7 +992,9 @@ export function App() {
   }, [aiToken, applyAiSession, refreshAiSessions]);
 
   const switchTask = useCallback(async (taskId?: string) => {
-    if (!clientRef.current || taskId === selectedTaskId || taskSwitchActive.current) return;
+    if (!clientRef.current) return;
+    if (taskSwitchActive.current) { queuedTaskSwitch.current = taskId; return; }
+    if (taskId === selectedTaskIdRef.current) return;
     const client = clientRef.current;
     const sequence = ++taskSwitchSequence.current;
     const isCurrent = () => taskSwitchSequence.current === sequence && clientRef.current === client;
@@ -1002,6 +1014,9 @@ export function App() {
       terminalWriters.current.clear(); terminalBuffers.current.clear(); markdownBlockTerminals.current.clear();
       setLayout((current) => ({ ...current, panels: current.panels.filter((panel) => !["terminal", "java", "problems"].includes(panel.type)), terminalGroup: { ...current.terminalGroup, tabs: [], activeTabId: undefined } }));
       setTasks(result.tasks); setSelectedTaskId(result.selectedTaskId); selectedTaskIdRef.current = result.selectedTaskId; activeTaskRef.current = result.tasks.find((task) => task.id === result.selectedTaskId); setTree(result.tree);
+      const switchedPanel = switchedTaskPanel(result.selectedTaskId);
+      if (switchedPanel.classic) setClassicSideView(switchedPanel.classic);
+      if (switchedPanel.focusedTaskGit) setRightPanels((current) => ({ ...current, taskGit: true }));
       if (!result.selectedTaskId) {
         setRightPanels((current) => ({ ...current, taskGit: false }));
         setClassicSideView((current) => current === "taskGit" ? "project" : current);
@@ -1027,9 +1042,29 @@ export function App() {
       if (isCurrent()) {
         taskSwitchActive.current = false;
         setTaskSwitching(false);
+        const queued = queuedTaskSwitch.current;
+        queuedTaskSwitch.current = null;
+        if (queued !== null && queued !== selectedTaskIdRef.current) switchTaskRef.current(queued);
       }
     }
-  }, [aiProviders, fileColors, gitCommitMessage, refreshAgents, refreshAi, refreshAiSessions, refreshGit, refreshTaskGit, restoreWorkspaceOptions, saveFileTab, selectedTaskId, switchAiProvider]);
+  }, [aiProviders, fileColors, gitCommitMessage, refreshAgents, refreshAi, refreshAiSessions, refreshGit, refreshTaskGit, restoreWorkspaceOptions, saveFileTab, switchAiProvider]);
+  switchTaskRef.current = (taskId) => { void switchTask(taskId); };
+
+  const selectClassicSideView = useCallback((view: ClassicTaskPanel) => {
+    setClassicSideView(view);
+    const taskId = selectedTaskIdRef.current;
+    if (taskId && workspaceKeyRef.current) writeWorkspaceSetting(workspaceKeyRef.current, taskPanelPreferenceKey("classic", taskId), view);
+  }, []);
+
+  const toggleFocusedTaskGit = useCallback(() => {
+    setRightPanels((current) => {
+      const open = !current.taskGit;
+      const taskId = selectedTaskIdRef.current;
+      if (taskId && workspaceKeyRef.current) writeWorkspaceSetting(workspaceKeyRef.current, taskPanelPreferenceKey("ai-focused", taskId), open ? "open" : "closed");
+      if (open) void refreshTaskGit();
+      return { ...current, taskGit: open };
+    });
+  }, [refreshTaskGit]);
 
   const openTask = useCallback((taskId?: string, pendingPermission = false) => {
     openTaskFromSummary({ taskId, pendingPermission, sideLayout, openClassicAi: () => setClassicAiOpen(true), openFocusedAi: () => setLeftPanels((current) => ({ ...current, tasks: true, ai: true })), switchTask: (id) => void switchTask(id) });
@@ -1739,13 +1774,13 @@ export function App() {
       </ResizablePanelStack></aside><div className="resize-handle" onPointerDown={beginLeftSidebarResize} /></>}
       </> : <>
       <nav className="tool-stripe" aria-label="Left tool windows">
-        <button className={`tool-stripe-button ${classicSideView === "project" ? "active" : ""}`} title="Project" onClick={() => setClassicSideView("project")}><Folder size={15} /><span>Project</span></button>
-        <button className={`tool-stripe-button ${classicSideView === "git" ? "active" : ""}`} title="Git changes" onClick={() => { setClassicSideView("git"); void refreshGit(); }}><GitBranch size={15} /><span>Git</span>{gitEntries.length > 0 && <span className="tool-badge">{gitEntries.length > 99 ? "99+" : gitEntries.length}</span>}</button>
-        {selectedTaskId && <button className={`tool-stripe-button ${classicSideView === "taskGit" ? "active" : ""}`} title="Changes from task base branch" onClick={() => { setClassicSideView("taskGit"); void refreshTaskGit(); }}><GitCompareArrows size={15} /><span>Task Git</span>{taskGitEntries.length > 0 && <span className="tool-badge">{taskGitEntries.length > 99 ? "99+" : taskGitEntries.length}</span>}</button>}
+        <button className={`tool-stripe-button ${classicSideView === "project" ? "active" : ""}`} title="Project" onClick={() => selectClassicSideView("project")}><Folder size={15} /><span>Project</span></button>
+        <button className={`tool-stripe-button ${classicSideView === "git" ? "active" : ""}`} title="Git changes" onClick={() => { selectClassicSideView("git"); void refreshGit(); }}><GitBranch size={15} /><span>Git</span>{gitEntries.length > 0 && <span className="tool-badge">{gitEntries.length > 99 ? "99+" : gitEntries.length}</span>}</button>
+        {selectedTaskId && <button className={`tool-stripe-button ${classicSideView === "taskGit" ? "active" : ""}`} title="Changes from task base branch" onClick={() => { selectClassicSideView("taskGit"); void refreshTaskGit(); }}><GitCompareArrows size={15} /><span>Task Git</span>{taskGitEntries.length > 0 && <span className="tool-badge">{taskGitEntries.length > 99 ? "99+" : taskGitEntries.length}</span>}</button>}
         {selectedTaskId && <button className={`tool-stripe-button ${rightPanels.promptHistory ? "active" : ""}`} title={rightPanels.promptHistory ? "Hide Prompt History" : "Show Prompt History"} onClick={() => setRightPanels((current) => { if (!current.promptHistory) void refreshTaskGit(); return { ...current, promptHistory: !current.promptHistory }; })}><ListTree size={15} /><span>History</span>{taskCheckpoints.length > 0 && <span className="tool-badge">{taskCheckpoints.length > 99 ? "99+" : taskCheckpoints.length}</span>}</button>}
-        <button className={`tool-stripe-button ${classicSideView === "useful" ? "active" : ""}`} title="Useful Files" onClick={() => { setClassicSideView("useful"); void refreshUsefulFiles(); }}><Library size={15} /><span>Useful</span></button>
-        <button className={`tool-stripe-button ${classicSideView === "agents" ? "active" : ""}`} title="Agents" onClick={() => { setClassicSideView("agents"); void refreshAgents(); }}><Bot size={15} /><span>Agents</span></button>
-        {javaOptions && <button className={`tool-stripe-button ${classicSideView === "java" ? "active" : ""}`} title="Java project" onClick={() => { setClassicSideView("java"); void refreshJavaTree(); }}><Coffee size={15} /><span>Java</span></button>}
+        <button className={`tool-stripe-button ${classicSideView === "useful" ? "active" : ""}`} title="Useful Files" onClick={() => { selectClassicSideView("useful"); void refreshUsefulFiles(); }}><Library size={15} /><span>Useful</span></button>
+        <button className={`tool-stripe-button ${classicSideView === "agents" ? "active" : ""}`} title="Agents" onClick={() => { selectClassicSideView("agents"); void refreshAgents(); }}><Bot size={15} /><span>Agents</span></button>
+        {javaOptions && <button className={`tool-stripe-button ${classicSideView === "java" ? "active" : ""}`} title="Java project" onClick={() => { selectClassicSideView("java"); void refreshJavaTree(); }}><Coffee size={15} /><span>Java</span></button>}
       </nav>
       <aside className="side-panel classic-left-panel" style={{ width: classicLeftWidth }}>
         {classicSideView === "project" ? <>
@@ -1824,7 +1859,7 @@ export function App() {
       <nav className="right-tool-stripe" aria-label="Right tool windows">
         <button className={`tool-stripe-button right ${rightPanels.project ? "active" : ""}`} title={rightPanels.project ? "Hide Project" : "Show Project"} onClick={() => setRightPanels((current) => ({ ...current, project: !current.project }))}><Folder size={15} /><span>Project</span></button>
         <button className={`tool-stripe-button right ${rightPanels.git ? "active" : ""}`} title={rightPanels.git ? "Hide Git changes" : "Show Git changes"} onClick={() => setRightPanels((current) => { if (!current.git) void refreshGit(); return { ...current, git: !current.git }; })}><GitBranch size={15} /><span>Git</span>{gitEntries.length > 0 && <span className="tool-badge">{gitEntries.length > 99 ? "99+" : gitEntries.length}</span>}</button>
-        {selectedTaskId && <button className={`tool-stripe-button right ${rightPanels.taskGit ? "active" : ""}`} title={rightPanels.taskGit ? "Hide Task Git" : "Show Task Git"} onClick={() => setRightPanels((current) => { if (!current.taskGit) void refreshTaskGit(); return { ...current, taskGit: !current.taskGit }; })}><GitCompareArrows size={15} /><span>Task Git</span>{taskGitEntries.length > 0 && <span className="tool-badge">{taskGitEntries.length > 99 ? "99+" : taskGitEntries.length}</span>}</button>}
+        {selectedTaskId && <button className={`tool-stripe-button right ${rightPanels.taskGit ? "active" : ""}`} title={rightPanels.taskGit ? "Hide Task Git" : "Show Task Git"} onClick={toggleFocusedTaskGit}><GitCompareArrows size={15} /><span>Task Git</span>{taskGitEntries.length > 0 && <span className="tool-badge">{taskGitEntries.length > 99 ? "99+" : taskGitEntries.length}</span>}</button>}
         {selectedTaskId && <button className={`tool-stripe-button right ${rightPanels.promptHistory ? "active" : ""}`} title={rightPanels.promptHistory ? "Hide Prompt History" : "Show Prompt History"} onClick={() => setRightPanels((current) => { if (!current.promptHistory) void refreshTaskGit(); return { ...current, promptHistory: !current.promptHistory }; })}><ListTree size={15} /><span>History</span>{taskCheckpoints.length > 0 && <span className="tool-badge">{taskCheckpoints.length > 99 ? "99+" : taskCheckpoints.length}</span>}</button>}
         {javaOptions && <button className={`tool-stripe-button right ${rightPanels.java ? "active" : ""}`} title={rightPanels.java ? "Hide Java project" : "Show Java project"} onClick={() => setRightPanels((current) => { if (!current.java) void refreshJavaTree(); return { ...current, java: !current.java }; })}><Coffee size={15} /><span>Java</span></button>}
         <button className={`tool-stripe-button right ${rightPanels.useful ? "active" : ""}`} title={rightPanels.useful ? "Hide Useful Files" : "Show Useful Files"} onClick={() => setRightPanels((current) => { if (!current.useful) void refreshUsefulFiles(); return { ...current, useful: !current.useful }; })}><Library size={15} /><span>Useful</span></button>
