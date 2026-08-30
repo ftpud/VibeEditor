@@ -4,7 +4,7 @@ import path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { chmod, lstat, mkdir, readFile, readlink, readdir, rm, symlink, writeFile } from "node:fs/promises";
-import type { AiProvider, TaskCheckpoint, TaskCheckpointFile } from "@remote-ide/protocol";
+import type { AiProvider, TaskCheckpoint, TaskCheckpointFile, TaskCheckpointProvenance } from "@remote-ide/protocol";
 import { CoreError } from "./errors.js";
 
 const execFileAsync = promisify(execFile);
@@ -20,19 +20,20 @@ export class TaskCheckpointStore {
     this.root = path.join(stateDirectory, `${crypto.createHash("sha256").update(path.resolve(workspace)).digest("hex")}-task-history`);
   }
 
-  begin(provider: AiProvider, prompt: string, sessionId?: string, promptId: string = crypto.randomUUID()): Promise<string> {
+  begin(provider: AiProvider, prompt: string, sessionId?: string, promptId: string = crypto.randomUUID(), provenance?: TaskCheckpointProvenance): Promise<string> {
     return this.serial(async () => {
       const id = crypto.randomUUID();
-      const checkpoint: StoredCheckpoint = { id, promptId, provider, prompt: prompt.slice(0, 100_000), startedAt: new Date().toISOString(), status: "running", before: await this.capture(), ...(sessionId ? { sessionId } : {}) };
+      const checkpoint: StoredCheckpoint = { id, promptId, provider, prompt: redact(prompt).slice(0, 1_000), startedAt: new Date().toISOString(), status: "running", before: await this.capture(), ...(sessionId ? { sessionId } : {}), ...(provenance ? { provenance } : {}) };
       await this.write(checkpoint); await this.prune(); return id;
     });
   }
 
-  complete(id: string, status: "completed" | "interrupted" | "error"): Promise<void> {
+  complete(id: string, status: "completed" | "interrupted" | "error", provenance?: Pick<TaskCheckpointProvenance, "usage">): Promise<void> {
     return this.serial(async () => {
       const checkpoint = await this.read(id);
       if (checkpoint.status !== "running") return;
       checkpoint.after = await this.capture(); checkpoint.status = status; checkpoint.completedAt = new Date().toISOString();
+      const commit = await this.head(); checkpoint.provenance = { ...checkpoint.provenance, ...provenance, ...(commit ? { commit } : {}) };
       await this.write(checkpoint);
     });
   }
@@ -49,7 +50,7 @@ export class TaskCheckpointStore {
 
   async history(): Promise<TaskCheckpoint[]> {
     const checkpoints = await this.all();
-    return checkpoints.map((item) => ({ id: item.id, promptId: item.promptId, provider: item.provider, prompt: item.prompt, startedAt: item.startedAt, status: item.status, ...(item.sessionId ? { sessionId: item.sessionId } : {}), ...(item.completedAt ? { completedAt: item.completedAt } : {}), files: changes(item.before, item.after ?? item.before) }));
+    return checkpoints.map((item) => ({ id: item.id, promptId: item.promptId, provider: item.provider, prompt: item.prompt, startedAt: item.startedAt, status: item.status, ...(item.sessionId ? { sessionId: item.sessionId } : {}), ...(item.completedAt ? { completedAt: item.completedAt } : {}), ...(item.provenance ? { provenance: item.provenance } : {}), files: changes(item.before, item.after ?? item.before) }));
   }
 
   async diff(id: string, filePath: string): Promise<{ originalContent: string; modifiedContent: string; binary: boolean }> {
@@ -92,6 +93,7 @@ export class TaskCheckpointStore {
     try { return (await execFileAsync("git", ["-C", this.workspace, "ls-files", "-z", "--cached", "--others", "--exclude-standard"], { encoding: "utf8", maxBuffer: 32 * 1024 * 1024 })).stdout.split("\0").filter(Boolean); }
     catch (error) { throw new CoreError("GIT_FAILED", `Could not enumerate task files: ${error instanceof Error ? error.message : String(error)}`); }
   }
+  private async head(): Promise<string | undefined> { try { return (await execFileAsync("git", ["-C", this.workspace, "rev-parse", "--verify", "HEAD"], { encoding: "utf8" })).stdout.trim(); } catch { return undefined; } }
   private target(file: string): string { validatePath(file); const target = path.resolve(this.workspace, file); if (!target.startsWith(`${path.resolve(this.workspace)}${path.sep}`)) throw new CoreError("INVALID_REQUEST", "Invalid checkpoint path"); return target; }
   private blob(hash: string): Promise<Buffer> { return readFile(path.join(this.root, "blobs", hash)); }
   private file(id: string): string { if (!/^[0-9a-f-]{36}$/i.test(id)) throw new CoreError("INVALID_REQUEST", "Invalid checkpoint id"); return path.join(this.root, "checkpoints", `${id}.json`); }
@@ -116,3 +118,7 @@ function changes(before: Record<string, SnapshotEntry>, after: Record<string, Sn
   return result.sort((a, b) => a.path.localeCompare(b.path));
 }
 function validatePath(file: string): void { if (!file || path.isAbsolute(file) || file.split(/[\\/]/).includes("..")) throw new CoreError("INVALID_REQUEST", "Invalid checkpoint path"); }
+function redact(value: string): string {
+  return value.replace(/\b(?:sk|api|ghp|github_pat)_[A-Za-z0-9_-]{12,}\b/gi, "[REDACTED]")
+    .replace(/\b(authorization|token|password|secret|api[_-]?key)\s*[:=]\s*([^\s,;]+)/gi, "$1=[REDACTED]");
+}

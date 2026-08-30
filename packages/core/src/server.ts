@@ -123,8 +123,8 @@ export async function createServer(host: string, port: number, workspacePath: st
   await Promise.all([rootWorkspace, ...savedTasks.tasks.map((task) => tasks.taskPath(task.id))].map((target) => checkpointStore(target).recover()));
   const taskGitChanged = (changedWorkspace: string) => { const encoded = JSON.stringify({ type: "taskGit.changed", payload: { workspace: changedWorkspace } } satisfies ServerEvent); for (const socket of activeSessions) sendWebSocketData(socket, encoded); };
   const acp = createAcpRegistry(aiChanged, {
-    begin: async (target, provider, prompt, sessionId) => { const id = await checkpointStore(target).begin(provider as AiProvider, prompt, sessionId); taskGitChanged(target); return id; },
-    complete: async (target, ids, status) => { await Promise.all(ids.map((id) => checkpointStore(target).complete(id, status))); taskGitChanged(target); }
+    begin: async (target, provider, prompt, sessionId, provenance) => { const id = await checkpointStore(target).begin(provider as AiProvider, prompt, sessionId, undefined, provenance); taskGitChanged(target); return id; },
+    complete: async (target, ids, status, provenance) => { await Promise.all(ids.map((id) => checkpointStore(target).complete(id, status, provenance))); taskGitChanged(target); }
   });
   const aiTimers = new AiTimerService(new AiTimerStore(rootWorkspace), acp, rootWorkspace, aiChanged);
   await aiTimers.start();
