@@ -67,6 +67,6 @@ describe("activity terminal links", () => {
     render(<AiPanel provider="codex" providers={[]} session={conversation} sessions={[conversation]} models={[]} attachments={[]} permissionOwner={{ provider: "codex" }} onProviderChange={vi.fn()} onConfigurationChange={vi.fn()} onAttachmentsChange={vi.fn()} onSend={vi.fn()} onSteer={vi.fn()} onInterrupt={vi.fn()} onNewSession={vi.fn()} onSwitchSession={vi.fn()} onRemoveSession={vi.fn()} onResolvePermission={vi.fn()} onOpenTerminal={onOpenTerminal} />);
     fireEvent.click(screen.getByTitle("Open this activity's terminal"));
     await vi.waitFor(() => expect(onOpenTerminal).toHaveBeenCalledWith("terminal-1"));
-    await vi.waitFor(() => expect(screen.getByRole("button", { name: "Terminal unavailable" })).toBeDisabled());
+    await vi.waitFor(() => expect((screen.getByRole("button", { name: "Terminal unavailable" }) as HTMLButtonElement).disabled).toBe(true));
   });
 });
