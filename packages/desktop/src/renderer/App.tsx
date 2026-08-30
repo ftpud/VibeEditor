@@ -108,6 +108,7 @@ export function App() {
   const [status, setStatus] = useState<ConnectionStatus>("idle");
   const [statusMessage, setStatusMessageState] = useState("");
   const [statusKind, setStatusKind] = useState<StatusKind>("error");
+  const [lastDeleted, setLastDeleted] = useState<{ recoveryId: string; path: string }>();
   const setStatusMessage = useCallback((message: string) => { setStatusKind("error"); setStatusMessageState(message); }, []);
   const showStatus = useCallback((message: string, kind: StatusKind) => { setStatusKind(kind); setStatusMessageState(message); }, []);
   const [tree, setTree] = useState<FileTreeNode[]>([]);
@@ -1618,8 +1619,44 @@ export function App() {
     const renamePath = (value: string) => value === node.path ? targetPath : node.type === "directory" && value.startsWith(oldPrefix) ? newPrefix + value.slice(oldPrefix.length) : value;
     updateGroup((tabs, active) => ({ tabs: tabs.map((tab) => tab.type === "file" ? { ...tab, path: renamePath(tab.path), title: tab.path === node.path || node.type === "directory" && tab.path.startsWith(oldPrefix) ? renamePath(tab.path).split("/").at(-1) ?? tab.title : tab.title } : tab), activeTabId: active }));
     setFileColors((current) => Object.fromEntries(Object.entries(current).map(([path, color]) => [renamePath(path), color])));
+    if (javaOptionsRef.current) {
+      const next = { ...javaOptionsRef.current, pomPath: renamePath(javaOptionsRef.current.pomPath), sourceRoots: javaOptionsRef.current.sourceRoots.map(renamePath), outputPath: renamePath(javaOptionsRef.current.outputPath), testOutputPath: renamePath(javaOptionsRef.current.testOutputPath) };
+      javaOptionsRef.current = next; setJavaOptions(next);
+    }
     setProjectPathDialog(undefined);
-    await Promise.all([refreshTree(), refreshGit()]);
+    await Promise.all([refreshTree(), refreshGit(), javaOptionsRef.current ? refreshJavaTree() : Promise.resolve()]);
+  };
+
+  const deleteProjectPath = async (node: FileTreeNode) => {
+    const client = clientRef.current;
+    if (!client) return;
+    const prefix = `${node.path}/`;
+    const affectedTabs = layoutRef.current.editorGroups.flatMap((editorGroup) => editorGroup.tabs).filter((tab) => tab.type === "file" && (tab.path === node.path || node.type === "directory" && tab.path.startsWith(prefix)));
+    const dirty = affectedTabs.filter((tab) => tab.dirty);
+    if (dirty.length) { setStatusMessage(`Save or discard changes before deleting ${node.path}: ${dirty.map((tab) => tab.path).join(", ")}`); return; }
+    try {
+      const preview = await client.request("filesystem.previewDelete", { path: node.path });
+      const separator = activeWorkspace.includes("\\") ? "\\" : "/";
+      const resolved = `${activeWorkspace.replace(/[\\/]+$/, "")}${separator}${node.path.split("/").join(separator)}`;
+      const detail = preview.childCount ? `\n\n${preview.childCount} child item${preview.childCount === 1 ? "" : "s"} will also be moved to trash.${preview.children.length ? `\n\n${preview.children.slice(0, 8).join("\n")}${preview.childCount > 8 ? "\n…" : ""}` : ""}` : "";
+      if (!window.confirm(`Move this ${preview.type} to workspace trash?\n\n${resolved}${detail}`)) return;
+      const result = await client.request("filesystem.delete", { path: node.path });
+      const closing = new Set(affectedTabs.map((tab) => tab.id));
+      updateGroup((tabs, active) => { const next = tabs.filter((tab) => !closing.has(tab.id)); return { tabs: next, activeTabId: active && !closing.has(active) ? active : next.at(-1)?.id }; });
+      setFileColors((current) => Object.fromEntries(Object.entries(current).filter(([filePath]) => filePath !== node.path && !(node.type === "directory" && filePath.startsWith(prefix)))));
+      if (result.recoveryId) setLastDeleted({ recoveryId: result.recoveryId, path: node.path });
+      showStatus(`${node.path} moved to workspace trash`, "success");
+      await Promise.all([refreshTree(), refreshGit(), javaOptionsRef.current ? refreshJavaTree() : Promise.resolve()]);
+    } catch (error) { setStatusMessage(error instanceof Error ? error.message : `Could not delete ${node.path}`); }
+  };
+
+  const restoreLastDeleted = async () => {
+    if (!lastDeleted || !clientRef.current) return;
+    try {
+      await clientRef.current.request("filesystem.restore", { recoveryId: lastDeleted.recoveryId });
+      showStatus(`${lastDeleted.path} restored`, "success"); setLastDeleted(undefined);
+      await Promise.all([refreshTree(), refreshGit(), javaOptionsRef.current ? refreshJavaTree() : Promise.resolve()]);
+    } catch (error) { setStatusMessage(error instanceof Error ? error.message : "Could not restore deleted path"); }
   };
 
   const toggleJavaPanel = () => {
@@ -1913,6 +1950,7 @@ export function App() {
     if (action === "createFile") setProjectPathDialog({ mode: "file", node, parentPath });
     else if (action === "createDirectory") setProjectPathDialog({ mode: "directory", node, parentPath });
     else if (action === "rename") setProjectPathDialog({ mode: "rename", node, parentPath });
+    else if (action === "delete") void deleteProjectPath(node);
   };
 
   const navigateToSearchResult = async (result: SearchResult, matchLength: number) => {
@@ -1967,6 +2005,7 @@ export function App() {
     {statusMessage && <div className={`status-toast ${statusKind}`} role={statusKind === "error" ? "alert" : "status"} aria-live={statusKind === "error" ? "assertive" : "polite"}>
       {statusKind === "progress" ? <LoaderCircle className="status-toast-spinner" size={16} /> : statusKind === "success" ? <Check size={16} /> : <CircleAlert size={16} />}
       <span>{statusMessage}</span>
+      {lastDeleted && statusKind === "success" && <button onClick={() => void restoreLastDeleted()}>Undo</button>}
       {statusKind !== "progress" && <button title="Dismiss" aria-label="Dismiss status message" onClick={() => setStatusMessageState("")}><X size={14} /></button>}
     </div>}
     <div className="workspace-row">
@@ -2117,7 +2156,7 @@ export function App() {
         {javaOptions && treeContextMenu.node.type === "directory" && treeContextMenu.node.path && <button onClick={() => void addJavaSourceRoot(treeContextMenu.node.path)}><Coffee size={14} /><span>Mark as Sources Root</span></button>}
         {treeContextMenu.node.path && <div className="context-submenu-trigger"><button><Palette size={14} /><span>Color</span><ChevronRight size={13} /></button><div className="context-menu context-submenu color-submenu">{fileColorChoices.map((color) => <button key={color.id} onClick={() => { setFileColors((current) => ({ ...current, [treeContextMenu.node.path]: color.id })); setTreeContextMenu(undefined); }}><span className={`file-color-swatch ${color.id}`} /><span>{color.label}</span>{fileColors[treeContextMenu.node.path] === color.id && <Check size={13} />}</button>)}<button disabled={!fileColors[treeContextMenu.node.path]} onClick={() => { setFileColors((current) => { const next = { ...current }; delete next[treeContextMenu.node.path]; return next; }); setTreeContextMenu(undefined); }}><X size={14} /><span>Clear Color</span></button></div></div>}
         <div className="context-menu-separator" role="separator" />
-        <button className="danger" disabled={!projectTreeActions({ node: treeContextMenu.node }).delete}><Trash2 size={14} /><span>Delete</span></button>
+        <button className="danger" disabled={!projectTreeActions({ node: treeContextMenu.node }).delete} onClick={() => { runProjectTreeAction("delete", treeContextMenu.node); setTreeContextMenu(undefined); }}><Trash2 size={14} /><span>Delete...</span></button>
       </div>
     </div>}
     {editorGitMenu && <div className="context-menu-layer" onMouseDown={() => setEditorGitMenu(undefined)}><div className="context-menu editor-git-menu" style={{ left: editorGitMenu.x, top: editorGitMenu.y }} onMouseDown={(event) => event.stopPropagation()}><button onClick={() => attachWorkspaceFile(editorGitMenu.path)}><Bot size={14} /><span>Attach to AI</span></button><div className="context-submenu-trigger"><button><GitBranch size={14} /><span>Git</span><ChevronRight size={13} /></button><div className="context-menu context-submenu"><button onClick={() => { setGitHistory({ path: editorGitMenu.path }); setEditorGitMenu(undefined); }}><FileDiff size={14} /><span>Show file changes</span></button><button disabled={editorGitMenu.startLine === undefined} onClick={() => { setGitHistory({ path: editorGitMenu.path, startLine: editorGitMenu.startLine, endLine: editorGitMenu.endLine }); setEditorGitMenu(undefined); }}><ListTree size={14} /><span>Show selection changes</span></button></div></div></div></div>}

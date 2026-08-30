@@ -1,14 +1,16 @@
 import { execFile } from "node:child_process";
 import { constants } from "node:fs";
-import { access, lstat, mkdir, readFile, readdir, realpath, rename, stat, writeFile } from "node:fs/promises";
+import { access, lstat, mkdir, readFile, readdir, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { promisify } from "node:util";
-import type { FileTreeNode } from "@remote-ide/protocol";
+import type { FileTreeNode, FilesystemDeletePreview, FilesystemDeleteResult } from "@remote-ide/protocol";
 import { CoreError } from "./errors.js";
 
 const execFileAsync = promisify(execFile);
 
 export const MAX_FILE_SIZE = 2 * 1024 * 1024;
+const TRASH_DIRECTORY = ".vibe-trash";
 
 export class WorkspaceFileSystem {
   private workspace?: string;
@@ -100,7 +102,7 @@ export class WorkspaceFileSystem {
   }
 
   async rename(relativePath: string, newRelativePath: string): Promise<void> {
-    const source = await this.resolveExisting(relativePath);
+    const source = await this.resolveMutationTarget(relativePath);
     const destination = await this.resolveNew(newRelativePath);
     try {
       await access(destination);
@@ -116,10 +118,57 @@ export class WorkspaceFileSystem {
     }
   }
 
+  async previewDelete(relativePath: string): Promise<FilesystemDeletePreview> {
+    const target = await this.resolveMutationTarget(relativePath);
+    const info = await lstat(target);
+    const children: string[] = [];
+    if (info.isDirectory()) await this.collectChildren(target, relativePath, children);
+    return { path: relativePath, type: info.isDirectory() ? "directory" : "file", children: children.slice(0, 100), childCount: children.length, recoverable: true };
+  }
+
+  async delete(relativePath: string, permanent = false): Promise<FilesystemDeleteResult> {
+    const target = await this.resolveMutationTarget(relativePath);
+    if (permanent) {
+      try { await rm(target, { recursive: true }); }
+      catch (error) { throw new CoreError("WRITE_FAILED", `Could not permanently delete ${relativePath}: ${error instanceof Error ? error.message : String(error)}`); }
+      return { path: relativePath, permanentlyDeleted: true };
+    }
+    const recoveryId = randomUUID();
+    const trashRoot = path.join(this.getWorkspace(), TRASH_DIRECTORY);
+    try {
+      await mkdir(trashRoot, { recursive: true });
+      await rename(target, path.join(trashRoot, recoveryId));
+      await writeFile(path.join(trashRoot, `${recoveryId}.json`), JSON.stringify({ path: relativePath }), { encoding: "utf8", flag: "wx" });
+      return { path: relativePath, recoveryId, permanentlyDeleted: false };
+    } catch (error) {
+      throw new CoreError("WRITE_FAILED", `Could not move ${relativePath} to workspace trash: ${error instanceof Error ? error.message : String(error)}. Retry with permanent delete only if recovery is not required.`);
+    }
+  }
+
+  async restore(recoveryId: string): Promise<string> {
+    if (!/^[0-9a-f-]{36}$/i.test(recoveryId)) throw new CoreError("INVALID_REQUEST", "Invalid recovery ID");
+    const trashRoot = path.join(this.getWorkspace(), TRASH_DIRECTORY);
+    try {
+      const metadataPath = path.join(trashRoot, `${recoveryId}.json`);
+      const metadata = JSON.parse(await readFile(metadataPath, "utf8")) as { path?: unknown };
+      if (typeof metadata.path !== "string") throw new Error("invalid recovery metadata");
+      const destination = await this.resolveNew(metadata.path);
+      try { await access(destination); throw new CoreError("WRITE_FAILED", `Cannot restore because a path already exists at ${metadata.path}`); }
+      catch (error) { if (error instanceof CoreError) throw error; if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+      await rename(path.join(trashRoot, recoveryId), destination);
+      await rm(metadataPath);
+      return metadata.path;
+    } catch (error) {
+      if (error instanceof CoreError) throw error;
+      throw new CoreError("WRITE_FAILED", `Could not restore deleted path: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
   private validateRelative(relativePath: string): string {
     if (!relativePath || path.isAbsolute(relativePath)) {
       throw new CoreError("PATH_OUTSIDE_WORKSPACE", "Path must be relative to the workspace");
     }
+    if (relativePath.split(/[\\/]/).includes(TRASH_DIRECTORY)) throw new CoreError("PATH_OUTSIDE_WORKSPACE", "The workspace trash is reserved");
     const root = this.getWorkspace();
     const resolved = path.resolve(root, relativePath);
     if (resolved === root || !resolved.startsWith(root + path.sep)) {
@@ -137,6 +186,21 @@ export class WorkspaceFileSystem {
         throw new CoreError("PATH_OUTSIDE_WORKSPACE", "Symbolic link points outside the workspace");
       }
       return resolved;
+    } catch (error) {
+      if (error instanceof CoreError) throw error;
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") throw new CoreError("FILE_NOT_FOUND", `File not found: ${relativePath}`);
+      throw new CoreError("READ_FAILED", `Could not resolve path: ${relativePath}`);
+    }
+  }
+
+  private async resolveMutationTarget(relativePath: string): Promise<string> {
+    const candidate = this.validateRelative(relativePath);
+    try {
+      await lstat(candidate);
+      const resolved = await realpath(candidate);
+      const root = this.getWorkspace();
+      if (!resolved.startsWith(root + path.sep)) throw new CoreError("PATH_OUTSIDE_WORKSPACE", "Symbolic link points outside the workspace");
+      return candidate;
     } catch (error) {
       if (error instanceof CoreError) throw error;
       if ((error as NodeJS.ErrnoException).code === "ENOENT") throw new CoreError("FILE_NOT_FOUND", `File not found: ${relativePath}`);
@@ -165,6 +229,7 @@ export class WorkspaceFileSystem {
     const entries = await readdir(absoluteDir, { withFileTypes: true });
     const nodes: FileTreeNode[] = [];
     for (const entry of entries.sort((a, b) => Number(b.isDirectory()) - Number(a.isDirectory()) || a.name.localeCompare(b.name))) {
+      if (!relativeDir && entry.name === TRASH_DIRECTORY) continue;
       const relative = path.posix.join(relativeDir.split(path.sep).join(path.posix.sep), entry.name);
       const absolute = path.join(absoluteDir, entry.name);
       const info = await lstat(absolute);
@@ -182,6 +247,14 @@ export class WorkspaceFileSystem {
       }
     }
     return nodes;
+  }
+
+  private async collectChildren(absolute: string, relative: string, output: string[]): Promise<void> {
+    for (const entry of await readdir(absolute, { withFileTypes: true })) {
+      const childRelative = path.posix.join(relative.split(path.sep).join(path.posix.sep), entry.name);
+      output.push(childRelative);
+      if (entry.isDirectory() && !entry.isSymbolicLink()) await this.collectChildren(path.join(absolute, entry.name), childRelative, output);
+    }
   }
 }
 
@@ -214,6 +287,7 @@ function buildTreeFromPaths(paths: string[], directoryPaths = new Set<string>())
   const directories = new Map<string, FileTreeNode[]>([["", rootNodes]]);
   const seen = new Set<string>();
   for (const entry of paths) {
+    if (entry === TRASH_DIRECTORY || entry.startsWith(`${TRASH_DIRECTORY}/`)) continue;
     const segments = entry.split("/").filter((segment) => segment.length > 0);
     if (segments.length === 0) continue;
     let relative = "";

@@ -14,7 +14,6 @@ export function projectTreeActions(selection: ProjectTreeSelection): Record<Proj
     open: node.type === "file",
     copyRelativePath: Boolean(node.path),
     copyAbsolutePath: Boolean(node.path),
-    // Filesystem deletion deliberately remains unavailable until safe-delete exists.
-    delete: false
+    delete: Boolean(node.path)
   };
 }

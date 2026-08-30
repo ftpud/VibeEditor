@@ -4,6 +4,8 @@ export type FileTreeNode = {
   type: "file" | "directory";
   children?: FileTreeNode[];
 };
+export type FilesystemDeletePreview = { path: string; type: "file" | "directory"; children: string[]; childCount: number; recoverable: boolean };
+export type FilesystemDeleteResult = { path: string; recoveryId?: string; permanentlyDeleted: boolean };
 
 export type GitStatusEntry = {
   path: string;
@@ -170,6 +172,18 @@ export type ProtocolOperations = {
   };
   "filesystem.rename": {
     payload: { path: string; newPath: string };
+    result: { path: string };
+  };
+  "filesystem.previewDelete": {
+    payload: { path: string };
+    result: FilesystemDeletePreview;
+  };
+  "filesystem.delete": {
+    payload: { path: string; permanent?: boolean };
+    result: FilesystemDeleteResult;
+  };
+  "filesystem.restore": {
+    payload: { recoveryId: string };
     result: { path: string };
   };
   "filesystem.search": {
@@ -408,6 +422,9 @@ const requestTypeRegistry: Record<RequestType, true> = {
   "filesystem.createFile": true,
   "filesystem.createDirectory": true,
   "filesystem.rename": true,
+  "filesystem.previewDelete": true,
+  "filesystem.delete": true,
+  "filesystem.restore": true,
   "filesystem.search": true,
   "terminal.create": true,
   "terminal.attach": true,

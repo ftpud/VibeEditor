@@ -28,12 +28,12 @@ multi-surface work).
 
 ### Project and filesystem control
 
-- [ ] **Project-tree create file/folder and rename/move — Project.** Value: make
+- [x] **Project-tree create file/folder and rename/move — Project.** Value: make
   routine repository changes possible without dropping to a terminal. Constraint:
   add typed Protocol operations first, then Core boundary/symlink validation and
   Desktop actions; update open tabs, persisted paths, Java roots, and file colors
   atomically after a move.
-- [ ] **Safe delete with recovery — Project.** Value: let users clean up files and
+- [x] **Safe delete with recovery — Project.** Value: let users clean up files and
   directories confidently. Constraint: define remote-host trash semantics and a
   clear permanent-delete fallback; show the resolved target and affected children,
   reject workspace-root/symlink escapes, and never silently discard a dirty buffer.
