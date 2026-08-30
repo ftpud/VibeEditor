@@ -17,6 +17,35 @@ describe("WorkspaceSearch", () => {
     const result = await new WorkspaceSearch(filesystem).search("target", "src", false);
     expect(result.matches.map((match) => match.path)).toEqual(["src/a.ts", "src/nested/b.ts"]);
     expect(result.matches[0]).toMatchObject({ line: 1, column: 7 });
+    expect(result.matches[0]?.context).toEqual({
+      before: [],
+      after: [{ line: 2, text: "", truncated: false }],
+      truncatedBefore: false,
+      truncatedAfter: false
+    });
+  });
+
+  it("returns bounded surrounding context and marks omitted or shortened content", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "remote-ide-search-"));
+    const longLine = "a".repeat(201);
+    await writeFile(path.join(root, "a.txt"), `one\ntwo\nthree\n${longLine}\ntarget\nsix\nseven\neight\n`);
+    const filesystem = new WorkspaceFileSystem();
+    await filesystem.open(root);
+
+    const result = await new WorkspaceSearch(filesystem).search("target", "", false);
+
+    expect(result.matches[0]?.context).toEqual({
+      before: [
+        { line: 3, text: "three", truncated: false },
+        { line: 4, text: "a".repeat(200), truncated: true }
+      ],
+      after: [
+        { line: 6, text: "six", truncated: false },
+        { line: 7, text: "seven", truncated: false }
+      ],
+      truncatedBefore: true,
+      truncatedAfter: true
+    });
   });
 
   it("supports case-sensitive matching", async () => {

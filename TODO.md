@@ -96,7 +96,7 @@ multi-surface work).
   make repository-scale refactors practical. Constraint: Core owns glob/ignore
   evaluation; replacements require a per-file preview, changed-file/version checks,
   binary exclusion, and one confirmed batch write.
-- [ ] **Search match context — Small.** Value: make individual search hits easier to
+- [x] **Search match context — Small.** Value: make individual search hits easier to
   interpret. Constraint: preserve truncation visibility and stream/page results
   before raising current limits.
 

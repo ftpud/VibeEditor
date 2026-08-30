@@ -757,14 +757,19 @@ button { color: inherit; }
 .find-result-group-header:hover { background: #343e50; }
 .find-result-group-header svg { color: #8f9298; }
 .find-group-count { min-width: 17px; padding: 1px 4px; border-radius: 9px; background: #41444a; color: #c7c9cc; font-size: 0.6923rem; text-align: center; }
-.find-result-group > button:not(.find-result-group-header) { width: 100%; min-width: 0; height: 32px; padding: 3px 10px 3px 31px; display: grid; grid-template-columns: minmax(0, 1fr) max-content; align-items: center; gap: 10px; overflow: hidden; border: 0; background: transparent; color: #c7c9cc; text-align: left; cursor: pointer; }
+.find-result-group > button:not(.find-result-group-header) { width: 100%; min-width: 0; min-height: 32px; padding: 3px 10px 3px 31px; display: grid; grid-template-columns: minmax(0, 1fr) max-content; align-items: center; gap: 10px; overflow: hidden; border: 0; background: transparent; color: #c7c9cc; text-align: left; cursor: pointer; }
 .find-result-group > button:not(.find-result-group-header):hover { background: #343e50; }
 .find-result-group > button.selected { background: #2e436e; }
 .find-result-file, .find-result-path { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .find-result-file { color: #b8bbc0; }
 .find-result-path { color: #777b82; font-size: 0.7692rem; }
 .find-location { min-width: max-content; color: #7aa2d6; font-size: 0.8462rem; white-space: nowrap; }
-.find-results code { min-width: 0; overflow: hidden; color: #c4c6ca; font-family: Menlo, Monaco, Consolas, monospace; font-size: 0.8462rem; text-overflow: ellipsis; white-space: nowrap; }
+.find-match-content { min-width: 0; display: grid; gap: 1px; }
+.find-context-line { min-width: 0; display: grid; grid-template-columns: 30px minmax(0, 1fr); gap: 7px; align-items: baseline; }
+.find-context-line > span { color: #777b82; font-family: Menlo, Monaco, Consolas, monospace; font-size: .7692rem; text-align: right; }
+.find-context-line code { min-width: 0; overflow: hidden; color: #95999f; font-family: Menlo, Monaco, Consolas, monospace; font-size: .8462rem; text-overflow: ellipsis; white-space: nowrap; }
+.find-context-match code { color: #c4c6ca; }
+.find-context-omission { color: #777b82; font-family: Menlo, Monaco, Consolas, monospace; font-size: .7692rem; line-height: 1; }
 .find-results mark { padding: 0; background: #725d2d; color: #fff3c4; }
 .find-empty { max-width: 100%; padding: 28px; overflow-wrap: anywhere; color: #85888e; text-align: center; }
 .find-preview-editor { min-height: 0; flex: 1; background: #1e1f22; }
