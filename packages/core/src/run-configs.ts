@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import os from "node:os";
 import path from "node:path";
-import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import type { RunConfig, RunConfigScope } from "@remote-ide/protocol";
 import { CoreError } from "./errors.js";
 import { TerminalSessionHost, type TerminalEvent } from "./process-manager.js";
@@ -44,6 +44,8 @@ export class RunConfigService {
     this.changed(workspace); return this.read(workspace, scope, normalized);
   }
   async write(workspace: string, scope: RunConfigScope, name: string, commands: string): Promise<RunConfig> { this.validateCommands(commands); const current = await this.read(workspace, scope, name); if (["starting", "running", "stopping"].includes(current.status)) throw new CoreError("RUN_CONFIG_RUNNING", "Stop the run configuration before editing it"); await writeFile(this.target(workspace, scope, name), commands, "utf8"); this.changed(workspace); return this.read(workspace, scope, name); }
+  async rename(workspace: string, scope: RunConfigScope, name: string, newName: string): Promise<RunConfig> { const current = await this.read(workspace, scope, name); if (["starting", "running", "stopping"].includes(current.status)) throw new CoreError("RUN_CONFIG_RUNNING", "Stop the run configuration before renaming it"); const normalized = this.displayName(newName); const destination = this.target(workspace, scope, normalized); try { await access(destination); throw new CoreError("RUN_CONFIG_FAILED", `Run configuration already exists: ${normalized}`); } catch (error) { if (error instanceof CoreError) throw error; if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; } await rename(this.target(workspace, scope, name), destination); const oldKey = key(workspace, scope, current.name); const state = this.runtime.get(oldKey); if (state) { this.runtime.delete(oldKey); this.runtime.set(key(workspace, scope, normalized), state); } this.changed(workspace); return this.read(workspace, scope, normalized); }
+  async delete(workspace: string, scope: RunConfigScope, name: string): Promise<void> { const current = await this.read(workspace, scope, name); if (["starting", "running", "stopping"].includes(current.status)) throw new CoreError("RUN_CONFIG_RUNNING", "Stop the run configuration before deleting it"); await rm(this.target(workspace, scope, name)); this.runtime.delete(key(workspace, scope, current.name)); this.changed(workspace); }
   async run(workspace: string, scope: RunConfigScope, name: string): Promise<RunConfig> {
     const config = await this.read(workspace, scope, name); if (["starting", "running", "stopping"].includes(config.status)) throw new CoreError("RUN_CONFIG_RUNNING", `${config.name} is already active`);
     const state: Runtime = { status: "starting" }; this.runtime.set(key(workspace, scope, config.name), state); this.changed(workspace);

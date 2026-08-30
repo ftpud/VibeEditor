@@ -125,6 +125,8 @@ export type ProtocolOperations = {
   "runConfig.create": { payload: { scope: RunConfigScope; name: string; commands: string }; result: { config: RunConfig } };
   "runConfig.read": { payload: { scope: RunConfigScope; name: string }; result: { config: RunConfig } };
   "runConfig.write": { payload: { scope: RunConfigScope; name: string; commands: string }; result: { config: RunConfig } };
+  "runConfig.rename": { payload: { scope: RunConfigScope; name: string; newName: string }; result: { config: RunConfig } };
+  "runConfig.delete": { payload: { scope: RunConfigScope; name: string }; result: Record<string, never> };
   "runConfig.run": { payload: { scope: RunConfigScope; name: string }; result: { config: RunConfig } };
   "runConfig.stop": { payload: { scope: RunConfigScope; name: string }; result: { config: RunConfig } };
   "runConfig.restart": { payload: { scope: RunConfigScope; name: string }; result: { config: RunConfig } };
@@ -359,6 +361,8 @@ const requestTypeRegistry: Record<RequestType, true> = {
   "runConfig.create": true,
   "runConfig.read": true,
   "runConfig.write": true,
+  "runConfig.rename": true,
+  "runConfig.delete": true,
   "runConfig.run": true,
   "runConfig.stop": true,
   "runConfig.restart": true,

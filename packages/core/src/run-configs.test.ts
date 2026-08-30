@@ -31,4 +31,9 @@ describe("RunConfigService", () => {
     const { service, workspace } = await fixture(); await service.create(workspace, "local", "watch", "sleep 10"); await service.run(workspace, "local", "watch");
     service.onTerminalClosed(workspace, "terminal-1"); expect(await service.read(workspace, "local", "watch")).toMatchObject({ status: "failed", exitCode: 130 });
   });
+  it("renames and deletes idle configurations", async () => {
+    const { service, workspace } = await fixture(); await service.create(workspace, "local", "old", "echo hi\n");
+    expect(await service.rename(workspace, "local", "old", "new")).toMatchObject({ name: "new", commands: "echo hi\n" }); await expect(service.read(workspace, "local", "old")).rejects.toThrow("not found");
+    await service.delete(workspace, "local", "new"); await expect(service.read(workspace, "local", "new")).rejects.toThrow("not found");
+  });
 });
