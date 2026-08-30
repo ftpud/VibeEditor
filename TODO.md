@@ -42,7 +42,7 @@ multi-surface work).
   create, rename, delete, and open actions where users expect them. Constraint:
   commands must share one selection/action model and remain keyboard accessible;
   disable unsupported actions rather than emulating filesystem work locally.
-- [ ] **Copy relative/absolute path and reveal active file — Small.** Value: speed
+- [x] **Copy relative/absolute path and reveal active file — Small.** Value: speed
   terminal, issue, and AI handoffs and reconnect the editor with a large tree.
   Constraint: relative paths are workspace-relative; absolute paths explicitly
   identify the remote machine and use the Electron clipboard bridge. Revealing must

@@ -58,6 +58,26 @@ describe("ProjectTree", () => {
     expect(screen.getByRole("treeitem", { name: "Tree.tsx" }).getAttribute("tabindex")).toBe("-1");
   });
 
+  it("reveals, focuses, and scrolls the active row without collapsing unrelated folders", async () => {
+    renderTree({ activePath: "src/components/Tree.tsx" });
+    fireEvent.click(screen.getByRole("button", { name: "Collapse all folders" }));
+    const scrollIntoView = vi.fn(); Element.prototype.scrollIntoView = scrollIntoView;
+    fireEvent.click(screen.getByRole("button", { name: "Reveal active file" }));
+    expect(await screen.findByRole("treeitem", { name: "Tree.tsx" })).toBe(document.activeElement);
+    expect(scrollIntoView).toHaveBeenCalledWith({ block: "nearest" });
+    expect(screen.getByRole("treeitem", { name: "main.ts" })).not.toBeNull();
+  });
+
+  it("routes path-copy shortcuts through the shared tree action model", () => {
+    const onAction = vi.fn();
+    render(<ProjectTree nodes={nodes} query="" fileColors={{}} gitStatuses={{}} onAction={onAction} onContextMenu={vi.fn()} />);
+    const src = screen.getByRole("treeitem", { name: "src" }); fireEvent.focus(src);
+    fireEvent.keyDown(src, { key: "c", ctrlKey: true, shiftKey: true });
+    fireEvent.keyDown(src, { key: "c", ctrlKey: true, altKey: true });
+    expect(onAction).toHaveBeenNthCalledWith(1, "copyAbsolutePath", expect.objectContaining({ path: "src" }));
+    expect(onAction).toHaveBeenNthCalledWith(2, "copyRelativePath", expect.objectContaining({ path: "src" }));
+  });
+
   it("keeps matching ancestor context while filtering", () => {
     expect(filterProjectTree(nodes, "tree.tsx")).toEqual([expect.objectContaining({
       path: "src",
