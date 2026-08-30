@@ -7,6 +7,7 @@ import { mkdir, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/p
 import { Readable, Writable } from "node:stream";
 import { ClientSideConnection, PROTOCOL_VERSION, ndJsonStream, type Client, type ContentBlock, type McpServer, type RequestPermissionRequest, type RequestPermissionResponse, type SessionConfigOption, type SessionNotification } from "@agentclientprotocol/sdk";
 import { AcpProvider, applyConfiguration, type AcpSendRequest, type AiConfiguration, type AiContentBlock, type AiMessage, type AiModel, type AiModelDetails, type AiOption, type AiProviderDescriptor, type AiSession, type AiUsage } from "@remote-ide/acp";
+import type { TaskCheckpointProvenance } from "@remote-ide/protocol";
 import { CoreError } from "../errors.js";
 import { agentFingerprint } from "../agent-profile.js";
 
@@ -40,6 +41,18 @@ type PermissionWaiter = { workspace: string; resolve(response: RequestPermission
 
 const STEERING_METHOD = "_session/steering";
 
+function checkpointProvenance(session: AiSession, content?: AiContentBlock[], agent?: AcpSendRequest["agent"]): TaskCheckpointProvenance {
+  const attachments = content?.filter((block) => block.type !== "text").slice(0, 20).map((block) => ({
+    name: (block.name ?? (block.type === "image" ? "Image" : block.uri) ?? "Attachment").slice(0, 160), mimeType: block.mimeType,
+    kind: block.type
+  }));
+  return {
+    model: session.model, reasoning: session.reasoning,
+    ...(agent ? { agent: { name: agent.name, fingerprint: agentFingerprint(agent) } } : session.agent ? { agent: session.agent } : {}),
+    ...(attachments?.length ? { attachments } : {})
+  };
+}
+
 function stamp(session: AiSession): number { return Date.parse(session.updatedAt ?? session.createdAt ?? "") || 0; }
 
 /** Everything the session picker needs to label a conversation, without its transcript. */
@@ -56,8 +69,8 @@ const TERMINAL_ONLY_COMMANDS = new Set(["/diff", "/resume", "/theme", "/settings
 
 /** Genuine ACP v1 client transport over NDJSON/stdio. */
 export type AcpTurnObserver = {
-  begin(workspace: string, provider: string, prompt: string, sessionId?: string): Promise<string>;
-  complete(workspace: string, ids: string[], status: "completed" | "interrupted" | "error"): Promise<void>;
+  begin(workspace: string, provider: string, prompt: string, sessionId?: string, provenance?: TaskCheckpointProvenance): Promise<string>;
+  complete(workspace: string, ids: string[], status: "completed" | "interrupted" | "error", provenance?: Pick<TaskCheckpointProvenance, "usage">): Promise<void>;
 };
 export abstract class StdioAcpProvider extends AcpProvider {
   abstract readonly descriptor: AiProviderDescriptor;
@@ -151,7 +164,7 @@ export abstract class StdioAcpProvider extends AcpProvider {
     if (nextConfiguration) runtime.session.nextConfiguration = undefined;
     const visible = [prompt, ...(request.content ?? []).map(contentLabel)].filter(Boolean).join("\n");
     runtime.session.messages.push({ ...this.message("user", visible), content: request.content });
-    if (this.turns) try { runtime.checkpointIds.push(await this.turns.begin(workspace, this.descriptor.id, visible, runtime.session.id)); } catch (error) { runtime.session.messages.push(this.message("activity", `Prompt checkpoint could not be created: ${error instanceof Error ? error.message : String(error)}`)); }
+    if (this.turns) try { runtime.checkpointIds.push(await this.turns.begin(workspace, this.descriptor.id, visible, runtime.session.id, checkpointProvenance(runtime.session, request.content, request.agent))); } catch (error) { runtime.session.messages.push(this.message("activity", `Prompt checkpoint could not be created: ${error instanceof Error ? error.message : String(error)}`)); }
     this.runPrompt(workspace, runtime, this.withSessionAgent(content, request.agent, runtime.session));
     await this.save(workspace, runtime.session); this.onChanged(workspace);
     return this.get(workspace);
@@ -167,7 +180,7 @@ export abstract class StdioAcpProvider extends AcpProvider {
     const runtime = this.runtimes.get(workspace);
     if (!runtime?.running) throw new CoreError("INVALID_REQUEST", `${this.descriptor.name} is not currently working`);
     runtime.session.messages.push({ ...this.message("user", prompt), ...(options?.senderModel ? { senderModel: options.senderModel } : {}) });
-    if (this.turns) try { runtime.checkpointIds.push(await this.turns.begin(workspace, this.descriptor.id, prompt, runtime.session.id)); } catch (error) { runtime.session.messages.push(this.message("activity", `Prompt checkpoint could not be created: ${error instanceof Error ? error.message : String(error)}`)); }
+    if (this.turns) try { runtime.checkpointIds.push(await this.turns.begin(workspace, this.descriptor.id, prompt, runtime.session.id, checkpointProvenance(runtime.session))); } catch (error) { runtime.session.messages.push(this.message("activity", `Prompt checkpoint could not be created: ${error instanceof Error ? error.message : String(error)}`)); }
     runtime.anchors = {};
     if (runtime.steering && !options?.queue) {
       try { await runtime.connection.extMethod(STEERING_METHOD, { sessionId: runtime.sessionId, prompt: [{ type: "text", text: prompt }] }); }
@@ -238,7 +251,7 @@ export abstract class StdioAcpProvider extends AcpProvider {
 
   private async completeCheckpoints(workspace: string, runtime: Runtime, status: "completed" | "interrupted" | "error"): Promise<void> {
     const ids = runtime.checkpointIds.splice(0); if (!this.turns || ids.length === 0) return;
-    try { await this.turns.complete(workspace, ids, status); } catch (error) { runtime.session.messages.push(this.message("activity", `Prompt checkpoint could not be completed: ${error instanceof Error ? error.message : String(error)}`)); }
+    try { await this.turns.complete(workspace, ids, status, runtime.session.tokens ? { usage: runtime.session.tokens } : undefined); } catch (error) { runtime.session.messages.push(this.message("activity", `Prompt checkpoint could not be completed: ${error instanceof Error ? error.message : String(error)}`)); }
   }
 
   private promptContent(workspace: string, prompt: string, blocks?: AiContentBlock[]): ContentBlock[] {
