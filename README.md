@@ -15,37 +15,47 @@ Vibe Editor is AI-first, not AI-only: agents can do the initial work, while the 
 
 Expect rough edges, incomplete features, breaking changes, and assumptions tailored to the author's workflow. This repository is under active development and currently targets source-based development and launches rather than packaged application releases.
 
-## Requirements
+## Quick start: Vibe Gateway (recommended)
 
-- Node.js 20 or newer and npm.
-- Git.
-- A compiler toolchain supported by `node-pty` if npm cannot use a prebuilt binary.
-- The platform libraries required by Electron.
+Use Gateway for the normal remote-first workflow. It installs and runs Core next to your project on the remote machine, then opens the Desktop UI locally through a private SSH tunnel. You do not need to manually clone Vibe Editor or start Core on the remote host.
+
+Before starting, make sure the two machines have the following:
+
+| Machine | Required for Gateway |
+| --- | --- |
+| **Local client** | Node.js 20+ and npm, Git (to clone this repository), `tar`, and the platform libraries required by Electron. A `node-pty` compiler toolchain is needed only if npm cannot use its prebuilt binary. |
+| **Remote server** | A Unix-like SSH host reachable with a username and **password** (Gateway does not support SSH keys or an agent), Node.js 20+ and npm for that SSH user, Git, `bash`, `tar`, standard process utilities (`nohup`, `kill`, `sleep`, and `tail`), and permission to create `~/.vibe`, run processes, and modify the selected project directory. It must be able to reach GitHub to clone the fixed `dev` branch. A C/C++ compiler, `make`, and Python 3 are needed only if `node-pty` must be rebuilt. |
+
+On the **local client**, clone the branch Gateway deploys, install dependencies, build, and launch Gateway:
+
+```bash
+git clone --branch dev https://github.com/ftpud/VibeEditor.git
+cd VibeEditor
+VIBE_SKIP_JDTLS=1 npm install
+npm run build
+npm run gateway
+```
+
+`VIBE_SKIP_JDTLS=1` skips the optional Java language-server download. Omit it if you want Java tooling; its requirements are listed below.
+
+In Gateway's first run:
+
+1. Add an SSH connection (host, port, username, and password).
+2. Add a remote workspace using the absolute path to an existing project directory on that server.
+3. Click **Start server**. Gateway clones or resets `~/.vibe` to `origin/dev`, installs/builds what changed, and starts remote Core on loopback.
+4. Click **Start client** and keep Gateway open while using the editor; it owns the SSH tunnel.
+
+For deployment details, caching behavior, and lifecycle notes, see [Vibe Gateway](#vibe-gateway). Use the direct Core/Desktop commands below only for local development, debugging, or when you intentionally manage Core and its connection yourself.
+
+## Optional capabilities
 
 Optional features have additional requirements:
 
 - Java: Maven and a project JDK that provides `java`, `jdb`, `jimage`, and related tools. The installer downloads JDT LS and a Temurin 21 JRE used only to run the language server.
 - Codex: valid Codex authentication/configuration in the account running Core. The Codex ACP server itself is an npm dependency of this repository; a separate `codex` executable is not required.
 - Copilot: an installed and authenticated `copilot` CLI, or `COPILOT_CLI_PATH` pointing to it.
-- Gateway: password-based SSH access to a host with Node.js 20+, npm, Git, and permission to run processes and modify the selected workspace. The local machine must also provide `tar` and Electron's platform dependencies.
 
-## Install
-
-Gateway is hard-coded to provision the `dev` branch, so use that branch when following the remote workflow:
-
-```bash
-git clone --branch dev https://github.com/ftpud/VibeEditor.git
-cd VibeEditor
-npm install
-```
-
-`npm install` attempts to download the pinned JDT LS and Temurin runtime. A download failure is reported as a warning because Java tooling is optional. Skip both downloads on a desktop-only installation with:
-
-```bash
-VIBE_SKIP_JDTLS=1 npm install
-```
-
-Install or repair them later on the machine running Core:
+An `npm install` without `VIBE_SKIP_JDTLS=1` attempts to download the pinned JDT LS and Temurin runtime. A download failure is reported as a warning because Java tooling is optional. If you skipped that download, install or repair it later on the machine running Core:
 
 ```bash
 npm run install:jdtls
