@@ -152,6 +152,18 @@ export type ProtocolOperations = {
     payload: { path: string; content: string };
     result: { path: string; bytesWritten: number };
   };
+  "filesystem.createFile": {
+    payload: { path: string };
+    result: { path: string };
+  };
+  "filesystem.createDirectory": {
+    payload: { path: string };
+    result: { path: string };
+  };
+  "filesystem.rename": {
+    payload: { path: string; newPath: string };
+    result: { path: string };
+  };
   "filesystem.search": {
     payload: { query: string; path: string; matchCase: boolean };
     result: { matches: SearchResult[]; truncated: boolean };
@@ -381,6 +393,9 @@ const requestTypeRegistry: Record<RequestType, true> = {
   "filesystem.listTree": true,
   "filesystem.readFile": true,
   "filesystem.writeFile": true,
+  "filesystem.createFile": true,
+  "filesystem.createDirectory": true,
+  "filesystem.rename": true,
   "filesystem.search": true,
   "terminal.create": true,
   "terminal.attach": true,

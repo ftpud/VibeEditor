@@ -201,6 +201,7 @@ export function App() {
   const [javaUsages, setJavaUsages] = useState<JavaLspLocation[]>();
   const [showRunConfigurationDialog, setShowRunConfigurationDialog] = useState(false);
   const [treeContextMenu, setTreeContextMenu] = useState<{ x: number; y: number; node: FileTreeNode }>();
+  const [projectPathDialog, setProjectPathDialog] = useState<{ mode: "file" | "directory" | "rename"; node: FileTreeNode; parentPath: string }>();
   const [editorGitMenu, setEditorGitMenu] = useState<{ x: number; y: number; path: string; startLine?: number; endLine?: number }>();
   const [gitRollbackMenu, setGitRollbackMenu] = useState<{ x: number; y: number; entry: GitStatusEntry }>();
   const [tabContextMenu, setTabContextMenu] = useState<{ x: number; y: number; tab: EditorTab }>();
@@ -1529,6 +1530,34 @@ export function App() {
     } catch (error) { setStatusMessage(error instanceof Error ? error.message : "Could not add source root"); }
   };
 
+  const saveProjectPathDialog = async (name: string) => {
+    if (!clientRef.current || !projectPathDialog) return;
+    const { mode, node, parentPath } = projectPathDialog;
+    const targetPath = parentPath ? `${parentPath}/${name}` : name;
+    if (mode === "file") {
+      await clientRef.current.request("filesystem.createFile", { path: targetPath });
+      setProjectPathDialog(undefined);
+      await Promise.all([refreshTree(), refreshGit()]);
+      await openFile({ name: name.split("/").at(-1) ?? name, path: targetPath, type: "file" });
+      return;
+    }
+    if (mode === "directory") {
+      await clientRef.current.request("filesystem.createDirectory", { path: targetPath });
+      setProjectPathDialog(undefined);
+      await refreshTree();
+      return;
+    }
+    if (targetPath === node.path) { setProjectPathDialog(undefined); return; }
+    await clientRef.current.request("filesystem.rename", { path: node.path, newPath: targetPath });
+    const oldPrefix = `${node.path}/`;
+    const newPrefix = `${targetPath}/`;
+    const renamePath = (value: string) => value === node.path ? targetPath : node.type === "directory" && value.startsWith(oldPrefix) ? newPrefix + value.slice(oldPrefix.length) : value;
+    updateGroup((tabs, active) => ({ tabs: tabs.map((tab) => tab.type === "file" ? { ...tab, path: renamePath(tab.path), title: tab.path === node.path || node.type === "directory" && tab.path.startsWith(oldPrefix) ? renamePath(tab.path).split("/").at(-1) ?? tab.title : tab.title } : tab), activeTabId: active }));
+    setFileColors((current) => Object.fromEntries(Object.entries(current).map(([path, color]) => [renamePath(path), color])));
+    setProjectPathDialog(undefined);
+    await Promise.all([refreshTree(), refreshGit()]);
+  };
+
   const toggleJavaPanel = () => {
     const visible = layout.panels.some((panel) => panel.type === "java");
     setLayout((current) => ({
@@ -1991,6 +2020,9 @@ export function App() {
     </footer>
     {treeContextMenu && <div className="context-menu-layer" onMouseDown={() => setTreeContextMenu(undefined)}>
       <div className="context-menu" style={{ left: treeContextMenu.x, top: treeContextMenu.y }} onMouseDown={(event) => event.stopPropagation()}>
+        <button onClick={() => { const node = treeContextMenu.node; setTreeContextMenu(undefined); setProjectPathDialog({ mode: "file", node, parentPath: node.type === "directory" ? node.path : node.path.split("/").slice(0, -1).join("/") }); }}><File size={14} /><span>New File...</span></button>
+        <button onClick={() => { const node = treeContextMenu.node; setTreeContextMenu(undefined); setProjectPathDialog({ mode: "directory", node, parentPath: node.type === "directory" ? node.path : node.path.split("/").slice(0, -1).join("/") }); }}><Folder size={14} /><span>New Directory...</span></button>
+        {treeContextMenu.node.path && <button onClick={() => { const node = treeContextMenu.node; setTreeContextMenu(undefined); setProjectPathDialog({ mode: "rename", node, parentPath: node.path.split("/").slice(0, -1).join("/") }); }}><Pencil size={14} /><span>Rename...</span></button>}
         <button onClick={() => openSearchForNode(treeContextMenu.node)}><Search size={14} /><span>Find in Files</span></button>
         {treeContextMenu.node.type === "file" && treeContextMenu.node.name === "pom.xml" && <button onClick={() => void loadMavenProject(treeContextMenu.node.path)}><Package size={14} /><span>Load as Maven Project</span></button>}
         {javaOptions && treeContextMenu.node.type === "directory" && treeContextMenu.node.path && <button onClick={() => void addJavaSourceRoot(treeContextMenu.node.path)}><Coffee size={14} /><span>Mark as Sources Root</span></button>}
@@ -2001,6 +2033,7 @@ export function App() {
     {gitRollbackMenu && <div className="context-menu-layer" onMouseDown={() => setGitRollbackMenu(undefined)}><div className="context-menu" style={{ left: gitRollbackMenu.x, top: gitRollbackMenu.y }} onMouseDown={(event) => event.stopPropagation()}><button className="danger" disabled={gitOperationRunning} onClick={() => void rollbackFile(gitRollbackMenu.entry)}><RefreshCw size={14} /><span>Rollback</span></button></div></div>}
     {tabContextMenu && <div className="context-menu-layer" onMouseDown={() => setTabContextMenu(undefined)}><div className="context-menu tab-context-menu" style={{ left: tabContextMenu.x, top: tabContextMenu.y }} onMouseDown={(event) => event.stopPropagation()}><button onClick={() => closeTabs(tabContextMenu.tab, "all")}><X size={14} /><span>Close All</span></button><button disabled={group.tabs.findIndex((tab) => tab.id === tabContextMenu.tab.id) === group.tabs.length - 1} onClick={() => closeTabs(tabContextMenu.tab, "right")}><ArrowUpRight className="close-right-icon" size={14} /><span>Close All to the Right</span></button><button disabled={tabContextMenu.tab.type === "diff" || tabContextMenu.tab.type === "agent" || tabContextMenu.tab.type === "runConfig"} onClick={() => void openTabInWindow(tabContextMenu.tab)}><Columns2 size={14} /><span>Open in New Window</span></button></div></div>}
     {runConfigMenu && <div className="context-menu-layer" onMouseDown={() => setRunConfigMenu(undefined)}><div className="context-menu" style={{ left: runConfigMenu.x, top: runConfigMenu.y }} onMouseDown={(event) => event.stopPropagation()}><button disabled={!runConfigMenu.config.terminalId} onClick={() => void runConfigAction(runConfigMenu.config, "openTerminal")}><SquareTerminal size={14} /><span>Open Terminal</span></button><button disabled={["starting", "running", "stopping"].includes(runConfigMenu.config.status)} onClick={() => void runConfigAction(runConfigMenu.config, "run")}><Play size={14} /><span>Run</span></button><button disabled={!['starting', 'running'].includes(runConfigMenu.config.status)} onClick={() => void runConfigAction(runConfigMenu.config, "stop")}><Square size={14} /><span>Stop</span></button><button disabled={runConfigMenu.config.status === "stopping"} onClick={() => void runConfigAction(runConfigMenu.config, "restart")}><RefreshCw size={14} /><span>Restart</span></button></div></div>}
+    {projectPathDialog && <ProjectPathDialog mode={projectPathDialog.mode} initialName={projectPathDialog.mode === "rename" ? projectPathDialog.node.name : ""} parentPath={projectPathDialog.parentPath} onClose={() => setProjectPathDialog(undefined)} onSave={saveProjectPathDialog} />}
     {searchScope !== undefined && <FindInFilesDialog client={clientRef.current!} scope={searchScope} onClose={() => setSearchScope(undefined)} onNavigate={(result, matchLength) => void navigateToSearchResult(result, matchLength)} />}
     {quickOpen && <QuickOpenDialog files={workspaceFiles(tree)} onClose={() => setQuickOpen(false)} onOpen={(file) => { setQuickOpen(false); void openFile(file); }} />}
     {importChoices && <div className="dialog-overlay" onMouseDown={() => setImportChoices(undefined)}><section className="import-chooser" role="dialog" aria-modal="true" aria-label="Choose Java import" onMouseDown={(event) => event.stopPropagation()}><header><span>Import class</span><button title="Close" onClick={() => setImportChoices(undefined)}><X size={15} /></button></header><div>{importChoices.suggestions.map((suggestion) => <button key={suggestion.qualifiedName} onClick={() => applyJavaImport(suggestion)}><span>{suggestion.simpleName}</span><code>{suggestion.qualifiedName}</code><small>{suggestion.source}</small></button>)}</div></section></div>}
@@ -2208,6 +2241,13 @@ function UsefulFileDialog({ mode, initialName, scope, onClose, onSave }: { mode:
   const [error, setError] = useState("");
   const save = async () => { if (!name.trim() || saving) return; setSaving(true); setError(""); try { await onSave(name.trim()); } catch (saveError) { setError(saveError instanceof Error ? saveError.message : "Could not save useful file"); setSaving(false); } };
   return <div className="dialog-overlay" onMouseDown={() => { if (!saving) onClose(); }}><section className="run-config-dialog useful-file-dialog" role="dialog" aria-modal="true" aria-label={`${mode} useful file`} onMouseDown={(event) => event.stopPropagation()}><header><div><h2>{mode === "create" ? "Create" : "Rename"} Useful File</h2><span>{scope === "global" ? "Global" : "Local"}</span></div><button title="Close" disabled={saving} onClick={onClose}><X size={15} /></button></header><form onSubmit={(event) => { event.preventDefault(); void save(); }}><label>File name<input autoFocus value={name} disabled={saving} maxLength={180} placeholder="notes.md" onChange={(event) => setName(event.target.value)} /></label>{error && <div className="find-error">{error}</div>}<footer><button type="button" disabled={saving} onClick={onClose}>Cancel</button><button className="primary" disabled={saving || !name.trim()}>{saving ? "Saving..." : mode === "create" ? "Create" : "Rename"}</button></footer></form></section></div>;
+}
+
+function ProjectPathDialog({ mode, initialName, parentPath, onClose, onSave }: { mode: "file" | "directory" | "rename"; initialName: string; parentPath: string; onClose(): void; onSave(name: string): Promise<void> }) {
+  const [name, setName] = useState(initialName); const [saving, setSaving] = useState(false); const [error, setError] = useState("");
+  const label = mode === "file" ? "New File" : mode === "directory" ? "New Directory" : "Rename";
+  const save = async () => { if (!name.trim() || saving) return; setSaving(true); setError(""); try { await onSave(name.trim()); } catch (reason) { setError(reason instanceof Error ? reason.message : `Could not ${label.toLowerCase()}`); setSaving(false); } };
+  return <div className="dialog-overlay" onMouseDown={() => { if (!saving) onClose(); }}><section className="run-config-dialog useful-file-dialog" role="dialog" aria-modal="true" aria-label={label} onMouseDown={(event) => event.stopPropagation()}><header><div><h2>{label}</h2><span>{parentPath || "Workspace root"}</span></div><button title="Close" disabled={saving} onClick={onClose}><X size={15} /></button></header><form onSubmit={(event) => { event.preventDefault(); void save(); }}><label>{mode === "directory" ? "Directory name" : "Path"}<input autoFocus value={name} disabled={saving} maxLength={240} placeholder={mode === "file" ? "src/new-file.ts" : mode === "directory" ? "components" : "new-name"} onChange={(event) => setName(event.target.value)} /></label>{error && <div className="find-error">{error}</div>}<footer><button type="button" disabled={saving} onClick={onClose}>Cancel</button><button className="primary" disabled={saving || !name.trim()}>{saving ? "Saving..." : mode === "rename" ? "Rename" : "Create"}</button></footer></form></section></div>;
 }
 
 function RunConfigDialog({ scope, onClose, onSave }: { scope: RunConfigScope; onClose(): void; onSave(name: string, commands: string): Promise<void> }) {

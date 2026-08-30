@@ -38,6 +38,13 @@ describe("WorkspaceFileSystem", () => {
     expect(full.map((node) => node.name)).toContain("node_modules");
   });
 
+  it("shows an empty, non-ignored directory in a Git workspace", async () => {
+    await execFileAsync("git", ["-C", root, "init", "-q"]);
+    await fs.open(root);
+    await fs.createDirectory("empty");
+    expect((await fs.listTree()).some((node) => node.path === "empty" && node.type === "directory")).toBe(true);
+  });
+
   it("rejects a missing workspace", async () => {
     await expect(fs.open(path.join(root, "missing"))).rejects.toMatchObject({ code: "WORKSPACE_NOT_FOUND" });
   });
@@ -47,6 +54,22 @@ describe("WorkspaceFileSystem", () => {
     expect(await fs.read("src/index.ts")).toContain("value = 1");
     await fs.write("src/index.ts", "changed\n");
     expect(await readFile(path.join(root, "src/index.ts"), "utf8")).toBe("changed\n");
+  });
+
+  it("creates files and directories and renames them within the workspace", async () => {
+    await fs.open(root);
+    await fs.createDirectory("src/components");
+    await fs.createFile("src/components/Tree.tsx");
+    await fs.rename("src/components/Tree.tsx", "src/components/ProjectTree.tsx");
+    await fs.rename("src/components", "src/ui");
+    expect(await readFile(path.join(root, "src", "ui", "ProjectTree.tsx"), "utf8")).toBe("");
+  });
+
+  it("does not overwrite existing paths when renaming", async () => {
+    await fs.open(root);
+    await fs.createFile("one.txt");
+    await fs.createFile("two.txt");
+    await expect(fs.rename("one.txt", "two.txt")).rejects.toMatchObject({ code: "WRITE_FAILED" });
   });
 
   it("blocks parent traversal", async () => {

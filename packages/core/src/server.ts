@@ -441,6 +441,18 @@ async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStor
       if (typeof request.payload.path !== "string" || typeof request.payload.content !== "string") throw new CoreError("INVALID_REQUEST", "path and content must be strings");
       return { path: request.payload.path, bytesWritten: await filesystem.write(request.payload.path, request.payload.content) };
     }
+    case "filesystem.createFile": {
+      if (typeof request.payload.path !== "string") throw new CoreError("INVALID_REQUEST", "path must be a string");
+      await filesystem.createFile(request.payload.path); return { path: request.payload.path };
+    }
+    case "filesystem.createDirectory": {
+      if (typeof request.payload.path !== "string") throw new CoreError("INVALID_REQUEST", "path must be a string");
+      await filesystem.createDirectory(request.payload.path); return { path: request.payload.path };
+    }
+    case "filesystem.rename": {
+      if (typeof request.payload.path !== "string" || typeof request.payload.newPath !== "string") throw new CoreError("INVALID_REQUEST", "path and newPath must be strings");
+      await filesystem.rename(request.payload.path, request.payload.newPath); return { path: request.payload.newPath };
+    }
     case "filesystem.search": {
       if (typeof request.payload.query !== "string" || typeof request.payload.path !== "string" || typeof request.payload.matchCase !== "boolean") throw new CoreError("INVALID_REQUEST", "query, path, and matchCase are required");
       return search.search(request.payload.query, request.payload.path, request.payload.matchCase);
