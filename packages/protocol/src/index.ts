@@ -22,10 +22,18 @@ export type GitCommitFile = { path: string; status: string; originalPath?: strin
 export type GitDiffHunk = { originalStart: number; originalLines: number; modifiedStart: number; modifiedLines: number };
 export type GitRollbackFailure = { path: string; message: string };
 export type TaskCheckpointFile = { path: string; status: "A" | "M" | "D" | "R"; originalPath?: string; binary: boolean; size: number };
+/** Compact, redacted turn metadata. It deliberately excludes prompt/attachment bodies and logs. */
+export type TaskCheckpointProvenance = {
+  model?: string; reasoning?: string; agent?: { name: string; fingerprint: string };
+  attachments?: { name: string; mimeType?: string; kind: "image" | "resource" | "resource_link" | "text" }[];
+  usage?: { total: number; input: number; output: number; thought?: number; cachedRead?: number; cachedWrite?: number };
+  commit?: string;
+};
 export type TaskCheckpoint = {
   id: string; promptId: string; sessionId?: string; provider: AiProvider; prompt: string;
   startedAt: string; completedAt?: string; status: "running" | "completed" | "interrupted" | "error";
   files: TaskCheckpointFile[];
+  provenance?: TaskCheckpointProvenance;
 };
 
 export type WorkspaceOptions = {

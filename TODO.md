@@ -169,7 +169,7 @@ multi-surface work).
   a file/hunk accept, restore, and follow-up loop. Constraint: Core snapshots remain
   authoritative, edits after a checkpoint are never overwritten without a three-way
   comparison, and actions compose with Git index state.
-- [ ] **Prompt provenance and handoff summary — Small.** Value: make model, agent,
+- [x] **Prompt provenance and handoff summary — Small.** Value: make model, agent,
   attachments, usage, and resulting checkpoint easy to audit or continue. Constraint:
   redact secrets and keep large logs/content server-side with bounded retrieval.
 
