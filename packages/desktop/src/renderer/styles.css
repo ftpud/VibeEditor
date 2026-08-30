@@ -423,6 +423,10 @@ button { color: inherit; }
 .connection-dot { width: 7px; height: 7px; border-radius: 50%; background: #59a869; }
 .tabs { height: 35px; flex: 0 0 35px; display: flex; background: #2b2d30; border-bottom: 1px solid #393b40; overflow-x: auto; overflow-y: hidden; }
 .tab { height: 34px; max-width: 180px; min-width: 100px; display: flex; align-items: center; gap: 6px; padding: 0 7px 0 10px; border: 0; border-right: 1px solid #393b40; background: #2b2d30; color: #a8aaaf; cursor: pointer; }
+.tab:focus-visible { outline: 2px solid #3574f0; outline-offset: -2px; }
+.tab-action, .tab .close { display: inline-flex; flex: 0 0 auto; align-items: center; justify-content: center; padding: 2px; border: 0; background: transparent; color: inherit; cursor: pointer; }
+.tab-action:hover, .tab .close:hover { color: #f0f0f0; }
+.tab-pinned-icon { flex: 0 0 auto; color: #e2b86b; }
 .tab:hover { background: #323438; color: #d5d7da; }
 .tab.active { background: #1e1f22; color: #f0f0f0; border-bottom: 2px solid #3574f0; }
 .tab.dragging { opacity: .4; }
