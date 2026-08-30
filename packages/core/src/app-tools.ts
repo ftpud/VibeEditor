@@ -35,7 +35,7 @@ export const appToolDefinitions = [
   },
   {
     name: "model_switch_next",
-    description: "Use a provider-advertised model and reasoning effort for exactly the next new task turn in this AI session. Calling this during a running turn does not change that turn; steering also does not consume the selection. A later call replaces the pending selection.",
+    description: "Use a provider-advertised model and reasoning effort for exactly the next new task turn in this AI session. When called during a running turn, automatically queue a continuation so the selection is exercised after the current turn; it never changes the current turn. A later call replaces the pending selection.",
     inputSchema: {
       type: "object", additionalProperties: false,
       properties: {
@@ -182,7 +182,8 @@ export class AppToolService {
       const manager = this.acp.get(this.currentProvider);
       await validateReasoning(await manager.models(), model, reasoning);
       await manager.configureNext(this.currentWorkspace, { model, reasoning });
-      return { provider: this.currentProvider, model, reasoning, applies_to: "next_turn" };
+      await manager.steer(this.currentWorkspace, "Continue the current task using the newly selected model and reasoning effort.");
+      return { provider: this.currentProvider, model, reasoning, applies_to: "next_turn", continuation: "queued" };
     }
     if (name === "task_create") {
       const task = await this.tasks.create(requiredString(args, "branch"), false, false, false);

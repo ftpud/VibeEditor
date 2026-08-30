@@ -205,7 +205,16 @@ export abstract class StdioAcpProvider extends AcpProvider {
       const usage = result.usage;
       if (usage) runtime.session.tokens = { total: usage.totalTokens, input: usage.inputTokens, output: usage.outputTokens, ...(usage.thoughtTokens != null ? { thought: usage.thoughtTokens } : {}), ...(usage.cachedReadTokens != null ? { cachedRead: usage.cachedReadTokens } : {}), ...(usage.cachedWriteTokens != null ? { cachedWrite: usage.cachedWriteTokens } : {}) };
       const queued = result.stopReason === "cancelled" ? undefined : runtime.pending.shift();
-      if (queued !== undefined) this.runPrompt(workspace, runtime, [{ type: "text", text: queued }]);
+      if (queued !== undefined) {
+        const nextConfiguration = runtime.session.nextConfiguration;
+        if (nextConfiguration) {
+          applyConfiguration(runtime.session, nextConfiguration);
+          runtime.session.nextConfiguration = undefined;
+          const warnings = await this.applyAcpConfiguration(runtime, runtime.configOptions, runtime.modes);
+          if (warnings.length > 0) runtime.session.messages.push(this.message("activity", `Session configuration\n${warnings.join("\n")}`));
+        }
+        this.runPrompt(workspace, runtime, [{ type: "text", text: queued }]);
+      }
       else {
         runtime.session.status = result.stopReason === "cancelled" ? "idle" : result.stopReason === "end_turn" ? "done" : result.stopReason === "refusal" ? "error" : "user_prompt";
         if (result.stopReason === "max_tokens" || result.stopReason === "max_turn_requests") runtime.session.messages.push(this.message("activity", `Turn stopped early: ${result.stopReason}`));

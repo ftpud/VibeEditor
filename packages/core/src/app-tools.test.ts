@@ -62,8 +62,9 @@ describe("Vibe Editor app tools", () => {
   it("queues a validated model and reasoning override for the next turn", async () => {
     const { tasks, provider, onTasksChanged, onCommitMessageChanged, agents } = harness();
     const service = new AppToolService(tasks as never, { get: vi.fn(() => provider), list: vi.fn(() => []) } as never, "/tasks/parent/workspace", onTasksChanged, onCommitMessageChanged, "codex", agents as never, "/workspace");
-    await expect(service.call("model_switch_next", { model: "gpt-5", reasoning: "high" })).resolves.toEqual({ provider: "codex", model: "gpt-5", reasoning: "high", applies_to: "next_turn" });
+    await expect(service.call("model_switch_next", { model: "gpt-5", reasoning: "high" })).resolves.toEqual({ provider: "codex", model: "gpt-5", reasoning: "high", applies_to: "next_turn", continuation: "queued" });
     expect(provider.configureNext).toHaveBeenCalledWith("/tasks/parent/workspace", { model: "gpt-5", reasoning: "high" });
+    expect(provider.steer).toHaveBeenCalledWith("/tasks/parent/workspace", "Continue the current task using the newly selected model and reasoning effort.");
   });
 
   it("rejects an unadvertised next-turn model or reasoning without queuing it", async () => {
