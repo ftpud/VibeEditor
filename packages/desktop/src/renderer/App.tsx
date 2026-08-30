@@ -1,5 +1,5 @@
 import Editor, { DiffEditor, type Monaco } from "@monaco-editor/react";
-import { ArrowUp, ArrowUpRight, Bot, Braces, Bug, Check, ChevronDown, ChevronRight, ChevronUp, CircleAlert, Coffee, Columns2, Eye, EyeOff, File, FileCode2, FileDiff, FileJson, FileText, Folder, FolderOpen, GitBranch, GitCompareArrows, GitMerge, Hash, Library, ListTodo, ListTree, LoaderCircle, LogOut, MoreVertical, Package, Palette, Pencil, Play, Plus, RefreshCw, Save, Search, Settings, ShieldAlert, Square, SquareTerminal, Trash2, X } from "lucide-react";
+import { ArrowUp, ArrowUpRight, Bot, Bug, Check, ChevronDown, ChevronRight, ChevronUp, CircleAlert, ClipboardCopy, Coffee, Columns2, Eye, EyeOff, File, FileCode2, FileDiff, FileText, Folder, FolderOpen, GitBranch, GitCompareArrows, GitMerge, Library, ListTodo, ListTree, LoaderCircle, LogOut, MoreVertical, Package, Palette, Pencil, Pin, PinOff, Play, Plus, RefreshCw, Save, Search, Settings, ShieldAlert, Square, SquareTerminal, Trash2, X } from "lucide-react";
 import { Children, isValidElement, useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
 import type { AgentFile, AgentFileScope, AiConfiguration, AiModel, AiProvider, AiProviderDescriptor, AiSession, AiStatus, AiTaskSummary, AiUsage, FileColor, FileTreeNode, GitBranch as GitBranchInfo, GitDiffHunk, GitStatusEntry, GitUpstreamStatus, HttpResponse, JavaBreakpoint, JavaDebugState, JavaDiagnostic, JavaLspLocation, JavaMainClass, JavaProjectNode, JavaProjectOptions, JavaTypeSuggestion, RunConfig, RunConfigScope, SearchResult, TaskCheckpoint, TaskCheckpointFile, UsefulFile, UsefulFileScope, WorkspaceOptions, WorkspaceTask } from "@remote-ide/protocol";
 import type { editor } from "monaco-editor";
@@ -7,6 +7,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { CoalescedAsyncAction, CoreClient } from "./client";
 import { readSetting, readSettingNumber, readWorkspaceSetting, workspaceSettingKey, writeSetting, writeWorkspaceSetting } from "./settings";
+import { readAiPromptDraft, writeAiPromptDraft } from "./ai-prompt-drafts";
 import { initialLayout, type EditorTab, type LayoutModel, type Panel } from "./model";
 import { TerminalPanel } from "./TerminalPanel";
 import { JavaPanel } from "./JavaPanel";
@@ -14,6 +15,8 @@ import { ProblemsPanel } from "./ProblemsPanel";
 import { GitLogPanel } from "./GitLogPanel";
 import { GitHistoryDialog } from "./GitHistoryDialog";
 import { GitToolbarActions, RollbackSelectedDialog, executeRollbackSelection, isUntrackedGitEntry, selectedGitEntries, shouldApplyGitStatus } from "./GitRollbackControls";
+import { GitCommitPanel } from "./GitCommitPanel";
+import { GitChangesView as KeyboardGitChangesView } from "./GitChangesView";
 import { AiPanel, type AiAttachment } from "./AiPanel";
 import type { PermissionRequestOwner } from "./PermissionRequestActions";
 import { openTaskFromSummary } from "./permission-navigation";
@@ -22,6 +25,14 @@ import { CURSOR_POSITIONS_SETTING, CursorPositionStore, validateCursorPosition }
 import { MarkdownPreview } from "./MarkdownPreview";
 import { FindInFilesDialog } from "./FindInFilesDialog";
 import { initialTaskPanel, switchedTaskPanel, taskPanelPreferenceKey, type ClassicTaskPanel } from "./task-panel-state";
+import { ProjectTree } from "./ProjectTree";
+import { projectTreeActions, type ProjectTreeAction } from "./project-tree-actions";
+import { copyProjectTreeActions } from "./project-context-menu";
+import { QuickOpenDialog, workspaceFiles } from "./QuickOpenDialog";
+import { EditorStatusBar, type EditorStatusBarHandle } from "./EditorStatusBar";
+import { adjacentEditorTabId, editorShortcutEligible, editorTabShortcut } from "./editor-shortcuts";
+import { orderPinnedTabs, pinnedFilePaths, togglePinnedTab } from "./pinned-tabs";
+import { EditorViewStateStore } from "./editor-view-state";
 
 type ConnectionStatus = "idle" | "connecting" | "connected" | "failed" | "disconnected" | "workspace-error";
 type StatusKind = "progress" | "success" | "error";
@@ -31,7 +42,7 @@ const languageByExtension: Record<string, string> = {
   css: "css", md: "markdown", java: "java", py: "python", yaml: "yaml", yml: "yaml", mta: "yaml", mtaext: "yaml",
   xml: "xml", cds: "sap-cds", http: "http", txt: "plaintext"
 };
-const formatAiStatus = (status: AiStatus) => ({ idle: "", in_progress: "In progress", user_prompt: "User prompt", done: "Done", error: "Error" })[status];
+const formatAiStatus = (status: AiStatus) => ({ idle: "", in_progress: "In progress", user_prompt: "User prompt", waiting: "Waiting", done: "Done", error: "Error" })[status];
 const fileColorChoices: { id: FileColor; label: string }[] = [{ id: "red", label: "Red" }, { id: "orange", label: "Orange" }, { id: "yellow", label: "Yellow" }, { id: "green", label: "Green" }, { id: "blue", label: "Blue" }, { id: "purple", label: "Purple" }, { id: "gray", label: "Gray" }];
 const gitHunkDecorations = (hunks: GitDiffHunk[]): editor.IModelDeltaDecoration[] => hunks.map((hunk) => {
   const start = Math.max(1, hunk.modifiedStart);
@@ -196,12 +207,14 @@ export function App() {
   const [javaUsages, setJavaUsages] = useState<JavaLspLocation[]>();
   const [showRunConfigurationDialog, setShowRunConfigurationDialog] = useState(false);
   const [treeContextMenu, setTreeContextMenu] = useState<{ x: number; y: number; node: FileTreeNode }>();
+  const [projectPathDialog, setProjectPathDialog] = useState<{ mode: "file" | "directory" | "rename"; node: FileTreeNode; parentPath: string }>();
   const [editorGitMenu, setEditorGitMenu] = useState<{ x: number; y: number; path: string; startLine?: number; endLine?: number }>();
   const [gitRollbackMenu, setGitRollbackMenu] = useState<{ x: number; y: number; entry: GitStatusEntry }>();
   const [tabContextMenu, setTabContextMenu] = useState<{ x: number; y: number; tab: EditorTab }>();
   const [draggedTabId, setDraggedTabId] = useState<string>();
   const [gitHistory, setGitHistory] = useState<{ path: string; startLine?: number; endLine?: number }>();
   const [searchScope, setSearchScope] = useState<string>();
+  const [quickOpen, setQuickOpen] = useState(false);
   const [pendingNavigation, setPendingNavigation] = useState<{ result: SearchResult; matchLength: number }>();
   const clientRef = useRef<CoreClient>();
   const gitRollbackRunningRef = useRef(false);
@@ -217,7 +230,10 @@ export function App() {
   const terminalBuffers = useRef(new Map<string, string>());
   const markdownBlockTerminals = useRef(new Map<string, string>());
   const monacoEditorRef = useRef<editor.IStandaloneCodeEditor>();
+  const editorViewStatesRef = useRef<EditorViewStateStore>();
+  const editorViewStates = editorViewStatesRef.current ??= new EditorViewStateStore();
   const monacoDiffEditorRef = useRef<editor.IStandaloneDiffEditor>();
+  const editorStatusBarRef = useRef<EditorStatusBarHandle>(null);
   const monacoRef = useRef<Monaco>();
   const breakpointDecorationsRef = useRef<string[]>([]);
   const gitDecorationsRef = useRef<string[]>([]);
@@ -280,8 +296,13 @@ export function App() {
   }, []);
 
   const updateGroup = useCallback((update: (tabs: EditorTab[], active?: string) => { tabs: EditorTab[]; activeTabId?: string }) => {
-    setLayout((current) => ({ ...current, editorGroups: current.editorGroups.map((item, index) => index === 0 ? { ...item, ...update(item.tabs, item.activeTabId) } : item) }));
-  }, []);
+    setLayout((current) => ({ ...current, editorGroups: current.editorGroups.map((item, index) => {
+      if (index !== 0) return item;
+      const next = update(item.tabs, item.activeTabId);
+      if (next.activeTabId !== item.activeTabId) editorViewStates.capture(monacoEditorRef.current);
+      return { ...item, ...next };
+    }) }));
+  }, [editorViewStates]);
 
   const updateTerminalGroup = useCallback((update: (group: LayoutModel["terminalGroup"]) => LayoutModel["terminalGroup"]) => {
     setLayout((current) => ({ ...current, terminalGroup: update(current.terminalGroup) }));
@@ -403,15 +424,16 @@ export function App() {
     setFileColors(options.fileColors ?? {});
     setGitCommitMessage(options.gitCommitMessage ?? "");
     setSelectedGitPaths(new Set());
-    const tabs = await Promise.all(options.openFiles.map(async (filePath): Promise<EditorTab> => {
+    const pinnedFiles = new Set(options.pinnedFiles ?? []);
+    const tabs = orderPinnedTabs(await Promise.all(options.openFiles.map(async (filePath): Promise<EditorTab> => {
       const title = filePath.split("/").pop() ?? filePath;
       try {
         const result = await client.request("filesystem.readFile", { path: filePath });
-        return { id: crypto.randomUUID(), type: "file", title, path: filePath, dirty: false, content: result.content, savedContent: result.content, loading: false, markdownMode: /\.md$/i.test(filePath) ? "preview" : undefined };
+        return { id: crypto.randomUUID(), type: "file", title, path: filePath, pinned: pinnedFiles.has(filePath), dirty: false, content: result.content, savedContent: result.content, loading: false, markdownMode: /\.md$/i.test(filePath) ? "preview" : undefined };
       } catch (error) {
-        return { id: crypto.randomUUID(), type: "file", title, path: filePath, dirty: false, content: "", savedContent: "", loading: false, markdownMode: /\.md$/i.test(filePath) ? "preview" : undefined, error: error instanceof Error ? error.message : "Could not restore file" };
+        return { id: crypto.randomUUID(), type: "file", title, path: filePath, pinned: pinnedFiles.has(filePath), dirty: false, content: "", savedContent: "", loading: false, markdownMode: /\.md$/i.test(filePath) ? "preview" : undefined, error: error instanceof Error ? error.message : "Could not restore file" };
       }
-    }));
+    })));
     const activeTabId = tabs.find((tab) => tab.path === options.activeFile)?.id ?? tabs[0]?.id;
     const restoredTerminals = await Promise.all((options.terminal?.tabs ?? []).map(async (saved, index) => {
       try {
@@ -693,10 +715,11 @@ export function App() {
   const terminalPanelOpen = layout.panels.some((panel) => panel.type === "terminal");
   const activeTerminalIndex = layout.terminalGroup.tabs.findIndex((tab) => tab.id === layout.terminalGroup.activeTabId);
   const terminalOptions: NonNullable<WorkspaceOptions["terminal"]> = { tabs: layout.terminalGroup.tabs.map((tab) => ({ title: tab.title, terminalId: tab.terminalId })), ...(activeTerminalIndex >= 0 ? { activeTabIndex: activeTerminalIndex } : {}), panelOpen: terminalPanelOpen };
-  const workspaceOptionsSignature = `${persistedFileTabs.map((tab) => tab.path).join("\0")}\n${persistedActiveTab?.path ?? ""}\n${JSON.stringify(javaOptions)}\n${JSON.stringify(terminalOptions)}\n${JSON.stringify(fileColors)}\n${gitCommitMessage}`;
+  const pinnedFiles = pinnedFilePaths(persistedFileTabs);
+  const workspaceOptionsSignature = `${persistedFileTabs.map((tab) => tab.path).join("\0")}\n${pinnedFiles.join("\0")}\n${persistedActiveTab?.path ?? ""}\n${JSON.stringify(javaOptions)}\n${JSON.stringify(terminalOptions)}\n${JSON.stringify(fileColors)}\n${gitCommitMessage}`;
   useEffect(() => {
     if (status !== "connected" || !workspaceOptionsReady || !clientRef.current) return;
-    const options: WorkspaceOptions = { openFiles: persistedFileTabs.map((tab) => tab.path), ...(persistedActiveTab ? { activeFile: persistedActiveTab.path } : {}), ...(javaOptions ? { javaProject: javaOptions } : {}), terminal: terminalOptions, ...(Object.keys(fileColors).length ? { fileColors } : {}), ...(gitCommitMessage ? { gitCommitMessage } : {}) };
+    const options: WorkspaceOptions = { openFiles: persistedFileTabs.map((tab) => tab.path), ...(pinnedFiles.length ? { pinnedFiles } : {}), ...(persistedActiveTab ? { activeFile: persistedActiveTab.path } : {}), ...(javaOptions ? { javaProject: javaOptions } : {}), terminal: terminalOptions, ...(Object.keys(fileColors).length ? { fileColors } : {}), ...(gitCommitMessage ? { gitCommitMessage } : {}) };
     void clientRef.current.request("workspace.saveOptions", { options }).catch((error: unknown) => {
       setStatusMessage(error instanceof Error ? error.message : "Could not save workspace options");
     });
@@ -937,7 +960,8 @@ export function App() {
   const closeTabs = (tab: EditorTab, mode: "all" | "right") => {
     const tabs = layoutRef.current.editorGroups[0]?.tabs ?? [];
     const index = tabs.findIndex((item) => item.id === tab.id);
-    const closing = mode === "all" ? tabs : tabs.slice(index + 1);
+    // Batch close never removes pins; individual close retains the existing dirty confirmation.
+    const closing = (mode === "all" ? tabs : tabs.slice(index + 1)).filter((item) => !item.pinned);
     if (closing.some((item) => item.dirty) && !window.confirm(`Close ${closing.length} tab${closing.length === 1 ? "" : "s"} and discard unsaved changes?`)) return;
     const closingIds = new Set(closing.map((item) => item.id));
     updateGroup((current, active) => { const next = current.filter((item) => !closingIds.has(item.id)); return { tabs: next, activeTabId: active && !closingIds.has(active) ? active : next[Math.min(index, next.length - 1)]?.id ?? next.at(-1)?.id }; });
@@ -962,6 +986,12 @@ export function App() {
     if (!draggedTabId || draggedTabId === targetId) return;
     updateGroup((tabs, active) => { const source = tabs.findIndex((tab) => tab.id === draggedTabId); const target = tabs.findIndex((tab) => tab.id === targetId); if (source < 0 || target < 0) return { tabs, activeTabId: active }; const next = [...tabs]; const [moved] = next.splice(source, 1); next.splice(target, 0, moved!); return { tabs: next, activeTabId: active }; });
     setDraggedTabId(undefined);
+  };
+
+  const toggleTabPin = (tab: EditorTab) => {
+    if (tab.type !== "file") return;
+    updateGroup((tabs, active) => ({ tabs: togglePinnedTab(tabs, tab.id), activeTabId: active }));
+    setTabContextMenu(undefined);
   };
 
   const saveFileTab = useCallback(async (current: EditorTab) => {
@@ -1032,7 +1062,7 @@ export function App() {
       const currentFiles = currentGroup.tabs.filter((tab) => tab.type === "file");
       const currentTerminal = layoutRef.current.terminalGroup;
       const currentActiveTerminalIndex = currentTerminal.tabs.findIndex((tab) => tab.id === currentTerminal.activeTabId);
-      await client.request("workspace.saveOptions", { options: { openFiles: currentFiles.map((tab) => tab.path), ...(currentFiles.find((tab) => tab.id === currentGroup.activeTabId) ? { activeFile: currentFiles.find((tab) => tab.id === currentGroup.activeTabId)!.path } : {}), ...(javaOptionsRef.current ? { javaProject: javaOptionsRef.current } : {}), terminal: { tabs: currentTerminal.tabs.map((tab) => ({ title: tab.title, terminalId: tab.terminalId })), ...(currentActiveTerminalIndex >= 0 ? { activeTabIndex: currentActiveTerminalIndex } : {}), panelOpen: layoutRef.current.panels.some((panel) => panel.type === "terminal") }, ...(Object.keys(fileColors).length ? { fileColors } : {}), ...(gitCommitMessage ? { gitCommitMessage } : {}) } });
+      await client.request("workspace.saveOptions", { options: { openFiles: currentFiles.map((tab) => tab.path), ...(pinnedFilePaths(currentFiles).length ? { pinnedFiles: pinnedFilePaths(currentFiles) } : {}), ...(currentFiles.find((tab) => tab.id === currentGroup.activeTabId) ? { activeFile: currentFiles.find((tab) => tab.id === currentGroup.activeTabId)!.path } : {}), ...(javaOptionsRef.current ? { javaProject: javaOptionsRef.current } : {}), terminal: { tabs: currentTerminal.tabs.map((tab) => ({ title: tab.title, terminalId: tab.terminalId })), ...(currentActiveTerminalIndex >= 0 ? { activeTabIndex: currentActiveTerminalIndex } : {}), panelOpen: layoutRef.current.panels.some((panel) => panel.type === "terminal") }, ...(Object.keys(fileColors).length ? { fileColors } : {}), ...(gitCommitMessage ? { gitCommitMessage } : {}) } });
       if (!isCurrent()) return;
       const result = await client.request("tasks.switch", { ...(taskId ? { taskId } : {}), includeIgnored: showIgnoredRef.current });
       if (!isCurrent()) return;
@@ -1097,11 +1127,13 @@ export function App() {
 
   const currentAiAttachmentKey = selectedTaskId ?? "root";
   const currentAiAttachments = aiAttachments[currentAiAttachmentKey] ?? [];
+  const currentAiDraft = readAiPromptDraft(workspaceKeyRef.current, selectedTaskId, aiProvider, aiSession.id);
   const selectedAgent = useMemo(() => agents.find((agent) => agentKey(agent) === selectedAgentKey), [agents, selectedAgentKey]);
   const selectAgent = useCallback((key: string) => {
     setSelectedAgentKey(key);
     if (workspaceKeyRef.current) writeWorkspaceSetting(workspaceKeyRef.current, aiAgentTaskKey(selectedTaskIdRef.current), key);
   }, []);
+  const updateAiDraft = useCallback((draft: string) => writeAiPromptDraft(workspaceKeyRef.current, selectedTaskIdRef.current, aiProviderRef.current, aiSession.id, draft), [aiSession.id]);
   const updateAiAttachments = useCallback((attachments: AiAttachment[]) => setAiAttachments((current) => ({ ...current, [selectedTaskId ?? "root"]: attachments })), [selectedTaskId]);
   const attachWorkspaceFile = useCallback((path: string) => {
     const key = selectedTaskId ?? "root";
@@ -1231,6 +1263,26 @@ export function App() {
     finally { setTaskSwitching(false); }
   }, [selectedTaskId, switchTask, taskSwitching]);
 
+  const setTaskStatus = useCallback(async (task: WorkspaceTask, status: WorkspaceTask["status"]) => {
+    if (!clientRef.current || taskSwitching) return;
+    try {
+      const result = await clientRef.current.request("tasks.status", { taskId: task.id, status });
+      setTasks((current) => current.map((item) => item.id === task.id ? result.task : item));
+    } catch (error) { setStatusMessage(error instanceof Error ? error.message : `Could not mark task ${status}`); }
+  }, [taskSwitching]);
+
+  const timerAction = useCallback(async (task: WorkspaceTask | undefined, action: "cancel" | "fire") => {
+    if (!clientRef.current || taskSwitching) return;
+    try {
+      const payload = task ? { taskId: task.id } : {};
+      const changed = action === "cancel"
+        ? (await clientRef.current.request("tasks.timer.cancel", payload)).cancelled
+        : (await clientRef.current.request("tasks.timer.fire", payload)).fired;
+      if (!changed) setStatusMessage(`The ${task ? "task" : "root workspace"} timer is no longer active`);
+      await refreshAiStatuses();
+    } catch (error) { setStatusMessage(error instanceof Error ? error.message : `Could not ${action} ${task ? "task" : "root workspace"} timer`); }
+  }, [refreshAiStatuses, taskSwitching]);
+
   const mergeTask = useCallback(async (task: WorkspaceTask, strategy: "merge" | "smart") => {
     if (!clientRef.current || taskSwitching) return;
     setMergeDialog(undefined);
@@ -1301,6 +1353,39 @@ export function App() {
     const listener = (event: KeyboardEvent) => { if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") { event.preventDefault(); void saveActive(); } };
     window.addEventListener("keydown", listener); return () => window.removeEventListener("keydown", listener);
   }, [saveActive]);
+
+  useEffect(() => {
+    const listener = (event: KeyboardEvent) => {
+      if ((!event.ctrlKey && !event.metaKey) || event.altKey || event.key.toLowerCase() !== "p") return;
+      if (status !== "connected") return;
+      if ((event.target as Element | null)?.closest?.(".terminal-panel")) return;
+      if (!quickOpen && document.querySelector('[role="dialog"], [role="alertdialog"], .context-menu-layer, .floating-window-layer')) return;
+      event.preventDefault();
+      if (!quickOpen) setQuickOpen(true);
+    };
+    window.addEventListener("keydown", listener); return () => window.removeEventListener("keydown", listener);
+  }, [quickOpen, status]);
+
+  useEffect(() => {
+    const listener = (event: KeyboardEvent) => {
+      const shortcut = editorTabShortcut(event);
+      if (!shortcut || !editorShortcutEligible(event.target, document)) return;
+      const currentGroup = layoutRef.current.editorGroups[0];
+      if (!currentGroup?.tabs.length) return;
+      if (shortcut === "close") {
+        const current = currentGroup.tabs.find((tab) => tab.id === currentGroup.activeTabId);
+        if (!current) return;
+        event.preventDefault();
+        closeTab(current);
+        return;
+      }
+      const nextId = adjacentEditorTabId(currentGroup.tabs.map((tab) => tab.id), currentGroup.activeTabId, shortcut === "previous");
+      if (!nextId) return;
+      event.preventDefault();
+      updateGroup((tabs) => ({ tabs, activeTabId: nextId }));
+    };
+    window.addEventListener("keydown", listener); return () => window.removeEventListener("keydown", listener);
+  }, [updateGroup]);
 
   const refreshTree = async (includeIgnored = showIgnoredRef.current) => {
     try { setTree((await clientRef.current!.request("filesystem.listTree", { includeIgnored })).tree); }
@@ -1477,6 +1562,34 @@ export function App() {
     } catch (error) { setStatusMessage(error instanceof Error ? error.message : "Could not add source root"); }
   };
 
+  const saveProjectPathDialog = async (name: string) => {
+    if (!clientRef.current || !projectPathDialog) return;
+    const { mode, node, parentPath } = projectPathDialog;
+    const targetPath = parentPath ? `${parentPath}/${name}` : name;
+    if (mode === "file") {
+      await clientRef.current.request("filesystem.createFile", { path: targetPath });
+      setProjectPathDialog(undefined);
+      await Promise.all([refreshTree(), refreshGit()]);
+      await openFile({ name: name.split("/").at(-1) ?? name, path: targetPath, type: "file" });
+      return;
+    }
+    if (mode === "directory") {
+      await clientRef.current.request("filesystem.createDirectory", { path: targetPath });
+      setProjectPathDialog(undefined);
+      await refreshTree();
+      return;
+    }
+    if (targetPath === node.path) { setProjectPathDialog(undefined); return; }
+    await clientRef.current.request("filesystem.rename", { path: node.path, newPath: targetPath });
+    const oldPrefix = `${node.path}/`;
+    const newPrefix = `${targetPath}/`;
+    const renamePath = (value: string) => value === node.path ? targetPath : node.type === "directory" && value.startsWith(oldPrefix) ? newPrefix + value.slice(oldPrefix.length) : value;
+    updateGroup((tabs, active) => ({ tabs: tabs.map((tab) => tab.type === "file" ? { ...tab, path: renamePath(tab.path), title: tab.path === node.path || node.type === "directory" && tab.path.startsWith(oldPrefix) ? renamePath(tab.path).split("/").at(-1) ?? tab.title : tab.title } : tab), activeTabId: active }));
+    setFileColors((current) => Object.fromEntries(Object.entries(current).map(([path, color]) => [renamePath(path), color])));
+    setProjectPathDialog(undefined);
+    await Promise.all([refreshTree(), refreshGit()]);
+  };
+
   const toggleJavaPanel = () => {
     const visible = layout.panels.some((panel) => panel.type === "java");
     setLayout((current) => ({
@@ -1631,6 +1744,8 @@ export function App() {
 
   const mountEditor = (instance: editor.IStandaloneCodeEditor, api: Monaco) => {
     monacoEditorRef.current = instance;
+    const restoredViewState = activeTab ? editorViewStates.mount(activeTab.id, instance) : false;
+    editorStatusBarRef.current?.attach(instance);
     monacoRef.current = api;
     gitDecorationsRef.current = instance.deltaDecorations([], gitHunkDecorations(activeTab?.type === "file" ? activeGitHunksRef.current : []));
     for (const disposable of javaLanguageDisposables.current) disposable.dispose();
@@ -1638,7 +1753,7 @@ export function App() {
     if (activeTab?.type !== "file" && activeTab?.type !== "useful" && activeTab?.type !== "runConfig" && activeTab?.type !== "agent") return;
     const model = instance.getModel();
     const savedCursor = model ? validateCursorPosition(cursorPositions.get(activeTab), model) : undefined;
-    if (savedCursor) instance.setPosition(savedCursor);
+    if (savedCursor && !restoredViewState) instance.setPosition(savedCursor);
     javaLanguageDisposables.current.push(instance.onDidChangeCursorPosition((event) => cursorPositions.update(activeTab, event.position)));
     const filePath = activeTab.path;
     if (activeTab.type === "file") javaLanguageDisposables.current.push(instance.onContextMenu((event) => {
@@ -1713,7 +1828,9 @@ export function App() {
   };
 
   const mountWorkingDiff = (instance: editor.IStandaloneDiffEditor) => {
+    editorViewStates.clearMounted();
     monacoDiffEditorRef.current = instance;
+    editorStatusBarRef.current?.attach(instance.getModifiedEditor());
     if (activeTab?.type === "diff") {
       const modifiedEditor = instance.getModifiedEditor();
       const model = modifiedEditor.getModel();
@@ -1746,6 +1863,24 @@ export function App() {
     const scope = node.type === "directory" ? node.path : node.path.split("/").slice(0, -1).join("/");
     setTreeContextMenu(undefined);
     setSearchScope(scope);
+  };
+
+  const runProjectTreeAction = (action: ProjectTreeAction, node: FileTreeNode) => {
+    const actions = projectTreeActions({ node });
+    if (!actions[action]) return;
+    if (action === "open") { void openFile(node); return; }
+    if (action === "copyRelativePath" || action === "copyAbsolutePath") {
+      const separator = activeWorkspace.includes("\\") ? "\\" : "/";
+      const absolutePath = activeWorkspace ? `${activeWorkspace.replace(/[\\/]+$/, "")}${separator}${node.path.split("/").join(separator)}` : node.path;
+      const value = action === "copyRelativePath" ? node.path : absolutePath;
+      if (!window.desktop?.writeClipboard) { setStatusMessage("Electron clipboard bridge is unavailable"); return; }
+      void window.desktop.writeClipboard(value).then(() => setStatusMessage(action === "copyRelativePath" ? "Copied workspace-relative path" : "Copied remote workspace absolute path")).catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : "Could not copy path"));
+      return;
+    }
+    const parentPath = node.type === "directory" ? node.path : node.path.split("/").slice(0, -1).join("/");
+    if (action === "createFile") setProjectPathDialog({ mode: "file", node, parentPath });
+    else if (action === "createDirectory") setProjectPathDialog({ mode: "directory", node, parentPath });
+    else if (action === "rename") setProjectPathDialog({ mode: "rename", node, parentPath });
   };
 
   const navigateToSearchResult = async (result: SearchResult, matchLength: number) => {
@@ -1785,13 +1920,13 @@ export function App() {
 
   const editorFontFamily = uiFontFamily === "jetbrains" ? "JetBrains Mono Variable" : "Inter Variable";
   const editorLineHeight = Math.round(uiFontSize * uiLineHeight);
-  const filteredTree = useMemo(() => filterFileTree(tree, projectFilter), [projectFilter, tree]);
   const normalizedTaskFilter = taskFilter.trim().toLowerCase();
-  const filteredTasks = useMemo(() => normalizedTaskFilter ? tasks.filter((task) => {
+  const filteredTasks = useMemo(() => (normalizedTaskFilter ? tasks.filter((task) => {
     const summary = aiStatuses.tasks[task.id] ?? emptyAiSummary;
-    return `${task.name} ${summary.status} ${summary.preview}`.toLowerCase().includes(normalizedTaskFilter);
-  }) : tasks, [aiStatuses.tasks, normalizedTaskFilter, tasks]);
+    return `${task.name} ${task.status} ${summary.status} ${summary.preview}`.toLowerCase().includes(normalizedTaskFilter);
+  }) : tasks).slice().sort((left, right) => Number(left.status === "finished") - Number(right.status === "finished")), [aiStatuses.tasks, normalizedTaskFilter, tasks]);
   const showRootTask = !normalizedTaskFilter || `root workspace ${aiStatuses.root.status} ${aiStatuses.root.preview}`.toLowerCase().includes(normalizedTaskFilter);
+  const selectedTaskTimerActive = Boolean(selectedTaskId && aiStatuses.tasks[selectedTaskId]?.waitingUntil);
   const rightSidebarOpen = rightPanels.project || rightPanels.git || rightPanels.useful || rightPanels.agents || ((rightPanels.taskGit || rightPanels.promptHistory) && Boolean(selectedTaskId)) || (rightPanels.java && Boolean(javaOptions));
 
   if (status !== "connected") return <ConnectionScreen {...{ host, port, status, statusMessage, setHost, setPort, connect }} />;
@@ -1810,11 +1945,11 @@ export function App() {
       </nav>
       {(leftPanels.tasks || leftPanels.ai) && <><aside className="side-panel side-panel-left" style={{ width: leftSidebarWidth }}><ResizablePanelStack workspace={activeWorkspace} setting="focused.leftSizes" ids={[...(leftPanels.tasks ? ["tasks"] : []), ...(leftPanels.ai ? ["ai"] : [])]}>
         {leftPanels.tasks && <section key="tasks" className="stacked-panel"><header className="panel-header"><span>Tasks</span><button title="Create task" disabled={taskSwitching} onClick={() => setShowCreateTaskDialog(true)}><Plus size={15} /></button></header><QuickFilter value={taskFilter} placeholder="Filter tasks" label="Filter tasks" onChange={setTaskFilter} /><div className="tasks-list">
-          {showRootTask && <TaskRow icon={<Folder size={15} />} name="Root workspace" summary={aiStatuses.root} selected={selectedTaskId === undefined} disabled={taskSwitching} onClick={() => openTask(undefined, aiStatuses.root.pendingPermission)} />}
-          {filteredTasks.map((task) => { const summary = aiStatuses.tasks[task.id] ?? emptyAiSummary; return <TaskRow key={task.id} icon={<ListTodo size={15} />} name={task.name} summary={summary} selected={selectedTaskId === task.id} disabled={taskSwitching} onClick={() => openTask(task.id, summary.pendingPermission)} onMerge={() => setMergeDialog(task)} onDelete={() => void deleteTask(task)} />; })}
+          {showRootTask && <TaskRow icon={<Folder size={15} />} name="Root workspace" summary={aiStatuses.root} selected={selectedTaskId === undefined} disabled={taskSwitching} onClick={() => openTask(undefined, aiStatuses.root.pendingPermission)} onCancelTimer={() => void timerAction(undefined, "cancel")} onFireTimer={() => void timerAction(undefined, "fire")} />}
+          {filteredTasks.map((task) => { const summary = aiStatuses.tasks[task.id] ?? emptyAiSummary; return <TaskRow key={task.id} icon={<ListTodo size={15} />} name={task.name} summary={summary} finished={task.status === "finished"} selected={selectedTaskId === task.id} disabled={taskSwitching} onClick={() => openTask(task.id, summary.pendingPermission)} onSetFinished={() => void setTaskStatus(task, task.status === "finished" ? "active" : "finished")} onMerge={() => setMergeDialog(task)} onDelete={() => void deleteTask(task)} onCancelTimer={() => void timerAction(task, "cancel")} onFireTimer={() => void timerAction(task, "fire")} />; })}
           {!showRootTask && filteredTasks.length === 0 && <div className="filter-empty">No matching tasks</div>}
         </div></section>}
-        {leftPanels.ai && <section key="ai" className="stacked-panel"><header className="panel-header"><span>AI</span><AgentPicker agents={agents} value={selectedAgentKey} disabled={aiSession.status === "in_progress"} onChange={selectAgent} /><span className={`ai-status ${aiSession.status}`}>{formatAiStatus(aiSession.status)}</span></header><AiPanel key={`${activeWorkspace}:${aiProvider}:${aiSession.id ?? "legacy"}`} provider={aiProvider} providers={aiProviders} session={aiSession} sessions={aiSessions} models={aiModels} usage={aiUsage} attachments={currentAiAttachments} permissionOwner={{ provider: aiProvider, ...(selectedTaskId ? { taskId: selectedTaskId } : {}), ...(aiSession.id ? { sessionId: aiSession.id } : {}) }} permissionActionsDisabled={taskSwitching} onProviderChange={(provider) => void switchAiProvider(provider)} onConfigurationChange={configureAi} onAttachmentsChange={updateAiAttachments} onSend={sendAiPrompt} onSendAsTask={selectedTaskId ? undefined : sendAiPromptAsTask} onSteer={steerAiPrompt} onInterrupt={() => void interruptAi()} onNewSession={() => void newAiSession()} onSwitchSession={(session) => void switchAiSession(session)} onRemoveSession={(session) => void removeAiSession(session)} onResolvePermission={resolveAiPermission} /></section>}
+        {leftPanels.ai && <section key="ai" className="stacked-panel"><header className="panel-header"><span>AI</span><AgentPicker agents={agents} value={selectedAgentKey} disabled={aiSession.status === "in_progress"} onChange={selectAgent} /><span className={`ai-status ${aiSession.status}`}>{formatAiStatus(aiSession.status)}</span></header><AiPanel key={`${activeWorkspace}:${selectedTaskId ?? "root"}:${aiProvider}:${aiSession.id ?? "legacy"}`} provider={aiProvider} providers={aiProviders} session={aiSession} sessions={aiSessions} models={aiModels} usage={aiUsage} attachments={currentAiAttachments} draft={currentAiDraft} permissionOwner={{ provider: aiProvider, ...(selectedTaskId ? { taskId: selectedTaskId } : {}), ...(aiSession.id ? { sessionId: aiSession.id } : {}) }} permissionActionsDisabled={taskSwitching} sessionChangesDisabled={selectedTaskTimerActive} onProviderChange={(provider) => void switchAiProvider(provider)} onConfigurationChange={configureAi} onAttachmentsChange={updateAiAttachments} onDraftChange={updateAiDraft} onSend={sendAiPrompt} onSendAsTask={selectedTaskId ? undefined : sendAiPromptAsTask} onSteer={steerAiPrompt} onInterrupt={() => void interruptAi()} onNewSession={() => void newAiSession()} onSwitchSession={(session) => void switchAiSession(session)} onRemoveSession={(session) => void removeAiSession(session)} onResolvePermission={resolveAiPermission} /></section>}
       </ResizablePanelStack></aside><div className="resize-handle" onPointerDown={beginLeftSidebarResize} /></>}
       </> : <>
       <nav className="tool-stripe" aria-label="Left tool windows">
@@ -1831,11 +1966,11 @@ export function App() {
           <header className="panel-header"><span>Project</span><div className="panel-header-actions"><button title={showIgnored ? "Hide ignored files" : "Show all files (including Git-ignored)"} className={showIgnored ? "active" : ""} onClick={toggleShowIgnored}>{showIgnored ? <Eye size={14} /> : <EyeOff size={14} />}</button><button title="Synchronize files" onClick={() => void refreshTree()}><RefreshCw size={14} /></button></div></header>
           <QuickFilter value={projectFilter} placeholder="Filter files" label="Filter project files" onChange={setProjectFilter} />
           <div className="workspace-name" onContextMenu={(event) => { event.preventDefault(); setTreeContextMenu({ x: Math.min(event.clientX, window.innerWidth - 220), y: Math.min(event.clientY, window.innerHeight - 110), node: { name: "REMOTE WORKSPACE", path: "", type: "directory" } }); }}><ChevronDown size={13} />REMOTE WORKSPACE</div>
-          <div className="tree">{filteredTree.length > 0 ? <Tree nodes={filteredTree} activePath={activeTab?.path} fileColors={fileColors} gitStatuses={projectGitStatuses} expandAll={Boolean(projectFilter.trim())} onOpen={openFile} onContextMenu={(event, node) => { event.preventDefault(); setTreeContextMenu({ x: Math.min(event.clientX, window.innerWidth - 220), y: Math.min(event.clientY, window.innerHeight - 110), node }); }} /> : <div className="filter-empty">No matching files</div>}</div>
+          <ProjectTree nodes={tree} query={projectFilter} activePath={activeTab?.path} fileColors={fileColors} gitStatuses={projectGitStatuses} onAction={runProjectTreeAction} onContextMenu={(node, x, y) => setTreeContextMenu({ x: Math.min(x, window.innerWidth - 220), y: Math.min(y, window.innerHeight - 110), node })} />
         </> : classicSideView === "git" ? <>
           <header className="panel-header"><span>Git Changes</span><GitToolbarActions selectedCount={selectedRollbackEntries.length} operationRunning={gitOperationRunning} pushing={gitPushing} rollingBack={gitRollingBack} upstream={gitUpstream} onRollbackSelected={openRollbackSelected} onPush={() => void pushGit()} onRefresh={() => void refreshGit()} /></header><div className="git-branch"><GitBranch size={13} /><span>{gitBranch}</span></div>
-          <GitChangesView entries={gitEntries} error={gitError} selectedPaths={selectedGitPaths} onTogglePath={(path) => setSelectedGitPaths((current) => { const next = new Set(current); next.has(path) ? next.delete(path) : next.add(path); return next; })} activePath={activeTab?.path} onOpenDiff={openDiff} onOpenFile={(entry) => void openFile({ name: entry.path.split("/").pop() ?? entry.path, path: entry.path, type: "file" })} onContextMenu={(event, entry) => { event.preventDefault(); setGitRollbackMenu({ x: Math.min(event.clientX, window.innerWidth - 220), y: Math.min(event.clientY, window.innerHeight - 50), entry }); }} />
-          <form className="git-commit-panel" onSubmit={(event) => { event.preventDefault(); void commitSelectedFiles(); }}><textarea aria-label="Commit message" placeholder="Commit message" value={gitCommitMessage} disabled={gitOperationRunning} onChange={(event) => setGitCommitMessage(event.target.value)} /><footer><span>{selectedGitPaths.size} selected</span><button disabled={gitOperationRunning || selectedGitPaths.size === 0 || !gitCommitMessage.trim()}>{gitCommitting ? "Committing..." : "Commit"}</button></footer></form>
+          <KeyboardGitChangesView entries={gitEntries} error={gitError} selectedPaths={selectedGitPaths} onTogglePath={(path) => setSelectedGitPaths((current) => { const next = new Set(current); next.has(path) ? next.delete(path) : next.add(path); return next; })} activePath={activeTab?.path} onOpenDiff={openDiff} onOpenFile={(entry) => void openFile({ name: entry.path.split("/").pop() ?? entry.path, path: entry.path, type: "file" })} onContextMenu={(event, entry) => { event.preventDefault(); setGitRollbackMenu({ x: Math.min(event.clientX, window.innerWidth - 220), y: Math.min(event.clientY, window.innerHeight - 50), entry }); }} />
+          <GitCommitPanel message={gitCommitMessage} selectedCount={selectedGitPaths.size} operationRunning={gitOperationRunning} committing={gitCommitting} onMessageChange={setGitCommitMessage} onCommit={() => void commitSelectedFiles()} />
         </> : classicSideView === "taskGit" && selectedTaskId ? <><header className="panel-header"><span>Task Git</span><button title="Refresh task comparison" onClick={() => void refreshTaskGit()}><RefreshCw size={14} /></button></header><div className="git-branch"><GitCompareArrows size={13} /><span>{tasks.find((task) => task.id === selectedTaskId)?.baseBranch ?? "Base branch"}</span></div><GitChangesView entries={taskGitEntries} error={taskGitError} emptyMessage="No changes from base branch" groupTitle="Changes from Base" activePath={activeTab?.path} onOpenDiff={openTaskDiff} onOpenFile={(entry) => void openFile({ name: entry.path.split("/").pop() ?? entry.path, path: entry.path, type: "file" })} /></> : classicSideView === "useful" ? <><header className="panel-header"><span>Useful Files</span><button title="Refresh useful files" onClick={() => void refreshUsefulFiles()}><RefreshCw size={14} /></button></header><div className="useful-files-list"><UsefulFileSection title="Global" scope="global" files={usefulFiles} activeTab={activeTab} onOpen={openUsefulFile} onCreate={(scope) => setUsefulDialog({ mode: "create", scope })} onRename={(file) => setUsefulDialog({ mode: "rename", scope: file.scope, file })} onDelete={(file) => void deleteUsefulFile(file)} /><UsefulFileSection title="Local" scope="local" files={usefulFiles} activeTab={activeTab} onOpen={openUsefulFile} onCreate={(scope) => setUsefulDialog({ mode: "create", scope })} onRename={(file) => setUsefulDialog({ mode: "rename", scope: file.scope, file })} onDelete={(file) => void deleteUsefulFile(file)} /></div></> : classicSideView === "agents" ? <AgentsPanel agents={agents} activeTab={activeTab} onRefresh={() => void refreshAgents()} onOpen={(file) => void openAgentFile(file)} onCreate={(scope) => setAgentDialog({ mode: "create", scope })} onRename={(file) => { if (file.scope !== "workspace") setAgentDialog({ mode: "rename", scope: file.scope, file }); }} onDelete={(file) => void deleteAgent(file)} /> : <><header className="panel-header"><span>Java Project</span><button title="Refresh Java project" onClick={() => void refreshJavaTree()}><RefreshCw size={14} /></button></header><div className="java-project-meta"><Coffee size={13} /><span>{javaOptions?.pomPath}</span></div><div className="tree java-tree">{javaOptions && <JavaProjectTree nodes={javaTree} activePath={activeTab?.path} onOpen={openFile} />}</div></>}
       </aside><div className="resize-handle" onPointerDown={beginClassicLeftResize} />
       </>}
@@ -1850,10 +1985,10 @@ export function App() {
           </div>}
           <span className="connection-dot" />{host}:{port}<div className="settings-anchor"><button title="Settings" onClick={() => setSettingsOpen((open) => !open)}><Settings size={15} /></button>{settingsOpen && <div className="settings-menu"><header>Settings</header><div className="settings-row"><span>Layout</span><div className="theme-switch"><button className={sideLayout === "classic" ? "active" : ""} onClick={() => changeSideLayout("classic")}>Classic</button><button className={sideLayout === "ai-focused" ? "active" : ""} onClick={() => changeSideLayout("ai-focused")}>AI focused</button></div></div><div className="settings-row"><span>Theme</span><div className="theme-switch"><button className={theme === "dark" ? "active" : ""} onClick={() => setTheme("dark")}>Dark</button><button className={theme === "light" ? "active" : ""} onClick={() => setTheme("light")}>Light</button></div></div><div className="settings-row"><span>Highlighting</span><div className="theme-switch"><button className={highlightTheme === "default" ? "active" : ""} onClick={() => setHighlightTheme("default")}>Default</button><button className={highlightTheme === "ftpud" ? "active" : ""} onClick={() => setHighlightTheme("ftpud")}>Ftpud</button></div></div><div className="settings-row font-setting"><label htmlFor="ui-font-family">Font</label><select id="ui-font-family" value={uiFontFamily} onChange={(event) => setUiFontFamily(event.target.value as "jetbrains" | "inter")}><option value="jetbrains">JetBrains Mono</option><option value="inter">Inter</option></select></div><div className="settings-row font-setting"><label htmlFor="ui-font-size">Size</label><input id="ui-font-size" type="number" min="10" max="20" step="1" value={uiFontSize} onChange={(event) => setUiFontSize(Math.min(20, Math.max(10, Number(event.target.value) || 13)))} /></div><div className="settings-row font-setting"><label htmlFor="ui-line-height">Line height</label><input id="ui-line-height" type="number" min="1" max="2" step="0.05" value={uiLineHeight} onChange={(event) => setUiLineHeight(Math.min(2, Math.max(1, Number(event.target.value) || 1.2)))} /></div></div>}</div><button title="Disconnect" onClick={disconnect}><LogOut size={15} /></button>
         </div>
-        <div className="tabs" role="tablist">
-          {group.tabs.map((tab) => <button className={`tab ${tab.id === group.activeTabId ? "active" : ""} ${tab.id === draggedTabId ? "dragging" : ""}`} key={tab.id} draggable onDragStart={(event) => { setDraggedTabId(tab.id); event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/plain", tab.id); }} onDragEnd={() => setDraggedTabId(undefined)} onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = "move"; }} onDrop={(event) => { event.preventDefault(); moveTab(tab.id); }} onContextMenu={(event) => { event.preventDefault(); setTabContextMenu({ x: Math.min(event.clientX, window.innerWidth - 220), y: Math.min(event.clientY, window.innerHeight - 125), tab }); }} onMouseDown={(event) => { if (event.button === 1) event.preventDefault(); }} onAuxClick={(event) => { if (event.button === 1) { event.preventDefault(); closeTab(tab); } }} onClick={() => void activateEditorTab(tab)}>
-            {tab.type === "diff" ? <GitCompareArrows size={14} /> : <File size={14} />}<span className={tab.type === "file" && projectGitStatuses[tab.path] ? `tab-file-name git-${projectGitStatuses[tab.path] === "C" ? "created" : "modified"}` : "tab-file-name"}>{tab.title}</span>{tab.dirty && <span className="dirty" title="Unsaved changes" />}<span className="close" title={`Close ${tab.title}`} onClick={(event) => { event.stopPropagation(); closeTab(tab); }}><X size={13} /></span>
-          </button>)}
+        <div className="tabs" role="tablist" aria-label="Open editors">
+          {group.tabs.map((tab) => <div className={`tab ${tab.pinned ? "pinned" : ""} ${tab.id === group.activeTabId ? "active" : ""} ${tab.id === draggedTabId ? "dragging" : ""}`} role="tab" aria-selected={tab.id === group.activeTabId} aria-label={tab.pinned ? `${tab.title} (pinned)` : tab.title} tabIndex={tab.id === group.activeTabId ? 0 : -1} title={`${tab.title}${tab.pinned ? " · Pinned" : ""} · Ctrl+Tab to switch · Ctrl/Cmd+W to close`} key={tab.id} draggable onDragStart={(event) => { setDraggedTabId(tab.id); event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/plain", tab.id); }} onDragEnd={() => setDraggedTabId(undefined)} onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = "move"; }} onDrop={(event) => { event.preventDefault(); moveTab(tab.id); }} onContextMenu={(event) => { event.preventDefault(); setTabContextMenu({ x: Math.min(event.clientX, window.innerWidth - 220), y: Math.min(event.clientY, window.innerHeight - 125), tab }); }} onMouseDown={(event) => { if (event.button === 1) event.preventDefault(); }} onAuxClick={(event) => { if (event.button === 1) { event.preventDefault(); closeTab(tab); } }} onClick={() => void activateEditorTab(tab)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); void activateEditorTab(tab); } }}>
+            {tab.type === "diff" ? <GitCompareArrows size={14} /> : <File size={14} />}<span className={tab.type === "file" && projectGitStatuses[tab.path] ? `tab-file-name git-${projectGitStatuses[tab.path] === "C" ? "created" : "modified"}` : "tab-file-name"}>{tab.title}</span>{tab.dirty && <span className="dirty" title="Unsaved changes" />}<button type="button" className="close" aria-label={`Close ${tab.title}`} title={`Close ${tab.title}`} onClick={(event) => { event.stopPropagation(); closeTab(tab); }}><X size={13} /></button>
+          </div>)}
           <div className="tab-spacer" />
           {activeTab?.type === "diff" && <div className="editor-mode-switch" aria-label="Diff layout">
             <button className={activeTab.diffMode === "split" ? "active" : ""} title="Side-by-side diff" onClick={() => updateGroup((tabs, active) => ({ tabs: tabs.map((tab) => tab.id === activeTab.id ? { ...tab, diffMode: "split" } : tab), activeTabId: active }))}><Columns2 size={14} /></button>
@@ -1876,6 +2011,7 @@ export function App() {
             {activeTab.error && <div className="inline-error">{activeTab.error}</div>}
             {activeTab.type === "diff" ? <><DiffEditor key={`${activeTab.id}:${activeTab.diffMode ?? "unified"}`} original={activeTab.originalContent ?? ""} modified={activeTab.content} language={languageByExtension[activeTab.path.split(".").pop()?.toLowerCase() ?? ""] ?? "plaintext"} beforeMount={configureMonacoThemes} theme={monacoTheme(theme, highlightTheme)} onMount={mountWorkingDiff} options={{ automaticLayout: true, readOnly: false, originalEditable: false, renderMarginRevertIcon: true, renderSideBySide: activeTab.diffMode === "split", useInlineViewWhenSpaceIsLimited: false, minimap: { enabled: false }, fontFamily: editorFontFamily, fontSize: uiFontSize, lineHeight: editorLineHeight, scrollBeyondLastLine: false }} /><div className="diff-navigation" aria-label="Diff navigation"><button title="Previous change" aria-label="Previous change" onClick={() => monacoDiffEditorRef.current?.goToDiff("previous")}><ChevronUp size={16} /></button><button title="Next change" aria-label="Next change" onClick={() => monacoDiffEditorRef.current?.goToDiff("next")}><ChevronDown size={16} /></button></div></> : activeTab.markdownMode === "preview" ? <div className="markdown-preview"><MarkdownPreview sourcePath={activeTab.path} workspacePath={activeWorkspace} renderPre={renderMarkdownPre} onOpenFile={(path) => void openFile({ name: path.split("/").pop() ?? path, path, type: "file" })} onOpenExternal={(url) => { void window.desktop?.openExternal(url).catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : "Could not open external link")); }}>{activeTab.content}</MarkdownPreview></div> : <Editor key={`${activeTab.type}:${activeTab.usefulScope ?? activeTab.runConfigScope ?? activeTab.agentScope ?? "workspace"}:${activeTab.path}`} path={activeTab.type === "useful" ? `useful-${activeTab.usefulScope}/${activeTab.path}` : activeTab.type === "runConfig" ? `run-config-${activeTab.runConfigScope}/${activeTab.path}.sh` : activeTab.type === "agent" ? `agent-${activeTab.agentScope}/${activeTab.path}` : activeTab.path} language={activeTab.type === "runConfig" ? "shell" : languageByExtension[activeTab.path.split(".").pop()?.toLowerCase() ?? ""] ?? "plaintext"} value={activeTab.content} beforeMount={configureMonacoThemes} theme={monacoTheme(theme, highlightTheme)} onMount={mountEditor} options={{ automaticLayout: true, contextmenu: false, minimap: { enabled: false }, glyphMargin: activeTab.type === "file" || /\.http$/i.test(activeTab.path), fontFamily: editorFontFamily, fontSize: uiFontSize, lineHeight: editorLineHeight, scrollBeyondLastLine: false, padding: { top: 10 } }} onChange={(value) => updateGroup((tabs, active) => ({ tabs: tabs.map((tab) => tab.id === activeTab.id ? { ...tab, content: value ?? "", dirty: (value ?? "") !== tab.savedContent, error: undefined } : tab), activeTabId: active }))} />}
           </>}
+          <EditorStatusBar ref={editorStatusBarRef} active={Boolean(activeTab && !activeTab.loading && !(activeTab.error && !activeTab.content) && activeTab.markdownMode !== "preview")} />
         </div>
         {httpResult && <section className="http-response-panel"><header><span>{httpResult.request.method} {httpResult.request.url}</span>{httpResult.loading ? <small>Sending...</small> : httpResult.response ? <small className={httpResult.response.status >= 400 ? "error" : "success"}>{httpResult.response.status} {httpResult.response.statusText} · {httpResult.response.durationMs} ms</small> : null}<button title="Close response" onClick={() => setHttpResult(undefined)}><X size={14} /></button></header>{httpResult.error ? <div className="http-response-error">{httpResult.error}</div> : httpResult.response ? <div className="http-response-content"><pre className="http-response-headers">{Object.entries(httpResult.response.headers).map(([name, value]) => `${name}: ${value}`).join("\n")}</pre><pre className="http-response-body">{httpResult.response.body}</pre></div> : <div className="http-response-loading">Waiting for response...</div>}</section>}
       </main>
@@ -1886,13 +2022,13 @@ export function App() {
           <header className="panel-header"><span>Project</span><div className="panel-header-actions"><button title={showIgnored ? "Hide ignored files" : "Show all files (including Git-ignored)"} className={showIgnored ? "active" : ""} onClick={toggleShowIgnored}>{showIgnored ? <Eye size={14} /> : <EyeOff size={14} />}</button><button title="Synchronize files" onClick={() => void refreshTree()}><RefreshCw size={14} /></button></div></header>
           <QuickFilter value={projectFilter} placeholder="Filter files" label="Filter project files" onChange={setProjectFilter} />
           <div className="workspace-name" onContextMenu={(event) => { event.preventDefault(); setTreeContextMenu({ x: Math.min(event.clientX, window.innerWidth - 220), y: Math.min(event.clientY, window.innerHeight - 110), node: { name: "REMOTE WORKSPACE", path: "", type: "directory" } }); }}><ChevronDown size={13} />REMOTE WORKSPACE</div>
-          <div className="tree">{filteredTree.length > 0 ? <Tree nodes={filteredTree} activePath={activeTab?.path} fileColors={fileColors} gitStatuses={projectGitStatuses} expandAll={Boolean(projectFilter.trim())} onOpen={openFile} onContextMenu={(event, node) => { event.preventDefault(); setTreeContextMenu({ x: Math.min(event.clientX, window.innerWidth - 220), y: Math.min(event.clientY, window.innerHeight - 110), node }); }} /> : <div className="filter-empty">No matching files</div>}</div>
+          <ProjectTree nodes={tree} query={projectFilter} activePath={activeTab?.path} fileColors={fileColors} gitStatuses={projectGitStatuses} onAction={runProjectTreeAction} onContextMenu={(node, x, y) => setTreeContextMenu({ x: Math.min(x, window.innerWidth - 220), y: Math.min(y, window.innerHeight - 110), node })} />
         </section>}
         {rightPanels.git && <section key="git" className="stacked-panel">
           <header className="panel-header"><span>Git Changes</span><GitToolbarActions selectedCount={selectedRollbackEntries.length} operationRunning={gitOperationRunning} pushing={gitPushing} rollingBack={gitRollingBack} upstream={gitUpstream} onRollbackSelected={openRollbackSelected} onPush={() => void pushGit()} onRefresh={() => void refreshGit()} /></header>
           <div className="git-branch"><GitBranch size={13} /><span>{gitBranch}</span></div>
-          <GitChangesView entries={gitEntries} error={gitError} selectedPaths={selectedGitPaths} onTogglePath={(path) => setSelectedGitPaths((current) => { const next = new Set(current); next.has(path) ? next.delete(path) : next.add(path); return next; })} activePath={activeTab?.path} onOpenDiff={openDiff} onOpenFile={(entry) => void openFile({ name: entry.path.split("/").pop() ?? entry.path, path: entry.path, type: "file" })} onContextMenu={(event, entry) => { event.preventDefault(); setGitRollbackMenu({ x: Math.min(event.clientX, window.innerWidth - 220), y: Math.min(event.clientY, window.innerHeight - 50), entry }); }} />
-          <form className="git-commit-panel" onSubmit={(event) => { event.preventDefault(); void commitSelectedFiles(); }}><textarea aria-label="Commit message" placeholder="Commit message" value={gitCommitMessage} disabled={gitOperationRunning} onChange={(event) => setGitCommitMessage(event.target.value)} /><footer><span>{selectedGitPaths.size} selected</span><button disabled={gitOperationRunning || selectedGitPaths.size === 0 || !gitCommitMessage.trim()}>{gitCommitting ? "Committing..." : "Commit"}</button></footer></form>
+          <KeyboardGitChangesView entries={gitEntries} error={gitError} selectedPaths={selectedGitPaths} onTogglePath={(path) => setSelectedGitPaths((current) => { const next = new Set(current); next.has(path) ? next.delete(path) : next.add(path); return next; })} activePath={activeTab?.path} onOpenDiff={openDiff} onOpenFile={(entry) => void openFile({ name: entry.path.split("/").pop() ?? entry.path, path: entry.path, type: "file" })} onContextMenu={(event, entry) => { event.preventDefault(); setGitRollbackMenu({ x: Math.min(event.clientX, window.innerHeight - 220), y: Math.min(event.clientY, window.innerHeight - 50), entry }); }} />
+          <GitCommitPanel message={gitCommitMessage} selectedCount={selectedGitPaths.size} operationRunning={gitOperationRunning} committing={gitCommitting} onMessageChange={setGitCommitMessage} onCommit={() => void commitSelectedFiles()} />
         </section>}
         {rightPanels.taskGit && selectedTaskId && <section key="taskGit" className="stacked-panel"><header className="panel-header"><span>Task Git</span><button title="Refresh task comparison" onClick={() => void refreshTaskGit()}><RefreshCw size={14} /></button></header><div className="git-branch"><GitCompareArrows size={13} /><span>{tasks.find((task) => task.id === selectedTaskId)?.baseBranch ?? "Base branch"}</span></div><GitChangesView entries={taskGitEntries} error={taskGitError} emptyMessage="No changes from base branch" groupTitle="Changes from Base" activePath={activeTab?.path} onOpenDiff={openTaskDiff} onOpenFile={(entry) => void openFile({ name: entry.path.split("/").pop() ?? entry.path, path: entry.path, type: "file" })} /></section>}
         {rightPanels.promptHistory && selectedTaskId && <TaskCheckpointHistory key="promptHistory" checkpoints={taskCheckpoints} onOpen={openCheckpointDiff} onRestore={restoreCheckpoint} onClose={() => setRightPanels((current) => ({ ...current, promptHistory: false }))} />}
@@ -1912,12 +2048,12 @@ export function App() {
       </> : <>
       {(classicTasksOpen || classicAiOpen || (rightPanels.promptHistory && selectedTaskId)) && <><div className="right-resize-handle" onPointerDown={beginClassicRightResize} /><aside className="side-panel classic-right-panel" style={{ width: classicRightWidth }}>
         {classicTasksOpen && <section className="stacked-panel" style={classicAiOpen ? { flex: `0 0 ${classicSplit}%` } : undefined}><header className="panel-header"><span>Tasks</span><button title="Create task" disabled={taskSwitching} onClick={() => setShowCreateTaskDialog(true)}><Plus size={15} /></button></header><QuickFilter value={taskFilter} placeholder="Filter tasks" label="Filter tasks" onChange={setTaskFilter} /><div className="tasks-list">
-          {showRootTask && <TaskRow icon={<Folder size={15} />} name="Root workspace" summary={aiStatuses.root} selected={selectedTaskId === undefined} disabled={taskSwitching} onClick={() => openTask(undefined, aiStatuses.root.pendingPermission)} />}
-          {filteredTasks.map((task) => { const summary = aiStatuses.tasks[task.id] ?? emptyAiSummary; return <TaskRow key={task.id} icon={<ListTodo size={15} />} name={task.name} summary={summary} selected={selectedTaskId === task.id} disabled={taskSwitching} onClick={() => openTask(task.id, summary.pendingPermission)} onMerge={() => setMergeDialog(task)} onDelete={() => void deleteTask(task)} />; })}
+          {showRootTask && <TaskRow icon={<Folder size={15} />} name="Root workspace" summary={aiStatuses.root} selected={selectedTaskId === undefined} disabled={taskSwitching} onClick={() => openTask(undefined, aiStatuses.root.pendingPermission)} onCancelTimer={() => void timerAction(undefined, "cancel")} onFireTimer={() => void timerAction(undefined, "fire")} />}
+          {filteredTasks.map((task) => { const summary = aiStatuses.tasks[task.id] ?? emptyAiSummary; return <TaskRow key={task.id} icon={<ListTodo size={15} />} name={task.name} summary={summary} finished={task.status === "finished"} selected={selectedTaskId === task.id} disabled={taskSwitching} onClick={() => openTask(task.id, summary.pendingPermission)} onSetFinished={() => void setTaskStatus(task, task.status === "finished" ? "active" : "finished")} onMerge={() => setMergeDialog(task)} onDelete={() => void deleteTask(task)} onCancelTimer={() => void timerAction(task, "cancel")} onFireTimer={() => void timerAction(task, "fire")} />; })}
           {!showRootTask && filteredTasks.length === 0 && <div className="filter-empty">No matching tasks</div>}
         </div></section>}
         {classicTasksOpen && classicAiOpen && <div className="classic-panel-divider" onPointerDown={beginClassicSplitResize} />}
-        {classicAiOpen && <section className="stacked-panel"><header className="panel-header"><span>AI</span><AgentPicker agents={agents} value={selectedAgentKey} disabled={aiSession.status === "in_progress"} onChange={selectAgent} /><span className={`ai-status ${aiSession.status}`}>{formatAiStatus(aiSession.status)}</span></header><AiPanel key={`classic:${activeWorkspace}:${aiProvider}:${aiSession.id ?? "legacy"}`} provider={aiProvider} providers={aiProviders} session={aiSession} sessions={aiSessions} models={aiModels} usage={aiUsage} attachments={currentAiAttachments} permissionOwner={{ provider: aiProvider, ...(selectedTaskId ? { taskId: selectedTaskId } : {}), ...(aiSession.id ? { sessionId: aiSession.id } : {}) }} permissionActionsDisabled={taskSwitching} onProviderChange={(provider) => void switchAiProvider(provider)} onConfigurationChange={configureAi} onAttachmentsChange={updateAiAttachments} onSend={sendAiPrompt} onSendAsTask={selectedTaskId ? undefined : sendAiPromptAsTask} onSteer={steerAiPrompt} onInterrupt={() => void interruptAi()} onNewSession={() => void newAiSession()} onSwitchSession={(session) => void switchAiSession(session)} onRemoveSession={(session) => void removeAiSession(session)} onResolvePermission={resolveAiPermission} /></section>}
+        {classicAiOpen && <section className="stacked-panel"><header className="panel-header"><span>AI</span><AgentPicker agents={agents} value={selectedAgentKey} disabled={aiSession.status === "in_progress"} onChange={selectAgent} /><span className={`ai-status ${aiSession.status}`}>{formatAiStatus(aiSession.status)}</span></header><AiPanel key={`classic:${activeWorkspace}:${selectedTaskId ?? "root"}:${aiProvider}:${aiSession.id ?? "legacy"}`} provider={aiProvider} providers={aiProviders} session={aiSession} sessions={aiSessions} models={aiModels} usage={aiUsage} attachments={currentAiAttachments} draft={currentAiDraft} permissionOwner={{ provider: aiProvider, ...(selectedTaskId ? { taskId: selectedTaskId } : {}), ...(aiSession.id ? { sessionId: aiSession.id } : {}) }} permissionActionsDisabled={taskSwitching} sessionChangesDisabled={selectedTaskTimerActive} onProviderChange={(provider) => void switchAiProvider(provider)} onConfigurationChange={configureAi} onAttachmentsChange={updateAiAttachments} onDraftChange={updateAiDraft} onSend={sendAiPrompt} onSendAsTask={selectedTaskId ? undefined : sendAiPromptAsTask} onSteer={steerAiPrompt} onInterrupt={() => void interruptAi()} onNewSession={() => void newAiSession()} onSwitchSession={(session) => void switchAiSession(session)} onRemoveSession={(session) => void removeAiSession(session)} onResolvePermission={resolveAiPermission} /></section>}
         {rightPanels.promptHistory && selectedTaskId && <TaskCheckpointHistory checkpoints={taskCheckpoints} onOpen={openCheckpointDiff} onRestore={restoreCheckpoint} onClose={() => setRightPanels((current) => ({ ...current, promptHistory: false }))} />}
       </aside></>}
       <nav className="right-tool-stripe" aria-label="Right tool windows"><button className={`tool-stripe-button right ${classicTasksOpen ? "active" : ""}`} title={classicTasksOpen ? "Hide Tasks" : "Show Tasks"} onClick={() => setClassicTasksOpen((open) => !open)}><ListTodo size={15} /><span>Tasks</span>{tasks.length > 0 && <span className="tool-badge">{tasks.length > 99 ? "99+" : tasks.length}</span>}</button><button className={`tool-stripe-button right ${classicAiOpen ? "active" : ""}`} title={classicAiOpen ? "Hide AI" : "Show AI"} onClick={() => { setClassicAiOpen((open) => { if (!open) void refreshAi(); return !open; }); }}><Bot size={15} /><span>AI</span>{aiSession.status === "in_progress" && <span className="tool-badge">...</span>}</button></nav>
@@ -1934,19 +2070,31 @@ export function App() {
       <button className={`bottom-tool-button ${layout.panels.some((panel) => panel.type === "gitlog") ? "active" : ""}`} onClick={toggleGitLogPanel}><GitBranch size={14} /><span>Git</span></button>
       {runConfigs.map((config, index) => <button key={`${config.scope}:${config.name}`} className={`bottom-tool-button run-config-entry ${index === 0 ? "first" : ""} ${["starting", "running", "stopping"].includes(config.status) ? "active-run" : ""}`} aria-label={`${config.name}, ${config.scope}, ${config.status}`} title={`${config.scope} Run Config: ${config.name} (${config.status})`} onClick={() => void runConfigAction(config, config.terminalId ? "openTerminal" : "run")} onContextMenu={(event) => { event.preventDefault(); setRunConfigMenu({ x: Math.min(event.clientX, window.innerWidth - 218), y: Math.min(event.clientY, window.innerHeight - 126), config }); }}><Play size={12} /><span>{config.name}</span><span className={`run-config-indicator ${config.status}`} aria-hidden="true" /></button>)}
     </footer>
-    {treeContextMenu && <div className="context-menu-layer" onMouseDown={() => setTreeContextMenu(undefined)}>
-      <div className="context-menu" style={{ left: treeContextMenu.x, top: treeContextMenu.y }} onMouseDown={(event) => event.stopPropagation()}>
+      {treeContextMenu && <div className="context-menu-layer" onMouseDown={() => setTreeContextMenu(undefined)}>
+      <div className="context-menu" aria-label={`Actions for ${treeContextMenu.node.name}`} style={{ left: treeContextMenu.x, top: treeContextMenu.y }} onMouseDown={(event) => event.stopPropagation()}>
+        <button role="menuitem" disabled={!projectTreeActions({ node: treeContextMenu.node }).createFile} onClick={() => { runProjectTreeAction("createFile", treeContextMenu.node); setTreeContextMenu(undefined); }}><File size={14} /><span>New File...</span></button>
+        <button disabled={!projectTreeActions({ node: treeContextMenu.node }).createDirectory} onClick={() => { runProjectTreeAction("createDirectory", treeContextMenu.node); setTreeContextMenu(undefined); }}><Folder size={14} /><span>New Directory...</span></button>
+        <div className="context-menu-separator" role="separator" />
+        <button disabled={!projectTreeActions({ node: treeContextMenu.node }).rename} onClick={() => { runProjectTreeAction("rename", treeContextMenu.node); setTreeContextMenu(undefined); }}><Pencil size={14} /><span>Rename...</span></button>
+        <button disabled={!projectTreeActions({ node: treeContextMenu.node }).open} onClick={() => { runProjectTreeAction("open", treeContextMenu.node); setTreeContextMenu(undefined); }}><FileText size={14} /><span>Open</span></button>
+        <div className="context-menu-separator" role="separator" />
+        <div className="context-submenu-trigger"><button role="menuitem" aria-haspopup="menu" aria-label="Copy"><ClipboardCopy size={14} /><span>Copy</span><ChevronRight size={13} /></button><div className="context-menu context-submenu copy-submenu" role="menu" aria-label="Copy actions">{copyProjectTreeActions.map(({ action, label }) => <button key={action} role="menuitem" disabled={!projectTreeActions({ node: treeContextMenu.node })[action]} onClick={() => { runProjectTreeAction(action, treeContextMenu.node); setTreeContextMenu(undefined); }}><ClipboardCopy size={14} /><span>{label}</span></button>)}</div></div>
+        <div className="context-menu-separator" role="separator" />
         <button onClick={() => openSearchForNode(treeContextMenu.node)}><Search size={14} /><span>Find in Files</span></button>
         {treeContextMenu.node.type === "file" && treeContextMenu.node.name === "pom.xml" && <button onClick={() => void loadMavenProject(treeContextMenu.node.path)}><Package size={14} /><span>Load as Maven Project</span></button>}
         {javaOptions && treeContextMenu.node.type === "directory" && treeContextMenu.node.path && <button onClick={() => void addJavaSourceRoot(treeContextMenu.node.path)}><Coffee size={14} /><span>Mark as Sources Root</span></button>}
         {treeContextMenu.node.path && <div className="context-submenu-trigger"><button><Palette size={14} /><span>Color</span><ChevronRight size={13} /></button><div className="context-menu context-submenu color-submenu">{fileColorChoices.map((color) => <button key={color.id} onClick={() => { setFileColors((current) => ({ ...current, [treeContextMenu.node.path]: color.id })); setTreeContextMenu(undefined); }}><span className={`file-color-swatch ${color.id}`} /><span>{color.label}</span>{fileColors[treeContextMenu.node.path] === color.id && <Check size={13} />}</button>)}<button disabled={!fileColors[treeContextMenu.node.path]} onClick={() => { setFileColors((current) => { const next = { ...current }; delete next[treeContextMenu.node.path]; return next; }); setTreeContextMenu(undefined); }}><X size={14} /><span>Clear Color</span></button></div></div>}
+        <div className="context-menu-separator" role="separator" />
+        <button className="danger" disabled={!projectTreeActions({ node: treeContextMenu.node }).delete}><Trash2 size={14} /><span>Delete</span></button>
       </div>
     </div>}
     {editorGitMenu && <div className="context-menu-layer" onMouseDown={() => setEditorGitMenu(undefined)}><div className="context-menu editor-git-menu" style={{ left: editorGitMenu.x, top: editorGitMenu.y }} onMouseDown={(event) => event.stopPropagation()}><button onClick={() => attachWorkspaceFile(editorGitMenu.path)}><Bot size={14} /><span>Attach to AI</span></button><div className="context-submenu-trigger"><button><GitBranch size={14} /><span>Git</span><ChevronRight size={13} /></button><div className="context-menu context-submenu"><button onClick={() => { setGitHistory({ path: editorGitMenu.path }); setEditorGitMenu(undefined); }}><FileDiff size={14} /><span>Show file changes</span></button><button disabled={editorGitMenu.startLine === undefined} onClick={() => { setGitHistory({ path: editorGitMenu.path, startLine: editorGitMenu.startLine, endLine: editorGitMenu.endLine }); setEditorGitMenu(undefined); }}><ListTree size={14} /><span>Show selection changes</span></button></div></div></div></div>}
     {gitRollbackMenu && <div className="context-menu-layer" onMouseDown={() => setGitRollbackMenu(undefined)}><div className="context-menu" style={{ left: gitRollbackMenu.x, top: gitRollbackMenu.y }} onMouseDown={(event) => event.stopPropagation()}><button className="danger" disabled={gitOperationRunning} onClick={() => void rollbackFile(gitRollbackMenu.entry)}><RefreshCw size={14} /><span>Rollback</span></button></div></div>}
-    {tabContextMenu && <div className="context-menu-layer" onMouseDown={() => setTabContextMenu(undefined)}><div className="context-menu tab-context-menu" style={{ left: tabContextMenu.x, top: tabContextMenu.y }} onMouseDown={(event) => event.stopPropagation()}><button onClick={() => closeTabs(tabContextMenu.tab, "all")}><X size={14} /><span>Close All</span></button><button disabled={group.tabs.findIndex((tab) => tab.id === tabContextMenu.tab.id) === group.tabs.length - 1} onClick={() => closeTabs(tabContextMenu.tab, "right")}><ArrowUpRight className="close-right-icon" size={14} /><span>Close All to the Right</span></button><button disabled={tabContextMenu.tab.type === "diff" || tabContextMenu.tab.type === "agent" || tabContextMenu.tab.type === "runConfig"} onClick={() => void openTabInWindow(tabContextMenu.tab)}><Columns2 size={14} /><span>Open in New Window</span></button></div></div>}
+    {tabContextMenu && <div className="context-menu-layer" onMouseDown={() => setTabContextMenu(undefined)}><div className="context-menu tab-context-menu" style={{ left: tabContextMenu.x, top: tabContextMenu.y }} onMouseDown={(event) => event.stopPropagation()}>{tabContextMenu.tab.type === "file" && <button onClick={() => toggleTabPin(tabContextMenu.tab)}>{tabContextMenu.tab.pinned ? <PinOff size={14} /> : <Pin size={14} />}<span>{tabContextMenu.tab.pinned ? "Unpin Tab" : "Pin Tab"}</span></button>}<button onClick={() => closeTabs(tabContextMenu.tab, "all")}><X size={14} /><span>Close All Unpinned</span></button><button disabled={!group.tabs.slice(group.tabs.findIndex((tab) => tab.id === tabContextMenu.tab.id) + 1).some((tab) => !tab.pinned)} onClick={() => closeTabs(tabContextMenu.tab, "right")}><ArrowUpRight className="close-right-icon" size={14} /><span>Close Unpinned to the Right</span></button><button disabled={tabContextMenu.tab.type === "diff" || tabContextMenu.tab.type === "agent" || tabContextMenu.tab.type === "runConfig"} onClick={() => void openTabInWindow(tabContextMenu.tab)}><Columns2 size={14} /><span>Open in New Window</span></button></div></div>}
     {runConfigMenu && <div className="context-menu-layer" onMouseDown={() => setRunConfigMenu(undefined)}><div className="context-menu" style={{ left: runConfigMenu.x, top: runConfigMenu.y }} onMouseDown={(event) => event.stopPropagation()}><button disabled={!runConfigMenu.config.terminalId} onClick={() => void runConfigAction(runConfigMenu.config, "openTerminal")}><SquareTerminal size={14} /><span>Open Terminal</span></button><button disabled={["starting", "running", "stopping"].includes(runConfigMenu.config.status)} onClick={() => void runConfigAction(runConfigMenu.config, "run")}><Play size={14} /><span>Run</span></button><button disabled={!['starting', 'running'].includes(runConfigMenu.config.status)} onClick={() => void runConfigAction(runConfigMenu.config, "stop")}><Square size={14} /><span>Stop</span></button><button disabled={runConfigMenu.config.status === "stopping"} onClick={() => void runConfigAction(runConfigMenu.config, "restart")}><RefreshCw size={14} /><span>Restart</span></button></div></div>}
+    {projectPathDialog && <ProjectPathDialog mode={projectPathDialog.mode} initialName={projectPathDialog.mode === "rename" ? projectPathDialog.node.name : ""} parentPath={projectPathDialog.parentPath} onClose={() => setProjectPathDialog(undefined)} onSave={saveProjectPathDialog} />}
     {searchScope !== undefined && <FindInFilesDialog client={clientRef.current!} scope={searchScope} onClose={() => setSearchScope(undefined)} onNavigate={(result, matchLength) => void navigateToSearchResult(result, matchLength)} />}
+    {quickOpen && <QuickOpenDialog files={workspaceFiles(tree)} onClose={() => setQuickOpen(false)} onOpen={(file) => { setQuickOpen(false); void openFile(file); }} />}
     {importChoices && <div className="dialog-overlay" onMouseDown={() => setImportChoices(undefined)}><section className="import-chooser" role="dialog" aria-modal="true" aria-label="Choose Java import" onMouseDown={(event) => event.stopPropagation()}><header><span>Import class</span><button title="Close" onClick={() => setImportChoices(undefined)}><X size={15} /></button></header><div>{importChoices.suggestions.map((suggestion) => <button key={suggestion.qualifiedName} onClick={() => applyJavaImport(suggestion)}><span>{suggestion.simpleName}</span><code>{suggestion.qualifiedName}</code><small>{suggestion.source}</small></button>)}</div></section></div>}
     {javaUsages && <div className="dialog-overlay" onMouseDown={() => setJavaUsages(undefined)}><section className="import-chooser usage-chooser" role="dialog" aria-modal="true" aria-label="Java usages" onMouseDown={(event) => event.stopPropagation()}><header><span>Usages ({javaUsages.length})</span><button title="Close" onClick={() => setJavaUsages(undefined)}><X size={15} /></button></header><div>{javaUsages.length === 0 ? <div className="problems-empty">No project usages found</div> : javaUsages.map((location, index) => <button key={`${location.path}:${location.startLine}:${location.startColumn}:${index}`} onClick={() => void openJavaLocation(location)}><span>{location.path.split("/").pop()}</span><code>{location.path}</code><small>{location.startLine}:{location.startColumn}</small></button>)}</div></section></div>}
     {gitHistory && <GitHistoryDialog client={clientRef.current!} path={gitHistory.path} startLine={gitHistory.startLine} endLine={gitHistory.endLine} onClose={() => setGitHistory(undefined)} />}
@@ -2055,36 +2203,6 @@ function QuickFilter({ value, placeholder, label, onChange }: { value: string; p
   return <div className="quick-filter"><Search size={13} /><input aria-label={label} value={value} placeholder={placeholder} onChange={(event) => onChange(event.target.value)} />{value && <button title="Clear filter" aria-label="Clear filter" onClick={() => onChange("")}><X size={12} /></button>}</div>;
 }
 
-function filterFileTree(nodes: FileTreeNode[], query: string): FileTreeNode[] {
-  const needle = query.trim().toLowerCase();
-  if (!needle) return nodes;
-  return nodes.flatMap((node) => {
-    if (node.type === "file") return `${node.name} ${node.path}`.toLowerCase().includes(needle) ? [node] : [];
-    const children = filterFileTree(node.children ?? [], needle);
-    return `${node.name} ${node.path}`.toLowerCase().includes(needle) || children.length > 0 ? [{ ...node, children }] : [];
-  });
-}
-
-function Tree({ nodes, activePath, fileColors, gitStatuses, expandAll = false, onOpen, onContextMenu }: { nodes: FileTreeNode[]; activePath?: string; fileColors: Record<string, FileColor>; gitStatuses: Record<string, "M" | "C">; expandAll?: boolean; onOpen(node: FileTreeNode): void; onContextMenu(event: ReactMouseEvent, node: FileTreeNode): void }) {
-  const initialAutoExpanded = useRef(new Set(collectSingleChildDirectories(nodes)));
-  const [expanded, setExpanded] = useState<Set<string>>(() => new Set(initialAutoExpanded.current));
-  useEffect(() => {
-    const additions = collectSingleChildDirectories(nodes).filter((directory) => !initialAutoExpanded.current.has(directory));
-    if (!additions.length) return;
-    for (const directory of additions) initialAutoExpanded.current.add(directory);
-    setExpanded((current) => new Set([...current, ...additions]));
-  }, [nodes]);
-  return <>{nodes.map((node) => node.type === "directory" ? <div key={node.path}>
-    <button className={`tree-row ${fileColors[node.path] ? `file-color-${fileColors[node.path]}` : ""}`} onContextMenu={(event) => onContextMenu(event, node)} onClick={() => setExpanded((current) => { const next = new Set(current); next.has(node.path) ? next.delete(node.path) : next.add(node.path); return next; })}>
-      {expandAll || expanded.has(node.path) ? <ChevronDown size={14} /> : <ChevronRight size={14} />}{expandAll || expanded.has(node.path) ? <FolderOpen className="folder-kind-icon" size={15} /> : <Folder className="folder-kind-icon" size={15} />}<span>{node.name}</span>
-    </button>{(expandAll || expanded.has(node.path)) && <div className="tree-children"><Tree nodes={node.children ?? []} activePath={activePath} fileColors={fileColors} gitStatuses={gitStatuses} expandAll={expandAll} onOpen={onOpen} onContextMenu={onContextMenu} /></div>}
-  </div> : <FileTreeRow key={node.path} node={node} selected={activePath === node.path} color={fileColors[node.path]} gitStatus={gitStatuses[node.path]} onOpen={onOpen} onContextMenu={onContextMenu} />)}</>;
-}
-
-function collectSingleChildDirectories(nodes: FileTreeNode[]): string[] {
-  const onlyEntry = nodes.length === 1 ? nodes[0] : undefined;
-  return onlyEntry?.type === "directory" ? [onlyEntry.path] : [];
-}
 
 function JavaProjectTree({ nodes, activePath, onOpen }: { nodes: JavaProjectNode[]; activePath?: string; onOpen(node: FileTreeNode): void }) {
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set(nodes.filter((node) => node.type === "sourceRoot").map((node) => node.path)));
@@ -2104,19 +2222,43 @@ function JavaProjectTree({ nodes, activePath, onOpen }: { nodes: JavaProjectNode
   return <>{render(nodes, 0)}</>;
 }
 
-function TaskRow({ icon, name, summary, selected, disabled, onClick, onMerge, onDelete }: { icon: ReactNode; name: string; summary: AiTaskSummary; selected: boolean; disabled: boolean; onClick(): void; onMerge?(): void; onDelete?(): void }) {
+export function TaskRow({ icon, name, summary, finished = false, selected, disabled, onClick, onSetFinished, onMerge, onDelete, onCancelTimer, onFireTimer }: { icon: ReactNode; name: string; summary: AiTaskSummary; finished?: boolean; selected: boolean; disabled: boolean; onClick(): void; onSetFinished?(): void; onMerge?(): void; onDelete?(): void; onCancelTimer?(): void; onFireTimer?(): void }) {
   const [menu, setMenu] = useState<{ x: number; y: number }>();
-  const preview = summary.pendingPermission ? "Waiting for permission approval" : (summary.preview || "No AI activity yet");
-  return <div className={`task-row ${selected ? "selected" : ""}`}><button className="task-open" disabled={disabled} title={`${name}\n${preview}`} onClick={onClick}>
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    if (summary.status !== "waiting" || !summary.waitingUntil) return;
+    setNow(Date.now());
+    const interval = window.setInterval(() => setNow(Date.now()), 1_000);
+    return () => window.clearInterval(interval);
+  }, [summary.status, summary.waitingUntil]);
+  const waiting = summary.status === "waiting" && summary.waitingUntil ? `Waiting · ${formatCountdown(new Date(summary.waitingUntil).getTime() - now)}` : undefined;
+  const hasTimer = Boolean(summary.waitingUntil);
+  const hasActions = Boolean(onSetFinished || onDelete || (hasTimer && (onCancelTimer || onFireTimer)));
+  const preview = summary.pendingPermission ? "Waiting for permission approval" : (waiting ? `Continuation scheduled in ${formatCountdown(new Date(summary.waitingUntil!).getTime() - now)}` : summary.preview || "No AI activity yet");
+  const openMenu = (x: number, y: number) => setMenu({ x: Math.max(8, Math.min(x, window.innerWidth - 220)), y: Math.max(8, Math.min(y, window.innerHeight - 170)) });
+  return <div className={`task-row ${selected ? "selected" : ""} ${finished ? "finished" : ""}`} onContextMenu={(event) => { if (!hasActions || disabled) return; event.preventDefault(); openMenu(event.clientX, event.clientY); }}><button className="task-open" disabled={disabled} title={`${name}\n${preview}`} onClick={onClick}>
     <span className="task-icon">{icon}</span>
-    <span className="task-content"><span className="task-title"><strong>{name}</strong>{(summary.additions > 0 || summary.deletions > 0) && <span className="task-diff-stat"><small>+{summary.additions}</small><small>-{summary.deletions}</small></span>}{summary.pendingPermission ? <small className="task-ai-status permission"><ShieldAlert size={13} /> Permission needed</small> : summary.status !== "idle" && <small className={`task-ai-status ${summary.status}`}>{summary.status === "in_progress" && <LoaderCircle className="task-progress-spinner" size={13} />}{formatAiStatus(summary.status)}</small>}</span><span className="task-preview"><TaskPreviewMarkdown>{preview}</TaskPreviewMarkdown></span></span>
+    <span className="task-content"><span className="task-title"><strong>{name}</strong>{finished && <small className="task-finished-status">Finished</small>}{(summary.additions > 0 || summary.deletions > 0) && <span className="task-diff-stat"><small>+{summary.additions}</small><small>-{summary.deletions}</small></span>}{summary.pendingPermission ? <small className="task-ai-status permission"><ShieldAlert size={13} /> Permission needed</small> : summary.status !== "idle" && <small className={`task-ai-status ${summary.status}`}>{summary.status === "in_progress" && <LoaderCircle className="task-progress-spinner" size={13} />}{waiting ?? formatAiStatus(summary.status)}</small>}</span><span className="task-preview"><TaskPreviewMarkdown>{preview}</TaskPreviewMarkdown></span></span>
     {selected && <Check className="task-check" size={13} />}
-  </button>{onDelete && <button className="task-actions" title={`Actions for ${name}`} disabled={disabled} onClick={(event) => { event.stopPropagation(); const bounds = event.currentTarget.getBoundingClientRect(); setMenu({ x: Math.max(8, bounds.right - 180), y: bounds.bottom + 2 }); }}><MoreVertical size={14} /></button>}
+  </button>{hasActions && <button className="task-actions" title={`Actions for ${name}`} disabled={disabled} onClick={(event) => { event.stopPropagation(); const bounds = event.currentTarget.getBoundingClientRect(); openMenu(bounds.right - 180, bounds.bottom + 2); }}><MoreVertical size={14} /></button>}
     {menu && <div className="context-menu-layer" onMouseDown={() => setMenu(undefined)}><div className="context-menu task-actions-menu" style={{ left: menu.x, top: menu.y }} onMouseDown={(event) => event.stopPropagation()}>
-      <button onClick={() => { setMenu(undefined); onMerge?.(); }}><GitMerge size={14} /><span>Merge to main workspace</span></button>
-      <button className="danger" onClick={() => { setMenu(undefined); onDelete?.(); }}><Trash2 size={14} /><span>Delete task</span></button>
+      {onSetFinished && <button onClick={() => { setMenu(undefined); onSetFinished(); }}><Check size={14} /><span>{finished ? "Restore task" : "Mark as Finished"}</span></button>}
+      {hasTimer && <button onClick={() => { setMenu(undefined); onFireTimer?.(); }}><Play size={14} /><span>Run timer now</span></button>}
+      {hasTimer && <button onClick={() => { setMenu(undefined); onCancelTimer?.(); }}><Square size={14} /><span>Cancel timer</span></button>}
+      {onMerge && <button onClick={() => { setMenu(undefined); onMerge(); }}><GitMerge size={14} /><span>Merge to main workspace</span></button>}
+      {onDelete && <button className="danger" onClick={() => { setMenu(undefined); onDelete(); }}><Trash2 size={14} /><span>Delete task</span></button>}
     </div></div>}
   </div>;
+}
+
+function formatCountdown(milliseconds: number): string {
+  const seconds = Math.max(0, Math.ceil(milliseconds / 1_000));
+  const hours = Math.floor(seconds / 3_600);
+  const minutes = Math.floor((seconds % 3_600) / 60);
+  const remainder = seconds % 60;
+  if (hours > 0) return `${hours}h ${minutes}m`;
+  if (minutes > 0) return `${minutes}m ${remainder}s`;
+  return `${remainder}s`;
 }
 
 function TaskPreviewMarkdown({ children }: { children: string }) {
@@ -2159,6 +2301,13 @@ function UsefulFileDialog({ mode, initialName, scope, onClose, onSave }: { mode:
   const [error, setError] = useState("");
   const save = async () => { if (!name.trim() || saving) return; setSaving(true); setError(""); try { await onSave(name.trim()); } catch (saveError) { setError(saveError instanceof Error ? saveError.message : "Could not save useful file"); setSaving(false); } };
   return <div className="dialog-overlay" onMouseDown={() => { if (!saving) onClose(); }}><section className="run-config-dialog useful-file-dialog" role="dialog" aria-modal="true" aria-label={`${mode} useful file`} onMouseDown={(event) => event.stopPropagation()}><header><div><h2>{mode === "create" ? "Create" : "Rename"} Useful File</h2><span>{scope === "global" ? "Global" : "Local"}</span></div><button title="Close" disabled={saving} onClick={onClose}><X size={15} /></button></header><form onSubmit={(event) => { event.preventDefault(); void save(); }}><label>File name<input autoFocus value={name} disabled={saving} maxLength={180} placeholder="notes.md" onChange={(event) => setName(event.target.value)} /></label>{error && <div className="find-error">{error}</div>}<footer><button type="button" disabled={saving} onClick={onClose}>Cancel</button><button className="primary" disabled={saving || !name.trim()}>{saving ? "Saving..." : mode === "create" ? "Create" : "Rename"}</button></footer></form></section></div>;
+}
+
+function ProjectPathDialog({ mode, initialName, parentPath, onClose, onSave }: { mode: "file" | "directory" | "rename"; initialName: string; parentPath: string; onClose(): void; onSave(name: string): Promise<void> }) {
+  const [name, setName] = useState(initialName); const [saving, setSaving] = useState(false); const [error, setError] = useState("");
+  const label = mode === "file" ? "New File" : mode === "directory" ? "New Directory" : "Rename";
+  const save = async () => { if (!name.trim() || saving) return; setSaving(true); setError(""); try { await onSave(name.trim()); } catch (reason) { setError(reason instanceof Error ? reason.message : `Could not ${label.toLowerCase()}`); setSaving(false); } };
+  return <div className="dialog-overlay" onMouseDown={() => { if (!saving) onClose(); }}><section className="run-config-dialog useful-file-dialog" role="dialog" aria-modal="true" aria-label={label} onMouseDown={(event) => event.stopPropagation()}><header><div><h2>{label}</h2><span>{parentPath || "Workspace root"}</span></div><button title="Close" disabled={saving} onClick={onClose}><X size={15} /></button></header><form onSubmit={(event) => { event.preventDefault(); void save(); }}><label>{mode === "directory" ? "Directory name" : "Path"}<input autoFocus value={name} disabled={saving} maxLength={240} placeholder={mode === "file" ? "src/new-file.ts" : mode === "directory" ? "components" : "new-name"} onChange={(event) => setName(event.target.value)} /></label>{error && <div className="find-error">{error}</div>}<footer><button type="button" disabled={saving} onClick={onClose}>Cancel</button><button className="primary" disabled={saving || !name.trim()}>{saving ? "Saving..." : mode === "rename" ? "Rename" : "Create"}</button></footer></form></section></div>;
 }
 
 function RunConfigDialog({ scope, onClose, onSave }: { scope: RunConfigScope; onClose(): void; onSave(name: string, commands: string): Promise<void> }) {
@@ -2302,22 +2451,6 @@ function collectGitDirectories(nodes: GitTreeNode[]): string[] {
 
 function collectGitFiles(node: GitTreeNode): string[] {
   return node.type === "file" ? [node.entry.path] : node.children.flatMap(collectGitFiles);
-}
-
-function FileTreeRow({ node, selected, color: rowColor, gitStatus, onOpen, onContextMenu }: { node: FileTreeNode; selected: boolean; color?: FileColor; gitStatus?: "M" | "C"; onOpen(node: FileTreeNode): void; onContextMenu(event: ReactMouseEvent, node: FileTreeNode): void }) {
-  const extension = node.name.split(".").pop()?.toLowerCase() ?? "";
-  const appearance: Record<string, { color: string; Icon: typeof File }> = {
-    ts: { color: "#5e9fd6", Icon: FileCode2 }, tsx: { color: "#5e9fd6", Icon: FileCode2 },
-    js: { color: "#d9c65c", Icon: FileCode2 }, jsx: { color: "#d9c65c", Icon: FileCode2 },
-    json: { color: "#c9b45d", Icon: FileJson }, xml: { color: "#d7a85e", Icon: FileCode2 }, html: { color: "#e8845b", Icon: FileCode2 },
-    css: { color: "#8d7bd8", Icon: Hash }, md: { color: "#78a7cf", Icon: FileText },
-    java: { color: "#d58b59", Icon: Coffee }, py: { color: "#63a86f", Icon: FileCode2 },
-    yaml: { color: "#ca6b75", Icon: Braces }, yml: { color: "#ca6b75", Icon: Braces }, mta: { color: "#ca6b75", Icon: Braces }, mtaext: { color: "#ca6b75", Icon: Braces }, cds: { color: "#5aa7a0", Icon: FileCode2 }
-  };
-  const { color, Icon } = appearance[extension] ?? { color: "#9aa0a8", Icon: File };
-  return <button className={`tree-row file-row ${selected ? "selected" : ""} ${rowColor ? `file-color-${rowColor}` : ""}`} onContextMenu={(event) => onContextMenu(event, node)} onClick={() => void onOpen(node)}>
-    <span className="tree-indent" /><Icon className="file-kind-icon" color={color} size={14} /><span className="tree-file-name">{node.name}</span>{gitStatus && <span className={`tree-git-status ${gitStatus === "C" ? "created" : "modified"}`}>{gitStatus}</span>}
-  </button>;
 }
 
 function CreateTaskDialog({ client, onClose, onCreate }: { client: CoreClient; onClose(): void; onCreate(branch: string, existing?: { remote: boolean }): Promise<void> }) {

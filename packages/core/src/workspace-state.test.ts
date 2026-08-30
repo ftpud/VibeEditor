@@ -23,6 +23,11 @@ describe("WorkspaceStateStore", () => {
     expect(validateWorkspaceOptions({ openFiles: [], terminal: { tabs: [{ title: "Legacy" }], activeTabIndex: 0, panelOpen: true } }).terminal).toEqual({ tabs: [{ title: "Legacy" }], activeTabIndex: 0, panelOpen: true });
   });
 
+  it("keeps pinned file ordering and rejects pins for closed files", () => {
+    expect(validateWorkspaceOptions({ openFiles: ["src/pinned.ts", "src/other.ts"], pinnedFiles: ["src/pinned.ts"] })).toEqual({ openFiles: ["src/pinned.ts", "src/other.ts"], pinnedFiles: ["src/pinned.ts"] });
+    expect(() => validateWorkspaceOptions({ openFiles: ["src/a.ts"], pinnedFiles: ["src/missing.ts"] })).toThrowError(expect.objectContaining({ code: "INVALID_REQUEST" }));
+  });
+
   it("rejects unsafe and absolute tab paths", () => {
     expect(() => validateWorkspaceOptions({ openFiles: ["../secret"] })).toThrowError(expect.objectContaining({ code: "INVALID_REQUEST" }));
     expect(() => validateWorkspaceOptions({ openFiles: [path.resolve("/tmp/secret")] })).toThrowError(expect.objectContaining({ code: "INVALID_REQUEST" }));

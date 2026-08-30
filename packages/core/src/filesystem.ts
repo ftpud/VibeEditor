@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { constants } from "node:fs";
-import { access, lstat, readFile, readdir, realpath, stat, writeFile } from "node:fs/promises";
+import { access, lstat, mkdir, readFile, readdir, realpath, rename, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import type { FileTreeNode } from "@remote-ide/protocol";
@@ -38,7 +38,10 @@ export class WorkspaceFileSystem {
     const root = this.getWorkspace();
     if (!includeIgnored) {
       const tracked = await listGitPaths(root);
-      if (tracked) return buildTreeFromPaths(tracked);
+      if (tracked) {
+        const directories = await listGitDirectories(root);
+        return buildTreeFromPaths([...tracked, ...directories], directories);
+      }
     }
     return this.walkDirectory(root, "");
   }
@@ -78,6 +81,41 @@ export class WorkspaceFileSystem {
     }
   }
 
+  async createFile(relativePath: string): Promise<void> {
+    const target = await this.resolveNew(relativePath);
+    try {
+      await writeFile(target, "", { encoding: "utf8", flag: "wx" });
+    } catch (error) {
+      throw new CoreError("WRITE_FAILED", `Could not create file: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  async createDirectory(relativePath: string): Promise<void> {
+    const target = await this.resolveNew(relativePath);
+    try {
+      await mkdir(target);
+    } catch (error) {
+      throw new CoreError("WRITE_FAILED", `Could not create directory: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  async rename(relativePath: string, newRelativePath: string): Promise<void> {
+    const source = await this.resolveExisting(relativePath);
+    const destination = await this.resolveNew(newRelativePath);
+    try {
+      await access(destination);
+      throw new CoreError("WRITE_FAILED", `A file or directory already exists at: ${newRelativePath}`);
+    } catch (error) {
+      if (error instanceof CoreError) throw error;
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw new CoreError("WRITE_FAILED", `Could not rename: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    try {
+      await rename(source, destination);
+    } catch (error) {
+      throw new CoreError("WRITE_FAILED", `Could not rename: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
   private validateRelative(relativePath: string): string {
     if (!relativePath || path.isAbsolute(relativePath)) {
       throw new CoreError("PATH_OUTSIDE_WORKSPACE", "Path must be relative to the workspace");
@@ -103,6 +141,23 @@ export class WorkspaceFileSystem {
       if (error instanceof CoreError) throw error;
       if ((error as NodeJS.ErrnoException).code === "ENOENT") throw new CoreError("FILE_NOT_FOUND", `File not found: ${relativePath}`);
       throw new CoreError("READ_FAILED", `Could not resolve path: ${relativePath}`);
+    }
+  }
+
+  private async resolveNew(relativePath: string): Promise<string> {
+    const candidate = this.validateRelative(relativePath);
+    const parent = path.dirname(candidate);
+    try {
+      const resolvedParent = await realpath(parent);
+      const root = this.getWorkspace();
+      if (resolvedParent !== root && !resolvedParent.startsWith(root + path.sep)) throw new CoreError("PATH_OUTSIDE_WORKSPACE", "Path escapes the workspace");
+      const info = await stat(resolvedParent);
+      if (!info.isDirectory()) throw new CoreError("WRITE_FAILED", "Parent path is not a directory");
+      return candidate;
+    } catch (error) {
+      if (error instanceof CoreError) throw error;
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") throw new CoreError("FILE_NOT_FOUND", `Parent directory not found: ${relativePath}`);
+      throw new CoreError("WRITE_FAILED", `Could not resolve parent directory: ${relativePath}`);
     }
   }
 
@@ -142,7 +197,19 @@ async function listGitPaths(root: string): Promise<string[] | undefined> {
   }
 }
 
-function buildTreeFromPaths(paths: string[]): FileTreeNode[] {
+async function listGitDirectories(root: string): Promise<Set<string>> {
+  try {
+    const { stdout } = await execFileAsync("git", ["-C", root, "ls-files", "--others", "--exclude-standard", "--directory", "-z"], {
+      encoding: "utf8",
+      maxBuffer: 64 * 1024 * 1024
+    });
+    return new Set(stdout.split("\0").filter((entry) => entry.endsWith("/")).map((entry) => entry.slice(0, -1)));
+  } catch {
+    return new Set();
+  }
+}
+
+function buildTreeFromPaths(paths: string[], directoryPaths = new Set<string>()): FileTreeNode[] {
   const rootNodes: FileTreeNode[] = [];
   const directories = new Map<string, FileTreeNode[]>([["", rootNodes]]);
   const seen = new Set<string>();
@@ -156,7 +223,7 @@ function buildTreeFromPaths(paths: string[]): FileTreeNode[] {
       relative = relative ? `${relative}/${name}` : name;
       if (seen.has(relative)) continue;
       seen.add(relative);
-      if (index === segments.length - 1) {
+      if (index === segments.length - 1 && !directoryPaths.has(relative)) {
         parent.push({ name, path: relative, type: "file" });
       } else {
         const children: FileTreeNode[] = [];

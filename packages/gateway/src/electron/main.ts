@@ -1,29 +1,31 @@
-import { app, BrowserWindow, ipcMain, nativeImage, safeStorage } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, nativeImage, safeStorage } from "electron";
 import { spawn } from "node:child_process";
 import { createServer, type Server } from "node:net";
 import { access, copyFile, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { Client, type ConnectConfig } from "ssh2";
+import { Client } from "ssh2";
+import { connectionHealthForLatency, type ConnectionRuntime } from "./connection-health.js";
+import { connectionConfig, normalizeStoredAuthentication, sshConnectionError, testSshConnection, validatePrivateKey, validatePrivateKeyPath, type AuthenticationMethod, type ConnectionAuth, type ConnectionDetails } from "./connection-auth.js";
+import { defaultRepositorySettings, normalizeRepositorySettings, provisionCommand, repositorySettingsOrDefault, type RepositorySettings } from "./repository-settings.js";
 
-type Connection = { id: string; name: string; host: string; port: number; username: string; password: string };
+type Connection = { id: string; name: string; host: string; port: number; username: string } & ConnectionAuth;
 type Workspace = { id: string; connectionId: string; name: string; directory: string; remotePort: number };
 type PortTunnel = { id: string; connectionId: string; port: number };
-type StoredConnection = Omit<Connection, "password"> & { password: string };
-type State = { connections: StoredConnection[]; workspaces: Workspace[]; portTunnels: PortTunnel[] };
-type PublicState = { connections: Omit<Connection, "password">[]; workspaces: Workspace[]; portTunnels: PortTunnel[] };
+type StoredConnection = { id: string; name: string; host: string; port: number; username: string; authenticationMethod?: AuthenticationMethod; password: string; privateKeyPath?: string; passphrase?: string };
+type State = { connections: StoredConnection[]; workspaces: Workspace[]; portTunnels: PortTunnel[]; repository: RepositorySettings };
+type PublicState = { connections: { id: string; name: string; host: string; port: number; username: string; authenticationMethod: AuthenticationMethod; privateKeyPath?: string }[]; workspaces: Workspace[]; portTunnels: PortTunnel[] };
 type Runtime = { status: "idle" | "working" | "server" | "client" | "error"; message: string };
 type TunnelRuntime = { status: "idle" | "working" | "running" | "error"; message: string };
 
 const directory = path.dirname(fileURLToPath(import.meta.url));
 const appIcon = path.join(directory, "../assets/app-icon.png");
-const repository = "https://github.com/ftpud/VibeEditor";
-const repositoryBranch = "dev";
 const remoteNodeEnvironment = `export PATH="$HOME/.local/bin:$HOME/.volta/bin:$HOME/.fnm:$HOME/.nvm/versions/node/current/bin:/usr/local/bin:$PATH"; export NVM_DIR="$HOME/.nvm"; if [ -s "$NVM_DIR/nvm.sh" ]; then . "$NVM_DIR/nvm.sh"; fi; command -v npm >/dev/null 2>&1 || { echo "npm was not found on the SSH host. Install Node.js 20+ for this user or configure NVM in ~/.bashrc." >&2; exit 127; }`;
 const runtimes = new Map<string, Runtime>();
 const tunnels = new Map<string, { ssh: Client; server: Server }>();
 const portTunnelRuntimes = new Map<string, TunnelRuntime>();
 const portTunnels = new Map<string, { ssh: Client; server: Server }>();
+const connectionRuntimes = new Map<string, ConnectionRuntime>();
 
 app.name = "Vibe Gateway";
 app.setName("Vibe Gateway");
@@ -35,9 +37,9 @@ function stateFile(): string { return path.join(app.getPath("userData"), "gatewa
 async function readState(): Promise<State> {
   try {
     const state = JSON.parse(await readFile(stateFile(), "utf8")) as Partial<State>;
-    return { connections: state.connections ?? [], workspaces: state.workspaces ?? [], portTunnels: state.portTunnels ?? [] };
+    return { connections: (state.connections ?? []).map(normalizeStoredAuthentication), workspaces: state.workspaces ?? [], portTunnels: state.portTunnels ?? [], repository: repositorySettingsOrDefault(state.repository) };
   }
-  catch { return { connections: [], workspaces: [], portTunnels: [] }; }
+  catch { return { connections: [], workspaces: [], portTunnels: [], repository: defaultRepositorySettings }; }
 }
 async function saveState(state: State): Promise<void> {
   await mkdir(path.dirname(stateFile()), { recursive: true });
@@ -49,7 +51,7 @@ function encrypt(password: string): string {
 }
 function decrypt(password: string): string { return safeStorage.decryptString(Buffer.from(password, "base64")); }
 function publicState(state: State): PublicState {
-  return { connections: state.connections.map(({ password: _password, ...item }) => item), workspaces: state.workspaces, portTunnels: state.portTunnels };
+  return { connections: state.connections.map((connection) => { const item = normalizeStoredAuthentication(connection); return { id: item.id, name: item.name, host: item.host, port: item.port, username: item.username, authenticationMethod: item.authenticationMethod, ...(item.privateKeyPath ? { privateKeyPath: item.privateKeyPath } : {}) }; }), workspaces: state.workspaces, portTunnels: state.portTunnels };
 }
 function id(): string { return crypto.randomUUID(); }
 function shell(value: string): string { return `'${value.replaceAll("'", `'"'"'`)}'`; }
@@ -61,18 +63,24 @@ function portTunnelRuntime(tunnelId: string, status: TunnelRuntime["status"], me
   const value = { status, message }; portTunnelRuntimes.set(tunnelId, value);
   for (const window of BrowserWindow.getAllWindows()) window.webContents.send("gateway:tunnelStatus", tunnelId, value);
 }
+function connectionRuntime(connectionId: string, value: ConnectionRuntime): void {
+  connectionRuntimes.set(connectionId, value);
+  for (const window of BrowserWindow.getAllWindows()) window.webContents.send("gateway:connectionStatus", connectionId, value);
+}
 async function credentials(connectionId: string): Promise<Connection> {
   const item = (await readState()).connections.find((connection) => connection.id === connectionId);
   if (!item) throw new Error("SSH connection was not found");
-  return { ...item, password: decrypt(item.password) };
+  const normalized = normalizeStoredAuthentication(item);
+  if (normalized.authenticationMethod === "privateKey") return { ...normalized, authenticationMethod: "privateKey", privateKeyPath: normalized.privateKeyPath ?? "", ...(normalized.passphrase ? { passphrase: decrypt(normalized.passphrase) } : {}) };
+  return { ...normalized, authenticationMethod: "password", password: decrypt(normalized.password) };
 }
-function connect(connection: Connection): Promise<Client> {
+function connectWithConfig(config: Parameters<Client["connect"]>[0]): Promise<Client> {
   return new Promise((resolve, reject) => {
     const client = new Client();
-    const config: ConnectConfig = { host: connection.host, port: connection.port, username: connection.username, password: connection.password, readyTimeout: 20_000, keepaliveInterval: 10_000 };
-    client.once("ready", () => resolve(client)).once("error", reject).connect(config);
+    client.once("ready", () => resolve(client)).once("error", (error) => reject(sshConnectionError(error, config.privateKey ? "privateKey" : "password"))).connect(config);
   });
 }
+async function connect(connection: ConnectionDetails): Promise<Client> { return connectWithConfig(await connectionConfig(connection, readFile)); }
 function execute(client: Client, command: string): Promise<string> {
   return new Promise((resolve, reject) => client.exec(command, (error, stream) => {
     if (error) { reject(error); return; }
@@ -99,8 +107,13 @@ async function refreshStatuses(connectionId?: string): Promise<void> {
   for (const workspace of workspaces) groups.set(workspace.connectionId, [...(groups.get(workspace.connectionId) ?? []), workspace]);
   await Promise.all([...groups.entries()].map(async ([currentConnectionId, items]) => {
     let client: Client | undefined;
+    const previous = connectionRuntimes.get(currentConnectionId);
+    connectionRuntime(currentConnectionId, { status: "reconnecting", message: previous?.status === "offline" ? "Reconnecting to SSH host..." : "Checking SSH connection..." });
     try {
+      const startedAt = performance.now();
       client = await connect(await credentials(currentConnectionId));
+      const latencyMs = Math.round(performance.now() - startedAt);
+      connectionRuntime(currentConnectionId, connectionHealthForLatency(latencyMs));
       for (const workspace of items) {
         const pidFile = `~/.vibe-server-${workspace.id}.pid`;
         const result = (await execute(client, `bash -lc ${shell(`if [ -f ${pidFile} ] && kill -0 $(cat ${pidFile}) 2>/dev/null; then echo running; else rm -f ${pidFile}; echo stopped; fi`)}`)).trim();
@@ -108,12 +121,13 @@ async function refreshStatuses(connectionId?: string): Promise<void> {
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
+      connectionRuntime(currentConnectionId, { status: "offline", message: `SSH unavailable: ${message}` });
       for (const workspace of items) runtime(workspace.id, "error", `Status check failed: ${message}`);
     } finally { client?.end(); }
   }));
 }
-async function provision(client: Client): Promise<{ commit: string; rebuilt: boolean }> {
-  const command = `set -e; ${remoteNodeEnvironment}; if [ -d ~/.vibe/.git ]; then git -C ~/.vibe fetch origin ${repositoryBranch}; git -C ~/.vibe checkout --force -B ${repositoryBranch} origin/${repositoryBranch}; else rm -rf ~/.vibe; git clone --branch ${repositoryBranch} --single-branch ${repository} ~/.vibe; fi; cd ~/.vibe; head=$(git rev-parse HEAD); rebuilt=0; if [ ! -f ~/.vibe-build ] || [ "$(cat ~/.vibe-build)" != "$head" ] || [ ! -f packages/core/dist/index.js ] || [ ! -f packages/desktop/dist-electron/main.js ] || [ ! -f packages/desktop/dist-renderer/index.html ] || [ ! -d node_modules ]; then VIBE_SKIP_JDTLS=1 npm install; rm -rf packages/acp/dist packages/protocol/dist packages/core/dist packages/desktop/dist-electron packages/desktop/dist-renderer; npm run build -w @remote-ide/acp; npm run build -w @remote-ide/protocol; npm run build -w @remote-ide/core; npm run build -w @remote-ide/desktop; printf '%s' "$head" > ~/.vibe-build; rebuilt=1; fi; printf '\nVIBE_RESULT:%s:%s\n' "$head" "$rebuilt"`;
+async function provision(client: Client, settings: RepositorySettings): Promise<{ commit: string; rebuilt: boolean }> {
+  const command = provisionCommand(settings, remoteNodeEnvironment);
   const output = await execute(client, `bash -lc ${shell(command)}`);
   const match = output.match(/VIBE_RESULT:([0-9a-f]{40,64}):([01])/);
   if (!match?.[1]) throw new Error("Remote Git revision could not be determined");
@@ -123,7 +137,7 @@ async function startServer(workspaceId: string): Promise<{ remotePort: number }>
   const { workspace, connection } = await withWorkspace(workspaceId); runtime(workspaceId, "working", "Updating and building remote server...");
   const client = await connect(connection);
   try {
-    const build = await provision(client);
+    const build = await provision(client, (await readState()).repository);
     const portScript = `const net=require("net");const preferred=${workspace.remotePort};let fallback=false;const open=port=>{const server=net.createServer();server.unref();server.once("error",error=>{if(error.code==="EADDRINUSE"&&!fallback){fallback=true;open(0);return}throw error});server.listen(port,"127.0.0.1",()=>{console.log(server.address().port);server.close()})};open(preferred)`;
     const selectedPort = Number((await execute(client, `bash -lc ${shell(`${remoteNodeEnvironment}; node -e ${shell(portScript)}`)}`)).trim());
     if (!Number.isInteger(selectedPort) || selectedPort < 1) throw new Error("Could not allocate a remote Core port");
@@ -259,13 +273,43 @@ async function startClient(workspaceId: string): Promise<void> {
 ipcMain.handle("gateway:get", async () => {
   const state = await readState();
   setTimeout(() => { void refreshStatuses(); }, 0);
-  return { state: publicState(state), runtimes: Object.fromEntries(runtimes), tunnelRuntimes: Object.fromEntries(portTunnelRuntimes) };
+  return { state: publicState(state), repository: state.repository, runtimes: Object.fromEntries(runtimes), tunnelRuntimes: Object.fromEntries(portTunnelRuntimes), connectionRuntimes: Object.fromEntries(connectionRuntimes) };
 });
+ipcMain.handle("gateway:saveRepository", async (_event, input: Partial<RepositorySettings>) => { if (!input.repository?.trim() || !input.branch?.trim()) throw new Error("Repository URL and branch are required"); const state = await readState(); state.repository = normalizeRepositorySettings(input); await saveState(state); return state.repository; });
 ipcMain.handle("gateway:refreshStatuses", (_event, connectionId?: string) => refreshStatuses(connectionId));
-ipcMain.handle("gateway:saveConnection", async (_event, input: Omit<Connection, "id"> & { id?: string }) => {
+ipcMain.handle("gateway:pickPrivateKey", async () => {
+  const selected = await dialog.showOpenDialog({ title: "Choose SSH private key", properties: ["openFile"], filters: [{ name: "SSH private keys", extensions: ["pem", "key", "ppk"] }, { name: "All files", extensions: ["*"] }] });
+  if (selected.canceled || !selected.filePaths[0]) return undefined;
+  const selectedPath = selected.filePaths[0];
+  validatePrivateKeyPath(selectedPath);
+  let key: Buffer;
+  try { key = await readFile(selectedPath); }
+  catch { throw new Error(`Could not read the private key file at ${selectedPath}`); }
+  try { validatePrivateKey(key); }
+  catch (error) {
+    // A passphrase is entered in the form after selecting an encrypted key.
+    if (!(error instanceof Error) || !/requires its passphrase/.test(error.message)) throw error;
+  }
+  return selectedPath;
+});
+ipcMain.handle("gateway:testConnection", async (_event, input: { id?: string; host: string; port: number; username: string; authenticationMethod: AuthenticationMethod; password?: string; privateKeyPath?: string; passphrase?: string }) => {
+  const authenticationMethod = input.authenticationMethod === "privateKey" ? "privateKey" : "password";
+  if (!input.host.trim() || !input.username.trim() || !Number.isInteger(input.port) || input.port < 1 || input.port > 65535) throw new Error("Host, username, and a valid SSH port are required");
+  const existing = input.id ? (await readState()).connections.find((item) => item.id === input.id) : undefined;
+  const saved = existing && normalizeStoredAuthentication(existing).authenticationMethod === authenticationMethod ? await credentials(input.id!) : undefined;
+  const connection = authenticationMethod === "privateKey"
+    ? { host: input.host.trim(), port: input.port, username: input.username.trim(), authenticationMethod, privateKeyPath: input.privateKeyPath?.trim() || (saved?.authenticationMethod === "privateKey" ? saved.privateKeyPath : ""), ...(input.passphrase ? { passphrase: input.passphrase } : saved?.authenticationMethod === "privateKey" && saved.passphrase ? { passphrase: saved.passphrase } : {}) } as const
+    : { host: input.host.trim(), port: input.port, username: input.username.trim(), authenticationMethod, password: input.password || (saved?.authenticationMethod === "password" ? saved.password : "") } as const;
+  if (authenticationMethod === "password" && !connection.password) throw new Error("Password is required");
+  await testSshConnection(await connectionConfig(connection, readFile), connectWithConfig);
+  return { message: "SSH connection succeeded" };
+});
+ipcMain.handle("gateway:saveConnection", async (_event, input: { id?: string; name: string; host: string; port: number; username: string; authenticationMethod: AuthenticationMethod; password?: string; privateKeyPath?: string; passphrase?: string }) => {
   const state = await readState(); const existing = input.id ? state.connections.find((item) => item.id === input.id) : undefined;
-  const item: StoredConnection = { id: input.id ?? id(), name: input.name, host: input.host, port: input.port, username: input.username, password: input.password ? encrypt(input.password) : existing?.password ?? "" };
-  if (!item.password) throw new Error("Password is required"); state.connections = [...state.connections.filter((value) => value.id !== item.id), item]; await saveState(state); return publicState(state);
+  const item: StoredConnection = { id: input.id ?? id(), name: input.name, host: input.host, port: input.port, username: input.username, authenticationMethod: input.authenticationMethod, password: "" };
+  if (input.authenticationMethod === "password") { item.password = input.password ? encrypt(input.password) : existing?.authenticationMethod !== "privateKey" ? existing?.password ?? "" : ""; if (!item.password) throw new Error("Password is required"); }
+  else { item.privateKeyPath = input.privateKeyPath?.trim() || (existing?.authenticationMethod === "privateKey" ? existing.privateKeyPath : ""); if (!item.privateKeyPath) throw new Error("A private key file is required for key authentication"); validatePrivateKeyPath(item.privateKeyPath); let key: Buffer; try { key = await readFile(item.privateKeyPath); } catch { throw new Error(`Could not read the private key file at ${item.privateKeyPath}`); } validatePrivateKey(key, input.passphrase || (existing?.authenticationMethod === "privateKey" && existing.passphrase ? decrypt(existing.passphrase) : undefined)); item.passphrase = input.passphrase ? encrypt(input.passphrase) : existing?.authenticationMethod === "privateKey" ? existing.passphrase : undefined; }
+  state.connections = [...state.connections.filter((value) => value.id !== item.id), item]; await saveState(state); return publicState(state);
 });
 ipcMain.handle("gateway:deleteConnection", async (_event, connectionId: string) => { const state = await readState(); for (const tunnel of state.portTunnels.filter((item) => item.connectionId === connectionId)) stopPortTunnel(tunnel.id, false); state.connections = state.connections.filter((item) => item.id !== connectionId); state.workspaces = state.workspaces.filter((item) => item.connectionId !== connectionId); state.portTunnels = state.portTunnels.filter((item) => item.connectionId !== connectionId); await saveState(state); return publicState(state); });
 ipcMain.handle("gateway:saveWorkspace", async (_event, input: Omit<Workspace, "id"> & { id?: string }) => { const state = await readState(); const item = { ...input, id: input.id ?? id() } as Workspace; state.workspaces = [...state.workspaces.filter((value) => value.id !== item.id), item]; await saveState(state); return publicState(state); });

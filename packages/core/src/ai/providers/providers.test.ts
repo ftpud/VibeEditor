@@ -79,6 +79,7 @@ describe("ACP integration", () => {
     const session = await settle(provider, workspace);
     const assistant = session.messages.filter((message) => message.role === "assistant");
     expect(assistant.map((message) => message.text)).toEqual(["Hello, world", "Done!"]);
+    expect(assistant.map((message) => ({ model: message.model, reasoning: message.reasoning }))).toEqual([{ model: "model-a", reasoning: "high" }, { model: "model-a", reasoning: "high" }]);
     const reasoning = session.messages.filter((message) => message.text.startsWith("Reasoning"));
     expect(reasoning.map((message) => message.text)).toEqual(["Reasoning\nthinking hard"]);
     const tool = session.messages.find((message) => message.id === "tool-1");
@@ -88,6 +89,39 @@ describe("ACP integration", () => {
     expect(session.contextUsed).toBe(120);
     expect(session.contextLimit).toBe(1000);
     expect(session.tokens).toEqual({ total: 30, input: 20, output: 10, thought: 4 });
+    await provider.clear(workspace);
+  });
+
+  it("consumes a queued model selection on exactly the next new turn", async () => {
+    const state = await mkdtemp(path.join(os.tmpdir(), "remote-ide-ai-next-model-"));
+    const provider = new FakeProvider(() => undefined, state);
+    const workspace = process.cwd();
+    await provider.configureNext(workspace, { model: "model-a", reasoning: "high" });
+    expect((await provider.get(workspace)).nextConfiguration).toEqual({ model: "model-a", reasoning: "high" });
+    await provider.send(workspace, { prompt: "first", configuration: { model: "model-b", reasoning: "" } });
+    let session = await settle(provider, workspace);
+    expect(session).toMatchObject({ model: "model-a", reasoning: "high" });
+    expect(session.nextConfiguration).toBeUndefined();
+    await provider.send(workspace, { prompt: "second", configuration: { model: "model-b", reasoning: "" } });
+    session = await settle(provider, workspace);
+    expect(session.model).toBe("model-b");
+    expect(session.messages.filter((message) => message.role === "assistant").slice(0, 2).every((message) => message.model === "model-a")).toBe(true);
+    expect(session.messages.filter((message) => message.role === "assistant").slice(-2).every((message) => message.model === "model-b")).toBe(true);
+    await provider.clear(workspace);
+  });
+
+  it("forces a model-authored continuation into a new turn that consumes the queued model", async () => {
+    const state = await mkdtemp(path.join(os.tmpdir(), "remote-ide-ai-model-continuation-"));
+    const provider = new FakeProvider(() => undefined, state, { FAKE_SLOW: "on" });
+    const workspace = process.cwd();
+    await provider.send(workspace, { prompt: "first", configuration: { model: "model-b", reasoning: "" } });
+    await provider.configureNext(workspace, { model: "model-a", reasoning: "high" });
+    await provider.steer(workspace, "continue", { senderModel: "model-b", queue: true });
+    const session = await settle(provider, workspace);
+    expect(session).toMatchObject({ model: "model-a", reasoning: "high" });
+    expect(session.messages.find((message) => message.text === "continue")).toMatchObject({ role: "user", senderModel: "model-b" });
+    expect(session.messages.filter((message) => message.text.startsWith("working"))).toHaveLength(2);
+    expect(session.messages.filter((message) => message.role === "assistant").at(-1)).toMatchObject({ model: "model-a", reasoning: "high" });
     await provider.clear(workspace);
   });
 

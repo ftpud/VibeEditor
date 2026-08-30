@@ -1,6 +1,6 @@
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { createInterface } from "node:readline";
-import { findAutopilotOption, type AiAgent, type AiConfiguration, type AiMcpServer, type AiModel, type AiOption, type AiProvider, type AiSession } from "@remote-ide/acp";
+import { findAutopilotOption, type AiAgent, type AiConfiguration, type AiMcpServer, type AiModel, type AiOption, type AiProvider, type AiQuotaWindow, type AiSession, type AiUsage } from "@remote-ide/acp";
 import type { AgentFileReference } from "@remote-ide/protocol";
 import { WorkspaceTaskStore, type WorkspaceTask } from "./tasks.js";
 import type { AcpRegistry } from "./ai/index.js";
@@ -8,10 +8,49 @@ import { summarizeAiSessions } from "./ai/summary.js";
 import { AppEventBridge } from "./app-events.js";
 import type { AgentsStore } from "./agents.js";
 import { agentFingerprint } from "./agent-profile.js";
+import type { AiTimerService } from "./ai-timers.js";
 
 type ToolResult = { content: { type: "text"; text: string }[]; isError?: boolean };
 
+function requiredTaskStatus(args: Record<string, unknown>): WorkspaceTask["status"] {
+  const status = requiredString(args, "status");
+  if (status !== "active" && status !== "finished") throw new Error("status must be active or finished");
+  return status;
+}
+
 export const appToolDefinitions = [
+  {
+    name: "ai_usage",
+    description: "Report the current AI session's token usage, remaining reported capacity, and reset time when the provider exposes one. Context-window capacity and account quota are identified separately.",
+    inputSchema: {
+      type: "object", additionalProperties: false,
+      properties: { provider: { type: "string", description: "AI provider id. Omit to use the provider running this agent." } }
+    }
+  },
+  {
+    name: "timer_set",
+    description: "Set or replace a timer for this agent. After the requested number of seconds, Vibe Editor sends the continuation prompt back to this task's AI session.",
+    inputSchema: {
+      type: "object", additionalProperties: false,
+      properties: {
+        seconds: { type: "integer", minimum: 1, maximum: 604800, description: "Delay in whole seconds, from 1 second to 7 days." },
+        prompt: { type: "string", minLength: 1, maxLength: 10000, description: "Continuation prompt to send when the timer expires." }
+      },
+      required: ["seconds", "prompt"]
+    }
+  },
+  {
+    name: "model_switch_next",
+    description: "Use a provider-advertised model and reasoning effort for exactly the next new task turn in this AI session. When called during a running turn, automatically queue a continuation so the selection is exercised after the current turn; it never changes the current turn. A later call replaces the pending selection.",
+    inputSchema: {
+      type: "object", additionalProperties: false,
+      properties: {
+        model: { type: "string", minLength: 1, description: "Model id advertised by the provider running this agent." },
+        reasoning: { type: "string", minLength: 1, description: "Reasoning effort advertised for that model." }
+      },
+      required: ["model", "reasoning"]
+    }
+  },
   {
     name: "task_create",
     description: "Create an isolated Vibe Editor task worktree without starting an agent.",
@@ -62,6 +101,18 @@ export const appToolDefinitions = [
       type: "object", additionalProperties: false,
       properties: { task_id: { type: "string", description: "Task id returned by task_create or task_list." } },
       required: ["task_id"]
+    }
+  },
+  {
+    name: "task_set_status",
+    description: "Mark a Vibe Editor task as finished or restore it to active.",
+    inputSchema: {
+      type: "object", additionalProperties: false,
+      properties: {
+        task_id: { type: "string", description: "Task id returned by task_create or task_list." },
+        status: { type: "string", enum: ["active", "finished"], description: "Set finished when the task is complete; set active to restore it." }
+      },
+      required: ["task_id", "status"]
     }
   },
   {
@@ -124,10 +175,35 @@ export class AppToolService {
     private readonly onCommitMessageChanged: (workspace: string, message: string) => Promise<void> = async () => undefined,
     private readonly currentProvider?: AiProvider,
     private readonly agents?: Pick<AgentsStore, "list">,
-    private readonly rootWorkspace?: string
+    private readonly rootWorkspace?: string,
+    private readonly timers?: Pick<AiTimerService, "schedule" | "next" | "cancelWorkspace">
   ) {}
 
   async call(name: string, args: Record<string, unknown>): Promise<unknown> {
+    if (name === "ai_usage") {
+      const provider = optionalString(args, "provider") ?? this.currentProvider;
+      if (!provider) throw new Error("provider is required when the invoking AI provider is not known");
+      return usageResult(provider, await this.acp.get(provider).usage(this.currentWorkspace));
+    }
+    if (name === "timer_set") {
+      if (!this.timers) throw new Error("Continuation timers are not available");
+      if (!this.currentProvider) throw new Error("provider is required when the invoking AI provider is not known");
+      const prompt = requiredString(args, "prompt");
+      if (prompt.length > 10_000) throw new Error("prompt must be at most 10000 characters");
+      const timer = await this.timers.schedule(this.currentWorkspace, this.currentProvider, prompt, requiredInteger(args, "seconds", 1, 604_800));
+      return { timer_id: timer.id, status: "waiting", due_at: timer.dueAt, continuation_prompt: timer.prompt };
+    }
+    if (name === "model_switch_next") {
+      if (!this.currentProvider) throw new Error("model switching requires a known invoking AI provider");
+      const model = requiredString(args, "model");
+      const reasoning = requiredString(args, "reasoning");
+      const manager = this.acp.get(this.currentProvider);
+      await validateReasoning(await manager.models(), model, reasoning);
+      const current = await manager.get(this.currentWorkspace);
+      await manager.configureNext(this.currentWorkspace, { model, reasoning });
+      await manager.steer(this.currentWorkspace, "Continue the current task using the newly selected model and reasoning effort.", { senderModel: current.model, queue: true });
+      return { provider: this.currentProvider, model, reasoning, applies_to: "next_turn", continuation: "queued" };
+    }
     if (name === "task_create") {
       const task = await this.tasks.create(requiredString(args, "branch"), false, false, false);
       await this.onTasksChanged();
@@ -167,9 +243,15 @@ export class AppToolService {
     }
     if (name === "task_delete") {
       const task = await this.task(requiredString(args, "task_id"));
+      await this.timers?.cancelWorkspace(this.tasks.taskPath(task.id));
       await this.tasks.delete(task.id);
       await this.onTasksChanged();
       return { deleted: task };
+    }
+    if (name === "task_set_status") {
+      const task = await this.tasks.setStatus(requiredString(args, "task_id"), requiredTaskStatus(args));
+      await this.onTasksChanged();
+      return { task };
     }
     if (name === "task_ai_response_tail") {
       const task = await this.task(requiredString(args, "task_id"));
@@ -221,7 +303,8 @@ export class AppToolService {
   private async status(task: WorkspaceTask) {
     const sessions = await Promise.all(this.acp.list().map((provider) => this.acp.get(provider.id).get(this.tasks.taskPath(task.id))));
     const summary = summarizeAiSessions(sessions);
-    return { status: summary.status, providers: Object.fromEntries(this.acp.list().map((provider, index) => [provider.id, sessions[index]!.status])) };
+    const timer = await this.timers?.next(this.tasks.taskPath(task.id));
+    return { ...summary, ...(timer && summary.status !== "in_progress" && summary.status !== "user_prompt" ? { status: "waiting", waiting_until: timer.dueAt } : {}), providers: Object.fromEntries(this.acp.list().map((provider, index) => [provider.id, sessions[index]!.status])) };
   }
 
   private async resolveAgent(requested: AgentFileReference | null | undefined, parent: AiSession): Promise<AiAgent | undefined> {
@@ -243,6 +326,41 @@ export class AppToolService {
   }
 }
 
+function usageResult(provider: AiProvider, usage: AiUsage) {
+  const remaining = usage.used !== undefined && usage.limit !== undefined ? Math.max(0, usage.limit - usage.used) : undefined;
+  return {
+    provider,
+    supported: usage.supported,
+    kind: usage.label === "Context window" ? "context_window" : "provider_usage",
+    label: usage.label ?? null,
+    used: usage.used ?? null,
+    limit: usage.limit ?? null,
+    remaining: remaining ?? null,
+    unit: usage.unit ?? null,
+    resets_at: usage.resetsAt ?? null,
+    details: usage.details ?? {},
+    account_quota: usage.accountQuota ? {
+      plan: usage.accountQuota.plan ?? null,
+      limit_id: usage.accountQuota.limitId ?? null,
+      limit_name: usage.accountQuota.limitName ?? null,
+      primary: usage.accountQuota.primary ? quotaWindowResult(usage.accountQuota.primary) : null,
+      secondary: usage.accountQuota.secondary ? quotaWindowResult(usage.accountQuota.secondary) : null,
+      credits: usage.accountQuota.credits ? {
+        has_credits: usage.accountQuota.credits.hasCredits,
+        unlimited: usage.accountQuota.credits.unlimited,
+        balance: usage.accountQuota.credits.balance ?? null
+      } : null
+    } : null,
+    note: usage.accountQuota === undefined
+      ? "This provider has not exposed a quota reset time through ACP. A context-window limit is conversation capacity, not an account rate-limit quota."
+      : undefined
+  };
+}
+
+function quotaWindowResult(window: AiQuotaWindow) {
+  return { used_percent: window.usedPercent, remaining_percent: window.remainingPercent, window_minutes: window.windowMinutes ?? null, resets_at: window.resetsAt ?? null };
+}
+
 type AgentArgument = AgentFileReference | null | undefined;
 
 function agentReference(args: Record<string, unknown>): AgentArgument {
@@ -259,6 +377,7 @@ function agentReference(args: Record<string, unknown>): AgentArgument {
 async function validateReasoning(models: AiModel[], modelId: string, reasoning: string): Promise<void> {
   const model = models.find((item) => item.id === modelId);
   if (!model) throw new Error(`Model '${modelId}' is not advertised by the selected provider`);
+  if (model.available === false) throw new Error(`Model '${modelId}' is advertised but is not available for the selected provider account`);
   if (!model.reasoningLevels.includes(reasoning)) {
     const supported = model.reasoningLevels.length > 0 ? model.reasoningLevels.join(", ") : "none (omit reasoning to use this model)";
     throw new Error(`reasoning '${reasoning}' is not supported by model '${modelId}'; supported values: ${supported}`);
@@ -337,14 +456,18 @@ function inheritedAutopilot(parentOptions: AiOption[], parent: AiSession, childO
 
 export function withAppTools(rootWorkspace: string, currentWorkspace: string, servers?: AiMcpServer[], agent?: AiAgent, currentProvider?: AiProvider): { servers: AiMcpServer[]; agent?: AiAgent } {
   if (!agent?.mcpServers?.includes("vibe-editor")) return { servers: servers ?? [], ...(agent ? { agent } : {}) };
+  const appServer = appToolServer(rootWorkspace, currentWorkspace, currentProvider);
+  const filtered = (servers ?? []).filter((server) => server.name !== appServer.name);
+  return { servers: [...filtered, appServer], agent };
+}
+
+export function appToolServer(rootWorkspace: string, currentWorkspace: string, currentProvider?: AiProvider): AiMcpServer {
   const compiled = fileURLToPath(new URL("app-tools.js", import.meta.url));
   const source = fileURLToPath(new URL("app-tools.ts", import.meta.url));
   const runningFromSource = import.meta.url.endsWith("/src/app-tools.ts");
-  const appServer: AiMcpServer = runningFromSource
+  return runningFromSource
     ? { transport: "stdio", name: "vibe-editor", command: process.execPath, args: ["--import", "tsx", source], env: { VIBE_EDITOR_ROOT_WORKSPACE: rootWorkspace, VIBE_EDITOR_CURRENT_WORKSPACE: currentWorkspace, ...(currentProvider ? { VIBE_EDITOR_CURRENT_PROVIDER: currentProvider } : {}) } }
     : { transport: "stdio", name: "vibe-editor", command: process.execPath, args: [compiled], env: { VIBE_EDITOR_ROOT_WORKSPACE: rootWorkspace, VIBE_EDITOR_CURRENT_WORKSPACE: currentWorkspace, ...(currentProvider ? { VIBE_EDITOR_CURRENT_PROVIDER: currentProvider } : {}) } };
-  const filtered = (servers ?? []).filter((server) => server.name !== appServer.name);
-  return { servers: [...filtered, appServer], agent };
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) void main();
