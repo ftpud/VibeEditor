@@ -1,11 +1,33 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AiSession } from "@remote-ide/protocol";
-import { AiPanel } from "./AiPanel";
+import { AiPanel, ContextUsageIndicator, contextUsage } from "./AiPanel";
 
 afterEach(cleanup);
 
 const session = (id: string, prompt: string): AiSession => ({ id, model: "test", reasoning: "low", status: "done", messages: [{ id: `${id}-message`, role: "user", text: prompt, timestamp: "2026-08-30T12:00:00.000Z" }] });
+
+describe("context usage indicator", () => {
+  it("calculates and clamps the active session percentage", () => {
+    expect(contextUsage({ ...session("one", "First"), contextUsed: 250, contextLimit: 1_000 })).toEqual({ used: 250, limit: 1_000, percent: 25 });
+    expect(contextUsage({ ...session("one", "First"), contextUsed: 1_500, contextLimit: 1_000 })?.percent).toBe(100);
+  });
+
+  it("hides when the provider has not reported a usable context window", () => {
+    const { container } = render(<ContextUsageIndicator session={session("one", "First")} />);
+    expect(container.firstChild).toBeNull();
+    expect(contextUsage({ ...session("one", "First"), contextUsed: 10, contextLimit: 0 })).toBeUndefined();
+  });
+
+  it("updates accessible context output when the active session changes", () => {
+    const first = { ...session("one", "First"), contextUsed: 250, contextLimit: 1_000 };
+    const second = { ...session("two", "Second"), contextUsed: 950, contextLimit: 1_000 };
+    const { rerender } = render(<ContextUsageIndicator session={first} />);
+    expect(screen.getByRole("img", { name: "Context window: 25% used (250 of 1,000 tokens)" }).getAttribute("title")).toBe("Context window: 25% used (250 of 1,000 tokens)");
+    rerender(<ContextUsageIndicator session={second} />);
+    expect(screen.getByRole("img", { name: "Context window: 95% used (950 of 1,000 tokens)" }).className).toContain("near-full");
+  });
+});
 
 describe("timed task session controls", () => {
   it("disables new, switch, and remove while a continuation timer owns the session", () => {
