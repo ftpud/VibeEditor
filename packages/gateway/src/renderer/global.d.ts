@@ -4,10 +4,11 @@ type GatewayPortTunnel = { id: string; connectionId: string; port: number };
 type GatewayState = { connections: GatewayConnection[]; workspaces: GatewayWorkspace[]; portTunnels: GatewayPortTunnel[] };
 type GatewayRuntime = { status: "idle" | "working" | "server" | "client" | "error"; message: string };
 type GatewayTunnelRuntime = { status: "idle" | "working" | "running" | "error"; message: string };
+type GatewayConnectionRuntime = { status: "unknown" | "reconnecting" | "online" | "slow" | "offline"; message: string; latencyMs?: number };
 
 interface Window {
   gateway: {
-    get(): Promise<{ state: GatewayState; runtimes: Record<string, GatewayRuntime>; tunnelRuntimes: Record<string, GatewayTunnelRuntime> }>;
+    get(): Promise<{ state: GatewayState; runtimes: Record<string, GatewayRuntime>; tunnelRuntimes: Record<string, GatewayTunnelRuntime>; connectionRuntimes: Record<string, GatewayConnectionRuntime> }>;
     refreshStatuses(connectionId?: string): Promise<void>;
     saveConnection(value: Partial<GatewayConnection> & { name: string; host: string; port: number; username: string; password: string }): Promise<GatewayState>;
     deleteConnection(id: string): Promise<GatewayState>;
@@ -22,5 +23,6 @@ interface Window {
     startClient(id: string): Promise<void>;
     onStatus(listener: (id: string, status: GatewayRuntime) => void): () => void;
     onTunnelStatus(listener: (id: string, status: GatewayTunnelRuntime) => void): () => void;
+    onConnectionStatus(listener: (id: string, status: GatewayConnectionRuntime) => void): () => void;
   };
 }
