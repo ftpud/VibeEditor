@@ -13,6 +13,8 @@ export type GitStatusEntry = {
 };
 export type GitUpstreamStatus = { upstream: string; ahead: number };
 export type GitBranch = { name: string; current: boolean; remote: boolean };
+/** A tag stored in this workspace's local Git repository. It is not a remote tag operation. */
+export type GitTag = { name: string; target: string; annotated: boolean };
 export type GitCommit = { hash: string; shortHash: string; author: string; date: string; subject: string; parents?: string[]; refs?: string[]; graph?: string };
 export type GitCommitFile = { path: string; status: string; originalPath?: string };
 export type GitDiffHunk = { originalStart: number; originalLines: number; modifiedStart: number; modifiedLines: number };
@@ -203,6 +205,9 @@ export type ProtocolOperations = {
     result: { path: string; originalContent: string; modifiedContent: string; hunks: GitDiffHunk[] };
   };
   "git.branches": { payload: Record<string, never>; result: { branches: GitBranch[] } };
+  "git.tags": { payload: Record<string, never>; result: { tags: GitTag[] } };
+  "git.createTag": { payload: { name: string; target: string }; result: { tag: GitTag } };
+  "git.deleteTag": { payload: { name: string }; result: Record<string, never> };
   "git.checkoutBranch": { payload: { branch: string; remote?: boolean }; result: { branch: string } };
   "git.renameBranch": { payload: { branch: string; newName: string }; result: { branch: string } };
   "git.log": { payload: { branch: string; limit?: number }; result: { commits: GitCommit[] } };
@@ -412,6 +417,9 @@ const requestTypeRegistry: Record<RequestType, true> = {
   "git.status": true,
   "git.diff": true,
   "git.branches": true,
+  "git.tags": true,
+  "git.createTag": true,
+  "git.deleteTag": true,
   "git.checkoutBranch": true,
   "git.renameBranch": true,
   "git.log": true,

@@ -140,7 +140,7 @@ multi-surface work).
   Constraint: protect checked-out/task-worktree branches, distinguish local and
   remote deletion, preview unmerged commits, and require explicit confirmation for
   force or remote actions.
-- [ ] **Tag browsing and bounded create/delete — Small.** Value: make release and
+- [x] **Tag browsing and bounded create/delete — Small.** Value: make release and
   checkpoint refs visible in existing history/compare surfaces. Constraint: annotate
   local versus remote effects and refuse ambiguous ref names; pushing/deleting remote
   tags is a separately confirmed action.

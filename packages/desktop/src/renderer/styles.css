@@ -615,6 +615,12 @@ button { color: inherit; }
 .git-branch-search input { min-width: 0; width: 100%; border: 0; outline: 0; background: transparent; color: #d3d5d8; font-size: 0.7692rem; }
 .git-branch-search input::placeholder { color: #71747a; }
 .branch-group-title, .branch-row { width: 100%; height: 25px; padding: 0 7px; display: flex; align-items: center; gap: 5px; border: 0; background: transparent; color: #bdc0c5; text-align: left; cursor: pointer; }
+.tag-group-header { display: flex; align-items: center; }
+.tag-group-header .branch-group-title { flex: 1; }
+.tag-create { width: 25px; height: 25px; display: grid; place-items: center; border: 0; background: transparent; color: #a7aab0; cursor: pointer; }
+.tag-create:hover:not(:disabled) { background: #34363a; color: #d7d9dd; }
+.tag-create:disabled { cursor: not-allowed; opacity: .45; }
+.tag-local-note { margin: 0; padding: 1px 8px 5px 25px; color: #7f8288; font-size: 0.6923rem; line-height: 1.25; }
 .branch-group-title { font-size: 0.8462rem; font-weight: 600; }
 .branch-group-title span, .branch-row span { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .branch-group-title small, .branch-row small { color: #7f8288; font-size: 0.6923rem; }
