@@ -364,7 +364,7 @@ button { color: inherit; }
 .ai-composer textarea { min-width: 0; min-height: 0; height: 100%; resize: none; padding: 7px; border: 1px solid #4b4d52; border-radius: 3px; outline: none; background: #1e1f22; color: #e2e3e5; font: inherit; }
 .ai-composer textarea:focus { border-color: #3574f0; }
 .ai-composer-actions { align-self: end; display: flex; flex-direction: column; gap: 4px; }
-.ai-context-usage { width: 18px; height: 18px; box-sizing: border-box; display: block; border: 2px solid #555a62; border-radius: 50%; background: conic-gradient(#5bb98c var(--context-usage), transparent 0); }
+.ai-context-usage { width: 18px; height: 18px; flex: 0 0 18px; box-sizing: border-box; display: block; border: 2px solid #555a62; border-radius: 50%; background: conic-gradient(#5bb98c var(--context-usage), transparent 0); }
 .ai-context-usage.near-full { background-image: conic-gradient(#e5a14d var(--context-usage), transparent 0); }
 .ai-composer-actions input { display: none; }
 .ai-composer-actions button { width: 28px; height: 28px; display: grid; place-items: center; border: 0; border-radius: 3px; background: #3c3f44; color: #c7c9cc; cursor: pointer; }
