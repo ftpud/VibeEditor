@@ -445,7 +445,8 @@ export function App() {
     const activeTabId = tabs.find((tab) => tab.path === options.activeFile)?.id ?? tabs[0]?.id;
     const restoredTerminals = await Promise.all((options.terminal?.tabs ?? []).map(async (saved, index) => {
       try {
-        const session = saved.terminalId ? (await client.request("terminal.attach", { terminalId: saved.terminalId })).session : await client.request("terminal.create", { cols: 80, rows: 24 });
+        const attached = saved.terminalId ? await client.request("terminal.attach", { terminalId: saved.terminalId }) : undefined;
+        const session = attached?.state === "available" ? attached.session : saved.terminalId ? undefined : await client.request("terminal.create", { cols: 80, rows: 24 });
         if (!session) {
           const terminalId = saved.terminalId!;
           terminalBuffers.current.set(terminalId, "\r\n[terminal session is no longer available]\r\n");
@@ -1469,17 +1470,31 @@ export function App() {
     }
   };
 
-  const openRunConfigTerminal = async (config: RunConfig) => {
-    if (!config.terminalId || !clientRef.current) return;
-    const existing = layoutRef.current.terminalGroup.tabs.find((tab) => tab.terminalId === config.terminalId);
+  const openTerminalReference = async (terminalId: string, title: string): Promise<boolean> => {
+    if (!clientRef.current) return false;
+    const existing = layoutRef.current.terminalGroup.tabs.find((tab) => tab.terminalId === terminalId);
     if (!existing) {
-      const session = (await clientRef.current.request("terminal.attach", { terminalId: config.terminalId })).session;
-      if (!session) return;
-      terminalBuffers.current.set(session.terminalId, session.output);
-      updateTerminalGroup((current) => { const id = crypto.randomUUID(); return { ...current, tabs: [...current.tabs, { id, terminalId: session.terminalId, title: config.name, status: session.status === "running" ? "running" : "exited" }], activeTabId: id }; });
+      const attached = await clientRef.current.request("terminal.attach", { terminalId });
+      if (attached.state === "stale") { setStatusMessage("That terminal is no longer available."); return false; }
+      terminalBuffers.current.set(attached.session.terminalId, attached.session.output);
+      updateTerminalGroup((current) => { const id = crypto.randomUUID(); return { ...current, tabs: [...current.tabs, { id, terminalId: attached.session.terminalId, title, status: attached.session.status === "running" ? "running" : "exited" }], activeTabId: id }; });
     } else updateTerminalGroup((current) => ({ ...current, activeTabId: existing.id }));
     setLayout((current) => ({ ...current, panels: [...current.panels.filter((panel) => !["terminal", "java", "problems", "gitlog"].includes(panel.type)), { id: "terminal", type: "terminal" }] }));
+    return true;
   };
+
+  const openRunConfigTerminal = async (config: RunConfig) => {
+    if (!config.terminalId || !clientRef.current) return;
+    await openTerminalReference(config.terminalId, config.name);
+  };
+  useEffect(() => {
+    const listener = (event: Event) => {
+      const { terminalId, resolve } = (event as CustomEvent<{ terminalId: string; resolve(opened: boolean): void }>).detail;
+      void openTerminalReference(terminalId, "AI activity").then(resolve);
+    };
+    window.addEventListener("vibe:open-terminal", listener);
+    return () => window.removeEventListener("vibe:open-terminal", listener);
+  });
   const runConfigAction = async (config: RunConfig, action: "run" | "stop" | "restart" | "openTerminal") => {
     setRunConfigMenu(undefined);
     try { const next = (await clientRef.current!.request(`runConfig.${action}` as "runConfig.run", { scope: config.scope, name: config.name })).config; setRunConfigs((items) => items.map((item) => item.scope === next.scope && item.name === next.name ? next : item)); if (action !== "stop") await openRunConfigTerminal(next); }
