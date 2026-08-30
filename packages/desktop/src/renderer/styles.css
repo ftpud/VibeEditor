@@ -192,6 +192,7 @@ button { color: inherit; }
 .task-progress-spinner { flex: 0 0 auto; animation: task-progress-spin .8s linear infinite; }
 @keyframes task-progress-spin { to { transform: rotate(360deg); } }
 .task-ai-status.user_prompt { color: #e3b762; }
+.task-ai-status.waiting { color: #b99aec; }
 .task-checkpoint-history { min-height: 0; flex: 1 1 0; overflow: auto; background: #24262a; border-bottom: 1px solid #3a3d42; }
 .task-checkpoint-history > header { position: sticky; top: 0; z-index: 1; display: flex; justify-content: space-between; padding: 9px 11px; background: #292b30; border-bottom: 1px solid #3b3e43; }
 .task-checkpoint-history > header > span { display: flex; align-items: center; gap: 8px; }.task-checkpoint-history > header button { display: grid; place-items: center; border: 0; background: transparent; }
@@ -213,6 +214,7 @@ button { color: inherit; }
 .ai-status { font-size: 0.7692rem; font-weight: 500; }
 .ai-status.in_progress { color: #6ea8fe; }
 .ai-status.user_prompt { color: #e3b762; }
+.ai-status.waiting { color: #b99aec; }
 .ai-status.done { color: #70b879; }
 .ai-status.error { color: #dc747c; }
 .ai-panel { min-height: 0; flex: 1; display: flex; flex-direction: column; }

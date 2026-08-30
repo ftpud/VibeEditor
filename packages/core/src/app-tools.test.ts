@@ -30,13 +30,14 @@ function harness() {
 
 describe("Vibe Editor app tools", () => {
   it("publishes task start agent and reasoning parameters", () => {
-    expect(appToolDefinitions.map((tool) => tool.name)).toEqual(["ai_usage", "task_create", "task_create_and_start", "task_list", "task_delete", "task_ai_response_tail", "task_append_prompt", "set_commit_message", "task_update_commit_message"]);
-    expect(appToolDefinitions[2].inputSchema.required).toEqual(["prompt", "provider", "model"]);
-    expect(appToolDefinitions[2].inputSchema.properties.agent).toMatchObject({
+    expect(appToolDefinitions.map((tool) => tool.name)).toEqual(["ai_usage", "timer_set", "task_create", "task_create_and_start", "task_list", "task_delete", "task_ai_response_tail", "task_append_prompt", "set_commit_message", "task_update_commit_message"]);
+    expect(appToolDefinitions[1]).toMatchObject({ name: "timer_set", inputSchema: { required: ["seconds", "prompt"] } });
+    expect(appToolDefinitions[3].inputSchema.required).toEqual(["prompt", "provider", "model"]);
+    expect(appToolDefinitions[3].inputSchema.properties.agent).toMatchObject({
       oneOf: [{ type: "object", required: ["scope", "name"] }, { type: "null" }]
     });
-    expect(appToolDefinitions[2].inputSchema.properties.reasoning).toMatchObject({ type: "string", minLength: 1 });
-    expect(appToolDefinitions[7]).toMatchObject({
+    expect(appToolDefinitions[3].inputSchema.properties.reasoning).toMatchObject({ type: "string", minLength: 1 });
+    expect(appToolDefinitions[8]).toMatchObject({
       name: "set_commit_message",
       inputSchema: {
         additionalProperties: false,
@@ -44,7 +45,7 @@ describe("Vibe Editor app tools", () => {
         properties: { message: { type: "string", minLength: 1, maxLength: 10_000, pattern: "\\S" } }
       }
     });
-    expect(appToolDefinitions[8]).toMatchObject({
+    expect(appToolDefinitions[9]).toMatchObject({
       name: "task_update_commit_message",
       inputSchema: {
         additionalProperties: false,
@@ -55,6 +56,16 @@ describe("Vibe Editor app tools", () => {
         }
       }
     });
+  });
+
+  it("sets a continuation timer for the invoking provider", async () => {
+    const { tasks, provider, onTasksChanged, onCommitMessageChanged, agents } = harness();
+    const timer = { id: "timer-1", workspace: "/tasks/parent/workspace", provider: "codex", prompt: "Check again", createdAt: "2026-08-30T12:00:00.000Z", dueAt: "2026-08-30T12:00:30.000Z" };
+    const timers = { schedule: vi.fn(async () => timer), next: vi.fn(async () => undefined) };
+    const service = new AppToolService(tasks as never, { get: vi.fn(() => provider), list: vi.fn(() => []) } as never, "/tasks/parent/workspace", onTasksChanged, onCommitMessageChanged, "codex", agents as never, "/workspace", timers as never);
+
+    await expect(service.call("timer_set", { seconds: 30, prompt: "Check again" })).resolves.toEqual({ timer_id: "timer-1", status: "waiting", due_at: timer.dueAt, continuation_prompt: "Check again" });
+    expect(timers.schedule).toHaveBeenCalledWith("/tasks/parent/workspace", "codex", "Check again", 30);
   });
 
   it("reports usage and computes remaining capacity for the invoking provider", async () => {
@@ -74,6 +85,18 @@ describe("Vibe Editor app tools", () => {
     provider.usage.mockResolvedValueOnce({ supported: true, label: "Plan quota", used: 80, limit: 100, unit: "percent", resetsAt: "2026-09-01T12:00:00.000Z" });
     await expect(service.call("ai_usage", { provider: "copilot" })).resolves.toMatchObject({
       provider: "copilot", kind: "provider_usage", remaining: 20, resets_at: "2026-09-01T12:00:00.000Z"
+    });
+  });
+
+  it("reports account quota separately from context usage", async () => {
+    const { service, provider } = harness();
+    provider.usage.mockResolvedValueOnce({
+      supported: true, label: "Context window", used: 120, limit: 1000, unit: "tokens",
+      accountQuota: { plan: "plus", primary: { usedPercent: 27, remainingPercent: 73, windowMinutes: 300, resetsAt: "2026-08-30T13:55:22.000Z" } }
+    });
+    await expect(service.call("ai_usage", { provider: "codex" })).resolves.toMatchObject({
+      kind: "context_window", remaining: 880,
+      account_quota: { plan: "plus", primary: { used_percent: 27, remaining_percent: 73, window_minutes: 300, resets_at: "2026-08-30T13:55:22.000Z" } }
     });
   });
 

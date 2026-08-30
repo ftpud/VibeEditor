@@ -1,6 +1,6 @@
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { createInterface } from "node:readline";
-import { findAutopilotOption, type AiAgent, type AiConfiguration, type AiMcpServer, type AiModel, type AiOption, type AiProvider, type AiSession, type AiUsage } from "@remote-ide/acp";
+import { findAutopilotOption, type AiAgent, type AiConfiguration, type AiMcpServer, type AiModel, type AiOption, type AiProvider, type AiQuotaWindow, type AiSession, type AiUsage } from "@remote-ide/acp";
 import type { AgentFileReference } from "@remote-ide/protocol";
 import { WorkspaceTaskStore, type WorkspaceTask } from "./tasks.js";
 import type { AcpRegistry } from "./ai/index.js";
@@ -8,6 +8,7 @@ import { summarizeAiSessions } from "./ai/summary.js";
 import { AppEventBridge } from "./app-events.js";
 import type { AgentsStore } from "./agents.js";
 import { agentFingerprint } from "./agent-profile.js";
+import type { AiTimerService } from "./ai-timers.js";
 
 type ToolResult = { content: { type: "text"; text: string }[]; isError?: boolean };
 
@@ -18,6 +19,18 @@ export const appToolDefinitions = [
     inputSchema: {
       type: "object", additionalProperties: false,
       properties: { provider: { type: "string", description: "AI provider id. Omit to use the provider running this agent." } }
+    }
+  },
+  {
+    name: "timer_set",
+    description: "Set or replace a timer for this agent. After the requested number of seconds, Vibe Editor sends the continuation prompt back to this task's AI session.",
+    inputSchema: {
+      type: "object", additionalProperties: false,
+      properties: {
+        seconds: { type: "integer", minimum: 1, maximum: 604800, description: "Delay in whole seconds, from 1 second to 7 days." },
+        prompt: { type: "string", minLength: 1, maxLength: 10000, description: "Continuation prompt to send when the timer expires." }
+      },
+      required: ["seconds", "prompt"]
     }
   },
   {
@@ -132,7 +145,8 @@ export class AppToolService {
     private readonly onCommitMessageChanged: (workspace: string, message: string) => Promise<void> = async () => undefined,
     private readonly currentProvider?: AiProvider,
     private readonly agents?: Pick<AgentsStore, "list">,
-    private readonly rootWorkspace?: string
+    private readonly rootWorkspace?: string,
+    private readonly timers?: Pick<AiTimerService, "schedule" | "next" | "cancelWorkspace">
   ) {}
 
   async call(name: string, args: Record<string, unknown>): Promise<unknown> {
@@ -140,6 +154,14 @@ export class AppToolService {
       const provider = optionalString(args, "provider") ?? this.currentProvider;
       if (!provider) throw new Error("provider is required when the invoking AI provider is not known");
       return usageResult(provider, await this.acp.get(provider).usage(this.currentWorkspace));
+    }
+    if (name === "timer_set") {
+      if (!this.timers) throw new Error("Continuation timers are not available");
+      if (!this.currentProvider) throw new Error("provider is required when the invoking AI provider is not known");
+      const prompt = requiredString(args, "prompt");
+      if (prompt.length > 10_000) throw new Error("prompt must be at most 10000 characters");
+      const timer = await this.timers.schedule(this.currentWorkspace, this.currentProvider, prompt, requiredInteger(args, "seconds", 1, 604_800));
+      return { timer_id: timer.id, status: "waiting", due_at: timer.dueAt, continuation_prompt: timer.prompt };
     }
     if (name === "task_create") {
       const task = await this.tasks.create(requiredString(args, "branch"), false, false, false);
@@ -180,6 +202,7 @@ export class AppToolService {
     }
     if (name === "task_delete") {
       const task = await this.task(requiredString(args, "task_id"));
+      await this.timers?.cancelWorkspace(this.tasks.taskPath(task.id));
       await this.tasks.delete(task.id);
       await this.onTasksChanged();
       return { deleted: task };
@@ -234,7 +257,8 @@ export class AppToolService {
   private async status(task: WorkspaceTask) {
     const sessions = await Promise.all(this.acp.list().map((provider) => this.acp.get(provider.id).get(this.tasks.taskPath(task.id))));
     const summary = summarizeAiSessions(sessions);
-    return { status: summary.status, providers: Object.fromEntries(this.acp.list().map((provider, index) => [provider.id, sessions[index]!.status])) };
+    const timer = await this.timers?.next(this.tasks.taskPath(task.id));
+    return { ...summary, ...(timer && summary.status !== "in_progress" && summary.status !== "user_prompt" ? { status: "waiting", waiting_until: timer.dueAt } : {}), providers: Object.fromEntries(this.acp.list().map((provider, index) => [provider.id, sessions[index]!.status])) };
   }
 
   private async resolveAgent(requested: AgentFileReference | null | undefined, parent: AiSession): Promise<AiAgent | undefined> {
@@ -269,10 +293,26 @@ function usageResult(provider: AiProvider, usage: AiUsage) {
     unit: usage.unit ?? null,
     resets_at: usage.resetsAt ?? null,
     details: usage.details ?? {},
-    note: usage.resetsAt === undefined
+    account_quota: usage.accountQuota ? {
+      plan: usage.accountQuota.plan ?? null,
+      limit_id: usage.accountQuota.limitId ?? null,
+      limit_name: usage.accountQuota.limitName ?? null,
+      primary: usage.accountQuota.primary ? quotaWindowResult(usage.accountQuota.primary) : null,
+      secondary: usage.accountQuota.secondary ? quotaWindowResult(usage.accountQuota.secondary) : null,
+      credits: usage.accountQuota.credits ? {
+        has_credits: usage.accountQuota.credits.hasCredits,
+        unlimited: usage.accountQuota.credits.unlimited,
+        balance: usage.accountQuota.credits.balance ?? null
+      } : null
+    } : null,
+    note: usage.accountQuota === undefined
       ? "This provider has not exposed a quota reset time through ACP. A context-window limit is conversation capacity, not an account rate-limit quota."
       : undefined
   };
+}
+
+function quotaWindowResult(window: AiQuotaWindow) {
+  return { used_percent: window.usedPercent, remaining_percent: window.remainingPercent, window_minutes: window.windowMinutes ?? null, resets_at: window.resetsAt ?? null };
 }
 
 type AgentArgument = AgentFileReference | null | undefined;
@@ -369,14 +409,18 @@ function inheritedAutopilot(parentOptions: AiOption[], parent: AiSession, childO
 
 export function withAppTools(rootWorkspace: string, currentWorkspace: string, servers?: AiMcpServer[], agent?: AiAgent, currentProvider?: AiProvider): { servers: AiMcpServer[]; agent?: AiAgent } {
   if (!agent?.mcpServers?.includes("vibe-editor")) return { servers: servers ?? [], ...(agent ? { agent } : {}) };
+  const appServer = appToolServer(rootWorkspace, currentWorkspace, currentProvider);
+  const filtered = (servers ?? []).filter((server) => server.name !== appServer.name);
+  return { servers: [...filtered, appServer], agent };
+}
+
+export function appToolServer(rootWorkspace: string, currentWorkspace: string, currentProvider?: AiProvider): AiMcpServer {
   const compiled = fileURLToPath(new URL("app-tools.js", import.meta.url));
   const source = fileURLToPath(new URL("app-tools.ts", import.meta.url));
   const runningFromSource = import.meta.url.endsWith("/src/app-tools.ts");
-  const appServer: AiMcpServer = runningFromSource
+  return runningFromSource
     ? { transport: "stdio", name: "vibe-editor", command: process.execPath, args: ["--import", "tsx", source], env: { VIBE_EDITOR_ROOT_WORKSPACE: rootWorkspace, VIBE_EDITOR_CURRENT_WORKSPACE: currentWorkspace, ...(currentProvider ? { VIBE_EDITOR_CURRENT_PROVIDER: currentProvider } : {}) } }
     : { transport: "stdio", name: "vibe-editor", command: process.execPath, args: [compiled], env: { VIBE_EDITOR_ROOT_WORKSPACE: rootWorkspace, VIBE_EDITOR_CURRENT_WORKSPACE: currentWorkspace, ...(currentProvider ? { VIBE_EDITOR_CURRENT_PROVIDER: currentProvider } : {}) } };
-  const filtered = (servers ?? []).filter((server) => server.name !== appServer.name);
-  return { servers: [...filtered, appServer], agent };
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) void main();

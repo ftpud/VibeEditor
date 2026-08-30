@@ -1,4 +1,4 @@
-export type AiStatus = "idle" | "in_progress" | "user_prompt" | "done" | "error";
+export type AiStatus = "idle" | "in_progress" | "user_prompt" | "waiting" | "done" | "error";
 export type AiProvider = string;
 export type AiConfiguration = Record<string, string | number | boolean>;
 export type AiContentBlock =
@@ -43,12 +43,21 @@ export type AiSettingsSection = { id: string; name: string; description?: string
 export type AiSettingsLayout = { title: string; description: string; sections: AiSettingsSection[] };
 export type AiProviderCapabilities = { models: boolean; usage: boolean; mcp: boolean; agents: boolean; contextWindow: boolean };
 export type AiProviderDescriptor = { id: AiProvider; name: string; description: string; settings: AiSettingsLayout; options: AiOption[]; capabilities: AiProviderCapabilities };
-export type AiUsage = { supported: boolean; label?: string; used?: number; limit?: number; unit?: string; resetsAt?: string; details?: Record<string, string | number> };
+export type AiQuotaWindow = { usedPercent: number; remainingPercent: number; windowMinutes?: number; resetsAt?: string };
+export type AiAccountQuota = {
+  plan?: string;
+  limitId?: string;
+  limitName?: string;
+  primary?: AiQuotaWindow;
+  secondary?: AiQuotaWindow;
+  credits?: { hasCredits: boolean; unlimited: boolean; balance?: string };
+};
+export type AiUsage = { supported: boolean; label?: string; used?: number; limit?: number; unit?: string; resetsAt?: string; details?: Record<string, string | number>; accountQuota?: AiAccountQuota };
 export type AiMcpServer =
   | { transport?: "stdio"; name: string; command: string; args?: string[]; env?: Record<string, string>; enabled?: boolean }
   | { transport: "http" | "sse"; name: string; url: string; headers?: Record<string, string>; enabled?: boolean };
 export type AiAgent = { name: string; description?: string; instructions: string; mcpServers?: string[] };
-export type AiTaskSummary = { status: AiStatus; preview: string; additions: number; deletions: number; pendingPermission: boolean };
+export type AiTaskSummary = { status: AiStatus; preview: string; additions: number; deletions: number; pendingPermission: boolean; waitingUntil?: string };
 export type AcpSendRequest = { prompt: string; content?: AiContentBlock[]; configuration: AiConfiguration; mcpServers?: AiMcpServer[]; agent?: AiAgent };
 
 /** Shared provider contract. Each provider owns its settings UI metadata. */
