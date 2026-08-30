@@ -16,6 +16,7 @@ interface Window {
     testConnection(value: { id?: string; host: string; port: number; username: string; authenticationMethod: "password" | "privateKey"; password?: string; privateKeyPath?: string; passphrase?: string }): Promise<{ message: string }>;
     saveConnection(value: Partial<GatewayConnection> & { name: string; host: string; port: number; username: string; authenticationMethod: "password" | "privateKey"; password?: string; passphrase?: string }): Promise<GatewayState>;
     deleteConnection(id: string): Promise<GatewayState>;
+    discoverWorkspaceDirectories(connectionId: string): Promise<string[]>;
     saveWorkspace(value: Partial<GatewayWorkspace> & { connectionId: string; name: string; directory: string; remotePort: number }): Promise<GatewayState>;
     deleteWorkspace(id: string): Promise<GatewayState>;
     savePortTunnel(value: Partial<GatewayPortTunnel> & { connectionId: string; port: number }): Promise<GatewayState>;
