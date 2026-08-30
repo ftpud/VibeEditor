@@ -4,6 +4,8 @@ contextBridge.exposeInMainWorld("gateway", {
   get: () => ipcRenderer.invoke("gateway:get"),
   saveRepository: (value: unknown) => ipcRenderer.invoke("gateway:saveRepository", value),
   refreshStatuses: (connectionId?: string) => ipcRenderer.invoke("gateway:refreshStatuses", connectionId),
+  pickPrivateKey: () => ipcRenderer.invoke("gateway:pickPrivateKey"),
+  testConnection: (value: unknown) => ipcRenderer.invoke("gateway:testConnection", value),
   saveConnection: (value: unknown) => ipcRenderer.invoke("gateway:saveConnection", value),
   deleteConnection: (id: string) => ipcRenderer.invoke("gateway:deleteConnection", id),
   saveWorkspace: (value: unknown) => ipcRenderer.invoke("gateway:saveWorkspace", value),
