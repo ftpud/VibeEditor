@@ -70,7 +70,7 @@ multi-surface work).
   only offer history-rewriting actions when repository state is understood; preview
   affected commit/index state and require confirmation if a commit may be published.
   Depends on explicit index operations and remote tracking.
-- [ ] **Git Changes keyboard and selection polish — Small.** Value: make diff review,
+- [x] **Git Changes keyboard and selection polish — Small.** Value: make diff review,
   stage/unstage, rollback, and commit reachable without pointer-heavy tree traversal.
   Constraint: focus, selection, and checked-for-commit paths must remain distinct;
   destructive shortcuts always retain confirmation.
