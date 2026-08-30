@@ -26,6 +26,9 @@ main { min-width: 0; display: flex; flex-direction: column; background: #202124;
 .connection-health.online { background: #294c31; color: #a7d7ae; }
 .connection-health.slow, .connection-health.reconnecting { background: #5c4725; color: #f0ce8a; }
 .connection-health.offline { background: #5d3033; color: #f1afb3; }
+.file-picker { display: flex; gap: 6px; }
+.file-picker input { min-width: 0; flex: 1; }
+.form-success { color: #a7d7ae; }
 .status-dot.connection-online { background: #59a869; }
 .status-dot.connection-slow, .status-dot.connection-reconnecting { background: #e2a33a; }
 .status-dot.connection-offline { background: #d65c5c; }

@@ -24,12 +24,12 @@ Before starting, make sure the two machines have the following:
 | Machine | Required for Gateway |
 | --- | --- |
 | **Local client** | Node.js 20+ and npm, Git (to clone this repository), `tar`, and the platform libraries required by Electron. A `node-pty` compiler toolchain is needed only if npm cannot use its prebuilt binary. |
-| **Remote server** | A Unix-like SSH host reachable with a username and **password** (Gateway does not support SSH keys or an agent), Node.js 20+ and npm for that SSH user, Git, `bash`, `tar`, standard process utilities (`nohup`, `kill`, `sleep`, and `tail`), and permission to create `~/.vibe`, run processes, and modify the selected project directory. It must be able to reach GitHub to clone the fixed `dev` branch. A C/C++ compiler, `make`, and Python 3 are needed only if `node-pty` must be rebuilt. |
+| **Remote server** | A Unix-like SSH host reachable with a username and either a password or an already-authorized SSH private key, Node.js 20+ and npm for that SSH user, Git, `bash`, `tar`, standard process utilities (`nohup`, `kill`, `sleep`, and `tail`), and permission to create `~/.vibe`, run processes, and modify the selected project directory. It must be able to reach the Git repository selected in Gateway settings. A C/C++ compiler, `make`, and Python 3 are needed only if `node-pty` must be rebuilt. |
 
-On the **local client**, clone the branch Gateway deploys, install dependencies, build, and launch Gateway:
+On the **local client**, clone this repository, install dependencies, build, and launch Gateway:
 
 ```bash
-git clone --branch dev https://github.com/ftpud/VibeEditor.git
+git clone https://github.com/ftpud/VibeEditor.git
 cd VibeEditor
 VIBE_SKIP_JDTLS=1 npm install
 npm run build
@@ -40,10 +40,11 @@ npm run gateway
 
 In Gateway's first run:
 
-1. Add an SSH connection (host, port, username, and password).
-2. Add a remote workspace using the absolute path to an existing project directory on that server.
-3. Click **Start server**. Gateway clones or resets `~/.vibe` to `origin/dev`, installs/builds what changed, and starts remote Core on loopback.
-4. Click **Start client** and keep Gateway open while using the editor; it owns the SSH tunnel.
+1. Add an SSH connection with host, port, and username. Choose **Password**, or choose **Private key**, select the local private-key file, and enter its optional passphrase. The matching public key must already be in the remote user's `~/.ssh/authorized_keys`; Gateway does not install or copy public keys. Use **Test connection** to verify the current form values before saving.
+2. Review **Gateway repository settings**. The default repository is `https://github.com/ftpud/VibeEditor` on branch `main`; choose a different repository or branch if needed. Auto-update is enabled by default.
+3. Add a remote workspace using the absolute path to an existing project directory on that server.
+4. Click **Start server**. Gateway clones the selected repository and branch into `~/.vibe`, installs/builds what changed, and starts remote Core on loopback.
+5. Click **Start client** and keep Gateway open while using the editor; it owns the SSH tunnel.
 
 For deployment details, caching behavior, and lifecycle notes, see [Vibe Gateway](#vibe-gateway). Use the direct Core/Desktop commands below only for local development, debugging, or when you intentionally manage Core and its connection yourself.
 
@@ -157,8 +158,8 @@ local Electron/Monaco Desktop
 
 The deployment flow is:
 
-1. **Save a connection and workspace.** Gateway stores the SSH host and remote project directory in its Electron application-data directory. The SSH password is encrypted with Electron `safeStorage`; public-key and SSH-agent authentication are not currently implemented.
-2. **Provision the remote application.** **Start server** connects over SSH and clones `https://github.com/ftpud/VibeEditor` into `~/.vibe`, or fetches and force-resets an existing checkout to `origin/dev`. This is the application installation; the configured project workspace remains in its own remote directory.
+1. **Save a connection and workspace.** Gateway supports password or local SSH private-key authentication. Select a private-key file in the connection dialog and optionally provide its passphrase; the file remains local and is read only by the Electron main process when connecting. The matching public key must already be authorized for the remote user in `~/.ssh/authorized_keys`; Gateway does not install or copy public keys. Passwords and passphrases are encrypted with Electron `safeStorage` and are not shown after saving. Use **Test connection** in the dialog to test the unsaved host, port, username, and selected authentication values before saving. SSH-agent authentication is not currently implemented.
+2. **Provision the remote application.** **Start server** connects over SSH and clones the repository and branch saved in Gateway repository settings into `~/.vibe`. The defaults are `https://github.com/ftpud/VibeEditor` and `main`. With auto-update enabled (the default), an existing checkout is updated and force-reset to the configured branch; with it disabled, Gateway retains the existing checkout. This is the application installation; the configured project workspace remains in its own remote directory.
 3. **Build only when needed.** Gateway records the deployed Git revision in `~/.vibe-build`. If the revision changed, dependencies or build outputs are missing, or `node_modules` is absent, it runs `npm install` and builds ACP, Protocol, Core, and Desktop. Otherwise it reuses the existing build.
 4. **Start remote Core.** Gateway tries the configured Core port and chooses a free fallback when it is occupied. It launches Core with `nohup`, bound only to remote loopback, and passes the configured project directory as the workspace root. Each Gateway workspace gets its own PID and log files in the remote home directory.
 5. **Prepare the local client.** **Start client** identifies the remote deployment by Git revision. If that Desktop build is not already cached locally, Gateway archives the remotely built Electron main process and renderer, downloads them over SFTP, and extracts them under Gateway's application-data directory.
@@ -167,7 +168,7 @@ The deployment flow is:
 
 Keep Gateway open while using a client because it owns the SSH tunnel. Closing Gateway closes its tunnels but leaves remote Core running; **Stop server** closes the tunnel and terminates the Core process recorded for that workspace.
 
-Gateway deploys only committed code from the fixed `dev` branch. It always resets the remote application checkout to `origin/dev` and does not copy uncommitted local source changes.
+Gateway deploys committed code from the repository and branch saved in its settings. With auto-update enabled, it resets the remote application checkout to the configured branch; it never copies uncommitted local source changes.
 
 ## Features
 
@@ -213,7 +214,7 @@ Task Git prompt checkpoints are also stored there as content-addressed snapshots
 - Core exposes one root workspace per process and has no authentication, authorization, or TLS. Anyone who can reach its port can modify files and run commands with Core's operating-system permissions. Do not expose it to the public internet.
 - Filesystem methods reject parent traversal and symlinks escaping the active workspace, but this boundary does not make an exposed Core safe. Text files, useful files, agent files, HTTP bodies, and HTTP responses are limited to 2 MB where applicable; HTTP requests time out after 30 seconds.
 - Task workspaces require the root to be a Git repository. Each task has an independent dependency tree, so run its package installation after switching when needed. Deleting a task forcibly removes its worktree and local task branch. Merging first commits all task changes; smart merge may stash and restore root changes.
-- Gateway accepts username/password authentication only, depends on the fixed public repository and `dev` branch, and owns non-persistent tunnels. Closing Gateway closes its tunnels but does not stop remote Core unless **Stop server** is used.
+- Gateway supports password and local private-key authentication, but not SSH-agent authentication or host-key verification UX. It deploys the saved repository and branch and owns non-persistent tunnels. Closing Gateway closes its tunnels but does not stop remote Core unless **Stop server** is used.
 - Java support is Maven-specific. The downloaded JRE runs JDT LS only; builds, runs, and debugging still depend on suitable project Java/Maven tools on the Core host.
 - The editor opens existing UTF-8 text files only; binary and invalid UTF-8 files are rejected.
 
