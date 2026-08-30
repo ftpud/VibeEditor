@@ -28,7 +28,7 @@ button { color: inherit; }
 .status-toast > button { width: 25px; height: 25px; padding: 0; display: grid; flex: 0 0 25px; place-items: center; border: 0; border-radius: 3px; background: transparent; color: #a8aab0; cursor: pointer; }
 .status-toast > button:hover { background: #3a3c41; color: #ffffff; }
 .status-toast-spinner { animation: task-progress-spin .9s linear infinite; }
-.workspace-row { min-height: 0; flex: 1; display: flex; }
+.workspace-row { min-width: 0; min-height: 0; flex: 1; display: flex; }
 .tool-stripe { width: 30px; flex: 0 0 30px; display: flex; flex-direction: column; align-items: center; padding: 2px 0; overflow-y: auto; overflow-x: hidden; border-right: 1px solid #393b40; background: #2b2d30; }
 .tool-stripe-button { width: 29px; min-height: 78px; padding: 6px 0; display: flex; flex-direction: column; align-items: center; gap: 5px; border: 0; border-left: 2px solid transparent; background: transparent; color: #8b8d91; cursor: pointer; }
 .tool-stripe-button { position: relative; }
@@ -450,7 +450,7 @@ button { color: inherit; }
 .editor-mode-switch button:last-child { border-right: 0; }
 .editor-mode-switch button:hover { background: #3a3c41; color: #e2e3e5; }
 .editor-mode-switch button.active { background: #2e5792; color: white; }
-.editor-area { min-height: 0; flex: 1; position: relative; display: grid; grid-template-rows: minmax(0, 1fr) auto; }
+.editor-area { min-width: 0; min-height: 0; flex: 1; position: relative; display: grid; grid-template-rows: minmax(0, 1fr) auto; overflow: hidden; }
 .editor-status-bar { height: 22px; z-index: 7; display: flex; align-items: center; justify-content: flex-end; border-top: 1px solid #393b40; background: #25272a; color: #a9acb2; font-size: 0.7692rem; }
 .editor-status-bar span, .editor-status-bar button { height: 100%; padding: 0 9px; display: inline-flex; align-items: center; border: 0; border-left: 1px solid transparent; background: transparent; color: inherit; font: inherit; white-space: nowrap; }
 .editor-status-bar button { cursor: pointer; }
