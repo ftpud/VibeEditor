@@ -99,8 +99,8 @@ export type ProtocolOperations = {
   "tasks.create": { payload: { branch: string; existing?: boolean; remote?: boolean }; result: { task: WorkspaceTask } };
   "tasks.createFromPrompt": { payload: { provider?: AiProvider; prompt: string; content?: AiContentBlock[]; configuration: AiConfiguration; mcpServers?: AiMcpServer[]; agent?: AiAgent }; result: { task: WorkspaceTask } };
   "tasks.merge": { payload: { taskId: string; strategy?: "merge" | "smart" }; result: { targetBranch: string } };
-  "tasks.timer.cancel": { payload: { taskId: string }; result: { cancelled: boolean } };
-  "tasks.timer.fire": { payload: { taskId: string }; result: { fired: boolean } };
+  "tasks.timer.cancel": { payload: { taskId?: string }; result: { cancelled: boolean } };
+  "tasks.timer.fire": { payload: { taskId?: string }; result: { fired: boolean } };
   "tasks.switch": { payload: { taskId?: string; includeIgnored?: boolean }; result: { workspace: string; projectName: string; tree: FileTreeNode[]; options: WorkspaceOptions; tasks: WorkspaceTask[]; selectedTaskId?: string } };
   "tasks.delete": { payload: { taskId: string }; result: { tasks: WorkspaceTask[]; selectedTaskId?: string } };
   "ai.providers": { payload: Record<string, never>; result: { providers: AiProviderDescriptor[] } };
