@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { WebSocket } from "ws";
 import { assertSessionChangeAllowed, permissionTargetWorkspace, sendWebSocketData } from "./server.js";
 import { withAppTools } from "./app-tools.js";
+import type { WorkspaceTaskStore } from "./tasks.js";
 
 describe("built-in app tool access", () => {
   it("does not grant tools without an explicit agent allowlist entry", () => {
@@ -21,7 +22,7 @@ describe("permission request task routing", () => {
   const tasks = {
     list: async () => ({ tasks: [{ id: "task-a", name: "A", branch: "a", baseBranch: "main", status: "active" }, { id: "task-b", name: "B", branch: "b", baseBranch: "main", status: "active" }] }),
     taskPath: (taskId: string) => `/tasks/${taskId}/workspace`
-  };
+  } satisfies Pick<WorkspaceTaskStore, "list" | "taskPath">;
 
   it("routes root and simultaneous task requests independently of the selected task", async () => {
     await expect(permissionTargetWorkspace(tasks, "/root")).resolves.toBe("/root");
