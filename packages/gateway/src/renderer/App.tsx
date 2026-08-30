@@ -8,6 +8,7 @@ export function App() {
   const [selected, setSelected] = useState<string>();
   const [runtimes, setRuntimes] = useState<Record<string, GatewayRuntime>>({});
   const [tunnelRuntimes, setTunnelRuntimes] = useState<Record<string, GatewayTunnelRuntime>>({});
+  const [connectionRuntimes, setConnectionRuntimes] = useState<Record<string, GatewayConnectionRuntime>>({});
   const [newTunnelPort, setNewTunnelPort] = useState("");
   const [connectionDialog, setConnectionDialog] = useState<Partial<GatewayConnection> & { password: string }>();
   const [workspaceDialog, setWorkspaceDialog] = useState<Partial<GatewayWorkspace>>();
@@ -15,14 +16,16 @@ export function App() {
   const bridgeReady = Boolean(window.gateway);
   useEffect(() => {
     if (!window.gateway) { setError("Gateway preload failed to initialize. Rebuild and restart the application."); return; }
-    void window.gateway.get().then((result) => { setState(result.state); setRuntimes(result.runtimes); setTunnelRuntimes(result.tunnelRuntimes); setSelected(result.state.connections[0]?.id); }).catch((reason) => setError(reason instanceof Error ? reason.message : String(reason)));
+    void window.gateway.get().then((result) => { setState(result.state); setRuntimes(result.runtimes); setTunnelRuntimes(result.tunnelRuntimes); setConnectionRuntimes(result.connectionRuntimes); setSelected(result.state.connections[0]?.id); }).catch((reason) => setError(reason instanceof Error ? reason.message : String(reason)));
     const stopStatusListener = window.gateway.onStatus((id, status) => setRuntimes((current) => ({ ...current, [id]: status })));
     const stopTunnelListener = window.gateway.onTunnelStatus((id, status) => setTunnelRuntimes((current) => ({ ...current, [id]: status })));
-    return () => { stopStatusListener(); stopTunnelListener(); };
+    const stopConnectionListener = window.gateway.onConnectionStatus((id, status) => setConnectionRuntimes((current) => ({ ...current, [id]: status })));
+    return () => { stopStatusListener(); stopTunnelListener(); stopConnectionListener(); };
   }, []);
   const connection = state.connections.find((item) => item.id === selected);
   const workspaces = useMemo(() => state.workspaces.filter((item) => item.connectionId === selected), [state.workspaces, selected]);
   const connectionTunnels = useMemo(() => state.portTunnels.filter((item) => item.connectionId === selected), [state.portTunnels, selected]);
+  const connectionRuntime = connection ? connectionRuntimes[connection.id] ?? { status: "unknown", message: "Not checked yet" } : undefined;
 
   const action = async (workspace: GatewayWorkspace, operation: "startServer" | "stopServer" | "startClient") => {
     setError("");
@@ -56,10 +59,10 @@ export function App() {
   return <div className="gateway-shell">
     <aside>
       <header><div><Network size={17} /><strong>Connections</strong></div><button title="Add SSH connection" onClick={() => setConnectionDialog({ port: 22, password: "" })}><Plus size={15} /></button></header>
-      <div className="connection-list">{state.connections.map((item) => <button key={item.id} className={item.id === selected ? "selected" : ""} onClick={() => setSelected(item.id)}><Server size={16} /><span><strong>{item.name}</strong><small>{item.username}@{item.host}:{item.port}</small></span></button>)}</div>
+      <div className="connection-list">{state.connections.map((item) => { const current = connectionRuntimes[item.id] ?? { status: "unknown" }; return <button key={item.id} className={item.id === selected ? "selected" : ""} onClick={() => setSelected(item.id)}><div className={`status-dot connection-${current.status}`} /><Server size={16} /><span><strong>{item.name}</strong><small>{item.username}@{item.host}:{item.port}</small></span></button>; })}</div>
     </aside>
     <main>
-      <div className="topbar"><div><HardDrive size={18} /><span>Vibe Gateway</span></div>{connection && <div className="connection-actions"><span>{connection.name}</span><button title="Refresh server status" onClick={() => void window.gateway.refreshStatuses(connection.id)}><RefreshCw size={14} /></button><button title="Edit connection" onClick={() => setConnectionDialog({ ...connection, password: "" })}><Pencil size={14} /></button><button title="Delete connection" onClick={() => void removeConnection(connection)}><Trash2 size={14} /></button></div>}</div>
+      <div className="topbar"><div><HardDrive size={18} /><span>Vibe Gateway</span></div>{connection && <div className="connection-actions"><span>{connection.name}</span><span className={`connection-health ${connectionRuntime!.status}`} title={connectionRuntime!.message}>{connectionHealthName(connectionRuntime!.status)}{connectionRuntime!.latencyMs !== undefined && ` · ${connectionRuntime!.latencyMs} ms`}</span><button title="Refresh SSH and Core status" onClick={() => void window.gateway.refreshStatuses(connection.id)}><RefreshCw size={14} /></button><button title="Edit connection" onClick={() => setConnectionDialog({ ...connection, password: "" })}><Pencil size={14} /></button><button title="Delete connection" onClick={() => void removeConnection(connection)}><Trash2 size={14} /></button></div>}</div>
       {!bridgeReady ? <div className="empty"><Network size={38} /><strong>Gateway failed to initialize</strong><span>Close the application and run <code>npm run gateway</code> again.</span></div> : !connection ? <div className="empty"><Network size={38} /><strong>No SSH connections</strong><span>Add a connection to manage remote Vibe Editor workspaces.</span><button onClick={() => setConnectionDialog({ port: 22, password: "" })}><Plus size={15} /> Add connection</button></div> : <section className="workspace-view">
         <header><div><h1>Remote workspaces</h1><p>{connection.username}@{connection.host}</p></div><button onClick={() => setWorkspaceDialog({ connectionId: connection.id, remotePort: 7331 })}><Plus size={15} /> Add workspace</button></header>
         {error && <div className="error-banner">{error}<button onClick={() => setError("")}><X size={14} /></button></div>}
@@ -92,3 +95,4 @@ function WorkspaceDialog({ value, connectionId, onClose, onSave }: { value: Part
 
 function statusName(status: GatewayRuntime["status"]): string { return { idle: "Stopped", working: "In progress", server: "Server ready", client: "Client running", error: "Failed" }[status]; }
 function tunnelStatusName(status: GatewayTunnelRuntime["status"]): string { return { idle: "Stopped", working: "Connecting", running: "Running", error: "Failed" }[status]; }
+function connectionHealthName(status: GatewayConnectionRuntime["status"]): string { return { unknown: "SSH unchecked", reconnecting: "SSH reconnecting", online: "SSH online", slow: "SSH slow", offline: "SSH offline" }[status]; }

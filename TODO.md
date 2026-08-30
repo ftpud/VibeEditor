@@ -222,7 +222,7 @@ multi-surface work).
   cached Desktop from silently speaking an incompatible protocol to Core. Constraint:
   add an explicit handshake/version range before offering update or rollback; verify
   transferred artifacts and preserve the last known-good client.
-- [ ] **Connection resilience and latency indicators — Small.** Value: explain slow,
+- [x] **Connection resilience and latency indicators — Small.** Value: explain slow,
   reconnecting, tunneled, or offline states across Desktop and Gateway. Constraint:
   avoid aggressive retry loops and distinguish SSH tunnel health from Core health.
 - [ ] **Workspace discovery and path validation — Small.** Value: reduce setup errors

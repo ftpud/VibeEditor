@@ -5,6 +5,7 @@ import { access, copyFile, mkdir, readFile, rm, writeFile } from "node:fs/promis
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { Client, type ConnectConfig } from "ssh2";
+import { connectionHealthForLatency, type ConnectionRuntime } from "./connection-health.js";
 
 type Connection = { id: string; name: string; host: string; port: number; username: string; password: string };
 type Workspace = { id: string; connectionId: string; name: string; directory: string; remotePort: number };
@@ -24,6 +25,7 @@ const runtimes = new Map<string, Runtime>();
 const tunnels = new Map<string, { ssh: Client; server: Server }>();
 const portTunnelRuntimes = new Map<string, TunnelRuntime>();
 const portTunnels = new Map<string, { ssh: Client; server: Server }>();
+const connectionRuntimes = new Map<string, ConnectionRuntime>();
 
 app.name = "Vibe Gateway";
 app.setName("Vibe Gateway");
@@ -60,6 +62,10 @@ function runtime(workspaceId: string, status: Runtime["status"], message: string
 function portTunnelRuntime(tunnelId: string, status: TunnelRuntime["status"], message: string): void {
   const value = { status, message }; portTunnelRuntimes.set(tunnelId, value);
   for (const window of BrowserWindow.getAllWindows()) window.webContents.send("gateway:tunnelStatus", tunnelId, value);
+}
+function connectionRuntime(connectionId: string, value: ConnectionRuntime): void {
+  connectionRuntimes.set(connectionId, value);
+  for (const window of BrowserWindow.getAllWindows()) window.webContents.send("gateway:connectionStatus", connectionId, value);
 }
 async function credentials(connectionId: string): Promise<Connection> {
   const item = (await readState()).connections.find((connection) => connection.id === connectionId);
@@ -99,8 +105,13 @@ async function refreshStatuses(connectionId?: string): Promise<void> {
   for (const workspace of workspaces) groups.set(workspace.connectionId, [...(groups.get(workspace.connectionId) ?? []), workspace]);
   await Promise.all([...groups.entries()].map(async ([currentConnectionId, items]) => {
     let client: Client | undefined;
+    const previous = connectionRuntimes.get(currentConnectionId);
+    connectionRuntime(currentConnectionId, { status: "reconnecting", message: previous?.status === "offline" ? "Reconnecting to SSH host..." : "Checking SSH connection..." });
     try {
+      const startedAt = performance.now();
       client = await connect(await credentials(currentConnectionId));
+      const latencyMs = Math.round(performance.now() - startedAt);
+      connectionRuntime(currentConnectionId, connectionHealthForLatency(latencyMs));
       for (const workspace of items) {
         const pidFile = `~/.vibe-server-${workspace.id}.pid`;
         const result = (await execute(client, `bash -lc ${shell(`if [ -f ${pidFile} ] && kill -0 $(cat ${pidFile}) 2>/dev/null; then echo running; else rm -f ${pidFile}; echo stopped; fi`)}`)).trim();
@@ -108,6 +119,7 @@ async function refreshStatuses(connectionId?: string): Promise<void> {
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
+      connectionRuntime(currentConnectionId, { status: "offline", message: `SSH unavailable: ${message}` });
       for (const workspace of items) runtime(workspace.id, "error", `Status check failed: ${message}`);
     } finally { client?.end(); }
   }));
@@ -259,7 +271,7 @@ async function startClient(workspaceId: string): Promise<void> {
 ipcMain.handle("gateway:get", async () => {
   const state = await readState();
   setTimeout(() => { void refreshStatuses(); }, 0);
-  return { state: publicState(state), runtimes: Object.fromEntries(runtimes), tunnelRuntimes: Object.fromEntries(portTunnelRuntimes) };
+  return { state: publicState(state), runtimes: Object.fromEntries(runtimes), tunnelRuntimes: Object.fromEntries(portTunnelRuntimes), connectionRuntimes: Object.fromEntries(connectionRuntimes) };
 });
 ipcMain.handle("gateway:refreshStatuses", (_event, connectionId?: string) => refreshStatuses(connectionId));
 ipcMain.handle("gateway:saveConnection", async (_event, input: Omit<Connection, "id"> & { id?: string }) => {
