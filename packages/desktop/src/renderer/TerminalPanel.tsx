@@ -1,7 +1,7 @@
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { Terminal } from "@xterm/xterm";
-import { ClipboardPaste, Plus, X } from "lucide-react";
+import { ClipboardPaste, Copy, Pencil, Plus, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { CoreClient } from "./client";
 import type { TerminalGroup, TerminalTab } from "./model";
@@ -19,16 +19,19 @@ type Props = {
   onActivate(id: string): void;
   onCreate(): void;
   onClose(tab: TerminalTab): void;
+  onRename(tab: TerminalTab): void;
+  onDuplicate(tab: TerminalTab): void;
+  onMove(tabId: string, targetTabId: string): void;
   onResizeStart(event: React.PointerEvent): void;
   registerWriter(terminalId: string, writer?: (data: string) => void): void;
   highlightedTerminalIds?: Set<string>;
 };
 
-export function TerminalPanel({ theme, fontFamily, fontSize, lineHeight, client, group, height, onActivate, onCreate, onClose, onResizeStart, registerWriter, highlightedTerminalIds }: Props) {
+export function TerminalPanel({ theme, fontFamily, fontSize, lineHeight, client, group, height, onActivate, onCreate, onClose, onRename, onDuplicate, onMove, onResizeStart, registerWriter, highlightedTerminalIds }: Props) {
   return <section className="terminal-panel" style={{ height }}>
     <div className="terminal-resize-handle" onPointerDown={onResizeStart} />
     <div className="terminal-tabs" role="tablist">
-      {group.tabs.map((tab) => <TerminalTabButton key={tab.id} tab={tab} active={tab.id === group.activeTabId} highlighted={highlightedTerminalIds?.has(tab.terminalId)} onActivate={onActivate} onClose={onClose} />)}
+      {group.tabs.map((tab) => <TerminalTabButton key={tab.id} tab={tab} active={tab.id === group.activeTabId} highlighted={highlightedTerminalIds?.has(tab.terminalId)} onActivate={onActivate} onClose={onClose} onRename={onRename} onDuplicate={onDuplicate} onMove={onMove} />)}
       <button className="terminal-action" title="New terminal" onClick={onCreate}><Plus size={15} /></button>
     </div>
     <div className="terminal-content">
@@ -37,10 +40,11 @@ export function TerminalPanel({ theme, fontFamily, fontSize, lineHeight, client,
   </section>;
 }
 
-export function TerminalTabButton({ tab, active, highlighted, onActivate, onClose }: { tab: TerminalTab; active: boolean; highlighted?: boolean; onActivate(id: string): void; onClose(tab: TerminalTab): void }) {
+export function TerminalTabButton({ tab, active, highlighted, onActivate, onClose, onRename, onDuplicate, onMove }: { tab: TerminalTab; active: boolean; highlighted?: boolean; onActivate(id: string): void; onClose(tab: TerminalTab): void; onRename?(tab: TerminalTab): void; onDuplicate?(tab: TerminalTab): void; onMove?(tabId: string, targetTabId: string): void }) {
   const statusLabel = tab.status === "running" ? "running" : tab.status;
   const visibleStatus = tab.status === "running" ? "" : ` (${tab.status})`;
-  return <button
+  const [menu, setMenu] = useState<{ x: number; y: number }>();
+  return <><button
     className={`terminal-tab ${active ? "active" : ""} ${highlighted ? "run-config-running" : ""}`}
     role="tab"
     aria-selected={active}
@@ -52,10 +56,20 @@ export function TerminalTabButton({ tab, active, highlighted, onActivate, onClos
       onClose(tab);
     }}
     onClick={(event) => { if (event.button === 0) onActivate(tab.id); }}
+    draggable
+    onDragStart={(event) => { event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/plain", tab.id); }}
+    onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = "move"; }}
+    onDrop={(event) => { event.preventDefault(); const sourceId = event.dataTransfer.getData("text/plain"); if (sourceId && sourceId !== tab.id) onMove?.(sourceId, tab.id); }}
+    onContextMenu={(event) => { event.preventDefault(); setMenu({ x: Math.min(event.clientX, window.innerWidth - 160), y: Math.min(event.clientY, window.innerHeight - 74) }); }}
   >
     <span>{tab.title}{visibleStatus}</span>
     <span className="close" title={`Close ${tab.title}`} onClick={(event) => { event.stopPropagation(); onClose(tab); }}><X size={13} /></span>
-  </button>;
+  </button>
+    {menu && <div className="terminal-context-menu terminal-tab-menu" style={{ left: menu.x, top: menu.y }} onMouseDown={(event) => event.stopPropagation()}>
+      <button onClick={() => { setMenu(undefined); onRename?.(tab); }}><Pencil size={14} /><span>Rename</span></button>
+      <button onClick={() => { setMenu(undefined); onDuplicate?.(tab); }}><Copy size={14} /><span>Duplicate</span></button>
+    </div>}
+  </>;
 }
 
 function TerminalView({ theme, fontFamily, fontSize, lineHeight, client, tab, active, registerWriter }: { theme: AppTheme; fontFamily: string; fontSize: number; lineHeight: number; client: CoreClient; tab: TerminalTab; active: boolean; registerWriter: Props["registerWriter"] }) {

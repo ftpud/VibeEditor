@@ -35,7 +35,8 @@ export type WorkspaceOptions = {
   gitCommitMessage?: string;
 };
 export type FileColor = "red" | "orange" | "yellow" | "green" | "blue" | "purple" | "gray";
-export type WorkspaceTerminalOptions = { tabs: { title: string; terminalId?: string }[]; activeTabIndex?: number; panelOpen: boolean };
+/** Durable terminal-tab metadata. The display name is UI state, not a PTY identity. */
+export type WorkspaceTerminalOptions = { tabs: { displayName: string; terminalId?: string }[]; activeTabIndex?: number; panelOpen: boolean };
 export type TerminalSessionSnapshot = { terminalId: string; status: "running" | "exited"; output: string; exitCode?: number };
 export type WorkspaceTask = { id: string; name: string; branch: string; baseBranch: string; status: "active" | "finished" };
 export type { AiAgent, AiCommand, AiConfiguration, AiContentBlock, AiMessage, AiModel, AiMcpServer, AiOption, AiPermissionRequest, AiProvider, AiProviderCapabilities, AiProviderDescriptor, AiSession, AiSettingsLayout, AiSettingsSection, AiStatus, AiTaskSummary, AiUsage } from "@remote-ide/acp";

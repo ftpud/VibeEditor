@@ -147,7 +147,7 @@ multi-surface work).
 
 ### Terminal
 
-- [ ] **Rename, reorder, and duplicate terminal tabs — Small.** Value: keep multiple
+- [x] **Rename, reorder, and duplicate terminal tabs — Small.** Value: keep multiple
   long-running remote shells understandable. Constraint: persist display metadata
   separately from PTY identity and retain the current rule that closing a tab ends
   its Core process.
