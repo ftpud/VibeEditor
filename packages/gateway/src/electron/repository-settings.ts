@@ -20,6 +20,11 @@ export function normalizeRepositorySettings(value: Partial<RepositorySettings> |
   return { repository, branch, autoUpdate: value?.autoUpdate !== false };
 }
 
+export function repositorySettingsOrDefault(value: Partial<RepositorySettings> | undefined): RepositorySettings {
+  try { return normalizeRepositorySettings(value); }
+  catch { return defaultRepositorySettings; }
+}
+
 export function provisionCommand(settings: RepositorySettings, remoteNodeEnvironment: string): string {
   const { repository, branch, autoUpdate } = normalizeRepositorySettings(settings);
   const quotedRepository = shell(repository);
