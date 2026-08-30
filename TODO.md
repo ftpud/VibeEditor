@@ -225,7 +225,7 @@ multi-surface work).
 - [x] **Connection resilience and latency indicators — Small.** Value: explain slow,
   reconnecting, tunneled, or offline states across Desktop and Gateway. Constraint:
   avoid aggressive retry loops and distinguish SSH tunnel health from Core health.
-- [ ] **Workspace discovery and path validation — Small.** Value: reduce setup errors
+- [x] **Workspace discovery and path validation — Small.** Value: reduce setup errors
   when configuring a remote project. Constraint: remote browsing occurs over the
   authenticated Gateway connection, is bounded to intended locations, and never
   grants Desktop direct filesystem ownership.
