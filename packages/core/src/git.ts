@@ -2,7 +2,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import path from "node:path";
 import { readFile } from "node:fs/promises";
-import type { GitBranch, GitCommit, GitCommitFile, GitDiffHunk, GitRollbackFailure, GitStatusEntry, GitUpstreamStatus } from "@remote-ide/protocol";
+import type { GitBranch, GitCommit, GitCommitFile, GitDiffHunk, GitRollbackFailure, GitStatusEntry, GitTag, GitUpstreamStatus } from "@remote-ide/protocol";
 import { CoreError } from "./errors.js";
 import { WorkspaceFileSystem } from "./filesystem.js";
 
@@ -66,6 +66,29 @@ export class GitService {
   async branches(): Promise<GitBranch[]> {
     const output = await this.git(["for-each-ref", "--format=%(refname)%00%(refname:short)%00%(HEAD)%00", "refs/heads", "refs/remotes"]);
     return output.split("\n").filter(Boolean).map((line) => { const [ref, name, head] = line.split("\0"); return { name: name!, current: head === "*", remote: ref!.startsWith("refs/remotes/") }; }).filter((item) => !item.name.endsWith("/HEAD"));
+  }
+
+  async tags(): Promise<GitTag[]> {
+    const output = await this.git(["for-each-ref", "--format=%(refname:strip=2)%00%(objectname)%00%(objecttype)", "refs/tags"]);
+    return output.split("\n").filter(Boolean).map((line) => {
+      const [name, target, type] = line.split("\0");
+      return { name: name!, target: target!, annotated: type === "tag" };
+    });
+  }
+
+  async createTag(name: string, target: string): Promise<GitTag> {
+    validateTagName(name); validateHash(target);
+    try { await this.git(["cat-file", "-e", `${target}^{commit}`]); }
+    catch { throw new CoreError("INVALID_REQUEST", "Tag target must be an existing commit"); }
+    await this.git(["tag", name, target]);
+    const tag = (await this.tags()).find((item) => item.name === name);
+    if (!tag) throw new CoreError("GIT_FAILED", `Git did not create local tag '${name}'`);
+    return tag;
+  }
+
+  async deleteTag(name: string): Promise<void> {
+    validateTagName(name);
+    await this.git(["tag", "-d", name]);
   }
 
   async checkoutBranch(branch: string, remote = false): Promise<string> {
@@ -216,6 +239,10 @@ export function parseDiffHunks(output: string): GitDiffHunk[] {
 function validateHash(hash: string): void { if (!/^[0-9a-f]{7,64}$/i.test(hash)) throw new CoreError("INVALID_REQUEST", "Invalid commit hash"); }
 function validateRef(ref: string): void { if (!/^[\w./@{}~^:+-]+$/.test(ref)) throw new CoreError("INVALID_REQUEST", "Invalid Git reference"); }
 function validateBranchName(name: string): void { if (!name || !/^[\w./-]+$/.test(name) || name.startsWith("-") || name.includes("..") || name.includes("//") || name.endsWith("/")) throw new CoreError("INVALID_REQUEST", "Invalid Git branch name"); }
+/** Accept a short, unambiguous local tag name; refs/tags/* and revision syntax are deliberately refused. */
+export function validateTagName(name: string): void {
+  if (!name || name.length > 255 || name.startsWith("-") || name.startsWith("refs/") || name === "@" || name === "HEAD" || /[\s~^:?*\\[\x00-\x1f\x7f]/.test(name) || name.includes("@{") || name.includes("..") || name.includes("//") || name.startsWith("/") || name.endsWith("/") || name.endsWith(".") || name.endsWith(".lock") || name.split("/").some((part) => !part || part.startsWith(".") || part.endsWith(".lock"))) throw new CoreError("INVALID_REQUEST", "Invalid or ambiguous local tag name");
+}
 function validatePath(filePath: string): void { if (!filePath || path.isAbsolute(filePath) || filePath.split(/[\\/]/).includes("..")) throw new CoreError("INVALID_REQUEST", "Invalid Git path"); }
 
 export function parseGitLog(output: string): GitCommit[] {

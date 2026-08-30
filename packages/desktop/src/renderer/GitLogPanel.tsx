@@ -1,7 +1,7 @@
 import { DiffEditor } from "@monaco-editor/react";
-import { ChevronDown, ChevronRight, ClipboardPaste, FileDiff, GitBranch, GitCommitVertical, GitCompareArrows, RefreshCw, Search } from "lucide-react";
+import { ChevronDown, ChevronRight, ClipboardPaste, FileDiff, GitBranch, GitCommitVertical, GitCompareArrows, Plus, RefreshCw, Search, Tag, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import type { GitBranch as Branch, GitCommit, GitCommitFile } from "@remote-ide/protocol";
+import type { GitBranch as Branch, GitCommit, GitCommitFile, GitTag } from "@remote-ide/protocol";
 import type { CoreClient } from "./client";
 import { GitCompareDialog } from "./GitCompareDialog";
 import { configureMonacoThemes, monacoTheme } from "./theme";
@@ -10,6 +10,7 @@ type Props = { client: CoreClient; height: number; onResizeStart(event: React.Po
 
 export function GitLogPanel({ client, height, onResizeStart }: Props) {
   const [branches, setBranches] = useState<Branch[]>([]);
+  const [tags, setTags] = useState<GitTag[]>([]);
   const [branch, setBranch] = useState("");
   const [commits, setCommits] = useState<GitCommit[]>([]);
   const [commit, setCommit] = useState<GitCommit>();
@@ -20,7 +21,7 @@ export function GitLogPanel({ client, height, onResizeStart }: Props) {
   const [error, setError] = useState("");
   const [query, setQuery] = useState("");
   const [branchQuery, setBranchQuery] = useState("");
-  const [menu, setMenu] = useState<{ x: number; y: number; reference: string; label: string; path?: string; commit?: boolean }>();
+  const [menu, setMenu] = useState<{ x: number; y: number; reference: string; label: string; path?: string; commit?: boolean; tag?: boolean }>();
   const [compare, setCompare] = useState<{ reference: string; label: string; path?: string }>();
   const [hoveredLane, setHoveredLane] = useState<string>();
   const filteredCommits = commits.filter((item) => `${item.subject} ${item.shortHash} ${item.hash} ${item.author} ${(item.refs ?? []).join(" ")}`.toLowerCase().includes(query.trim().toLowerCase()));
@@ -30,8 +31,9 @@ export function GitLogPanel({ client, height, onResizeStart }: Props) {
   const loadBranches = async () => {
     setLoading(true);
     try {
-      const result = await client.request("git.branches", {});
+      const [result, tagResult] = await Promise.all([client.request("git.branches", {}), client.request("git.tags", {})]);
       setBranches(result.branches);
+      setTags(tagResult.tags);
       setBranch((current) => current || result.branches.find((item) => item.current)?.name || result.branches[0]?.name || "");
       setError("");
     } catch (reason) { setError(reason instanceof Error ? reason.message : "Could not load branches"); }
@@ -66,13 +68,29 @@ export function GitLogPanel({ client, height, onResizeStart }: Props) {
     } catch (reason) { setError(reason instanceof Error ? reason.message : `Could not ${createCommit ? "cherry-pick" : "apply"} commit`); }
     finally { setLoading(false); }
   };
+  const createTag = async () => {
+    if (!commit) return;
+    const name = window.prompt(`Create a local tag at ${commit.shortHash}. This stays local; it will not be pushed.`, "");
+    if (!name?.trim()) return;
+    setLoading(true); setError("");
+    try { const result = await client.request("git.createTag", { name: name.trim(), target: commit.hash }); setTags((current) => [...current.filter((tag) => tag.name !== result.tag.name), result.tag].sort((left, right) => left.name.localeCompare(right.name))); }
+    catch (reason) { setError(reason instanceof Error ? reason.message : "Could not create local tag"); }
+    finally { setLoading(false); }
+  };
+  const deleteTag = async (name: string) => {
+    if (!window.confirm(`Delete local tag '${name}'? This does not delete or change any remote tag.`)) return;
+    setLoading(true); setError(""); setMenu(undefined);
+    try { await client.request("git.deleteTag", { name }); setTags((current) => current.filter((tag) => tag.name !== name)); if (branch === name) setBranch(""); }
+    catch (reason) { setError(reason instanceof Error ? reason.message : "Could not delete local tag"); }
+    finally { setLoading(false); }
+  };
 
   return <section className="git-log-panel" style={{ height }}>
     <div className="terminal-resize-handle" onPointerDown={onResizeStart} />
-    <aside className="git-log-branches"><header><span>Branches</span><button title="Refresh branches" disabled={loading} onClick={() => void loadBranches()}><RefreshCw size={13} /></button></header><label className="git-branch-search"><Search size={12} /><input value={branchQuery} onChange={(event) => setBranchQuery(event.target.value)} placeholder="Find branch" /></label><div className="git-branch-tree"><BranchGroup title="Local" branches={visibleBranches.filter((item) => !item.remote)} selected={branch} onSelect={setBranch} onContextMenu={(event, item) => { event.preventDefault(); setMenu({ x: event.clientX, y: event.clientY, reference: item.name, label: item.name }); }} /><BranchGroup title="Remote" branches={visibleBranches.filter((item) => item.remote)} selected={branch} onSelect={setBranch} onContextMenu={(event, item) => { event.preventDefault(); setMenu({ x: event.clientX, y: event.clientY, reference: item.name, label: item.name }); }} /></div></aside>
+    <aside className="git-log-branches"><header><span>Refs</span><button title="Refresh branches and local tags" disabled={loading} onClick={() => void loadBranches()}><RefreshCw size={13} /></button></header><label className="git-branch-search"><Search size={12} /><input value={branchQuery} onChange={(event) => setBranchQuery(event.target.value)} placeholder="Find branch or tag" /></label><div className="git-branch-tree"><BranchGroup title="Local branches" branches={visibleBranches.filter((item) => !item.remote)} selected={branch} onSelect={setBranch} onContextMenu={(event, item) => { event.preventDefault(); setMenu({ x: event.clientX, y: event.clientY, reference: item.name, label: item.name }); }} /><BranchGroup title="Remote branches" branches={visibleBranches.filter((item) => item.remote)} selected={branch} onSelect={setBranch} onContextMenu={(event, item) => { event.preventDefault(); setMenu({ x: event.clientX, y: event.clientY, reference: item.name, label: item.name }); }} /><TagGroup tags={tags.filter((item) => item.name.toLowerCase().includes(branchQuery.trim().toLowerCase()))} selected={branch} disabled={loading || !commit} onSelect={setBranch} onCreate={() => void createTag()} onContextMenu={(event, item) => { event.preventDefault(); setMenu({ x: event.clientX, y: event.clientY, reference: item.name, label: item.name, tag: true }); }} /></div></aside>
     <section className="git-log-commits"><header><span>Log {branch}</span><label className="git-commit-search"><Search size={12} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search commits" /></label></header><div>{filteredCommits.map((item) => <button className={commit?.hash === item.hash ? "selected" : ""} key={item.hash} onClick={() => void selectCommit(item)} onContextMenu={(event) => { event.preventDefault(); setMenu({ x: event.clientX, y: event.clientY, reference: item.hash, label: `${item.shortHash} ${item.subject}`, commit: true }); }}><CommitGraph row={graph.rows.get(item.hash)} width={graph.width} hoveredLane={hoveredLane} onHover={setHoveredLane} /><span className="commit-subject"><span>{item.subject}</span>{item.refs?.map((ref) => <small className="commit-ref" key={ref}>{ref}</small>)}</span><span className="commit-meta">{item.shortHash} · {item.author}</span><time>{new Date(item.date).toLocaleString()}</time></button>)}</div></section>
     <section className="git-log-details"><header>{commit ? <><span>{commit.subject}</span><code>{commit.shortHash}</code></> : <span>Commit details</span>}</header>{error && <div className="git-log-error">{error}</div>}<div className="commit-files">{files.map((item) => <button className={file?.path === item.path ? "selected" : ""} key={`${item.status}:${item.path}`} onClick={() => void selectFile(item)} onContextMenu={(event) => { event.preventDefault(); if (commit) setMenu({ x: event.clientX, y: event.clientY, reference: commit.hash, label: `${commit.shortHash} · ${item.path}`, path: item.path }); }}><FileDiff size={13} /><span>{item.path}</span><code>{item.status}</code></button>)}</div><div className="commit-diff">{file && diff ? <DiffEditor original={diff.originalContent} modified={diff.modifiedContent} language={languageFor(file.path)} beforeMount={configureMonacoThemes} theme={monacoTheme()} options={{ automaticLayout: true, readOnly: true, renderSideBySide: false, minimap: { enabled: false }, fontSize: 11, scrollBeyondLastLine: false }} /> : <div className="git-log-empty">{commit ? "Select a changed file" : "Select a commit"}</div>}</div></section>
-    {menu && <div className="context-menu-layer" onMouseDown={() => setMenu(undefined)}><div className="context-menu" style={{ left: Math.min(menu.x, window.innerWidth - 220), top: Math.min(menu.y, window.innerHeight - (menu.commit ? 105 : 50)) }} onMouseDown={(event) => event.stopPropagation()}>{menu.commit && <><button disabled={loading} onClick={() => void applyCommit(menu.reference, true)}><GitCommitVertical size={14} /><span>Cherry-pick Commit</span></button><button disabled={loading} onClick={() => void applyCommit(menu.reference, false)}><ClipboardPaste size={14} /><span>Apply to Working Tree</span></button></>}<button onClick={() => { setCompare({ reference: menu.reference, label: menu.label, ...(menu.path ? { path: menu.path } : {}) }); setMenu(undefined); }}><GitCompareArrows size={14} /><span>Compare with Local</span></button></div></div>}
+    {menu && <div className="context-menu-layer" onMouseDown={() => setMenu(undefined)}><div className="context-menu" style={{ left: Math.min(menu.x, window.innerWidth - 220), top: Math.min(menu.y, window.innerHeight - (menu.commit ? 105 : 80)) }} onMouseDown={(event) => event.stopPropagation()}>{menu.commit && <><button disabled={loading} onClick={() => void applyCommit(menu.reference, true)}><GitCommitVertical size={14} /><span>Cherry-pick Commit</span></button><button disabled={loading} onClick={() => void applyCommit(menu.reference, false)}><ClipboardPaste size={14} /><span>Apply to Working Tree</span></button></>}<button onClick={() => { setCompare({ reference: menu.reference, label: menu.label, ...(menu.path ? { path: menu.path } : {}) }); setMenu(undefined); }}><GitCompareArrows size={14} /><span>Compare with Local</span></button>{menu.tag && <button className="danger" disabled={loading} onClick={() => void deleteTag(menu.reference)}><Trash2 size={14} /><span>Delete local tag</span></button>}</div></div>}
     {compare && <GitCompareDialog client={client} reference={compare.reference} label={compare.label} path={compare.path} onClose={() => setCompare(undefined)} />}
   </section>;
 }
@@ -131,6 +149,11 @@ function BranchGroup({ title, branches, selected, onSelect, onContextMenu }: { t
   const [open, setOpen] = useState(true);
   const tree = useMemo(() => branchTree(branches), [branches]);
   return <div className="branch-group"><button className="branch-group-title" onClick={() => setOpen((value) => !value)}>{open ? <ChevronDown size={13} /> : <ChevronRight size={13} />}<span>{title}</span><small>{branches.length}</small></button>{open && tree.map((node) => <BranchTreeNode key={node.path} node={node} depth={0} selected={selected} onSelect={onSelect} onContextMenu={onContextMenu} />)}</div>;
+}
+
+export function TagGroup({ tags, selected, disabled, onSelect, onCreate, onContextMenu }: { tags: GitTag[]; selected: string; disabled: boolean; onSelect(name: string): void; onCreate(): void; onContextMenu(event: React.MouseEvent, tag: GitTag): void }) {
+  const [open, setOpen] = useState(true);
+  return <div className="branch-group"><div className="tag-group-header"><button className="branch-group-title" onClick={() => setOpen((value) => !value)}>{open ? <ChevronDown size={13} /> : <ChevronRight size={13} />}<Tag size={13} /><span>Local tags</span><small>{tags.length}</small></button><button className="tag-create" title={disabled ? "Select a commit to create a local tag" : "Create local tag at selected commit"} aria-label="Create local tag" disabled={disabled} onClick={onCreate}><Plus size={13} /></button></div>{open && <p className="tag-local-note">Create/delete affects this local repository only.</p>}{open && tags.map((tag) => <button className={`branch-row ${selected === tag.name ? "selected" : ""}`} key={tag.name} onClick={() => onSelect(tag.name)} onContextMenu={(event) => onContextMenu(event, tag)}><Tag size={13} /><span>{tag.name}</span><small title={tag.target}>{tag.target.slice(0, 7)}{tag.annotated ? " · annotated" : ""}</small></button>)}</div>;
 }
 
 type BranchNode = { name: string; path: string; branch?: Branch; children: BranchNode[] };
