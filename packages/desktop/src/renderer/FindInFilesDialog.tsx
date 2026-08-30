@@ -24,6 +24,10 @@ function highlightMatch(preview: string, query: string, matchCase: boolean) {
   return <>{preview.slice(0, index)}<mark>{preview.slice(index, index + query.length)}</mark>{preview.slice(index + query.length)}</>;
 }
 
+function contextLine(line: { line: number; text: string; truncated: boolean }) {
+  return <span className="find-context-line" key={line.line}><span>{line.line}</span><code title={line.text}>{line.text}{line.truncated && "…"}</code></span>;
+}
+
 export function FindInFilesDialog({ client, scope, onClose, onNavigate }: { client: CoreClient; scope: string; onClose(): void; onNavigate(result: SearchResult, matchLength: number): void }) {
   const [query, setQuery] = useState("");
   const [matchCase, setMatchCase] = useState(false);
@@ -109,7 +113,13 @@ export function FindInFilesDialog({ client, scope, onClose, onNavigate }: { clie
                   <span className="find-group-count">{group.length}</span>
                 </button>
                 {!collapsed && group.map((match, index) => <button type="button" className={selected === match ? "selected" : ""} key={`${match.line}:${match.column}:${index}`} title={path} aria-label={`${path}, line ${match.line}, column ${match.column}`} onClick={() => setSelected(match)} onDoubleClick={() => onNavigate(match, query.length)}>
-                  <code title={match.preview}>{highlightMatch(match.preview, query, matchCase)}</code>
+                  <span className="find-match-content">
+                    {match.context?.truncatedBefore && <span className="find-context-omission" aria-label="Earlier lines omitted">…</span>}
+                    {match.context?.before.map(contextLine)}
+                    <span className="find-context-line find-context-match"><span>{match.line}</span><code title={match.preview}>{highlightMatch(match.preview, query, matchCase)}{match.previewTruncated && "…"}</code></span>
+                    {match.context?.after.map(contextLine)}
+                    {match.context?.truncatedAfter && <span className="find-context-omission" aria-label="Later lines omitted">…</span>}
+                  </span>
                   <span className="find-location">{match.line}:{match.column}</span>
                 </button>)}
               </section>;
