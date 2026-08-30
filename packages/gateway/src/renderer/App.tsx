@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type FormEvent } from "react";
-import { Cable, CircleStop, HardDrive, Laptop, Network, Pencil, Play, Plus, RefreshCw, Server, Trash2, X } from "lucide-react";
+import { Cable, CircleStop, HardDrive, Laptop, Network, Pencil, Play, Plus, RefreshCw, Server, Settings, Trash2, X } from "lucide-react";
 
 const emptyState: GatewayState = { connections: [], workspaces: [], portTunnels: [] };
 
@@ -9,14 +9,16 @@ export function App() {
   const [runtimes, setRuntimes] = useState<Record<string, GatewayRuntime>>({});
   const [tunnelRuntimes, setTunnelRuntimes] = useState<Record<string, GatewayTunnelRuntime>>({});
   const [connectionRuntimes, setConnectionRuntimes] = useState<Record<string, GatewayConnectionRuntime>>({});
+  const [repository, setRepository] = useState<GatewayRepositorySettings>();
   const [newTunnelPort, setNewTunnelPort] = useState("");
   const [connectionDialog, setConnectionDialog] = useState<Partial<GatewayConnection> & { password: string }>();
   const [workspaceDialog, setWorkspaceDialog] = useState<Partial<GatewayWorkspace>>();
+  const [repositoryDialog, setRepositoryDialog] = useState<GatewayRepositorySettings>();
   const [error, setError] = useState("");
   const bridgeReady = Boolean(window.gateway);
   useEffect(() => {
     if (!window.gateway) { setError("Gateway preload failed to initialize. Rebuild and restart the application."); return; }
-    void window.gateway.get().then((result) => { setState(result.state); setRuntimes(result.runtimes); setTunnelRuntimes(result.tunnelRuntimes); setConnectionRuntimes(result.connectionRuntimes); setSelected(result.state.connections[0]?.id); }).catch((reason) => setError(reason instanceof Error ? reason.message : String(reason)));
+    void window.gateway.get().then((result) => { setState(result.state); setRepository(result.repository); setRuntimes(result.runtimes); setTunnelRuntimes(result.tunnelRuntimes); setConnectionRuntimes(result.connectionRuntimes); setSelected(result.state.connections[0]?.id); }).catch((reason) => setError(reason instanceof Error ? reason.message : String(reason)));
     const stopStatusListener = window.gateway.onStatus((id, status) => setRuntimes((current) => ({ ...current, [id]: status })));
     const stopTunnelListener = window.gateway.onTunnelStatus((id, status) => setTunnelRuntimes((current) => ({ ...current, [id]: status })));
     const stopConnectionListener = window.gateway.onConnectionStatus((id, status) => setConnectionRuntimes((current) => ({ ...current, [id]: status })));
@@ -62,7 +64,7 @@ export function App() {
       <div className="connection-list">{state.connections.map((item) => { const current = connectionRuntimes[item.id] ?? { status: "unknown" }; return <button key={item.id} className={item.id === selected ? "selected" : ""} onClick={() => setSelected(item.id)}><div className={`status-dot connection-${current.status}`} /><Server size={16} /><span><strong>{item.name}</strong><small>{item.username}@{item.host}:{item.port}</small></span></button>; })}</div>
     </aside>
     <main>
-      <div className="topbar"><div><HardDrive size={18} /><span>Vibe Gateway</span></div>{connection && <div className="connection-actions"><span>{connection.name}</span><span className={`connection-health ${connectionRuntime!.status}`} title={connectionRuntime!.message}>{connectionHealthName(connectionRuntime!.status)}{connectionRuntime!.latencyMs !== undefined && ` · ${connectionRuntime!.latencyMs} ms`}</span><button title="Refresh SSH and Core status" onClick={() => void window.gateway.refreshStatuses(connection.id)}><RefreshCw size={14} /></button><button title="Edit connection" onClick={() => setConnectionDialog({ ...connection, password: "" })}><Pencil size={14} /></button><button title="Delete connection" onClick={() => void removeConnection(connection)}><Trash2 size={14} /></button></div>}</div>
+      <div className="topbar"><div><HardDrive size={18} /><span>Vibe Gateway</span></div><div className="connection-actions">{connection && <><span>{connection.name}</span><span className={`connection-health ${connectionRuntime!.status}`} title={connectionRuntime!.message}>{connectionHealthName(connectionRuntime!.status)}{connectionRuntime!.latencyMs !== undefined && ` · ${connectionRuntime!.latencyMs} ms`}</span><button title="Refresh SSH and Core status" onClick={() => void window.gateway.refreshStatuses(connection.id)}><RefreshCw size={14} /></button><button title="Edit connection" onClick={() => setConnectionDialog({ ...connection, password: "" })}><Pencil size={14} /></button><button title="Delete connection" onClick={() => void removeConnection(connection)}><Trash2 size={14} /></button></>}<button title="Gateway repository settings" aria-label="Gateway repository settings" onClick={() => repository && setRepositoryDialog(repository)}><Settings size={15} /></button></div></div>
       {!bridgeReady ? <div className="empty"><Network size={38} /><strong>Gateway failed to initialize</strong><span>Close the application and run <code>npm run gateway</code> again.</span></div> : !connection ? <div className="empty"><Network size={38} /><strong>No SSH connections</strong><span>Add a connection to manage remote Vibe Editor workspaces.</span><button onClick={() => setConnectionDialog({ port: 22, password: "" })}><Plus size={15} /> Add connection</button></div> : <section className="workspace-view">
         <header><div><h1>Remote workspaces</h1><p>{connection.username}@{connection.host}</p></div><button onClick={() => setWorkspaceDialog({ connectionId: connection.id, remotePort: 7331 })}><Plus size={15} /> Add workspace</button></header>
         {error && <div className="error-banner">{error}<button onClick={() => setError("")}><X size={14} /></button></div>}
@@ -78,7 +80,14 @@ export function App() {
     </main>
     {bridgeReady && connectionDialog && <ConnectionDialog value={connectionDialog} onClose={() => setConnectionDialog(undefined)} onSave={async (value) => { const next = await window.gateway.saveConnection(value); setState(next); setSelected(value.id ?? next.connections.at(-1)?.id); setConnectionDialog(undefined); }} />}
     {bridgeReady && workspaceDialog && connection && <WorkspaceDialog value={workspaceDialog} connectionId={connection.id} onClose={() => setWorkspaceDialog(undefined)} onSave={async (value) => { setState(await window.gateway.saveWorkspace(value)); setWorkspaceDialog(undefined); }} />}
+    {bridgeReady && repositoryDialog && <RepositoryDialog value={repositoryDialog} onClose={() => setRepositoryDialog(undefined)} onSave={async (value) => { const saved = await window.gateway.saveRepository(value); setRepository(saved); setRepositoryDialog(undefined); }} />}
   </div>;
+}
+
+function RepositoryDialog({ value, onClose, onSave }: { value: GatewayRepositorySettings; onClose(): void; onSave(value: GatewayRepositorySettings): Promise<void> }) {
+  const [form, setForm] = useState(value); const [saving, setSaving] = useState(false); const [error, setError] = useState("");
+  const submit = async (event: FormEvent) => { event.preventDefault(); setSaving(true); setError(""); try { await onSave({ repository: form.repository.trim(), branch: form.branch.trim(), autoUpdate: form.autoUpdate }); } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); setSaving(false); } };
+  return <div className="dialog-layer"><form className="dialog" onSubmit={(event) => void submit(event)}><header><strong>Gateway repository settings</strong><button type="button" onClick={onClose}><X size={15} /></button></header><p className="dialog-help">Gateway clones this source on SSH hosts when starting a server.</p><label>Git repository URL<input required value={form.repository} onChange={(event) => setForm({ ...form, repository: event.target.value })} placeholder="https://github.com/org/repository.git" /></label><label>Branch<input required value={form.branch} onChange={(event) => setForm({ ...form, branch: event.target.value })} placeholder="main" /></label><label className="checkbox-field"><input type="checkbox" checked={form.autoUpdate} onChange={(event) => setForm({ ...form, autoUpdate: event.target.checked })} />Automatically fetch and deploy branch updates</label>{error && <div className="form-error">{error}</div>}<footer><button type="button" onClick={onClose}>Cancel</button><button className="primary" disabled={saving}>{saving ? "Saving..." : "Save settings"}</button></footer></form></div>;
 }
 
 function ConnectionDialog({ value, onClose, onSave }: { value: Partial<GatewayConnection> & { password: string }; onClose(): void; onSave(value: Partial<GatewayConnection> & { name: string; host: string; port: number; username: string; password: string }): Promise<void> }) {
