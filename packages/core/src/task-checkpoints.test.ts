@@ -42,4 +42,12 @@ describe("TaskCheckpointStore", () => {
     const restarted = new TaskCheckpointStore(workspace, path.join(path.dirname(workspace), "state")); await restarted.recover();
     expect((await restarted.history())[0]).toMatchObject({ id, status: "interrupted", files: [expect.objectContaining({ path: "tracked.txt", status: "M" })] });
   });
+
+  it("keeps a compact redacted handoff summary with usage and the resulting commit", async () => {
+    const { store } = await fixture(); const id = await store.begin("codex", "Use api_key=super-secret-value", "session", "prompt", { model: "model-a", reasoning: "low", agent: { name: "Oleg", fingerprint: "agent" }, attachments: [{ name: "brief.md", kind: "resource" }] });
+    await store.complete(id, "completed", { usage: { total: 10, input: 4, output: 6 } });
+    const checkpoint = (await store.history())[0]!;
+    expect(checkpoint.prompt).toContain("[REDACTED]");
+    expect(checkpoint.provenance).toMatchObject({ model: "model-a", agent: { name: "Oleg" }, attachments: [{ name: "brief.md" }], usage: { total: 10 }, commit: expect.stringMatching(/^[0-9a-f]{40}$/) });
+  });
 });
