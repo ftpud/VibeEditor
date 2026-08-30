@@ -85,6 +85,9 @@ h1 { font-size: 18px; font-weight: 600; }
 .dialog label { margin-bottom: 11px; display: flex; flex-direction: column; gap: 5px; color: #b7b9bd; }
 .dialog input { width: 100%; height: 31px; padding: 0 8px; border: 1px solid #55585e; border-radius: 3px; outline: none; background: #1f2022; }
 .dialog input:focus { border-color: #3574f0; }
+.dialog-help { margin: -2px 0 13px; color: #92959b; line-height: 1.45; }
+.dialog .checkbox-field { flex-direction: row; align-items: center; gap: 8px; }
+.dialog .checkbox-field input { width: 15px; height: 15px; }
 .field-row { display: grid; grid-template-columns: 1fr 92px; gap: 10px; }
 .dialog footer { margin-top: 15px; display: flex; justify-content: flex-end; gap: 7px; }
 .dialog footer button { height: 31px; padding: 0 12px; border: 1px solid #51545a; border-radius: 3px; background: #37393d; }

@@ -6,20 +6,19 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { Client, type ConnectConfig } from "ssh2";
 import { connectionHealthForLatency, type ConnectionRuntime } from "./connection-health.js";
+import { defaultRepositorySettings, normalizeRepositorySettings, provisionCommand, repositorySettingsOrDefault, type RepositorySettings } from "./repository-settings.js";
 
 type Connection = { id: string; name: string; host: string; port: number; username: string; password: string };
 type Workspace = { id: string; connectionId: string; name: string; directory: string; remotePort: number };
 type PortTunnel = { id: string; connectionId: string; port: number };
 type StoredConnection = Omit<Connection, "password"> & { password: string };
-type State = { connections: StoredConnection[]; workspaces: Workspace[]; portTunnels: PortTunnel[] };
+type State = { connections: StoredConnection[]; workspaces: Workspace[]; portTunnels: PortTunnel[]; repository: RepositorySettings };
 type PublicState = { connections: Omit<Connection, "password">[]; workspaces: Workspace[]; portTunnels: PortTunnel[] };
 type Runtime = { status: "idle" | "working" | "server" | "client" | "error"; message: string };
 type TunnelRuntime = { status: "idle" | "working" | "running" | "error"; message: string };
 
 const directory = path.dirname(fileURLToPath(import.meta.url));
 const appIcon = path.join(directory, "../assets/app-icon.png");
-const repository = "https://github.com/ftpud/VibeEditor";
-const repositoryBranch = "dev";
 const remoteNodeEnvironment = `export PATH="$HOME/.local/bin:$HOME/.volta/bin:$HOME/.fnm:$HOME/.nvm/versions/node/current/bin:/usr/local/bin:$PATH"; export NVM_DIR="$HOME/.nvm"; if [ -s "$NVM_DIR/nvm.sh" ]; then . "$NVM_DIR/nvm.sh"; fi; command -v npm >/dev/null 2>&1 || { echo "npm was not found on the SSH host. Install Node.js 20+ for this user or configure NVM in ~/.bashrc." >&2; exit 127; }`;
 const runtimes = new Map<string, Runtime>();
 const tunnels = new Map<string, { ssh: Client; server: Server }>();
@@ -37,9 +36,9 @@ function stateFile(): string { return path.join(app.getPath("userData"), "gatewa
 async function readState(): Promise<State> {
   try {
     const state = JSON.parse(await readFile(stateFile(), "utf8")) as Partial<State>;
-    return { connections: state.connections ?? [], workspaces: state.workspaces ?? [], portTunnels: state.portTunnels ?? [] };
+    return { connections: state.connections ?? [], workspaces: state.workspaces ?? [], portTunnels: state.portTunnels ?? [], repository: repositorySettingsOrDefault(state.repository) };
   }
-  catch { return { connections: [], workspaces: [], portTunnels: [] }; }
+  catch { return { connections: [], workspaces: [], portTunnels: [], repository: defaultRepositorySettings }; }
 }
 async function saveState(state: State): Promise<void> {
   await mkdir(path.dirname(stateFile()), { recursive: true });
@@ -124,8 +123,8 @@ async function refreshStatuses(connectionId?: string): Promise<void> {
     } finally { client?.end(); }
   }));
 }
-async function provision(client: Client): Promise<{ commit: string; rebuilt: boolean }> {
-  const command = `set -e; ${remoteNodeEnvironment}; if [ -d ~/.vibe/.git ]; then git -C ~/.vibe fetch origin ${repositoryBranch}; git -C ~/.vibe checkout --force -B ${repositoryBranch} origin/${repositoryBranch}; else rm -rf ~/.vibe; git clone --branch ${repositoryBranch} --single-branch ${repository} ~/.vibe; fi; cd ~/.vibe; head=$(git rev-parse HEAD); rebuilt=0; if [ ! -f ~/.vibe-build ] || [ "$(cat ~/.vibe-build)" != "$head" ] || [ ! -f packages/core/dist/index.js ] || [ ! -f packages/desktop/dist-electron/main.js ] || [ ! -f packages/desktop/dist-renderer/index.html ] || [ ! -d node_modules ] || ! node -e "require('node-pty')" >/dev/null 2>&1; then VIBE_SKIP_JDTLS=1 npm install; if ! node -e "require('node-pty')" >/dev/null 2>&1; then echo "Repairing the node-pty native module for $(uname -s)-$(uname -m)..."; if ! npm rebuild node-pty; then echo "node-pty could not be built. Install a C/C++ compiler, make, and Python 3 on the SSH host, then try again." >&2; exit 1; fi; fi; node -e "require('node-pty')" >/dev/null 2>&1 || { echo "node-pty is still unavailable after rebuilding it." >&2; exit 1; }; rm -rf packages/acp/dist packages/protocol/dist packages/core/dist packages/desktop/dist-electron packages/desktop/dist-renderer; npm run build -w @remote-ide/acp; npm run build -w @remote-ide/protocol; npm run build -w @remote-ide/core; npm run build -w @remote-ide/desktop; printf '%s' "$head" > ~/.vibe-build; rebuilt=1; fi; printf '\nVIBE_RESULT:%s:%s\n' "$head" "$rebuilt"`;
+async function provision(client: Client, settings: RepositorySettings): Promise<{ commit: string; rebuilt: boolean }> {
+  const command = provisionCommand(settings, remoteNodeEnvironment);
   const output = await execute(client, `bash -lc ${shell(command)}`);
   const match = output.match(/VIBE_RESULT:([0-9a-f]{40,64}):([01])/);
   if (!match?.[1]) throw new Error("Remote Git revision could not be determined");
@@ -135,7 +134,7 @@ async function startServer(workspaceId: string): Promise<{ remotePort: number }>
   const { workspace, connection } = await withWorkspace(workspaceId); runtime(workspaceId, "working", "Updating and building remote server...");
   const client = await connect(connection);
   try {
-    const build = await provision(client);
+    const build = await provision(client, (await readState()).repository);
     const portScript = `const net=require("net");const preferred=${workspace.remotePort};let fallback=false;const open=port=>{const server=net.createServer();server.unref();server.once("error",error=>{if(error.code==="EADDRINUSE"&&!fallback){fallback=true;open(0);return}throw error});server.listen(port,"127.0.0.1",()=>{console.log(server.address().port);server.close()})};open(preferred)`;
     const selectedPort = Number((await execute(client, `bash -lc ${shell(`${remoteNodeEnvironment}; node -e ${shell(portScript)}`)}`)).trim());
     if (!Number.isInteger(selectedPort) || selectedPort < 1) throw new Error("Could not allocate a remote Core port");
@@ -271,8 +270,9 @@ async function startClient(workspaceId: string): Promise<void> {
 ipcMain.handle("gateway:get", async () => {
   const state = await readState();
   setTimeout(() => { void refreshStatuses(); }, 0);
-  return { state: publicState(state), runtimes: Object.fromEntries(runtimes), tunnelRuntimes: Object.fromEntries(portTunnelRuntimes), connectionRuntimes: Object.fromEntries(connectionRuntimes) };
+  return { state: publicState(state), repository: state.repository, runtimes: Object.fromEntries(runtimes), tunnelRuntimes: Object.fromEntries(portTunnelRuntimes), connectionRuntimes: Object.fromEntries(connectionRuntimes) };
 });
+ipcMain.handle("gateway:saveRepository", async (_event, input: Partial<RepositorySettings>) => { if (!input.repository?.trim() || !input.branch?.trim()) throw new Error("Repository URL and branch are required"); const state = await readState(); state.repository = normalizeRepositorySettings(input); await saveState(state); return state.repository; });
 ipcMain.handle("gateway:refreshStatuses", (_event, connectionId?: string) => refreshStatuses(connectionId));
 ipcMain.handle("gateway:saveConnection", async (_event, input: Omit<Connection, "id"> & { id?: string }) => {
   const state = await readState(); const existing = input.id ? state.connections.find((item) => item.id === input.id) : undefined;
