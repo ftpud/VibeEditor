@@ -16,6 +16,7 @@ import { JdtLanguageService } from "./jdtls.js";
 import { WorkspaceTaskStore } from "./tasks.js";
 import { UsefulFilesStore } from "./useful-files.js";
 import { AgentsStore } from "./agents.js";
+import { RunConfigService } from "./run-configs.js";
 import { executeHttpRequest } from "./http.js";
 import { summarizeAiSessions } from "./ai/summary.js";
 import { createAcpRegistry, type AcpRegistry } from "./ai/index.js";
@@ -75,13 +76,27 @@ export async function createServer(host: string, port: number, workspacePath: st
   const server = new WebSocketServer({ host, port });
   const activeSessions = new Set<WebSocket>();
   const terminalSubscriptions = new Map<WebSocket, { workspace: string; terminalIds: Set<string> }>();
+  let runConfigs: RunConfigService;
   const terminalHost = new TerminalSessionHost((event) => {
+    runConfigs?.onTerminalEvent(event);
     const message: ServerEvent = event.type === "output"
       ? { type: "terminal.output", payload: { terminalId: event.terminalId, data: event.data } }
       : { type: "terminal.exit", payload: { terminalId: event.terminalId, exitCode: event.exitCode } };
     const encoded = JSON.stringify(message);
     for (const [socket, subscription] of terminalSubscriptions) {
       if (subscription.workspace === event.workspace && subscription.terminalIds.has(event.terminalId)) sendWebSocketData(socket, encoded);
+    }
+  });
+  runConfigs = new RunConfigService(terminalHost, (changedWorkspace) => {
+    void runConfigs.list(changedWorkspace).then((configs) => {
+      const encoded = JSON.stringify({ type: "runConfig.changed", payload: { workspace: changedWorkspace, configs } } satisfies ServerEvent);
+      for (const [socket, subscription] of terminalSubscriptions) if (subscription.workspace === path.resolve(changedWorkspace)) sendWebSocketData(socket, encoded);
+    });
+  });
+  const globalRunConfigWatcher = chokidar.watch(runConfigs.directory(rootWorkspace, "global"), { ignoreInitial: true, depth: 0, awaitWriteFinish: { stabilityThreshold: 150, pollInterval: 50 } });
+  globalRunConfigWatcher.on("all", () => {
+    for (const changedWorkspace of new Set([...terminalSubscriptions.values()].map((subscription) => subscription.workspace))) {
+      void runConfigs.list(changedWorkspace).then((configs) => { const encoded = JSON.stringify({ type: "runConfig.changed", payload: { workspace: changedWorkspace, configs } } satisfies ServerEvent); for (const [socket, subscription] of terminalSubscriptions) if (subscription.workspace === changedWorkspace) sendWebSocketData(socket, encoded); });
     }
   });
   const appEvents = new AppEventBridge(rootWorkspace);
@@ -154,7 +169,7 @@ export async function createServer(host: string, port: number, workspacePath: st
     .on("addDir", (directory) => broadcastChange("addDir", directory))
     .on("unlinkDir", (directory) => broadcastChange("unlinkDir", directory))
     .on("error", (error) => console.error(`[core] watcher error: ${String(error)}`));
-  server.on("close", () => { terminalHost.closeAll(); void watcher.close(); void gitIndexWatcher.close(); void appEventWatcher.close(); void appCommandWatcher.close(); });
+  server.on("close", () => { terminalHost.closeAll(); void watcher.close(); void gitIndexWatcher.close(); void globalRunConfigWatcher.close(); void appEventWatcher.close(); void appCommandWatcher.close(); });
   server.on("listening", () => console.log(`[core] listening on ws://${host}:${port}`));
   server.on("connection", (socket, request) => {
     const makeServices = async (nextWorkspace: string): Promise<SessionServices> => {
@@ -244,11 +259,14 @@ export async function createServer(host: string, port: number, workspacePath: st
             await watchSwitchedWorkspace(selected.workspace);
           }
         } finally { release?.(); }
-        const result = await handleRequest(services, tasks, acp, usefulFiles, agents, terminalHost, rootWorkspace, parsed);
+        const result = await handleRequest(services, tasks, acp, usefulFiles, agents, terminalHost, runConfigs, rootWorkspace, parsed);
         const terminalSubscription = terminalSubscriptions.get(socket);
         if (terminalSubscription && parsed.type === "terminal.create") terminalSubscription.terminalIds.add((result as { terminalId: string }).terminalId);
         if (terminalSubscription && parsed.type === "terminal.attach" && (result as { session?: { terminalId: string } }).session) terminalSubscription.terminalIds.add(parsed.payload.terminalId);
         if (terminalSubscription && parsed.type === "terminal.close") terminalSubscription.terminalIds.delete(parsed.payload.terminalId);
+        if (terminalSubscription && (parsed.type === "runConfig.run" || parsed.type === "runConfig.restart" || parsed.type === "runConfig.openTerminal")) {
+          const terminalId = (result as { config: { terminalId?: string } }).config.terminalId; if (terminalId) terminalSubscription.terminalIds.add(terminalId);
+        }
         if (parsed.type === "workspace.open") activeSessions.add(socket);
         sendWebSocketData(socket, JSON.stringify({ id, ok: true, result }));
       } catch (error) {
@@ -286,7 +304,7 @@ function parseRequest(data: RawData): Request {
   return value as Request;
 }
 
-async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStore, acp: AcpRegistry, usefulFiles: UsefulFilesStore, agents: AgentsStore, terminalHost: TerminalSessionHost, rootWorkspace: string, request: Request): Promise<unknown> {
+async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStore, acp: AcpRegistry, usefulFiles: UsefulFilesStore, agents: AgentsStore, terminalHost: TerminalSessionHost, runConfigs: RunConfigService, rootWorkspace: string, request: Request): Promise<unknown> {
   const { filesystem, search, git, java, jdt, workspaceState, workspacePath, checkpoints } = services;
   if (request.type !== "workspace.open") filesystem.getWorkspace();
   switch (request.type) {
@@ -368,6 +386,14 @@ async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStor
     case "useful.write": await usefulFiles.write(request.payload.scope, request.payload.name, request.payload.content); return {};
     case "useful.rename": await usefulFiles.rename(request.payload.scope, request.payload.name, request.payload.newName); return {};
     case "useful.delete": await usefulFiles.delete(request.payload.scope, request.payload.name); return {};
+    case "runConfig.list": return { configs: await runConfigs.list(workspacePath) };
+    case "runConfig.create": return { config: await runConfigs.create(workspacePath, request.payload.scope, request.payload.name, request.payload.commands) };
+    case "runConfig.read": return { config: await runConfigs.read(workspacePath, request.payload.scope, request.payload.name) };
+    case "runConfig.write": return { config: await runConfigs.write(workspacePath, request.payload.scope, request.payload.name, request.payload.commands) };
+    case "runConfig.run": return { config: await runConfigs.run(workspacePath, request.payload.scope, request.payload.name) };
+    case "runConfig.stop": return { config: await runConfigs.stop(workspacePath, request.payload.scope, request.payload.name) };
+    case "runConfig.restart": return { config: await runConfigs.restart(workspacePath, request.payload.scope, request.payload.name) };
+    case "runConfig.openTerminal": return { config: await runConfigs.read(workspacePath, request.payload.scope, request.payload.name) };
     case "agents.list": return { agents: await agents.list(workspacePath) };
     case "agents.read": return { content: await agents.read(request.payload.scope, request.payload.name, workspacePath) };
     case "agents.create": await agents.create(request.payload.scope, request.payload.name, workspacePath); return {};

@@ -40,6 +40,9 @@ export type { AiAgent, AiCommand, AiConfiguration, AiContentBlock, AiMessage, Ai
 import type { AiAgent, AiConfiguration, AiContentBlock, AiMcpServer, AiModel, AiProvider, AiProviderDescriptor, AiSession, AiTaskSummary, AiUsage } from "@remote-ide/acp";
 export type UsefulFileScope = "global" | "local";
 export type UsefulFile = { scope: UsefulFileScope; name: string };
+export type RunConfigScope = "global" | "local";
+export type RunConfigStatus = "idle" | "starting" | "running" | "stopping" | "succeeded" | "failed";
+export type RunConfig = { scope: RunConfigScope; name: string; commands: string; status: RunConfigStatus; terminalId?: string; exitCode?: number };
 export type AgentFileScope = "global" | "local" | "workspace";
 export type AgentFileReference = { scope: AgentFileScope; name: string };
 export type AgentFile = { scope: AgentFileScope; name: string; agent: AiAgent };
@@ -118,6 +121,14 @@ export type ProtocolOperations = {
   "useful.write": { payload: { scope: UsefulFileScope; name: string; content: string }; result: Record<string, never> };
   "useful.rename": { payload: { scope: UsefulFileScope; name: string; newName: string }; result: Record<string, never> };
   "useful.delete": { payload: { scope: UsefulFileScope; name: string }; result: Record<string, never> };
+  "runConfig.list": { payload: Record<string, never>; result: { configs: RunConfig[] } };
+  "runConfig.create": { payload: { scope: RunConfigScope; name: string; commands: string }; result: { config: RunConfig } };
+  "runConfig.read": { payload: { scope: RunConfigScope; name: string }; result: { config: RunConfig } };
+  "runConfig.write": { payload: { scope: RunConfigScope; name: string; commands: string }; result: { config: RunConfig } };
+  "runConfig.run": { payload: { scope: RunConfigScope; name: string }; result: { config: RunConfig } };
+  "runConfig.stop": { payload: { scope: RunConfigScope; name: string }; result: { config: RunConfig } };
+  "runConfig.restart": { payload: { scope: RunConfigScope; name: string }; result: { config: RunConfig } };
+  "runConfig.openTerminal": { payload: { scope: RunConfigScope; name: string }; result: { config: RunConfig } };
   "agents.list": { payload: Record<string, never>; result: { agents: AgentFile[] } };
   "agents.read": { payload: { scope: AgentFileScope; name: string }; result: { content: string } };
   "agents.create": { payload: { scope: Exclude<AgentFileScope, "workspace">; name: string }; result: Record<string, never> };
@@ -265,6 +276,9 @@ export type ErrorCode =
   | "READ_FAILED"
   | "WRITE_FAILED"
   | "TERMINAL_FAILED"
+  | "RUN_CONFIG_NOT_FOUND"
+  | "RUN_CONFIG_RUNNING"
+  | "RUN_CONFIG_FAILED"
   | "GIT_NOT_REPOSITORY"
   | "GIT_FAILED"
   | "JAVA_NOT_CONFIGURED"
@@ -303,8 +317,9 @@ export type JavaDebugStateEvent = { type: "java.debug.state"; payload: JavaDebug
 export type AiChangedEvent = { type: "ai.changed"; payload: { workspace: string } };
 export type TasksChangedEvent = { type: "tasks.changed"; payload: Record<string, never> };
 export type CommitMessageChangedEvent = { type: "commit-message.changed"; payload: { workspace: string; message: string } };
+export type RunConfigChangedEvent = { type: "runConfig.changed"; payload: { workspace: string; configs: RunConfig[] } };
 
-export type ServerEvent = FilesystemChangedEvent | TerminalOutputEvent | TerminalExitEvent | GitChangedEvent | TaskGitChangedEvent | JavaOutputEvent | JavaExitEvent | JavaDebugStateEvent | AiChangedEvent | TasksChangedEvent | CommitMessageChangedEvent;
+export type ServerEvent = FilesystemChangedEvent | TerminalOutputEvent | TerminalExitEvent | GitChangedEvent | TaskGitChangedEvent | JavaOutputEvent | JavaExitEvent | JavaDebugStateEvent | AiChangedEvent | TasksChangedEvent | CommitMessageChangedEvent | RunConfigChangedEvent;
 
 /**
  * Every request the core accepts. Declaring it as a fully keyed record makes TypeScript
@@ -340,6 +355,14 @@ const requestTypeRegistry: Record<RequestType, true> = {
   "useful.write": true,
   "useful.rename": true,
   "useful.delete": true,
+  "runConfig.list": true,
+  "runConfig.create": true,
+  "runConfig.read": true,
+  "runConfig.write": true,
+  "runConfig.run": true,
+  "runConfig.stop": true,
+  "runConfig.restart": true,
+  "runConfig.openTerminal": true,
   "agents.list": true,
   "agents.read": true,
   "agents.create": true,

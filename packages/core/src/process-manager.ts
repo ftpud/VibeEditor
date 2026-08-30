@@ -26,12 +26,12 @@ export class TerminalSessionHost {
     private readonly createPty: TerminalPtyFactory = defaultPtyFactory
   ) {}
 
-  create(workspace: string, cols: number, rows: number): TerminalSnapshot {
+  create(workspace: string, cols: number, rows: number, cwd = workspace): TerminalSnapshot {
     this.validateSize(cols, rows);
     const terminalId = crypto.randomUUID();
     const scopedWorkspace = path.resolve(workspace);
     try {
-      const pty = this.createPty(scopedWorkspace, cols, rows);
+      const pty = this.createPty(path.resolve(cwd), cols, rows);
       const session: TerminalSession = { id: terminalId, workspace: scopedWorkspace, pty, output: "" };
       this.sessions.set(terminalId, session);
       pty.onData((data) => {
@@ -69,6 +69,11 @@ export class TerminalSessionHost {
     const session = this.get(workspace, terminalId);
     this.sessions.delete(terminalId);
     session.pty?.kill();
+  }
+
+  /** Terminates a PTY while retaining its replay buffer and exit event for reconnect/attach. */
+  terminate(workspace: string, terminalId: string): void {
+    this.getRunning(workspace, terminalId).kill();
   }
 
   closeWorkspace(workspace: string): void {

@@ -633,6 +633,16 @@ button { color: inherit; }
 .floating-window-layer .git-compare-dialog { width: min(1120px, calc(100vw - 40px)); height: min(760px, calc(100vh - 70px)); min-width: 620px; min-height: 360px; position: absolute; resize: both; pointer-events: auto; }
 .floating-window-layer .git-compare-dialog > header { cursor: move; user-select: none; }
 .bottom-tool-bar { height: 27px; flex: 0 0 27px; display: flex; align-items: stretch; border-top: 1px solid #393b40; background: #2b2d30; }
+.run-config-entry.first { margin-left: auto; border-left: 1px solid #45484e; }
+.run-config-entry { min-width: 0; max-width: 180px; }
+.run-config-entry > span:nth-child(2) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.run-config-indicator { width: 7px; height: 7px; flex: 0 0 7px; border-radius: 50%; background: #777; }
+.run-config-indicator.starting, .run-config-indicator.stopping { background: #d6a84b; animation: run-config-pulse 1s infinite; }
+.run-config-indicator.running { background: #59a869; box-shadow: 0 0 5px #59a869; }
+.run-config-indicator.succeeded { background: #6aa9e9; }
+.run-config-indicator.failed { background: #d65c5c; }
+.terminal-tab.run-config-running { box-shadow: inset 0 0 0 1px #59a869; color: #e9fff0; }
+@keyframes run-config-pulse { 50% { opacity: .35; } }
 .bottom-tool-button { min-width: 92px; padding: 0 10px; display: flex; align-items: center; gap: 6px; border: 0; border-bottom: 2px solid transparent; background: transparent; color: #a8aaaf; cursor: pointer; }
 .bottom-tool-button:hover { background: #34363a; color: #e0e1e3; }
 .bottom-tool-button.active { border-bottom-color: #3574f0; background: #1e1f22; color: #f0f0f0; }

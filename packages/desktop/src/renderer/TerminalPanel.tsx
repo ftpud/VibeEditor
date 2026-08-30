@@ -21,13 +21,14 @@ type Props = {
   onClose(tab: TerminalTab): void;
   onResizeStart(event: React.PointerEvent): void;
   registerWriter(terminalId: string, writer?: (data: string) => void): void;
+  highlightedTerminalIds?: Set<string>;
 };
 
-export function TerminalPanel({ theme, fontFamily, fontSize, lineHeight, client, group, height, onActivate, onCreate, onClose, onResizeStart, registerWriter }: Props) {
+export function TerminalPanel({ theme, fontFamily, fontSize, lineHeight, client, group, height, onActivate, onCreate, onClose, onResizeStart, registerWriter, highlightedTerminalIds }: Props) {
   return <section className="terminal-panel" style={{ height }}>
     <div className="terminal-resize-handle" onPointerDown={onResizeStart} />
     <div className="terminal-tabs" role="tablist">
-      {group.tabs.map((tab) => <button key={tab.id} className={`terminal-tab ${tab.id === group.activeTabId ? "active" : ""}`} onClick={() => onActivate(tab.id)}>
+      {group.tabs.map((tab) => <button key={tab.id} className={`terminal-tab ${tab.id === group.activeTabId ? "active" : ""} ${highlightedTerminalIds?.has(tab.terminalId) ? "run-config-running" : ""}`} onClick={() => onActivate(tab.id)}>
         <span>{tab.title}{tab.status === "exited" ? " (exited)" : tab.status === "unavailable" ? " (unavailable)" : ""}</span>
         <span className="close" title={`Close ${tab.title}`} onClick={(event) => { event.stopPropagation(); onClose(tab); }}><X size={13} /></span>
       </button>)}
