@@ -6,7 +6,8 @@ export type AiContentBlock =
   | { type: "image"; data: string; mimeType: string; name?: string }
   | { type: "resource"; uri: string; mimeType?: string; text: string; name?: string }
   | { type: "resource_link"; uri: string; name: string; mimeType?: string; size?: number };
-export type AiMessage = { id: string; role: "user" | "assistant" | "activity" | "error"; text: string; content?: AiContentBlock[]; timestamp: string; /** Effective model for a generated response. */ model?: string; reasoning?: string; /** Model that originated an automated prompt; absent for human prompts. */ senderModel?: string };
+/** `terminalId` is an opaque candidate Core terminal identity. It resolves only in the current workspace and never restores a shell. */
+export type AiMessage = { id: string; role: "user" | "assistant" | "activity" | "error"; text: string; content?: AiContentBlock[]; timestamp: string; terminalId?: string; /** Effective model for a generated response. */ model?: string; reasoning?: string; /** Model that originated an automated prompt; absent for human prompts. */ senderModel?: string };
 export type AiCommand = { name: string; description: string; inputHint?: string };
 export type AiPermissionOption = { optionId: string; name: string; kind: "allow_once" | "allow_always" | "reject_once" | "reject_always" };
 export type AiPermissionRequest = { id: string; title: string; toolCallId: string; details?: string; options: AiPermissionOption[] };

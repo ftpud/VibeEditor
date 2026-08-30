@@ -11,7 +11,7 @@ import type { TaskCheckpointProvenance } from "@remote-ide/protocol";
 import { CoreError } from "../errors.js";
 import { agentFingerprint } from "../agent-profile.js";
 
-type ToolState = { title: string; name?: string; status?: string; command?: string; body: string[]; content: AiContentBlock[]; completion?: string };
+type ToolState = { title: string; name?: string; status?: string; command?: string; body: string[]; content: AiContentBlock[]; completion?: string; terminalId?: string };
 type Runtime = {
   child: ChildProcessWithoutNullStreams;
   connection: ClientSideConnection;
@@ -608,7 +608,7 @@ export abstract class StdioAcpProvider extends AcpProvider {
         runtime.anchors = {};
         const tool: ToolState = { title: update.title, name: update.name ?? undefined, status: update.status ?? undefined, ...toolBody(update) };
         runtime.tools.set(update.toolCallId, tool);
-        session.messages.push({ id: update.toolCallId, role: "activity", text: renderTool(tool), content: tool.content, timestamp: new Date().toISOString() });
+        session.messages.push({ id: update.toolCallId, role: "activity", text: renderTool(tool), content: tool.content, timestamp: new Date().toISOString(), ...(tool.terminalId ? { terminalId: tool.terminalId } : {}) });
         appendTaskCompletion(session, update.toolCallId, tool);
         break;
       }
@@ -621,10 +621,11 @@ export abstract class StdioAcpProvider extends AcpProvider {
         if (next.body.length > 0) tool.body = next.body;
         if (next.content.length > 0) tool.content = next.content;
         if (next.completion) tool.completion = next.completion;
+        if (next.terminalId) tool.terminalId = next.terminalId;
         runtime.tools.set(update.toolCallId, tool);
         const existing = session.messages.find((message) => message.id === update.toolCallId);
-        if (existing) { existing.text = renderTool(tool); existing.content = tool.content; }
-        else session.messages.push({ id: update.toolCallId, role: "activity", text: renderTool(tool), content: tool.content, timestamp: new Date().toISOString() });
+        if (existing) { existing.text = renderTool(tool); existing.content = tool.content; existing.terminalId = tool.terminalId; }
+        else session.messages.push({ id: update.toolCallId, role: "activity", text: renderTool(tool), content: tool.content, timestamp: new Date().toISOString(), ...(tool.terminalId ? { terminalId: tool.terminalId } : {}) });
         appendTaskCompletion(session, update.toolCallId, tool);
         break;
       }
@@ -845,21 +846,22 @@ function contentLabel(content: AiContentBlock): string {
   return `[Workspace resource: ${content.name}]`;
 }
 
-function toolBody(update: { rawInput?: unknown; content?: unknown }): { command?: string; body: string[]; content: AiContentBlock[]; completion?: string } {
+function toolBody(update: { rawInput?: unknown; content?: unknown }): { command?: string; body: string[]; content: AiContentBlock[]; completion?: string; terminalId?: string } {
   const lines: string[] = [];
   const content: AiContentBlock[] = [];
   const input = update.rawInput as Record<string, unknown> | undefined;
   const command = input && typeof input.command === "string" ? input.command : undefined;
   const completion = input && typeof input.summary === "string" ? input.summary.trim() : undefined;
   for (const key of ["path", "filePath", "url", "scope"] as const) if (input && typeof input[key] === "string") lines.push(`${key}: ${input[key]}`);
+  let terminalId: string | undefined;
   for (const item of Array.isArray(update.content) ? update.content : []) {
     const entry = item as { type?: string; content?: { type?: string; text?: string }; path?: string; newText?: string; terminalId?: string };
     if (entry.type === "content" && entry.content?.type === "text" && entry.content.text) lines.push(entry.content.text);
     else if (entry.type === "content" && entry.content?.type === "image") { const block = fromAcpContent(entry.content as ContentBlock); if (block) content.push(block); lines.push("[Image output]"); }
     else if (entry.type === "diff" && entry.path) lines.push(`--- ${entry.path}\n${entry.newText ?? ""}`);
-    else if (entry.type === "terminal" && entry.terminalId) lines.push(`terminal ${entry.terminalId}`);
+    else if (entry.type === "terminal" && entry.terminalId) { terminalId = entry.terminalId; lines.push(`terminal ${entry.terminalId}`); }
   }
-  return { ...(command === undefined ? {} : { command }), body: lines, content, ...(completion ? { completion } : {}) };
+  return { ...(command === undefined ? {} : { command }), body: lines, content, ...(completion ? { completion } : {}), ...(terminalId ? { terminalId } : {}) };
 }
 
 function renderTool(tool: ToolState): string {
