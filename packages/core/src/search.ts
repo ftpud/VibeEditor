@@ -25,10 +25,12 @@ export class WorkspaceSearch {
       for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
         const line = lines[lineIndex]!;
         const haystack = matchCase ? line : line.toLocaleLowerCase();
-        const column = haystack.indexOf(needle);
-        if (column < 0) continue;
-        matches.push({ path: relativePath, line: lineIndex + 1, column: column + 1, preview: line.trim().slice(0, 300) });
-        if (matches.length >= MAX_RESULTS) return { matches, truncated: true };
+        let column = haystack.indexOf(needle);
+        while (column >= 0) {
+          matches.push({ path: relativePath, line: lineIndex + 1, column: column + 1, preview: line.trim().slice(0, 300) });
+          if (matches.length >= MAX_RESULTS) return { matches, truncated: true };
+          column = haystack.indexOf(needle, column + needle.length);
+        }
       }
     }
     return { matches, truncated: false };
