@@ -6,11 +6,11 @@ export type AiContentBlock =
   | { type: "image"; data: string; mimeType: string; name?: string }
   | { type: "resource"; uri: string; mimeType?: string; text: string; name?: string }
   | { type: "resource_link"; uri: string; name: string; mimeType?: string; size?: number };
-export type AiMessage = { id: string; role: "user" | "assistant" | "activity" | "error"; text: string; content?: AiContentBlock[]; timestamp: string };
+export type AiMessage = { id: string; role: "user" | "assistant" | "activity" | "error"; text: string; content?: AiContentBlock[]; timestamp: string; /** Effective model for this generated message. */ model?: string; reasoning?: string };
 export type AiCommand = { name: string; description: string; inputHint?: string };
 export type AiPermissionOption = { optionId: string; name: string; kind: "allow_once" | "allow_always" | "reject_once" | "reject_always" };
 export type AiPermissionRequest = { id: string; title: string; toolCallId: string; details?: string; options: AiPermissionOption[] };
-export type AiSession = { id?: string; createdAt?: string; updatedAt?: string; threadId?: string; model: string; reasoning: string; configuration?: AiConfiguration; availableOptions?: AiOption[]; availableCommands?: AiCommand[]; pendingPermission?: AiPermissionRequest; status: AiStatus; messages: AiMessage[]; contextUsed?: number; contextLimit?: number; tokens?: AiTokenUsage; steering?: boolean; agent?: { name: string; fingerprint: string } };
+export type AiSession = { id?: string; createdAt?: string; updatedAt?: string; threadId?: string; model: string; reasoning: string; configuration?: AiConfiguration; /** One-shot model/reasoning override consumed by the next new turn. */ nextConfiguration?: AiConfiguration; availableOptions?: AiOption[]; availableCommands?: AiCommand[]; pendingPermission?: AiPermissionRequest; status: AiStatus; messages: AiMessage[]; contextUsed?: number; contextLimit?: number; tokens?: AiTokenUsage; steering?: boolean; agent?: { name: string; fingerprint: string } };
 export type AiTokenUsage = { total: number; input: number; output: number; thought?: number; cachedRead?: number; cachedWrite?: number };
 /**
  * Optional catalogue metadata. Everything here is advertised by the agent (ACP
@@ -66,6 +66,8 @@ export abstract class AcpProvider {
   abstract get(workspace: string): Promise<AiSession>;
   abstract models(): Promise<AiModel[]>;
   abstract configure(workspace: string, configuration: AiConfiguration): Promise<AiSession>;
+  /** Queues a one-shot configuration override for the next new turn, including while a turn is running. */
+  abstract configureNext(workspace: string, configuration: AiConfiguration): Promise<AiSession>;
   abstract send(workspace: string, request: AcpSendRequest): Promise<AiSession>;
   abstract interrupt(workspace: string): Promise<AiSession>;
   abstract resolvePermission(workspace: string, requestId: string, optionId?: string): Promise<AiSession>;

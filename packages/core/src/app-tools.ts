@@ -34,6 +34,18 @@ export const appToolDefinitions = [
     }
   },
   {
+    name: "model_switch_next",
+    description: "Use a provider-advertised model and reasoning effort for exactly the next new task turn in this AI session. Calling this during a running turn does not change that turn; steering also does not consume the selection. A later call replaces the pending selection.",
+    inputSchema: {
+      type: "object", additionalProperties: false,
+      properties: {
+        model: { type: "string", minLength: 1, description: "Model id advertised by the provider running this agent." },
+        reasoning: { type: "string", minLength: 1, description: "Reasoning effort advertised for that model." }
+      },
+      required: ["model", "reasoning"]
+    }
+  },
+  {
     name: "task_create",
     description: "Create an isolated Vibe Editor task worktree without starting an agent.",
     inputSchema: {
@@ -162,6 +174,15 @@ export class AppToolService {
       if (prompt.length > 10_000) throw new Error("prompt must be at most 10000 characters");
       const timer = await this.timers.schedule(this.currentWorkspace, this.currentProvider, prompt, requiredInteger(args, "seconds", 1, 604_800));
       return { timer_id: timer.id, status: "waiting", due_at: timer.dueAt, continuation_prompt: timer.prompt };
+    }
+    if (name === "model_switch_next") {
+      if (!this.currentProvider) throw new Error("model switching requires a known invoking AI provider");
+      const model = requiredString(args, "model");
+      const reasoning = requiredString(args, "reasoning");
+      const manager = this.acp.get(this.currentProvider);
+      await validateReasoning(await manager.models(), model, reasoning);
+      await manager.configureNext(this.currentWorkspace, { model, reasoning });
+      return { provider: this.currentProvider, model, reasoning, applies_to: "next_turn" };
     }
     if (name === "task_create") {
       const task = await this.tasks.create(requiredString(args, "branch"), false, false, false);
@@ -331,6 +352,7 @@ function agentReference(args: Record<string, unknown>): AgentArgument {
 async function validateReasoning(models: AiModel[], modelId: string, reasoning: string): Promise<void> {
   const model = models.find((item) => item.id === modelId);
   if (!model) throw new Error(`Model '${modelId}' is not advertised by the selected provider`);
+  if (model.available === false) throw new Error(`Model '${modelId}' is advertised but is not available for the selected provider account`);
   if (!model.reasoningLevels.includes(reasoning)) {
     const supported = model.reasoningLevels.length > 0 ? model.reasoningLevels.join(", ") : "none (omit reasoning to use this model)";
     throw new Error(`reasoning '${reasoning}' is not supported by model '${modelId}'; supported values: ${supported}`);

@@ -106,7 +106,7 @@ export function AiPanel({ provider, providers, session, sessions, models, usage,
     </div>
     {sessionsOpen && <section className="ai-sessions">
       <header><strong>Sessions</strong><button disabled={sessionControlsDisabled} title={sessionChangesDisabled ? "Cancel or run the active task timer before changing sessions" : undefined} onClick={() => { setSessionsOpen(false); onNewSession(); }}><Plus size={13} /> New</button></header>
-      <div>{sessions.filter((item) => item.id).map((item, index) => <div className="ai-session-row" key={item.id ?? index}><button className="ai-session-select" disabled={sessionControlsDisabled} title={sessionChangesDisabled ? "Cancel or run the active task timer before changing sessions" : undefined} onClick={() => { setSessionsOpen(false); onSwitchSession(item); }}>{item.id === session.id && <Check size={13} />}<span><strong>{sessionTitle(item)}</strong><small>{sessionDate(item)}</small></span></button><button className="ai-session-remove" title={sessionChangesDisabled ? "Cancel or run the active task timer before changing sessions" : "Remove session"} disabled={sessionControlsDisabled || sessions.length === 1} onClick={() => onRemoveSession(item)}><Trash2 size={13} /></button></div>)}</div>
+      <div>{sessions.filter((item) => item.id).map((item, index) => <div className="ai-session-row" key={item.id ?? index}><button className="ai-session-select" disabled={sessionControlsDisabled} title={sessionChangesDisabled ? "Cancel or run the active task timer before changing sessions" : undefined} onClick={() => { setSessionsOpen(false); onSwitchSession(item); }}>{item.id === session.id && <Check size={13} />}<span><strong>{sessionTitle(item)}</strong><small>{modelName(models, item.model)} · {sessionDate(item)}</small></span></button><button className="ai-session-remove" title={sessionChangesDisabled ? "Cancel or run the active task timer before changing sessions" : "Remove session"} disabled={sessionControlsDisabled || sessions.length === 1} onClick={() => onRemoveSession(item)}><Trash2 size={13} /></button></div>)}</div>
     </section>}
     {settingsOpen && descriptor && <section className="ai-settings">
       <header><strong>{descriptor.settings.title}</strong><p>{descriptor.settings.description}</p></header>
@@ -116,7 +116,7 @@ export function AiPanel({ provider, providers, session, sessions, models, usage,
     </section>}
     <div className="ai-messages" ref={messagesRef} onScroll={(event) => { const element = event.currentTarget; pinnedRef.current = element.scrollHeight - element.scrollTop - element.clientHeight < 40; }}>
       {session.messages.length === 0 && !submitting && <div className="ai-empty">Start a {providerName} task for this workspace.</div>}
-      {session.messages.map((message, index) => message.role === "activity" ? <ActivityMessage key={`${message.id}:${index}`} text={message.text} content={message.content} /> : <article key={`${message.id}:${index}`} className={`ai-message ${message.role}`}><header>{message.role === "user" ? "You" : message.role === "assistant" ? providerName : "Error"}</header><div>{message.role === "assistant" ? <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.text}</ReactMarkdown> : <pre>{message.text}</pre>}<RichContent content={message.content} /></div></article>)}
+      {session.messages.map((message, index) => message.role === "activity" ? <ActivityMessage key={`${message.id}:${index}`} text={message.text} content={message.content} /> : <article key={`${message.id}:${index}`} className={`ai-message ${message.role}`}><header>{message.role === "user" ? "You" : message.role === "assistant" ? `${providerName}${message.model ? ` · ${modelName(models, message.model)}` : ""}` : "Error"}</header><div>{message.role === "assistant" ? <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.text}</ReactMarkdown> : <pre>{message.text}</pre>}<RichContent content={message.content} /></div></article>)}
       {session.pendingPermission && <PermissionRequestActions request={session.pendingPermission} owner={permissionOwner} disabled={permissionActionsDisabled} onResolve={onResolvePermission} />}
       {submitting && !running && <div className="ai-working ai-connecting" role="status" aria-live="polite"><span />Connecting to {providerName}...</div>}
       {running && <div className="ai-working" role="status" aria-live="polite"><span />{providerName} is working...</div>}
@@ -141,6 +141,8 @@ function sessionDate(session: AiSession): string {
   const value = session.updatedAt ?? session.createdAt;
   return value ? new Date(value).toLocaleString() : "";
 }
+
+function modelName(models: AiModel[], id: string): string { return models.find((model) => model.id === id)?.name ?? id; }
 
 function isTextFile(file: File): boolean { return file.type.startsWith("text/") || /(?:json|xml|yaml|javascript|typescript|markdown|csv|toml|sql)$/.test(file.type) || /\.(?:txt|md|json|jsonl|ya?ml|xml|csv|toml|ini|log|tsx?|jsx?|css|html?|sql|py|java|c|cc|cpp|h|hpp|rs|go|sh)$/i.test(file.name); }
 function readBase64(file: File): Promise<string> { return new Promise((resolve, reject) => { const reader = new FileReader(); reader.onerror = () => reject(reader.error); reader.onload = () => resolve(String(reader.result).split(",", 2)[1] ?? ""); reader.readAsDataURL(file); }); }

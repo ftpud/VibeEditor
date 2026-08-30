@@ -19,3 +19,11 @@ describe("timed task session controls", () => {
     expect([...container.querySelectorAll<HTMLButtonElement>(".ai-session-remove")].every((button) => button.disabled)).toBe(true);
   });
 });
+
+describe("response provenance", () => {
+  it("shows the effective response model next to the provider name", () => {
+    const conversation: AiSession = { id: "one", model: "model-b", reasoning: "high", status: "done", messages: [{ id: "answer", role: "assistant", text: "Done", model: "model-a", reasoning: "low", timestamp: "2026-08-30T12:00:00.000Z" }] };
+    render(<AiPanel provider="codex" providers={[{ id: "codex", name: "Codex", description: "", settings: { title: "", description: "", sections: [] }, options: [], capabilities: { models: true, usage: true, mcp: true, agents: true, contextWindow: true } }]} session={conversation} sessions={[conversation]} models={[{ id: "model-a", name: "Model A", defaultReasoning: "low", reasoningLevels: ["low"] }]} attachments={[]} permissionOwner={{ provider: "codex" }} onProviderChange={vi.fn()} onConfigurationChange={vi.fn()} onAttachmentsChange={vi.fn()} onSend={vi.fn()} onSteer={vi.fn()} onInterrupt={vi.fn()} onNewSession={vi.fn()} onSwitchSession={vi.fn()} onRemoveSession={vi.fn()} onResolvePermission={vi.fn()} />);
+    expect(screen.getByText("Codex · Model A")).toBeTruthy();
+  });
+});
