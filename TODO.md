@@ -183,7 +183,7 @@ multi-surface work).
   make dialogs, trees, splitters, status, and AI permission flows usable without a
   mouse or animation. Constraint: test semantic focus order and screen-reader names
   across Electron platforms; never convey Git/AI state by color alone.
-- [ ] **Settings search and workspace override indicators — Small.** Value: make
+- [x] **Settings search and workspace override indicators — Small.** Value: make
   persisted UI choices easier to find and reset. Constraint: clearly distinguish
   global defaults, per-workspace values, and remote Core-owned configuration.
 
