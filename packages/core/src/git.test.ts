@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
-import { GitService, parseCommitFiles, parseGitGraphLog, parseGitLog, parseGitStatus } from "./git.js";
+import { GitService, parseCommitFiles, parseGitGraphLog, parseGitLog, parseGitStatus, validateTagName } from "./git.js";
 import { WorkspaceFileSystem } from "./filesystem.js";
 
 const execFileAsync = promisify(execFile);
@@ -209,6 +209,29 @@ describe("Git upstream status", () => {
     expect((await service.status()).upstream).toMatchObject({ ahead: 1 });
     await service.push();
     expect((await service.status()).upstream).toMatchObject({ ahead: 0 });
+  });
+});
+
+describe("local Git tags", () => {
+  it("lists, creates, and deletes local tags", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "remote-ide-git-tags-"));
+    await execFileAsync("git", ["-C", root, "init"]);
+    await execFileAsync("git", ["-C", root, "config", "user.email", "test@example.com"]);
+    await execFileAsync("git", ["-C", root, "config", "user.name", "Test"]);
+    await writeFile(path.join(root, "file.txt"), "initial\n");
+    await execFileAsync("git", ["-C", root, "add", "file.txt"]);
+    await execFileAsync("git", ["-C", root, "commit", "-m", "initial"]);
+    const service = new GitService(root);
+    const target = (await execFileAsync("git", ["-C", root, "rev-parse", "HEAD"])).stdout.trim();
+    await expect(service.createTag("v1.0.0", target)).resolves.toEqual({ name: "v1.0.0", target, annotated: false });
+    expect(await service.tags()).toEqual([{ name: "v1.0.0", target, annotated: false }]);
+    await service.deleteTag("v1.0.0");
+    expect(await service.tags()).toEqual([]);
+  });
+
+  it("refuses ambiguous or unsafe local tag names", () => {
+    for (const name of ["refs/tags/v1", "HEAD", "@", "v1..0", "release^{commit}", "release~1", "-option", "v1.lock", "v1/"]) expect(() => validateTagName(name)).toThrow("Invalid or ambiguous local tag name");
+    expect(() => validateTagName("releases/v1.0.0")).not.toThrow();
   });
 });
 
