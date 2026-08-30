@@ -636,6 +636,7 @@ button { color: inherit; }
 .run-config-entry.first { margin-left: auto; border-left: 1px solid #45484e; }
 .run-config-entry { min-width: 0; max-width: 180px; }
 .run-config-entry > span:nth-child(2) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.run-config-useful-row .useful-open small { margin-left: auto; color: #777; font-size: .7rem; }
 .run-config-indicator { width: 7px; height: 7px; flex: 0 0 7px; border-radius: 50%; background: #777; }
 .run-config-indicator.starting, .run-config-indicator.stopping { background: #d6a84b; animation: run-config-pulse 1s infinite; }
 .run-config-indicator.running { background: #59a869; box-shadow: 0 0 5px #59a869; }

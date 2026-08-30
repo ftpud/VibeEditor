@@ -433,6 +433,7 @@ async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStor
     }
     case "terminal.close": {
       if (typeof request.payload.terminalId !== "string") throw new CoreError("INVALID_REQUEST", "terminalId must be a string");
+      runConfigs.onTerminalClosed(workspacePath, request.payload.terminalId);
       terminalHost.close(workspacePath, request.payload.terminalId);
       return {};
     }
