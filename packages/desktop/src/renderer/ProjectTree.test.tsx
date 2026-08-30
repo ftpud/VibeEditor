@@ -14,7 +14,7 @@ afterEach(cleanup);
 
 function renderTree(options: { query?: string; activePath?: string } = {}) {
   const onOpen = vi.fn();
-  render(<ProjectTree nodes={nodes} query={options.query ?? ""} activePath={options.activePath} fileColors={{}} gitStatuses={{}} onOpen={onOpen} onContextMenu={vi.fn()} />);
+  render(<ProjectTree nodes={nodes} query={options.query ?? ""} activePath={options.activePath} fileColors={{}} gitStatuses={{}} onAction={(action, node) => { if (action === "open") onOpen(node); }} onContextMenu={vi.fn()} />);
   return onOpen;
 }
 
@@ -39,6 +39,17 @@ describe("ProjectTree", () => {
     expect(document.activeElement).toBe(screen.getByRole("treeitem", { name: "main.ts" }));
     fireEvent.keyDown(screen.getByRole("tree"), { key: "Enter" });
     expect(onOpen).toHaveBeenCalledWith(expect.objectContaining({ path: "src/main.ts" }));
+  });
+
+  it("opens the shared action menu from the keyboard and renames with F2", () => {
+    const onAction = vi.fn(); const onMenu = vi.fn();
+    render(<ProjectTree nodes={nodes} query="" fileColors={{}} gitStatuses={{}} onAction={onAction} onContextMenu={onMenu} />);
+    const src = screen.getByRole("treeitem", { name: "src" });
+    fireEvent.focus(src);
+    fireEvent.keyDown(src, { key: "F2" });
+    fireEvent.keyDown(src, { key: "ContextMenu" });
+    expect(onAction).toHaveBeenCalledWith("rename", expect.objectContaining({ path: "src" }));
+    expect(onMenu).toHaveBeenCalledWith(expect.objectContaining({ path: "src" }), expect.any(Number), expect.any(Number));
   });
 
   it("reveals the active file and reports filtered file counts", async () => {
