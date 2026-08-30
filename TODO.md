@@ -19,7 +19,7 @@ multi-surface work).
 
 ### Project foundations
 
-- [ ] **Make `AGENTS.md` a compact coding and navigation guide — Small.** Value:
+- [x] **Make `AGENTS.md` a compact coding and navigation guide — Small.** Value:
   reduce agent search/token cost while keeping changes consistent with the package
   boundaries, SOLID design, useful abstractions, reuse, and repository structure.
   Constraint: audit current adherence first, document only repository-specific rules
