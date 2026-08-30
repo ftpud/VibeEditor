@@ -15,5 +15,6 @@ contextBridge.exposeInMainWorld("gateway", {
   stopServer: (id: string) => ipcRenderer.invoke("gateway:stopServer", id),
   startClient: (id: string) => ipcRenderer.invoke("gateway:startClient", id),
   onStatus: (listener: (id: string, status: unknown) => void) => { const handler = (_event: unknown, id: string, status: unknown) => listener(id, status); ipcRenderer.on("gateway:status", handler); return () => ipcRenderer.removeListener("gateway:status", handler); },
-  onTunnelStatus: (listener: (id: string, status: unknown) => void) => { const handler = (_event: unknown, id: string, status: unknown) => listener(id, status); ipcRenderer.on("gateway:tunnelStatus", handler); return () => ipcRenderer.removeListener("gateway:tunnelStatus", handler); }
+  onTunnelStatus: (listener: (id: string, status: unknown) => void) => { const handler = (_event: unknown, id: string, status: unknown) => listener(id, status); ipcRenderer.on("gateway:tunnelStatus", handler); return () => ipcRenderer.removeListener("gateway:tunnelStatus", handler); },
+  onConnectionStatus: (listener: (id: string, status: unknown) => void) => { const handler = (_event: unknown, id: string, status: unknown) => listener(id, status); ipcRenderer.on("gateway:connectionStatus", handler); return () => ipcRenderer.removeListener("gateway:connectionStatus", handler); }
 });
