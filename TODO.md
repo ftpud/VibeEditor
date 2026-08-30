@@ -38,7 +38,7 @@ multi-surface work).
   clear permanent-delete fallback; show the resolved target and affected children,
   reject workspace-root/symlink escapes, and never silently discard a dirty buffer.
   Depends on the shared mutation API above.
-- [ ] **Project-tree context menu and keyboard actions — Small.** Value: expose
+- [x] **Project-tree context menu and keyboard actions — Small.** Value: expose
   create, rename, delete, and open actions where users expect them. Constraint:
   commands must share one selection/action model and remain keyboard accessible;
   disable unsupported actions rather than emulating filesystem work locally.
