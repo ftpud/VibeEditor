@@ -73,6 +73,25 @@ describe("FindInFilesDialog responsive result layout", () => {
     expect(within(results).getByText("1:123456").classList.contains("find-location")).toBe(true);
   });
 
+  it("renders bounded context and makes omitted or shortened lines explicit", async () => {
+    const contextualMatch: SearchResult = {
+      path: "src/context.ts", line: 4, column: 3, preview: "needle suffix", previewTruncated: true,
+      context: {
+        before: [{ line: 2, text: "before", truncated: false }, { line: 3, text: "long before", truncated: true }],
+        after: [{ line: 5, text: "after", truncated: false }], truncatedBefore: true, truncatedAfter: true
+      }
+    };
+    render(<FindInFilesDialog client={clientWith({ matches: [contextualMatch], truncated: true })} scope="" onClose={vi.fn()} onNavigate={vi.fn()} />);
+    await search();
+
+    const result = screen.getByRole("button", { name: "src/context.ts, line 4, column 3" });
+    expect(within(result).getByText("before")).toBeTruthy();
+    expect(within(result).getByText("long before…")).toBeTruthy();
+    expect(within(result).getByText("needle").tagName).toBe("MARK");
+    expect(within(result).getAllByLabelText(/lines omitted/)).toHaveLength(2);
+    expect(screen.getByText("First 500")).toBeTruthy();
+  });
+
   it("collapses a file group without changing the selected preview", async () => {
     const sameFileMatches = [{ ...matches[0]!, line: 1 }, { ...matches[0]!, line: 2, column: 4 }];
     render(<FindInFilesDialog client={clientWith({ matches: sameFileMatches, truncated: false })} scope="" onClose={vi.fn()} onNavigate={vi.fn()} />);

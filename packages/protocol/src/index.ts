@@ -84,7 +84,9 @@ export type JavaProjectNode = {
   children?: JavaProjectNode[];
 };
 
-export type SearchResult = { path: string; line: number; column: number; preview: string };
+export type SearchContextLine = { line: number; text: string; truncated: boolean };
+export type SearchMatchContext = { before: SearchContextLine[]; after: SearchContextLine[]; truncatedBefore: boolean; truncatedAfter: boolean };
+export type SearchResult = { path: string; line: number; column: number; preview: string; previewTruncated?: boolean; context?: SearchMatchContext };
 
 export type ProtocolOperations = {
   "workspace.open": {
