@@ -39,6 +39,17 @@ export type GitStatusEntry = {
   states: GitChangeState[];
 };
 export type GitChangeState = "index" | "worktree" | "untracked" | "conflict";
+export type GitConflictOperationKind = "merge" | "rebase" | "cherry-pick" | "stash";
+export type GitConflictFile = {
+  path: string;
+  /** Index stages may be absent for add/delete conflicts. */
+  base?: string;
+  ours?: string;
+  theirs?: string;
+  result?: string;
+  resultDeleted: boolean;
+};
+export type GitConflictWorkspace = { operation: GitConflictOperationKind; files: GitConflictFile[]; canContinue: boolean; canAbort: boolean; recovery: string };
 /** The configured upstream and the last remote information Core successfully obtained. */
 export type GitUpstreamStatus = { upstream: string; ahead: number; behind: number; lastFetch?: string };
 export type GitPullStrategy = "merge" | "rebase";
@@ -322,6 +333,9 @@ export type ProtocolOperations = {
   };
   "git.stage": { payload: { path: string; hunk?: GitDiffHunk }; result: Record<string, never> };
   "git.unstage": { payload: { path: string; hunk?: GitDiffHunk }; result: Record<string, never> };
+  "git.conflicts": { payload: Record<string, never>; result: GitConflictWorkspace };
+  "git.resolveConflict": { payload: { path: string; result: string | null }; result: GitConflictWorkspace };
+  "git.conflictAction": { payload: { action: "continue" | "abort" }; result: { outcome: string } };
   "git.branches": { payload: Record<string, never>; result: { branches: GitBranch[] } };
   "git.tags": { payload: Record<string, never>; result: { tags: GitTag[] } };
   "git.createTag": { payload: { name: string; target: string }; result: { tag: GitTag } };
@@ -569,6 +583,9 @@ const requestTypeRegistry: Record<RequestType, true> = {
   "git.diff": true,
   "git.stage": true,
   "git.unstage": true,
+  "git.conflicts": true,
+  "git.resolveConflict": true,
+  "git.conflictAction": true,
   "git.branches": true,
   "git.tags": true,
   "git.createTag": true,

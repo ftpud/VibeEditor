@@ -143,7 +143,7 @@ multi-surface work).
   state while switching tasks/branches. Constraint: explicitly cover staged,
   unstaged, untracked, and ignored files; preview apply/pop conflicts and retain a
   stash on failed application.
-- [ ] **Conflict resolution workspace — Project.** Value: turn conflicted status rows
+- [x] **Conflict resolution workspace — Project.** Value: turn conflicted status rows
   into navigable ours/base/theirs/result resolution and guided continuation/abort.
   Constraint: Core detects the active operation (merge, rebase, cherry-pick, stash),
   validates every resolved path, and exposes native Git continue/abort safely.

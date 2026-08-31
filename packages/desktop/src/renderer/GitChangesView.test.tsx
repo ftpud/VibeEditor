@@ -18,4 +18,9 @@ describe("GitChangesView keyboard and selection states", () => {
   it("opens a non-deleted file with Shift+Enter", () => {
     const onOpenFile = vi.fn(); render(<GitChangesView entries={entries} error="" onOpenDiff={vi.fn()} onOpenFile={onOpenFile} />); const first = screen.getByRole("button", { name: /first\.ts/ }); fireEvent.keyDown(first, { key: "Enter", shiftKey: true }); expect(onOpenFile).toHaveBeenCalledWith(entries[0]);
   });
+  it("opens the resolution workspace for a conflicted row", () => {
+    const conflict: GitStatusEntry = { path: "src/conflict.ts", indexStatus: "U", worktreeStatus: "U", states: ["conflict"] }; const onOpenConflict = vi.fn();
+    render(<GitChangesView entries={[conflict]} error="" onOpenDiff={vi.fn()} onOpenConflict={onOpenConflict} onOpenFile={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: /conflict\.ts/ })); expect(onOpenConflict).toHaveBeenCalledWith(conflict);
+  });
 });
