@@ -264,6 +264,7 @@ export async function createServer(host: string, port: number, workspacePath: st
           }
         } finally { release?.(); }
         const result = await handleRequest(services, tasks, acp, usefulFiles, agents, terminalHost, runConfigs, aiTimers, rootWorkspace, parsed);
+        if (["tasks.create", "tasks.createFromPrompt", "tasks.status", "tasks.rename", "tasks.archive", "tasks.delete"].includes(parsed.type)) await onTasksChanged();
         const terminalSubscription = terminalSubscriptions.get(socket);
         if (terminalSubscription && parsed.type === "terminal.create") terminalSubscription.terminalIds.add((result as { terminalId: string }).terminalId);
         if (terminalSubscription && parsed.type === "terminal.attach" && (result as { state: string }).state === "available") terminalSubscription.terminalIds.add(parsed.payload.terminalId);
@@ -350,6 +351,8 @@ async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStor
       return { fired: await aiTimers.fireNext(target) };
     }
     case "tasks.status": return { task: await tasks.setStatus(request.payload.taskId, request.payload.status) };
+    case "tasks.rename": return { task: await tasks.rename(request.payload.taskId, request.payload.name) };
+    case "tasks.archive": return { task: await tasks.setArchived(request.payload.taskId, request.payload.archived) };
     case "tasks.delete": {
       await aiTimers.cancelWorkspace(tasks.taskPath(request.payload.taskId));
       const result = await tasks.delete(request.payload.taskId);
