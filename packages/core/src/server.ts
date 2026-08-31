@@ -600,6 +600,8 @@ async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStor
     case "git.push": await git.push(); return {};
     case "git.fetch": return git.fetch();
     case "git.cancelFetch": return { cancelled: git.cancelFetch() };
+    case "git.pullPreview": return git.pullPreview();
+    case "git.pull": return git.pull(request.payload.strategy, request.payload.expectedHead, request.payload.expectedUpstreamHead);
     case "taskGit.history": return { checkpoints: await checkpoints.history() };
     case "taskGit.diff": return checkpoints.diff(request.payload.checkpointId, request.payload.path);
     case "taskGit.review": return checkpoints.review(request.payload.checkpointId, request.payload.paths);

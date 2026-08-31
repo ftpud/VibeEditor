@@ -3,7 +3,7 @@ import { promisify } from "node:util";
 import path from "node:path";
 import { readFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
-import type { GitBranch, GitBranchDeletePreview, GitCommit, GitCommitFile, GitDiffHunk, GitHistoryRewritePreview, GitRollbackFailure, GitStash, GitStashInclusion, GitStashPreview, GitStatusEntry, GitTag, GitUpstreamStatus } from "@remote-ide/protocol";
+import type { GitBranch, GitBranchDeletePreview, GitCommit, GitCommitFile, GitDiffHunk, GitHistoryRewritePreview, GitPullPreview, GitPullResult, GitPullStrategy, GitRollbackFailure, GitStash, GitStashInclusion, GitStashPreview, GitStatusEntry, GitTag, GitUpstreamStatus } from "@remote-ide/protocol";
 import { CoreError } from "./errors.js";
 import { WorkspaceFileSystem } from "./filesystem.js";
 
@@ -347,6 +347,46 @@ export class GitService {
     return true;
   }
 
+  async pullPreview(): Promise<GitPullPreview> {
+    const { fetchedAt } = await this.fetch();
+    const status = await this.status();
+    if (!status.upstream) throw new CoreError("GIT_FAILED", "This branch has no configured upstream. Publish it or configure an upstream before pulling.");
+    const [head, upstreamHead, incomingOutput] = await Promise.all([
+      this.git(["rev-parse", "HEAD"]),
+      this.git(["rev-parse", status.upstream.upstream]),
+      this.git(["log", "--max-count=51", "--format=%H%x00%h%x00%an%x00%aI%x00%s%x00", `HEAD..${status.upstream.upstream}`])
+    ]);
+    const incoming = parseGitLog(incomingOutput);
+    return {
+      branch: status.branch, upstream: status.upstream.upstream, head: head.trim(), upstreamHead: upstreamHead.trim(), fetchedAt,
+      ahead: status.upstream.ahead, behind: status.upstream.behind, incoming: incoming.slice(0, 50), incomingTruncated: incoming.length > 50,
+      blockers: status.entries,
+      recovery: "No stash will be created. If conflicts occur, resolve them and continue, or abort with git merge --abort / git rebase --abort."
+    };
+  }
+
+  async pull(strategy: GitPullStrategy, expectedHead: string, expectedUpstreamHead: string): Promise<GitPullResult> {
+    if (strategy !== "merge" && strategy !== "rebase") throw new CoreError("INVALID_REQUEST", "Pull strategy must be merge or rebase");
+    validateFullHash(expectedHead); validateFullHash(expectedUpstreamHead);
+    await this.fetch();
+    const status = await this.status();
+    if (!status.upstream) throw new CoreError("GIT_FAILED", "This branch no longer has a configured upstream. Preview the pull again.");
+    const head = (await this.git(["rev-parse", "HEAD"])).trim();
+    const upstreamHead = (await this.git(["rev-parse", status.upstream.upstream])).trim();
+    if (head !== expectedHead || upstreamHead !== expectedUpstreamHead) throw new CoreError("GIT_FAILED", "The local or upstream branch changed after the preview. Review incoming commits again before pulling.");
+    if (status.entries.length) throw new CoreError("GIT_FAILED", `Pull blocked by ${status.entries.length} dirty path${status.entries.length === 1 ? "" : "s"}. Commit or explicitly stash them, then preview again. No automatic stash was created.`);
+    if (status.upstream.behind === 0) return { strategy, branch: status.branch, head, outcome: "Already up to date.", recovery: "No recovery action is needed." };
+    try {
+      if (strategy === "merge") await this.git(["merge", "--no-edit", status.upstream.upstream]);
+      else await this.git(["rebase", status.upstream.upstream]);
+    } catch (error) {
+      const guidance = strategy === "merge" ? "Resolve conflicts and commit the merge, or run git merge --abort to return to the pre-pull state." : "Resolve conflicts and run git rebase --continue, or run git rebase --abort to return to the pre-pull state.";
+      throw new CoreError("GIT_FAILED", `Pull with ${strategy} stopped. ${guidance} ${error instanceof Error ? error.message : String(error)}`);
+    }
+    const resultHead = (await this.git(["rev-parse", "HEAD"])).trim();
+    return { strategy, branch: status.branch, head: resultHead, outcome: `Pulled ${status.upstream.upstream} with ${strategy}.`, recovery: strategy === "merge" ? "The merge can be inspected in Git history." : "The rebased local commits now have new commit IDs; use reflog if recovery is needed." };
+  }
+
   async diffStats(): Promise<{ additions: number; deletions: number }> {
     let additions = 0; let deletions = 0;
     try {
@@ -466,6 +506,7 @@ export function parseDiffHunks(output: string, source: "index" | "worktree" = "w
 }
 
 function validateHash(hash: string): void { if (!/^[0-9a-f]{7,64}$/i.test(hash)) throw new CoreError("INVALID_REQUEST", "Invalid commit hash"); }
+function validateFullHash(hash: string): void { if (!/^[0-9a-f]{40,64}$/i.test(hash)) throw new CoreError("INVALID_REQUEST", "Invalid preview commit hash"); }
 function validateRef(ref: string): void { if (!/^[\w./@{}~^:+-]+$/.test(ref)) throw new CoreError("INVALID_REQUEST", "Invalid Git reference"); }
 function validateBranchName(name: string): void { if (!name || !/^[\w./-]+$/.test(name) || name.startsWith("-") || name.includes("..") || name.includes("//") || name.endsWith("/")) throw new CoreError("INVALID_REQUEST", "Invalid Git branch name"); }
 function splitRemoteBranch(value: string): { remoteName: string; branchName: string } { const [remoteName, ...parts] = value.split("/"); const branchName = parts.join("/"); if (!remoteName || !branchName) throw new CoreError("INVALID_REQUEST", "Remote branch must include a remote and branch name"); validateBranchName(branchName); return { remoteName, branchName }; }

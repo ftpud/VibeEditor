@@ -292,6 +292,27 @@ describe("Git upstream status", () => {
     expect(fetched.fetchedAt).toMatch(/^\d{4}-\d\d-\d\dT/);
     expect((await service.status()).upstream).toMatchObject({ ahead: 0, behind: 1, lastFetch: fetched.fetchedAt });
   });
+
+  it("previews fetched commits, blocks dirty and stale pulls, and runs explicit merge or rebase without stashing", async () => {
+    const parent = await mkdtemp(path.join(tmpdir(), "remote-ide-git-pull-"));
+    const remote = path.join(parent, "remote.git"); const root = path.join(parent, "repo"); const other = path.join(parent, "other");
+    await execFileAsync("git", ["init", "--bare", remote]); await execFileAsync("git", ["clone", remote, root]);
+    for (const repo of [root]) { await execFileAsync("git", ["-C", repo, "config", "user.email", "test@example.com"]); await execFileAsync("git", ["-C", repo, "config", "user.name", "Test"]); }
+    await writeFile(path.join(root, "base.txt"), "base\n"); await execFileAsync("git", ["-C", root, "add", "."]); await execFileAsync("git", ["-C", root, "commit", "-m", "initial"]); await execFileAsync("git", ["-C", root, "push", "-u", "origin", "HEAD"]);
+    await execFileAsync("git", ["clone", remote, other]); await execFileAsync("git", ["-C", other, "config", "user.email", "test@example.com"]); await execFileAsync("git", ["-C", other, "config", "user.name", "Test"]);
+    await writeFile(path.join(other, "remote.txt"), "remote one\n"); await execFileAsync("git", ["-C", other, "add", "."]); await execFileAsync("git", ["-C", other, "commit", "-m", "incoming one"]); await execFileAsync("git", ["-C", other, "push"]);
+    const service = new GitService(root); const preview = await service.pullPreview();
+    expect(preview).toMatchObject({ behind: 1, incoming: [{ subject: "incoming one" }], blockers: [], incomingTruncated: false });
+    await writeFile(path.join(root, "dirty.txt"), "dirty\n"); await expect(service.pull("merge", preview.head, preview.upstreamHead)).rejects.toThrow("dirty path");
+    expect((await execFileAsync("git", ["-C", root, "stash", "list"])).stdout).toBe(""); await execFileAsync("git", ["-C", root, "clean", "-f"]);
+    await expect(service.pull("merge", preview.head, preview.upstreamHead)).resolves.toMatchObject({ strategy: "merge", outcome: expect.stringContaining("Pulled") });
+
+    await writeFile(path.join(root, "local.txt"), "local\n"); await execFileAsync("git", ["-C", root, "add", "."]); await execFileAsync("git", ["-C", root, "commit", "-m", "local"]);
+    await writeFile(path.join(other, "remote-two.txt"), "remote two\n"); await execFileAsync("git", ["-C", other, "add", "."]); await execFileAsync("git", ["-C", other, "commit", "-m", "incoming two"]); await execFileAsync("git", ["-C", other, "push"]);
+    const rebasePreview = await service.pullPreview(); await expect(service.pull("rebase", rebasePreview.head, rebasePreview.upstreamHead)).resolves.toMatchObject({ strategy: "rebase" });
+    await expect(service.pull("merge", rebasePreview.head, rebasePreview.upstreamHead)).rejects.toThrow("changed after the preview");
+    expect((await execFileAsync("git", ["-C", root, "log", "--format=%s", "-2"])).stdout).toContain("local");
+  });
 });
 
 describe("local Git tags", () => {
