@@ -82,6 +82,36 @@ describe("WorkspaceFileSystem", () => {
     await expect(fs.rename("one.txt", "two.txt")).rejects.toMatchObject({ code: "WRITE_FAILED" });
   });
 
+  it("preflights normalized bulk copies and requires explicit collision overwrites", async () => {
+    await fs.open(root);
+    await mkdir(path.join(root, "target"));
+    await writeFile(path.join(root, "target", "index.ts"), "old\n");
+    const items = [
+      { source: "src", destination: "target/src-copy" },
+      { source: "src/index.ts", destination: "target/index.ts" }
+    ];
+    const preview = await fs.transferPreflight("copy", items, [], ["src/index.ts"], []);
+    expect(preview).toMatchObject({ collisions: 0, openFiles: ["src/index.ts"], confirmationRequired: true });
+    expect(preview.skipped).toEqual([{ source: "src/index.ts", reason: "Already included by selected directory src" }]);
+    const collision = await fs.transferPreflight("copy", [{ source: "src/index.ts", destination: "target/index.ts" }]);
+    expect(collision.items[0]).toMatchObject({ collision: true, overwrite: false });
+    await expect(fs.transferApply("copy", [{ source: "src/index.ts", destination: "target/index.ts" }], [], [], [], true)).rejects.toMatchObject({ code: "WRITE_FAILED" });
+    expect(await fs.transferApply("copy", [{ source: "src/index.ts", destination: "target/index.ts" }], ["target/index.ts"], [], [], true)).toMatchObject({ failures: [] });
+    expect(await readFile(path.join(root, "target", "index.ts"), "utf8")).toContain("value = 1");
+  });
+
+  it("moves multiple paths, reports dirty blockers, and supports case-only names", async () => {
+    await fs.open(root);
+    await fs.createFile("README.md");
+    await expect(fs.transferApply("move", [{ source: "README.md", destination: "Readme.md" }], [], ["README.md"], ["README.md"], true)).rejects.toMatchObject({ code: "WRITE_FAILED" });
+    const preview = await fs.transferPreflight("move", [{ source: "README.md", destination: "Readme.md" }]);
+    expect(preview.items[0]).toMatchObject({ caseOnlyRename: true });
+    const result = await fs.transferApply("move", [{ source: "README.md", destination: "Readme.md" }], [], [], [], true);
+    expect(result).toEqual({ completed: [{ source: "README.md", destination: "Readme.md" }], failures: [] });
+    await expect(access(path.join(root, "README.md"))).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(access(path.join(root, "Readme.md"))).resolves.toBeUndefined();
+  });
+
   it("previews, trashes, and restores a directory without exposing trash in the tree", async () => {
     await fs.open(root);
     const preview = await fs.previewDelete("src");

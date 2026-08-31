@@ -511,6 +511,16 @@ async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStor
       catch (error) { await filesystem.rename(request.payload.newPath, request.payload.path).catch(() => undefined); throw error; }
       return { path: request.payload.newPath };
     }
+    case "filesystem.transferPreflight": return filesystem.transferPreflight(request.payload.kind, request.payload.items, request.payload.overwritePaths, request.payload.openFiles, request.payload.dirtyFiles);
+    case "filesystem.transferApply": {
+      const result = await filesystem.transferApply(request.payload.kind, request.payload.items, request.payload.overwritePaths, request.payload.openFiles, request.payload.dirtyFiles, request.payload.confirmed);
+      if (request.payload.kind === "move" && result.completed.length) {
+        let options = await workspaceState.load();
+        for (const item of result.completed) options = renameWorkspacePaths(options, item.source, item.destination);
+        await workspaceState.save(options);
+      }
+      return result;
+    }
     case "filesystem.previewDelete": return filesystem.previewDelete(request.payload.path);
     case "filesystem.delete": return filesystem.delete(request.payload.path, request.payload.permanent === true);
     case "filesystem.restore": return { path: await filesystem.restore(request.payload.recoveryId) };
@@ -557,6 +567,9 @@ async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStor
     }
     case "git.stage": await git.stage(request.payload.path, request.payload.hunk); return {};
     case "git.unstage": await git.unstage(request.payload.path, request.payload.hunk); return {};
+    case "git.conflicts": return git.conflicts();
+    case "git.resolveConflict": return git.resolveConflict(request.payload.path, request.payload.result);
+    case "git.conflictAction": return { outcome: await git.conflictAction(request.payload.action) };
     case "git.branches": return { branches: await git.branches() };
     case "git.tags": return { tags: await git.tags() };
     case "git.createTag": return { tag: await git.createTag(request.payload.name, request.payload.target) };

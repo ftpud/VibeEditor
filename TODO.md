@@ -117,7 +117,7 @@ multi-surface work).
 
 ### Project and filesystem control
 
-- [ ] **Duplicate and move/copy via multi-select — Project.** Value: enable common
+- [x] **Duplicate and move/copy via multi-select — Project.** Value: enable common
   bulk organization work. Constraint: introduce stable multi-selection and a
   preflight summary for collisions, overwrites, case-only renames, cross-device
   moves, partial failures, and dirty/open files. Depends on safe single-path

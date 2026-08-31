@@ -24,6 +24,11 @@ export function protocolRangesOverlap(left: ProtocolCompatibility, right: Protoc
 }
 export type FilesystemDeletePreview = { path: string; type: "file" | "directory"; children: string[]; childCount: number; recoverable: boolean };
 export type FilesystemDeleteResult = { path: string; recoveryId?: string; permanentlyDeleted: boolean };
+export type FilesystemTransferKind = "copy" | "move";
+export type FilesystemTransferRequest = { source: string; destination: string };
+export type FilesystemTransferItem = FilesystemTransferRequest & { type: "file" | "directory"; collision: boolean; overwrite: boolean; caseOnlyRename: boolean; crossDevice: boolean; openFiles: string[]; dirtyFiles: string[] };
+export type FilesystemTransferPreflight = { kind: FilesystemTransferKind; items: FilesystemTransferItem[]; skipped: { source: string; reason: string }[]; collisions: number; overwrites: number; caseOnlyRenames: number; crossDeviceMoves: number; openFiles: string[]; dirtyFiles: string[]; confirmationRequired: boolean };
+export type FilesystemTransferResult = { completed: FilesystemTransferRequest[]; failures: (FilesystemTransferRequest & { message: string })[] };
 
 export type GitStatusEntry = {
   path: string;
@@ -254,6 +259,14 @@ export type ProtocolOperations = {
   "filesystem.rename": {
     payload: { path: string; newPath: string };
     result: { path: string };
+  };
+  "filesystem.transferPreflight": {
+    payload: { kind: FilesystemTransferKind; items: FilesystemTransferRequest[]; overwritePaths?: string[]; openFiles?: string[]; dirtyFiles?: string[] };
+    result: FilesystemTransferPreflight;
+  };
+  "filesystem.transferApply": {
+    payload: { kind: FilesystemTransferKind; items: FilesystemTransferRequest[]; overwritePaths?: string[]; openFiles?: string[]; dirtyFiles?: string[]; confirmed: boolean };
+    result: FilesystemTransferResult;
   };
   "filesystem.previewDelete": {
     payload: { path: string };
@@ -539,6 +552,8 @@ const requestTypeRegistry: Record<RequestType, true> = {
   "filesystem.createFile": true,
   "filesystem.createDirectory": true,
   "filesystem.rename": true,
+  "filesystem.transferPreflight": true,
+  "filesystem.transferApply": true,
   "filesystem.previewDelete": true,
   "filesystem.delete": true,
   "filesystem.restore": true,
