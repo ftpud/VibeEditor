@@ -204,7 +204,7 @@ multi-surface work).
 
 ### Git, editor, and search
 
-- [ ] **Interactive rebase planner — Project.** Value: offer reorder, squash, fixup,
+- [x] **Interactive rebase planner — Project.** Value: offer reorder, squash, fixup,
   reword, and drop for unpublished commits. Constraint: require clean-state and
   upstream safety checks, preview the todo list, preserve reflog-based recovery, and
   route conflicts through the conflict workspace. Depends on remote tracking,
