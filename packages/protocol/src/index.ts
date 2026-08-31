@@ -4,6 +4,20 @@ export type FileTreeNode = {
   type: "file" | "directory";
   children?: FileTreeNode[];
 };
+/**
+ * The wire contract is independently versioned from package releases so a cached
+ * Desktop can prove it is safe to talk to a newly deployed Core.
+ */
+export type ProtocolCompatibility = { minimum: number; maximum: number };
+export const protocolCompatibility: ProtocolCompatibility = { minimum: 1, maximum: 1 };
+
+export function protocolRangeIsValid(range: ProtocolCompatibility): boolean {
+  return Number.isInteger(range.minimum) && Number.isInteger(range.maximum) && range.minimum > 0 && range.minimum <= range.maximum;
+}
+
+export function protocolRangesOverlap(left: ProtocolCompatibility, right: ProtocolCompatibility): boolean {
+  return protocolRangeIsValid(left) && protocolRangeIsValid(right) && left.minimum <= right.maximum && right.minimum <= left.maximum;
+}
 export type FilesystemDeletePreview = { path: string; type: "file" | "directory"; children: string[]; childCount: number; recoverable: boolean };
 export type FilesystemDeleteResult = { path: string; recoveryId?: string; permanentlyDeleted: boolean };
 
@@ -111,6 +125,7 @@ export type SearchMatchContext = { before: SearchContextLine[]; after: SearchCon
 export type SearchResult = { path: string; line: number; column: number; preview: string; previewTruncated?: boolean; context?: SearchMatchContext };
 
 export type ProtocolOperations = {
+  "protocol.handshake": { payload: { compatibility: ProtocolCompatibility; clientVersion?: string }; result: { compatible: boolean; compatibility: ProtocolCompatibility; message?: string } };
   "workspace.open": {
     payload: { includeIgnored?: boolean };
     result: { workspace: string; projectName: string; tree: FileTreeNode[]; options: WorkspaceOptions };
@@ -387,6 +402,7 @@ export type ServerEvent = FilesystemChangedEvent | TerminalOutputEvent | Termina
  * registered here, which would otherwise reject the request at runtime.
  */
 const requestTypeRegistry: Record<RequestType, true> = {
+  "protocol.handshake": true,
   "workspace.open": true,
   "workspace.saveOptions": true,
   "tasks.list": true,

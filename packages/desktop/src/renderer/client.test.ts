@@ -17,7 +17,12 @@ class FakeWebSocket {
 
   constructor(readonly url: string) { FakeWebSocket.instances.push(this); }
   open(): void { this.readyState = FakeWebSocket.OPEN; this.onopen?.(); }
-  send(data: string): void { if (this.readyState !== FakeWebSocket.OPEN) throw new Error("socket closed"); this.sent.push(data); }
+  send(data: string): void {
+    if (this.readyState !== FakeWebSocket.OPEN) throw new Error("socket closed");
+    this.sent.push(data);
+    const request = JSON.parse(data) as { id: string; type: string };
+    if (request.type === "protocol.handshake") this.receive({ id: request.id, ok: true, result: { compatible: true, compatibility: { minimum: 1, maximum: 1 } } });
+  }
   close(): void { this.readyState = FakeWebSocket.CLOSED; this.onclose?.(); }
   receive(value: unknown): void { this.onmessage?.({ data: JSON.stringify(value) }); }
 }
@@ -48,7 +53,7 @@ describe("CoreClient streaming disconnects", () => {
     second.open();
     await reconnecting;
     const restoring = client.request("ai.get", {});
-    const request = JSON.parse(second.sent[0]!) as { id: string };
+    const request = JSON.parse(second.sent[1]!) as { id: string };
     let restored = false;
     void restoring.then(() => { restored = true; });
     first.receive({ id: request.id, ok: true, result: { session: { status: "done", messages: [] } } });
@@ -95,7 +100,7 @@ describe("CoreClient streaming disconnects", () => {
     loading = true;
     const switched = client.request("tasks.switch", { taskId: "task-b", includeIgnored: false })
       .finally(() => { loading = false; });
-    const request = JSON.parse(second.sent[0]!) as { id: string };
+    const request = JSON.parse(second.sent[1]!) as { id: string };
     second.receive({ id: request.id, ok: true, result: { workspace: "/task-b", projectName: "project", tree: [], options: {}, tasks: [], selectedTaskId: "task-b" } });
 
     await expect(switched).resolves.toMatchObject({ selectedTaskId: "task-b" });
@@ -117,6 +122,25 @@ describe("CoreClient streaming disconnects", () => {
     await rejection;
     expect(loading).toBe(false);
     vi.useRealTimers();
+  });
+});
+
+describe("CoreClient protocol handshake", () => {
+  beforeEach(() => { FakeWebSocket.instances = []; vi.stubGlobal("WebSocket", FakeWebSocket); });
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("rejects an incompatible Core before allowing requests", async () => {
+    const client = new CoreClient();
+    const connecting = client.connect("core", 7331);
+    const socket = FakeWebSocket.instances[0]!;
+    socket.send = (data: string) => {
+      socket.sent.push(data);
+      const request = JSON.parse(data) as { id: string; type: string };
+      if (request.type === "protocol.handshake") socket.receive({ id: request.id, ok: true, result: { compatible: false, compatibility: { minimum: 2, maximum: 2 }, message: "Update required" } });
+    };
+    socket.open();
+    await expect(connecting).rejects.toThrow("Update required");
+    await expect(client.request("tasks.list", {})).rejects.toThrow("Not connected");
   });
 });
 
