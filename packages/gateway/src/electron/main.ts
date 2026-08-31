@@ -1,7 +1,8 @@
 import { app, BrowserWindow, dialog, ipcMain, nativeImage, safeStorage } from "electron";
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import { createServer, type Server } from "node:net";
-import { access, copyFile, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { access, copyFile, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { Client } from "ssh2";
@@ -9,6 +10,7 @@ import { connectionHealthForLatency, type ConnectionRuntime } from "./connection
 import { connectionConfig, normalizeStoredAuthentication, sshConnectionError, testSshConnection, validatePrivateKey, validatePrivateKeyPath, type AuthenticationMethod, type ConnectionAuth, type ConnectionDetails } from "./connection-auth.js";
 import { defaultRepositorySettings, normalizeRepositorySettings, provisionCommand, repositorySettingsOrDefault, type RepositorySettings } from "./repository-settings.js";
 import { parseDiscoveredWorkspaceDirectories, parseValidatedWorkspaceDirectory, validateWorkspaceDirectoryInput, workspaceDiscoveryCommand, workspaceValidationCommand } from "./workspace-path.js";
+import { compatibleClient, readCompatibility, type Compatibility } from "./client-compatibility.js";
 
 type Connection = { id: string; name: string; host: string; port: number; username: string } & ConnectionAuth;
 type Workspace = { id: string; connectionId: string; name: string; directory: string; remotePort: number };
@@ -227,28 +229,59 @@ async function startClient(workspaceId: string): Promise<void> {
   const client = await connect(connection);
   const commit = (await execute(client, `git -C ~/.vibe rev-parse HEAD`)).trim();
   if (!/^[0-9a-f]{40,64}$/.test(commit)) { client.end(); throw new Error("Remote Vibe checkout was not found. Start the server first."); }
-  const clientRoot = path.join(app.getPath("userData"), "clients", workspace.id, commit); const archive = path.join(app.getPath("temp"), `vibe-${workspace.id}-${commit}.tar.gz`);
+  const remoteCompatibilityOutput = await execute(client, `bash -lc ${shell(`${remoteNodeEnvironment}; cd ~/.vibe; node --input-type=module -e ${shell("import { protocolCompatibility } from './packages/protocol/dist/index.js'; console.log(JSON.stringify(protocolCompatibility))")}`)}`);
+  const remoteCompatibility = JSON.parse(remoteCompatibilityOutput) as Compatibility;
+  if (!compatibleClient(remoteCompatibility, remoteCompatibility)) { client.end(); throw new Error("Remote Core reported an invalid protocol compatibility range"); }
+  const clientsDirectory = path.join(app.getPath("userData"), "clients", workspace.id);
+  const clientRoot = path.join(clientsDirectory, commit); const archive = path.join(app.getPath("temp"), `vibe-${workspace.id}-${commit}.tar.gz`);
   const buildMarker = path.join(clientRoot, ".gateway-client-built");
   const expectedMarker = `artifact-v1:${commit}`;
   let clientBuilt = false;
   try {
     const marker = (await readFile(buildMarker, "utf8")).trim();
     clientBuilt = marker === expectedMarker || marker === commit;
-    await access(path.join(clientRoot, "package.json")); await access(path.join(clientRoot, "dist-electron", "main.js")); await access(path.join(clientRoot, "dist-renderer", "index.html"));
+    await access(path.join(clientRoot, "package.json")); await access(path.join(clientRoot, "compatibility.json")); await access(path.join(clientRoot, "dist-electron", "main.js")); await access(path.join(clientRoot, "dist-renderer", "index.html"));
+    const compatibility = readCompatibility(JSON.parse(await readFile(path.join(clientRoot, "compatibility.json"), "utf8")));
+    clientBuilt = clientBuilt && !!compatibility && compatibleClient(compatibility, remoteCompatibility);
     if (clientBuilt && marker !== expectedMarker) await writeFile(buildMarker, `${expectedMarker}\n`, "utf8");
   }
   catch { clientBuilt = false; }
   if (!clientBuilt) {
+    const cached = await readdir(clientsDirectory, { withFileTypes: true }).catch(() => []);
+    const rollback = (await Promise.all(cached.filter((entry) => entry.isDirectory() && entry.name !== commit).map(async (entry) => {
+      const candidate = path.join(clientsDirectory, entry.name);
+      try {
+        const marker = (await readFile(path.join(candidate, ".gateway-client-built"), "utf8")).trim();
+        const compatibility = readCompatibility(JSON.parse(await readFile(path.join(candidate, "compatibility.json"), "utf8")));
+        await access(path.join(candidate, "dist-electron", "main.js")); await access(path.join(candidate, "dist-renderer", "index.html"));
+        return marker.startsWith("artifact-v1:") && compatibility && compatibleClient(compatibility, remoteCompatibility) ? candidate : undefined;
+      } catch { return undefined; }
+    }))).find(Boolean);
+    if (rollback) {
+      const choice = await dialog.showMessageBox({ type: "warning", buttons: ["Download update", "Use last known-good client", "Cancel"], defaultId: 0, cancelId: 2, title: "Desktop update available", message: "The cached Desktop cannot be used with this Core.", detail: "Choose a verified update or keep using the last compatible client." });
+      if (choice.response === 1) { client.end(); await launchClient(workspaceId, workspace, connection, rollback, true); return; }
+      if (choice.response === 2) { client.end(); throw new Error("Desktop update was cancelled"); }
+    }
+  }
+  if (!clientBuilt) {
   try {
-    await execute(client, `bash -lc ${shell(`set -e; test -f ~/.vibe/packages/desktop/package.json || { echo "Desktop package is missing; start the server to provision it first." >&2; exit 1; }; test -f ~/.vibe/packages/desktop/dist-electron/main.js || { echo "Desktop Electron build is missing; start the server to rebuild it first." >&2; exit 1; }; test -f ~/.vibe/packages/desktop/dist-renderer/index.html || { echo "Desktop renderer build is missing; start the server to rebuild it first." >&2; exit 1; }; cd ~/.vibe/packages/desktop; files="package.json dist-electron dist-renderer"; if [ -d assets ]; then files="$files assets"; fi; tar -czf /tmp/vibe-${workspace.id}.tar.gz $files`)}`);
+    const remoteArchive = `/tmp/vibe-${workspace.id}.tar.gz`;
+    const checksum = (await execute(client, `bash -lc ${shell(`set -e; test -f ~/.vibe/packages/desktop/compatibility.json; cd ~/.vibe/packages/desktop; files="package.json compatibility.json dist-electron dist-renderer"; if [ -d assets ]; then files="$files assets"; fi; tar -czf ${remoteArchive} $files; sha256sum ${remoteArchive}`)}`)).trim().split(/\s+/)[0];
     await mkdir(path.dirname(archive), { recursive: true }); await download(client, `/tmp/vibe-${workspace.id}.tar.gz`, archive);
-    await execute(client, `rm -f /tmp/vibe-${workspace.id}.tar.gz`);
+    const actual = createHash("sha256").update(await readFile(archive)).digest("hex");
+    if (actual !== checksum) throw new Error("Downloaded Desktop artifacts failed checksum verification");
+    await execute(client, `rm -f ${remoteArchive}`);
   } finally { client.end(); }
     await mkdir(clientRoot, { recursive: true });
     runtime(workspaceId, "working", "Installing remote-built client artifacts...");
     await runLocal("tar", ["-xzf", archive, "-C", clientRoot], clientRoot); await rm(archive, { force: true });
+    const downloadedCompatibility = readCompatibility(JSON.parse(await readFile(path.join(clientRoot, "compatibility.json"), "utf8")));
+    if (!downloadedCompatibility || !compatibleClient(downloadedCompatibility, remoteCompatibility)) throw new Error("Downloaded Desktop is not compatible with the remote Core");
     await writeFile(buildMarker, `${expectedMarker}\n`, "utf8");
   } else { client.end(); runtime(workspaceId, "working", "Reusing local client build..."); }
+  await launchClient(workspaceId, workspace, connection, clientRoot, clientBuilt);
+}
+async function launchClient(workspaceId: string, workspace: Workspace, connection: Connection, clientRoot: string, clientBuilt: boolean): Promise<void> {
   const localIcon = process.env.VIBE_DESKTOP_ICON;
   if (localIcon) {
     await mkdir(path.join(clientRoot, "assets"), { recursive: true });
