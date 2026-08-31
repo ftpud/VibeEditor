@@ -2072,6 +2072,36 @@ export function App() {
     } catch (error) { setStatusMessage(error instanceof Error ? error.message : "Could not rename branch"); }
   };
 
+  const createBranch = async () => {
+    const name = window.prompt("Create local branch from the current commit:");
+    if (!clientRef.current || !name?.trim()) return;
+    try { await clientRef.current.request("git.createBranch", { name: name.trim() }); await loadBranchMenu(); setStatusMessage(`Created branch ${name.trim()}`); }
+    catch (error) { setStatusMessage(error instanceof Error ? error.message : "Could not create branch"); }
+  };
+  const deleteBranch = async (branch: GitBranchInfo) => {
+    if (!clientRef.current) return;
+    try {
+      const preview = await clientRef.current.request("git.branchDeletePreview", { branch: branch.name, remote: branch.remote });
+      const force = !branch.remote && preview.unmerged.length > 0;
+      const details = preview.unmerged.length ? `\n\n${preview.unmerged.length} commit(s) are not merged into the current branch.${force ? " This will force-delete the branch." : ""}` : "";
+      if (!window.confirm(`${branch.remote ? "Delete remote" : "Delete local"} branch ${branch.name}?${details}`)) return;
+      await clientRef.current.request("git.deleteBranch", { branch: branch.name, remote: branch.remote, force, confirm: true }); await loadBranchMenu(); setStatusMessage(`Deleted ${branch.remote ? "remote" : "local"} branch ${branch.name}`);
+    } catch (error) { setStatusMessage(error instanceof Error ? error.message : "Could not delete branch"); }
+  };
+  const publishBranch = async (branch: GitBranchInfo) => {
+    const remote = window.prompt(`Publish ${branch.name} to remote:`, "origin");
+    if (!clientRef.current || !remote?.trim() || !window.confirm(`Publish ${branch.name} to ${remote.trim()} and set its upstream?`)) return;
+    try { await clientRef.current.request("git.publishBranch", { branch: branch.name, remote: remote.trim(), force: false, confirm: true }); await Promise.all([loadBranchMenu(), refreshGit()]); }
+    catch (error) { setStatusMessage(error instanceof Error ? error.message : "Could not publish branch"); }
+  };
+  const setBranchUpstream = async (branch: GitBranchInfo) => {
+    const remote = window.prompt(`Remote for ${branch.name}'s upstream:`, "origin");
+    const upstream = remote?.trim() ? window.prompt(`Set upstream branch for ${branch.name} on ${remote.trim()}:`, branch.name) : undefined;
+    if (!clientRef.current || !remote?.trim() || !upstream?.trim() || !window.confirm(`Change ${branch.name}'s upstream to ${remote.trim()}/${upstream.trim()}?`)) return;
+    try { await clientRef.current.request("git.setBranchUpstream", { branch: branch.name, remote: remote.trim(), upstream: upstream.trim(), confirm: true }); await refreshGit(); }
+    catch (error) { setStatusMessage(error instanceof Error ? error.message : "Could not set branch upstream"); }
+  };
+
   const editorFontFamily = uiFontFamily === "jetbrains" ? "JetBrains Mono Variable" : "Inter Variable";
   const editorLineHeight = Math.round(uiFontSize * uiLineHeight);
   const normalizedTaskFilter = taskFilter.trim().toLowerCase();
@@ -2133,7 +2163,7 @@ export function App() {
       </>}
       <main className="workbench">
         <div className="titlebar-actions">
-          <div className="branch-selector"><button className="branch-selector-button" title="Git branches" onClick={() => void toggleBranchMenu()}><GitBranch size={14} /><span>{gitBranch}</span><ChevronDown size={12} /></button>{branchMenu && <div className="branch-menu"><header><span>Git Branches</span><button title="Refresh branches" onClick={() => void loadBranchMenu()}><RefreshCw size={13} /></button></header>{branchMenu.loading ? <div className="branch-menu-empty">Loading branches...</div> : <div className="branch-groups"><BranchSelectorGroup title="Local" branches={branchMenu.branches.filter((branch) => !branch.remote)} selected={branchMenu.selected} onSelect={(name) => setBranchMenu((current) => current ? { ...current, selected: current.selected === name ? undefined : name } : current)} onCheckout={checkoutBranch} onRename={renameBranch} /><BranchSelectorGroup title="Remote" branches={branchMenu.branches.filter((branch) => branch.remote)} selected={branchMenu.selected} onSelect={(name) => setBranchMenu((current) => current ? { ...current, selected: current.selected === name ? undefined : name } : current)} onCheckout={checkoutBranch} onRename={renameBranch} /></div>}</div>}</div>
+          <div className="branch-selector"><button className="branch-selector-button" title="Git branches" onClick={() => void toggleBranchMenu()}><GitBranch size={14} /><span>{gitBranch}</span><ChevronDown size={12} /></button>{branchMenu && <div className="branch-menu"><header><span>Git Branches</span><span><button title="Create local branch" onClick={() => void createBranch()}><Plus size={13} /></button><button title="Refresh branches" onClick={() => void loadBranchMenu()}><RefreshCw size={13} /></button></span></header>{branchMenu.loading ? <div className="branch-menu-empty">Loading branches...</div> : <div className="branch-groups"><BranchSelectorGroup title="Local" branches={branchMenu.branches.filter((branch) => !branch.remote)} selected={branchMenu.selected} onSelect={(name) => setBranchMenu((current) => current ? { ...current, selected: current.selected === name ? undefined : name } : current)} onCheckout={checkoutBranch} onRename={renameBranch} onDelete={deleteBranch} onPublish={publishBranch} onSetUpstream={setBranchUpstream} /><BranchSelectorGroup title="Remote" branches={branchMenu.branches.filter((branch) => branch.remote)} selected={branchMenu.selected} onSelect={(name) => setBranchMenu((current) => current ? { ...current, selected: current.selected === name ? undefined : name } : current)} onCheckout={checkoutBranch} onRename={renameBranch} onDelete={deleteBranch} onPublish={publishBranch} onSetUpstream={setBranchUpstream} /></div>}</div>}</div>
           {javaOptions && <div className="top-java-run">
             <button title="Run selected Java configuration" disabled={javaRunning || !javaOptions.selectedRunConfigurationId} onClick={() => void runJavaAction("java.run")}><Play size={14} /></button>
             <button title="Debug selected Java configuration" disabled={javaRunning || !javaOptions.selectedRunConfigurationId} onClick={() => void debugJava()}><Bug size={14} /></button>
@@ -2283,13 +2313,13 @@ export function CheckpointHandoff({ checkpoint }: { checkpoint: TaskCheckpoint }
   return <aside className="task-checkpoint-handoff" aria-label="Prompt handoff summary"><strong>Handoff</strong><small>{[provenance.model && `Model: ${provenance.model}${provenance.reasoning ? ` (${provenance.reasoning})` : ""}`, provenance.agent && `Agent: ${provenance.agent.name}`, attachments && `Attachments: ${attachments}`, provenance.usage && `Usage: ${provenance.usage.total.toLocaleString()} tokens`, provenance.commit && `Commit: ${provenance.commit.slice(0, 12)}`].filter(Boolean).join(" · ") || "No additional turn metadata"}</small></aside>;
 }
 
-function BranchSelectorGroup({ title, branches, selected, onSelect, onCheckout, onRename }: { title: string; branches: GitBranchInfo[]; selected?: string; onSelect(name: string): void; onCheckout(branch: GitBranchInfo): void; onRename(branch: GitBranchInfo): void }) {
+export function BranchSelectorGroup({ title, branches, selected, onSelect, onCheckout, onRename, onDelete, onPublish, onSetUpstream }: { title: string; branches: GitBranchInfo[]; selected?: string; onSelect(name: string): void; onCheckout(branch: GitBranchInfo): void; onRename(branch: GitBranchInfo): void; onDelete(branch: GitBranchInfo): void; onPublish(branch: GitBranchInfo): void; onSetUpstream(branch: GitBranchInfo): void }) {
   const nodes = useMemo(() => buildBranchPathTree(branches), [branches]);
   const currentPaths = branches.filter((branch) => branch.current).flatMap((branch) => { const parts = branch.name.split("/"); return parts.slice(0, -1).map((_, index) => parts.slice(0, index + 1).join("/")); });
   const currentPathsKey = currentPaths.join("\0");
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set(currentPaths));
   useEffect(() => { if (currentPaths.some((path) => !expanded.has(path))) setExpanded((current) => new Set([...current, ...currentPaths])); }, [currentPathsKey]);
-  const renderBranch = (branch: GitBranchInfo, label: string, depth: number) => { const open = selected === branch.name; return <div className={`branch-selector-item ${open ? "open" : ""}`} key={`branch:${branch.name}`}><button className={`branch-selector-row ${branch.current ? "current" : ""} ${open ? "selected" : ""}`} title={branch.name} style={{ paddingLeft: 10 + depth * 15 }} onClick={() => onSelect(branch.name)}><GitBranch size={13} /><span>{label}</span>{branch.current && <span className="branch-current-label">Current</span>}<ChevronRight className={open ? "expanded" : ""} size={12} /></button>{open && <div className="branch-action-menu"><button disabled={branch.current} onClick={() => void onCheckout(branch)}><GitBranch size={13} /><span>Checkout</span></button><button disabled={branch.remote} onClick={() => void onRename(branch)}><Pencil size={13} /><span>Rename</span></button></div>}</div>; };
+  const renderBranch = (branch: GitBranchInfo, label: string, depth: number) => { const open = selected === branch.name; return <div className={`branch-selector-item ${open ? "open" : ""}`} key={`branch:${branch.name}`}><button className={`branch-selector-row ${branch.current ? "current" : ""} ${open ? "selected" : ""}`} title={branch.name} style={{ paddingLeft: 10 + depth * 15 }} onClick={() => onSelect(branch.name)}><GitBranch size={13} /><span>{label}</span>{branch.current && <span className="branch-current-label">Current</span>}<ChevronRight className={open ? "expanded" : ""} size={12} /></button>{open && <div className="branch-action-menu"><button disabled={branch.current} onClick={() => void onCheckout(branch)}><GitBranch size={13} /><span>Checkout</span></button><button disabled={branch.remote || branch.current} onClick={() => void onRename(branch)}><Pencil size={13} /><span>Rename</span></button><button disabled={branch.current} onClick={() => void onDelete(branch)}><Trash2 size={13} /><span>Delete</span></button>{!branch.remote && <><button onClick={() => void onPublish(branch)}><ArrowUp size={13} /><span>Publish</span></button><button onClick={() => void onSetUpstream(branch)}><GitCompareArrows size={13} /><span>Upstream</span></button></>}</div>}</div>; };
   const renderNodes = (items: BranchPathNode[], depth: number): ReactNode => items.map((node) => { if (node.children.length === 0 && node.branch) return renderBranch(node.branch, node.segment, depth); const open = expanded.has(node.path); return <div className="branch-path-group" key={`path:${node.path}`}><button className="branch-path-row" style={{ paddingLeft: 9 + depth * 15 }} aria-expanded={open} onClick={() => setExpanded((current) => { const next = new Set(current); open ? next.delete(node.path) : next.add(node.path); return next; })}>{open ? <ChevronDown size={12} /> : <ChevronRight size={12} />}{open ? <FolderOpen size={13} /> : <Folder size={13} />}<span>{node.segment}</span><small>{countBranchPathLeaves(node)}</small></button>{open && <div>{node.branch && renderBranch(node.branch, node.segment, depth + 1)}{renderNodes(node.children, depth + 1)}</div>}</div>; });
   return <section className="branch-selector-group"><header>{title}<small>{branches.length}</small></header>{branches.length === 0 ? <div className="branch-menu-empty">No {title.toLowerCase()} branches</div> : renderNodes(nodes, 0)}</section>;
 }

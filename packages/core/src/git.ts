@@ -3,7 +3,7 @@ import { promisify } from "node:util";
 import path from "node:path";
 import { readFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
-import type { GitBranch, GitCommit, GitCommitFile, GitDiffHunk, GitHistoryRewritePreview, GitRollbackFailure, GitStatusEntry, GitTag, GitUpstreamStatus } from "@remote-ide/protocol";
+import type { GitBranch, GitBranchDeletePreview, GitCommit, GitCommitFile, GitDiffHunk, GitHistoryRewritePreview, GitRollbackFailure, GitStatusEntry, GitTag, GitUpstreamStatus } from "@remote-ide/protocol";
 import { CoreError } from "./errors.js";
 import { WorkspaceFileSystem } from "./filesystem.js";
 
@@ -122,9 +122,20 @@ export class GitService {
 
   async renameBranch(branch: string, newName: string): Promise<string> {
     validateBranchName(branch); validateBranchName(newName);
+    await this.ensureBranchNotCheckedOut(branch);
     await this.git(["branch", "-m", branch, newName]);
     return (await this.status()).branch;
   }
+
+  async createBranch(name: string): Promise<string> { validateBranchName(name); await this.git(["branch", name]); return name; }
+  async branchDeletePreview(branch: string, remote: boolean): Promise<GitBranchDeletePreview> { const reference = await this.branchReference(branch, remote); const unmerged = parseGitLog(await this.git(["log", "--max-count=50", "--format=%H%x00%h%x00%an%x00%aI%x00%s%x00", reference, "--not", "HEAD"])); return { branch, remote, unmerged, confirmationRequired: remote || unmerged.length > 0 }; }
+  async deleteBranch(branch: string, remote: boolean, force: boolean, confirm: boolean): Promise<void> {
+    if (typeof force !== "boolean" || typeof confirm !== "boolean") throw new CoreError("INVALID_REQUEST", "Branch deletion confirmation is required"); const reference = await this.branchReference(branch, remote);
+    if (!remote) { await this.ensureBranchNotCheckedOut(branch); const preview = await this.branchDeletePreview(branch, false); if ((force || preview.confirmationRequired) && !confirm) throw new CoreError("INVALID_REQUEST", "Confirm deletion of an unmerged or forced branch"); await this.git(["branch", force ? "-D" : "-d", branch]); return; }
+    if (!confirm) throw new CoreError("INVALID_REQUEST", "Confirm remote branch deletion"); const { remoteName, branchName } = splitRemoteBranch(reference); await this.networkGit(["push", remoteName, "--delete", branchName]);
+  }
+  async publishBranch(branch: string, remote: string, force: boolean, confirm: boolean): Promise<void> { validateBranchName(branch); await this.requireLocalBranch(branch); await this.requireRemote(remote); if (typeof force !== "boolean" || typeof confirm !== "boolean" || !confirm) throw new CoreError("INVALID_REQUEST", force ? "Confirm force publishing this branch" : "Confirm publishing this branch to the remote"); await this.networkGit(["push", ...(force ? ["--force-with-lease"] : []), "--set-upstream", remote, branch]); }
+  async setBranchUpstream(branch: string, remote: string, upstream: string, confirm: boolean): Promise<void> { validateBranchName(branch); validateBranchName(upstream); await this.requireLocalBranch(branch); await this.branchReference(`${remote}/${upstream}`, true); if (typeof confirm !== "boolean" || !confirm) throw new CoreError("INVALID_REQUEST", "Confirm changing this branch's upstream"); await this.git(["branch", "--set-upstream-to", `${remote}/${upstream}`, branch]); }
 
   async log(branch: string, limit = 200): Promise<GitCommit[]> {
     if (!/^[\w./@{}~^:+-]+$/.test(branch)) throw new CoreError("INVALID_REQUEST", "Invalid Git branch");
@@ -295,6 +306,11 @@ export class GitService {
     try { return (await execFileAsync("git", ["-C", this.workspace, ...args], { encoding: "utf8", maxBuffer: 16 * 1024 * 1024 })).stdout; }
     catch (error) { throw new CoreError("GIT_FAILED", error instanceof Error ? error.message : String(error)); }
   }
+  private async networkGit(args: string[]): Promise<string> { try { return (await execFileAsync("git", ["-C", this.workspace, ...args], { encoding: "utf8", maxBuffer: 16 * 1024 * 1024 })).stdout; } catch (error) { throw new CoreError("GIT_FAILED", gitNetworkError(error)); } }
+  private async requireLocalBranch(branch: string): Promise<void> { try { await this.git(["show-ref", "--verify", "--quiet", `refs/heads/${branch}`]); } catch { throw new CoreError("INVALID_REQUEST", `Local branch '${branch}' does not exist`); } }
+  private async requireRemote(remote: string): Promise<void> { if (!/^[A-Za-z0-9._-]+$/.test(remote)) throw new CoreError("INVALID_REQUEST", "Invalid Git remote"); const remotes = (await this.git(["remote"])).split("\n").filter(Boolean); if (!remotes.includes(remote)) throw new CoreError("INVALID_REQUEST", `Git remote '${remote}' does not exist`); }
+  private async branchReference(branch: string, remote: boolean): Promise<string> { if (!remote) { validateBranchName(branch); await this.requireLocalBranch(branch); return branch; } const { remoteName, branchName } = splitRemoteBranch(branch); await this.requireRemote(remoteName); try { await this.git(["show-ref", "--verify", "--quiet", `refs/remotes/${remoteName}/${branchName}`]); } catch { throw new CoreError("INVALID_REQUEST", `Remote branch '${branch}' does not exist`); } return branch; }
+  private async ensureBranchNotCheckedOut(branch: string): Promise<void> { const output = await this.git(["worktree", "list", "--porcelain"]); if (output.split("\n").some((line) => line === `branch refs/heads/${branch}`)) throw new CoreError("INVALID_REQUEST", "Cannot delete a branch checked out by a workspace or task worktree"); }
 
   private async headCommit(): Promise<GitCommit> {
     try {
@@ -386,6 +402,7 @@ export function parseDiffHunks(output: string, source: "index" | "worktree" = "w
 function validateHash(hash: string): void { if (!/^[0-9a-f]{7,64}$/i.test(hash)) throw new CoreError("INVALID_REQUEST", "Invalid commit hash"); }
 function validateRef(ref: string): void { if (!/^[\w./@{}~^:+-]+$/.test(ref)) throw new CoreError("INVALID_REQUEST", "Invalid Git reference"); }
 function validateBranchName(name: string): void { if (!name || !/^[\w./-]+$/.test(name) || name.startsWith("-") || name.includes("..") || name.includes("//") || name.endsWith("/")) throw new CoreError("INVALID_REQUEST", "Invalid Git branch name"); }
+function splitRemoteBranch(value: string): { remoteName: string; branchName: string } { const [remoteName, ...parts] = value.split("/"); const branchName = parts.join("/"); if (!remoteName || !branchName) throw new CoreError("INVALID_REQUEST", "Remote branch must include a remote and branch name"); validateBranchName(branchName); return { remoteName, branchName }; }
 /** Accept a short, unambiguous local tag name; refs/tags/* and revision syntax are deliberately refused. */
 export function validateTagName(name: string): void {
   if (!name || name.length > 255 || name.startsWith("-") || name.startsWith("refs/") || name === "@" || name === "HEAD" || /[\s~^:?*\\[\x00-\x1f\x7f]/.test(name) || name.includes("@{") || name.includes("..") || name.includes("//") || name.startsWith("/") || name.endsWith("/") || name.endsWith(".") || name.endsWith(".lock") || name.split("/").some((part) => !part || part.startsWith(".") || part.endsWith(".lock"))) throw new CoreError("INVALID_REQUEST", "Invalid or ambiguous local tag name");

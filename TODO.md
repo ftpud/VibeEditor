@@ -135,7 +135,7 @@ multi-surface work).
   Constraint: Core detects the active operation (merge, rebase, cherry-pick, stash),
   validates every resolved path, and exposes native Git continue/abort safely.
   Depends on index operations; precedes polished merge/rebase flows.
-- [ ] **Branch management: create, delete, publish, upstream — Project.** Value:
+- [x] **Branch management: create, delete, publish, upstream — Project.** Value:
   complete the current checkout/rename selector for everyday branch lifecycle work.
   Constraint: protect checked-out/task-worktree branches, distinguish local and
   remote deletion, preview unmerged commits, and require explicit confirmation for
