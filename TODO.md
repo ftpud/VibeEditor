@@ -19,13 +19,14 @@ multi-surface work).
 
 ## Found defects, high priority for fixing:
 
-- [ ] **Review UI/UX, fix defects.**: 
+- [ ] **Review UI/UX, fix defects. Use Sol model for fixing these**: 
   In task filter dropdown width is to big.
   Terminal rename doesnt work
   Gateway connection buttons have wierd allignment and size
   Gateway errors produces message boxes, make it unblocking status float window
   Editing text in the editor sometimes pushes cursor to the very end of file
-
+  Stash manager doesn't have background
+  'Amend staged' padding is wierd and it's always disabled
 
 ### Project foundations
 
