@@ -151,7 +151,7 @@ multi-surface work).
   long-running remote shells understandable. Constraint: persist display metadata
   separately from PTY identity and retain the current rule that closing a tab ends
   its Core process.
-- [ ] **Terminal recovery clarity — Project.** Value: distinguish a live reattach from
+- [x] **Terminal recovery clarity — Project.** Value: distinguish a live reattach from
   a recreated shell after reconnect/task switch. Constraint: Core remains process
   owner; show exit/recreation reason and working-directory limitations instead of
   implying shell state was restored.

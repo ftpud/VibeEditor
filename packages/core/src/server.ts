@@ -471,7 +471,7 @@ async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStor
     case "terminal.attach": {
       if (typeof request.payload.terminalId !== "string") throw new CoreError("INVALID_REQUEST", "terminalId must be a string");
       const session = terminalHost.attach(workspacePath, request.payload.terminalId);
-      return session ? { state: "available" as const, session } : { state: "stale" as const };
+      return session ? { state: "available" as const, session } : { state: "stale" as const, reason: "session-unavailable" as const };
     }
     case "terminal.input": {
       if (typeof request.payload.terminalId !== "string" || typeof request.payload.data !== "string") throw new CoreError("INVALID_REQUEST", "terminalId and data must be strings");
