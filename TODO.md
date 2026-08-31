@@ -165,7 +165,7 @@ multi-surface work).
   AI workspaces manageable as their count grows. Constraint: rename display metadata
   separately from Git branches; archive must not delete worktrees or unpublished
   commits, and deletion keeps its existing safety checks.
-- [ ] **Review queue for AI changes — Project.** Value: turn prompt checkpoints into
+- [x] **Review queue for AI changes — Project.** Value: turn prompt checkpoints into
   a file/hunk accept, restore, and follow-up loop. Constraint: Core snapshots remain
   authoritative, edits after a checkpoint are never overwritten without a three-way
   comparison, and actions compose with Git index state.

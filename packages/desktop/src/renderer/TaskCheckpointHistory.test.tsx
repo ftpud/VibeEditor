@@ -7,13 +7,13 @@ const checkpoint: TaskCheckpoint = { id: "one", promptId: "prompt-one", provider
 
 describe("TaskCheckpointHistory", () => {
   it("groups recorded changes under prompt metadata", () => {
-    const markup = renderToStaticMarkup(<TaskCheckpointHistory checkpoints={[checkpoint]} onOpen={() => undefined} onRestore={() => undefined} />);
+    const markup = renderToStaticMarkup(<TaskCheckpointHistory checkpoints={[checkpoint]} onOpen={() => undefined} onReview={() => undefined} onRestore={() => undefined} onFollowUp={() => undefined} />);
     expect(markup).toContain("Prompt History"); expect(markup).toContain("Add prompt history");
     const handoff = renderToStaticMarkup(<CheckpointHandoff checkpoint={checkpoint} />);
     expect(handoff).toContain("Handoff"); expect(handoff).toContain("Model: gpt-5 (low)"); expect(handoff).toContain("Attachments: brief.md"); expect(handoff).toContain("Commit: 1234567890ab");
   });
 
   it("explains an empty durable history", () => {
-    expect(renderToStaticMarkup(<TaskCheckpointHistory checkpoints={[]} onOpen={() => undefined} onRestore={() => undefined} />)).toContain("Prompt checkpoints appear");
+    expect(renderToStaticMarkup(<TaskCheckpointHistory checkpoints={[]} onOpen={() => undefined} onReview={() => undefined} onRestore={() => undefined} onFollowUp={() => undefined} />)).toContain("Prompt checkpoints appear");
   });
 });
