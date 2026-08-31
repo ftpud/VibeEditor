@@ -460,11 +460,13 @@ async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStor
     case "filesystem.listTree": return { tree: await filesystem.listTree(request.payload.includeIgnored === true) };
     case "filesystem.readFile": {
       if (typeof request.payload.path !== "string") throw new CoreError("INVALID_REQUEST", "path must be a string");
-      return { path: request.payload.path, content: await filesystem.read(request.payload.path) };
+      const file = await filesystem.read(request.payload.path);
+      return { path: request.payload.path, ...file };
     }
     case "filesystem.writeFile": {
       if (typeof request.payload.path !== "string" || typeof request.payload.content !== "string") throw new CoreError("INVALID_REQUEST", "path and content must be strings");
-      return { path: request.payload.path, bytesWritten: await filesystem.write(request.payload.path, request.payload.content) };
+      const file = await filesystem.write(request.payload.path, request.payload.content, request.payload.expectedRevision, request.payload.force === true, request.payload.create === true);
+      return { path: request.payload.path, ...file };
     }
     case "filesystem.createFile": {
       if (typeof request.payload.path !== "string") throw new CoreError("INVALID_REQUEST", "path must be a string");

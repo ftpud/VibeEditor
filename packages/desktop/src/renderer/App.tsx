@@ -1,7 +1,7 @@
 import Editor, { DiffEditor, type Monaco } from "@monaco-editor/react";
 import { Archive, ArrowUp, ArrowUpRight, Bot, Bug, Check, ChevronDown, ChevronRight, ChevronUp, CircleAlert, ClipboardCopy, Coffee, Columns2, Eye, EyeOff, File, FileCode2, FileDiff, FileText, Folder, FolderOpen, GitBranch, GitCompareArrows, GitMerge, Library, ListTodo, ListTree, LoaderCircle, LogOut, MoreVertical, Package, Palette, Pencil, Pin, PinOff, Play, Plus, RefreshCw, Save, Search, Settings, ShieldAlert, Square, SquareTerminal, Trash2, X } from "lucide-react";
 import { Children, isValidElement, useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
-import type { AgentFile, AgentFileScope, AiConfiguration, AiModel, AiProvider, AiProviderDescriptor, AiSession, AiStatus, AiTaskSummary, AiUsage, FileColor, FileTreeNode, GitBranch as GitBranchInfo, GitDiffHunk, GitHistoryRewritePreview, GitStatusEntry, GitUpstreamStatus, HttpResponse, JavaBreakpoint, JavaDebugState, JavaDiagnostic, JavaLspLocation, JavaMainClass, JavaProjectNode, JavaProjectOptions, JavaTypeSuggestion, RunConfig, RunConfigScope, SearchResult, TaskCheckpoint, TaskCheckpointFile, UsefulFile, UsefulFileScope, WorkspaceOptions, WorkspaceSearchQueries, WorkspaceTask } from "@remote-ide/protocol";
+import type { AgentFile, AgentFileScope, AiConfiguration, AiModel, AiProvider, AiProviderDescriptor, AiSession, AiStatus, AiTaskSummary, AiUsage, FileColor, FileRevision, FileTreeNode, GitBranch as GitBranchInfo, GitDiffHunk, GitHistoryRewritePreview, GitStatusEntry, GitUpstreamStatus, HttpResponse, JavaBreakpoint, JavaDebugState, JavaDiagnostic, JavaLspLocation, JavaMainClass, JavaProjectNode, JavaProjectOptions, JavaTypeSuggestion, RunConfig, RunConfigScope, SearchResult, TaskCheckpoint, TaskCheckpointFile, UsefulFile, UsefulFileScope, WorkspaceOptions, WorkspaceSearchQueries, WorkspaceTask } from "@remote-ide/protocol";
 import type { editor } from "monaco-editor";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -226,6 +226,7 @@ export function App() {
   const [searchScope, setSearchScope] = useState<string>();
   const [searchQueries, setSearchQueries] = useState<WorkspaceSearchQueries>({});
   const [quickOpen, setQuickOpen] = useState(false);
+  const [externalConflict, setExternalConflict] = useState<{ tabId: string; path: string; externalContent: string; externalRevision: FileRevision; error?: string }>();
   const [pendingNavigation, setPendingNavigation] = useState<{ result: SearchResult; matchLength: number }>();
   const clientRef = useRef<CoreClient>();
   const gitRollbackRunningRef = useRef(false);
@@ -441,7 +442,7 @@ export function App() {
       const title = filePath.split("/").pop() ?? filePath;
       try {
         const result = await client.request("filesystem.readFile", { path: filePath });
-        return { id: crypto.randomUUID(), type: "file", title, path: filePath, pinned: pinnedFiles.has(filePath), dirty: false, content: result.content, savedContent: result.content, loading: false, markdownMode: /\.md$/i.test(filePath) ? "preview" : undefined };
+        return { id: crypto.randomUUID(), type: "file", title, path: filePath, pinned: pinnedFiles.has(filePath), dirty: false, content: result.content, savedContent: result.content, revision: result.revision, loading: false, markdownMode: /\.md$/i.test(filePath) ? "preview" : undefined };
       } catch (error) {
         return { id: crypto.randomUUID(), type: "file", title, path: filePath, pinned: pinnedFiles.has(filePath), dirty: false, content: "", savedContent: "", loading: false, markdownMode: /\.md$/i.test(filePath) ? "preview" : undefined, error: error instanceof Error ? error.message : "Could not restore file" };
       }
@@ -600,16 +601,10 @@ export function App() {
         return;
       }
       if (kind !== "change" || (selfWriteUntil.current.get(path) ?? 0) > Date.now()) return;
-      if (openTab.dirty) {
-        updateGroup((tabs, active) => ({
-          tabs: tabs.map((tab) => tab.path === path ? { ...tab, error: "File changed outside the editor; your unsaved changes were preserved" } : tab),
-          activeTabId: active
-        }));
-        return;
-      }
       void client.request("filesystem.readFile", { path }).then((result) => {
+        if (openTab.dirty) { setExternalConflict({ tabId: openTab.id, path, externalContent: result.content, externalRevision: result.revision }); return; }
         updateGroup((tabs, active) => ({
-          tabs: tabs.map((tab) => tab.path !== path || tab.dirty ? tab : { ...tab, content: result.content, savedContent: result.content, error: undefined }),
+          tabs: tabs.map((tab) => tab.path !== path || tab.dirty ? tab : { ...tab, content: result.content, savedContent: result.content, revision: result.revision, error: undefined }),
           activeTabId: active
         }));
       }).catch((error: unknown) => {
@@ -747,7 +742,7 @@ export function App() {
     updateGroup((tabs) => ({ tabs: [...tabs, tab], activeTabId: tab.id }));
     try {
       const result = await clientRef.current!.request("filesystem.readFile", { path: node.path });
-      updateGroup((tabs, active) => ({ tabs: tabs.map((item) => item.id === tab.id ? { ...item, content: result.content, savedContent: result.content, loading: false } : item), activeTabId: active }));
+      updateGroup((tabs, active) => ({ tabs: tabs.map((item) => item.id === tab.id ? { ...item, content: result.content, savedContent: result.content, revision: result.revision, loading: false } : item), activeTabId: active }));
     } catch (error) {
       updateGroup((tabs, active) => ({ tabs: tabs.map((item) => item.id === tab.id ? { ...item, loading: false, error: error instanceof Error ? error.message : "Read failed" } : item), activeTabId: active }));
     }
@@ -1061,8 +1056,11 @@ export function App() {
       if (current.type === "useful") await clientRef.current.request("useful.write", { scope: current.usefulScope!, name: current.path, content });
       else if (current.type === "runConfig") { const config = (await clientRef.current.request("runConfig.write", { scope: current.runConfigScope!, name: current.path, commands: content })).config; setRunConfigs((items) => items.map((item) => item.scope === config.scope && item.name === config.name ? config : item)); }
       else if (current.type === "agent") await clientRef.current.request("agents.write", { scope: current.agentScope!, name: current.path, content });
-      else await clientRef.current.request("filesystem.writeFile", { path: current.path, content });
-      updateGroup((tabs, active) => ({ tabs: tabs.map((tab) => tab.id === current.id ? { ...tab, dirty: tab.content !== content, savedContent: content, error: undefined } : tab), activeTabId: active }));
+      else {
+        const saved = await clientRef.current.request("filesystem.writeFile", { path: current.path, content, expectedRevision: current.revision });
+        updateGroup((tabs, active) => ({ tabs: tabs.map((tab) => tab.id === current.id ? { ...tab, dirty: tab.content !== content, savedContent: content, revision: saved.revision, error: undefined } : tab), activeTabId: active }));
+      }
+      if (current.type !== "file") updateGroup((tabs, active) => ({ tabs: tabs.map((tab) => tab.id === current.id ? { ...tab, dirty: tab.content !== content, savedContent: content, error: undefined } : tab), activeTabId: active }));
       if (current.type === "agent" || (current.type === "file" && /^\.agents\/[^/]+\.md$/i.test(current.path))) await refreshAgents();
       if (current.type === "file" && /\.java$/i.test(current.path)) scheduleJavaCheck();
     } catch (error) {
@@ -2288,6 +2286,7 @@ export function App() {
     {gitRollbackDialog && <RollbackSelectedDialog entries={gitRollbackDialog} busy={gitRollingBack} onClose={() => { if (!gitRollingBack) setGitRollbackDialog(undefined); }} onConfirm={(deleteUntracked) => void rollbackSelected(deleteUntracked)} />}
     {gitRewriteDialog && <GitHistoryRewriteDialog action={gitRewriteDialog.action} preview={gitRewriteDialog.preview} busy={gitCommitting} onClose={() => { if (!gitCommitting) setGitRewriteDialog(undefined); }} onConfirm={(confirmedRisk) => void executeHistoryRewrite(confirmedRisk)} />}
     {gitHunkDialog && <div className="context-menu-layer" onMouseDown={() => setGitHunkDialog(undefined)}><section className="git-hunk-popup" role="dialog" aria-label={`Previous content in ${gitHunkDialog.path}`} style={{ left: gitHunkDialog.x, top: gitHunkDialog.y }} onMouseDown={(event) => event.stopPropagation()}><header><div><strong>Before this change</strong><span>{gitHunkDialog.path.split("/").pop()} · line {gitHunkDialog.hunk.originalStart}</span></div><button title="Close" onClick={() => setGitHunkDialog(undefined)}><X size={14} /></button></header>{gitHunkDialog.error && <div className="git-hunk-error">{gitHunkDialog.error}</div>}<pre>{gitHunkDialog.hunk.originalLines === 0 ? "This block did not exist before." : gitHunkDialog.originalContent.split("\n").slice(Math.max(0, gitHunkDialog.hunk.originalStart - 1), Math.max(0, gitHunkDialog.hunk.originalStart - 1) + gitHunkDialog.hunk.originalLines).join("\n")}</pre><footer>{gitHunkDialog.hunk.source === "worktree" ? <button onClick={() => void updateGitIndex("stage", gitHunkDialog.path, gitHunkDialog.hunk)}><Check size={13} /><span>Stage Hunk</span></button> : <button onClick={() => void updateGitIndex("unstage", gitHunkDialog.path, gitHunkDialog.hunk)}><X size={13} /><span>Unstage Hunk</span></button>}<button className="danger" disabled={gitHunkDialog.hunk.source !== "worktree"} onClick={() => void rollbackGitHunk()}><RefreshCw size={13} /><span>Rollback</span></button></footer></section></div>}
+    {externalConflict && <ExternalChangeConflict dialog={externalConflict} onClose={() => setExternalConflict(undefined)} onReload={() => { updateGroup((tabs, active) => ({ tabs: tabs.map((tab) => tab.id === externalConflict.tabId ? { ...tab, content: externalConflict.externalContent, savedContent: externalConflict.externalContent, revision: externalConflict.externalRevision, dirty: false, error: undefined } : tab), activeTabId: active })); setExternalConflict(undefined); }} onOverwrite={() => { const tab = layoutRef.current.editorGroups[0]?.tabs.find((item) => item.id === externalConflict.tabId); if (!tab || !clientRef.current) return; void clientRef.current.request("filesystem.writeFile", { path: externalConflict.path, content: tab.content, expectedRevision: externalConflict.externalRevision, force: true }).then((saved) => { updateGroup((tabs, active) => ({ tabs: tabs.map((item) => item.id === tab.id ? { ...item, savedContent: tab.content, dirty: false, revision: saved.revision, error: undefined } : item), activeTabId: active })); setExternalConflict(undefined); }).catch((error: unknown) => setExternalConflict((current) => current ? { ...current, error: error instanceof Error ? error.message : "Could not overwrite" } : current)); }} onSaveAs={(target) => { const tab = layoutRef.current.editorGroups[0]?.tabs.find((item) => item.id === externalConflict.tabId); if (!tab || !clientRef.current) return; void clientRef.current.request("filesystem.writeFile", { path: target, content: tab.content, create: true }).then(() => { setExternalConflict(undefined); void refreshTree(); }).catch((error: unknown) => setExternalConflict((current) => current ? { ...current, error: error instanceof Error ? error.message : "Could not save as" } : current)); }} />}
     {showRunConfigurationDialog && <RunConfigurationDialog client={clientRef.current!} onClose={() => setShowRunConfigurationDialog(false)} onSaved={(options) => { setJavaOptions(options); javaOptionsRef.current = options; setShowRunConfigurationDialog(false); }} />}
     {showCreateTaskDialog && <CreateTaskDialog client={clientRef.current!} onClose={() => setShowCreateTaskDialog(false)} onCreate={createTask} />}
     {mergeDialog && <MergeTaskDialog task={mergeDialog} onClose={() => setMergeDialog(undefined)} onMerge={(strategy) => void mergeTask(mergeDialog, strategy)} />}
@@ -2295,6 +2294,11 @@ export function App() {
     {runConfigDialog && <RunConfigDialog scope={runConfigDialog.scope} onClose={() => setRunConfigDialog(undefined)} onSave={async (name, commands) => { const config = (await clientRef.current!.request("runConfig.create", { scope: runConfigDialog.scope, name, commands })).config; setRunConfigs((items) => [...items, config].sort((a, b) => a.name.localeCompare(b.name) || a.scope.localeCompare(b.scope))); setRunConfigDialog(undefined); }} />}
     {agentDialog && <AgentDialog mode={agentDialog.mode} initialName={agentDialog.file?.name ?? ""} scope={agentDialog.scope} onClose={() => setAgentDialog(undefined)} onSave={saveAgentDialog} />}
   </div>;
+}
+
+function ExternalChangeConflict({ dialog, onClose, onReload, onOverwrite, onSaveAs }: { dialog: { path: string; externalContent: string; externalRevision: FileRevision; error?: string }; onClose(): void; onReload(): void; onOverwrite(): void; onSaveAs(target: string): void }) {
+  const [target, setTarget] = useState("");
+  return <div className="dialog-overlay" onMouseDown={onClose}><section className="run-config-dialog" role="alertdialog" aria-modal="true" aria-label="External file change" onMouseDown={(event) => event.stopPropagation()}><header><div><h2>File changed externally</h2><span>{dialog.path} · {dialog.externalRevision.identity} · {dialog.externalRevision.version.slice(0, 12)}</span></div><button title="Keep editing" onClick={onClose}><X size={15} /></button></header><p>Your unsaved buffer is preserved. Compare it with the external version before choosing an action.</p><details><summary>Compare external content</summary><pre>{dialog.externalContent}</pre></details>{dialog.error && <div className="find-error">{dialog.error}</div>}<label>Save as path<input value={target} placeholder="conflict-copy.ts" onChange={(event) => setTarget(event.target.value)} /></label><footer><button onClick={onReload}>Reload external version</button><button onClick={onOverwrite}>Overwrite external version</button><button disabled={!target.trim()} onClick={() => onSaveAs(target.trim())}>Save As</button><button onClick={onClose}>Keep editing</button></footer></section></div>;
 }
 
 export function TaskCheckpointHistory({ checkpoints, onOpen, onRestore, onClose }: { checkpoints: TaskCheckpoint[]; onOpen(checkpoint: TaskCheckpoint, file: TaskCheckpointFile): void; onRestore(checkpoint: TaskCheckpoint): void; onClose?(): void }) {
