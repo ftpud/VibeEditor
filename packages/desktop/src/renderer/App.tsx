@@ -32,6 +32,8 @@ import { ProjectTree } from "./ProjectTree";
 import { projectTreeActions, type ProjectTreeAction } from "./project-tree-actions";
 import { copyProjectTreeActions } from "./project-context-menu";
 import { QuickOpenDialog, workspaceFiles } from "./QuickOpenDialog";
+import { CommandPalette } from "./CommandPalette";
+import type { Command, CommandContext } from "./command-registry";
 import { EditorStatusBar, type EditorStatusBarHandle } from "./EditorStatusBar";
 import { adjacentEditorTabId, editorShortcutEligible, editorTabShortcut } from "./editor-shortcuts";
 import { orderPinnedTabs, pinnedFilePaths, togglePinnedTab } from "./pinned-tabs";
@@ -229,6 +231,7 @@ export function App() {
   const [searchScope, setSearchScope] = useState<string>();
   const [searchQueries, setSearchQueries] = useState<WorkspaceSearchQueries>({});
   const [quickOpen, setQuickOpen] = useState(false);
+  const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const [externalConflict, setExternalConflict] = useState<{ tabId: string; path: string; externalContent: string; externalRevision: FileRevision; error?: string }>();
   const [pendingNavigation, setPendingNavigation] = useState<{ result: SearchResult; matchLength: number }>();
   const clientRef = useRef<CoreClient>();
@@ -1443,6 +1446,17 @@ export function App() {
 
   useEffect(() => {
     const listener = (event: KeyboardEvent) => {
+      if ((!event.ctrlKey && !event.metaKey) || !event.shiftKey || event.altKey || event.key.toLowerCase() !== "p") return;
+      if (status !== "connected" || (event.target as Element | null)?.closest?.(".terminal-panel")) return;
+      if (!commandPaletteOpen && document.querySelector('[role="dialog"], [role="alertdialog"], .context-menu-layer, .floating-window-layer')) return;
+      event.preventDefault();
+      if (!commandPaletteOpen) setCommandPaletteOpen(true);
+    };
+    window.addEventListener("keydown", listener); return () => window.removeEventListener("keydown", listener);
+  }, [commandPaletteOpen, status]);
+
+  useEffect(() => {
+    const listener = (event: KeyboardEvent) => {
       const shortcut = editorTabShortcut(event);
       if (!shortcut || !editorShortcutEligible(event.target, document)) return;
       const currentGroup = layoutRef.current.editorGroups[0];
@@ -2113,6 +2127,18 @@ export function App() {
   const showRootTask = !normalizedTaskFilter || `root workspace ${aiStatuses.root.status} ${aiStatuses.root.preview}`.toLowerCase().includes(normalizedTaskFilter);
   const selectedTaskTimerActive = Boolean(selectedTaskId && aiStatuses.tasks[selectedTaskId]?.waitingUntil);
   const rightSidebarOpen = rightPanels.project || rightPanels.git || rightPanels.useful || rightPanels.agents || ((rightPanels.taskGit || rightPanels.promptHistory) && Boolean(selectedTaskId)) || (rightPanels.java && Boolean(javaOptions));
+  const commandContext: CommandContext = { connected: status === "connected", hasActiveEditor: Boolean(activeTab), activeEditorDirty: Boolean(activeTab?.dirty), gitBusy: gitOperationRunning, taskSwitching, aiBusy: aiSession.status === "in_progress" };
+  const commands: Command[] = [
+    { id: "project.quickOpen", label: "Go to File", category: "Project", shortcut: "Ctrl/Cmd+P", when: (context) => context.connected, execute: () => setQuickOpen(true) },
+    { id: "project.refresh", label: "Refresh Project", category: "Project", when: (context) => context.connected, execute: () => refreshTree() },
+    { id: "project.findInFiles", label: "Find in Files", category: "Project", when: (context) => context.connected, execute: () => setSearchScope("") },
+    { id: "git.refresh", label: "Refresh Git Changes", category: "Git", when: (context) => context.connected && !context.gitBusy, execute: () => refreshGit() },
+    { id: "terminal.new", label: "New Terminal", category: "Terminal", when: (context) => context.connected, execute: () => { void createTerminal(); } },
+    { id: "terminal.toggle", label: "Toggle Terminal Panel", category: "Terminal", when: (context) => context.connected, execute: toggleTerminalPanel },
+    { id: "task.create", label: "Create Task", category: "Task", when: (context) => context.connected && !context.taskSwitching, execute: () => setShowCreateTaskDialog(true) },
+    { id: "ai.open", label: "Open AI", category: "AI", when: (context) => context.connected, execute: () => { if (sideLayout === "classic") setClassicAiOpen(true); else setLeftPanels((current) => ({ ...current, ai: true })); void refreshAi(); } },
+    { id: "editor.save", label: "Save Active Editor", category: "Editor", shortcut: "Ctrl/Cmd+S", when: (context) => context.hasActiveEditor && context.activeEditorDirty, execute: () => saveActive() }
+  ];
 
   if (status !== "connected") return <ConnectionScreen {...{ host, port, status, statusMessage, setHost, setPort, connect }} />;
 
@@ -2281,6 +2307,7 @@ export function App() {
     {projectPathDialog && <ProjectPathDialog mode={projectPathDialog.mode} initialName={projectPathDialog.mode === "rename" ? projectPathDialog.node.name : ""} parentPath={projectPathDialog.parentPath} onClose={() => setProjectPathDialog(undefined)} onSave={saveProjectPathDialog} />}
     {searchScope !== undefined && <FindInFilesDialog client={clientRef.current!} scope={searchScope} queries={searchQueries} onQueriesChange={setSearchQueries} onClose={() => setSearchScope(undefined)} onNavigate={(result, matchLength) => void navigateToSearchResult(result, matchLength)} />}
     {quickOpen && <QuickOpenDialog files={workspaceFiles(tree)} onClose={() => setQuickOpen(false)} onOpen={(file) => { setQuickOpen(false); void openFile(file); }} />}
+    {commandPaletteOpen && <CommandPalette commands={commands} context={commandContext} onClose={() => setCommandPaletteOpen(false)} />}
     {importChoices && <div className="dialog-overlay" onMouseDown={() => setImportChoices(undefined)}><section className="import-chooser" role="dialog" aria-modal="true" aria-label="Choose Java import" onMouseDown={(event) => event.stopPropagation()}><header><span>Import class</span><button title="Close" onClick={() => setImportChoices(undefined)}><X size={15} /></button></header><div>{importChoices.suggestions.map((suggestion) => <button key={suggestion.qualifiedName} onClick={() => applyJavaImport(suggestion)}><span>{suggestion.simpleName}</span><code>{suggestion.qualifiedName}</code><small>{suggestion.source}</small></button>)}</div></section></div>}
     {javaUsages && <div className="dialog-overlay" onMouseDown={() => setJavaUsages(undefined)}><section className="import-chooser usage-chooser" role="dialog" aria-modal="true" aria-label="Java usages" onMouseDown={(event) => event.stopPropagation()}><header><span>Usages ({javaUsages.length})</span><button title="Close" onClick={() => setJavaUsages(undefined)}><X size={15} /></button></header><div>{javaUsages.length === 0 ? <div className="problems-empty">No project usages found</div> : javaUsages.map((location, index) => <button key={`${location.path}:${location.startLine}:${location.startColumn}:${index}`} onClick={() => void openJavaLocation(location)}><span>{location.path.split("/").pop()}</span><code>{location.path}</code><small>{location.startLine}:{location.startColumn}</small></button>)}</div></section></div>}
     {gitHistory && <GitHistoryDialog client={clientRef.current!} path={gitHistory.path} startLine={gitHistory.startLine} endLine={gitHistory.endLine} onClose={() => setGitHistory(undefined)} />}
