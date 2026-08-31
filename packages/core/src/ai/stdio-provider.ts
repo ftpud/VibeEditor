@@ -166,7 +166,7 @@ export abstract class StdioAcpProvider extends AcpProvider {
     const visible = [prompt, ...(request.content ?? []).map(contentLabel)].filter(Boolean).join("\n");
     runtime.session.messages.push({ ...this.message("user", visible), content: request.content });
     if (this.turns) try { runtime.checkpointIds.push(await this.turns.begin(workspace, this.descriptor.id, visible, runtime.session.id, checkpointProvenance(runtime.session, request.content, request.agent))); } catch (error) { runtime.session.messages.push(this.message("activity", `Prompt checkpoint could not be created: ${error instanceof Error ? error.message : String(error)}`)); }
-    this.runPrompt(workspace, runtime, this.withSessionAgent(content, request.agent, runtime.session));
+    this.runPrompt(workspace, runtime, this.withSessionAgent(content, request.agent, request.agentPreset, runtime.session));
     await this.save(workspace, runtime.session); this.onChanged(workspace);
     return this.get(workspace);
   }
@@ -308,9 +308,10 @@ export abstract class StdioAcpProvider extends AcpProvider {
   }
 
   /** Agent presets are durable session instructions, not per-turn user content. */
-  private withSessionAgent(content: ContentBlock[], agent: AcpSendRequest["agent"] | undefined, session: AiSession): ContentBlock[] {
-    if (!agent) { session.agent = undefined; return content; }
+  private withSessionAgent(content: ContentBlock[], agent: AcpSendRequest["agent"] | undefined, preset: AcpSendRequest["agentPreset"] | undefined, session: AiSession): ContentBlock[] {
+    if (!agent) { session.agent = undefined; session.agentPreset = undefined; return content; }
     const fingerprint = agentFingerprint(agent);
+    session.agentPreset = preset;
     if (session.agent?.fingerprint === fingerprint) return content;
     session.agent = { name: agent.name, fingerprint };
     return this.withAgent(content, agent);

@@ -220,8 +220,8 @@ export class AppToolService {
       const manager = this.acp.get(this.currentProvider);
       const current = await manager.get(this.currentWorkspace);
       const selectedAgent = await this.resolveAgent(undefined, current);
-      const appTools = this.rootWorkspace ? withAppTools(this.rootWorkspace, this.currentWorkspace, [], selectedAgent, this.currentProvider) : { servers: [], agent: selectedAgent };
-      const session = await manager.startFreshSession(this.currentWorkspace, { prompt, configuration: current.configuration ?? { model: current.model, reasoning: current.reasoning }, ...(appTools.servers.length ? { mcpServers: appTools.servers } : {}), ...(appTools.agent ? { agent: appTools.agent } : {}) });
+      const appTools = this.rootWorkspace ? withAppTools(this.rootWorkspace, this.currentWorkspace, [], selectedAgent?.agent, this.currentProvider) : { servers: [], agent: selectedAgent?.agent };
+      const session = await manager.startFreshSession(this.currentWorkspace, { prompt, configuration: current.configuration ?? { model: current.model, reasoning: current.reasoning }, ...(appTools.servers.length ? { mcpServers: appTools.servers } : {}), ...(appTools.agent ? { agent: appTools.agent, agentPreset: selectedAgent!.preset } : {}) });
       return { provider: this.currentProvider, workspace: this.currentWorkspace, status: session.status, transition: "queued", prompt };
     }
     if (name === "task_create") {
@@ -246,8 +246,8 @@ export class AppToolService {
       await this.onTasksChanged();
       try {
         const workspace = this.tasks.taskPath(task.id);
-        const appTools = this.rootWorkspace ? withAppTools(this.rootWorkspace, workspace, [], selectedAgent, provider) : { servers: [], agent: selectedAgent };
-        const session = await manager.send(workspace, { prompt, configuration, ...(appTools.servers.length > 0 ? { mcpServers: appTools.servers } : {}), ...(appTools.agent ? { agent: appTools.agent } : {}) });
+        const appTools = this.rootWorkspace ? withAppTools(this.rootWorkspace, workspace, [], selectedAgent?.agent, provider) : { servers: [], agent: selectedAgent?.agent };
+        const session = await manager.send(workspace, { prompt, configuration, ...(appTools.servers.length > 0 ? { mcpServers: appTools.servers } : {}), ...(appTools.agent ? { agent: appTools.agent, agentPreset: selectedAgent!.preset } : {}) });
         return { task, session: { status: session.status, model: session.model } };
       } catch (error) {
         await this.tasks.delete(task.id).catch(() => undefined);
@@ -327,7 +327,7 @@ export class AppToolService {
     return { ...summary, ...(timer && summary.status !== "in_progress" && summary.status !== "user_prompt" ? { status: "waiting", waiting_until: timer.dueAt } : {}), providers: Object.fromEntries(this.acp.list().map((provider, index) => [provider.id, sessions[index]!.status])) };
   }
 
-  private async resolveAgent(requested: AgentFileReference | null | undefined, parent: AiSession): Promise<AiAgent | undefined> {
+  private async resolveAgent(requested: AgentFileReference | null | undefined, parent: AiSession): Promise<{ agent: AiAgent; preset: AgentFileReference } | undefined> {
     if (requested === null) return undefined;
     if (!this.agents) {
       if (requested !== undefined || parent.agent) throw new Error("Agent presets are not available");
@@ -337,12 +337,14 @@ export class AppToolService {
     if (requested) {
       const match = configured.find((file) => file.scope === requested.scope && file.name === requested.name);
       if (!match) throw new Error(`Agent preset '${requested.scope}:${requested.name}' does not exist`);
-      return match.agent;
+      return { agent: match.agent, preset: { scope: match.scope, name: match.name } };
     }
     if (!parent.agent) return undefined;
-    const inherited = configured.find((file) => file.agent.name === parent.agent!.name && agentFingerprint(file.agent) === parent.agent!.fingerprint);
+    const inherited = parent.agentPreset
+      ? configured.find((file) => file.scope === parent.agentPreset!.scope && file.name === parent.agentPreset!.name)
+      : configured.find((file) => file.agent.name === parent.agent!.name && agentFingerprint(file.agent) === parent.agent!.fingerprint);
     if (!inherited) throw new Error(`Invoking agent preset '${parent.agent.name}' is no longer available; pass agent: null to start without it`);
-    return inherited.agent;
+    return { agent: inherited.agent, preset: { scope: inherited.scope, name: inherited.name } };
   }
 }
 
