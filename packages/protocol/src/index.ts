@@ -12,7 +12,10 @@ export type GitStatusEntry = {
   originalPath?: string;
   indexStatus: string;
   worktreeStatus: string;
+  /** Separate Git areas represented by this row; a partially staged file has both index and worktree. */
+  states: GitChangeState[];
 };
+export type GitChangeState = "index" | "worktree" | "untracked" | "conflict";
 /** The configured upstream and the last remote information Core successfully obtained. */
 export type GitUpstreamStatus = { upstream: string; ahead: number; behind: number; lastFetch?: string };
 export type GitBranch = { name: string; current: boolean; remote: boolean };
@@ -20,7 +23,8 @@ export type GitBranch = { name: string; current: boolean; remote: boolean };
 export type GitTag = { name: string; target: string; annotated: boolean };
 export type GitCommit = { hash: string; shortHash: string; author: string; date: string; subject: string; parents?: string[]; refs?: string[]; graph?: string };
 export type GitCommitFile = { path: string; status: string; originalPath?: string };
-export type GitDiffHunk = { originalStart: number; originalLines: number; modifiedStart: number; modifiedLines: number };
+/** Patch and version are opaque Core-issued values; they prevent applying a hunk after its source changed. */
+export type GitDiffHunk = { originalStart: number; originalLines: number; modifiedStart: number; modifiedLines: number; source: "index" | "worktree"; patch: string; version: string };
 export type GitRollbackFailure = { path: string; message: string };
 export type TaskCheckpointFile = { path: string; status: "A" | "M" | "D" | "R"; originalPath?: string; binary: boolean; size: number };
 /** Compact, redacted turn metadata. It deliberately excludes prompt/attachment bodies and logs. */
@@ -235,6 +239,8 @@ export type ProtocolOperations = {
     payload: { path: string };
     result: { path: string; originalContent: string; modifiedContent: string; hunks: GitDiffHunk[] };
   };
+  "git.stage": { payload: { path: string; hunk?: GitDiffHunk }; result: Record<string, never> };
+  "git.unstage": { payload: { path: string; hunk?: GitDiffHunk }; result: Record<string, never> };
   "git.branches": { payload: Record<string, never>; result: { branches: GitBranch[] } };
   "git.tags": { payload: Record<string, never>; result: { tags: GitTag[] } };
   "git.createTag": { payload: { name: string; target: string }; result: { tag: GitTag } };
@@ -454,6 +460,8 @@ const requestTypeRegistry: Record<RequestType, true> = {
   "terminal.close": true,
   "git.status": true,
   "git.diff": true,
+  "git.stage": true,
+  "git.unstage": true,
   "git.branches": true,
   "git.tags": true,
   "git.createTag": true,

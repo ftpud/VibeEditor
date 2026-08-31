@@ -4,7 +4,7 @@ import type { GitStatusEntry } from "@remote-ide/protocol";
 import { GitChangesView } from "./GitChangesView";
 
 afterEach(cleanup);
-const entries: GitStatusEntry[] = [{ path: "src/first.ts", indexStatus: " ", worktreeStatus: "M" }, { path: "src/second.ts", indexStatus: " ", worktreeStatus: "M" }];
+const entries: GitStatusEntry[] = [{ path: "src/first.ts", indexStatus: " ", worktreeStatus: "M", states: ["worktree"] }, { path: "src/second.ts", indexStatus: " ", worktreeStatus: "M", states: ["worktree"] }];
 
 describe("GitChangesView keyboard and selection states", () => {
   it("reviews the focused row with Enter and moves focus with arrows", () => {
