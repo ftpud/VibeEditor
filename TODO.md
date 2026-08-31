@@ -47,7 +47,7 @@ multi-surface work).
   Constraint: relative paths are workspace-relative; absolute paths explicitly
   identify the remote machine and use the Electron clipboard bridge. Revealing must
   expand ancestors without replacing the user's remaining expansion state.
-- [ ] **Actionable external-change conflicts — Project.** Value: replace the current
+- [x] **Actionable external-change conflicts — Project.** Value: replace the current
   dirty-buffer warning with compare, reload, overwrite, and save-as choices.
   Constraint: carry file identity/version metadata through Core so stale saves are
   detected server-side; preserve the current safe auto-reload behavior for clean

@@ -31,7 +31,7 @@ export class JavaProjectService {
   async loadMavenProject(pomPath: string): Promise<{ options: JavaProjectOptions; tree: JavaProjectNode[] }> {
     this.dependencyTypes = undefined;
     if (path.posix.basename(pomPath) !== "pom.xml") throw new CoreError("MAVEN_PROJECT_INVALID", "Select a pom.xml file");
-    const xml = await this.filesystem.read(pomPath);
+    const xml = (await this.filesystem.read(pomPath)).content;
     let document: Record<string, unknown>;
     try { document = new XMLParser({ ignoreAttributes: false }).parse(xml) as Record<string, unknown>; }
     catch (error) { throw new CoreError("MAVEN_PROJECT_INVALID", `Could not parse pom.xml: ${error instanceof Error ? error.message : String(error)}`); }
@@ -88,7 +88,7 @@ export class JavaProjectService {
       try { absolute = await this.filesystem.resolveExisting(sourceRoot); } catch { continue; }
       for (const filePath of await this.collectJavaFiles(absolute, sourceRoot)) {
         let content: string;
-        try { content = await this.filesystem.read(filePath); } catch { continue; }
+        try { content = (await this.filesystem.read(filePath)).content; } catch { continue; }
         if (!/\bpublic\s+static\s+void\s+main\s*\(\s*(?:java\.lang\.)?String(?:\s*\[\s*\]|\s*\.\.\.)/m.test(content)) continue;
         const packageName = content.match(/^\s*package\s+([A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*)\s*;/m)?.[1];
         const simpleName = path.posix.basename(filePath, ".java");
@@ -153,7 +153,7 @@ export class JavaProjectService {
       let absolute: string;
       try { absolute = await this.filesystem.resolveExisting(sourceRoot); } catch { continue; }
       for (const filePath of await this.collectJavaFiles(absolute, sourceRoot)) {
-        const content = await this.filesystem.read(filePath).catch(() => "");
+        const content = await this.filesystem.read(filePath).then((file) => file.content).catch(() => "");
         const packageName = content.match(/^\s*package\s+([\w$.]+)\s*;/m)?.[1];
         for (const match of content.matchAll(/\b(?:public\s+)?(?:class|interface|enum|record)\s+([A-Za-z_$][\w$]*)/g)) {
           const simpleName = match[1]!;

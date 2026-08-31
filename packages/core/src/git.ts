@@ -61,7 +61,7 @@ export class GitService {
     } catch {
       // New files and repositories without HEAD have no original content.
     }
-    try { modifiedContent = await filesystem.read(entry.path); }
+    try { modifiedContent = (await filesystem.read(entry.path)).content; }
     catch (error) {
       if (!(error instanceof CoreError) || error.code !== "FILE_NOT_FOUND") throw error;
     }
@@ -184,7 +184,7 @@ export class GitService {
     validateRef(ref); validatePath(filePath); if (originalPath) validatePath(originalPath);
     const originalContent = await this.show(`${ref}:${originalPath ?? filePath}`);
     let modifiedContent = "";
-    try { modifiedContent = await filesystem.read(filePath); } catch (error) { if (!(error instanceof CoreError) || error.code !== "FILE_NOT_FOUND") throw error; }
+    try { modifiedContent = (await filesystem.read(filePath)).content; } catch (error) { if (!(error instanceof CoreError) || error.code !== "FILE_NOT_FOUND") throw error; }
     return { originalContent, modifiedContent };
   }
 
