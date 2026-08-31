@@ -489,7 +489,15 @@ async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStor
     case "filesystem.restore": return { path: await filesystem.restore(request.payload.recoveryId) };
     case "filesystem.search": {
       if (typeof request.payload.query !== "string" || typeof request.payload.path !== "string" || typeof request.payload.matchCase !== "boolean") throw new CoreError("INVALID_REQUEST", "query, path, and matchCase are required");
-      return search.search(request.payload.query, request.payload.path, request.payload.matchCase);
+      return search.search(request.payload.query, request.payload.path, request.payload.matchCase, { include: request.payload.include, exclude: request.payload.exclude });
+    }
+    case "filesystem.replacePreview": {
+      if (typeof request.payload.query !== "string" || typeof request.payload.replacement !== "string" || typeof request.payload.path !== "string" || typeof request.payload.matchCase !== "boolean") throw new CoreError("INVALID_REQUEST", "query, replacement, path, and matchCase are required");
+      return search.previewReplace(request.payload.query, request.payload.replacement, request.payload.path, request.payload.matchCase, { include: request.payload.include, exclude: request.payload.exclude });
+    }
+    case "filesystem.replaceApply": {
+      if (typeof request.payload.previewId !== "string" || typeof request.payload.confirmed !== "boolean") throw new CoreError("INVALID_REQUEST", "previewId and confirmed are required");
+      return search.applyReplace(request.payload.previewId, request.payload.confirmed);
     }
     case "terminal.create": {
       return terminalHost.create(workspacePath, request.payload.cols, request.payload.rows);

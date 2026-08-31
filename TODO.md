@@ -92,7 +92,7 @@ multi-surface work).
 
 ### Search
 
-- [ ] **Find-in-files include/exclude controls and replace preview — Project.** Value:
+- [x] **Find-in-files include/exclude controls and replace preview — Project.** Value:
   make repository-scale refactors practical. Constraint: Core owns glob/ignore
   evaluation; replacements require a per-file preview, changed-file/version checks,
   binary exclusion, and one confirmed batch write.

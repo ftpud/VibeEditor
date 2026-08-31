@@ -1,7 +1,7 @@
 import Editor from "@monaco-editor/react";
 import { ArrowUpRight, Bookmark, CaseSensitive, ChevronDown, ChevronRight, FileCode2, Search, Trash2, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { SearchResult, WorkspaceSearchQueries, WorkspaceSearchQuery } from "@remote-ide/protocol";
+import type { SearchReplacePreview, SearchResult, WorkspaceSearchQueries, WorkspaceSearchQuery } from "@remote-ide/protocol";
 import type { editor } from "monaco-editor";
 import type { CoreClient } from "./client";
 import { configureMonacoThemes, monacoTheme } from "./theme";
@@ -28,12 +28,17 @@ function contextLine(line: { line: number; text: string; truncated: boolean }) {
   return <span className="find-context-line" key={line.line}><span>{line.line}</span><code title={line.text}>{line.text}{line.truncated && "…"}</code></span>;
 }
 
-const searchKey = (search: WorkspaceSearchQuery) => `${search.query}\0${search.path}\0${search.matchCase ? "1" : "0"}`;
+const searchKey = (search: WorkspaceSearchQuery) => `${search.query}\0${search.path}\0${search.matchCase ? "1" : "0"}\0${search.include ?? ""}\0${search.exclude ?? ""}`;
 const sameSearch = (left: WorkspaceSearchQuery, right: WorkspaceSearchQuery) => searchKey(left) === searchKey(right);
 
 export function FindInFilesDialog({ client, scope, queries = {}, onQueriesChange, onClose, onNavigate }: { client: CoreClient; scope: string; queries?: WorkspaceSearchQueries; onQueriesChange?(queries: WorkspaceSearchQueries): void; onClose(): void; onNavigate(result: SearchResult, matchLength: number): void }) {
   const [query, setQuery] = useState("");
   const [matchCase, setMatchCase] = useState(false);
+  const [include, setInclude] = useState("");
+  const [exclude, setExclude] = useState("");
+  const [replacement, setReplacement] = useState("");
+  const [replacePreview, setReplacePreview] = useState<SearchReplacePreview>();
+  const [replaceStatus, setReplaceStatus] = useState("");
   const [searchPath, setSearchPath] = useState(scope);
   const [matches, setMatches] = useState<SearchResult[]>([]);
   const [selected, setSelected] = useState<SearchResult>();
@@ -51,8 +56,8 @@ export function FindInFilesDialog({ client, scope, queries = {}, onQueriesChange
     for (const match of matches) byPath.set(match.path, [...(byPath.get(match.path) ?? []), match]);
     return [...byPath.entries()];
   }, [matches]);
-  const currentSearch = (): WorkspaceSearchQuery | undefined => query.trim() ? { query: query.trim(), path: searchPath, ...(matchCase ? { matchCase: true } : {}) } : undefined;
-  const reuse = (saved: WorkspaceSearchQuery) => { setQuery(saved.query); setMatchCase(Boolean(saved.matchCase)); setSearchPath(saved.path); };
+  const currentSearch = (): WorkspaceSearchQuery | undefined => query.trim() ? { query: query.trim(), path: searchPath, ...(matchCase ? { matchCase: true } : {}), ...(include.trim() ? { include: include.trim() } : {}), ...(exclude.trim() ? { exclude: exclude.trim() } : {}) } : undefined;
+  const reuse = (saved: WorkspaceSearchQuery) => { setQuery(saved.query); setMatchCase(Boolean(saved.matchCase)); setSearchPath(saved.path); setInclude(saved.include ?? ""); setExclude(saved.exclude ?? ""); };
   const addRecent = (saved: WorkspaceSearchQuery) => onQueriesChange?.({ ...queries, recent: [saved, ...(queries.recent ?? []).filter((item) => !sameSearch(item, saved))].slice(0, 10) });
   const saveCurrent = () => { const saved = currentSearch(); if (!saved) return; onQueriesChange?.({ ...queries, saved: [saved, ...(queries.saved ?? []).filter((item) => !sameSearch(item, saved))].slice(0, 20) }); };
   const remove = (kind: "recent" | "saved", saved: WorkspaceSearchQuery) => onQueriesChange?.({ ...queries, [kind]: (queries[kind] ?? []).filter((item) => !sameSearch(item, saved)) });
@@ -68,7 +73,7 @@ export function FindInFilesDialog({ client, scope, queries = {}, onQueriesChange
     if (!query.trim()) { setMatches([]); setSelected(undefined); setTruncated(false); setLoading(false); setError(""); return; }
     const timer = setTimeout(() => {
       setLoading(true); setError("");
-      void client.request("filesystem.search", { query, path: searchPath, matchCase }).then((result) => {
+      void client.request("filesystem.search", { query, path: searchPath, matchCase, ...(include.trim() ? { include: include.trim() } : {}), ...(exclude.trim() ? { exclude: exclude.trim() } : {}) }).then((result) => {
         if (version !== searchVersion.current) return;
         setMatches(result.matches); setSelected(result.matches[0]); setCollapsedPaths(new Set()); setTruncated(result.truncated); const saved = currentSearch(); if (saved) addRecent(saved);
       }).catch((searchError: unknown) => {
@@ -77,7 +82,17 @@ export function FindInFilesDialog({ client, scope, queries = {}, onQueriesChange
       }).finally(() => { if (version === searchVersion.current) setLoading(false); });
     }, 600);
     return () => clearTimeout(timer);
-  }, [client, matchCase, query, searchPath]);
+  }, [client, exclude, include, matchCase, query, searchPath]);
+
+  const createReplacePreview = () => {
+    if (!query.trim()) return;
+    setReplaceStatus("");
+    void client.request("filesystem.replacePreview", { query, replacement, path: searchPath, matchCase, ...(include.trim() ? { include: include.trim() } : {}), ...(exclude.trim() ? { exclude: exclude.trim() } : {}) }).then((result) => setReplacePreview(result)).catch((replaceError: unknown) => setReplaceStatus(replaceError instanceof Error ? replaceError.message : "Could not create replacement preview"));
+  };
+  const applyReplace = () => {
+    if (!replacePreview || !window.confirm(`Replace in ${replacePreview.files.length} file(s)? This writes all unchanged previewed files.`)) return;
+    void client.request("filesystem.replaceApply", { previewId: replacePreview.id, confirmed: true }).then((result) => { setReplaceStatus(`${result.applied.length} file(s) replaced${result.failures.length ? `; ${result.failures.map((failure) => `${failure.path}: ${failure.message}`).join("; ")}` : ""}`); setReplacePreview(undefined); }).catch((replaceError: unknown) => setReplaceStatus(replaceError instanceof Error ? replaceError.message : "Replacement failed"));
+  };
 
   useEffect(() => {
     if (!selected) { setPreviewContent(""); setPreviewError(""); return; }
@@ -106,11 +121,18 @@ export function FindInFilesDialog({ client, scope, queries = {}, onQueriesChange
         <label className="match-case" title="Match case"><input type="checkbox" aria-label="Match case" checked={matchCase} onChange={(event) => setMatchCase(event.target.checked)} /><CaseSensitive size={17} /></label>
         <span className="find-progress" role="status" aria-live="polite">{loading ? "Searching..." : query ? `${matches.length} matches` : ""}</span>
       </div>
+      <div className="find-filter-controls">
+        <input value={include} onChange={(event) => setInclude(event.target.value)} placeholder="Include globs (e.g. src/**/*.ts)" aria-label="Include globs" maxLength={200} />
+        <input value={exclude} onChange={(event) => setExclude(event.target.value)} placeholder="Exclude globs (e.g. **/*.test.ts)" aria-label="Exclude globs" maxLength={200} />
+        <input value={replacement} onChange={(event) => setReplacement(event.target.value)} placeholder="Replace with" aria-label="Replace with" maxLength={10000} />
+        <button type="button" onClick={createReplacePreview} disabled={!query.trim()}>Preview replace</button>
+      </div>
       <div className="find-query-library" aria-label="Search history and saved searches">
         <div><span>Recent</span>{queries.recent?.map((saved) => <span className="find-query" key={`recent:${searchKey(saved)}`}><button type="button" onClick={() => reuse(saved)}>{saved.query}</button><button type="button" aria-label={`Remove recent search ${saved.query}`} title="Remove" onClick={() => remove("recent", saved)}><Trash2 size={12} /></button></span>)}</div>
         <div><span>Saved</span><button type="button" aria-label="Save current search" title="Save current search" disabled={!query.trim()} onClick={saveCurrent}><Bookmark size={13} /></button>{queries.saved?.map((saved) => <span className="find-query" key={`saved:${searchKey(saved)}`}><button type="button" onClick={() => reuse(saved)}>{saved.query}</button><button type="button" aria-label={`Delete saved search ${saved.query}`} title="Delete" onClick={() => remove("saved", saved)}><Trash2 size={12} /></button></span>)}</div>
       </div>
       {error && <div className="find-error" role="alert">{error}</div>}
+      {(replacePreview || replaceStatus) && <section className="find-replace-preview" aria-label="Replace preview">{replacePreview && <><span>{replacePreview.files.length} file(s) previewed{replacePreview.truncated ? "; limited result set" : ""}</span><button type="button" onClick={applyReplace}>Replace all previewed files</button>{replacePreview.files.map((file) => <details key={file.path}><summary>{file.path} ({file.occurrences.length})</summary>{file.occurrences.map((occurrence) => <div key={`${occurrence.line}:${occurrence.column}`}><code>{occurrence.line}:{occurrence.column} − {occurrence.before}</code><code>+ {occurrence.after}</code></div>)}</details>)}</>}{replaceStatus && <div role="status">{replaceStatus}</div>}</section>}
       <div className="find-split">
         <section className="find-results-pane" aria-label="Search results" aria-busy={loading}>
           <div className="find-pane-header"><Search size={13} /><span className="find-pane-title">Occurrences</span>{truncated && <span className="find-pane-meta">First 500</span>}</div>
