@@ -373,6 +373,40 @@ describe("local Git tags", () => {
   });
 });
 
+describe("interactive rebase planner", () => {
+  it("previews unpublished commits and completes reordered fixup, reword, and drop actions", async () => {
+    const root = await rebaseRepository(["one", "two", "three", "four", "five"]); const service = new GitService(root); const preview = await service.rebasePreview();
+    expect(preview).toMatchObject({ blockers: [], truncated: false, items: [{ commit: { subject: "one" } }, { commit: { subject: "two" } }, { commit: { subject: "three" } }, { commit: { subject: "four" } }, { commit: { subject: "five" } }] });
+    const [one, two, three, four, five] = preview.items;
+    const result = await service.rebaseStart(preview.head, preview.upstreamHead, preview.base, [
+      { ...two!, action: "pick" }, { ...one!, action: "fixup" }, { ...three!, action: "squash" }, { ...four!, action: "reword", message: "renamed four" }, { ...five!, action: "drop" }
+    ]);
+    expect(result).toMatchObject({ state: "completed", outcome: expect.stringContaining("Rebased 5") });
+    expect((await execFileAsync("git", ["-C", root, "log", "--format=%s", "upstream..HEAD"])).stdout.trim().split("\n")).toEqual(["renamed four", "two"]);
+  });
+
+  it("rejects dirty, published/upstream-unsafe, stale, and invalid todo plans", async () => {
+    const published = await rebaseRepository([]); const publishedPreview = await new GitService(published).rebasePreview(); expect(publishedPreview.blockers.join(" ")).toContain("no unpublished commits");
+    const root = await rebaseRepository(["one", "two"]); const service = new GitService(root); const preview = await service.rebasePreview();
+    await writeFile(path.join(root, "dirty.txt"), "dirty\n"); expect((await service.rebasePreview()).blockers.join(" ")).toContain("changed path"); await execFileAsync("git", ["-C", root, "clean", "-f"]);
+    await expect(service.rebaseStart(preview.head, preview.upstreamHead, preview.base, [{ ...preview.items[0]!, action: "squash" }, preview.items[1]!])).rejects.toThrow("first retained");
+    await expect(service.rebaseStart(preview.head, preview.upstreamHead, preview.base, [preview.items[0]!, preview.items[0]!])).rejects.toThrow("duplicate");
+    await expect(service.rebaseStart(preview.head, preview.upstreamHead, preview.base, [{ ...preview.items[0]!, action: "explode" as never }, preview.items[1]!])).rejects.toThrow("invalid action");
+    await execFileAsync("git", ["-C", root, "commit", "--allow-empty", "-m", "later"]); await expect(service.rebaseStart(preview.head, preview.upstreamHead, preview.base, preview.items)).rejects.toThrow("changed after the preview");
+    await execFileAsync("git", ["-C", published, "switch", "upstream"]); await execFileAsync("git", ["-C", published, "commit", "--allow-empty", "-m", "remote advance"]); await execFileAsync("git", ["-C", published, "switch", "feature"]); expect((await new GitService(published).rebasePreview()).blockers.join(" ")).toContain("Upstream is 1 commit ahead");
+    const shared = await rebaseRepository(["shared elsewhere"]); const sharedHead = (await execFileAsync("git", ["-C", shared, "rev-parse", "HEAD"])).stdout.trim(); await execFileAsync("git", ["-C", shared, "update-ref", "refs/remotes/origin/shared", sharedHead]); expect((await new GitService(shared).rebasePreview()).blockers.join(" ")).toContain("already published on origin/shared");
+  });
+
+  it("routes conflicts into native rebase state and abort restores the original head", async () => {
+    const root = await rebaseRepository([], true); await writeFile(path.join(root, "shared.txt"), "one\n"); await execFileAsync("git", ["-C", root, "commit", "-am", "one"]); await writeFile(path.join(root, "shared.txt"), "two\n"); await execFileAsync("git", ["-C", root, "commit", "-am", "two"]);
+    const service = new GitService(root); const preview = await service.rebasePreview(); const originalHead = preview.head;
+    const result = await service.rebaseStart(preview.head, preview.upstreamHead, preview.base, [preview.items[1]!, preview.items[0]!]); expect(result.state).toBe("conflicts");
+    await expect(service.conflicts()).resolves.toMatchObject({ operation: "rebase", canAbort: true });
+    await expect(service.rebaseAbort()).resolves.toMatchObject({ outcome: expect.stringContaining("restored") });
+    expect((await execFileAsync("git", ["-C", root, "rev-parse", "HEAD"])).stdout.trim()).toBe(originalHead);
+  });
+});
+
 describe("Git branch management", () => {
   it("creates branches, previews unmerged commits, and protects worktree branches from deletion", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "remote-ide-git-branches-"));
@@ -420,3 +454,10 @@ describe("Git history parsing", () => {
     ]);
   });
 });
+
+async function rebaseRepository(subjects: string[], shared = false): Promise<string> {
+  const root = await mkdtemp(path.join(tmpdir(), "remote-ide-rebase-")); await execFileAsync("git", ["-C", root, "init"]); await execFileAsync("git", ["-C", root, "config", "user.email", "test@example.com"]); await execFileAsync("git", ["-C", root, "config", "user.name", "Test"]);
+  await writeFile(path.join(root, shared ? "shared.txt" : "base.txt"), "base\n"); await execFileAsync("git", ["-C", root, "add", "."]); await execFileAsync("git", ["-C", root, "commit", "-m", "base"]); await execFileAsync("git", ["-C", root, "branch", "upstream"]); await execFileAsync("git", ["-C", root, "switch", "-c", "feature"]); await execFileAsync("git", ["-C", root, "branch", "--set-upstream-to=upstream"]);
+  for (const [index, subject] of subjects.entries()) { await writeFile(path.join(root, `${index}-${subject}.txt`), `${subject}\n`); await execFileAsync("git", ["-C", root, "add", "."]); await execFileAsync("git", ["-C", root, "commit", "-m", subject]); }
+  return root;
+}
