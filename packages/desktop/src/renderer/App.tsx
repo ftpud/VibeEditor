@@ -447,17 +447,14 @@ export function App() {
     const restoredTerminals = await Promise.all((options.terminal?.tabs ?? []).map(async (saved, index) => {
       try {
         const attached = saved.terminalId ? await client.request("terminal.attach", { terminalId: saved.terminalId }) : undefined;
-        const session = attached?.state === "available" ? attached.session : saved.terminalId ? undefined : await client.request("terminal.create", { cols: 80, rows: 24 });
-        if (!session) {
-          const terminalId = saved.terminalId!;
-          terminalBuffers.current.set(terminalId, "\r\n[terminal session is no longer available]\r\n");
-          return { index, tab: { id: crypto.randomUUID(), terminalId, title: saved.displayName, status: "unavailable" as const } };
-        }
+        const reattached = attached?.state === "available";
+        const session = reattached ? attached.session : await client.request("terminal.create", { cols: 80, rows: 24 });
+        const recovery = reattached ? (session.status === "running" ? "reattached" as const : undefined) : "recreated" as const;
         terminalBuffers.current.set(session.terminalId, `${session.output}${session.status === "exited" ? `\r\n[process exited${session.exitCode === undefined ? "" : ` with code ${session.exitCode}`}]\r\n` : ""}`);
-        return { index, tab: { id: crypto.randomUUID(), terminalId: session.terminalId, title: saved.displayName, status: session.status } };
+        return { index, tab: { id: crypto.randomUUID(), terminalId: session.terminalId, title: saved.displayName, status: session.status, ...(session.exitCode === undefined ? {} : { exitCode: session.exitCode }), recovery } };
       } catch {
         const terminalId = saved.terminalId ?? crypto.randomUUID();
-        terminalBuffers.current.set(terminalId, "\r\n[terminal session could not be restored]\r\n");
+        terminalBuffers.current.set(terminalId, "\r\n[terminal recovery failed; no replacement shell was started]\r\n");
         return { index, tab: { id: crypto.randomUUID(), terminalId, title: saved.displayName, status: "unavailable" as const } };
       }
     }));
@@ -528,7 +525,7 @@ export function App() {
         terminalBuffers.current.set(event.payload.terminalId, ((terminalBuffers.current.get(event.payload.terminalId) ?? "") + exitMessage).slice(-1_000_000));
         const writer = terminalWriters.current.get(event.payload.terminalId);
         writer?.(exitMessage);
-        updateTerminalGroup((current) => ({ ...current, tabs: current.tabs.map((tab) => tab.terminalId === event.payload.terminalId ? { ...tab, status: "exited" } : tab) }));
+        updateTerminalGroup((current) => ({ ...current, tabs: current.tabs.map((tab) => tab.terminalId === event.payload.terminalId ? { ...tab, status: "exited", exitCode: event.payload.exitCode } : tab) }));
         return;
       }
       if (event.type === "java.output") {
@@ -1494,7 +1491,7 @@ export function App() {
       const attached = await clientRef.current.request("terminal.attach", { terminalId });
       if (attached.state === "stale") { setStatusMessage("That terminal is no longer available."); return false; }
       terminalBuffers.current.set(attached.session.terminalId, attached.session.output);
-      updateTerminalGroup((current) => { const id = crypto.randomUUID(); return { ...current, tabs: [...current.tabs, { id, terminalId: attached.session.terminalId, title, status: attached.session.status === "running" ? "running" : "exited" }], activeTabId: id }; });
+      updateTerminalGroup((current) => { const id = crypto.randomUUID(); return { ...current, tabs: [...current.tabs, { id, terminalId: attached.session.terminalId, title, status: attached.session.status === "running" ? "running" : "exited", ...(attached.session.exitCode === undefined ? {} : { exitCode: attached.session.exitCode }), ...(attached.session.status === "running" ? { recovery: "reattached" as const } : {}) }], activeTabId: id }; });
     } else updateTerminalGroup((current) => ({ ...current, activeTabId: existing.id }));
     setLayout((current) => ({ ...current, panels: [...current.panels.filter((panel) => !["terminal", "java", "problems", "gitlog"].includes(panel.type)), { id: "terminal", type: "terminal" }] }));
     return true;
