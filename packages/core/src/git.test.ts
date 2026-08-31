@@ -242,6 +242,20 @@ describe("parseGitStatus", () => {
   });
 });
 
+describe("Git stashes", () => {
+  it("creates explicit stashes, previews overlap, and retains a failed pop", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "remote-ide-git-stash-"));
+    await execFileAsync("git", ["-C", root, "init"]); await execFileAsync("git", ["-C", root, "config", "user.email", "test@example.com"]); await execFileAsync("git", ["-C", root, "config", "user.name", "Test"]);
+    await writeFile(path.join(root, "file.txt"), "base\n"); await execFileAsync("git", ["-C", root, "add", "."]); await execFileAsync("git", ["-C", root, "commit", "-m", "initial"]);
+    await writeFile(path.join(root, "file.txt"), "stashed\n"); await writeFile(path.join(root, "new.txt"), "new\n");
+    const service = new GitService(root); const stash = await service.createStash({ staged: true, unstaged: true, untracked: true, ignored: false }, "save work");
+    expect((await service.stashes())[0]).toMatchObject({ reference: stash.reference }); expect((await service.status()).entries).toEqual([]);
+    await writeFile(path.join(root, "file.txt"), "current\n"); const preview = await service.stashPreview(stash.reference); expect(preview).toMatchObject({ conflictRisk: "possible", blockers: ["file.txt"] });
+    const outcome = await service.popStash(stash.reference, true); expect(outcome).toMatchObject({ applied: false, stashRetained: true }); expect(await service.stashes()).toHaveLength(1);
+    await expect(service.dropStash(stash.reference, false)).rejects.toThrow("Confirm"); await service.dropStash(stash.reference, true); expect(await service.stashes()).toEqual([]);
+  });
+});
+
 describe("Git upstream status", () => {
   it("reports no upstream, ahead/behind counts, fetch time, and clears ahead after push", async () => {
     const parent = await mkdtemp(path.join(tmpdir(), "remote-ide-git-upstream-"));

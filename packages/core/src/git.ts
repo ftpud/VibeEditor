@@ -3,7 +3,7 @@ import { promisify } from "node:util";
 import path from "node:path";
 import { readFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
-import type { GitBranch, GitBranchDeletePreview, GitCommit, GitCommitFile, GitDiffHunk, GitHistoryRewritePreview, GitRollbackFailure, GitStatusEntry, GitTag, GitUpstreamStatus } from "@remote-ide/protocol";
+import type { GitBranch, GitBranchDeletePreview, GitCommit, GitCommitFile, GitDiffHunk, GitHistoryRewritePreview, GitRollbackFailure, GitStash, GitStashInclusion, GitStashPreview, GitStatusEntry, GitTag, GitUpstreamStatus } from "@remote-ide/protocol";
 import { CoreError } from "./errors.js";
 import { WorkspaceFileSystem } from "./filesystem.js";
 
@@ -259,8 +259,65 @@ export class GitService {
     return preview.commit.hash;
   }
 
+  async stashes(): Promise<GitStash[]> {
+    return parseStashes(await this.git(["stash", "list", "--format=%gd%x00%H%x00%gs%x00%ci"]));
+  }
+
+  async createStash(include: GitStashInclusion, message?: string, paths?: string[]): Promise<GitStash> {
+    if (!include || [include.staged, include.unstaged, include.untracked, include.ignored].some((value) => typeof value !== "boolean")) throw new CoreError("INVALID_REQUEST", "Explicit stash inclusion choices are required");
+    if (!include.staged && !include.unstaged && !include.untracked && !include.ignored) throw new CoreError("INVALID_REQUEST", "Choose at least one kind of change to stash");
+    if (include.ignored && !include.untracked) throw new CoreError("INVALID_REQUEST", "Ignored files require including untracked files");
+    if (paths && (!Array.isArray(paths) || paths.length > 500)) throw new CoreError("INVALID_REQUEST", "Invalid stash path selection");
+    for (const filePath of paths ?? []) validatePath(filePath);
+    const args = ["stash", "push", "--message", (message?.trim() || "Vibe Editor stash")];
+    if (include.staged && !include.unstaged) args.push("--staged");
+    else if (!include.staged && include.unstaged) args.push("--keep-index");
+    else if (!include.staged && !include.unstaged && (include.untracked || include.ignored)) args.push("--keep-index");
+    if (include.ignored) args.push("--all"); else if (include.untracked) args.push("--include-untracked");
+    if (paths?.length) args.push("--", ...paths);
+    await this.git(args);
+    const stash = (await this.stashes())[0];
+    if (!stash) throw new CoreError("GIT_FAILED", "Git did not create a stash; there may be no matching changes");
+    return stash;
+  }
+
+  async stashPreview(reference: string): Promise<GitStashPreview> {
+    const stash = await this.stash(reference);
+    const files = parseCommitFiles(await this.git(["diff-tree", "--no-commit-id", "--name-status", "-r", "-z", `${stash.reference}^1`, stash.reference]));
+    const changed = new Set(files.map((file) => file.path));
+    const current = await this.status();
+    const blockers = current.entries.filter((entry) => changed.has(entry.path) || (!!entry.originalPath && changed.has(entry.originalPath))).map((entry) => entry.path);
+    return { stash, files, conflictRisk: blockers.length ? "possible" : "none", blockers, recovery: `If application fails, ${stash.reference} is retained. Resolve Git conflicts in the working tree, then retry apply or drop it manually.` };
+  }
+
+  async applyStash(reference: string): Promise<{ applied: boolean; stashRetained: boolean; outcome: string }> {
+    const stash = await this.stash(reference);
+    try { await this.git(["stash", "apply", "--index", stash.reference]); return { applied: true, stashRetained: true, outcome: `Applied ${stash.reference}; it was retained for recovery.` }; }
+    catch (error) { return { applied: false, stashRetained: true, outcome: `Could not apply ${stash.reference}; it was retained. ${error instanceof Error ? error.message : String(error)}` }; }
+  }
+
+  async popStash(reference: string, confirm: boolean): Promise<{ applied: boolean; stashRetained: boolean; outcome: string }> {
+    if (confirm !== true) throw new CoreError("INVALID_REQUEST", "Confirm popping a stash because successful application permanently drops it");
+    const applied = await this.applyStash(reference);
+    if (!applied.applied) return applied;
+    await this.git(["stash", "drop", reference]);
+    return { applied: true, stashRetained: false, outcome: `Applied and dropped ${reference}.` };
+  }
+
+  async dropStash(reference: string, confirm: boolean): Promise<void> {
+    if (confirm !== true) throw new CoreError("INVALID_REQUEST", "Confirm permanently dropping a stash");
+    await this.stash(reference); await this.git(["stash", "drop", reference]);
+  }
+
   async push(): Promise<void> {
     await this.git(["push"]);
+  }
+
+  private async stash(reference: string): Promise<GitStash> {
+    if (!/^stash@\{\d+\}$/.test(reference)) throw new CoreError("INVALID_REQUEST", "Invalid stash reference");
+    const stash = (await this.stashes()).find((item) => item.reference === reference);
+    if (!stash) throw new CoreError("GIT_FAILED", `Stash ${reference} no longer exists`);
+    return stash;
   }
 
   async fetch(): Promise<{ fetchedAt: string }> {
@@ -379,6 +436,14 @@ export class GitService {
   private async show(spec: string): Promise<string> {
     try { return await this.git(["show", spec]); } catch { return ""; }
   }
+}
+
+function parseStashes(output: string): GitStash[] {
+  return output.split("\n").filter(Boolean).map((line) => {
+    const [reference, hash, message, date] = line.split("\0");
+    const branch = message?.match(/^On ([^:]+):/)?.[1];
+    return { reference: reference!, hash: hash!, message: message!, ...(branch ? { branch } : {}), ...(date ? { date } : {}) };
+  });
 }
 
 function gitNetworkError(error: unknown): string {
