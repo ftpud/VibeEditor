@@ -19,7 +19,7 @@ type Props = {
   onActivate(id: string): void;
   onCreate(): void;
   onClose(tab: TerminalTab): void;
-  onRename(tab: TerminalTab): void;
+  onRename(tab: TerminalTab, title: string): void;
   onDuplicate(tab: TerminalTab): void;
   onMove(tabId: string, targetTabId: string): void;
   onResizeStart(event: React.PointerEvent): void;
@@ -41,11 +41,24 @@ export function TerminalPanel({ theme, fontFamily, fontSize, lineHeight, client,
   </section>;
 }
 
-export function TerminalTabButton({ tab, active, highlighted, onActivate, onClose, onRename, onDuplicate, onMove }: { tab: TerminalTab; active: boolean; highlighted?: boolean; onActivate(id: string): void; onClose(tab: TerminalTab): void; onRename?(tab: TerminalTab): void; onDuplicate?(tab: TerminalTab): void; onMove?(tabId: string, targetTabId: string): void }) {
+export function TerminalTabButton({ tab, active, highlighted, onActivate, onClose, onRename, onDuplicate, onMove }: { tab: TerminalTab; active: boolean; highlighted?: boolean; onActivate(id: string): void; onClose(tab: TerminalTab): void; onRename?(tab: TerminalTab, title: string): void; onDuplicate?(tab: TerminalTab): void; onMove?(tabId: string, targetTabId: string): void }) {
   const statusLabel = tab.status === "running" ? "running" : tab.status;
   const visibleStatus = tab.status === "running" ? "" : ` (${tab.status})`;
   const [menu, setMenu] = useState<{ x: number; y: number }>();
-  return <><button
+  const [renaming, setRenaming] = useState(false);
+  const [draft, setDraft] = useState(tab.title);
+  const renameInputRef = useRef<HTMLInputElement>(null);
+  useEffect(() => { if (renaming) renameInputRef.current?.select(); }, [renaming]);
+  const beginRename = () => { setMenu(undefined); setDraft(tab.title); setRenaming(true); };
+  const finishRename = () => {
+    if (!renaming) return;
+    setRenaming(false);
+    const title = draft.trim();
+    if (title && title !== tab.title) onRename?.(tab, title);
+  };
+  return <>{renaming ? <div className={`terminal-tab terminal-tab-renaming ${active ? "active" : ""}`}>
+    <input ref={renameInputRef} aria-label={`Rename ${tab.title}`} value={draft} maxLength={100} onChange={(event) => setDraft(event.target.value)} onBlur={finishRename} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); finishRename(); } else if (event.key === "Escape") { event.preventDefault(); setRenaming(false); } }} />
+  </div> : <button
     className={`terminal-tab ${active ? "active" : ""} ${highlighted ? "run-config-running" : ""}`}
     role="tab"
     aria-selected={active}
@@ -57,6 +70,7 @@ export function TerminalTabButton({ tab, active, highlighted, onActivate, onClos
       onClose(tab);
     }}
     onClick={(event) => { if (event.button === 0) onActivate(tab.id); }}
+    onDoubleClick={(event) => { if (event.button === 0 && onRename) { event.preventDefault(); beginRename(); } }}
     draggable
     onDragStart={(event) => { event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/plain", tab.id); }}
     onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = "move"; }}
@@ -65,9 +79,9 @@ export function TerminalTabButton({ tab, active, highlighted, onActivate, onClos
   >
     <span>{tab.title}{visibleStatus}</span>
     <span className="close" title={`Close ${tab.title}`} onClick={(event) => { event.stopPropagation(); onClose(tab); }}><X size={13} /></span>
-  </button>
+  </button>}
     {menu && <div className="terminal-context-menu terminal-tab-menu" style={{ left: menu.x, top: menu.y }} onMouseDown={(event) => event.stopPropagation()}>
-      <button onClick={() => { setMenu(undefined); onRename?.(tab); }}><Pencil size={14} /><span>Rename</span></button>
+      <button onClick={beginRename}><Pencil size={14} /><span>Rename</span></button>
       <button onClick={() => { setMenu(undefined); onDuplicate?.(tab); }}><Copy size={14} /><span>Duplicate</span></button>
     </div>}
   </>;

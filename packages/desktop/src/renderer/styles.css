@@ -59,8 +59,8 @@ button { color: inherit; }
 .panel-header:has(> .ai-agent-picker) .ai-status { margin-left: auto; }
 .panel-header-actions { margin-left: auto; display: flex; align-items: center; gap: 2px; }
 .git-toolbar-actions { min-width: 0; }
-.panel-header .git-push-button { position: relative; overflow: visible; }
-.git-push-badge { position: absolute; top: -3px; right: -4px; min-width: 13px; height: 13px; padding: 0 3px; display: grid; place-items: center; border: 1px solid #2b2d30; border-radius: 7px; background: #3574f0; color: white; font-size: 8px; font-weight: 700; line-height: 1; }
+.panel-header .git-push-button, .panel-header .git-fetch-button { width: auto; min-width: 28px; padding: 0 5px; display: flex; gap: 3px; }
+.git-push-badge { min-width: 13px; height: 13px; padding: 0 3px; display: grid; place-items: center; border-radius: 7px; background: #3574f0; color: white; font-size: 8px; font-weight: 700; line-height: 1; }
 .panel-header .git-rollback-selected { width: auto; max-width: 150px; padding: 0 7px; display: flex; gap: 5px; color: #e2858b; white-space: nowrap; }
 .git-rollback-selected span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .panel-header .git-rollback-selected:hover:not(:disabled) { background: #6a3035; }
@@ -124,11 +124,13 @@ button { color: inherit; }
 .git-commit-panel { flex: 0 0 auto; padding: 7px; border-top: 1px solid #393b40; background: #2b2d30; }
 .git-commit-panel textarea { width: 100%; min-height: 62px; max-height: 150px; box-sizing: border-box; resize: vertical; padding: 7px; border: 1px solid #4b4d52; border-radius: 3px; outline: none; background: #1e1f22; color: #e2e3e5; font: inherit; }
 .git-commit-panel textarea:focus { border-color: #3574f0; }
-.git-commit-panel footer { height: 31px; padding-top: 5px; display: flex; align-items: center; justify-content: space-between; color: #85888e; font-size: 0.7692rem; }
+.git-commit-panel footer { min-height: 34px; padding-top: 6px; display: flex; align-items: center; gap: 6px; color: #85888e; font-size: 0.7692rem; }
 .git-commit-shortcut { margin-left: auto; padding-right: 7px; white-space: nowrap; }
 .git-commit-shortcut kbd { font: inherit; }
 .git-commit-panel footer button { min-width: 72px; height: 27px; padding: 0 10px; border: 0; border-radius: 3px; background: #3574f0; color: white; cursor: pointer; }
 .git-commit-panel footer button:disabled { opacity: .45; cursor: default; }
+.git-commit-panel footer .git-amend-button { width: auto; min-width: 0; height: 25px; padding: 0 7px; border: 1px solid #505359; background: #34363a; color: #c9cbd0; white-space: nowrap; }
+.git-commit-panel footer .git-amend-button:hover:not(:disabled) { background: #404247; color: white; }
 .git-file-name { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .git-status { width: 22px; flex: 0 0 22px; font-size: 0.7692rem; font-weight: 700; text-align: right; }
 .git-status.modified { color: #e2b86b; }
@@ -136,7 +138,7 @@ button { color: inherit; }
 .git-status.deleted { color: #d66c75; }
 .git-status.conflict { color: #e05f65; }
 .git-empty { padding: 18px 12px; color: #898c92; text-align: center; line-height: 1.5; }
-.stash-dialog { width: min(620px, calc(100vw - 32px)); max-height: 78vh; overflow: auto; background: var(--panel-bg); border: 1px solid var(--border-color); border-radius: 8px; padding: 16px; display: grid; gap: 12px; }.stash-dialog > header, .stash-dialog section > header, .stash-dialog footer { display: flex; justify-content: space-between; gap: 8px; }.stash-dialog section { display: grid; gap: 8px; }.stash-dialog input { padding: 6px; }.stash-dialog label { margin-right: 10px; }.stash-dialog section > button { text-align: left; }
+.stash-dialog { width: min(620px, calc(100vw - 32px)); max-height: 78vh; overflow: auto; background: #2b2d30; border: 1px solid #505359; border-radius: 8px; padding: 16px; display: grid; gap: 12px; box-shadow: 0 18px 50px rgba(0, 0, 0, .48); }.stash-dialog > header, .stash-dialog section > header, .stash-dialog footer { display: flex; justify-content: space-between; gap: 8px; }.stash-dialog section { display: grid; gap: 8px; }.stash-dialog input { padding: 6px; }.stash-dialog label { margin-right: 10px; }.stash-dialog section > button { text-align: left; }
 .git-empty.error { color: #d88a8f; text-align: left; }
 .git-rollback-content { padding: 14px 16px 16px; display: flex; flex-direction: column; gap: 12px; }
 .git-rollback-content > p { margin: 0; color: #c7c9cc; line-height: 1.5; }
@@ -178,7 +180,7 @@ button { color: inherit; }
 .tasks-list { flex: 1; overflow: auto; padding: 4px 0 12px; }
 .task-filters { display: flex; gap: 4px; padding: 4px 6px; }
 .task-filters .quick-filter { flex: 1; min-width: 0; }
-.task-filters select { max-width: 92px; border: 1px solid #4a4d52; border-radius: 3px; background: #2b2d30; color: #bfc1c5; }
+.task-filters select { width: 78px; flex: 0 0 78px; border: 1px solid #4a4d52; border-radius: 3px; background: #2b2d30; color: #bfc1c5; }
 .task-row { width: 100%; min-height: 56px; position: relative; display: flex; align-items: stretch; border-left: 2px solid transparent; border-bottom: 1px solid #35373b; background: transparent; color: #bfc1c5; }
 .task-row:hover { background: #34363a; color: #e4e5e7; }
 .task-row.selected { border-left-color: #3574f0; background: #2e436e; color: white; }
@@ -515,6 +517,8 @@ button { color: inherit; }
 .terminal-tab:hover { background: #34363a; color: #d8d9dc; }
 .terminal-tab.active { color: #f0f0f0; background: #1e1f22; border-bottom: 2px solid #3574f0; }
 .terminal-tab > span:first-child { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.terminal-tab-renaming { padding: 3px 6px; cursor: default; }
+.terminal-tab-renaming input { width: 100%; min-width: 0; height: 23px; padding: 0 5px; border: 1px solid #3574f0; border-radius: 2px; outline: none; background: #1e1f22; color: #f0f0f0; }
 .terminal-action { width: 30px; flex: 0 0 30px; display: grid; place-items: center; border: 0; background: transparent; color: #aaa; cursor: pointer; }
 .terminal-action:hover { background: #333; color: white; }
 .terminal-content { min-height: 0; flex: 1; position: relative; padding: 5px 7px; }

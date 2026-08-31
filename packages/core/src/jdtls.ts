@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL, fileURLToPath } from "node:url";
 import { createMessageConnection, StreamMessageReader, StreamMessageWriter, type MessageConnection } from "vscode-jsonrpc/node.js";
-import type { JavaLspCompletion, JavaLspLocation, JavaSemanticToken } from "@remote-ide/protocol";
+import type { JavaLspCompletion, JavaLspLocation, JavaSemanticToken, WorkspaceSymbol } from "@remote-ide/protocol";
 import { CoreError } from "./errors.js";
 import { WorkspaceFileSystem } from "./filesystem.js";
 
@@ -44,6 +44,21 @@ export class JdtLanguageService {
 
   async references(filePath: string, content: string, line: number, column: number): Promise<JavaLspLocation[]> {
     return this.locations("textDocument/references", filePath, content, line, column, { context: { includeDeclaration: false } });
+  }
+
+  async workspaceSymbols(query: string, limit = 100): Promise<{ symbols: WorkspaceSymbol[]; truncated: boolean }> {
+    const connection = await this.ready();
+    const bounded = Math.max(1, Math.min(200, limit));
+    const result = await connection.sendRequest("workspace/symbol", { query: query.slice(0, 200) }) as any[] | null;
+    const items = Array.isArray(result) ? result : [];
+    const symbols = items.slice(0, bounded).flatMap((item: any) => {
+      const location = item.location ?? item; const uri = location.uri; const range = location.range;
+      if (typeof item.name !== "string" || typeof uri !== "string" || !range?.start) return [];
+      const relative = this.relativeUri(uri);
+      if (relative.startsWith("..") || relative.includes("://")) return [];
+      return [{ name: item.name, kind: Number(item.kind) || 0, path: relative, line: range.start.line + 1, column: range.start.character + 1, ...(typeof item.containerName === "string" ? { container: item.containerName } : {}) }];
+    });
+    return { symbols, truncated: items.length > bounded };
   }
 
   async semanticTokens(filePath: string, content: string): Promise<JavaSemanticToken[]> {

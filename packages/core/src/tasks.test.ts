@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { access, lstat, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { access, lstat, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -181,7 +181,7 @@ describe("WorkspaceTaskStore", () => {
     expect((await store.list()).selectedTaskId).toBe(task.id);
     expect((await lstat(path.join(selected.workspace, ".git"))).isFile()).toBe(true);
     expect(await readFile(path.join(selected.workspace, ".git"), "utf8")).toContain("gitdir:");
-    expect((await execFileAsync("git", ["-C", root, "worktree", "list", "--porcelain"])).stdout).toContain(`worktree ${selected.workspace}`);
+    expect((await execFileAsync("git", ["-C", root, "worktree", "list", "--porcelain"])).stdout).toContain(`worktree ${await realpath(selected.workspace)}`);
     expect((await execFileAsync("git", ["-C", selected.workspace, "branch", "--show-current"])).stdout.trim()).toBe("feature/task-one");
     await expect(execFileAsync("git", ["-C", selected.workspace, "rev-parse", "--abbrev-ref", "@{upstream}"])).rejects.toBeTruthy();
     await writeFile(path.join(selected.workspace, "tracked.txt"), "task\n");

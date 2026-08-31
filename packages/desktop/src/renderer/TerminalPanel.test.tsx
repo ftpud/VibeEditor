@@ -36,18 +36,32 @@ describe("TerminalTabButton", () => {
     expect(tabButton.getAttribute("title")).toBe(`${tab.title} — running. Middle-click to close.`);
   });
 
-  it("offers rename and duplicate actions from the tab menu", () => {
+  it("renames inline from the tab menu and duplicates independently", () => {
     const onRename = vi.fn();
     const onDuplicate = vi.fn();
     render(<TerminalTabButton tab={tab} active={false} onActivate={vi.fn()} onClose={vi.fn()} onRename={onRename} onDuplicate={onDuplicate} />);
 
     fireEvent.contextMenu(screen.getByRole("tab"));
     fireEvent.click(screen.getByText("Rename"));
-    expect(onRename).toHaveBeenCalledWith(tab);
+    const input = screen.getByRole("textbox", { name: `Rename ${tab.title}` });
+    fireEvent.change(input, { target: { value: "API server" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(onRename).toHaveBeenCalledWith(tab, "API server");
 
     fireEvent.contextMenu(screen.getByRole("tab"));
     fireEvent.click(screen.getByText("Duplicate"));
     expect(onDuplicate).toHaveBeenCalledWith(tab);
+  });
+
+  it("cancels an inline rename without changing the title", () => {
+    const onRename = vi.fn();
+    render(<TerminalTabButton tab={tab} active onActivate={vi.fn()} onClose={vi.fn()} onRename={onRename} />);
+    fireEvent.doubleClick(screen.getByRole("tab"));
+    const input = screen.getByRole("textbox", { name: `Rename ${tab.title}` });
+    fireEvent.change(input, { target: { value: "Discard me" } });
+    fireEvent.keyDown(input, { key: "Escape" });
+    expect(onRename).not.toHaveBeenCalled();
+    expect(screen.getByRole("tab").textContent).toContain(tab.title);
   });
 
   it("moves a tab when dropped onto another tab", () => {

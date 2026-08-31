@@ -37,4 +37,20 @@ describe("GitCommitPanel", () => {
     expect(textarea.getAttribute("aria-keyshortcuts")).toBe("Control+Enter Meta+Enter");
     expect(screen.getByText("Ctrl")).toBeTruthy();
   });
+
+  it("enables amend when the index has staged changes", () => {
+    const onAmend = vi.fn();
+    render(<GitCommitPanel message="" selectedCount={0} operationRunning={false} committing={false} onMessageChange={() => undefined} onCommit={vi.fn()} stagedCount={2} onAmend={onAmend} />);
+    const amend = screen.getByRole("button", { name: "Amend staged (2)" }) as HTMLButtonElement;
+    expect(amend.disabled).toBe(false);
+    fireEvent.click(amend);
+    expect(onAmend).toHaveBeenCalledOnce();
+  });
+
+  it("explains why amend is unavailable without staged changes", () => {
+    render(<GitCommitPanel message="" selectedCount={0} operationRunning={false} committing={false} onMessageChange={() => undefined} onCommit={vi.fn()} stagedCount={0} onAmend={vi.fn()} />);
+    const amend = screen.getByRole("button", { name: "Amend staged" }) as HTMLButtonElement;
+    expect(amend.disabled).toBe(true);
+    expect(amend.title).toBe("Stage changes before amending");
+  });
 });

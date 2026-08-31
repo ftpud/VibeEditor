@@ -3,6 +3,11 @@ import { Cable, CircleStop, HardDrive, Laptop, Network, Pencil, Play, Plus, Refr
 
 const emptyState: GatewayState = { connections: [], workspaces: [], portTunnels: [] };
 
+export function gatewayErrorMessage(reason: unknown): string {
+  const message = reason instanceof Error ? reason.message : String(reason);
+  return message.replace(/^Error invoking remote method '[^']+': Error:\s*/i, "").replace(/^Error:\s*/i, "") || "Gateway action failed";
+}
+
 export function App() {
   const [state, setState] = useState(emptyState);
   const [selected, setSelected] = useState<string>();
@@ -18,7 +23,7 @@ export function App() {
   const bridgeReady = Boolean(window.gateway);
   useEffect(() => {
     if (!window.gateway) { setError("Gateway preload failed to initialize. Rebuild and restart the application."); return; }
-    void window.gateway.get().then((result) => { setState(result.state); setRepository(result.repository); setRuntimes(result.runtimes); setTunnelRuntimes(result.tunnelRuntimes); setConnectionRuntimes(result.connectionRuntimes); setSelected(result.state.connections[0]?.id); }).catch((reason) => setError(reason instanceof Error ? reason.message : String(reason)));
+    void window.gateway.get().then((result) => { setState(result.state); setRepository(result.repository); setRuntimes(result.runtimes); setTunnelRuntimes(result.tunnelRuntimes); setConnectionRuntimes(result.connectionRuntimes); setSelected(result.state.connections[0]?.id); }).catch((reason) => setError(gatewayErrorMessage(reason)));
     const stopStatusListener = window.gateway.onStatus((id, status) => setRuntimes((current) => ({ ...current, [id]: status })));
     const stopTunnelListener = window.gateway.onTunnelStatus((id, status) => setTunnelRuntimes((current) => ({ ...current, [id]: status })));
     const stopConnectionListener = window.gateway.onConnectionStatus((id, status) => setConnectionRuntimes((current) => ({ ...current, [id]: status })));
@@ -35,27 +40,29 @@ export function App() {
       const result = await window.gateway[operation](workspace.id);
       if ((operation === "startServer" || operation === "repairServer") && result && "remotePort" in result) setState((current) => ({ ...current, workspaces: current.workspaces.map((item) => item.id === workspace.id ? { ...item, remotePort: result.remotePort } : item) }));
     }
-    catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
+    catch (reason) { setError(gatewayErrorMessage(reason)); }
   };
-  const removeConnection = async (item: GatewayConnection) => { if (confirm(`Delete ${item.name} and its workspaces?`)) { const next = await window.gateway.deleteConnection(item.id); setState(next); setSelected(next.connections[0]?.id); } };
-  const removeWorkspace = async (item: GatewayWorkspace) => { if (confirm(`Delete workspace ${item.name}?`)) setState(await window.gateway.deleteWorkspace(item.id)); };
+  const removeConnection = async (item: GatewayConnection) => { if (!confirm(`Delete ${item.name} and its workspaces?`)) return; setError(""); try { const next = await window.gateway.deleteConnection(item.id); setState(next); setSelected(next.connections[0]?.id); } catch (reason) { setError(gatewayErrorMessage(reason)); } };
+  const removeWorkspace = async (item: GatewayWorkspace) => { if (!confirm(`Delete workspace ${item.name}?`)) return; setError(""); try { setState(await window.gateway.deleteWorkspace(item.id)); } catch (reason) { setError(gatewayErrorMessage(reason)); } };
+  const refreshConnection = async (connectionId: string) => { setError(""); try { await window.gateway.refreshStatuses(connectionId); } catch (reason) { setError(gatewayErrorMessage(reason)); } };
+  const cancelProvisioning = async (workspaceId: string) => { setError(""); try { await window.gateway.cancelProvisioning(workspaceId); } catch (reason) { setError(gatewayErrorMessage(reason)); } };
   const addPortTunnel = async (event: FormEvent) => {
     event.preventDefault();
     if (!connection) return;
     const port = Number(newTunnelPort);
     setError("");
     try { setState(await window.gateway.savePortTunnel({ connectionId: connection.id, port })); setNewTunnelPort(""); }
-    catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
+    catch (reason) { setError(gatewayErrorMessage(reason)); }
   };
   const tunnelAction = async (item: GatewayPortTunnel, operation: "startPortTunnel" | "stopPortTunnel") => {
     setError("");
     try { await window.gateway[operation](item.id); }
-    catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
+    catch (reason) { setError(gatewayErrorMessage(reason)); }
   };
   const removePortTunnel = async (item: GatewayPortTunnel) => {
     setError("");
     try { setState(await window.gateway.deletePortTunnel(item.id)); setTunnelRuntimes((current) => { const next = { ...current }; delete next[item.id]; return next; }); }
-    catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
+    catch (reason) { setError(gatewayErrorMessage(reason)); }
   };
 
   return <div className="gateway-shell">
@@ -64,13 +71,12 @@ export function App() {
       <div className="connection-list">{state.connections.map((item) => { const current = connectionRuntimes[item.id] ?? { status: "unknown" }; return <button key={item.id} className={item.id === selected ? "selected" : ""} onClick={() => setSelected(item.id)}><div className={`status-dot connection-${current.status}`} /><Server size={16} /><span><strong>{item.name}</strong><small>{item.username}@{item.host}:{item.port}</small></span></button>; })}</div>
     </aside>
     <main>
-      <div className="topbar"><div><HardDrive size={18} /><span>Vibe Gateway</span></div><div className="connection-actions">{connection && <><span>{connection.name}</span><span className={`connection-health ${connectionRuntime!.status}`} title={connectionRuntime!.message}>{connectionHealthName(connectionRuntime!.status)}{connectionRuntime!.latencyMs !== undefined && ` · ${connectionRuntime!.latencyMs} ms`}</span><button title="Refresh SSH and Core status" onClick={() => void window.gateway.refreshStatuses(connection.id)}><RefreshCw size={14} /></button><button title="Edit connection" onClick={() => setConnectionDialog({ ...connection, password: "", passphrase: "" })}><Pencil size={14} /></button><button title="Delete connection" onClick={() => void removeConnection(connection)}><Trash2 size={14} /></button></>}<button title="Gateway repository settings" aria-label="Gateway repository settings" onClick={() => repository && setRepositoryDialog(repository)}><Settings size={15} /></button></div></div>
+      <div className="topbar"><div><HardDrive size={18} /><span>Vibe Gateway</span></div><div className="connection-actions">{connection && <><span>{connection.name}</span><span className={`connection-health ${connectionRuntime!.status}`} title={connectionRuntime!.message}>{connectionHealthName(connectionRuntime!.status)}{connectionRuntime!.latencyMs !== undefined && ` · ${connectionRuntime!.latencyMs} ms`}</span><button title="Refresh SSH and Core status" onClick={() => void refreshConnection(connection.id)}><RefreshCw size={14} /></button><button title="Edit connection" onClick={() => setConnectionDialog({ ...connection, password: "", passphrase: "" })}><Pencil size={14} /></button><button title="Delete connection" onClick={() => void removeConnection(connection)}><Trash2 size={14} /></button></>}<button title="Gateway repository settings" aria-label="Gateway repository settings" onClick={() => repository && setRepositoryDialog(repository)}><Settings size={15} /></button></div></div>
       {!bridgeReady ? <div className="empty"><Network size={38} /><strong>Gateway failed to initialize</strong><span>Close the application and run <code>npm run gateway</code> again.</span></div> : !connection ? <div className="empty"><Network size={38} /><strong>No SSH connections</strong><span>Add a connection to manage remote Vibe Editor workspaces.</span><button onClick={() => setConnectionDialog({ port: 22, authenticationMethod: "password", password: "", passphrase: "" })}><Plus size={15} /> Add connection</button></div> : <section className="workspace-view">
         <header><div><h1>Remote workspaces</h1><p>{connection.username}@{connection.host}</p></div><button onClick={() => setWorkspaceDialog({ connectionId: connection.id, remotePort: 7331 })}><Plus size={15} /> Add workspace</button></header>
-        {error && <div className="error-banner">{error}<button onClick={() => setError("")}><X size={14} /></button></div>}
         <div className="workspace-list">{workspaces.map((workspace) => { const current = runtimes[workspace.id] ?? { status: "idle", message: "Not running" }; const busy = current.status === "working"; const serverRunning = current.status === "server" || current.status === "client"; return <article key={workspace.id}>
           <div className="workspace-info"><div className={`status-dot ${current.status}`} /><div><h2>{workspace.name}</h2><code>{workspace.directory}</code><span>Remote port {workspace.remotePort}</span></div><div className="status"><strong>{statusName(current.status)}</strong><small>{current.message}</small>{current.logs?.length ? <details><summary>Provisioning log</summary><pre>{current.logs.join("\n")}</pre></details> : null}</div></div>
-          <div className="workspace-buttons"><button title={serverRunning ? "Server is already running" : "Start server"} disabled={busy || serverRunning} onClick={() => void action(workspace, "startServer")}><Play size={14} /> Start server</button>{busy && <button className="stop" onClick={() => void window.gateway.cancelProvisioning(workspace.id)}><CircleStop size={14} /> Cancel</button>}{current.status === "error" && current.retryable && <button onClick={() => void action(workspace, "startServer")}><RefreshCw size={14} /> Retry</button>}{current.status === "error" && current.repairable && <button onClick={() => void action(workspace, "repairServer")}><RefreshCw size={14} /> Repair</button>}<button disabled={busy} onClick={() => void action(workspace, "startClient")}><Laptop size={14} /> Start client</button><button className="stop" disabled={busy} onClick={() => void action(workspace, "stopServer")}><CircleStop size={14} /> Stop server</button><span /><button title="Edit workspace" onClick={() => setWorkspaceDialog(workspace)}><Pencil size={14} /></button><button title="Delete workspace" onClick={() => void removeWorkspace(workspace)}><Trash2 size={14} /></button></div>
+          <div className="workspace-buttons"><button title={serverRunning ? "Server is already running" : "Start server"} disabled={busy || serverRunning} onClick={() => void action(workspace, "startServer")}><Play size={14} /> Start server</button>{busy && <button className="stop" onClick={() => void cancelProvisioning(workspace.id)}><CircleStop size={14} /> Cancel</button>}{current.status === "error" && current.retryable && <button onClick={() => void action(workspace, "startServer")}><RefreshCw size={14} /> Retry</button>}{current.status === "error" && current.repairable && <button onClick={() => void action(workspace, "repairServer")}><RefreshCw size={14} /> Repair</button>}<button disabled={busy} onClick={() => void action(workspace, "startClient")}><Laptop size={14} /> Start client</button><button className="stop" disabled={busy} onClick={() => void action(workspace, "stopServer")}><CircleStop size={14} /> Stop server</button><span className="workspace-action-spacer" /><button className="icon-button" title="Edit workspace" onClick={() => setWorkspaceDialog(workspace)}><Pencil size={14} /></button><button className="icon-button" title="Delete workspace" onClick={() => void removeWorkspace(workspace)}><Trash2 size={14} /></button></div>
         </article>; })}{workspaces.length === 0 && <div className="workspace-empty">No workspaces configured for this connection.</div>}</div>
         <section className="tunnel-section">
           <header><div><Cable size={16} /><div><h2>SSH port tunnels</h2><p>Forward a local port to the same port on {connection.host}.</p></div></div><form onSubmit={(event) => void addPortTunnel(event)}><input aria-label="Tunnel port" required type="number" min="1" max="65535" value={newTunnelPort} onChange={(event) => setNewTunnelPort(event.target.value)} placeholder="Port" /><button className="primary"><Plus size={14} /> Add port</button></form></header>
@@ -81,6 +87,7 @@ export function App() {
     {bridgeReady && connectionDialog && <ConnectionDialog value={connectionDialog} onClose={() => setConnectionDialog(undefined)} onSave={async (value) => { const next = await window.gateway.saveConnection(value); setState(next); setSelected(value.id ?? next.connections.at(-1)?.id); setConnectionDialog(undefined); }} />}
     {bridgeReady && workspaceDialog && connection && <WorkspaceDialog value={workspaceDialog} connectionId={connection.id} onClose={() => setWorkspaceDialog(undefined)} onSave={async (value) => { setState(await window.gateway.saveWorkspace(value)); setWorkspaceDialog(undefined); }} />}
     {bridgeReady && repositoryDialog && <RepositoryDialog value={repositoryDialog} onClose={() => setRepositoryDialog(undefined)} onSave={async (value) => { const saved = await window.gateway.saveRepository(value); setRepository(saved); setRepositoryDialog(undefined); }} />}
+    {error && <div className="gateway-status-float" role="alert"><span>{error}</span><button title="Dismiss error" aria-label="Dismiss error" onClick={() => setError("")}><X size={14} /></button></div>}
   </div>;
 }
 
