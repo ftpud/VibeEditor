@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, nativeImage, safeStorage } from "electron";
+import { app, BrowserWindow, clipboard, dialog, ipcMain, nativeImage, safeStorage } from "electron";
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { createServer, type Server } from "node:net";
@@ -12,6 +12,7 @@ import { defaultRepositorySettings, normalizeRepositorySettings, provisionComman
 import { parseDiscoveredWorkspaceDirectories, parseValidatedWorkspaceDirectory, validateWorkspaceDirectoryInput, workspaceDiscoveryCommand, workspaceValidationCommand } from "./workspace-path.js";
 import { compatibleClient, readCompatibility, type Compatibility } from "./client-compatibility.js";
 import { boundedProvisioningLog, classifyProvisioningFailure } from "./provisioning.js";
+import { buildConnectionDiagnostics } from "./diagnostics.js";
 
 type Connection = { id: string; name: string; host: string; port: number; username: string } & ConnectionAuth;
 type Workspace = { id: string; connectionId: string; name: string; directory: string; remotePort: number };
@@ -19,8 +20,9 @@ type PortTunnel = { id: string; connectionId: string; port: number };
 type StoredConnection = { id: string; name: string; host: string; port: number; username: string; authenticationMethod?: AuthenticationMethod; password: string; privateKeyPath?: string; passphrase?: string; hostKeyFingerprint?: string };
 type State = { connections: StoredConnection[]; workspaces: Workspace[]; portTunnels: PortTunnel[]; repository: RepositorySettings };
 type PublicState = { connections: { id: string; name: string; host: string; port: number; username: string; authenticationMethod: AuthenticationMethod; privateKeyPath?: string; hostKeyFingerprint?: string }[]; workspaces: Workspace[]; portTunnels: PortTunnel[] };
-type Runtime = { status: "idle" | "working" | "server" | "client" | "error"; message: string; logs?: string[]; retryable?: boolean; repairable?: boolean };
-type TunnelRuntime = { status: "idle" | "working" | "running" | "error"; message: string };
+type Runtime = { status: "idle" | "working" | "server" | "client" | "error"; message: string; updatedAt: string; stage: string; logs?: string[]; retryable?: boolean; repairable?: boolean };
+type TunnelRuntime = { status: "idle" | "working" | "running" | "error"; message: string; updatedAt: string; stage: string };
+type ConnectionRuntimeSnapshot = ConnectionRuntime & { updatedAt: string; stage: string };
 
 const directory = path.dirname(fileURLToPath(import.meta.url));
 const appIcon = path.join(directory, "../assets/app-icon.png");
@@ -29,7 +31,7 @@ const runtimes = new Map<string, Runtime>();
 const tunnels = new Map<string, { ssh: Client; server: Server }>();
 const portTunnelRuntimes = new Map<string, TunnelRuntime>();
 const portTunnels = new Map<string, { ssh: Client; server: Server }>();
-const connectionRuntimes = new Map<string, ConnectionRuntime>();
+const connectionRuntimes = new Map<string, ConnectionRuntimeSnapshot>();
 const provisioningClients = new Map<string, Client>();
 const cancelledProvisioning = new Set<string>();
 
@@ -61,17 +63,18 @@ function publicState(state: State): PublicState {
 }
 function id(): string { return crypto.randomUUID(); }
 function shell(value: string): string { return `'${value.replaceAll("'", `'"'"'`)}'`; }
-function runtime(workspaceId: string, status: Runtime["status"], message: string, details: Omit<Runtime, "status" | "message"> = {}): void {
-  const value = { status, message, ...details }; runtimes.set(workspaceId, value);
+function runtime(workspaceId: string, status: Runtime["status"], message: string, details: Partial<Omit<Runtime, "status" | "message" | "updatedAt">> = {}): void {
+  const value = { status, message, updatedAt: new Date().toISOString(), stage: details.stage ?? status, ...details }; runtimes.set(workspaceId, value);
   for (const window of BrowserWindow.getAllWindows()) window.webContents.send("gateway:status", workspaceId, value);
 }
 function portTunnelRuntime(tunnelId: string, status: TunnelRuntime["status"], message: string): void {
-  const value = { status, message }; portTunnelRuntimes.set(tunnelId, value);
+  const value = { status, message, updatedAt: new Date().toISOString(), stage: status }; portTunnelRuntimes.set(tunnelId, value);
   for (const window of BrowserWindow.getAllWindows()) window.webContents.send("gateway:tunnelStatus", tunnelId, value);
 }
 function connectionRuntime(connectionId: string, value: ConnectionRuntime): void {
-  connectionRuntimes.set(connectionId, value);
-  for (const window of BrowserWindow.getAllWindows()) window.webContents.send("gateway:connectionStatus", connectionId, value);
+  const timestamped = { ...value, updatedAt: new Date().toISOString(), stage: "ssh-health-check" };
+  connectionRuntimes.set(connectionId, timestamped);
+  for (const window of BrowserWindow.getAllWindows()) window.webContents.send("gateway:connectionStatus", connectionId, timestamped);
 }
 async function credentials(connectionId: string): Promise<Connection> {
   const item = (await readState()).connections.find((connection) => connection.id === connectionId);
@@ -141,7 +144,7 @@ async function provision(workspaceId: string, client: Client, settings: Reposito
   const output = await execute(client, `bash -lc ${shell(command)}`, (line) => {
     logs.push(line);
     const stage = line.match(/^VIBE_STAGE:(.+)$/)?.[1];
-    runtime(workspaceId, "working", stage ? `${stage.replaceAll("-", " ")}…` : "Provisioning remote Vibe application…", { logs: boundedProvisioningLog(logs) });
+    runtime(workspaceId, "working", stage ? `${stage.replaceAll("-", " ")}…` : "Provisioning remote Vibe application…", { stage: stage ?? "provisioning", logs: boundedProvisioningLog(logs) });
   });
   if (cancelledProvisioning.has(workspaceId)) throw new Error("Provisioning cancelled");
   const match = output.match(/VIBE_RESULT:([0-9a-f]{40,64}):([01])/);
@@ -166,7 +169,8 @@ async function startServer(workspaceId: string, repair = false): Promise<{ remot
     return { remotePort: workspace.remotePort };
   } catch (error) {
     const failure = classifyProvisioningFailure(cancelledProvisioning.has(workspaceId) ? new Error("Provisioning cancelled") : error);
-    runtime(workspaceId, "error", failure.message, { logs: runtimes.get(workspaceId)?.logs, retryable: failure.retryable, repairable: failure.repairable });
+    const previous = runtimes.get(workspaceId);
+    runtime(workspaceId, "error", failure.message, { stage: previous?.stage ?? "provisioning", logs: previous?.logs, retryable: failure.retryable, repairable: failure.repairable });
     throw error;
   } finally { provisioningClients.delete(workspaceId); cancelledProvisioning.delete(workspaceId); client.end(); }
 }
@@ -327,6 +331,21 @@ ipcMain.handle("gateway:get", async () => {
 });
 ipcMain.handle("gateway:saveRepository", async (_event, input: Partial<RepositorySettings>) => { if (!input.repository?.trim() || !input.branch?.trim()) throw new Error("Repository URL and branch are required"); const state = await readState(); state.repository = normalizeRepositorySettings(input); await saveState(state); return state.repository; });
 ipcMain.handle("gateway:refreshStatuses", (_event, connectionId?: string) => refreshStatuses(connectionId));
+ipcMain.handle("gateway:copyDiagnostics", async (_event, connectionId: string) => {
+  const state = await readState();
+  const connection = state.connections.find((item) => item.id === connectionId);
+  if (!connection) throw new Error("SSH connection was not found");
+  const workspaces = state.workspaces.filter((item) => item.connectionId === connectionId);
+  const portTunnelItems = state.portTunnels.filter((item) => item.connectionId === connectionId);
+  const report = buildConnectionDiagnostics({
+    generatedAt: new Date().toISOString(), version: app.getVersion(), platform: `${process.platform}-${process.arch}`,
+    connection: { name: connection.name, authenticationMethod: normalizeStoredAuthentication(connection).authenticationMethod },
+    connectionRuntime: connectionRuntimes.get(connectionId), workspaces, runtimes: Object.fromEntries(runtimes),
+    tunnels: portTunnelItems, tunnelRuntimes: Object.fromEntries(portTunnelRuntimes),
+  });
+  clipboard.writeText(report);
+  return { copiedAt: new Date().toISOString() };
+});
 ipcMain.handle("gateway:pickPrivateKey", async () => {
   const selected = await dialog.showOpenDialog({ title: "Choose SSH private key", properties: ["openFile"], filters: [{ name: "SSH private keys", extensions: ["pem", "key", "ppk"] }, { name: "All files", extensions: ["*"] }] });
   if (selected.canceled || !selected.filePaths[0]) return undefined;

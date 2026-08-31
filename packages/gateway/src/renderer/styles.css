@@ -3,6 +3,8 @@
 html, body, #root { width: 100%; height: 100%; margin: 0; overflow: hidden; }
 button, input, select { font: inherit; color: inherit; }
 button { cursor: pointer; }
+button:disabled { cursor: default; }
+.visually-hidden { width: 1px; height: 1px; position: absolute; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 button:focus-visible, input:focus-visible, select:focus-visible, summary:focus-visible { outline: 2px solid #79a7ff; outline-offset: 2px; }
 .gateway-shell { height: 100%; display: grid; grid-template-columns: 248px minmax(0, 1fr); }
 aside { min-width: 0; display: flex; flex-direction: column; background: #252629; border-right: 1px solid #3c3e42; }
