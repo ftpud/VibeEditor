@@ -15,7 +15,7 @@ describe("Git rollback controls", () => {
 
   it("disables every toolbar operation while a Git operation is running", () => {
     const markup = renderToStaticMarkup(<GitToolbarActions selectedCount={2} operationRunning pushing={false} fetching={false} rollingBack onRollbackSelected={noop} onUndoLastCommit={noop} onPush={noop} onFetch={noop} onRefresh={noop} />);
-    expect(markup.match(/disabled/g)).toHaveLength(5);
+    expect(markup.match(/disabled/g)).toHaveLength(6);
     expect(markup).toContain("status-toast-spinner");
   });
 
@@ -28,6 +28,13 @@ describe("Git rollback controls", () => {
     const synchronized = renderToStaticMarkup(<GitToolbarActions selectedCount={0} operationRunning={false} pushing={false} fetching={false} rollingBack={false} upstream={{ upstream: "origin/main", ahead: 0, behind: 0 }} onRollbackSelected={noop} onUndoLastCommit={noop} onPush={noop} onFetch={noop} onRefresh={noop} />);
     expect(synchronized).not.toContain("git-push-badge");
     expect(synchronized).toContain("up to date with origin/main");
+  });
+
+  it("offers pull only for a branch with an upstream", () => {
+    const published = renderToStaticMarkup(<GitToolbarActions selectedCount={0} operationRunning={false} pushing={false} fetching={false} rollingBack={false} upstream={{ upstream: "origin/main", ahead: 0, behind: 2 }} onRollbackSelected={noop} onUndoLastCommit={noop} onPush={noop} onFetch={noop} onRefresh={noop} />);
+    expect(published).toContain('aria-label="Pull remote changes"'); expect(published).not.toMatch(/aria-label="Pull remote changes"[^>]*disabled/);
+    const unpublished = renderToStaticMarkup(<GitToolbarActions selectedCount={0} operationRunning={false} pushing={false} fetching={false} rollingBack={false} onRollbackSelected={noop} onUndoLastCommit={noop} onPush={noop} onFetch={noop} onRefresh={noop} />);
+    expect(unpublished).toMatch(/aria-label="Pull remote changes"[^>]*disabled/);
   });
 
   it("distinguishes a branch without an upstream without showing an ahead indicator", () => {

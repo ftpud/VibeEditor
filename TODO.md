@@ -135,7 +135,7 @@ multi-surface work).
 
 ### Git workflows
 
-- [ ] **Pull with merge/rebase choice — Project.** Value: synchronize branches with
+- [x] **Pull with merge/rebase choice — Project.** Value: synchronize branches with
   an understandable preview and outcome. Constraint: fetch first, display incoming
   commits and dirty-state blockers, avoid implicit auto-stash, and preserve recovery
   instructions. Depends on remote tracking/fetch.
