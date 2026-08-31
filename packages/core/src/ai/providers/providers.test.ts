@@ -252,6 +252,23 @@ describe("ACP integration", () => {
     await provider.clear(workspace);
   });
 
+  it("archives a running conversation and starts a context-empty handoff session", async () => {
+    const state = await mkdtemp(path.join(os.tmpdir(), "remote-ide-ai-fresh-"));
+    const provider = new FakeProvider(() => undefined, state, { FAKE_SLOW: "on" });
+    const workspace = process.cwd();
+    const first = await provider.send(workspace, { prompt: "old context", configuration: { model: "model-a", reasoning: "high" } });
+    await provider.startFreshSession(workspace, { prompt: "fresh handoff", configuration: first.configuration ?? { model: first.model, reasoning: first.reasoning } });
+    let fresh = await provider.get(workspace);
+    for (let attempt = 0; attempt < 240 && (fresh.id === first.id || fresh.status === "in_progress" || !fresh.messages.some((message) => message.text === "fresh handoff")); attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 25)); fresh = await provider.get(workspace);
+    }
+    expect(fresh.id).not.toBe(first.id);
+    expect(fresh.messages.filter((message) => message.role === "user").map((message) => message.text)).toEqual(["fresh handoff"]);
+    const archived = (await provider.sessions(workspace)).find((session) => session.id === first.id);
+    expect(archived?.messages.some((message) => message.text === "old context")).toBe(true);
+    await provider.clear(workspace);
+  });
+
   it("injects mid-turn input into the live turn when the agent supports steering", async () => {
     const state = await mkdtemp(path.join(os.tmpdir(), "remote-ide-ai-steer-"));
     const provider = new FakeProvider(() => undefined, state, { FAKE_STEERING: "on", FAKE_SLOW: "on" });

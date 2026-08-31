@@ -88,8 +88,15 @@ export function TerminalTabButton({ tab, active, highlighted, onActivate, onClos
 }
 
 export function TerminalRecoveryNotice({ tab }: { tab: TerminalTab }) {
-  if (tab.recovery === "reattached") return <div className="terminal-recovery-notice live" role="status">Live process reattached — this is the same Core-owned terminal process.</div>;
-  if (tab.recovery === "recreated") return <div className="terminal-recovery-notice" role="status">New shell created because Core no longer has the previous terminal session. It starts in this task workspace; the former process, environment, and working directory were not restored.</div>;
+  const [recoveryVisible, setRecoveryVisible] = useState(Boolean(tab.recovery));
+  useEffect(() => {
+    setRecoveryVisible(Boolean(tab.recovery));
+    if (!tab.recovery) return;
+    const timer = window.setTimeout(() => setRecoveryVisible(false), 6_000);
+    return () => window.clearTimeout(timer);
+  }, [tab.recovery, tab.terminalId]);
+  if (recoveryVisible && tab.recovery === "reattached") return <div className="terminal-recovery-notice live" role="status">Live process reattached — this is the same Core-owned terminal process.</div>;
+  if (recoveryVisible && tab.recovery === "recreated") return <div className="terminal-recovery-notice" role="status">New shell created because Core no longer has the previous terminal session. It starts in this task workspace; the former process, environment, and working directory were not restored.</div>;
   if (tab.status === "exited") return <div className="terminal-recovery-notice exited" role="status">This terminal process exited{tab.exitCode === undefined ? "" : ` with code ${tab.exitCode}`} and cannot accept input.</div>;
   if (tab.status === "unavailable") return <div className="terminal-recovery-notice exited" role="status">The previous terminal session is unavailable and no replacement shell was started.</div>;
   return null;

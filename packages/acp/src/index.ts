@@ -75,6 +75,13 @@ export abstract class AcpProvider {
   /** Adds input to a turn that is already running, optionally forcing a distinct follow-up turn. */
   abstract steer(workspace: string, prompt: string, options?: { senderModel?: string; queue?: boolean }): Promise<AiSession>;
   abstract clear(workspace: string): Promise<AiSession>;
+  /** Starts a context-empty session. Providers may queue this until a running turn finishes. */
+  async startFreshSession(workspace: string, request: AcpSendRequest): Promise<AiSession> {
+    const current = await this.get(workspace);
+    if (current.status === "in_progress" || current.status === "user_prompt") throw new Error(`${this.descriptor.name} is still working`);
+    await this.clear(workspace);
+    return this.send(workspace, request);
+  }
   /** Every session recorded for the workspace, most recently updated first. */
   abstract sessions(workspace: string): Promise<AiSession[]>;
   /** Makes a previously recorded session the active one again. */

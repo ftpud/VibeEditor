@@ -18,7 +18,7 @@ function harness() {
   const session: AiSession = { status: "in_progress", model: "gpt-5", messages: [{ id: "one", role: "assistant", text: "First", timestamp: "2026-01-01" }, { id: "two", role: "assistant", text: "Latest", timestamp: "2026-01-02" }], reasoning: "medium", configuration: { model: "gpt-5", reasoning: "medium", mode: "agent-full-access" } };
   const provider = {
     descriptor: { options: [{ id: "mode", name: "Agent mode", description: "", type: "select", defaultValue: "agent", choices: [{ value: "read-only", name: "Read only" }, { value: "agent", name: "Workspace agent" }, { value: "agent-full-access", name: "Full access" }] }] },
-    send: vi.fn(async () => session), get: vi.fn(async () => session), steer: vi.fn(async () => session), configureNext: vi.fn(async (_workspace: string, configuration: Record<string, string>) => ({ ...session, nextConfiguration: configuration })),
+    send: vi.fn(async () => session), get: vi.fn(async () => session), steer: vi.fn(async () => session), configureNext: vi.fn(async (_workspace: string, configuration: Record<string, string>) => ({ ...session, nextConfiguration: configuration })), startFreshSession: vi.fn(async () => session),
     usage: vi.fn(async (): Promise<AiUsage> => ({ supported: true, label: "Context window", used: 120, limit: 1000, unit: "tokens" })),
     models: vi.fn(async () => [{ id: "gpt-5", name: "GPT-5", defaultReasoning: "medium", reasoningLevels: ["low", "medium", "high"] }, { id: "child-model", name: "Child", defaultReasoning: "low", reasoningLevels: ["low", "high"] }, { id: "unavailable", name: "Unavailable", available: false, defaultReasoning: "low", reasoningLevels: ["low"] }])
   };
@@ -31,16 +31,17 @@ function harness() {
 
 describe("Vibe Editor app tools", () => {
   it("publishes task start agent and reasoning parameters", () => {
-    expect(appToolDefinitions.map((tool) => tool.name)).toEqual(["ai_usage", "timer_set", "model_switch_next", "task_create", "task_create_and_start", "task_list", "task_delete", "task_set_status", "task_ai_response_tail", "task_append_prompt", "set_commit_message", "task_update_commit_message"]);
+    expect(appToolDefinitions.map((tool) => tool.name)).toEqual(["ai_usage", "timer_set", "model_switch_next", "session_new", "task_create", "task_create_and_start", "task_list", "task_delete", "task_set_status", "task_ai_response_tail", "task_append_prompt", "set_commit_message", "task_update_commit_message"]);
     expect(appToolDefinitions[1]).toMatchObject({ name: "timer_set", inputSchema: { required: ["seconds", "prompt"] } });
     expect(appToolDefinitions[2]).toMatchObject({ name: "model_switch_next", inputSchema: { required: ["model", "reasoning"] } });
-    expect(appToolDefinitions[4].inputSchema.required).toEqual(["prompt", "provider", "model"]);
-    expect(appToolDefinitions[4].inputSchema.properties.agent).toMatchObject({
+    expect(appToolDefinitions[3]).toMatchObject({ name: "session_new", inputSchema: { required: ["prompt"] } });
+    expect(appToolDefinitions[5].inputSchema.required).toEqual(["prompt", "provider", "model"]);
+    expect(appToolDefinitions[5].inputSchema.properties.agent).toMatchObject({
       oneOf: [{ type: "object", required: ["scope", "name"] }, { type: "null" }]
     });
-    expect(appToolDefinitions[4].inputSchema.properties.reasoning).toMatchObject({ type: "string", minLength: 1 });
-    expect(appToolDefinitions[7]).toMatchObject({ name: "task_set_status", inputSchema: { required: ["task_id", "status"], properties: { status: { enum: ["active", "finished"] } } } });
-    expect(appToolDefinitions[10]).toMatchObject({
+    expect(appToolDefinitions[5].inputSchema.properties.reasoning).toMatchObject({ type: "string", minLength: 1 });
+    expect(appToolDefinitions[8]).toMatchObject({ name: "task_set_status", inputSchema: { required: ["task_id", "status"], properties: { status: { enum: ["active", "finished"] } } } });
+    expect(appToolDefinitions[11]).toMatchObject({
       name: "set_commit_message",
       inputSchema: {
         additionalProperties: false,
@@ -48,7 +49,7 @@ describe("Vibe Editor app tools", () => {
         properties: { message: { type: "string", minLength: 1, maxLength: 10_000, pattern: "\\S" } }
       }
     });
-    expect(appToolDefinitions[11]).toMatchObject({
+    expect(appToolDefinitions[12]).toMatchObject({
       name: "task_update_commit_message",
       inputSchema: {
         additionalProperties: false,
@@ -67,6 +68,16 @@ describe("Vibe Editor app tools", () => {
     await expect(service.call("model_switch_next", { model: "gpt-5", reasoning: "high" })).resolves.toEqual({ provider: "codex", model: "gpt-5", reasoning: "high", applies_to: "next_turn", continuation: "queued" });
     expect(provider.configureNext).toHaveBeenCalledWith("/tasks/parent/workspace", { model: "gpt-5", reasoning: "high" });
     expect(provider.steer).toHaveBeenCalledWith("/tasks/parent/workspace", "Continue the current task using the newly selected model and reasoning effort.", { senderModel: "gpt-5", queue: true });
+  });
+
+  it("queues a context-empty session with a handoff prompt in the invoking workspace", async () => {
+    const { tasks, provider, onTasksChanged, onCommitMessageChanged, agents } = harness();
+    const coordinator = { name: "Coordinator", instructions: "Coordinate.", mcpServers: ["vibe-editor"] };
+    provider.get.mockResolvedValue({ ...await provider.get(), agent: { name: coordinator.name, fingerprint: agentFingerprint(coordinator) } });
+    agents.list.mockResolvedValue([{ scope: "workspace", name: "coordinator.md", agent: coordinator }]);
+    const service = new AppToolService(tasks as never, { get: vi.fn(() => provider), list: vi.fn(() => []) } as never, "/tasks/parent/workspace", onTasksChanged, onCommitMessageChanged, "codex", agents as never, "/workspace");
+    await expect(service.call("session_new", { prompt: "Continue from this handoff" })).resolves.toMatchObject({ provider: "codex", workspace: "/tasks/parent/workspace", transition: "queued" });
+    expect(provider.startFreshSession).toHaveBeenCalledWith("/tasks/parent/workspace", expect.objectContaining({ prompt: "Continue from this handoff", agent: coordinator, mcpServers: [expect.objectContaining({ name: "vibe-editor" })] }));
   });
 
   it("rejects an unadvertised next-turn model or reasoning without queuing it", async () => {
