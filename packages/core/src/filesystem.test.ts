@@ -51,9 +51,19 @@ describe("WorkspaceFileSystem", () => {
 
   it("reads and writes a file", async () => {
     await fs.open(root);
-    expect(await fs.read("src/index.ts")).toContain("value = 1");
-    await fs.write("src/index.ts", "changed\n");
+    const opened = await fs.read("src/index.ts");
+    expect(opened.content).toContain("value = 1");
+    await fs.write("src/index.ts", "changed\n", opened.revision);
     expect(await readFile(path.join(root, "src/index.ts"), "utf8")).toBe("changed\n");
+  });
+
+  it("rejects stale saves and permits an explicit overwrite", async () => {
+    await fs.open(root);
+    const opened = await fs.read("src/index.ts");
+    await writeFile(path.join(root, "src", "index.ts"), "external\n");
+    await expect(fs.write("src/index.ts", "editor\n", opened.revision)).rejects.toMatchObject({ code: "FILE_CHANGED" });
+    const saved = await fs.write("src/index.ts", "editor\n", opened.revision, true);
+    expect(saved.revision.version).not.toBe(opened.revision.version);
   });
 
   it("creates files and directories and renames them within the workspace", async () => {

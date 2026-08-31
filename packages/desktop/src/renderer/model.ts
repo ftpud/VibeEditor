@@ -7,6 +7,7 @@ export type EditorTab = {
   dirty: boolean;
   content: string;
   savedContent: string;
+  revision?: { identity: string; version: string };
   loading: boolean;
   pinned?: boolean;
   error?: string;
