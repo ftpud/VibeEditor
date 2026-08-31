@@ -51,6 +51,10 @@ export type GitHistoryRewritePreview = {
   undoUnavailableReason?: string;
   recovery: string;
 };
+/** Inclusion is deliberately explicit because Git's default stash behavior excludes untracked and ignored files. */
+export type GitStashInclusion = { staged: boolean; unstaged: boolean; untracked: boolean; ignored: boolean };
+export type GitStash = { reference: string; hash: string; message: string; branch?: string; date?: string };
+export type GitStashPreview = { stash: GitStash; files: GitCommitFile[]; conflictRisk: "none" | "possible"; blockers: string[]; recovery: string };
 /** Patch and version are opaque Core-issued values; they prevent applying a hunk after its source changed. */
 export type GitDiffHunk = { originalStart: number; originalLines: number; modifiedStart: number; modifiedLines: number; source: "index" | "worktree"; patch: string; version: string };
 export type GitRollbackFailure = { path: string; message: string };
@@ -306,6 +310,12 @@ export type ProtocolOperations = {
   "git.historyRewritePreview": { payload: Record<string, never>; result: GitHistoryRewritePreview };
   "git.amend": { payload: { confirmHistoryRewrite: boolean }; result: { hash: string } };
   "git.undoLastCommit": { payload: { confirmHistoryRewrite: boolean }; result: { undone: string } };
+  "git.stashes": { payload: Record<string, never>; result: { stashes: GitStash[] } };
+  "git.createStash": { payload: { message?: string; paths?: string[]; include: GitStashInclusion }; result: { stash: GitStash } };
+  "git.stashPreview": { payload: { reference: string }; result: GitStashPreview };
+  "git.applyStash": { payload: { reference: string }; result: { applied: boolean; stashRetained: boolean; outcome: string } };
+  "git.popStash": { payload: { reference: string; confirm: boolean }; result: { applied: boolean; stashRetained: boolean; outcome: string } };
+  "git.dropStash": { payload: { reference: string; confirm: boolean }; result: Record<string, never> };
   "git.push": { payload: Record<string, never>; result: Record<string, never> };
   "git.fetch": { payload: Record<string, never>; result: { fetchedAt: string } };
   "git.cancelFetch": { payload: Record<string, never>; result: { cancelled: boolean } };
@@ -540,6 +550,12 @@ const requestTypeRegistry: Record<RequestType, true> = {
   "git.historyRewritePreview": true,
   "git.amend": true,
   "git.undoLastCommit": true,
+  "git.stashes": true,
+  "git.createStash": true,
+  "git.stashPreview": true,
+  "git.applyStash": true,
+  "git.popStash": true,
+  "git.dropStash": true,
   "git.push": true,
   "git.fetch": true,
   "git.cancelFetch": true,
