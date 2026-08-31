@@ -2,7 +2,7 @@ type GatewayConnection = { id: string; name: string; host: string; port: number;
 type GatewayWorkspace = { id: string; connectionId: string; name: string; directory: string; remotePort: number };
 type GatewayPortTunnel = { id: string; connectionId: string; port: number };
 type GatewayState = { connections: GatewayConnection[]; workspaces: GatewayWorkspace[]; portTunnels: GatewayPortTunnel[] };
-type GatewayRuntime = { status: "idle" | "working" | "server" | "client" | "error"; message: string };
+type GatewayRuntime = { status: "idle" | "working" | "server" | "client" | "error"; message: string; logs?: string[]; retryable?: boolean; repairable?: boolean };
 type GatewayTunnelRuntime = { status: "idle" | "working" | "running" | "error"; message: string };
 type GatewayConnectionRuntime = { status: "unknown" | "reconnecting" | "online" | "slow" | "offline"; message: string; latencyMs?: number };
 type GatewayRepositorySettings = { repository: string; branch: string; autoUpdate: boolean };
@@ -24,6 +24,8 @@ interface Window {
     startPortTunnel(id: string): Promise<void>;
     stopPortTunnel(id: string): Promise<void>;
     startServer(id: string): Promise<{ remotePort: number }>;
+    repairServer(id: string): Promise<{ remotePort: number }>;
+    cancelProvisioning(id: string): Promise<void>;
     stopServer(id: string): Promise<void>;
     startClient(id: string): Promise<void>;
     onStatus(listener: (id: string, status: GatewayRuntime) => void): () => void;

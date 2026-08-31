@@ -214,7 +214,7 @@ multi-surface work).
   password-only path with safer, more common remote authentication. Constraint:
   never copy private keys into project/Core state; show fingerprints and changed-key
   failures explicitly, using OS-backed secret storage only where needed.
-- [ ] **Provisioning logs, cancellation, and repair — Project.** Value: make remote
+- [x] **Provisioning logs, cancellation, and repair — Project.** Value: make remote
   clone/install/build/start failures diagnosable and recoverable. Constraint: stream
   bounded redacted logs, distinguish retryable stages, and never reset the configured
   project repository (only the dedicated Vibe application checkout).
