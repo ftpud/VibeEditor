@@ -196,6 +196,22 @@ describe("parseGitStatus", () => {
     expect((await execFileAsync("git", ["-C", root, "show", "HEAD:other.txt"])).stdout).toBe("before\n");
   });
 
+  it("amends only staged index changes and undoes the last commit into the worktree", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "remote-ide-git-rewrite-"));
+    await execFileAsync("git", ["-C", root, "init"]); await execFileAsync("git", ["-C", root, "config", "user.email", "test@example.com"]); await execFileAsync("git", ["-C", root, "config", "user.name", "Test"]);
+    await writeFile(path.join(root, "file.txt"), "base\n"); await execFileAsync("git", ["-C", root, "add", "."]); await execFileAsync("git", ["-C", root, "commit", "-m", "initial"]);
+    await writeFile(path.join(root, "file.txt"), "staged\n"); await execFileAsync("git", ["-C", root, "add", "file.txt"]); await writeFile(path.join(root, "other.txt"), "unstaged\n");
+    const service = new GitService(root);
+    expect((await service.historyRewritePreview()).confirmationRequired).toBe(true);
+    await expect(service.amend(false)).rejects.toThrow("publication state is unknown");
+    await service.amend(true);
+    expect((await execFileAsync("git", ["-C", root, "show", "HEAD:file.txt"])).stdout).toBe("staged\n");
+    const undone = await service.undoLastCommit(true);
+    expect(undone).toMatch(/^[0-9a-f]{40}$/);
+    expect((await execFileAsync("git", ["-C", root, "status", "--porcelain"])).stdout).toContain(" M file.txt");
+    expect((await execFileAsync("git", ["-C", root, "status", "--porcelain"])).stdout).toContain("?? other.txt");
+  });
+
   it("cherry-picks a commit or applies it without committing", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "remote-ide-git-cherry-pick-"));
     await execFileAsync("git", ["-C", root, "init"]);
