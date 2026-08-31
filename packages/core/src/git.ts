@@ -267,6 +267,7 @@ export class GitService {
     if (!include || [include.staged, include.unstaged, include.untracked, include.ignored].some((value) => typeof value !== "boolean")) throw new CoreError("INVALID_REQUEST", "Explicit stash inclusion choices are required");
     if (!include.staged && !include.unstaged && !include.untracked && !include.ignored) throw new CoreError("INVALID_REQUEST", "Choose at least one kind of change to stash");
     if (include.ignored && !include.untracked) throw new CoreError("INVALID_REQUEST", "Ignored files require including untracked files");
+    if (include.staged && !include.unstaged && (include.untracked || include.ignored)) throw new CoreError("INVALID_REQUEST", "A staged-only stash cannot include untracked or ignored files; include unstaged changes too");
     if (paths && (!Array.isArray(paths) || paths.length > 500)) throw new CoreError("INVALID_REQUEST", "Invalid stash path selection");
     for (const filePath of paths ?? []) validatePath(filePath);
     const args = ["stash", "push", "--message", (message?.trim() || "Vibe Editor stash")];

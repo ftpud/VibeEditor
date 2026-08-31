@@ -126,7 +126,7 @@ multi-surface work).
   an understandable preview and outcome. Constraint: fetch first, display incoming
   commits and dirty-state blockers, avoid implicit auto-stash, and preserve recovery
   instructions. Depends on remote tracking/fetch.
-- [ ] **Stash manager — Project.** Value: temporarily shelve selected or full working
+- [x] **Stash manager — Project.** Value: temporarily shelve selected or full working
   state while switching tasks/branches. Constraint: explicitly cover staged,
   unstaged, untracked, and ignored files; preview apply/pop conflicts and retain a
   stash on failed application.
