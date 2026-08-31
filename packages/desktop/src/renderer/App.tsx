@@ -241,7 +241,8 @@ export function App() {
   const [importChoices, setImportChoices] = useState<{ suggestions: JavaTypeSuggestion[]; range: { startLineNumber: number; startColumn: number; endLineNumber: number; endColumn: number } }>();
   const [javaUsages, setJavaUsages] = useState<JavaLspLocation[]>();
   const [showRunConfigurationDialog, setShowRunConfigurationDialog] = useState(false);
-  const [treeContextMenu, setTreeContextMenu] = useState<{ x: number; y: number; node: FileTreeNode }>();
+  const [treeContextMenu, setTreeContextMenu] = useState<{ x: number; y: number; nodes: FileTreeNode[] }>();
+  const [projectSelection, setProjectSelection] = useState<Set<string>>(new Set());
   const [projectPathDialog, setProjectPathDialog] = useState<{ mode: "file" | "directory" | "rename"; node: FileTreeNode; parentPath: string }>();
   const [editorGitMenu, setEditorGitMenu] = useState<{ x: number; y: number; path: string; startLine?: number; endLine?: number }>();
   const [gitRollbackMenu, setGitRollbackMenu] = useState<{ x: number; y: number; entry: GitStatusEntry }>();
@@ -2074,23 +2075,55 @@ export function App() {
     setSearchScope(scope);
   };
 
-  const runProjectTreeAction = (action: ProjectTreeAction, node: FileTreeNode) => {
-    const actions = projectTreeActions({ node });
+  const transferProjectPaths = async (kind: "copy" | "move", nodes: FileTreeNode[], duplicate = false) => {
+    const client = clientRef.current; if (!client || nodes.length === 0) return;
+    const destinationDirectory = duplicate ? undefined : window.prompt(`${kind === "copy" ? "Copy" : "Move"} ${nodes.length} selected item${nodes.length === 1 ? "" : "s"} to workspace directory:`, "");
+    if (!duplicate && destinationDirectory === null) return;
+    const duplicateName = (name: string) => { const dot = name.lastIndexOf("."); return dot > 0 ? `${name.slice(0, dot)} copy${name.slice(dot)}` : `${name} copy`; };
+    const items = nodes.map((node) => ({ source: node.path, destination: duplicate ? [...node.path.split("/").slice(0, -1), duplicateName(node.name)].filter(Boolean).join("/") : [destinationDirectory!.replace(/^\/+|\/+$/g, ""), node.name].filter(Boolean).join("/") }));
+    const fileTabs = layoutRef.current.editorGroups.flatMap((group) => group.tabs).filter((tab) => tab.type === "file");
+    const openFiles = fileTabs.map((tab) => tab.path); const dirtyFiles = fileTabs.filter((tab) => tab.dirty).map((tab) => tab.path);
+    try {
+      let preview = await client.request("filesystem.transferPreflight", { kind, items, openFiles, dirtyFiles });
+      if (preview.dirtyFiles.length) { setStatusMessage(`Save or discard changes first: ${preview.dirtyFiles.join(", ")}`); return; }
+      let overwritePaths: string[] = [];
+      if (preview.collisions) {
+        const collisions = preview.items.filter((item) => item.collision).map((item) => item.destination);
+        if (!window.confirm(`${collisions.length} destination${collisions.length === 1 ? " exists" : "s exist"}:\n\n${collisions.join("\n")}\n\nOverwrite these destinations?`)) return;
+        overwritePaths = collisions; preview = await client.request("filesystem.transferPreflight", { kind, items, overwritePaths, openFiles, dirtyFiles });
+      }
+      const summary = `${kind === "copy" ? "Copy" : "Move"} ${preview.items.length} item${preview.items.length === 1 ? "" : "s"}?${preview.overwrites ? `\nOverwrites: ${preview.overwrites}` : ""}${preview.caseOnlyRenames ? `\nCase-only renames: ${preview.caseOnlyRenames}` : ""}${preview.crossDeviceMoves ? `\nCross-device moves (copy then remove): ${preview.crossDeviceMoves}` : ""}${preview.openFiles.length ? `\nOpen files affected: ${preview.openFiles.length}` : ""}${preview.skipped.length ? `\nSkipped nested/invalid selections: ${preview.skipped.length}` : ""}`;
+      if (!window.confirm(summary)) return;
+      const result = await client.request("filesystem.transferApply", { kind, items, overwritePaths, openFiles, dirtyFiles, confirmed: true });
+      if (kind === "move") for (const item of result.completed) {
+        const prefix = `${item.source}/`; const replacement = `${item.destination}/`;
+        updateGroup((tabs, active) => ({ tabs: tabs.map((tab) => tab.type === "file" && (tab.path === item.source || tab.path.startsWith(prefix)) ? { ...tab, path: tab.path === item.source ? item.destination : replacement + tab.path.slice(prefix.length), title: (tab.path === item.source ? item.destination : replacement + tab.path.slice(prefix.length)).split("/").at(-1) ?? tab.title } : tab), activeTabId: active }));
+      }
+      setProjectSelection(new Set(result.completed.map((item) => item.destination)));
+      await Promise.all([refreshTree(), refreshGit(), javaOptionsRef.current ? refreshJavaTree() : Promise.resolve()]);
+      showStatus(`${result.completed.length} item${result.completed.length === 1 ? "" : "s"} ${kind === "copy" ? "copied" : "moved"}${result.failures.length ? `; ${result.failures.length} failed` : ""}`, result.failures.length ? "error" : "success");
+    } catch (error) { setStatusMessage(error instanceof Error ? error.message : `Could not ${kind} selected paths`); }
+  };
+
+  const runProjectTreeAction = (action: ProjectTreeAction, nodes: FileTreeNode[]) => {
+    const node = nodes[0]; if (!node) return;
+    const actions = projectTreeActions({ node, count: nodes.length });
     if (!actions[action]) return;
     if (action === "open") { void openFile(node); return; }
     if (action === "copyRelativePath" || action === "copyAbsolutePath") {
       const separator = activeWorkspace.includes("\\") ? "\\" : "/";
-      const absolutePath = activeWorkspace ? `${activeWorkspace.replace(/[\\/]+$/, "")}${separator}${node.path.split("/").join(separator)}` : node.path;
-      const value = action === "copyRelativePath" ? node.path : absolutePath;
+      const value = nodes.map((item) => action === "copyRelativePath" ? item.path : activeWorkspace ? `${activeWorkspace.replace(/[\\/]+$/, "")}${separator}${item.path.split("/").join(separator)}` : item.path).join("\n");
       if (!window.desktop?.writeClipboard) { setStatusMessage("Electron clipboard bridge is unavailable"); return; }
       void window.desktop.writeClipboard(value).then(() => setStatusMessage(action === "copyRelativePath" ? "Copied workspace-relative path" : "Copied remote workspace absolute path")).catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : "Could not copy path"));
       return;
     }
+    if (action === "duplicate") { void transferProjectPaths("copy", nodes, true); return; }
+    if (action === "copyTo" || action === "moveTo") { void transferProjectPaths(action === "copyTo" ? "copy" : "move", nodes); return; }
     const parentPath = node.type === "directory" ? node.path : node.path.split("/").slice(0, -1).join("/");
     if (action === "createFile") setProjectPathDialog({ mode: "file", node, parentPath });
     else if (action === "createDirectory") setProjectPathDialog({ mode: "directory", node, parentPath });
     else if (action === "rename") setProjectPathDialog({ mode: "rename", node, parentPath });
-    else if (action === "delete") void deleteProjectPath(node);
+    else if (action === "delete") { if (nodes.length > 1) setStatusMessage("Bulk delete is not part of this operation; select one item to delete"); else void deleteProjectPath(node); }
   };
 
   const navigateToSearchResult = async (result: SearchResult, matchLength: number) => {
@@ -2238,8 +2271,8 @@ export function App() {
         {classicSideView === "project" ? <>
           <header className="panel-header"><span>Project</span><div className="panel-header-actions"><button title={showIgnored ? "Hide ignored files" : "Show all files (including Git-ignored)"} className={showIgnored ? "active" : ""} onClick={toggleShowIgnored}>{showIgnored ? <Eye size={14} /> : <EyeOff size={14} />}</button><button title="Synchronize files" onClick={() => void refreshTree()}><RefreshCw size={14} /></button></div></header>
           <QuickFilter value={projectFilter} placeholder="Filter files" label="Filter project files" onChange={setProjectFilter} />
-          <div className="workspace-name" onContextMenu={(event) => { event.preventDefault(); setTreeContextMenu({ x: Math.min(event.clientX, window.innerWidth - 220), y: Math.min(event.clientY, window.innerHeight - 110), node: { name: "REMOTE WORKSPACE", path: "", type: "directory" } }); }}><ChevronDown size={13} />REMOTE WORKSPACE</div>
-          <ProjectTree nodes={tree} query={projectFilter} activePath={activeTab?.path} fileColors={fileColors} gitStatuses={projectGitStatuses} onAction={runProjectTreeAction} onContextMenu={(node, x, y) => setTreeContextMenu({ x: Math.min(x, window.innerWidth - 220), y: Math.min(y, window.innerHeight - 110), node })} />
+          <div className="workspace-name" onContextMenu={(event) => { event.preventDefault(); setTreeContextMenu({ x: Math.min(event.clientX, window.innerWidth - 220), y: Math.min(event.clientY, window.innerHeight - 110), nodes: [{ name: "REMOTE WORKSPACE", path: "", type: "directory" }] }); }}><ChevronDown size={13} />REMOTE WORKSPACE</div>
+          <ProjectTree nodes={tree} query={projectFilter} activePath={activeTab?.path} selectedPaths={projectSelection} fileColors={fileColors} gitStatuses={projectGitStatuses} onAction={runProjectTreeAction} onSelectionChange={setProjectSelection} onContextMenu={(nodes, x, y) => setTreeContextMenu({ x: Math.min(x, window.innerWidth - 220), y: Math.min(y, window.innerHeight - 180), nodes })} />
         </> : classicSideView === "git" ? <>
           <header className="panel-header"><span>Git Changes</span><div className="panel-header-actions"><button title="Stash manager" onClick={() => setGitStashDialog(true)}><Archive size={14} /></button><GitToolbarActions selectedCount={selectedRollbackEntries.length} operationRunning={gitOperationRunning} pushing={gitPushing} fetching={gitFetching} rollingBack={gitRollingBack} upstream={gitUpstream} onRollbackSelected={openRollbackSelected} onUndoLastCommit={() => void previewHistoryRewrite("undo")} onPush={() => void pushGit()} onFetch={() => void fetchGit()} onRefresh={() => void refreshGit()} /></div></header><div className="git-branch"><GitBranch size={13} /><span>{gitBranch}</span>{gitUpstream && <small title={gitUpstream.lastFetch ? `Last fetched ${new Date(gitUpstream.lastFetch).toLocaleString()}` : "Not fetched in this Core session"}>{gitUpstream.upstream} · {gitUpstream.ahead} ahead · {gitUpstream.behind} behind</small>}</div>
           <KeyboardGitChangesView entries={gitEntries} error={gitError} selectedPaths={selectedGitPaths} onTogglePath={(path) => setSelectedGitPaths((current) => { const next = new Set(current); next.has(path) ? next.delete(path) : next.add(path); return next; })} activePath={activeTab?.path} onOpenDiff={openDiff} onOpenFile={(entry) => void openFile({ name: entry.path.split("/").pop() ?? entry.path, path: entry.path, type: "file" })} onContextMenu={(event, entry) => { event.preventDefault(); setGitRollbackMenu({ x: Math.min(event.clientX, window.innerWidth - 220), y: Math.min(event.clientY, window.innerHeight - 50), entry }); }} />
@@ -2294,8 +2327,8 @@ export function App() {
         {rightPanels.project && <section key="project" className="stacked-panel">
           <header className="panel-header"><span>Project</span><div className="panel-header-actions"><button title={showIgnored ? "Hide ignored files" : "Show all files (including Git-ignored)"} className={showIgnored ? "active" : ""} onClick={toggleShowIgnored}>{showIgnored ? <Eye size={14} /> : <EyeOff size={14} />}</button><button title="Synchronize files" onClick={() => void refreshTree()}><RefreshCw size={14} /></button></div></header>
           <QuickFilter value={projectFilter} placeholder="Filter files" label="Filter project files" onChange={setProjectFilter} />
-          <div className="workspace-name" onContextMenu={(event) => { event.preventDefault(); setTreeContextMenu({ x: Math.min(event.clientX, window.innerWidth - 220), y: Math.min(event.clientY, window.innerHeight - 110), node: { name: "REMOTE WORKSPACE", path: "", type: "directory" } }); }}><ChevronDown size={13} />REMOTE WORKSPACE</div>
-          <ProjectTree nodes={tree} query={projectFilter} activePath={activeTab?.path} fileColors={fileColors} gitStatuses={projectGitStatuses} onAction={runProjectTreeAction} onContextMenu={(node, x, y) => setTreeContextMenu({ x: Math.min(x, window.innerWidth - 220), y: Math.min(y, window.innerHeight - 110), node })} />
+          <div className="workspace-name" onContextMenu={(event) => { event.preventDefault(); setTreeContextMenu({ x: Math.min(event.clientX, window.innerWidth - 220), y: Math.min(event.clientY, window.innerHeight - 110), nodes: [{ name: "REMOTE WORKSPACE", path: "", type: "directory" }] }); }}><ChevronDown size={13} />REMOTE WORKSPACE</div>
+          <ProjectTree nodes={tree} query={projectFilter} activePath={activeTab?.path} selectedPaths={projectSelection} fileColors={fileColors} gitStatuses={projectGitStatuses} onAction={runProjectTreeAction} onSelectionChange={setProjectSelection} onContextMenu={(nodes, x, y) => setTreeContextMenu({ x: Math.min(x, window.innerWidth - 220), y: Math.min(y, window.innerHeight - 180), nodes })} />
         </section>}
         {rightPanels.git && <section key="git" className="stacked-panel">
           <header className="panel-header"><span>Git Changes</span><div className="panel-header-actions"><button title="Stash manager" onClick={() => setGitStashDialog(true)}><Archive size={14} /></button><GitToolbarActions selectedCount={selectedRollbackEntries.length} operationRunning={gitOperationRunning} pushing={gitPushing} fetching={gitFetching} rollingBack={gitRollingBack} upstream={gitUpstream} onRollbackSelected={openRollbackSelected} onUndoLastCommit={() => void previewHistoryRewrite("undo")} onPush={() => void pushGit()} onFetch={() => void fetchGit()} onRefresh={() => void refreshGit()} /></div></header>
@@ -2344,19 +2377,17 @@ export function App() {
       {runConfigs.map((config, index) => <button key={`${config.scope}:${config.name}`} className={`bottom-tool-button run-config-entry ${index === 0 ? "first" : ""} ${["starting", "running", "stopping"].includes(config.status) ? "active-run" : ""}`} aria-label={`${config.name}, ${config.scope}, ${config.status}`} title={`${config.scope} Run Config: ${config.name} (${config.status})`} onClick={() => void runConfigAction(config, config.terminalId ? "openTerminal" : "run")} onContextMenu={(event) => { event.preventDefault(); setRunConfigMenu({ x: Math.min(event.clientX, window.innerWidth - 218), y: Math.min(event.clientY, window.innerHeight - 126), config }); }}><Play size={12} /><span>{config.name}</span><span className={`run-config-indicator ${config.status}`} aria-hidden="true" /></button>)}
     </footer>
       {treeContextMenu && <div className="context-menu-layer" onMouseDown={() => setTreeContextMenu(undefined)}>
-      <div className="context-menu" aria-label={`Actions for ${treeContextMenu.node.name}`} style={{ left: treeContextMenu.x, top: treeContextMenu.y }} onMouseDown={(event) => event.stopPropagation()}>
-        <button role="menuitem" disabled={!projectTreeActions({ node: treeContextMenu.node }).createFile} onClick={() => { runProjectTreeAction("createFile", treeContextMenu.node); setTreeContextMenu(undefined); }}><File size={14} /><span>New File...</span></button>
-        <button disabled={!projectTreeActions({ node: treeContextMenu.node }).createDirectory} onClick={() => { runProjectTreeAction("createDirectory", treeContextMenu.node); setTreeContextMenu(undefined); }}><Folder size={14} /><span>New Directory...</span></button>
+      <div className="context-menu" aria-label={`Actions for ${treeContextMenu.nodes.length} selected item${treeContextMenu.nodes.length === 1 ? "" : "s"}`} style={{ left: treeContextMenu.x, top: treeContextMenu.y }} onMouseDown={(event) => event.stopPropagation()}>
+        <button role="menuitem" disabled={treeContextMenu.nodes.length !== 1} onClick={() => { runProjectTreeAction("createFile", treeContextMenu.nodes); setTreeContextMenu(undefined); }}><File size={14} /><span>New File...</span></button>
+        <button disabled={treeContextMenu.nodes.length !== 1} onClick={() => { runProjectTreeAction("createDirectory", treeContextMenu.nodes); setTreeContextMenu(undefined); }}><Folder size={14} /><span>New Directory...</span></button>
         <div className="context-menu-separator" role="separator" />
-        <button disabled={!projectTreeActions({ node: treeContextMenu.node }).rename} onClick={() => { runProjectTreeAction("rename", treeContextMenu.node); setTreeContextMenu(undefined); }}><Pencil size={14} /><span>Rename...</span></button>
-        <button disabled={!projectTreeActions({ node: treeContextMenu.node }).open} onClick={() => { runProjectTreeAction("open", treeContextMenu.node); setTreeContextMenu(undefined); }}><FileText size={14} /><span>Open</span></button>
+        <button disabled={treeContextMenu.nodes.length !== 1} onClick={() => { runProjectTreeAction("rename", treeContextMenu.nodes); setTreeContextMenu(undefined); }}><Pencil size={14} /><span>Rename...</span></button>
+        <button disabled={treeContextMenu.nodes.length !== 1 || treeContextMenu.nodes[0]?.type !== "file"} onClick={() => { runProjectTreeAction("open", treeContextMenu.nodes); setTreeContextMenu(undefined); }}><FileText size={14} /><span>Open</span></button>
+        <button onClick={() => { runProjectTreeAction("duplicate", treeContextMenu.nodes); setTreeContextMenu(undefined); }}><ClipboardCopy size={14} /><span>Duplicate</span></button>
+        <button onClick={() => { runProjectTreeAction("copyTo", treeContextMenu.nodes); setTreeContextMenu(undefined); }}><ClipboardCopy size={14} /><span>Copy to...</span></button>
+        <button onClick={() => { runProjectTreeAction("moveTo", treeContextMenu.nodes); setTreeContextMenu(undefined); }}><ArrowUpRight size={14} /><span>Move to...</span></button>
         <div className="context-menu-separator" role="separator" />
-        <div className="context-submenu-trigger"><button role="menuitem" aria-haspopup="menu" aria-label="Copy"><ClipboardCopy size={14} /><span>Copy</span><ChevronRight size={13} /></button><div className="context-menu context-submenu copy-submenu" role="menu" aria-label="Copy actions">{copyProjectTreeActions.map(({ action, label }) => <button key={action} role="menuitem" disabled={!projectTreeActions({ node: treeContextMenu.node })[action]} onClick={() => { runProjectTreeAction(action, treeContextMenu.node); setTreeContextMenu(undefined); }}><ClipboardCopy size={14} /><span>{label}</span></button>)}</div></div>
-        <div className="context-menu-separator" role="separator" />
-        <button onClick={() => openSearchForNode(treeContextMenu.node)}><Search size={14} /><span>Find in Files</span></button>
-        {treeContextMenu.node.type === "file" && treeContextMenu.node.name === "pom.xml" && <button onClick={() => void loadMavenProject(treeContextMenu.node.path)}><Package size={14} /><span>Load as Maven Project</span></button>}
-        {javaOptions && treeContextMenu.node.type === "directory" && treeContextMenu.node.path && <button onClick={() => void addJavaSourceRoot(treeContextMenu.node.path)}><Coffee size={14} /><span>Mark as Sources Root</span></button>}
-        {treeContextMenu.node.path && <div className="context-submenu-trigger"><button><Palette size={14} /><span>Color</span><ChevronRight size={13} /></button><div className="context-menu context-submenu color-submenu">{fileColorChoices.map((color) => <button key={color.id} onClick={() => { setFileColors((current) => ({ ...current, [treeContextMenu.node.path]: color.id })); setTreeContextMenu(undefined); }}><span className={`file-color-swatch ${color.id}`} /><span>{color.label}</span>{fileColors[treeContextMenu.node.path] === color.id && <Check size={13} />}</button>)}<button disabled={!fileColors[treeContextMenu.node.path]} onClick={() => { setFileColors((current) => { const next = { ...current }; delete next[treeContextMenu.node.path]; return next; }); setTreeContextMenu(undefined); }}><X size={14} /><span>Clear Color</span></button></div></div>}
+        <div className="context-submenu-trigger"><button role="menuitem" aria-haspopup="menu" aria-label="Copy paths"><ClipboardCopy size={14} /><span>Copy Paths</span><ChevronRight size={13} /></button><div className="context-menu context-submenu copy-submenu" role="menu" aria-label="Copy path actions">{copyProjectTreeActions.map(({ action, label }) => <button key={action} role="menuitem" onClick={() => { runProjectTreeAction(action, treeContextMenu.nodes); setTreeContextMenu(undefined); }}><ClipboardCopy size={14} /><span>{label}</span></button>)}</div></div>
         <div className="context-menu-separator" role="separator" />
         <button className="danger" disabled={!projectTreeActions({ node: treeContextMenu.node }).delete} onClick={() => { runProjectTreeAction("delete", treeContextMenu.node); setTreeContextMenu(undefined); }}><Trash2 size={14} /><span>Delete...</span></button>
       </div>

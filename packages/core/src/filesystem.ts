@@ -1,11 +1,11 @@
 import { execFile } from "node:child_process";
 import { constants } from "node:fs";
-import { access, lstat, mkdir, readFile, readdir, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
+import { access, cp, lstat, mkdir, readFile, readdir, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { createHash } from "node:crypto";
 import path from "node:path";
 import { promisify } from "node:util";
-import type { FileRevision, FileTreeNode, FilesystemDeletePreview, FilesystemDeleteResult, FilesystemSnapshotEntry } from "@remote-ide/protocol";
+import type { FileRevision, FileTreeNode, FilesystemDeletePreview, FilesystemDeleteResult, FilesystemSnapshotEntry, FilesystemTransferKind, FilesystemTransferPreflight, FilesystemTransferRequest, FilesystemTransferResult } from "@remote-ide/protocol";
 import { CoreError } from "./errors.js";
 
 const execFileAsync = promisify(execFile);
@@ -154,6 +154,67 @@ export class WorkspaceFileSystem {
     } catch (error) {
       throw new CoreError("WRITE_FAILED", `Could not rename: ${error instanceof Error ? error.message : String(error)}`);
     }
+  }
+
+  async transferPreflight(kind: FilesystemTransferKind, requests: FilesystemTransferRequest[], overwritePaths: string[] = [], openFiles: string[] = [], dirtyFiles: string[] = []): Promise<FilesystemTransferPreflight> {
+    if ((kind !== "copy" && kind !== "move") || !Array.isArray(requests) || requests.length === 0 || requests.length > 100) throw new CoreError("INVALID_REQUEST", "A copy or move requires 1 to 100 items");
+    const normalized = requests.map((item) => ({ source: item.source.replaceAll("\\", "/"), destination: item.destination.replaceAll("\\", "/") }));
+    const overwrite = new Set(overwritePaths);
+    const selected = new Set(normalized.map(({ source }) => source));
+    const skipped: { source: string; reason: string }[] = [];
+    const items: FilesystemTransferPreflight["items"] = [];
+    const destinations = new Set<string>();
+    for (const request of normalized) {
+      if (!request.source || !request.destination || request.source === request.destination) { skipped.push({ source: request.source, reason: "Source and destination must be different" }); continue; }
+      const ancestor = [...selected].find((candidate) => candidate !== request.source && request.source.startsWith(`${candidate}/`));
+      if (ancestor) { skipped.push({ source: request.source, reason: `Already included by selected directory ${ancestor}` }); continue; }
+      if (destinations.has(request.destination)) { skipped.push({ source: request.source, reason: `Another item uses destination ${request.destination}` }); continue; }
+      const source = await this.resolveMutationTarget(request.source);
+      const info = await lstat(source);
+      if (info.isDirectory() && request.destination.startsWith(`${request.source}/`)) { skipped.push({ source: request.source, reason: "A directory cannot be copied or moved inside itself" }); continue; }
+      const destination = this.validateRelative(request.destination);
+      const parentName = path.posix.dirname(request.destination);
+      const parent = parentName === "." ? this.getWorkspace() : await this.resolveExisting(parentName);
+      let collision = false;
+      try { await lstat(destination); collision = true; } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+      const caseOnlyRename = kind === "move" && request.source.toLocaleLowerCase() === request.destination.toLocaleLowerCase() && request.source !== request.destination;
+      if (caseOnlyRename) collision = false;
+      const affected = (candidate: string) => candidate === request.source || info.isDirectory() && candidate.startsWith(`${request.source}/`);
+      items.push({ ...request, type: info.isDirectory() ? "directory" : "file", collision, overwrite: collision && overwrite.has(request.destination), caseOnlyRename, crossDevice: kind === "move" && info.dev !== (await stat(parent)).dev, openFiles: openFiles.filter(affected), dirtyFiles: dirtyFiles.filter(affected) });
+      destinations.add(request.destination);
+    }
+    const allOpen = [...new Set(items.flatMap((item) => item.openFiles))]; const allDirty = [...new Set(items.flatMap((item) => item.dirtyFiles))];
+    return { kind, items, skipped, collisions: items.filter((item) => item.collision).length, overwrites: items.filter((item) => item.overwrite).length, caseOnlyRenames: items.filter((item) => item.caseOnlyRename).length, crossDeviceMoves: items.filter((item) => item.crossDevice).length, openFiles: allOpen, dirtyFiles: allDirty, confirmationRequired: items.some((item) => item.collision || item.caseOnlyRename || item.crossDevice) || skipped.length > 0 || allOpen.length > 0 || allDirty.length > 0 };
+  }
+
+  async transferApply(kind: FilesystemTransferKind, requests: FilesystemTransferRequest[], overwritePaths: string[] = [], openFiles: string[] = [], dirtyFiles: string[] = [], confirmed = false): Promise<FilesystemTransferResult> {
+    const preview = await this.transferPreflight(kind, requests, overwritePaths, openFiles, dirtyFiles);
+    if (preview.dirtyFiles.length) throw new CoreError("WRITE_FAILED", `Save or discard changes before ${kind === "move" ? "moving" : "overwriting"}: ${preview.dirtyFiles.join(", ")}`);
+    if (preview.items.some((item) => item.collision && !item.overwrite)) throw new CoreError("WRITE_FAILED", "Destination collisions require explicit overwrite selection");
+    if (preview.confirmationRequired && !confirmed) throw new CoreError("INVALID_REQUEST", "Confirm the current transfer preflight before applying it");
+    const completed: FilesystemTransferRequest[] = []; const failures: FilesystemTransferResult["failures"] = preview.skipped.map((item) => ({ source: item.source, destination: requests.find((request) => request.source === item.source)?.destination ?? "", message: item.reason }));
+    for (const item of preview.items) {
+      const temporaryName = `.vibe-transfer-${randomUUID()}`; const destination = this.validateRelative(item.destination); const parent = path.dirname(destination); const temporary = path.join(parent, temporaryName); const backup = `${temporary}.backup`;
+      try {
+        const source = await this.resolveMutationTarget(item.source);
+        if (item.caseOnlyRename) {
+          await rename(source, temporary);
+          try { await rename(temporary, destination); } catch (error) { await rename(temporary, source).catch(() => undefined); throw error; }
+          completed.push({ source: item.source, destination: item.destination });
+          continue;
+        }
+        await cp(source, temporary, { recursive: item.type === "directory", errorOnExist: true, force: false });
+        if (item.collision) await rename(destination, backup);
+        try { await rename(temporary, destination); } catch (error) { if (item.collision) await rename(backup, destination).catch(() => undefined); throw error; }
+        if (item.collision) await rm(backup, { recursive: true, force: true });
+        if (kind === "move") await rm(source, { recursive: true });
+        completed.push({ source: item.source, destination: item.destination });
+      } catch (error) {
+        await rm(temporary, { recursive: true, force: true }).catch(() => undefined);
+        failures.push({ source: item.source, destination: item.destination, message: error instanceof Error ? error.message : String(error) });
+      }
+    }
+    return { completed, failures };
   }
 
   async previewDelete(relativePath: string): Promise<FilesystemDeletePreview> {
