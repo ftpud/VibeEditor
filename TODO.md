@@ -55,7 +55,7 @@ multi-surface work).
 
 ### Git workflows
 
-- [ ] **Explicit stage/unstage for files and hunks — Project.** Value: support
+- [x] **Explicit stage/unstage for files and hunks — Project.** Value: support
   deliberate index-based review instead of using commit-time path selection alone.
   Constraint: distinguish index, worktree, untracked, and conflict states in the
   protocol; apply patches against the exact blob/version and refresh on mismatch.
