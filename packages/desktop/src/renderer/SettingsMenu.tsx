@@ -1,4 +1,6 @@
 import { useMemo, useState, type ReactNode } from "react";
+import type { Command, CommandId, DesktopPlatform, ShortcutBindings } from "./command-registry";
+import { ShortcutSettings } from "./ShortcutSettings";
 
 export type DesktopSettings = {
   theme: "dark" | "light";
@@ -16,11 +18,13 @@ type Props = {
   onChange: <K extends keyof DesktopSettings>(setting: K, value: DesktopSettings[K]) => void;
   onReset: (setting: keyof DesktopSettings) => void;
   onSideLayoutChange: (layout: "classic" | "ai-focused") => void;
+  commands: Command[]; shortcutBindings: ShortcutBindings; platform: DesktopPlatform;
+  onShortcutChange: (id: CommandId, shortcut?: string) => void; onShortcutsReset: () => void;
 };
 
 const labels: Record<keyof DesktopSettings, string> = { theme: "Theme", highlightTheme: "Highlighting", uiFontFamily: "Font", uiFontSize: "Size", uiLineHeight: "Line height" };
 
-export function SettingsMenu({ workspace, sideLayout, values, isWorkspaceOverride, onChange, onReset, onSideLayoutChange }: Props) {
+export function SettingsMenu({ workspace, sideLayout, values, isWorkspaceOverride, onChange, onReset, onSideLayoutChange, commands, shortcutBindings, platform, onShortcutChange, onShortcutsReset }: Props) {
   const [query, setQuery] = useState("");
   const matches = (label: string) => label.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase());
   const visible = useMemo(() => (Object.keys(labels) as (keyof DesktopSettings)[]).filter((setting) => matches(labels[setting])), [query]);
@@ -34,6 +38,7 @@ export function SettingsMenu({ workspace, sideLayout, values, isWorkspaceOverrid
     {row("uiFontFamily", <select aria-label="Font" value={values.uiFontFamily} onChange={(event) => onChange("uiFontFamily", event.target.value as DesktopSettings["uiFontFamily"])}><option value="jetbrains">JetBrains Mono</option><option value="inter">Inter</option></select>)}
     {row("uiFontSize", <input aria-label="Size" type="number" min="10" max="20" step="1" value={values.uiFontSize} onChange={(event) => onChange("uiFontSize", Math.min(20, Math.max(10, Number(event.target.value) || 13)))} />)}
     {row("uiLineHeight", <input aria-label="Line height" type="number" min="1" max="2" step="0.05" value={values.uiLineHeight} onChange={(event) => onChange("uiLineHeight", Math.min(2, Math.max(1, Number(event.target.value) || 1.2)))} />)}
-    {visible.length === 0 && !matches("Layout") && <p className="settings-empty">No desktop settings match “{query}”.</p>}
+    {matches("Keyboard shortcuts") && <ShortcutSettings commands={commands} bindings={shortcutBindings} platform={platform} onChange={onShortcutChange} onReset={onShortcutsReset} />}
+    {visible.length === 0 && !matches("Layout") && !matches("Keyboard shortcuts") && <p className="settings-empty">No desktop settings match “{query}”.</p>}
   </div>;
 }
