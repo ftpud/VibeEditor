@@ -4,7 +4,7 @@ import chokidar from "chokidar";
 import path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { protocolCompatibility, protocolRangesOverlap, requestTypes, type FileChangeKind, type Request, type RequestType, type Response, type ServerEvent, type WorkspaceOptions } from "@remote-ide/protocol";
+import { requestTypes, type FileChangeKind, type Request, type RequestType, type Response, type ServerEvent, type WorkspaceOptions } from "@remote-ide/protocol";
 import { CoreError } from "./errors.js";
 import { WorkspaceFileSystem } from "./filesystem.js";
 import { TerminalSessionHost } from "./process-manager.js";
@@ -54,11 +54,14 @@ export function sendWebSocketData(socket: WebSocket, data: string): boolean {
   }
 }
 
-export function protocolHandshake(compatibility: { minimum: number; maximum: number }): { compatible: boolean; compatibility: typeof protocolCompatibility; message?: string } {
-  const compatible = protocolRangesOverlap(compatibility, protocolCompatibility);
+const coreProtocolCompatibility = { minimum: 1, maximum: 1 } as const;
+
+export function protocolHandshake(compatibility: { minimum: number; maximum: number }): { compatibility: typeof coreProtocolCompatibility; compatible: boolean; message?: string } {
+  const valid = Number.isInteger(compatibility.minimum) && Number.isInteger(compatibility.maximum) && compatibility.minimum > 0 && compatibility.minimum <= compatibility.maximum;
+  const compatible = valid && compatibility.minimum <= coreProtocolCompatibility.maximum && coreProtocolCompatibility.minimum <= compatibility.maximum;
   return compatible
-    ? { compatible, compatibility: protocolCompatibility }
-    : { compatible, compatibility: protocolCompatibility, message: `Core supports protocol ${protocolCompatibility.minimum}-${protocolCompatibility.maximum}; this Desktop supports ${compatibility.minimum}-${compatibility.maximum}` };
+    ? { compatible, compatibility: coreProtocolCompatibility }
+    : { compatible, compatibility: coreProtocolCompatibility, message: `Core supports protocol ${coreProtocolCompatibility.minimum}-${coreProtocolCompatibility.maximum}; this Desktop supports ${compatibility.minimum}-${compatibility.maximum}` };
 }
 
 export async function createServer(host: string, port: number, workspacePath: string): Promise<WebSocketServer> {
@@ -321,7 +324,7 @@ function parseRequest(data: RawData): Request {
   try { value = JSON.parse(data.toString()); } catch { throw new CoreError("INVALID_REQUEST", "Message must be valid JSON"); }
   if (!value || typeof value !== "object") throw new CoreError("INVALID_REQUEST", "Request must be an object");
   const candidate = value as Record<string, unknown>;
-  if (typeof candidate.id !== "string" || typeof candidate.type !== "string" || !("payload" in candidate) || !requestTypes.includes(candidate.type as RequestType)) {
+  if (typeof candidate.id !== "string" || typeof candidate.type !== "string" || !("payload" in candidate) || (candidate.type !== "protocol.handshake" && !requestTypes.includes(candidate.type as RequestType))) {
     throw new CoreError("INVALID_REQUEST", "Request must contain a valid id, type, and payload");
   }
   return value as Request;

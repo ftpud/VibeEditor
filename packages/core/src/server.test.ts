@@ -6,6 +6,7 @@ describe("protocol handshake", () => {
   it("accepts overlapping ranges and describes incompatible Desktops", () => {
     expect(protocolHandshake({ minimum: 1, maximum: 1 })).toMatchObject({ compatible: true, compatibility: { minimum: 1, maximum: 1 } });
     expect(protocolHandshake({ minimum: 2, maximum: 3 })).toEqual({ compatible: false, compatibility: { minimum: 1, maximum: 1 }, message: "Core supports protocol 1-1; this Desktop supports 2-3" });
+    expect(protocolHandshake({ minimum: 3, maximum: 1 }).compatible).toBe(false);
   });
 });
 import { withAppTools } from "./app-tools.js";
