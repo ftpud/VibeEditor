@@ -1,8 +1,8 @@
 import { Search } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
-import { commandEnabled, rankCommands, type Command, type CommandContext } from "./command-registry";
+import { commandEnabled, formatShortcut, rankCommands, type Command, type CommandContext, type DesktopPlatform, type ShortcutBindings } from "./command-registry";
 
-export function CommandPalette({ commands, context, onClose }: { commands: Command[]; context: CommandContext; onClose(): void }) {
+export function CommandPalette({ commands, context, bindings, platform, onClose }: { commands: Command[]; context: CommandContext; bindings: ShortcutBindings; platform: DesktopPlatform; onClose(): void }) {
   const [query, setQuery] = useState(""); const [activeIndex, setActiveIndex] = useState(0);
   const input = useRef<HTMLInputElement>(null); const active = useRef<HTMLButtonElement>(null);
   const results = useMemo(() => rankCommands(commands, query), [commands, query]);
@@ -31,7 +31,7 @@ export function CommandPalette({ commands, context, onClose }: { commands: Comma
               <button ref={index === selected ? active : undefined} id={`command-${index}`} key={command.id} type="button" role="option" aria-selected={index === selected} aria-disabled={!enabled} disabled={!enabled} className={index === selected ? "selected" : ""} onMouseMove={() => setActiveIndex(index)} onClick={() => execute(command)}>
                 <span className="command-category">{command.category}</span>
                 <span className="quick-open-name">{command.label}</span>
-                {command.shortcut && <kbd>{command.shortcut}</kbd>}
+                {bindings[command.id] && <kbd>{formatShortcut(bindings[command.id]!, platform)}</kbd>}
                 {!enabled && <span className="command-unavailable">Unavailable</span>}
               </button>
             );
