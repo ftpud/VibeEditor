@@ -774,6 +774,14 @@ button { color: inherit; }
 .find-controls { height: 46px; flex: 0 0 46px; padding: 7px 10px; display: flex; gap: 6px; border-bottom: 1px solid #3d3f44; }
 .find-controls > input { min-width: 0; flex: 1; padding: 0 9px; border: 1px solid #55585e; border-radius: 3px; outline: none; background: #1e1f22; color: #f0f0f0; }
 .find-controls > input:focus { border-color: #3574f0; box-shadow: 0 0 0 1px #3574f0; }
+.find-filter-controls { display: grid; grid-template-columns: 1fr 1fr 1fr auto; gap: 6px; padding: 6px 10px; border-bottom: 1px solid #3d3f44; }
+.find-filter-controls input { min-width: 0; padding: 6px 8px; border: 1px solid #55585e; border-radius: 3px; background: #1e1f22; color: #f0f0f0; }
+.find-filter-controls button, .find-replace-preview button { border: 1px solid #4e78c4; border-radius: 3px; background: #285a9f; color: #fff; cursor: pointer; }
+.find-filter-controls button:disabled { opacity: .5; cursor: default; }
+.find-replace-preview { max-height: 150px; padding: 7px 10px; overflow: auto; border-bottom: 1px solid #3d3f44; color: #c7c9cc; font-size: .8462rem; }
+.find-replace-preview > span { margin-right: 10px; }
+.find-replace-preview details { margin-top: 5px; }
+.find-replace-preview code { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .find-query-library { flex: 0 0 auto; max-height: 72px; padding: 5px 10px; overflow: auto; border-bottom: 1px solid #3d3f44; color: #a8aaaf; font-size: .8462rem; }
 .find-query-library > div { display: flex; align-items: center; gap: 4px; min-width: max-content; }
 .find-query-library > div + div { margin-top: 3px; }

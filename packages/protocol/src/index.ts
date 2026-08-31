@@ -81,7 +81,7 @@ export type WorkspaceOptions = {
   searchQueries?: WorkspaceSearchQueries;
 };
 /** Compact Find in Files metadata. Search results and file contents are never persisted. */
-export type WorkspaceSearchQuery = { query: string; path: string; matchCase?: boolean };
+export type WorkspaceSearchQuery = { query: string; path: string; matchCase?: boolean; include?: string; exclude?: string };
 export type WorkspaceSearchQueries = { recent?: WorkspaceSearchQuery[]; saved?: WorkspaceSearchQuery[] };
 export type FileColor = "red" | "orange" | "yellow" | "green" | "blue" | "purple" | "gray";
 /** Durable terminal-tab metadata. The display name is UI state, not a PTY identity. */
@@ -141,6 +141,9 @@ export type JavaProjectNode = {
 export type SearchContextLine = { line: number; text: string; truncated: boolean };
 export type SearchMatchContext = { before: SearchContextLine[]; after: SearchContextLine[]; truncatedBefore: boolean; truncatedAfter: boolean };
 export type SearchResult = { path: string; line: number; column: number; preview: string; previewTruncated?: boolean; context?: SearchMatchContext };
+export type SearchReplacePreviewFile = { path: string; revision: FileRevision; occurrences: { line: number; column: number; before: string; after: string }[] };
+export type SearchReplacePreview = { id: string; files: SearchReplacePreviewFile[]; truncated: boolean };
+export type SearchReplaceApplyResult = { applied: { path: string; revision: FileRevision }[]; failures: { path: string; code: string; message: string }[] };
 
 export type ProtocolOperations = {
   "protocol.handshake": { payload: { compatibility: ProtocolCompatibility; clientVersion?: string }; result: { compatible: boolean; compatibility: ProtocolCompatibility; message?: string } };
@@ -237,8 +240,16 @@ export type ProtocolOperations = {
     result: { path: string };
   };
   "filesystem.search": {
-    payload: { query: string; path: string; matchCase: boolean };
+    payload: { query: string; path: string; matchCase: boolean; include?: string; exclude?: string };
     result: { matches: SearchResult[]; truncated: boolean };
+  };
+  "filesystem.replacePreview": {
+    payload: { query: string; replacement: string; path: string; matchCase: boolean; include?: string; exclude?: string };
+    result: SearchReplacePreview;
+  };
+  "filesystem.replaceApply": {
+    payload: { previewId: string; confirmed: boolean };
+    result: SearchReplaceApplyResult;
   };
   "terminal.create": {
     payload: { cols: number; rows: number };
@@ -493,6 +504,8 @@ const requestTypeRegistry: Record<RequestType, true> = {
   "filesystem.delete": true,
   "filesystem.restore": true,
   "filesystem.search": true,
+  "filesystem.replacePreview": true,
+  "filesystem.replaceApply": true,
   "terminal.create": true,
   "terminal.attach": true,
   "terminal.input": true,

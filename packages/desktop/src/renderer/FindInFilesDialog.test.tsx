@@ -53,6 +53,24 @@ describe("FindInFilesDialog responsive result layout", () => {
     expect(onQueriesChange).toHaveBeenLastCalledWith({ saved: [{ query: "needle", path: "src", matchCase: true }, saved] });
   });
 
+  it("sends glob controls to Core and renders a per-file replacement preview", async () => {
+    const request = vi.fn((type: string) => {
+      if (type === "filesystem.search") return Promise.resolve({ matches: [], truncated: false });
+      if (type === "filesystem.replacePreview") return Promise.resolve({ id: "preview", truncated: false, files: [{ path: "src/a.ts", revision: { identity: "1", version: "1" }, occurrences: [{ line: 1, column: 1, before: "needle", after: "replacement" }] }] });
+      return Promise.resolve({ content: "" });
+    });
+    render(<FindInFilesDialog client={{ request } as unknown as CoreClient} scope="" onClose={vi.fn()} onNavigate={vi.fn()} />);
+    await search();
+    fireEvent.change(screen.getByRole("textbox", { name: "Include globs" }), { target: { value: "src/**/*.ts" } });
+    fireEvent.change(screen.getByRole("textbox", { name: "Exclude globs" }), { target: { value: "**/*.test.ts" } });
+    fireEvent.change(screen.getByRole("textbox", { name: "Replace with" }), { target: { value: "replacement" } });
+    fireEvent.click(screen.getByRole("button", { name: "Preview replace" }));
+    await act(async () => { await Promise.resolve(); });
+    expect(request).toHaveBeenCalledWith("filesystem.replacePreview", expect.objectContaining({ include: "src/**/*.ts", exclude: "**/*.test.ts", replacement: "replacement" }));
+    expect(screen.getByRole("region", { name: "Replace preview" }).textContent).toContain("src/a.ts");
+    expect(screen.getByText("+ replacement")).toBeTruthy();
+  });
+
   it("keeps loading status and controls accessible while a search is pending", () => {
     const pendingClient = { request: vi.fn(() => new Promise(() => undefined)) } as unknown as CoreClient;
     render(<FindInFilesDialog client={pendingClient} scope="src" onClose={vi.fn()} onNavigate={vi.fn()} />);
