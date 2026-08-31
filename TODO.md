@@ -60,7 +60,7 @@ multi-surface work).
   Constraint: distinguish index, worktree, untracked, and conflict states in the
   protocol; apply patches against the exact blob/version and refresh on mismatch.
   This is the foundation for amend and richer conflict workflows.
-- [ ] **Remote tracking summary and fetch — Project.** Value: show upstream,
+- [x] **Remote tracking summary and fetch — Project.** Value: show upstream,
   ahead/behind counts, last fetch, and a visible Push/Fetch state before users act.
   Constraint: Git/network work stays on Core, is cancellable where possible, and
   reports authentication/progress without exposing credentials. Extend the current

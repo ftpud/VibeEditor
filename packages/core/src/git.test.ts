@@ -189,7 +189,7 @@ describe("parseGitStatus", () => {
 });
 
 describe("Git upstream status", () => {
-  it("reports no upstream, zero ahead, ahead commits, and clears after push", async () => {
+  it("reports no upstream, ahead/behind counts, fetch time, and clears ahead after push", async () => {
     const parent = await mkdtemp(path.join(tmpdir(), "remote-ide-git-upstream-"));
     const remote = path.join(parent, "remote.git");
     const root = path.join(parent, "repo");
@@ -203,12 +203,26 @@ describe("Git upstream status", () => {
     const service = new GitService(root);
     expect((await service.status()).upstream).toBeUndefined();
     await execFileAsync("git", ["-C", root, "push", "-u", "origin", "HEAD"]);
-    expect((await service.status()).upstream).toMatchObject({ ahead: 0 });
+    const branch = (await execFileAsync("git", ["-C", root, "branch", "--show-current"])).stdout.trim();
+    expect((await service.status()).upstream).toMatchObject({ upstream: `origin/${branch}`, ahead: 0, behind: 0 });
     await writeFile(path.join(root, "file.txt"), "next\n");
     await execFileAsync("git", ["-C", root, "commit", "-am", "next"]);
-    expect((await service.status()).upstream).toMatchObject({ ahead: 1 });
+    expect((await service.status()).upstream).toMatchObject({ ahead: 1, behind: 0 });
     await service.push();
-    expect((await service.status()).upstream).toMatchObject({ ahead: 0 });
+    expect((await service.status()).upstream).toMatchObject({ ahead: 0, behind: 0 });
+
+    const other = path.join(parent, "other");
+    await execFileAsync("git", ["clone", remote, other]);
+    await execFileAsync("git", ["-C", other, "config", "user.email", "test@example.com"]);
+    await execFileAsync("git", ["-C", other, "config", "user.name", "Test"]);
+    await writeFile(path.join(other, "remote.txt"), "remote\n");
+    await execFileAsync("git", ["-C", other, "add", "remote.txt"]);
+    await execFileAsync("git", ["-C", other, "commit", "-m", "remote"]);
+    await execFileAsync("git", ["-C", other, "push"]);
+    expect((await service.status()).upstream).toMatchObject({ behind: 0 });
+    const fetched = await service.fetch();
+    expect(fetched.fetchedAt).toMatch(/^\d{4}-\d\d-\d\dT/);
+    expect((await service.status()).upstream).toMatchObject({ ahead: 0, behind: 1, lastFetch: fetched.fetchedAt });
   });
 });
 

@@ -514,6 +514,8 @@ async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStor
     }
     case "git.commit": return { hash: await git.commit(request.payload.paths, request.payload.message) };
     case "git.push": await git.push(); return {};
+    case "git.fetch": return git.fetch();
+    case "git.cancelFetch": return { cancelled: git.cancelFetch() };
     case "taskGit.history": return { checkpoints: await checkpoints.history() };
     case "taskGit.diff": return checkpoints.diff(request.payload.checkpointId, request.payload.path);
     case "taskGit.restore": {
