@@ -178,9 +178,9 @@ button { color: inherit; }
 .right-resize-handle { width: 4px; margin-left: -2px; z-index: 3; cursor: col-resize; background: transparent; border-right: 1px solid #393b40; }
 .right-resize-handle:hover { background: #3574f0; }
 .tasks-list { flex: 1; overflow: auto; padding: 4px 0 12px; }
-.task-filters { display: flex; gap: 4px; padding: 4px 6px; }
-.task-filters .quick-filter { flex: 1; min-width: 0; }
-.task-filters select { width: 78px; flex: 0 0 78px; border: 1px solid #4a4d52; border-radius: 3px; background: #2b2d30; color: #bfc1c5; }
+.task-filters { display: flex; align-items: center; gap: 4px; padding: 4px 6px; }
+.task-filters .quick-filter { flex: 1; min-width: 0; margin: 0; }
+.task-filters select { width: 96px; height: 31px; flex: 0 0 96px; padding: 0 5px; border: 1px solid #4a4d52; border-radius: 3px; background: #2b2d30; color: #bfc1c5; }
 .task-row { width: 100%; min-height: 56px; position: relative; display: flex; align-items: stretch; border-left: 2px solid transparent; border-bottom: 1px solid #35373b; background: transparent; color: #bfc1c5; }
 .task-row:hover { background: #34363a; color: #e4e5e7; }
 .task-row.selected { border-left-color: #3574f0; background: #2e436e; color: white; }
@@ -425,11 +425,15 @@ button { color: inherit; }
 .settings-choice > div:first-child { min-width: 0; display: grid; gap: 1px; }
 .settings-choice label { color: #bfc1c5; }
 .settings-choice small { color: #85888e; font-size: .6923rem; }
-.settings-control { display: flex; align-items: center; gap: 5px; }
-.settings-reset { width: auto; height: 25px; padding: 0 6px; border: 1px solid #4b4d52; border-radius: 3px; color: #bfc1c5; font-size: .6923rem; }
+.settings-control { min-width: 0; display: flex; align-items: center; gap: 5px; }
+.settings-control > select { width: 112px; height: 27px; padding: 0 7px; border: 1px solid #4b4d52; border-radius: 3px; outline: none; background: #313338; color: #d7d9dc; }
+.settings-control > input[type="number"] { width: 58px; height: 27px; box-sizing: border-box; padding: 0 6px; border: 1px solid #4b4d52; border-radius: 3px; outline: none; background: #313338; color: #d7d9dc; text-align: right; }
+.settings-reset { width: auto; height: 27px; padding: 0 8px; border: 1px solid #4b4d52; border-radius: 3px; background: transparent; color: #bfc1c5; font-size: .6923rem; cursor: pointer; }
+.settings-reset:hover { border-color: #65686e; background: #3a3c41; color: #fff; }
 .settings-empty { margin: 12px 0 2px; color: #85888e; font-size: .7692rem; }
-.theme-switch { height: 27px; display: flex; border: 1px solid #4b4d52; border-radius: 3px; overflow: hidden; }
+.theme-switch { height: 27px; flex-shrink: 0; display: flex; border: 1px solid #4b4d52; border-radius: 3px; overflow: hidden; }
 .theme-switch button { width: auto; min-width: 52px; height: 25px; padding: 0 9px; border-radius: 0; color: #bfc1c5; }
+.settings-row:first-of-type .theme-switch button:last-child { min-width: 82px; white-space: nowrap; }
 .theme-switch button + button { border-left: 1px solid #4b4d52; }
 .theme-switch button.active { background: #3574f0; color: white; }
 .font-setting label { color: #bfc1c5; }
