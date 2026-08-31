@@ -1,5 +1,5 @@
 import type { GitStatusEntry, GitUpstreamStatus } from "@remote-ide/protocol";
-import { ArrowDown, ArrowUp, GitPullRequest, LoaderCircle, RefreshCw, RotateCcw, X } from "lucide-react";
+import { ArrowDown, ArrowUp, GitPullRequest, ListRestart, LoaderCircle, RefreshCw, RotateCcw, X } from "lucide-react";
 import { useEffect, useState } from "react";
 
 export function isUntrackedGitEntry(entry: GitStatusEntry): boolean {
@@ -45,6 +45,7 @@ export function GitToolbarActions({ selectedCount, operationRunning, pushing, fe
 }) {
   return <div className="panel-header-actions git-toolbar-actions">
     <button aria-label="Undo last local commit" title="Undo last local commit" disabled={operationRunning} onClick={onUndoLastCommit}><RotateCcw size={14} /></button>
+    <button aria-label="Plan interactive rebase" title="Plan interactive rebase of unpublished commits" disabled={operationRunning || !upstream} onClick={() => window.dispatchEvent(new Event("vibe:git-rebase"))}><ListRestart size={14} /></button>
     <button className="git-rollback-selected" aria-label="Rollback Selected" title={selectedCount ? `Rollback ${selectedCount} selected change${selectedCount === 1 ? "" : "s"}` : "Rollback Selected"} disabled={operationRunning || selectedCount === 0} onClick={onRollbackSelected}>{rollingBack ? <LoaderCircle className="status-toast-spinner" size={14} /> : <RotateCcw size={14} />}<span>Rollback Selected</span></button>
     <button className="git-push-button" aria-label={upstream && upstream.ahead > 0 ? `Push ${upstream.ahead} unpushed commit${upstream.ahead === 1 ? "" : "s"}` : "Push"} title={pushing ? "Pushing changes" : upstream && upstream.ahead > 0 ? `${upstream.ahead} commit${upstream.ahead === 1 ? "" : "s"} ahead of ${upstream.upstream}` : upstream ? `Push (up to date with ${upstream.upstream})` : "Push (branch is not published)"} disabled={operationRunning} onClick={onPush}>{pushing ? <LoaderCircle className="status-toast-spinner" size={14} /> : <ArrowUp size={14} />}{upstream && upstream.ahead > 0 && <span className="git-push-badge" aria-hidden="true">{upstream.ahead > 99 ? "99+" : upstream.ahead}</span>}</button>
     <button className="git-pull-button" aria-label="Pull remote changes" title={upstream ? `Preview and pull from ${upstream.upstream}` : "Pull (branch is not published)"} disabled={operationRunning || !upstream} onClick={() => onPull ? onPull() : window.dispatchEvent(new Event("vibe:git-pull"))}><GitPullRequest size={14} />{upstream && upstream.behind > 0 && <span className="git-push-badge" aria-hidden="true">{upstream.behind > 99 ? "99+" : upstream.behind}</span>}</button>
