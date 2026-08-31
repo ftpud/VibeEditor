@@ -5,7 +5,7 @@ import { randomUUID } from "node:crypto";
 import { createHash } from "node:crypto";
 import path from "node:path";
 import { promisify } from "node:util";
-import type { FileRevision, FileTreeNode, FilesystemDeletePreview, FilesystemDeleteResult } from "@remote-ide/protocol";
+import type { FileRevision, FileTreeNode, FilesystemDeletePreview, FilesystemDeleteResult, FilesystemSnapshotEntry } from "@remote-ide/protocol";
 import { CoreError } from "./errors.js";
 
 const execFileAsync = promisify(execFile);
@@ -47,6 +47,25 @@ export class WorkspaceFileSystem {
       }
     }
     return this.walkDirectory(root, "");
+  }
+
+  /**
+   * Resolves only watcher-affected paths.  This deliberately does not walk the
+   * workspace: a watcher burst must never turn into a repository-sized transfer.
+   */
+  async snapshot(relativePaths: string[]): Promise<FilesystemSnapshotEntry[]> {
+    if (relativePaths.length > 256) throw new CoreError("INVALID_REQUEST", "Snapshot is limited to 256 paths");
+    return Promise.all([...new Set(relativePaths)].map(async (relativePath) => {
+      const target = this.validateRelative(relativePath);
+      try {
+        const info = await lstat(target);
+        if (info.isSymbolicLink()) await this.resolveExisting(relativePath);
+        return { path: relativePath, type: info.isDirectory() ? "directory" : "file" };
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") return { path: relativePath };
+        throw error;
+      }
+    }));
   }
 
   async read(relativePath: string): Promise<{ content: string; revision: FileRevision }> {

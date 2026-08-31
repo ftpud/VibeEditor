@@ -115,7 +115,7 @@ multi-surface work).
   than WebSocket JSON payloads; make overwrite, permissions, symlinks, partial files,
   and destination trust explicit. Keep Gateway deployment artifacts separate from
   project-file transfer.
-- [ ] **Watcher health and burst UX — Project.** Value: keep the tree/editor reliable
+- [x] **Watcher health and burst UX — Project.** Value: keep the tree/editor reliable
   during branch switches, generators, and large AI edits. Constraint: coalesce
   events, surface watcher degradation/overflow, and reconcile from a Core snapshot;
   never infer final state only from event order.
