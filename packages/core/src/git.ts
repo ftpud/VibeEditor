@@ -9,6 +9,7 @@ import { WorkspaceFileSystem } from "./filesystem.js";
 const execFileAsync = promisify(execFile);
 
 export class GitService {
+  private static readonly fetches = new Map<string, { controller?: AbortController; lastSuccessful?: string }>();
   constructor(private readonly workspace: string) {}
 
   async status(): Promise<{ branch: string; entries: GitStatusEntry[]; upstream?: GitUpstreamStatus }> {
@@ -30,8 +31,16 @@ export class GitService {
   private async upstreamStatus(): Promise<GitUpstreamStatus | undefined> {
     try {
       const upstream = (await this.git(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"])).trim();
-      const ahead = Number((await this.git(["rev-list", "--count", `${upstream}..HEAD`])).trim());
-      return upstream && Number.isSafeInteger(ahead) && ahead >= 0 ? { upstream, ahead } : undefined;
+      const [aheadOutput = "", behindOutput = ""] = await Promise.all([
+        this.git(["rev-list", "--count", `${upstream}..HEAD`]),
+        this.git(["rev-list", "--count", `HEAD..${upstream}`])
+      ]);
+      const ahead = Number(aheadOutput.trim());
+      const behind = Number(behindOutput.trim());
+      const lastFetch = GitService.fetches.get(this.workspace)?.lastSuccessful;
+      return upstream && Number.isSafeInteger(ahead) && ahead >= 0 && Number.isSafeInteger(behind) && behind >= 0
+        ? { upstream, ahead, behind, ...(lastFetch ? { lastFetch } : {}) }
+        : undefined;
     } catch {
       // A detached HEAD or a branch without a configured, resolvable upstream is unpublished.
       return undefined;
@@ -196,6 +205,32 @@ export class GitService {
     await this.git(["push"]);
   }
 
+  async fetch(): Promise<{ fetchedAt: string }> {
+    const existing = GitService.fetches.get(this.workspace);
+    if (existing?.controller) throw new CoreError("GIT_FAILED", "A Git fetch is already in progress");
+    const controller = new AbortController();
+    GitService.fetches.set(this.workspace, { controller, ...(existing?.lastSuccessful ? { lastSuccessful: existing.lastSuccessful } : {}) });
+    try {
+      await execFileAsync("git", ["-C", this.workspace, "fetch", "--prune"], { encoding: "utf8", maxBuffer: 16 * 1024 * 1024, signal: controller.signal });
+      const fetchedAt = new Date().toISOString();
+      GitService.fetches.set(this.workspace, { controller, lastSuccessful: fetchedAt });
+      return { fetchedAt };
+    } catch (error) {
+      if (controller.signal.aborted) throw new CoreError("GIT_FAILED", "Git fetch was cancelled");
+      throw new CoreError("GIT_FAILED", gitNetworkError(error));
+    } finally {
+      const current = GitService.fetches.get(this.workspace);
+      if (current?.controller === controller) GitService.fetches.set(this.workspace, { ...(current.lastSuccessful ? { lastSuccessful: current.lastSuccessful } : {}) });
+    }
+  }
+
+  cancelFetch(): boolean {
+    const fetch = GitService.fetches.get(this.workspace);
+    if (!fetch?.controller || fetch.controller.signal.aborted) return false;
+    fetch.controller.abort();
+    return true;
+  }
+
   async diffStats(): Promise<{ additions: number; deletions: number }> {
     let additions = 0; let deletions = 0;
     try {
@@ -228,6 +263,13 @@ export class GitService {
   private async show(spec: string): Promise<string> {
     try { return await this.git(["show", spec]); } catch { return ""; }
   }
+}
+
+function gitNetworkError(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  const safe = message.replace(/([a-z][a-z0-9+.-]*:\/\/)[^\s/@]+@/gi, "$1***@");
+  if (/authentication failed|could not read username|terminal prompts disabled|permission denied \(publickey\)/i.test(safe)) return "Git authentication failed. Check your remote credentials and try again.";
+  return `Could not fetch remote: ${safe}`;
 }
 
 function isUntracked(entry: GitStatusEntry): boolean { return entry.indexStatus === "?" && entry.worktreeStatus === "?"; }

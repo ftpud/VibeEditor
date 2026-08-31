@@ -474,7 +474,7 @@ async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStor
     case "terminal.attach": {
       if (typeof request.payload.terminalId !== "string") throw new CoreError("INVALID_REQUEST", "terminalId must be a string");
       const session = terminalHost.attach(workspacePath, request.payload.terminalId);
-      return session ? { state: "available" as const, session } : { state: "stale" as const };
+      return session ? { state: "available" as const, session } : { state: "stale" as const, reason: "session-unavailable" as const };
     }
     case "terminal.input": {
       if (typeof request.payload.terminalId !== "string" || typeof request.payload.data !== "string") throw new CoreError("INVALID_REQUEST", "terminalId and data must be strings");
@@ -517,6 +517,8 @@ async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStor
     }
     case "git.commit": return { hash: await git.commit(request.payload.paths, request.payload.message) };
     case "git.push": await git.push(); return {};
+    case "git.fetch": return git.fetch();
+    case "git.cancelFetch": return { cancelled: git.cancelFetch() };
     case "taskGit.history": return { checkpoints: await checkpoints.history() };
     case "taskGit.diff": return checkpoints.diff(request.payload.checkpointId, request.payload.path);
     case "taskGit.restore": {

@@ -21,7 +21,9 @@ export type EditorTab = {
   runConfigScope?: "global" | "local";
 };
 export type EditorGroup = { id: string; tabs: EditorTab[]; activeTabId?: string };
-export type TerminalTab = { id: string; terminalId: string; title: string; status: "running" | "exited" | "unavailable" };
+/** Renderer-only recovery state. A recreated tab is a new Core-owned shell, never a restored process. */
+export type TerminalRecovery = "reattached" | "recreated";
+export type TerminalTab = { id: string; terminalId: string; title: string; status: "running" | "exited" | "unavailable"; exitCode?: number; recovery?: TerminalRecovery };
 export type TerminalGroup = { id: string; tabs: TerminalTab[]; activeTabId?: string };
 export type LayoutModel = { panels: Panel[]; editorGroups: EditorGroup[]; terminalGroup: TerminalGroup };
 

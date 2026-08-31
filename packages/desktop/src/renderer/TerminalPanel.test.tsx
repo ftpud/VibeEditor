@@ -1,7 +1,7 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { TerminalTab } from "./model";
-import { TerminalTabButton } from "./TerminalPanel";
+import { TerminalRecoveryNotice, TerminalTabButton } from "./TerminalPanel";
 
 const tab: TerminalTab = { id: "tab-1", terminalId: "terminal-1", title: "Development server", status: "running" };
 
@@ -56,5 +56,19 @@ describe("TerminalTabButton", () => {
     const dataTransfer = { effectAllowed: "", dropEffect: "", getData: vi.fn(() => "tab-2"), setData: vi.fn() };
     fireEvent.drop(screen.getByRole("tab"), { dataTransfer });
     expect(onMove).toHaveBeenCalledWith("tab-2", tab.id);
+  });
+});
+
+describe("TerminalRecoveryNotice", () => {
+  it("clearly distinguishes a live reattach from a recreated shell", () => {
+    const { rerender } = render(<TerminalRecoveryNotice tab={{ ...tab, recovery: "reattached" }} />);
+    expect(screen.getByRole("status").textContent).toContain("same Core-owned terminal process");
+    rerender(<TerminalRecoveryNotice tab={{ ...tab, recovery: "recreated" }} />);
+    expect(screen.getByRole("status").textContent).toContain("former process, environment, and working directory were not restored");
+  });
+
+  it("reports an exited process without suggesting recovery", () => {
+    render(<TerminalRecoveryNotice tab={{ ...tab, status: "exited", exitCode: 17 }} />);
+    expect(screen.getByRole("status").textContent).toContain("exited with code 17 and cannot accept input");
   });
 });

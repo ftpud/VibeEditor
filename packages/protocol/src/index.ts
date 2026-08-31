@@ -13,7 +13,8 @@ export type GitStatusEntry = {
   indexStatus: string;
   worktreeStatus: string;
 };
-export type GitUpstreamStatus = { upstream: string; ahead: number };
+/** The configured upstream and the last remote information Core successfully obtained. */
+export type GitUpstreamStatus = { upstream: string; ahead: number; behind: number; lastFetch?: string };
 export type GitBranch = { name: string; current: boolean; remote: boolean };
 /** A tag stored in this workspace's local Git repository. It is not a remote tag operation. */
 export type GitTag = { name: string; target: string; annotated: boolean };
@@ -54,8 +55,8 @@ export type FileColor = "red" | "orange" | "yellow" | "green" | "blue" | "purple
 /** Durable terminal-tab metadata. The display name is UI state, not a PTY identity. */
 export type WorkspaceTerminalOptions = { tabs: { displayName: string; terminalId?: string }[]; activeTabIndex?: number; panelOpen: boolean };
 export type TerminalSessionSnapshot = { terminalId: string; status: "running" | "exited"; output: string; exitCode?: number };
-/** Resolution is always against the currently selected workspace. A stale ID is not recreated. */
-export type TerminalAttachResult = { state: "available"; session: TerminalSessionSnapshot } | { state: "stale" };
+/** Resolution is always against the currently selected workspace. A stale ID means Core no longer owns that process. */
+export type TerminalAttachResult = { state: "available"; session: TerminalSessionSnapshot } | { state: "stale"; reason: "session-unavailable" };
 export type WorkspaceTask = { id: string; name: string; branch: string; baseBranch: string; status: "active" | "finished"; archived: boolean };
 export type { AiAgent, AiCommand, AiConfiguration, AiContentBlock, AiMessage, AiModel, AiMcpServer, AiOption, AiPermissionRequest, AiProvider, AiProviderCapabilities, AiProviderDescriptor, AiSession, AiSettingsLayout, AiSettingsSection, AiStatus, AiTaskSummary, AiUsage } from "@remote-ide/acp";
 import type { AiAgent, AiConfiguration, AiContentBlock, AiMcpServer, AiModel, AiProvider, AiProviderDescriptor, AiSession, AiTaskSummary, AiUsage } from "@remote-ide/acp";
@@ -251,6 +252,8 @@ export type ProtocolOperations = {
   "git.rollbackSelected": { payload: { paths: string[]; deleteUntracked: boolean }; result: { rolledBack: string[]; failures: GitRollbackFailure[] } };
   "git.commit": { payload: { paths: string[]; message: string }; result: { hash: string } };
   "git.push": { payload: Record<string, never>; result: Record<string, never> };
+  "git.fetch": { payload: Record<string, never>; result: { fetchedAt: string } };
+  "git.cancelFetch": { payload: Record<string, never>; result: { cancelled: boolean } };
   "taskGit.history": { payload: Record<string, never>; result: { checkpoints: TaskCheckpoint[] } };
   "taskGit.diff": { payload: { checkpointId: string; path: string }; result: { originalContent: string; modifiedContent: string; binary: boolean } };
   "taskGit.restore": { payload: { checkpointId: string }; result: { restored: string[] } };
@@ -468,6 +471,8 @@ const requestTypeRegistry: Record<RequestType, true> = {
   "git.rollbackSelected": true,
   "git.commit": true,
   "git.push": true,
+  "git.fetch": true,
+  "git.cancelFetch": true,
   "taskGit.history": true,
   "taskGit.diff": true,
   "taskGit.restore": true,
