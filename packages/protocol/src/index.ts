@@ -36,6 +36,21 @@ export type GitStatusEntry = {
 export type GitChangeState = "index" | "worktree" | "untracked" | "conflict";
 /** The configured upstream and the last remote information Core successfully obtained. */
 export type GitUpstreamStatus = { upstream: string; ahead: number; behind: number; lastFetch?: string };
+export type GitPullStrategy = "merge" | "rebase";
+export type GitPullPreview = {
+  branch: string;
+  upstream: string;
+  head: string;
+  upstreamHead: string;
+  fetchedAt: string;
+  ahead: number;
+  behind: number;
+  incoming: GitCommit[];
+  incomingTruncated: boolean;
+  blockers: GitStatusEntry[];
+  recovery: string;
+};
+export type GitPullResult = { strategy: GitPullStrategy; branch: string; head: string; outcome: string; recovery: string };
 export type GitBranch = { name: string; current: boolean; remote: boolean };
 export type GitBranchDeletePreview = { branch: string; remote: boolean; unmerged: GitCommit[]; confirmationRequired: boolean };
 /** A tag stored in this workspace's local Git repository. It is not a remote tag operation. */
@@ -328,6 +343,8 @@ export type ProtocolOperations = {
   "git.push": { payload: Record<string, never>; result: Record<string, never> };
   "git.fetch": { payload: Record<string, never>; result: { fetchedAt: string } };
   "git.cancelFetch": { payload: Record<string, never>; result: { cancelled: boolean } };
+  "git.pullPreview": { payload: Record<string, never>; result: GitPullPreview };
+  "git.pull": { payload: { strategy: GitPullStrategy; expectedHead: string; expectedUpstreamHead: string }; result: GitPullResult };
   "taskGit.history": { payload: Record<string, never>; result: { checkpoints: TaskCheckpoint[] } };
   /** Text bodies are capped by Core; callers must not use this as bulk file retrieval. */
   "taskGit.diff": { payload: { checkpointId: string; path: string }; result: { originalContent: string; modifiedContent: string; binary: boolean; truncated: boolean } };
@@ -571,6 +588,8 @@ const requestTypeRegistry: Record<RequestType, true> = {
   "git.push": true,
   "git.fetch": true,
   "git.cancelFetch": true,
+  "git.pullPreview": true,
+  "git.pull": true,
   "taskGit.history": true,
   "taskGit.diff": true,
   "taskGit.review": true,

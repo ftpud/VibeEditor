@@ -19,6 +19,7 @@ import { GitToolbarActions, RollbackSelectedDialog, executeRollbackSelection, is
 import { GitCommitPanel } from "./GitCommitPanel";
 import { GitHistoryRewriteDialog } from "./GitHistoryRewriteDialog";
 import { GitStashDialog } from "./GitStashDialog";
+import { GitPullDialog } from "./GitPullDialog";
 import { GitChangesView as KeyboardGitChangesView } from "./GitChangesView";
 import { AiPanel, type AiAttachment } from "./AiPanel";
 import type { PermissionRequestOwner } from "./PermissionRequestActions";
@@ -211,6 +212,8 @@ export function App() {
   const [gitRollbackDialog, setGitRollbackDialog] = useState<GitStatusEntry[]>();
   const [gitRewriteDialog, setGitRewriteDialog] = useState<{ action: "amend" | "undo"; preview: GitHistoryRewritePreview }>();
   const [gitStashDialog, setGitStashDialog] = useState(false);
+  const [gitPullDialog, setGitPullDialog] = useState<{ preview: import("@remote-ide/protocol").GitPullPreview; error?: string }>();
+  const [gitPulling, setGitPulling] = useState(false);
   const [taskGitEntries, setTaskGitEntries] = useState<GitStatusEntry[]>([]);
   const [taskCheckpoints, setTaskCheckpoints] = useState<TaskCheckpoint[]>([]);
   const [taskGitError, setTaskGitError] = useState("");
@@ -739,7 +742,7 @@ export function App() {
   useEffect(() => setSelectedGitPaths((current) => new Set([...current].filter((path) => gitEntries.some((entry) => entry.path === path)))), [gitEntries]);
 
   const selectedRollbackEntries = useMemo(() => selectedGitEntries(gitEntries, selectedGitPaths), [gitEntries, selectedGitPaths]);
-  const gitOperationRunning = gitCommitting || gitPushing || gitFetching || gitRollingBack;
+  const gitOperationRunning = gitCommitting || gitPushing || gitFetching || gitRollingBack || gitPulling;
 
   const openFile = async (node: FileTreeNode) => {
     const existing = group.tabs.find((tab) => tab.type === "file" && tab.path === node.path);
@@ -972,6 +975,28 @@ export function App() {
     } catch (error) { setStatusMessage(error instanceof Error ? error.message : "Could not fetch remote changes"); }
     finally { setGitFetching(false); }
   };
+
+  const previewPull = async () => {
+    if (!clientRef.current || gitOperationRunning) return;
+    setGitFetching(true); showStatus("Fetching and preparing pull preview…", "progress");
+    try { const preview = await clientRef.current.request("git.pullPreview", {}); setGitPullDialog({ preview }); await refreshGit(); showStatus("Pull preview ready", "success"); }
+    catch (error) { showStatus(error instanceof Error ? error.message : "Could not prepare pull preview", "error"); }
+    finally { setGitFetching(false); }
+  };
+
+  const executePull = async (strategy: import("@remote-ide/protocol").GitPullStrategy) => {
+    if (!clientRef.current || !gitPullDialog || gitPulling) return;
+    setGitPulling(true); setGitPullDialog((current) => current ? { preview: current.preview } : current); showStatus(`Fetching again, then pulling with ${strategy}…`, "progress");
+    try {
+      const result = await clientRef.current.request("git.pull", { strategy, expectedHead: gitPullDialog.preview.head, expectedUpstreamHead: gitPullDialog.preview.upstreamHead });
+      setGitPullDialog(undefined); await Promise.all([refreshGit(), refreshTree()]); showStatus(`${result.outcome} ${result.recovery}`, "success");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : `Could not pull with ${strategy}`;
+      setGitPullDialog((current) => current ? { ...current, error: message } : current); await Promise.all([refreshGit(), refreshTree()]); showStatus(message, "error");
+    } finally { setGitPulling(false); }
+  };
+
+  useEffect(() => { const listener = () => void previewPull(); window.addEventListener("vibe:git-pull", listener); return () => window.removeEventListener("vibe:git-pull", listener); }, [gitOperationRunning]);
 
   const openGitHunkDialog = async (path: string, hunk: GitDiffHunk, x: number, y: number) => {
     if (!clientRef.current) return;
@@ -2343,6 +2368,7 @@ export function App() {
     {gitRollbackDialog && <RollbackSelectedDialog entries={gitRollbackDialog} busy={gitRollingBack} onClose={() => { if (!gitRollingBack) setGitRollbackDialog(undefined); }} onConfirm={(deleteUntracked) => void rollbackSelected(deleteUntracked)} />}
     {gitRewriteDialog && <GitHistoryRewriteDialog action={gitRewriteDialog.action} preview={gitRewriteDialog.preview} busy={gitCommitting} onClose={() => { if (!gitCommitting) setGitRewriteDialog(undefined); }} onConfirm={(confirmedRisk) => void executeHistoryRewrite(confirmedRisk)} />}
     {gitStashDialog && clientRef.current && <GitStashDialog client={clientRef.current} selectedPaths={[...selectedGitPaths]} onClose={() => setGitStashDialog(false)} onChanged={() => { void Promise.all([refreshGit(), refreshTree()]); }} />}
+    {gitPullDialog && <GitPullDialog preview={gitPullDialog.preview} busy={gitPulling} error={gitPullDialog.error} onClose={() => { if (!gitPulling) setGitPullDialog(undefined); }} onConfirm={(strategy) => void executePull(strategy)} />}
     {gitHunkDialog && <div className="context-menu-layer" onMouseDown={() => setGitHunkDialog(undefined)}><section className="git-hunk-popup" role="dialog" aria-label={`Previous content in ${gitHunkDialog.path}`} style={{ left: gitHunkDialog.x, top: gitHunkDialog.y }} onMouseDown={(event) => event.stopPropagation()}><header><div><strong>Before this change</strong><span>{gitHunkDialog.path.split("/").pop()} · line {gitHunkDialog.hunk.originalStart}</span></div><button title="Close" onClick={() => setGitHunkDialog(undefined)}><X size={14} /></button></header>{gitHunkDialog.error && <div className="git-hunk-error">{gitHunkDialog.error}</div>}<pre>{gitHunkDialog.hunk.originalLines === 0 ? "This block did not exist before." : gitHunkDialog.originalContent.split("\n").slice(Math.max(0, gitHunkDialog.hunk.originalStart - 1), Math.max(0, gitHunkDialog.hunk.originalStart - 1) + gitHunkDialog.hunk.originalLines).join("\n")}</pre><footer>{gitHunkDialog.hunk.source === "worktree" ? <button onClick={() => void updateGitIndex("stage", gitHunkDialog.path, gitHunkDialog.hunk)}><Check size={13} /><span>Stage Hunk</span></button> : <button onClick={() => void updateGitIndex("unstage", gitHunkDialog.path, gitHunkDialog.hunk)}><X size={13} /><span>Unstage Hunk</span></button>}<button className="danger" disabled={gitHunkDialog.hunk.source !== "worktree"} onClick={() => void rollbackGitHunk()}><RefreshCw size={13} /><span>Rollback</span></button></footer></section></div>}
     {externalConflict && <ExternalChangeConflict dialog={externalConflict} onClose={() => setExternalConflict(undefined)} onReload={() => { updateGroup((tabs, active) => ({ tabs: tabs.map((tab) => tab.id === externalConflict.tabId ? { ...tab, content: externalConflict.externalContent, savedContent: externalConflict.externalContent, revision: externalConflict.externalRevision, dirty: false, error: undefined } : tab), activeTabId: active })); setExternalConflict(undefined); }} onOverwrite={() => { const tab = layoutRef.current.editorGroups[0]?.tabs.find((item) => item.id === externalConflict.tabId); if (!tab || !clientRef.current) return; void clientRef.current.request("filesystem.writeFile", { path: externalConflict.path, content: tab.content, expectedRevision: externalConflict.externalRevision, force: true }).then((saved) => { updateGroup((tabs, active) => ({ tabs: tabs.map((item) => item.id === tab.id ? { ...item, savedContent: tab.content, dirty: false, revision: saved.revision, error: undefined } : item), activeTabId: active })); setExternalConflict(undefined); }).catch((error: unknown) => setExternalConflict((current) => current ? { ...current, error: error instanceof Error ? error.message : "Could not overwrite" } : current)); }} onSaveAs={(target) => { const tab = layoutRef.current.editorGroups[0]?.tabs.find((item) => item.id === externalConflict.tabId); if (!tab || !clientRef.current) return; void clientRef.current.request("filesystem.writeFile", { path: target, content: tab.content, create: true }).then(() => { setExternalConflict(undefined); void refreshTree(); }).catch((error: unknown) => setExternalConflict((current) => current ? { ...current, error: error instanceof Error ? error.message : "Could not save as" } : current)); }} />}
     {showRunConfigurationDialog && <RunConfigurationDialog client={clientRef.current!} onClose={() => setShowRunConfigurationDialog(false)} onSaved={(options) => { setJavaOptions(options); javaOptionsRef.current = options; setShowRunConfigurationDialog(false); }} />}
