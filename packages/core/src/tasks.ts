@@ -8,7 +8,7 @@ import { CoreError } from "./errors.js";
 import { WorkspaceStateStore } from "./workspace-state.js";
 
 const execFileAsync = promisify(execFile);
-export type WorkspaceTask = { id: string; name: string; branch: string; baseBranch: string; status: "active" | "finished" };
+export type WorkspaceTask = { id: string; name: string; branch: string; baseBranch: string; status: "active" | "finished"; archived: boolean };
 export type TaskCommitMessageUpdate = { task: WorkspaceTask; message: string; overwritten: boolean };
 export type TaskGitCommitMessageUpdate = { task: WorkspaceTask; previousCommit: string; commit: string; previousMessage: string; message: string };
 type Registry = { selectedTaskId?: string; tasks: WorkspaceTask[] };
@@ -29,13 +29,13 @@ export class WorkspaceTaskStore {
       if (!Array.isArray(value.tasks)) throw new Error("Invalid task registry");
       const validTasks = value.tasks.filter(isTask);
       const fallbackBaseBranch = validTasks.some((task) => !task.baseBranch) ? await this.rootBranch() : "";
-      const tasks = validTasks.map((task) => ({ ...task, baseBranch: task.baseBranch || fallbackBaseBranch, status: task.status ?? "active" }));
+      const tasks = validTasks.map((task) => ({ ...task, baseBranch: task.baseBranch || fallbackBaseBranch, status: task.status ?? "active", archived: task.archived ?? false }));
       for (const task of tasks) {
         await this.migrateLegacyCopy(task);
         await this.removeSharedNodeModules(this.taskPath(task.id));
       }
       const registry = { tasks, ...(value.selectedTaskId && tasks.some((task) => task.id === value.selectedTaskId) ? { selectedTaskId: value.selectedTaskId } : {}) };
-      if (validTasks.some((task) => !task.baseBranch || task.status === undefined)) await this.save(registry);
+      if (validTasks.some((task) => !task.baseBranch || task.status === undefined || task.archived === undefined)) await this.save(registry);
       return registry;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return { tasks: [] };
@@ -53,7 +53,7 @@ export class WorkspaceTaskStore {
     const exists = await this.branchExists(name);
     if (!existing && exists) throw new CoreError("INVALID_REQUEST", `Git branch ${name} already exists. Select it from the existing branches list.`);
     if (existing && !remote && !exists) throw new CoreError("INVALID_REQUEST", `Git branch ${name} no longer exists`);
-    const task: WorkspaceTask = { id: crypto.randomUUID(), name, branch: name, baseBranch: await this.rootBranch(), status: "active" };
+    const task: WorkspaceTask = { id: crypto.randomUUID(), name, branch: name, baseBranch: await this.rootBranch(), status: "active", archived: false };
     const destination = this.taskPath(task.id);
     let createdBranch = false;
     try {
@@ -101,6 +101,26 @@ export class WorkspaceTaskStore {
     if (!task) throw new CoreError("INVALID_REQUEST", "Task does not exist");
     if (status !== "active" && status !== "finished") throw new CoreError("INVALID_REQUEST", "Invalid task status");
     const updated = { ...task, status };
+    await this.save({ ...registry, tasks: registry.tasks.map((item) => item.id === taskId ? updated : item) });
+    return updated;
+  }
+
+  async rename(taskId: string, name: string): Promise<WorkspaceTask> {
+    const normalized = name.trim();
+    if (!normalized || normalized.length > 200 || normalized.includes("\0")) throw new CoreError("INVALID_REQUEST", "Task name must contain between 1 and 200 non-NUL characters");
+    const registry = await this.list();
+    const task = registry.tasks.find((item) => item.id === taskId);
+    if (!task) throw new CoreError("INVALID_REQUEST", "Task does not exist");
+    const updated = { ...task, name: normalized };
+    await this.save({ ...registry, tasks: registry.tasks.map((item) => item.id === taskId ? updated : item) });
+    return updated;
+  }
+
+  async setArchived(taskId: string, archived: boolean): Promise<WorkspaceTask> {
+    const registry = await this.list();
+    const task = registry.tasks.find((item) => item.id === taskId);
+    if (!task) throw new CoreError("INVALID_REQUEST", "Task does not exist");
+    const updated = { ...task, archived };
     await this.save({ ...registry, tasks: registry.tasks.map((item) => item.id === taskId ? updated : item) });
     return updated;
   }
@@ -393,8 +413,8 @@ function validateCommitMessage(message: string): void {
   if (message.includes("\0")) throw new CoreError("INVALID_REQUEST", "Commit message must not contain NUL characters");
 }
 
-function isTask(value: unknown): value is Omit<WorkspaceTask, "status"> & { status?: WorkspaceTask["status"] } {
+function isTask(value: unknown): value is Omit<WorkspaceTask, "status" | "archived"> & { status?: WorkspaceTask["status"]; archived?: boolean } {
   if (!value || typeof value !== "object") return false;
   const task = value as Record<string, unknown>;
-  return typeof task.id === "string" && typeof task.name === "string" && typeof task.branch === "string" && (task.baseBranch === undefined || typeof task.baseBranch === "string") && (task.status === undefined || task.status === "active" || task.status === "finished");
+  return typeof task.id === "string" && typeof task.name === "string" && typeof task.branch === "string" && (task.baseBranch === undefined || typeof task.baseBranch === "string") && (task.status === undefined || task.status === "active" || task.status === "finished") && (task.archived === undefined || typeof task.archived === "boolean");
 }

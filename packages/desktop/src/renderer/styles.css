@@ -175,10 +175,15 @@ button { color: inherit; }
 .right-resize-handle { width: 4px; margin-left: -2px; z-index: 3; cursor: col-resize; background: transparent; border-right: 1px solid #393b40; }
 .right-resize-handle:hover { background: #3574f0; }
 .tasks-list { flex: 1; overflow: auto; padding: 4px 0 12px; }
+.task-filters { display: flex; gap: 4px; padding: 4px 6px; }
+.task-filters .quick-filter { flex: 1; min-width: 0; }
+.task-filters select { max-width: 92px; border: 1px solid #4a4d52; border-radius: 3px; background: #2b2d30; color: #bfc1c5; }
 .task-row { width: 100%; min-height: 56px; position: relative; display: flex; align-items: stretch; border-left: 2px solid transparent; border-bottom: 1px solid #35373b; background: transparent; color: #bfc1c5; }
 .task-row:hover { background: #34363a; color: #e4e5e7; }
 .task-row.selected { border-left-color: #3574f0; background: #2e436e; color: white; }
 .task-row.finished:not(.selected) { opacity: .52; }
+.task-row.archived:not(.selected) { opacity: .42; }
+.task-branch { overflow: hidden; color: #85888e; font-size: .6923rem; text-overflow: ellipsis; white-space: nowrap; }
 .task-open { min-width: 0; flex: 1; padding: 7px 8px; display: flex; align-items: flex-start; gap: 8px; border: 0; background: transparent; color: inherit; text-align: left; cursor: pointer; }
 .task-open:disabled, .task-actions:disabled { opacity: .55; cursor: wait; }
 .task-actions { width: 28px; flex: 0 0 28px; margin: 5px 4px 5px 0; display: grid; place-items: center; align-self: stretch; border: 0; border-radius: 3px; background: transparent; color: #85888e; opacity: 0; cursor: pointer; }
