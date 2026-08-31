@@ -81,7 +81,7 @@ multi-surface work).
   stable while navigating rapidly with Quick Open and search. Constraint: define
   pinned-tab ordering and persistence before adding preview-tab replacement; never
   close or replace dirty tabs implicitly.
-- [ ] **Unified command palette — Project.** Value: make Project, Git, terminal,
+- [x] **Unified command palette — Project.** Value: make Project, Git, terminal,
   task, AI, and editor actions discoverable from one keyboard surface. Constraint:
   use a typed command registry with context/enablement metadata rather than UI event
   strings. Build after filesystem and Git commands have stable action contracts.
