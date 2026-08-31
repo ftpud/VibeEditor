@@ -4,6 +4,7 @@
 html, body, #root { width: 100%; height: 100%; margin: 0; overflow: hidden; }
 button, input, select, textarea { font: inherit; letter-spacing: 0; }
 button { color: inherit; }
+button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible, [tabindex]:focus-visible { outline: 2px solid #79a7ff; outline-offset: 2px; }
 .connection-screen { height: 100%; display: grid; place-items: center; background: #181818; }
 .connection-form { width: min(420px, calc(100vw - 40px)); display: flex; flex-direction: column; gap: 16px; }
 .connection-form h1 { margin: 0; color: #f2f2f2; font-size: 1.9231rem; font-weight: 600; }
@@ -21,6 +22,10 @@ button { color: inherit; }
 .status-toast.progress { border-left-color: #579dff; }
 .status-toast.success { border-left-color: #62ad6d; }
 .status-toast.error { border-left-color: #d8646d; }
+.status-toast.progress::before { content: "In progress:"; }
+.status-toast.success::before { content: "Success:"; }
+.status-toast.error::before { content: "Error:"; }
+.status-toast::before { font-weight: 700; }
 .status-toast.progress > svg { color: #73a9f5; }
 .status-toast.success > svg { color: #70bd79; }
 .status-toast.error > svg { color: #e2767e; }
@@ -1261,3 +1266,19 @@ button { color: inherit; }
 :root[data-theme="light"] .side-panel .git-changes .git-file-row.selected:hover,
 :root[data-theme="light"] .side-panel .git-changes .git-file-row.active-diff,
 :root[data-theme="light"] .side-panel .git-changes .git-file-row.active-diff:hover { background: #d9e7fb; color: #17233a; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .001ms !important; animation-iteration-count: 1 !important; transition-duration: .001ms !important; }
+  .status-toast-spinner, .task-progress-spinner { animation: none !important; }
+  .status-toast-spinner::after, .task-progress-spinner::after { content: "…"; }
+}
+
+@media (forced-colors: active) {
+  button, input, select, textarea, [role="treeitem"], [role="option"] { forced-color-adjust: auto; }
+  button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible, [tabindex]:focus-visible { outline: 2px solid Highlight; }
+  .selected, .active, [aria-selected="true"], [aria-pressed="true"] { outline: 2px solid Highlight; outline-offset: -2px; }
+  .status-toast, .ai-permission, .connection-message { border: 2px solid CanvasText; }
+  .status-toast.error, .ai-permission-error { border-style: double; }
+  .resize-handle, .right-resize-handle, .focused-panel-divider, .terminal-resize-handle { background: ButtonText; }
+  .tree-git-status, .git-status, .task-ai-status { forced-color-adjust: none; color: CanvasText; background: Canvas; border: 1px solid CanvasText; }
+}
