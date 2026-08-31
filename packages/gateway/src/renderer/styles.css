@@ -52,8 +52,10 @@ h1 { font-size: 18px; font-weight: 600; }
 .workspace-info span, .status small { color: #85888e; font-size: 10px; }
 .status { display: flex; flex-direction: column; gap: 5px; align-items: flex-end; text-align: right; }
 .status small { max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.workspace-buttons { min-height: 42px; padding: 6px 8px; display: grid; grid-template-columns: auto auto auto 1fr 30px 30px; gap: 6px; border-top: 1px solid #3c3e42; }
-.workspace-buttons button { min-width: 30px; padding: 0 10px; display: flex; align-items: center; justify-content: center; gap: 6px; border: 1px solid #4a4d52; border-radius: 3px; background: #34363a; }
+.workspace-buttons { min-height: 44px; padding: 6px 8px; display: flex; align-items: center; gap: 6px; border-top: 1px solid #3c3e42; }
+.workspace-buttons button { height: 30px; min-width: 88px; padding: 0 10px; display: flex; align-items: center; justify-content: center; gap: 6px; border: 1px solid #4a4d52; border-radius: 3px; background: #34363a; white-space: nowrap; }
+.workspace-buttons .workspace-action-spacer { min-width: 8px; flex: 1; }
+.workspace-buttons button.icon-button { width: 30px; min-width: 30px; padding: 0; }
 .workspace-buttons button:hover:not(:disabled) { background: #41444a; }
 .workspace-buttons button.stop { color: #ef9a9a; }
 .workspace-buttons button:disabled { opacity: .45; cursor: default; }
@@ -79,8 +81,10 @@ h1 { font-size: 18px; font-weight: 600; }
 .tunnel-status { align-items: flex-end; text-align: right; }
 .status-dot.running { background: #59a869; box-shadow: 0 0 0 3px rgba(89, 168, 105, .15); }
 .tunnel-empty { padding: 16px; color: #85888e; text-align: center; }
-.error-banner { margin: 0 22px 12px; padding: 8px 10px; display: flex; justify-content: space-between; align-items: center; border: 1px solid #743f43; background: #3d292b; color: #f0b1b5; }
-.error-banner button { border: 0; background: transparent; }
+.gateway-status-float { max-width: min(560px, calc(100vw - 32px)); position: fixed; z-index: 30; right: 18px; bottom: 18px; padding: 10px 10px 10px 12px; display: flex; align-items: flex-start; gap: 12px; border: 1px solid #8a4a50; border-radius: 5px; background: #3d292b; color: #f0b1b5; box-shadow: 0 12px 35px rgba(0, 0, 0, .42); }
+.gateway-status-float span { min-width: 0; line-height: 1.4; overflow-wrap: anywhere; }
+.gateway-status-float button { width: 24px; height: 24px; flex: 0 0 24px; margin: -3px -3px -3px 0; display: grid; place-items: center; border: 0; border-radius: 3px; background: transparent; }
+.gateway-status-float button:hover { background: #60383c; }
 .dialog-layer { position: fixed; inset: 0; z-index: 20; display: grid; place-items: center; background: rgba(0, 0, 0, .45); }
 .dialog { width: 430px; padding: 0 16px 15px; border: 1px solid #55585e; border-radius: 6px; background: #2b2d30; box-shadow: 0 18px 45px rgba(0, 0, 0, .45); }
 .dialog > header { height: 44px; margin-bottom: 12px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid #414349; font-size: 14px; }
@@ -97,4 +101,4 @@ h1 { font-size: 18px; font-weight: 600; }
 .dialog footer button { height: 31px; padding: 0 12px; border: 1px solid #51545a; border-radius: 3px; background: #37393d; }
 .dialog footer button.primary { border-color: #3574f0; background: #3574f0; color: white; }
 .form-error { padding: 7px; background: #3d292b; color: #f0b1b5; }
-@media (max-width: 860px) { .gateway-shell { grid-template-columns: 210px minmax(0, 1fr); } .workspace-info { grid-template-columns: 9px 1fr; } .status { grid-column: 2; align-items: flex-start; text-align: left; } .tunnel-row { grid-template-columns: 8px minmax(130px, 1fr) 60px 60px 31px; } .tunnel-status { display: none; } }
+@media (max-width: 860px) { .gateway-shell { grid-template-columns: 210px minmax(0, 1fr); } .workspace-info { grid-template-columns: 9px 1fr; } .status { grid-column: 2; align-items: flex-start; text-align: left; } .workspace-buttons { flex-wrap: wrap; } .workspace-buttons .workspace-action-spacer { display: none; } .tunnel-row { grid-template-columns: 8px minmax(130px, 1fr) 60px 60px 31px; } .tunnel-status { display: none; } }

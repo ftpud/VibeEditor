@@ -19,7 +19,7 @@ multi-surface work).
 
 ## Found defects, high priority for fixing:
 
-- [ ] **Review UI/UX, fix defects. Use Sol model for fixing these**: 
+- [x] **Review UI/UX, fix defects. Use Sol model for fixing these**:
   In task filter dropdown width is to big.
   Terminal rename doesnt work
   Gateway connection buttons have wierd allignment and size
@@ -27,6 +27,7 @@ multi-surface work).
   Editing text in the editor sometimes pushes cursor to the very end of file
   Stash manager doesn't have background
   'Amend staged' padding is wierd and it's always disabled
+  in the Git panel there is weird floating beacon in the very right
 
 ### Project foundations
 
@@ -96,7 +97,7 @@ multi-surface work).
   task, AI, and editor actions discoverable from one keyboard surface. Constraint:
   use a typed command registry with context/enablement metadata rather than UI event
   strings. Build after filesystem and Git commands have stable action contracts.
-- [ ] **Workspace symbols and recent locations — Project.** Value: complement file
+- [x] **Workspace symbols and recent locations — Project.** Value: complement file
   search with fast code-level navigation and back/forward history. Constraint: use
   remote language/search services and bounded result sets; do not transfer or index
   the whole repository in Desktop.

@@ -137,6 +137,7 @@ export type JavaTypeSuggestion = { simpleName: string; qualifiedName: string; so
 export type JavaLspRange = { startLine: number; startColumn: number; endLine: number; endColumn: number };
 export type JavaLspCompletion = { label: string; detail?: string; insertText: string; range?: JavaLspRange; additionalTextEdits: { range: JavaLspRange; text: string }[] };
 export type JavaLspLocation = { path: string } & JavaLspRange;
+export type WorkspaceSymbol = { name: string; kind: number; path: string; line: number; column: number; container?: string };
 export type JavaSemanticToken = JavaLspRange & { type: string; modifiers: string[] };
 
 export type JavaProjectNode = {
@@ -349,6 +350,7 @@ export type ProtocolOperations = {
     payload: Record<string, never>;
     result: { tree: JavaProjectNode[] };
   };
+  "java.workspaceSymbols": { payload: { query: string; limit?: number }; result: { symbols: WorkspaceSymbol[]; truncated: boolean } };
   "java.listMainClasses": {
     payload: Record<string, never>;
     result: { classes: JavaMainClass[] };
@@ -577,6 +579,7 @@ const requestTypeRegistry: Record<RequestType, true> = {
   "java.getOptions": true,
   "java.addSourceRoot": true,
   "java.getProjectTree": true,
+  "java.workspaceSymbols": true,
   "java.listMainClasses": true,
   "java.addRunConfiguration": true,
   "java.selectRunConfiguration": true,

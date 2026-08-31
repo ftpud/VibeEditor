@@ -1,0 +1,12 @@
+import { Braces, Search } from "lucide-react";
+import { useEffect, useRef, useState, type KeyboardEvent } from "react";
+import type { WorkspaceSymbol } from "@remote-ide/protocol";
+
+export function WorkspaceSymbolDialog({ search, onOpen, onClose }: { search(query: string): Promise<{ symbols: WorkspaceSymbol[]; truncated: boolean }>; onOpen(symbol: WorkspaceSymbol): void; onClose(): void }) {
+  const [query, setQuery] = useState(""); const [symbols, setSymbols] = useState<WorkspaceSymbol[]>([]); const [selected, setSelected] = useState(0); const [truncated, setTruncated] = useState(false);
+  const input = useRef<HTMLInputElement>(null);
+  useEffect(() => { input.current?.focus(); }, []);
+  useEffect(() => { const timer = setTimeout(() => { void search(query).then((result) => { setSymbols(result.symbols); setTruncated(result.truncated); setSelected(0); }); }, 120); return () => clearTimeout(timer); }, [query, search]);
+  const keyDown = (event: KeyboardEvent) => { if (event.key === "Escape") onClose(); else if (event.key === "ArrowDown" || event.key === "ArrowUp") setSelected((value) => symbols.length ? (value + (event.key === "ArrowDown" ? 1 : -1) + symbols.length) % symbols.length : 0); else if (event.key === "Enter" && symbols[selected]) onOpen(symbols[selected]!); else return; event.preventDefault(); };
+  return <div className="dialog-overlay quick-open-overlay" onMouseDown={onClose}><section className="quick-open-dialog" role="dialog" aria-modal="true" aria-label="Go to workspace symbol" onMouseDown={(event) => event.stopPropagation()} onKeyDown={keyDown}><div className="quick-open-input"><Search size={16} /><input ref={input} value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search workspace symbols" aria-label="Search workspace symbols" /></div><div className="quick-open-results" role="listbox">{symbols.map((symbol, index) => <button key={`${symbol.path}:${symbol.line}:${symbol.name}`} role="option" aria-selected={index === selected} className={index === selected ? "selected" : ""} onMouseMove={() => setSelected(index)} onClick={() => onOpen(symbol)}><Braces size={15} /><span className="quick-open-name">{symbol.name}</span>{symbol.container && <span className="quick-open-path">{symbol.container}</span>}<span className="quick-open-path">{symbol.path}:{symbol.line}</span></button>)}</div><footer><span>{symbols.length} symbols{truncated ? "+" : ""}</span></footer></section></div>;
+}

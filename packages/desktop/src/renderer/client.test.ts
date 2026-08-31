@@ -1,11 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { readFile } from "node:fs/promises";
-import { fileURLToPath } from "node:url";
+import path from "node:path";
 import { protocolCompatibility } from "@remote-ide/protocol";
 import { CoalescedAsyncAction, CoreClient } from "./client";
 
 it("keeps the downloadable Desktop manifest aligned with the protocol package", async () => {
-  const manifestPath = fileURLToPath(new URL("../../compatibility.json", import.meta.url));
+  const manifestPath = path.resolve(process.cwd(), "compatibility.json");
   const manifest = JSON.parse(await readFile(manifestPath, "utf8")) as { compatibility: unknown };
   expect(manifest.compatibility).toEqual(protocolCompatibility);
 });

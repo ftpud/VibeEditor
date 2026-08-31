@@ -27,6 +27,6 @@ export function GitCommitPanel({ message, selectedCount, operationRunning, commi
       onChange={(event) => onMessageChange(event.target.value)}
       onKeyDown={(event) => { if (canCommit && isCommitShortcut(event)) { event.preventDefault(); onCommit(); } }}
     />
-    <footer><span>{selectedCount} selected</span>{onAmend && <button type="button" title={stagedCount ? `Amend using ${stagedCount} staged change${stagedCount === 1 ? "" : "s"}` : "Stage changes before amending"} disabled={operationRunning || stagedCount === 0} onClick={onAmend}>Amend Staged</button>}<span className="git-commit-shortcut" title="Commit selected files"><kbd>Ctrl</kbd>/<kbd>Cmd</kbd>+<kbd>Enter</kbd></span><button disabled={!canCommit}>{committing ? "Committing..." : "Commit"}</button></footer>
+    <footer><span>{selectedCount} selected</span>{onAmend && <button className="git-amend-button" type="button" title={stagedCount ? `Amend using ${stagedCount} staged change${stagedCount === 1 ? "" : "s"}` : "Stage changes before amending"} disabled={operationRunning || stagedCount === 0} onClick={onAmend}>Amend staged{stagedCount > 0 ? ` (${stagedCount})` : ""}</button>}<span className="git-commit-shortcut" title="Commit selected files"><kbd>Ctrl</kbd>/<kbd>Cmd</kbd>+<kbd>Enter</kbd></span><button disabled={!canCommit}>{committing ? "Committing..." : "Commit"}</button></footer>
   </form>;
 }

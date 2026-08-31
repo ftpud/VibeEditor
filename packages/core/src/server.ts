@@ -618,6 +618,7 @@ async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStor
       return java.addSourceRoot(request.payload.path);
     }
     case "java.getProjectTree": return { tree: await java.getProjectTree() };
+    case "java.workspaceSymbols": return jdt.workspaceSymbols(request.payload.query, request.payload.limit);
     case "java.listMainClasses": return { classes: await java.listMainClasses() };
     case "java.addRunConfiguration": {
       if (typeof request.payload.name !== "string" || typeof request.payload.mainClass !== "string") throw new CoreError("INVALID_REQUEST", "name and mainClass must be strings");

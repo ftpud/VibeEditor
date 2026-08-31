@@ -1,7 +1,7 @@
-import Editor, { DiffEditor, type Monaco } from "@monaco-editor/react";
+import { DiffEditor, type Monaco } from "@monaco-editor/react";
 import { Archive, ArrowUp, ArrowUpRight, Bot, Bug, Check, ChevronDown, ChevronRight, ChevronUp, CircleAlert, ClipboardCopy, Coffee, Columns2, Eye, EyeOff, File, FileCode2, FileDiff, FileText, Folder, FolderOpen, GitBranch, GitCompareArrows, GitMerge, Library, ListTodo, ListTree, LoaderCircle, LogOut, MoreVertical, Package, Palette, Pencil, Pin, PinOff, Play, Plus, RefreshCw, Save, Search, Settings, ShieldAlert, Square, SquareTerminal, Trash2, X } from "lucide-react";
 import { Children, isValidElement, useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
-import type { AgentFile, AgentFileScope, AiConfiguration, AiModel, AiProvider, AiProviderDescriptor, AiSession, AiStatus, AiTaskSummary, AiUsage, FileColor, FileRevision, FileTreeNode, GitBranch as GitBranchInfo, GitDiffHunk, GitHistoryRewritePreview, GitStatusEntry, GitUpstreamStatus, HttpResponse, JavaBreakpoint, JavaDebugState, JavaDiagnostic, JavaLspLocation, JavaMainClass, JavaProjectNode, JavaProjectOptions, JavaTypeSuggestion, RunConfig, RunConfigScope, SearchResult, TaskCheckpoint, TaskCheckpointFile, UsefulFile, UsefulFileScope, WorkspaceOptions, WorkspaceSearchQueries, WorkspaceTask } from "@remote-ide/protocol";
+import type { AgentFile, AgentFileScope, AiConfiguration, AiModel, AiProvider, AiProviderDescriptor, AiSession, AiStatus, AiTaskSummary, AiUsage, FileColor, FileRevision, FileTreeNode, GitBranch as GitBranchInfo, GitDiffHunk, GitHistoryRewritePreview, GitStatusEntry, GitUpstreamStatus, HttpResponse, JavaBreakpoint, JavaDebugState, JavaDiagnostic, JavaLspLocation, JavaMainClass, JavaProjectNode, JavaProjectOptions, JavaTypeSuggestion, RunConfig, RunConfigScope, SearchResult, TaskCheckpoint, TaskCheckpointFile, UsefulFile, UsefulFileScope, WorkspaceOptions, WorkspaceSearchQueries, WorkspaceSymbol, WorkspaceTask } from "@remote-ide/protocol";
 import type { editor } from "monaco-editor";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -33,12 +33,15 @@ import { projectTreeActions, type ProjectTreeAction } from "./project-tree-actio
 import { copyProjectTreeActions } from "./project-context-menu";
 import { QuickOpenDialog, workspaceFiles } from "./QuickOpenDialog";
 import { CommandPalette } from "./CommandPalette";
+import { WorkspaceSymbolDialog } from "./WorkspaceSymbolDialog";
 import type { Command, CommandContext } from "./command-registry";
 import { EditorStatusBar, type EditorStatusBarHandle } from "./EditorStatusBar";
 import { adjacentEditorTabId, editorShortcutEligible, editorTabShortcut } from "./editor-shortcuts";
 import { orderPinnedTabs, pinnedFilePaths, togglePinnedTab } from "./pinned-tabs";
 import { EditorViewStateStore } from "./editor-view-state";
+import { StableEditor } from "./StableEditor";
 import { reconcileProjectTree } from "./project-tree-reconciliation";
+import { NavigationHistory, type EditorLocation } from "./navigation-history";
 
 type ConnectionStatus = "idle" | "connecting" | "connected" | "failed" | "disconnected" | "workspace-error";
 type StatusKind = "progress" | "success" | "error";
@@ -231,6 +234,7 @@ export function App() {
   const [searchScope, setSearchScope] = useState<string>();
   const [searchQueries, setSearchQueries] = useState<WorkspaceSearchQueries>({});
   const [quickOpen, setQuickOpen] = useState(false);
+  const [workspaceSymbolsOpen, setWorkspaceSymbolsOpen] = useState(false);
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const [externalConflict, setExternalConflict] = useState<{ tabId: string; path: string; externalContent: string; externalRevision: FileRevision; error?: string }>();
   const [pendingNavigation, setPendingNavigation] = useState<{ result: SearchResult; matchLength: number }>();
@@ -239,6 +243,7 @@ export function App() {
   const aiProviderRef = useRef<AiProvider>(readSetting("aiProvider") === "copilot" ? "copilot" : "codex");
   const didAutoConnect = useRef(false);
   const layoutRef = useRef(layout);
+  const navigationHistory = useRef(new NavigationHistory());
   const treeRefreshTimer = useRef<ReturnType<typeof setTimeout>>();
   const gitRefreshTimer = useRef<ReturnType<typeof setTimeout>>();
   const javaRefreshTimer = useRef<ReturnType<typeof setTimeout>>();
@@ -1446,6 +1451,25 @@ export function App() {
 
   useEffect(() => {
     const listener = (event: KeyboardEvent) => {
+      if ((!event.ctrlKey && !event.metaKey) || event.shiftKey || event.altKey || event.key.toLowerCase() !== "t" || status !== "connected") return;
+      if ((event.target as Element | null)?.closest?.(".terminal-panel")) return;
+      if (!workspaceSymbolsOpen && document.querySelector('[role="dialog"], [role="alertdialog"], .context-menu-layer, .floating-window-layer')) return;
+      event.preventDefault(); if (!workspaceSymbolsOpen) setWorkspaceSymbolsOpen(true);
+    };
+    window.addEventListener("keydown", listener); return () => window.removeEventListener("keydown", listener);
+  }, [status, workspaceSymbolsOpen]);
+
+  useEffect(() => {
+    const listener = (event: KeyboardEvent) => {
+      if (!event.altKey || event.ctrlKey || event.metaKey || event.shiftKey || !["ArrowLeft", "ArrowRight"].includes(event.key) || status !== "connected") return;
+      if ((event.target as Element | null)?.closest?.(".terminal-panel")) return;
+      event.preventDefault(); void navigateHistory(event.key === "ArrowLeft" ? "back" : "forward");
+    };
+    window.addEventListener("keydown", listener); return () => window.removeEventListener("keydown", listener);
+  }, [status]);
+
+  useEffect(() => {
+    const listener = (event: KeyboardEvent) => {
       if ((!event.ctrlKey && !event.metaKey) || !event.shiftKey || event.altKey || event.key.toLowerCase() !== "p") return;
       if (status !== "connected" || (event.target as Element | null)?.closest?.(".terminal-panel")) return;
       if (!commandPaletteOpen && document.querySelector('[role="dialog"], [role="alertdialog"], .context-menu-layer, .floating-window-layer')) return;
@@ -1633,8 +1657,8 @@ export function App() {
     });
   };
 
-  const renameTerminal = (tab: LayoutModel["terminalGroup"]["tabs"][number]) => {
-    const title = window.prompt("Terminal name", tab.title)?.trim();
+  const renameTerminal = (tab: LayoutModel["terminalGroup"]["tabs"][number], value: string) => {
+    const title = value.trim();
     if (!title) return;
     updateTerminalGroup((current) => ({ ...current, tabs: current.tabs.map((item) => item.id === tab.id ? { ...item, title: title.slice(0, 100) } : item) }));
   };
@@ -1871,14 +1895,41 @@ export function App() {
   };
 
   const openDiagnostic = async (diagnostic: JavaDiagnostic) => {
+    rememberNavigation({ path: diagnostic.path, line: diagnostic.line, column: diagnostic.column });
     await openFile({ name: diagnostic.path.split("/").pop() ?? diagnostic.path, path: diagnostic.path, type: "file" });
     setPendingNavigation({ result: { path: diagnostic.path, line: diagnostic.line, column: diagnostic.column, preview: diagnostic.message }, matchLength: 1 });
   };
 
   const openJavaLocation = async (location: JavaLspLocation) => {
+    rememberNavigation({ path: location.path, line: location.startLine, column: location.startColumn });
     await openFile({ name: location.path.split("/").pop() ?? location.path, path: location.path, type: "file" });
     setPendingNavigation({ result: { path: location.path, line: location.startLine, column: location.startColumn, preview: "Java symbol" }, matchLength: Math.max(1, location.endColumn - location.startColumn) });
     setJavaUsages(undefined);
+  };
+
+  const searchWorkspaceSymbols = useCallback(async (query: string) => {
+    const client = clientRef.current; if (!client) return { symbols: [], truncated: false };
+    return client.request("java.workspaceSymbols", { query, limit: 100 });
+  }, []);
+
+  const openWorkspaceSymbol = async (symbol: WorkspaceSymbol) => {
+    setWorkspaceSymbolsOpen(false);
+    rememberNavigation({ path: symbol.path, line: symbol.line, column: symbol.column });
+    await openFile({ name: symbol.path.split("/").pop() ?? symbol.path, path: symbol.path, type: "file" });
+    setPendingNavigation({ result: { path: symbol.path, line: symbol.line, column: symbol.column, preview: symbol.name }, matchLength: Math.max(1, symbol.name.length) });
+  };
+
+  function rememberNavigation(target: EditorLocation): void {
+    const current = layoutRef.current.editorGroups[0]; const tab = current?.tabs.find((item) => item.id === current.activeTabId);
+    const position = monacoEditorRef.current?.getPosition();
+    if (tab?.type === "file") navigationHistory.current.visit({ path: tab.path, line: position?.lineNumber ?? 1, column: position?.column ?? 1 });
+    navigationHistory.current.visit(target);
+  }
+
+  const navigateHistory = async (direction: "back" | "forward") => {
+    const location = direction === "back" ? navigationHistory.current.back() : navigationHistory.current.forward(); if (!location) return;
+    await openFile({ name: location.path.split("/").pop() ?? location.path, path: location.path, type: "file" });
+    setPendingNavigation({ result: { ...location, preview: "Recent location" }, matchLength: 1 });
   };
 
   const applyJavaImport = (suggestion: JavaTypeSuggestion, range = importChoices?.range) => {
@@ -2051,6 +2102,7 @@ export function App() {
   };
 
   const navigateToSearchResult = async (result: SearchResult, matchLength: number) => {
+    rememberNavigation({ path: result.path, line: result.line, column: result.column });
     await openFile({ name: result.path.split("/").pop() ?? result.path, path: result.path, type: "file" });
     setPendingNavigation({ result, matchLength });
     setSearchScope(undefined);
@@ -2130,6 +2182,9 @@ export function App() {
   const commandContext: CommandContext = { connected: status === "connected", hasActiveEditor: Boolean(activeTab), activeEditorDirty: Boolean(activeTab?.dirty), gitBusy: gitOperationRunning, taskSwitching, aiBusy: aiSession.status === "in_progress" };
   const commands: Command[] = [
     { id: "project.quickOpen", label: "Go to File", category: "Project", shortcut: "Ctrl/Cmd+P", when: (context) => context.connected, execute: () => setQuickOpen(true) },
+    { id: "project.workspaceSymbols", label: "Go to Workspace Symbol", category: "Project", shortcut: "Ctrl/Cmd+T", when: (context) => context.connected, execute: () => setWorkspaceSymbolsOpen(true) },
+    { id: "editor.navigateBack", label: "Go Back", category: "Editor", shortcut: "Alt+Left", when: (context) => context.connected, execute: () => navigateHistory("back") },
+    { id: "editor.navigateForward", label: "Go Forward", category: "Editor", shortcut: "Alt+Right", when: (context) => context.connected, execute: () => navigateHistory("forward") },
     { id: "project.refresh", label: "Refresh Project", category: "Project", when: (context) => context.connected, execute: () => refreshTree() },
     { id: "project.findInFiles", label: "Find in Files", category: "Project", when: (context) => context.connected, execute: () => setSearchScope("") },
     { id: "git.refresh", label: "Refresh Git Changes", category: "Git", when: (context) => context.connected && !context.gitBusy, execute: () => refreshGit() },
@@ -2221,7 +2276,7 @@ export function App() {
         }}>
           {!activeTab ? <div className="empty-editor">Open a file from Project</div> : activeTab.loading ? <div className="empty-editor">Loading {activeTab.title}...</div> : activeTab.error && !activeTab.content ? <div className="editor-error">{activeTab.error}</div> : <>
             {activeTab.error && <div className="inline-error">{activeTab.error}</div>}
-            {activeTab.type === "diff" ? <><DiffEditor key={`${activeTab.id}:${activeTab.diffMode ?? "unified"}`} original={activeTab.originalContent ?? ""} modified={activeTab.content} language={languageByExtension[activeTab.path.split(".").pop()?.toLowerCase() ?? ""] ?? "plaintext"} beforeMount={configureMonacoThemes} theme={monacoTheme(theme, highlightTheme)} onMount={mountWorkingDiff} options={{ automaticLayout: true, readOnly: false, originalEditable: false, renderMarginRevertIcon: true, renderSideBySide: activeTab.diffMode === "split", useInlineViewWhenSpaceIsLimited: false, minimap: { enabled: false }, fontFamily: editorFontFamily, fontSize: uiFontSize, lineHeight: editorLineHeight, scrollBeyondLastLine: false }} /><div className="diff-navigation" aria-label="Diff navigation"><button title="Previous change" aria-label="Previous change" onClick={() => monacoDiffEditorRef.current?.goToDiff("previous")}><ChevronUp size={16} /></button><button title="Next change" aria-label="Next change" onClick={() => monacoDiffEditorRef.current?.goToDiff("next")}><ChevronDown size={16} /></button></div></> : activeTab.markdownMode === "preview" ? <div className="markdown-preview"><MarkdownPreview sourcePath={activeTab.path} workspacePath={activeWorkspace} renderPre={renderMarkdownPre} onOpenFile={(path) => void openFile({ name: path.split("/").pop() ?? path, path, type: "file" })} onOpenExternal={(url) => { void window.desktop?.openExternal(url).catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : "Could not open external link")); }}>{activeTab.content}</MarkdownPreview></div> : <Editor key={`${activeTab.type}:${activeTab.usefulScope ?? activeTab.runConfigScope ?? activeTab.agentScope ?? "workspace"}:${activeTab.path}`} path={activeTab.type === "useful" ? `useful-${activeTab.usefulScope}/${activeTab.path}` : activeTab.type === "runConfig" ? `run-config-${activeTab.runConfigScope}/${activeTab.path}.sh` : activeTab.type === "agent" ? `agent-${activeTab.agentScope}/${activeTab.path}` : activeTab.path} language={activeTab.type === "runConfig" ? "shell" : languageByExtension[activeTab.path.split(".").pop()?.toLowerCase() ?? ""] ?? "plaintext"} value={activeTab.content} beforeMount={configureMonacoThemes} theme={monacoTheme(theme, highlightTheme)} onMount={mountEditor} options={{ automaticLayout: true, contextmenu: false, minimap: { enabled: false }, glyphMargin: activeTab.type === "file" || /\.http$/i.test(activeTab.path), fontFamily: editorFontFamily, fontSize: uiFontSize, lineHeight: editorLineHeight, scrollBeyondLastLine: false, padding: { top: 10 } }} onChange={(value) => updateGroup((tabs, active) => ({ tabs: tabs.map((tab) => tab.id === activeTab.id ? { ...tab, content: value ?? "", dirty: (value ?? "") !== tab.savedContent, error: undefined } : tab), activeTabId: active }))} />}
+            {activeTab.type === "diff" ? <><DiffEditor key={`${activeTab.id}:${activeTab.diffMode ?? "unified"}`} original={activeTab.originalContent ?? ""} modified={activeTab.content} language={languageByExtension[activeTab.path.split(".").pop()?.toLowerCase() ?? ""] ?? "plaintext"} beforeMount={configureMonacoThemes} theme={monacoTheme(theme, highlightTheme)} onMount={mountWorkingDiff} options={{ automaticLayout: true, readOnly: false, originalEditable: false, renderMarginRevertIcon: true, renderSideBySide: activeTab.diffMode === "split", useInlineViewWhenSpaceIsLimited: false, minimap: { enabled: false }, fontFamily: editorFontFamily, fontSize: uiFontSize, lineHeight: editorLineHeight, scrollBeyondLastLine: false }} /><div className="diff-navigation" aria-label="Diff navigation"><button title="Previous change" aria-label="Previous change" onClick={() => monacoDiffEditorRef.current?.goToDiff("previous")}><ChevronUp size={16} /></button><button title="Next change" aria-label="Next change" onClick={() => monacoDiffEditorRef.current?.goToDiff("next")}><ChevronDown size={16} /></button></div></> : activeTab.markdownMode === "preview" ? <div className="markdown-preview"><MarkdownPreview sourcePath={activeTab.path} workspacePath={activeWorkspace} renderPre={renderMarkdownPre} onOpenFile={(path) => void openFile({ name: path.split("/").pop() ?? path, path, type: "file" })} onOpenExternal={(url) => { void window.desktop?.openExternal(url).catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : "Could not open external link")); }}>{activeTab.content}</MarkdownPreview></div> : <StableEditor key={`${activeTab.type}:${activeTab.usefulScope ?? activeTab.runConfigScope ?? activeTab.agentScope ?? "workspace"}:${activeTab.path}`} path={activeTab.type === "useful" ? `useful-${activeTab.usefulScope}/${activeTab.path}` : activeTab.type === "runConfig" ? `run-config-${activeTab.runConfigScope}/${activeTab.path}.sh` : activeTab.type === "agent" ? `agent-${activeTab.agentScope}/${activeTab.path}` : activeTab.path} language={activeTab.type === "runConfig" ? "shell" : languageByExtension[activeTab.path.split(".").pop()?.toLowerCase() ?? ""] ?? "plaintext"} value={activeTab.content} beforeMount={configureMonacoThemes} theme={monacoTheme(theme, highlightTheme)} onMount={mountEditor} options={{ automaticLayout: true, contextmenu: false, minimap: { enabled: false }, glyphMargin: activeTab.type === "file" || /\.http$/i.test(activeTab.path), fontFamily: editorFontFamily, fontSize: uiFontSize, lineHeight: editorLineHeight, scrollBeyondLastLine: false, padding: { top: 10 } }} onChange={(value) => updateGroup((tabs, active) => ({ tabs: tabs.map((tab) => tab.id === activeTab.id ? { ...tab, content: value, dirty: value !== tab.savedContent, error: undefined } : tab), activeTabId: active }))} />}
           </>}
           <EditorStatusBar ref={editorStatusBarRef} active={Boolean(activeTab && !activeTab.loading && !(activeTab.error && !activeTab.content) && activeTab.markdownMode !== "preview")} />
         </div>
@@ -2307,6 +2362,7 @@ export function App() {
     {projectPathDialog && <ProjectPathDialog mode={projectPathDialog.mode} initialName={projectPathDialog.mode === "rename" ? projectPathDialog.node.name : ""} parentPath={projectPathDialog.parentPath} onClose={() => setProjectPathDialog(undefined)} onSave={saveProjectPathDialog} />}
     {searchScope !== undefined && <FindInFilesDialog client={clientRef.current!} scope={searchScope} queries={searchQueries} onQueriesChange={setSearchQueries} onClose={() => setSearchScope(undefined)} onNavigate={(result, matchLength) => void navigateToSearchResult(result, matchLength)} />}
     {quickOpen && <QuickOpenDialog files={workspaceFiles(tree)} onClose={() => setQuickOpen(false)} onOpen={(file) => { setQuickOpen(false); void openFile(file); }} />}
+    {workspaceSymbolsOpen && <WorkspaceSymbolDialog search={searchWorkspaceSymbols} onClose={() => setWorkspaceSymbolsOpen(false)} onOpen={(symbol) => void openWorkspaceSymbol(symbol)} />}
     {commandPaletteOpen && <CommandPalette commands={commands} context={commandContext} onClose={() => setCommandPaletteOpen(false)} />}
     {importChoices && <div className="dialog-overlay" onMouseDown={() => setImportChoices(undefined)}><section className="import-chooser" role="dialog" aria-modal="true" aria-label="Choose Java import" onMouseDown={(event) => event.stopPropagation()}><header><span>Import class</span><button title="Close" onClick={() => setImportChoices(undefined)}><X size={15} /></button></header><div>{importChoices.suggestions.map((suggestion) => <button key={suggestion.qualifiedName} onClick={() => applyJavaImport(suggestion)}><span>{suggestion.simpleName}</span><code>{suggestion.qualifiedName}</code><small>{suggestion.source}</small></button>)}</div></section></div>}
     {javaUsages && <div className="dialog-overlay" onMouseDown={() => setJavaUsages(undefined)}><section className="import-chooser usage-chooser" role="dialog" aria-modal="true" aria-label="Java usages" onMouseDown={(event) => event.stopPropagation()}><header><span>Usages ({javaUsages.length})</span><button title="Close" onClick={() => setJavaUsages(undefined)}><X size={15} /></button></header><div>{javaUsages.length === 0 ? <div className="problems-empty">No project usages found</div> : javaUsages.map((location, index) => <button key={`${location.path}:${location.startLine}:${location.startColumn}:${index}`} onClick={() => void openJavaLocation(location)}><span>{location.path.split("/").pop()}</span><code>{location.path}</code><small>{location.startLine}:{location.startColumn}</small></button>)}</div></section></div>}
