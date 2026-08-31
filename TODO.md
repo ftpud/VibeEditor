@@ -17,6 +17,16 @@ multi-surface work).
 
 ## Now
 
+## Found defects, high priority for fixing:
+
+- [ ] **Review UI/UX, fix defects.**: 
+  In task filter dropdown width is to big.
+  Terminal rename doesnt work
+  Gateway connection buttons have wierd allignment and size
+  Gateway errors produces message boxes, make it unblocking status float window
+  Editing text in the editor sometimes pushes cursor to the very end of file
+
+
 ### Project foundations
 
 - [x] **Make `AGENTS.md` a compact coding and navigation guide — Small.** Value:
