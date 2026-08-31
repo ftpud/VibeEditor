@@ -72,12 +72,23 @@ describe("Vibe Editor app tools", () => {
 
   it("queues a context-empty session with a handoff prompt in the invoking workspace", async () => {
     const { tasks, provider, onTasksChanged, onCommitMessageChanged, agents } = harness();
-    const coordinator = { name: "Coordinator", instructions: "Coordinate.", mcpServers: ["vibe-editor"] };
-    provider.get.mockResolvedValue({ ...await provider.get(), agent: { name: coordinator.name, fingerprint: agentFingerprint(coordinator) } });
-    agents.list.mockResolvedValue([{ scope: "workspace", name: "coordinator.md", agent: coordinator }]);
+    const coordinator = { name: "Oleg", instructions: "Implement end to end.", mcpServers: ["vibe-editor"] };
+    provider.get.mockResolvedValue({ ...await provider.get(), agent: { name: coordinator.name, fingerprint: agentFingerprint(coordinator) }, agentPreset: { scope: "local", name: "Oleg.md" } });
+    agents.list.mockResolvedValue([{ scope: "local", name: "Oleg.md", agent: coordinator }]);
     const service = new AppToolService(tasks as never, { get: vi.fn(() => provider), list: vi.fn(() => []) } as never, "/tasks/parent/workspace", onTasksChanged, onCommitMessageChanged, "codex", agents as never, "/workspace");
     await expect(service.call("session_new", { prompt: "Continue from this handoff" })).resolves.toMatchObject({ provider: "codex", workspace: "/tasks/parent/workspace", transition: "queued" });
-    expect(provider.startFreshSession).toHaveBeenCalledWith("/tasks/parent/workspace", expect.objectContaining({ prompt: "Continue from this handoff", agent: coordinator, mcpServers: [expect.objectContaining({ name: "vibe-editor" })] }));
+    expect(provider.startFreshSession).toHaveBeenCalledWith("/tasks/parent/workspace", expect.objectContaining({ prompt: "Continue from this handoff", configuration: { model: "gpt-5", reasoning: "medium", mode: "agent-full-access" }, agent: coordinator, agentPreset: { scope: "local", name: "Oleg.md" }, mcpServers: [expect.objectContaining({ name: "vibe-editor" })] }));
+    expect(tasks.create).not.toHaveBeenCalled();
+    expect(tasks.createRandom).not.toHaveBeenCalled();
+  });
+
+  it("starts a fresh session without a preset when the invoking session has none", async () => {
+    const { tasks, provider, onTasksChanged, onCommitMessageChanged, agents } = harness();
+    const service = new AppToolService(tasks as never, { get: vi.fn(() => provider), list: vi.fn(() => []) } as never, "/tasks/parent/workspace", onTasksChanged, onCommitMessageChanged, "codex", agents as never, "/workspace");
+
+    await service.call("session_new", { prompt: "Continue without a preset" });
+
+    expect(provider.startFreshSession).toHaveBeenCalledWith("/tasks/parent/workspace", expect.not.objectContaining({ agent: expect.anything(), agentPreset: expect.anything() }));
   });
 
   it("rejects an unadvertised next-turn model or reasoning without queuing it", async () => {
@@ -163,7 +174,7 @@ describe("Vibe Editor app tools", () => {
 
     await service.call("task_create_and_start", { prompt: "Implement it", provider: "codex", model: "gpt-5", agent: { scope: "workspace", name: "reviewer.md" } });
 
-    expect(provider.send).toHaveBeenCalledWith("/tasks/task-1/workspace", expect.objectContaining({ agent: reviewer }));
+    expect(provider.send).toHaveBeenCalledWith("/tasks/task-1/workspace", expect.objectContaining({ agent: reviewer, agentPreset: { scope: "workspace", name: "reviewer.md" } }));
   });
 
   it("inherits the invoking session's configured agent when agent is omitted", async () => {

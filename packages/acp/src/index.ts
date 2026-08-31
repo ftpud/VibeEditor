@@ -11,7 +11,7 @@ export type AiMessage = { id: string; role: "user" | "assistant" | "activity" | 
 export type AiCommand = { name: string; description: string; inputHint?: string };
 export type AiPermissionOption = { optionId: string; name: string; kind: "allow_once" | "allow_always" | "reject_once" | "reject_always" };
 export type AiPermissionRequest = { id: string; title: string; toolCallId: string; details?: string; options: AiPermissionOption[] };
-export type AiSession = { id?: string; createdAt?: string; updatedAt?: string; threadId?: string; model: string; reasoning: string; configuration?: AiConfiguration; /** One-shot model/reasoning override consumed by the next new turn. */ nextConfiguration?: AiConfiguration; availableOptions?: AiOption[]; availableCommands?: AiCommand[]; pendingPermission?: AiPermissionRequest; status: AiStatus; messages: AiMessage[]; contextUsed?: number; contextLimit?: number; tokens?: AiTokenUsage; steering?: boolean; agent?: { name: string; fingerprint: string } };
+export type AiSession = { id?: string; createdAt?: string; updatedAt?: string; threadId?: string; model: string; reasoning: string; configuration?: AiConfiguration; /** One-shot model/reasoning override consumed by the next new turn. */ nextConfiguration?: AiConfiguration; availableOptions?: AiOption[]; availableCommands?: AiCommand[]; pendingPermission?: AiPermissionRequest; status: AiStatus; messages: AiMessage[]; contextUsed?: number; contextLimit?: number; tokens?: AiTokenUsage; steering?: boolean; agent?: { name: string; fingerprint: string }; agentPreset?: AiAgentPreset };
 export type AiTokenUsage = { total: number; input: number; output: number; thought?: number; cachedRead?: number; cachedWrite?: number };
 /**
  * Optional catalogue metadata. Everything here is advertised by the agent (ACP
@@ -58,8 +58,9 @@ export type AiMcpServer =
   | { transport?: "stdio"; name: string; command: string; args?: string[]; env?: Record<string, string>; enabled?: boolean }
   | { transport: "http" | "sse"; name: string; url: string; headers?: Record<string, string>; enabled?: boolean };
 export type AiAgent = { name: string; description?: string; instructions: string; mcpServers?: string[] };
+export type AiAgentPreset = { scope: "global" | "local" | "workspace"; name: string };
 export type AiTaskSummary = { status: AiStatus; preview: string; additions: number; deletions: number; pendingPermission: boolean; waitingUntil?: string };
-export type AcpSendRequest = { prompt: string; content?: AiContentBlock[]; configuration: AiConfiguration; mcpServers?: AiMcpServer[]; agent?: AiAgent };
+export type AcpSendRequest = { prompt: string; content?: AiContentBlock[]; configuration: AiConfiguration; mcpServers?: AiMcpServer[]; agent?: AiAgent; agentPreset?: AiAgentPreset };
 
 /** Shared provider contract. Each provider owns its settings UI metadata. */
 export abstract class AcpProvider {

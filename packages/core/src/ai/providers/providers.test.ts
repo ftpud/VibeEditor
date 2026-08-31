@@ -269,6 +269,25 @@ describe("ACP integration", () => {
     await provider.clear(workspace);
   });
 
+  it("carries the selected local agent preset into a queued fresh session", async () => {
+    const state = await mkdtemp(path.join(os.tmpdir(), "remote-ide-ai-fresh-agent-"));
+    const provider = new FakeProvider(() => undefined, state, { FAKE_SLOW: "on" });
+    const workspace = process.cwd();
+    const oleg = { name: "Oleg", instructions: "Implement repository features end to end." };
+    const preset = { scope: "local" as const, name: "Oleg.md" };
+    const first = await provider.send(workspace, { prompt: "old context", configuration: { model: "model-a" }, agent: oleg, agentPreset: preset });
+    await provider.startFreshSession(workspace, { prompt: "fresh handoff", configuration: { model: "model-a" }, agent: oleg, agentPreset: preset });
+    let fresh = await provider.get(workspace);
+    for (let attempt = 0; attempt < 240 && (fresh.id === first.id || fresh.status === "in_progress" || !fresh.messages.some((message) => message.text === "fresh handoff")); attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 25)); fresh = await provider.get(workspace);
+    }
+    expect(fresh.id).not.toBe(first.id);
+    expect(fresh.agentPreset).toEqual(preset);
+    expect(fresh.agent?.name).toBe("Oleg");
+    expect((await provider.sessions(workspace)).find((session) => session.id === first.id)?.messages.some((message) => message.text === "old context")).toBe(true);
+    await provider.clear(workspace);
+  });
+
   it("injects mid-turn input into the live turn when the agent supports steering", async () => {
     const state = await mkdtemp(path.join(os.tmpdir(), "remote-ide-ai-steer-"));
     const provider = new FakeProvider(() => undefined, state, { FAKE_STEERING: "on", FAKE_SLOW: "on" });
