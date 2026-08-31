@@ -518,6 +518,8 @@ async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStor
       if (typeof request.payload.path !== "string") throw new CoreError("INVALID_REQUEST", "path must be a string");
       return git.diff(request.payload.path, filesystem);
     }
+    case "git.stage": await git.stage(request.payload.path, request.payload.hunk); return {};
+    case "git.unstage": await git.unstage(request.payload.path, request.payload.hunk); return {};
     case "git.branches": return { branches: await git.branches() };
     case "git.tags": return { tags: await git.tags() };
     case "git.createTag": return { tag: await git.createTag(request.payload.name, request.payload.target) };
