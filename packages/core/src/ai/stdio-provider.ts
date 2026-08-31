@@ -78,6 +78,7 @@ export abstract class StdioAcpProvider extends AcpProvider {
   protected abstract fallbackModels(): Promise<AiModel[]>;
   private readonly runtimes = new Map<string, Runtime>();
   private readonly queues = new Map<string, Promise<void>>();
+  private readonly freshSessions = new Map<string, AcpSendRequest>();
   private readonly saveQueues = new Map<string, Promise<void>>();
   private modelCache?: { at: number; models: AiModel[] };
   private modelDiscovery?: Promise<AiModel[]>;
@@ -190,12 +191,23 @@ export abstract class StdioAcpProvider extends AcpProvider {
     return this.get(workspace);
   }
 
+  async startFreshSession(workspace: string, request: AcpSendRequest): Promise<AiSession> {
+    this.validate(request.prompt);
+    const runtime = this.runtimes.get(workspace);
+    if (!runtime?.running) return super.startFreshSession(workspace, request);
+    runtime.pending = [];
+    this.freshSessions.set(workspace, request);
+    await this.save(workspace, runtime.session); this.onChanged(workspace);
+    return this.get(workspace);
+  }
+
   async interrupt(workspace: string): Promise<AiSession> {
     const runtime = this.runtimes.get(workspace);
     if (!runtime?.running) throw new CoreError("INVALID_REQUEST", `${this.descriptor.name} is not currently working`);
     // Retire the turn before cancelling so neither its late output nor its
     // completion status (agents may still report `end_turn`) lands afterwards.
     runtime.generation += 1;
+    this.freshSessions.delete(workspace);
     runtime.running = false; runtime.anchors = {}; runtime.pending = [];
     try { await runtime.connection.cancel({ sessionId: runtime.sessionId }); }
     catch (error) { runtime.session.messages.push(this.message("activity", `Cancel request failed: ${error instanceof Error ? error.message : String(error)}`)); }
@@ -217,7 +229,9 @@ export abstract class StdioAcpProvider extends AcpProvider {
       runtime.running = false; runtime.anchors = {};
       const usage = result.usage;
       if (usage) runtime.session.tokens = { total: usage.totalTokens, input: usage.inputTokens, output: usage.outputTokens, ...(usage.thoughtTokens != null ? { thought: usage.thoughtTokens } : {}), ...(usage.cachedReadTokens != null ? { cachedRead: usage.cachedReadTokens } : {}), ...(usage.cachedWriteTokens != null ? { cachedWrite: usage.cachedWriteTokens } : {}) };
-      const queued = result.stopReason === "cancelled" ? undefined : runtime.pending.shift();
+      const fresh = result.stopReason === "cancelled" ? undefined : this.freshSessions.get(workspace);
+      if (fresh) this.freshSessions.delete(workspace);
+      const queued = fresh || result.stopReason === "cancelled" ? undefined : runtime.pending.shift();
       if (queued !== undefined) {
         const nextConfiguration = runtime.session.nextConfiguration;
         if (nextConfiguration) {
@@ -235,9 +249,11 @@ export abstract class StdioAcpProvider extends AcpProvider {
       }
       if (queued === undefined) await this.completeCheckpoints(workspace, runtime, result.stopReason === "cancelled" ? "interrupted" : result.stopReason === "refusal" ? "error" : "completed");
       await this.save(workspace, runtime.session); this.onChanged(workspace);
+      if (fresh) { await this.clear(workspace); await this.send(workspace, fresh); }
     })).catch((error: unknown) => this.queue(workspace, async () => {
       if (runtime.generation !== generation) return;
       runtime.running = false; runtime.anchors = {}; runtime.pending = [];
+      this.freshSessions.delete(workspace);
       runtime.session.status = "error"; runtime.session.messages.push(this.message("error", this.describe(error, runtime)));
       await this.completeCheckpoints(workspace, runtime, "error");
       await this.save(workspace, runtime.session); this.onChanged(workspace);
@@ -314,6 +330,7 @@ export abstract class StdioAcpProvider extends AcpProvider {
 
   async clear(workspace: string): Promise<AiSession> {
     if (this.runtimes.get(workspace)?.running) throw new CoreError("INVALID_REQUEST", `${this.descriptor.name} is still working`);
+    this.freshSessions.delete(workspace);
     await this.closeRuntime(workspace);
     const current = await this.get(workspace);
     await this.archive(workspace, current);

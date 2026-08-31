@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { TerminalTab } from "./model";
 import { TerminalRecoveryNotice, TerminalTabButton } from "./TerminalPanel";
@@ -84,5 +84,15 @@ describe("TerminalRecoveryNotice", () => {
   it("reports an exited process without suggesting recovery", () => {
     render(<TerminalRecoveryNotice tab={{ ...tab, status: "exited", exitCode: 17 }} />);
     expect(screen.getByRole("status").textContent).toContain("exited with code 17 and cannot accept input");
+  });
+
+  it("automatically dismisses recovery notices", () => {
+    vi.useFakeTimers();
+    try {
+      render(<TerminalRecoveryNotice tab={{ ...tab, recovery: "recreated" }} />);
+      expect(screen.getByRole("status")).toBeTruthy();
+      act(() => vi.advanceTimersByTime(6_000));
+      expect(screen.queryByRole("status")).toBeNull();
+    } finally { vi.useRealTimers(); }
   });
 });

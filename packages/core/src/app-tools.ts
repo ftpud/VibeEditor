@@ -52,6 +52,15 @@ export const appToolDefinitions = [
     }
   },
   {
+    name: "session_new",
+    description: "After this turn, archive the current conversation, start a new empty session in the same workspace/provider, and send a handoff prompt as its first message.",
+    inputSchema: {
+      type: "object", additionalProperties: false,
+      properties: { prompt: { type: "string", minLength: 1, maxLength: 10000, description: "Self-contained handoff prompt for the fresh session." } },
+      required: ["prompt"]
+    }
+  },
+  {
     name: "task_create",
     description: "Create an isolated Vibe Editor task worktree without starting an agent.",
     inputSchema: {
@@ -203,6 +212,17 @@ export class AppToolService {
       await manager.configureNext(this.currentWorkspace, { model, reasoning });
       await manager.steer(this.currentWorkspace, "Continue the current task using the newly selected model and reasoning effort.", { senderModel: current.model, queue: true });
       return { provider: this.currentProvider, model, reasoning, applies_to: "next_turn", continuation: "queued" };
+    }
+    if (name === "session_new") {
+      if (!this.currentProvider) throw new Error("starting a fresh session requires a known invoking AI provider");
+      const prompt = requiredString(args, "prompt");
+      if (prompt.length > 10_000) throw new Error("prompt must be at most 10000 characters");
+      const manager = this.acp.get(this.currentProvider);
+      const current = await manager.get(this.currentWorkspace);
+      const selectedAgent = await this.resolveAgent(undefined, current);
+      const appTools = this.rootWorkspace ? withAppTools(this.rootWorkspace, this.currentWorkspace, [], selectedAgent, this.currentProvider) : { servers: [], agent: selectedAgent };
+      const session = await manager.startFreshSession(this.currentWorkspace, { prompt, configuration: current.configuration ?? { model: current.model, reasoning: current.reasoning }, ...(appTools.servers.length ? { mcpServers: appTools.servers } : {}), ...(appTools.agent ? { agent: appTools.agent } : {}) });
+      return { provider: this.currentProvider, workspace: this.currentWorkspace, status: session.status, transition: "queued", prompt };
     }
     if (name === "task_create") {
       const task = await this.tasks.create(requiredString(args, "branch"), false, false, false);
