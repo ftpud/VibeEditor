@@ -61,6 +61,8 @@ export type GitStashPreview = { stash: GitStash; files: GitCommitFile[]; conflic
 export type GitDiffHunk = { originalStart: number; originalLines: number; modifiedStart: number; modifiedLines: number; source: "index" | "worktree"; patch: string; version: string };
 export type GitRollbackFailure = { path: string; message: string };
 export type TaskCheckpointFile = { path: string; status: "A" | "M" | "D" | "R"; originalPath?: string; binary: boolean; size: number };
+/** The result of comparing a checkpoint's before/after snapshots with the live worktree. */
+export type TaskCheckpointApplyResult = { applied: string[]; alreadyApplied: string[]; conflicts: { path: string; message: string }[] };
 /** Compact, redacted turn metadata. It deliberately excludes prompt/attachment bodies and logs. */
 export type TaskCheckpointProvenance = {
   model?: string; reasoning?: string; agent?: { name: string; fingerprint: string };
@@ -326,8 +328,11 @@ export type ProtocolOperations = {
   "git.fetch": { payload: Record<string, never>; result: { fetchedAt: string } };
   "git.cancelFetch": { payload: Record<string, never>; result: { cancelled: boolean } };
   "taskGit.history": { payload: Record<string, never>; result: { checkpoints: TaskCheckpoint[] } };
-  "taskGit.diff": { payload: { checkpointId: string; path: string }; result: { originalContent: string; modifiedContent: string; binary: boolean } };
-  "taskGit.restore": { payload: { checkpointId: string }; result: { restored: string[] } };
+  /** Text bodies are capped by Core; callers must not use this as bulk file retrieval. */
+  "taskGit.diff": { payload: { checkpointId: string; path: string }; result: { originalContent: string; modifiedContent: string; binary: boolean; truncated: boolean } };
+  /** Applies selected checkpoint files only when a three-way comparison has no conflict. Git's index is untouched. */
+  "taskGit.review": { payload: { checkpointId: string; paths: string[] }; result: TaskCheckpointApplyResult };
+  "taskGit.restore": { payload: { checkpointId: string }; result: TaskCheckpointApplyResult };
   "java.loadMavenProject": {
     payload: { pomPath: string };
     result: { options: JavaProjectOptions; tree: JavaProjectNode[] };
@@ -566,6 +571,7 @@ const requestTypeRegistry: Record<RequestType, true> = {
   "git.cancelFetch": true,
   "taskGit.history": true,
   "taskGit.diff": true,
+  "taskGit.review": true,
   "taskGit.restore": true,
   "java.loadMavenProject": true,
   "java.getOptions": true,
