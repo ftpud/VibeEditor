@@ -11,7 +11,8 @@
     "start": "node ../../scripts/start-electron.mjs desktop",
     "build": "vite build && tsc -p tsconfig.electron.json",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.electron.json --noEmit",
-    "test": "vitest run --environment happy-dom"
+    "test": "vitest run --environment happy-dom",
+    "test:electron": "vitest run --config vitest.electron.config.ts"
   },
   "dependencies": {
     "@remote-ide/acp": "0.1.0",
@@ -27,7 +28,8 @@
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-markdown": "^9.0.3",
-    "remark-gfm": "^4.0.0"
+    "remark-gfm": "^4.0.0",
+    "ws": "^8.18.0"
   },
   "devDependencies": {
     "@testing-library/react": "^16.3.0",
@@ -35,6 +37,7 @@
     "@types/node": "^22.10.0",
     "@types/react": "^18.3.18",
     "@types/react-dom": "^18.3.5",
+    "@types/ws": "^8.5.13",
     "@vitejs/plugin-react": "^4.3.4",
     "electron": "^33.2.1",
     "happy-dom": "^18.0.1",

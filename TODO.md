@@ -122,7 +122,7 @@ multi-surface work).
   preflight summary for collisions, overwrites, case-only renames, cross-device
   moves, partial failures, and dirty/open files. Depends on safe single-path
   mutations.
-- [ ] **Remote upload/download — Project.** Value: move assets and artifacts between
+- [x] **Remote upload/download — Project.** Value: move assets and artifacts between
   the local control surface and remote workspace without a separate SFTP client.
   Constraint: use a streaming, cancellable, size-limited transfer channel rather
   than WebSocket JSON payloads; make overwrite, permissions, symlinks, partial files,
