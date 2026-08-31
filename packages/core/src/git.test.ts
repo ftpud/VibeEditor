@@ -14,15 +14,15 @@ describe("parseGitStatus", () => {
     const result = parseGitStatus("## main...origin/main\0 M src/app.ts\0A  src/new.ts\0?? notes.txt\0");
     expect(result.branch).toBe("main");
     expect(result.entries).toEqual([
-      { path: "src/app.ts", indexStatus: " ", worktreeStatus: "M" },
-      { path: "src/new.ts", indexStatus: "A", worktreeStatus: " " },
-      { path: "notes.txt", indexStatus: "?", worktreeStatus: "?" }
+      { path: "src/app.ts", indexStatus: " ", worktreeStatus: "M", states: ["worktree"] },
+      { path: "src/new.ts", indexStatus: "A", worktreeStatus: " ", states: ["index"] },
+      { path: "notes.txt", indexStatus: "?", worktreeStatus: "?", states: ["untracked"] }
     ]);
   });
 
   it("parses null-delimited rename records", () => {
     expect(parseGitStatus("## main\0R  src/new.ts\0src/old.ts\0").entries[0]).toEqual({
-      path: "src/new.ts", originalPath: "src/old.ts", indexStatus: "R", worktreeStatus: " "
+      path: "src/new.ts", originalPath: "src/old.ts", indexStatus: "R", worktreeStatus: " ", states: ["index"]
     });
   });
 
@@ -38,7 +38,7 @@ describe("parseGitStatus", () => {
     const filesystem = new WorkspaceFileSystem();
     await filesystem.open(root);
     const service = new GitService(root);
-    await expect(service.diff("file.txt", filesystem)).resolves.toEqual({ path: "file.txt", originalContent: "original\n", modifiedContent: "modified\n", hunks: [{ originalStart: 1, originalLines: 1, modifiedStart: 1, modifiedLines: 1 }] });
+    await expect(service.diff("file.txt", filesystem)).resolves.toMatchObject({ path: "file.txt", originalContent: "original\n", modifiedContent: "modified\n", hunks: [{ originalStart: 1, originalLines: 1, modifiedStart: 1, modifiedLines: 1, source: "worktree", patch: expect.any(String), version: expect.stringMatching(/^[0-9a-f]{64}$/) }] });
     await writeFile(path.join(root, "new.txt"), "one\ntwo\n");
     await expect(service.diffStats()).resolves.toEqual({ additions: 3, deletions: 1 });
   });
@@ -58,6 +58,39 @@ describe("parseGitStatus", () => {
     await service.rollback("new.txt");
     expect(await readFile(path.join(root, "tracked.txt"), "utf8")).toBe("original\n");
     await expect(access(path.join(root, "new.txt"))).rejects.toThrow();
+  });
+
+  it("stages and unstages exact reviewed hunks without changing the worktree", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "remote-ide-git-hunks-"));
+    await execFileAsync("git", ["-C", root, "init"]);
+    await execFileAsync("git", ["-C", root, "config", "user.email", "test@example.com"]);
+    await execFileAsync("git", ["-C", root, "config", "user.name", "Test"]);
+    await writeFile(path.join(root, "file.txt"), "one\ntwo\nthree\n");
+    await execFileAsync("git", ["-C", root, "add", "file.txt"]);
+    await execFileAsync("git", ["-C", root, "commit", "-m", "initial"]);
+    await writeFile(path.join(root, "file.txt"), "ONE\ntwo\nTHREE\n");
+    const filesystem = new WorkspaceFileSystem(); await filesystem.open(root);
+    const service = new GitService(root);
+    const reviewed = await service.diff("file.txt", filesystem);
+    expect(reviewed.hunks).toHaveLength(2);
+    await service.stage("file.txt", reviewed.hunks[0]);
+    expect((await execFileAsync("git", ["-C", root, "diff", "--cached"])).stdout).toContain("ONE");
+    expect(await readFile(path.join(root, "file.txt"), "utf8")).toBe("ONE\ntwo\nTHREE\n");
+    const staged = await service.diff("file.txt", filesystem);
+    const stagedHunk = staged.hunks.find((hunk) => hunk.source === "index")!;
+    await service.unstage("file.txt", stagedHunk);
+    expect((await execFileAsync("git", ["-C", root, "diff", "--cached"])).stdout).toBe("");
+    expect(await readFile(path.join(root, "file.txt"), "utf8")).toBe("ONE\ntwo\nTHREE\n");
+  });
+
+  it("rejects a stale reviewed hunk with a refresh instruction", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "remote-ide-git-stale-hunk-"));
+    await execFileAsync("git", ["-C", root, "init"]);
+    await writeFile(path.join(root, "file.txt"), "before\n"); await execFileAsync("git", ["-C", root, "add", "file.txt"]); await execFileAsync("git", ["-C", root, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "initial"]);
+    await writeFile(path.join(root, "file.txt"), "first\n"); const filesystem = new WorkspaceFileSystem(); await filesystem.open(root); const service = new GitService(root);
+    const hunk = (await service.diff("file.txt", filesystem)).hunks[0]!;
+    await writeFile(path.join(root, "file.txt"), "second\n");
+    await expect(service.stage("file.txt", hunk)).rejects.toThrow("Refresh the diff and try again");
   });
 
   it("rolls back only selected staged, unstaged, partially staged, deleted, and renamed entries", async () => {
