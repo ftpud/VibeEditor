@@ -13,7 +13,8 @@ export type GitStatusEntry = {
   indexStatus: string;
   worktreeStatus: string;
 };
-export type GitUpstreamStatus = { upstream: string; ahead: number };
+/** The configured upstream and the last remote information Core successfully obtained. */
+export type GitUpstreamStatus = { upstream: string; ahead: number; behind: number; lastFetch?: string };
 export type GitBranch = { name: string; current: boolean; remote: boolean };
 /** A tag stored in this workspace's local Git repository. It is not a remote tag operation. */
 export type GitTag = { name: string; target: string; annotated: boolean };
@@ -249,6 +250,8 @@ export type ProtocolOperations = {
   "git.rollbackSelected": { payload: { paths: string[]; deleteUntracked: boolean }; result: { rolledBack: string[]; failures: GitRollbackFailure[] } };
   "git.commit": { payload: { paths: string[]; message: string }; result: { hash: string } };
   "git.push": { payload: Record<string, never>; result: Record<string, never> };
+  "git.fetch": { payload: Record<string, never>; result: { fetchedAt: string } };
+  "git.cancelFetch": { payload: Record<string, never>; result: { cancelled: boolean } };
   "taskGit.history": { payload: Record<string, never>; result: { checkpoints: TaskCheckpoint[] } };
   "taskGit.diff": { payload: { checkpointId: string; path: string }; result: { originalContent: string; modifiedContent: string; binary: boolean } };
   "taskGit.restore": { payload: { checkpointId: string }; result: { restored: string[] } };
@@ -464,6 +467,8 @@ const requestTypeRegistry: Record<RequestType, true> = {
   "git.rollbackSelected": true,
   "git.commit": true,
   "git.push": true,
+  "git.fetch": true,
+  "git.cancelFetch": true,
   "taskGit.history": true,
   "taskGit.diff": true,
   "taskGit.restore": true,
