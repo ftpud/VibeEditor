@@ -59,7 +59,16 @@ button { color: inherit; }
 .panel-header:has(> .ai-agent-picker) .ai-status { margin-left: auto; }
 .panel-header-actions { margin-left: auto; display: flex; align-items: center; gap: 2px; }
 .git-toolbar-actions { min-width: 0; }
-.panel-header .git-push-button, .panel-header .git-fetch-button { width: auto; min-width: 28px; padding: 0 5px; display: flex; gap: 3px; }
+.panel-header .git-push-button, .panel-header .git-pull-button, .panel-header .git-fetch-button { width: auto; min-width: 28px; padding: 0 5px; display: flex; gap: 3px; }
+.git-pull-dialog { width: min(620px, calc(100vw - 32px)); }
+.git-pull-content { padding: 14px; display: flex; flex-direction: column; gap: 12px; }
+.git-pull-content p { margin: 0; }
+.git-pull-content ul { max-height: 220px; margin: 7px 0 0; padding: 0; overflow: auto; list-style: none; }
+.git-pull-content li { min-height: 26px; display: flex; align-items: center; gap: 9px; border-bottom: 1px solid #3d3f44; }
+.git-pull-content li span { min-width: 0; flex: 1; overflow-wrap: anywhere; }
+.git-pull-content li small { color: #85888e; }
+.git-pull-blockers, .git-pull-error { padding: 10px; border-left: 3px solid #d8646d; background: #2b2020; color: #efb6ba; }
+.git-pull-content footer { display: flex; justify-content: flex-end; gap: 7px; }
 .git-push-badge { min-width: 13px; height: 13px; padding: 0 3px; display: grid; place-items: center; border-radius: 7px; background: #3574f0; color: white; font-size: 8px; font-weight: 700; line-height: 1; }
 .panel-header .git-rollback-selected { width: auto; max-width: 150px; padding: 0 7px; display: flex; gap: 5px; color: #e2858b; white-space: nowrap; }
 .git-rollback-selected span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
