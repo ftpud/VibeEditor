@@ -73,9 +73,9 @@ function validateSearchQueries(value: unknown): WorkspaceSearchQueries {
     const seen = new Set<string>(); const result: WorkspaceSearchQuery[] = [];
     for (const item of list) {
       if (!item || typeof item !== "object" || Array.isArray(item)) throw new CoreError("INVALID_REQUEST", `Invalid ${label} search`);
-      const query = (item as Record<string, unknown>).query; const searchPath = (item as Record<string, unknown>).path; const matchCase = (item as Record<string, unknown>).matchCase;
-      if (typeof query !== "string" || !query.trim() || query.length > 200 || typeof searchPath !== "string" || (searchPath !== "" && !isSafeRelativePath(searchPath)) || (matchCase !== undefined && typeof matchCase !== "boolean")) throw new CoreError("INVALID_REQUEST", `Invalid ${label} search`);
-      const normalized = { query: query.trim(), path: searchPath, ...(matchCase ? { matchCase: true } : {}) };
+      const query = (item as Record<string, unknown>).query; const searchPath = (item as Record<string, unknown>).path; const matchCase = (item as Record<string, unknown>).matchCase; const include = (item as Record<string, unknown>).include; const exclude = (item as Record<string, unknown>).exclude;
+      if (typeof query !== "string" || !query.trim() || query.length > 200 || typeof searchPath !== "string" || (searchPath !== "" && !isSafeRelativePath(searchPath)) || (matchCase !== undefined && typeof matchCase !== "boolean") || (include !== undefined && (typeof include !== "string" || include.length > 200)) || (exclude !== undefined && (typeof exclude !== "string" || exclude.length > 200))) throw new CoreError("INVALID_REQUEST", `Invalid ${label} search`);
+      const normalized = { query: query.trim(), path: searchPath, ...(matchCase ? { matchCase: true } : {}), ...(include?.trim() ? { include: include.trim() } : {}), ...(exclude?.trim() ? { exclude: exclude.trim() } : {}) };
       const key = JSON.stringify(normalized); if (!seen.has(key)) { seen.add(key); result.push(normalized); }
     }
     return result;
