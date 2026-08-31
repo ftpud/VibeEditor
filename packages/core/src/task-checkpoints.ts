@@ -53,28 +53,52 @@ export class TaskCheckpointStore {
     return checkpoints.map((item) => ({ id: item.id, promptId: item.promptId, provider: item.provider, prompt: item.prompt, startedAt: item.startedAt, status: item.status, ...(item.sessionId ? { sessionId: item.sessionId } : {}), ...(item.completedAt ? { completedAt: item.completedAt } : {}), ...(item.provenance ? { provenance: item.provenance } : {}), files: changes(item.before, item.after ?? item.before) }));
   }
 
-  async diff(id: string, filePath: string): Promise<{ originalContent: string; modifiedContent: string; binary: boolean }> {
+  async diff(id: string, filePath: string): Promise<{ originalContent: string; modifiedContent: string; binary: boolean; truncated: boolean }> {
     validatePath(filePath); const item = await this.read(id); const after = item.after ?? item.before;
     const change = changes(item.before, after).find((entry) => entry.path === filePath);
     if (!change) throw new CoreError("INVALID_REQUEST", "File is not part of that checkpoint");
     const beforeEntry = item.before[change.originalPath ?? filePath]; const afterEntry = after[filePath];
     const binary = Boolean(beforeEntry?.binary || afterEntry?.binary);
-    return { originalContent: binary || !beforeEntry ? "" : (await this.blob(beforeEntry.hash)).toString("utf8"), modifiedContent: binary || !afterEntry ? "" : (await this.blob(afterEntry.hash)).toString("utf8"), binary };
+    const originalContent = binary || !beforeEntry ? "" : (await this.blob(beforeEntry.hash)).toString("utf8");
+    const modifiedContent = binary || !afterEntry ? "" : (await this.blob(afterEntry.hash)).toString("utf8");
+    const limit = 256 * 1024; const truncated = originalContent.length > limit || modifiedContent.length > limit;
+    return { originalContent: originalContent.slice(0, limit), modifiedContent: modifiedContent.slice(0, limit), binary, truncated };
   }
 
-  restore(id: string): Promise<string[]> {
+  /** Apply checkpoint changes safely. The Git index is intentionally never read or written. */
+  review(id: string, requestedPaths: string[]): Promise<{ applied: string[]; alreadyApplied: string[]; conflicts: { path: string; message: string }[] }> {
     return this.serial(async () => {
       const item = await this.read(id); if (!item.after) throw new CoreError("INVALID_REQUEST", "A running checkpoint cannot be restored");
-      const current = await this.managedPaths(); const target = item.after;
-      for (const file of current) if (!target[file]) await rm(this.target(file), { force: true, recursive: true });
-      for (const [file, entry] of Object.entries(target)) {
-        const destination = this.target(file); await mkdir(path.dirname(destination), { recursive: true }); await rm(destination, { force: true, recursive: true });
-        const content = await this.blob(entry.hash);
-        if (entry.symlink) await symlink(content.toString("utf8"), destination); else { await writeFile(destination, content); await chmod(destination, entry.mode & 0o777); }
-      }
-      return [...new Set([...current, ...Object.keys(target)])].sort();
+      if (!Array.isArray(requestedPaths) || requestedPaths.length === 0 || requestedPaths.length > 100) throw new CoreError("INVALID_REQUEST", "Select between one and 100 checkpoint files");
+      const changed = changes(item.before, item.after); const selected = changed.filter((change) => requestedPaths.includes(change.path));
+      if (selected.length !== new Set(requestedPaths).size) throw new CoreError("INVALID_REQUEST", "A selected path is not part of that checkpoint");
+      return this.applyAll(selected, item.before, item.after);
     });
   }
+
+  restore(id: string): Promise<{ applied: string[]; alreadyApplied: string[]; conflicts: { path: string; message: string }[] }> {
+    return this.serial(async () => { const item = await this.read(id); if (!item.after) throw new CoreError("INVALID_REQUEST", "A running checkpoint cannot be restored"); return this.applyAll(changes(item.before, item.after), item.before, item.after); });
+  }
+
+  private async applyAll(selected: TaskCheckpointFile[], before: Record<string, SnapshotEntry>, after: Record<string, SnapshotEntry>) {
+    const result = { applied: [] as string[], alreadyApplied: [] as string[], conflicts: [] as { path: string; message: string }[] };
+    for (const change of selected) await this.apply(change, before, after, result);
+    return result;
+  }
+  private async apply(change: TaskCheckpointFile, before: Record<string, SnapshotEntry>, after: Record<string, SnapshotEntry>, result: { applied: string[]; alreadyApplied: string[]; conflicts: { path: string; message: string }[] }): Promise<void> {
+    const oldPath = change.originalPath ?? change.path; const base = before[oldPath]; const target = after[change.path];
+    const current = await this.live(change.path); const oldCurrent = oldPath === change.path ? current : await this.live(oldPath);
+    const equal = (a?: SnapshotEntry, b?: SnapshotEntry) => a?.hash === b?.hash && a?.mode === b?.mode && a?.symlink === b?.symlink;
+    if (change.status === "R") {
+      if (!equal(oldCurrent, base) || current) { result.conflicts.push({ path: change.path, message: "The file was edited after this checkpoint; rename was not applied." }); return; }
+      await this.writeEntry(change.path, target!); await rm(this.target(oldPath), { force: true }); result.applied.push(change.path); return;
+    }
+    if (equal(current, target)) { result.alreadyApplied.push(change.path); return; }
+    if (!equal(current, base)) { result.conflicts.push({ path: change.path, message: "The file was edited after this checkpoint; review the three-way diff before resolving it." }); return; }
+    if (target) await this.writeEntry(change.path, target); else await rm(this.target(change.path), { force: true }); result.applied.push(change.path);
+  }
+  private async live(file: string): Promise<SnapshotEntry | undefined> { try { const full = this.target(file); const stat = await lstat(full); if (!stat.isFile() && !stat.isSymbolicLink()) return undefined; const content = stat.isSymbolicLink() ? Buffer.from(await readlink(full)) : await readFile(full); return { hash: crypto.createHash("sha256").update(content).digest("hex"), size: content.length, mode: stat.mode, ...(stat.isSymbolicLink() ? { symlink: true } : {}), binary: content.includes(0) }; } catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined; throw error; } }
+  private async writeEntry(file: string, entry: SnapshotEntry): Promise<void> { const destination = this.target(file); await mkdir(path.dirname(destination), { recursive: true }); await rm(destination, { force: true, recursive: true }); const content = await this.blob(entry.hash); if (entry.symlink) await symlink(content.toString("utf8"), destination); else { await writeFile(destination, content); await chmod(destination, entry.mode & 0o777); } }
 
   private async capture(): Promise<Record<string, SnapshotEntry>> {
     const result: Record<string, SnapshotEntry> = {};

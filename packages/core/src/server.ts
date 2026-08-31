@@ -576,10 +576,11 @@ async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStor
     case "git.cancelFetch": return { cancelled: git.cancelFetch() };
     case "taskGit.history": return { checkpoints: await checkpoints.history() };
     case "taskGit.diff": return checkpoints.diff(request.payload.checkpointId, request.payload.path);
+    case "taskGit.review": return checkpoints.review(request.payload.checkpointId, request.payload.paths);
     case "taskGit.restore": {
       const sessions = await Promise.all(acp.list().map((provider) => acp.get(provider.id).get(workspacePath)));
       if (sessions.some((session) => session.status === "in_progress" || session.status === "user_prompt")) throw new CoreError("INVALID_REQUEST", "Stop the running task agent before restoring a checkpoint");
-      return { restored: await checkpoints.restore(request.payload.checkpointId) };
+      return checkpoints.restore(request.payload.checkpointId);
     }
     case "java.loadMavenProject": {
       if (typeof request.payload.pomPath !== "string") throw new CoreError("INVALID_REQUEST", "pomPath must be a string");
