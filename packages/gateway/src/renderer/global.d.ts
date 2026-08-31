@@ -2,9 +2,9 @@ type GatewayConnection = { id: string; name: string; host: string; port: number;
 type GatewayWorkspace = { id: string; connectionId: string; name: string; directory: string; remotePort: number };
 type GatewayPortTunnel = { id: string; connectionId: string; port: number };
 type GatewayState = { connections: GatewayConnection[]; workspaces: GatewayWorkspace[]; portTunnels: GatewayPortTunnel[] };
-type GatewayRuntime = { status: "idle" | "working" | "server" | "client" | "error"; message: string; logs?: string[]; retryable?: boolean; repairable?: boolean };
-type GatewayTunnelRuntime = { status: "idle" | "working" | "running" | "error"; message: string };
-type GatewayConnectionRuntime = { status: "unknown" | "reconnecting" | "online" | "slow" | "offline"; message: string; latencyMs?: number };
+type GatewayRuntime = { status: "idle" | "working" | "server" | "client" | "error"; message: string; updatedAt?: string; stage?: string; logs?: string[]; retryable?: boolean; repairable?: boolean };
+type GatewayTunnelRuntime = { status: "idle" | "working" | "running" | "error"; message: string; updatedAt?: string; stage?: string };
+type GatewayConnectionRuntime = { status: "unknown" | "reconnecting" | "online" | "slow" | "offline"; message: string; latencyMs?: number; updatedAt?: string; stage?: string };
 type GatewayRepositorySettings = { repository: string; branch: string; autoUpdate: boolean };
 
 interface Window {
@@ -12,6 +12,7 @@ interface Window {
     get(): Promise<{ state: GatewayState; repository: GatewayRepositorySettings; runtimes: Record<string, GatewayRuntime>; tunnelRuntimes: Record<string, GatewayTunnelRuntime>; connectionRuntimes: Record<string, GatewayConnectionRuntime> }>;
     saveRepository(value: GatewayRepositorySettings): Promise<GatewayRepositorySettings>;
     refreshStatuses(connectionId?: string): Promise<void>;
+    copyDiagnostics(connectionId: string): Promise<{ copiedAt: string }>;
     pickPrivateKey(): Promise<string | undefined>;
     testConnection(value: { id?: string; host: string; port: number; username: string; authenticationMethod: "password" | "privateKey" | "agent"; password?: string; privateKeyPath?: string; passphrase?: string; hostKeyFingerprint?: string }): Promise<{ message: string; hostKeyFingerprint?: string }>;
     saveConnection(value: Partial<GatewayConnection> & { name: string; host: string; port: number; username: string; authenticationMethod: "password" | "privateKey" | "agent"; password?: string; passphrase?: string }): Promise<GatewayState>;

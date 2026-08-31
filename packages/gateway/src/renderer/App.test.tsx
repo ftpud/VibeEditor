@@ -1,6 +1,6 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ConnectionDialog } from "./App";
+import { ConnectionDialog, DiagnosticsCopyButton } from "./App";
 
 afterEach(cleanup);
 
@@ -33,5 +33,28 @@ describe("Gateway dialogs", () => {
     first.focus();
     fireEvent.keyDown(first, { key: "Tab", shiftKey: true });
     expect(document.activeElement).toBe(last);
+  });
+});
+
+describe("connection diagnostics", () => {
+  it("copies without blocking and announces success", async () => {
+    let finish!: () => void;
+    const onCopy = vi.fn(() => new Promise<void>((resolve) => { finish = resolve; }));
+    render(<DiagnosticsCopyButton onCopy={onCopy} onFailure={vi.fn()} />);
+    const button = screen.getByRole("button", { name: "Copy connection diagnostics" });
+    fireEvent.click(button);
+    expect(button.hasAttribute("disabled")).toBe(true);
+    expect(screen.getByRole("status").textContent).toBe("Copying connection diagnostics");
+    finish();
+    await waitFor(() => expect(screen.getByRole("status").textContent).toBe("Connection diagnostics copied"));
+    expect(button.hasAttribute("disabled")).toBe(false);
+  });
+
+  it("announces and exposes copy failures", async () => {
+    const onFailure = vi.fn();
+    render(<DiagnosticsCopyButton onCopy={() => Promise.reject(new Error("clipboard unavailable"))} onFailure={onFailure} />);
+    fireEvent.click(screen.getByRole("button", { name: "Copy connection diagnostics" }));
+    await waitFor(() => expect(screen.getByRole("status").textContent).toBe("Connection diagnostics could not be copied"));
+    expect(onFailure).toHaveBeenCalledWith(expect.objectContaining({ message: "clipboard unavailable" }));
   });
 });
