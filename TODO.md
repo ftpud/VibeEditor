@@ -192,7 +192,7 @@ multi-surface work).
   the growing keyboard-first surface adaptable. Constraint: commands use stable IDs,
   OS conventions are preserved, reserved Electron/Monaco bindings are identified,
   and settings migrate safely.
-- [ ] **Accessible focus, labels, contrast, and reduced motion pass — Project.** Value:
+- [x] **Accessible focus, labels, contrast, and reduced motion pass — Project.** Value:
   make dialogs, trees, splitters, status, and AI permission flows usable without a
   mouse or animation. Constraint: test semantic focus order and screen-reader names
   across Electron platforms; never convey Git/AI state by color alone.
