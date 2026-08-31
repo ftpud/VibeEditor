@@ -136,6 +136,7 @@ button { color: inherit; }
 .git-status.deleted { color: #d66c75; }
 .git-status.conflict { color: #e05f65; }
 .git-empty { padding: 18px 12px; color: #898c92; text-align: center; line-height: 1.5; }
+.stash-dialog { width: min(620px, calc(100vw - 32px)); max-height: 78vh; overflow: auto; background: var(--panel-bg); border: 1px solid var(--border-color); border-radius: 8px; padding: 16px; display: grid; gap: 12px; }.stash-dialog > header, .stash-dialog section > header, .stash-dialog footer { display: flex; justify-content: space-between; gap: 8px; }.stash-dialog section { display: grid; gap: 8px; }.stash-dialog input { padding: 6px; }.stash-dialog label { margin-right: 10px; }.stash-dialog section > button { text-align: left; }
 .git-empty.error { color: #d88a8f; text-align: left; }
 .git-rollback-content { padding: 14px 16px 16px; display: flex; flex-direction: column; gap: 12px; }
 .git-rollback-content > p { margin: 0; color: #c7c9cc; line-height: 1.5; }
