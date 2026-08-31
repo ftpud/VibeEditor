@@ -303,6 +303,31 @@ describe("local Git tags", () => {
   });
 });
 
+describe("Git branch management", () => {
+  it("creates branches, previews unmerged commits, and protects worktree branches from deletion", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "remote-ide-git-branches-"));
+    await execFileAsync("git", ["-C", root, "init"]);
+    await execFileAsync("git", ["-C", root, "config", "user.email", "test@example.com"]);
+    await execFileAsync("git", ["-C", root, "config", "user.name", "Test"]);
+    await writeFile(path.join(root, "file.txt"), "initial\n");
+    await execFileAsync("git", ["-C", root, "add", "file.txt"]);
+    await execFileAsync("git", ["-C", root, "commit", "-m", "initial"]);
+    const service = new GitService(root);
+    await expect(service.createBranch("feature/preview")).resolves.toBe("feature/preview");
+    await execFileAsync("git", ["-C", root, "worktree", "add", path.join(root, "task-worktree"), "feature/preview"]);
+    await expect(service.deleteBranch("feature/preview", false, true, true)).rejects.toThrow("checked out");
+    await execFileAsync("git", ["-C", root, "worktree", "remove", "--force", path.join(root, "task-worktree")]);
+    await execFileAsync("git", ["-C", root, "switch", "feature/preview"]);
+    await writeFile(path.join(root, "file.txt"), "feature\n");
+    await execFileAsync("git", ["-C", root, "commit", "-am", "feature"]);
+    await execFileAsync("git", ["-C", root, "switch", "-"]);
+    const preview = await service.branchDeletePreview("feature/preview", false);
+    expect(preview).toMatchObject({ remote: false, confirmationRequired: true, unmerged: [{ subject: "feature" }] });
+    await expect(service.deleteBranch("feature/preview", false, false, false)).rejects.toThrow("Confirm deletion");
+    await expect(service.deleteBranch("feature/preview", false, true, true)).resolves.toBeUndefined();
+  });
+});
+
 describe("Git history parsing", () => {
   it("parses null-delimited commit metadata", () => {
     const hash = "a".repeat(40);

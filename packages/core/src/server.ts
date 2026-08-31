@@ -525,7 +525,19 @@ async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStor
     case "git.createTag": return { tag: await git.createTag(request.payload.name, request.payload.target) };
     case "git.deleteTag": await git.deleteTag(request.payload.name); return {};
     case "git.checkoutBranch": return { branch: await git.checkoutBranch(request.payload.branch, request.payload.remote) };
-    case "git.renameBranch": return { branch: await git.renameBranch(request.payload.branch, request.payload.newName) };
+    case "git.renameBranch": {
+      if ((await tasks.list()).tasks.some((task) => task.branch === request.payload.branch)) throw new CoreError("INVALID_REQUEST", "Cannot rename a branch owned by a task worktree");
+      return { branch: await git.renameBranch(request.payload.branch, request.payload.newName) };
+    }
+    case "git.createBranch": return { branch: await git.createBranch(request.payload.name) };
+    case "git.branchDeletePreview": return git.branchDeletePreview(request.payload.branch, request.payload.remote);
+    case "git.deleteBranch": {
+      const localName = request.payload.remote ? request.payload.branch.split("/").slice(1).join("/") : request.payload.branch;
+      if ((await tasks.list()).tasks.some((task) => task.branch === localName)) throw new CoreError("INVALID_REQUEST", "Cannot delete a branch owned by a task worktree");
+      await git.deleteBranch(request.payload.branch, request.payload.remote, request.payload.force, request.payload.confirm); return {};
+    }
+    case "git.publishBranch": await git.publishBranch(request.payload.branch, request.payload.remote, request.payload.force, request.payload.confirm); return {};
+    case "git.setBranchUpstream": await git.setBranchUpstream(request.payload.branch, request.payload.remote, request.payload.upstream, request.payload.confirm); return {};
     case "git.log": return { commits: await git.log(request.payload.branch, request.payload.limit) };
     case "git.commitFiles": return { files: await git.commitFiles(request.payload.hash) };
     case "git.commitMessage": return { message: await git.commitMessage(request.payload.hash) };
