@@ -1272,6 +1272,12 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 :root[data-theme="light"] .side-panel .git-changes .git-file-row.active-diff,
 :root[data-theme="light"] .side-panel .git-changes .git-file-row.active-diff:hover { background: #d9e7fb; color: #17233a; }
 
+.git-rebase-dialog { width: min(900px, calc(100vw - 32px)); max-height: min(780px, calc(100vh - 32px)); }
+.git-rebase-content { min-height: 0; display: flex; flex-direction: column; gap: 10px; }
+.git-rebase-content > ol { min-height: 0; overflow: auto; margin: 0; padding: 0; list-style: none; border: 1px solid #4a4d52; }
+.git-rebase-content > ol > li { display: grid; grid-template-columns: auto 100px auto minmax(150px, 1fr); align-items: center; gap: 8px; padding: 7px; border-bottom: 1px solid #414348; }
+.git-rebase-content > ol > li:last-child { border-bottom: 0; }.git-rebase-content > ol > li.drop { opacity: .62; }.git-rebase-move { display: flex; }.git-rebase-move button { padding: 3px; }.git-rebase-subject { display: flex; min-width: 0; flex-direction: column; overflow-wrap: anywhere; }.git-rebase-subject small { color: #aeb1b6; }.git-rebase-content li input { grid-column: 2 / -1; }.git-rebase-blockers { padding: 9px; border: 1px solid #a95c5c; background: rgba(169,92,92,.12); }.git-rebase-content > footer { display: flex; justify-content: flex-end; gap: 8px; }
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .001ms !important; animation-iteration-count: 1 !important; transition-duration: .001ms !important; }
   .status-toast-spinner, .task-progress-spinner { animation: none !important; }

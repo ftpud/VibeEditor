@@ -621,6 +621,9 @@ async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStor
     case "git.cancelFetch": return { cancelled: git.cancelFetch() };
     case "git.pullPreview": return git.pullPreview();
     case "git.pull": return git.pull(request.payload.strategy, request.payload.expectedHead, request.payload.expectedUpstreamHead);
+    case "git.rebasePreview": return git.rebasePreview();
+    case "git.rebaseStart": return git.rebaseStart(request.payload.expectedHead, request.payload.expectedUpstreamHead, request.payload.base, request.payload.items);
+    case "git.rebaseAbort": return git.rebaseAbort();
     case "taskGit.history": return { checkpoints: await checkpoints.history() };
     case "taskGit.diff": return checkpoints.diff(request.payload.checkpointId, request.payload.path);
     case "taskGit.review": return checkpoints.review(request.payload.checkpointId, request.payload.paths);
