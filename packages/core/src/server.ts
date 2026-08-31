@@ -557,6 +557,12 @@ async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStor
     case "git.historyRewritePreview": return git.historyRewritePreview();
     case "git.amend": return { hash: await git.amend(request.payload.confirmHistoryRewrite) };
     case "git.undoLastCommit": return { undone: await git.undoLastCommit(request.payload.confirmHistoryRewrite) };
+    case "git.stashes": return { stashes: await git.stashes() };
+    case "git.createStash": return { stash: await git.createStash(request.payload.include, request.payload.message, request.payload.paths) };
+    case "git.stashPreview": return git.stashPreview(request.payload.reference);
+    case "git.applyStash": return git.applyStash(request.payload.reference);
+    case "git.popStash": return git.popStash(request.payload.reference, request.payload.confirm);
+    case "git.dropStash": await git.dropStash(request.payload.reference, request.payload.confirm); return {};
     case "git.push": await git.push(); return {};
     case "git.fetch": return git.fetch();
     case "git.cancelFetch": return { cancelled: git.cancelFetch() };
