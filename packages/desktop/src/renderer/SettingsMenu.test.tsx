@@ -3,10 +3,11 @@ import { describe, expect, it, vi } from "vitest";
 import { SettingsMenu } from "./SettingsMenu";
 
 const values = { theme: "dark" as const, highlightTheme: "default" as const, uiFontFamily: "jetbrains" as const, uiFontSize: 13, uiLineHeight: 1.2 };
+const shortcutProps = { commands: [], shortcutBindings: {}, platform: "linux" as const, onShortcutChange: vi.fn(), onShortcutsReset: vi.fn() };
 
 describe("SettingsMenu", () => {
   it("filters persisted desktop settings", () => {
-    render(<SettingsMenu workspace="/project" sideLayout="classic" onSideLayoutChange={vi.fn()} values={values} isWorkspaceOverride={() => false} onChange={vi.fn()} onReset={vi.fn()} />);
+    render(<SettingsMenu {...shortcutProps} workspace="/project" sideLayout="classic" onSideLayoutChange={vi.fn()} values={values} isWorkspaceOverride={() => false} onChange={vi.fn()} onReset={vi.fn()} />);
     fireEvent.change(screen.getByRole("textbox", { name: "Search settings" }), { target: { value: "font" } });
     expect(screen.getByText("Font")).toBeTruthy();
     expect(screen.queryByText("Theme")).toBeNull();
@@ -16,7 +17,7 @@ describe("SettingsMenu", () => {
 
   it("labels overrides and resets them to the global default", () => {
     const onReset = vi.fn();
-    render(<SettingsMenu workspace="/project" sideLayout="classic" onSideLayoutChange={vi.fn()} values={values} isWorkspaceOverride={(setting) => setting === "theme"} onChange={vi.fn()} onReset={onReset} />);
+    render(<SettingsMenu {...shortcutProps} workspace="/project" sideLayout="classic" onSideLayoutChange={vi.fn()} values={values} isWorkspaceOverride={(setting) => setting === "theme"} onChange={vi.fn()} onReset={onReset} />);
     expect(screen.getAllByText("Workspace override")).toHaveLength(1);
     expect(screen.getAllByText("Global default")).toHaveLength(5);
     fireEvent.click(screen.getByRole("button", { name: "Reset" }));

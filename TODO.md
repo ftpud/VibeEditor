@@ -187,7 +187,7 @@ multi-surface work).
 
 ### Settings and accessibility
 
-- [ ] **Keyboard shortcut settings and conflict detection — Project.** Value: make
+- [x] **Keyboard shortcut settings and conflict detection — Project.** Value: make
   the growing keyboard-first surface adaptable. Constraint: commands use stable IDs,
   OS conventions are preserved, reserved Electron/Monaco bindings are identified,
   and settings migrate safely.
