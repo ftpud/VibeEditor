@@ -161,7 +161,7 @@ multi-surface work).
 
 ### Tasks and AI
 
-- [ ] **Task lifecycle filters, rename, and archive — Project.** Value: keep durable
+- [x] **Task lifecycle filters, rename, and archive — Project.** Value: keep durable
   AI workspaces manageable as their count grows. Constraint: rename display metadata
   separately from Git branches; archive must not delete worktrees or unpublished
   commits, and deletion keeps its existing safety checks.
