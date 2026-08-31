@@ -4,7 +4,7 @@ import type { GitStatusEntry } from "@remote-ide/protocol";
 import { GitToolbarActions, RollbackSelectedDialog, executeRollbackSelection, selectedGitEntries, shouldApplyGitStatus } from "./GitRollbackControls";
 
 const noop = () => {};
-const entry = (path: string, indexStatus = " ", worktreeStatus = "M"): GitStatusEntry => ({ path, indexStatus, worktreeStatus });
+const entry = (path: string, indexStatus = " ", worktreeStatus = "M"): GitStatusEntry => ({ path, indexStatus, worktreeStatus, states: indexStatus === "?" ? ["untracked"] : indexStatus !== " " ? ["index"] : ["worktree"] });
 
 describe("Git rollback controls", () => {
   it("places Rollback Selected immediately before Push and disables it without a selection", () => {
