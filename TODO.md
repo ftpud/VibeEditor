@@ -65,7 +65,7 @@ multi-surface work).
   Constraint: Git/network work stays on Core, is cancellable where possible, and
   reports authentication/progress without exposing credentials. Extend the current
   ahead-only status before adding pull/rebase UX.
-- [ ] **Commit follow-ups: amend, copy hash/message, undo last local commit — Project.**
+- [x] **Commit follow-ups: amend, copy hash/message, undo last local commit — Project.**
   Value: cover common review corrections without terminal commands. Constraint:
   only offer history-rewriting actions when repository state is understood; preview
   affected commit/index state and require confirmation if a commit may be published.

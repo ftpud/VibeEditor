@@ -3,7 +3,7 @@ import { promisify } from "node:util";
 import path from "node:path";
 import { readFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
-import type { GitBranch, GitCommit, GitCommitFile, GitDiffHunk, GitRollbackFailure, GitStatusEntry, GitTag, GitUpstreamStatus } from "@remote-ide/protocol";
+import type { GitBranch, GitCommit, GitCommitFile, GitDiffHunk, GitHistoryRewritePreview, GitRollbackFailure, GitStatusEntry, GitTag, GitUpstreamStatus } from "@remote-ide/protocol";
 import { CoreError } from "./errors.js";
 import { WorkspaceFileSystem } from "./filesystem.js";
 
@@ -136,6 +136,11 @@ export class GitService {
     return parseCommitFiles(await this.git(["diff-tree", "--root", "--no-commit-id", "--name-status", "-r", "-z", hash]));
   }
 
+  async commitMessage(hash: string): Promise<string> {
+    validateHash(hash);
+    return (await this.git(["show", "-s", "--format=%B", hash])).replace(/\n$/, "");
+  }
+
   async commitDiff(hash: string, filePath: string, originalPath?: string): Promise<{ originalContent: string; modifiedContent: string }> {
     validateHash(hash); validatePath(filePath); if (originalPath) validatePath(originalPath);
     const modifiedContent = await this.show(`${hash}:${filePath}`);
@@ -211,6 +216,35 @@ export class GitService {
     return (await this.git(["rev-parse", "HEAD"])).trim();
   }
 
+  async historyRewritePreview(): Promise<GitHistoryRewritePreview> {
+    const commit = await this.headCommit();
+    const [commitFiles, status, publication] = await Promise.all([this.commitFiles(commit.hash), this.status(), this.headPublication()]);
+    return {
+      commit,
+      commitFiles,
+      indexEntries: status.entries.filter((entry) => entry.states.includes("index")),
+      worktreeEntries: status.entries.filter((entry) => entry.states.includes("worktree") || entry.states.includes("untracked")),
+      publication,
+      confirmationRequired: publication !== "unpublished",
+      recovery: `If needed, recover ${commit.shortHash} with git reflog, then git reset --hard ${commit.hash}.`
+    };
+  }
+
+  async amend(confirmHistoryRewrite: boolean): Promise<string> {
+    const preview = await this.historyRewritePreview();
+    this.requireRewriteConfirmation(preview, confirmHistoryRewrite);
+    if (preview.indexEntries.length === 0) throw new CoreError("INVALID_REQUEST", "Stage changes before amending; amend only uses the explicit Git index");
+    await this.git(["commit", "--amend", "--no-edit"]);
+    return (await this.git(["rev-parse", "HEAD"])).trim();
+  }
+
+  async undoLastCommit(confirmHistoryRewrite: boolean): Promise<string> {
+    const preview = await this.historyRewritePreview();
+    this.requireRewriteConfirmation(preview, confirmHistoryRewrite);
+    await this.git(["reset", "--mixed", "HEAD^"]);
+    return preview.commit.hash;
+  }
+
   async push(): Promise<void> {
     await this.git(["push"]);
   }
@@ -257,6 +291,29 @@ export class GitService {
   private async git(args: string[]): Promise<string> {
     try { return (await execFileAsync("git", ["-C", this.workspace, ...args], { encoding: "utf8", maxBuffer: 16 * 1024 * 1024 })).stdout; }
     catch (error) { throw new CoreError("GIT_FAILED", error instanceof Error ? error.message : String(error)); }
+  }
+
+  private async headCommit(): Promise<GitCommit> {
+    try {
+      const commit = parseGitLog(await this.git(["log", "-1", "--format=%H%x00%h%x00%an%x00%aI%x00%s%x00"]))[0];
+      if (!commit) throw new Error("No HEAD");
+      return commit;
+    }
+    catch { throw new CoreError("INVALID_REQUEST", "There is no local commit to amend or undo"); }
+  }
+
+  private async headPublication(): Promise<"unpublished" | "published" | "unknown"> {
+    try {
+      const upstream = (await this.git(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"])).trim();
+      if (!upstream) return "unknown";
+      const [head, base] = await Promise.all([this.git(["rev-parse", "HEAD"]), this.git(["merge-base", "HEAD", upstream])]);
+      return head.trim() === base.trim() ? "published" : "unpublished";
+    } catch { return "unknown"; }
+  }
+
+  private requireRewriteConfirmation(preview: GitHistoryRewritePreview, confirmed: boolean): void {
+    if (typeof confirmed !== "boolean") throw new CoreError("INVALID_REQUEST", "History rewrite confirmation is required");
+    if (preview.confirmationRequired && !confirmed) throw new CoreError("INVALID_REQUEST", preview.publication === "published" ? "This commit is published; confirm rewriting shared history to continue" : "The publication state is unknown; confirm history rewrite to continue");
   }
 
   private async updateIndex(action: "stage" | "unstage", filePath: string, hunk?: GitDiffHunk): Promise<void> {
