@@ -1,7 +1,8 @@
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
 import path from "node:path";
 import { readFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import type { GitBranch, GitCommit, GitCommitFile, GitDiffHunk, GitRollbackFailure, GitStatusEntry, GitTag, GitUpstreamStatus } from "@remote-ide/protocol";
 import { CoreError } from "./errors.js";
 import { WorkspaceFileSystem } from "./filesystem.js";
@@ -65,12 +66,21 @@ export class GitService {
       if (!(error instanceof CoreError) || error.code !== "FILE_NOT_FOUND") throw error;
     }
     let hunks: GitDiffHunk[] = [];
-    if (entry.indexStatus === "?" && entry.worktreeStatus === "?") hunks = modifiedContent ? [{ originalStart: 0, originalLines: 0, modifiedStart: 1, modifiedLines: modifiedContent.split("\n").length - (modifiedContent.endsWith("\n") ? 1 : 0) }] : [];
-    else {
-      try { hunks = parseDiffHunks(await this.git(["diff", "--unified=0", "HEAD", "--", entry.path])); } catch { /* Repositories without HEAD are treated as new files. */ }
+    if (isUntracked(entry)) {
+      const patch = await this.untrackedPatch(entry.path);
+      hunks = parseDiffHunks(patch, "worktree");
+    } else {
+      const [indexPatch, worktreePatch] = await Promise.all([
+        this.git(["diff", "--cached", "--unified=0", "--", entry.path]).catch(() => ""),
+        this.git(["diff", "--unified=0", "--", entry.path]).catch(() => "")
+      ]);
+      hunks = [...parseDiffHunks(indexPatch, "index"), ...parseDiffHunks(worktreePatch, "worktree")];
     }
     return { path: entry.path, originalContent, modifiedContent, hunks };
   }
+
+  async stage(filePath: string, hunk?: GitDiffHunk): Promise<void> { await this.updateIndex("stage", filePath, hunk); }
+  async unstage(filePath: string, hunk?: GitDiffHunk): Promise<void> { await this.updateIndex("unstage", filePath, hunk); }
 
   async branches(): Promise<GitBranch[]> {
     const output = await this.git(["for-each-ref", "--format=%(refname)%00%(refname:short)%00%(HEAD)%00", "refs/heads", "refs/remotes"]);
@@ -249,6 +259,31 @@ export class GitService {
     catch (error) { throw new CoreError("GIT_FAILED", error instanceof Error ? error.message : String(error)); }
   }
 
+  private async updateIndex(action: "stage" | "unstage", filePath: string, hunk?: GitDiffHunk): Promise<void> {
+    validatePath(filePath);
+    const entry = (await this.status()).entries.find((item) => item.path === filePath);
+    if (!entry) throw new CoreError("GIT_FAILED", `Path has no Git changes: ${filePath}`);
+    if (entry.states.includes("conflict")) throw new CoreError("GIT_FAILED", "Cannot stage or unstage a conflicted file");
+    if (!hunk) {
+      const paths = entry.originalPath ? [entry.originalPath, filePath] : [filePath];
+      if (action === "stage") { await this.git(["add", "-A", "--", ...paths]); return; }
+      if (!await this.hasHead()) { await this.git(["rm", "--cached", "--ignore-unmatch", "--", ...paths]); return; }
+      await this.git(["restore", "--staged", "--", ...paths]); return;
+    }
+    if (!isGitHunk(hunk)) throw new CoreError("INVALID_REQUEST", "Invalid Git hunk");
+    if (hunk.source !== (action === "stage" ? "worktree" : "index")) throw new CoreError("INVALID_REQUEST", `A ${action} hunk must come from the ${action === "stage" ? "worktree" : "index"}`);
+    const currentPatch = hunk.source === "worktree" ? (isUntracked(entry) ? await this.untrackedPatch(filePath) : await this.git(["diff", "--unified=0", "--", filePath])) : await this.git(["diff", "--cached", "--unified=0", "--", filePath]);
+    const current = parseDiffHunks(currentPatch, hunk.source).find((item) => item.patch === hunk.patch && item.version === hunk.version);
+    if (!current) throw new CoreError("GIT_FAILED", "Git change no longer matches the reviewed hunk. Refresh the diff and try again.");
+    try { await applyGitPatch(this.workspace, hunk.patch, action === "unstage"); }
+    catch (error) { throw new CoreError("GIT_FAILED", `Git change no longer matches the ${hunk.source} version. Refresh the diff and try again.`); }
+  }
+
+  private async untrackedPatch(filePath: string): Promise<string> {
+    const result = await execFileAsync("git", ["-C", this.workspace, "diff", "--no-index", "--unified=0", "--", "/dev/null", filePath], { encoding: "utf8", maxBuffer: 16 * 1024 * 1024 }).catch((error: { stdout?: string }) => ({ stdout: error.stdout ?? "" }));
+    return result.stdout;
+  }
+
   private async rollbackEntry(entry: GitStatusEntry): Promise<void> {
     if (isUntracked(entry)) { await this.git(["clean", "-f", "--", entry.path]); return; }
     if (entry.indexStatus === "A" && !await this.hasHead()) { await this.git(["rm", "-f", "--", entry.path]); return; }
@@ -274,8 +309,13 @@ function gitNetworkError(error: unknown): string {
 
 function isUntracked(entry: GitStatusEntry): boolean { return entry.indexStatus === "?" && entry.worktreeStatus === "?"; }
 
-export function parseDiffHunks(output: string): GitDiffHunk[] {
-  return [...output.matchAll(/^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/gm)].map((match) => ({ originalStart: Number(match[1]), originalLines: Number(match[2] ?? 1), modifiedStart: Number(match[3]), modifiedLines: Number(match[4] ?? 1) }));
+export function parseDiffHunks(output: string, source: "index" | "worktree" = "worktree"): GitDiffHunk[] {
+  const matches = [...output.matchAll(/^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@.*$/gm)];
+  const header = output.slice(0, matches[0]?.index ?? 0);
+  return matches.map((match, index) => {
+    const patch = header + output.slice(match.index, matches[index + 1]?.index);
+    return { originalStart: Number(match[1]), originalLines: Number(match[2] ?? 1), modifiedStart: Number(match[3]), modifiedLines: Number(match[4] ?? 1), source, patch, version: createHash("sha256").update(patch).digest("hex") };
+  });
 }
 
 function validateHash(hash: string): void { if (!/^[0-9a-f]{7,64}$/i.test(hash)) throw new CoreError("INVALID_REQUEST", "Invalid commit hash"); }
@@ -335,7 +375,7 @@ export function parseGitStatus(output: string): { branch: string; entries: GitSt
     }
     const indexStatus = record[0] ?? " ";
     const worktreeStatus = record[1] ?? " ";
-    const entry: GitStatusEntry = { path: record.slice(3), indexStatus, worktreeStatus };
+    const entry: GitStatusEntry = { path: record.slice(3), indexStatus, worktreeStatus, states: gitChangeStates(indexStatus, worktreeStatus) };
     if (indexStatus === "R" || indexStatus === "C" || worktreeStatus === "R" || worktreeStatus === "C") {
       entry.originalPath = records[index + 1];
       index += 1;
@@ -343,4 +383,23 @@ export function parseGitStatus(output: string): { branch: string; entries: GitSt
     entries.push(entry);
   }
   return { branch, entries };
+}
+
+function gitChangeStates(indexStatus: string, worktreeStatus: string): GitStatusEntry["states"] {
+  if (indexStatus === "?" && worktreeStatus === "?") return ["untracked"];
+  if (indexStatus === "U" || worktreeStatus === "U" || ["AA", "DD"].includes(indexStatus + worktreeStatus)) return ["conflict"];
+  return [indexStatus !== " " ? "index" : undefined, worktreeStatus !== " " ? "worktree" : undefined].filter((state): state is "index" | "worktree" => Boolean(state));
+}
+
+function isGitHunk(value: GitDiffHunk): boolean {
+  return (value.source === "index" || value.source === "worktree") && Number.isInteger(value.originalStart) && Number.isInteger(value.originalLines) && Number.isInteger(value.modifiedStart) && Number.isInteger(value.modifiedLines) && value.originalStart >= 0 && value.originalLines >= 0 && value.modifiedStart >= 0 && value.modifiedLines >= 0 && typeof value.patch === "string" && value.patch.length > 0 && value.patch.length <= 4 * 1024 * 1024 && /^[0-9a-f]{64}$/.test(value.version);
+}
+
+async function applyGitPatch(workspace: string, patch: string, reverse: boolean): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    const child = spawn("git", ["-C", workspace, "apply", "--cached", "--unidiff-zero", ...(reverse ? ["--reverse"] : [])], { stdio: ["pipe", "ignore", "pipe"] });
+    let stderr = ""; child.stderr.on("data", (chunk: Buffer) => { stderr += chunk.toString(); });
+    child.on("error", reject); child.on("close", (code) => code === 0 ? resolve() : reject(new Error(stderr || "git apply failed")));
+    child.stdin.end(patch);
+  });
 }
