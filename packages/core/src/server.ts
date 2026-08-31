@@ -4,7 +4,7 @@ import chokidar from "chokidar";
 import path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { requestTypes, type Request, type RequestType, type Response, type ServerEvent, type WorkspaceOptions } from "@remote-ide/protocol";
+import { protocolCompatibility, requestTypes, type Request, type RequestType, type Response, type ServerEvent, type WorkspaceOptions } from "@remote-ide/protocol";
 import { CoreError } from "./errors.js";
 import { WorkspaceFileSystem } from "./filesystem.js";
 import { TerminalSessionHost } from "./process-manager.js";
@@ -54,7 +54,7 @@ export function sendWebSocketData(socket: WebSocket, data: string): boolean {
   }
 }
 
-const coreProtocolCompatibility = { minimum: 2, maximum: 2 } as const;
+const coreProtocolCompatibility = protocolCompatibility;
 
 /** Collapses noisy watcher streams into a bounded, state-reconciliation signal. */
 export class WorkspaceWatchBatcher {
