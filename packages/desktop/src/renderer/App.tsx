@@ -1255,7 +1255,7 @@ export function App() {
         ? { type: "image" as const, data: attachment.data, mimeType: attachment.mimeType, name: attachment.name }
         : { type: "resource" as const, uri: `attachment:${encodeURIComponent(attachment.name)}`, mimeType: attachment.mimeType, text: attachment.content ?? "", name: attachment.name });
     const token = aiToken();
-    try { applyAiSession((await clientRef.current.request("ai.send", { provider: aiProviderRef.current, prompt, content, configuration, ...(selectedAgent ? { agent: selectedAgent.agent } : {}) })).session, token); await Promise.all([refreshAi(), refreshAiSessions()]); }
+    try { applyAiSession((await clientRef.current.request("ai.send", { provider: aiProviderRef.current, prompt, content, configuration, ...(selectedAgent ? { agent: selectedAgent.agent, agentPreset: { scope: selectedAgent.scope, name: selectedAgent.name } } : {}) })).session, token); await Promise.all([refreshAi(), refreshAiSessions()]); }
     catch (error) { setStatusMessage(error instanceof Error ? error.message : `Could not start ${aiProviderRef.current}`); throw error; }
   }, [aiToken, applyAiSession, refreshAi, refreshAiSessions, selectedAgent]);
   const sendAiPromptAsTask = useCallback(async (prompt: string, configuration: AiConfiguration, attachments: AiAttachment[]) => {
@@ -1266,7 +1266,7 @@ export function App() {
         ? { type: "image" as const, data: attachment.data, mimeType: attachment.mimeType, name: attachment.name }
         : { type: "resource" as const, uri: `attachment:${encodeURIComponent(attachment.name)}`, mimeType: attachment.mimeType, text: attachment.content ?? "", name: attachment.name });
     try {
-      const { task } = await clientRef.current.request("tasks.createFromPrompt", { provider: aiProviderRef.current, prompt, content, configuration, ...(selectedAgent ? { agent: selectedAgent.agent } : {}) });
+      const { task } = await clientRef.current.request("tasks.createFromPrompt", { provider: aiProviderRef.current, prompt, content, configuration, ...(selectedAgent ? { agent: selectedAgent.agent, agentPreset: { scope: selectedAgent.scope, name: selectedAgent.name } } : {}) });
       setTasks((current) => [...current, task]);
       await refreshAiStatuses();
       showStatus(`Started ${task.branch}`, "success");

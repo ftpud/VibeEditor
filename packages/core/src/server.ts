@@ -379,7 +379,8 @@ async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStor
           content: request.payload.content,
           configuration: request.payload.configuration,
           mcpServers: appTools.servers,
-          agent: appTools.agent
+          agent: appTools.agent,
+          agentPreset: request.payload.agentPreset
         });
         return { task };
       } catch (error) {
@@ -415,7 +416,7 @@ async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStor
     case "ai.configure": return { session: await acp.get(request.payload.provider).configure(workspacePath, { ...request.payload.configuration, ...(request.payload.model ? { model: request.payload.model } : {}), ...(request.payload.reasoning ? { reasoning: request.payload.reasoning } : {}) }) };
     case "ai.send": {
       const appTools = withAppTools(rootWorkspace, workspacePath, request.payload.mcpServers, request.payload.agent, request.payload.provider);
-      return { session: await acp.get(request.payload.provider).send(workspacePath, { prompt: request.payload.prompt, content: request.payload.content, configuration: { ...request.payload.configuration, ...(request.payload.model ? { model: request.payload.model } : {}), ...(request.payload.reasoning ? { reasoning: request.payload.reasoning } : {}) }, mcpServers: appTools.servers, agent: appTools.agent }) };
+      return { session: await acp.get(request.payload.provider).send(workspacePath, { prompt: request.payload.prompt, content: request.payload.content, configuration: { ...request.payload.configuration, ...(request.payload.model ? { model: request.payload.model } : {}), ...(request.payload.reasoning ? { reasoning: request.payload.reasoning } : {}) }, mcpServers: appTools.servers, agent: appTools.agent, agentPreset: request.payload.agentPreset }) };
     }
     case "ai.permission.resolve": {
       // Permission cards can remain mounted while the user changes tasks. A target supplied by the
