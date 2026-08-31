@@ -53,4 +53,23 @@ describe("task timer context actions", () => {
     expect(screen.getByRole("button", { name: "Restore task" })).toBeTruthy();
     expect(container.querySelector(".task-row.finished")).toBeTruthy();
   });
+
+  it("offers rename and archive actions separately from finished state", () => {
+    const rename = vi.fn();
+    const archive = vi.fn();
+    const { container, rerender } = render(<TaskRow icon={null} name="Task" branch="feature/task" summary={{ ...summary, status: "idle", waitingUntil: undefined }} selected={false} disabled={false} onClick={vi.fn()} onRename={rename} onSetArchived={archive} />);
+    fireEvent.contextMenu(container.querySelector(".task-row")!, { clientX: 40, clientY: 50 });
+    fireEvent.click(screen.getByRole("button", { name: "Rename task" }));
+    expect(rename).toHaveBeenCalledOnce();
+
+    fireEvent.contextMenu(container.querySelector(".task-row")!, { clientX: 40, clientY: 50 });
+    fireEvent.click(screen.getByRole("button", { name: "Archive task" }));
+    expect(archive).toHaveBeenCalledOnce();
+
+    rerender(<TaskRow icon={null} name="Task" branch="feature/task" summary={{ ...summary, status: "idle", waitingUntil: undefined }} finished archived selected={false} disabled={false} onClick={vi.fn()} onRename={rename} onSetArchived={archive} />);
+    fireEvent.contextMenu(container.querySelector(".task-row")!, { clientX: 40, clientY: 50 });
+    expect(screen.getByRole("button", { name: "Unarchive task" })).toBeTruthy();
+    expect(screen.getByText("Finished")).toBeTruthy();
+    expect(screen.getByText("Archived")).toBeTruthy();
+  });
 });

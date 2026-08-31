@@ -57,7 +57,7 @@ export type WorkspaceTerminalOptions = { tabs: { displayName: string; terminalId
 export type TerminalSessionSnapshot = { terminalId: string; status: "running" | "exited"; output: string; exitCode?: number };
 /** Resolution is always against the currently selected workspace. A stale ID means Core no longer owns that process. */
 export type TerminalAttachResult = { state: "available"; session: TerminalSessionSnapshot } | { state: "stale"; reason: "session-unavailable" };
-export type WorkspaceTask = { id: string; name: string; branch: string; baseBranch: string; status: "active" | "finished" };
+export type WorkspaceTask = { id: string; name: string; branch: string; baseBranch: string; status: "active" | "finished"; archived: boolean };
 export type { AiAgent, AiCommand, AiConfiguration, AiContentBlock, AiMessage, AiModel, AiMcpServer, AiOption, AiPermissionRequest, AiProvider, AiProviderCapabilities, AiProviderDescriptor, AiSession, AiSettingsLayout, AiSettingsSection, AiStatus, AiTaskSummary, AiUsage } from "@remote-ide/acp";
 import type { AiAgent, AiConfiguration, AiContentBlock, AiMcpServer, AiModel, AiProvider, AiProviderDescriptor, AiSession, AiTaskSummary, AiUsage } from "@remote-ide/acp";
 export type UsefulFileScope = "global" | "local";
@@ -126,6 +126,8 @@ export type ProtocolOperations = {
   "tasks.timer.cancel": { payload: { taskId?: string }; result: { cancelled: boolean } };
   "tasks.timer.fire": { payload: { taskId?: string }; result: { fired: boolean } };
   "tasks.status": { payload: { taskId: string; status: "active" | "finished" }; result: { task: WorkspaceTask } };
+  "tasks.rename": { payload: { taskId: string; name: string }; result: { task: WorkspaceTask } };
+  "tasks.archive": { payload: { taskId: string; archived: boolean }; result: { task: WorkspaceTask } };
   "tasks.switch": { payload: { taskId?: string; includeIgnored?: boolean }; result: { workspace: string; projectName: string; tree: FileTreeNode[]; options: WorkspaceOptions; tasks: WorkspaceTask[]; selectedTaskId?: string } };
   "tasks.delete": { payload: { taskId: string }; result: { tasks: WorkspaceTask[]; selectedTaskId?: string } };
   "ai.providers": { payload: Record<string, never>; result: { providers: AiProviderDescriptor[] } };
@@ -394,6 +396,8 @@ const requestTypeRegistry: Record<RequestType, true> = {
   "tasks.timer.cancel": true,
   "tasks.timer.fire": true,
   "tasks.status": true,
+  "tasks.rename": true,
+  "tasks.archive": true,
   "tasks.switch": true,
   "tasks.delete": true,
   "ai.providers": true,

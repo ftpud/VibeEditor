@@ -27,6 +27,29 @@ describe("WorkspaceTaskStore", () => {
     await store.delete(task.id);
   });
 
+  it("persists a display-name rename and archives without removing the worktree or branch", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "remote-ide-task-lifecycle-root-"));
+    const state = await mkdtemp(path.join(os.tmpdir(), "remote-ide-task-lifecycle-state-"));
+    await execFileAsync("git", ["init", root]);
+    await execFileAsync("git", ["-C", root, "config", "user.name", "Test"]);
+    await execFileAsync("git", ["-C", root, "config", "user.email", "test@example.com"]);
+    await writeFile(path.join(root, "tracked.txt"), "root\n");
+    await execFileAsync("git", ["-C", root, "add", "tracked.txt"]);
+    await execFileAsync("git", ["-C", root, "commit", "-m", "initial"]);
+    const store = new WorkspaceTaskStore(root, state);
+    const task = await store.create("feature/lifecycle", false, false, false);
+
+    const renamed = await store.rename(task.id, "Polished lifecycle");
+    expect(renamed).toMatchObject({ name: "Polished lifecycle", branch: "feature/lifecycle", archived: false });
+    const archived = await store.setArchived(task.id, true);
+    expect(archived).toMatchObject({ name: "Polished lifecycle", branch: "feature/lifecycle", status: "active", archived: true });
+    await expect(access(store.taskPath(task.id))).resolves.toBeUndefined();
+    await expect(execFileAsync("git", ["-C", root, "rev-parse", "--verify", "feature/lifecycle"])).resolves.toBeDefined();
+    await expect(new WorkspaceTaskStore(root, state).list()).resolves.toMatchObject({ tasks: [expect.objectContaining({ id: task.id, name: "Polished lifecycle", archived: true })] });
+
+    await store.delete(task.id);
+  });
+
   it("rewrites only an explicit task's unpushed tip message while preserving its contents and working state", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "remote-ide-task-git-message-root-"));
     const state = await mkdtemp(path.join(os.tmpdir(), "remote-ide-task-git-message-state-"));

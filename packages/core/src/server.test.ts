@@ -27,7 +27,7 @@ describe("built-in app tool access", () => {
 
 describe("permission request task routing", () => {
   const tasks = {
-    list: async () => ({ tasks: [{ id: "task-a", name: "A", branch: "a", baseBranch: "main", status: "active" as const }, { id: "task-b", name: "B", branch: "b", baseBranch: "main", status: "active" as const }] }),
+    list: async () => ({ tasks: [{ id: "task-a", name: "A", branch: "a", baseBranch: "main", status: "active" as const, archived: false }, { id: "task-b", name: "B", branch: "b", baseBranch: "main", status: "active" as const, archived: false }] }),
     taskPath: (taskId: string) => `/tasks/${taskId}/workspace`
   } satisfies Pick<WorkspaceTaskStore, "list" | "taskPath">;
 
