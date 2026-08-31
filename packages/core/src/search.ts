@@ -23,7 +23,7 @@ export class WorkspaceSearch {
     for (const absoluteFile of files) {
       const relativePath = path.relative(root, absoluteFile).split(path.sep).join("/");
       let content: string;
-      try { content = await this.filesystem.read(relativePath); } catch { continue; }
+      try { content = (await this.filesystem.read(relativePath)).content; } catch { continue; }
       const lines = content.split(/\r?\n/);
       for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
         const line = lines[lineIndex]!;

@@ -4,12 +4,14 @@ export type FileTreeNode = {
   type: "file" | "directory";
   children?: FileTreeNode[];
 };
+/** Opaque Core-issued file identity and content revision used for conditional saves. */
+export type FileRevision = { identity: string; version: string };
 /**
  * The wire contract is independently versioned from package releases so a cached
  * Desktop can prove it is safe to talk to a newly deployed Core.
  */
 export type ProtocolCompatibility = { minimum: number; maximum: number };
-export const protocolCompatibility: ProtocolCompatibility = { minimum: 1, maximum: 1 };
+export const protocolCompatibility: ProtocolCompatibility = { minimum: 2, maximum: 2 };
 
 export function protocolRangeIsValid(range: ProtocolCompatibility): boolean {
   return Number.isInteger(range.minimum) && Number.isInteger(range.maximum) && range.minimum > 0 && range.minimum <= range.maximum;
@@ -204,11 +206,11 @@ export type ProtocolOperations = {
   };
   "filesystem.readFile": {
     payload: { path: string };
-    result: { path: string; content: string };
+    result: { path: string; content: string; revision: FileRevision };
   };
   "filesystem.writeFile": {
-    payload: { path: string; content: string };
-    result: { path: string; bytesWritten: number };
+    payload: { path: string; content: string; expectedRevision?: FileRevision; force?: boolean; create?: boolean };
+    result: { path: string; bytesWritten: number; revision: FileRevision };
   };
   "filesystem.createFile": {
     payload: { path: string };
@@ -377,6 +379,7 @@ export type ErrorCode =
   | "BINARY_FILE"
   | "READ_FAILED"
   | "WRITE_FAILED"
+  | "FILE_CHANGED"
   | "TERMINAL_FAILED"
   | "RUN_CONFIG_NOT_FOUND"
   | "RUN_CONFIG_RUNNING"

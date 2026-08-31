@@ -2,9 +2,10 @@ import { execFile } from "node:child_process";
 import { constants } from "node:fs";
 import { access, lstat, mkdir, readFile, readdir, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import path from "node:path";
 import { promisify } from "node:util";
-import type { FileTreeNode, FilesystemDeletePreview, FilesystemDeleteResult } from "@remote-ide/protocol";
+import type { FileRevision, FileTreeNode, FilesystemDeletePreview, FilesystemDeleteResult } from "@remote-ide/protocol";
 import { CoreError } from "./errors.js";
 
 const execFileAsync = promisify(execFile);
@@ -48,7 +49,7 @@ export class WorkspaceFileSystem {
     return this.walkDirectory(root, "");
   }
 
-  async read(relativePath: string): Promise<string> {
+  async read(relativePath: string): Promise<{ content: string; revision: FileRevision }> {
     const target = await this.resolveExisting(relativePath);
     try {
       const info = await stat(target);
@@ -57,7 +58,7 @@ export class WorkspaceFileSystem {
       const buffer = await readFile(target);
       if (buffer.includes(0)) throw new CoreError("BINARY_FILE", "Binary files cannot be opened");
       const content = new TextDecoder("utf-8", { fatal: true }).decode(buffer);
-      return content;
+      return { content, revision: this.revision(info, buffer) };
     } catch (error) {
       if (error instanceof CoreError) throw error;
       if ((error as NodeJS.ErrnoException).code === "ENOENT") throw new CoreError("FILE_NOT_FOUND", `File not found: ${relativePath}`);
@@ -66,21 +67,39 @@ export class WorkspaceFileSystem {
     }
   }
 
-  async write(relativePath: string, content: string): Promise<number> {
+  async write(relativePath: string, content: string, expectedRevision?: FileRevision, force = false, create = false): Promise<{ bytesWritten: number; revision: FileRevision }> {
     const bytes = Buffer.byteLength(content, "utf8");
     if (bytes > MAX_FILE_SIZE) throw new CoreError("FILE_TOO_LARGE", `Content exceeds ${MAX_FILE_SIZE} byte limit`);
+    if (create) {
+      if (expectedRevision || force) throw new CoreError("INVALID_REQUEST", "A new file cannot have an expected revision or force flag");
+      const target = await this.resolveNew(relativePath);
+      try {
+        await writeFile(target, content, { encoding: "utf8", flag: "wx" });
+        const info = await stat(target); return { bytesWritten: bytes, revision: this.revision(info, Buffer.from(content, "utf8")) };
+      } catch (error) { throw new CoreError("WRITE_FAILED", `Could not create file: ${error instanceof Error ? error.message : String(error)}`); }
+    }
     const target = await this.resolveExisting(relativePath);
     try {
       const info = await stat(target);
       if (!info.isFile()) throw new CoreError("WRITE_FAILED", "Path is not a file");
+      const current = await readFile(target);
+      const revision = this.revision(info, current);
+      if (expectedRevision && !force && (expectedRevision.identity !== revision.identity || expectedRevision.version !== revision.version)) {
+        throw new CoreError("FILE_CHANGED", `File changed outside the editor: ${relativePath}`);
+      }
       await access(target, constants.W_OK);
       await writeFile(target, content, "utf8");
-      return bytes;
+      const updated = await stat(target);
+      return { bytesWritten: bytes, revision: this.revision(updated, Buffer.from(content, "utf8")) };
     } catch (error) {
       if (error instanceof CoreError) throw error;
       if ((error as NodeJS.ErrnoException).code === "ENOENT") throw new CoreError("FILE_NOT_FOUND", `File not found: ${relativePath}`);
       throw new CoreError("WRITE_FAILED", `Could not write file: ${relativePath}`);
     }
+  }
+
+  private revision(info: Awaited<ReturnType<typeof stat>>, content: Buffer): FileRevision {
+    return { identity: `${info.dev}:${info.ino}`, version: createHash("sha256").update(content).digest("hex") };
   }
 
   async createFile(relativePath: string): Promise<void> {
