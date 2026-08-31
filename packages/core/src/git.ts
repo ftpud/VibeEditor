@@ -218,7 +218,7 @@ export class GitService {
 
   async historyRewritePreview(): Promise<GitHistoryRewritePreview> {
     const commit = await this.headCommit();
-    const [commitFiles, status, publication] = await Promise.all([this.commitFiles(commit.hash), this.status(), this.headPublication()]);
+    const [commitFiles, status, publication, hasParent] = await Promise.all([this.commitFiles(commit.hash), this.status(), this.headPublication(), this.hasHeadParent()]);
     return {
       commit,
       commitFiles,
@@ -226,6 +226,8 @@ export class GitService {
       worktreeEntries: status.entries.filter((entry) => entry.states.includes("worktree") || entry.states.includes("untracked")),
       publication,
       confirmationRequired: publication !== "unpublished",
+      canUndo: hasParent,
+      ...(hasParent ? {} : { undoUnavailableReason: "The root commit cannot be undone safely from this interface." }),
       recovery: `If needed, recover ${commit.shortHash} with git reflog, then git reset --hard ${commit.hash}.`
     };
   }
@@ -240,6 +242,7 @@ export class GitService {
 
   async undoLastCommit(confirmHistoryRewrite: boolean): Promise<string> {
     const preview = await this.historyRewritePreview();
+    if (!preview.canUndo) throw new CoreError("INVALID_REQUEST", preview.undoUnavailableReason!);
     this.requireRewriteConfirmation(preview, confirmHistoryRewrite);
     await this.git(["reset", "--mixed", "HEAD^"]);
     return preview.commit.hash;
@@ -309,6 +312,11 @@ export class GitService {
       const [head, base] = await Promise.all([this.git(["rev-parse", "HEAD"]), this.git(["merge-base", "HEAD", upstream])]);
       return head.trim() === base.trim() ? "published" : "unpublished";
     } catch { return "unknown"; }
+  }
+
+  private async hasHeadParent(): Promise<boolean> {
+    try { await this.git(["rev-parse", "--verify", "HEAD^"]); return true; }
+    catch { return false; }
   }
 
   private requireRewriteConfirmation(preview: GitHistoryRewritePreview, confirmed: boolean): void {

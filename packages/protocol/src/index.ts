@@ -44,6 +44,8 @@ export type GitHistoryRewritePreview = {
   worktreeEntries: GitStatusEntry[];
   publication: "unpublished" | "published" | "unknown";
   confirmationRequired: boolean;
+  canUndo: boolean;
+  undoUnavailableReason?: string;
   recovery: string;
 };
 /** Patch and version are opaque Core-issued values; they prevent applying a hunk after its source changed. */
