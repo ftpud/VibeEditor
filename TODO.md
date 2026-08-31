@@ -8,6 +8,7 @@ multi-surface work).
 
 ## Recently completed
 
+- [x] **Gateway connection diagnostics:** copy a bounded, redacted SSH/Core and provisioning report with timestamps, stages, version, and latency.
 - **Quick Open:** fuzzy, keyboard-first workspace file navigation (`Ctrl/Cmd+P`).
 - **Problems navigation:** text/severity filtering plus keyboard traversal and
   editor navigation.
