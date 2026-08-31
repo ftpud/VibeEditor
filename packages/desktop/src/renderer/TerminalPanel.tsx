@@ -35,6 +35,7 @@ export function TerminalPanel({ theme, fontFamily, fontSize, lineHeight, client,
       <button className="terminal-action" title="New terminal" onClick={onCreate}><Plus size={15} /></button>
     </div>
     <div className="terminal-content">
+      {group.tabs.filter((tab) => tab.id === group.activeTabId).map((tab) => <TerminalRecoveryNotice key={tab.id} tab={tab} />)}
       {group.tabs.map((tab) => <TerminalView key={tab.id} theme={theme} fontFamily={fontFamily} fontSize={fontSize} lineHeight={lineHeight} client={client} tab={tab} active={tab.id === group.activeTabId} registerWriter={registerWriter} />)}
     </div>
   </section>;
@@ -70,6 +71,14 @@ export function TerminalTabButton({ tab, active, highlighted, onActivate, onClos
       <button onClick={() => { setMenu(undefined); onDuplicate?.(tab); }}><Copy size={14} /><span>Duplicate</span></button>
     </div>}
   </>;
+}
+
+export function TerminalRecoveryNotice({ tab }: { tab: TerminalTab }) {
+  if (tab.recovery === "reattached") return <div className="terminal-recovery-notice live" role="status">Live process reattached — this is the same Core-owned terminal process.</div>;
+  if (tab.recovery === "recreated") return <div className="terminal-recovery-notice" role="status">New shell created because Core no longer has the previous terminal session. It starts in this task workspace; the former process, environment, and working directory were not restored.</div>;
+  if (tab.status === "exited") return <div className="terminal-recovery-notice exited" role="status">This terminal process exited{tab.exitCode === undefined ? "" : ` with code ${tab.exitCode}`} and cannot accept input.</div>;
+  if (tab.status === "unavailable") return <div className="terminal-recovery-notice exited" role="status">The previous terminal session is unavailable and no replacement shell was started.</div>;
+  return null;
 }
 
 function TerminalView({ theme, fontFamily, fontSize, lineHeight, client, tab, active, registerWriter }: { theme: AppTheme; fontFamily: string; fontSize: number; lineHeight: number; client: CoreClient; tab: TerminalTab; active: boolean; registerWriter: Props["registerWriter"] }) {

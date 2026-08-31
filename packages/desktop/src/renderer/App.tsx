@@ -192,6 +192,7 @@ export function App() {
   const [gitCommitMessage, setGitCommitMessage] = useState("");
   const [gitCommitting, setGitCommitting] = useState(false);
   const [gitPushing, setGitPushing] = useState(false);
+  const [gitFetching, setGitFetching] = useState(false);
   const [gitRollingBack, setGitRollingBack] = useState(false);
   const [gitRollbackDialog, setGitRollbackDialog] = useState<GitStatusEntry[]>();
   const [taskGitEntries, setTaskGitEntries] = useState<GitStatusEntry[]>([]);
@@ -447,17 +448,14 @@ export function App() {
     const restoredTerminals = await Promise.all((options.terminal?.tabs ?? []).map(async (saved, index) => {
       try {
         const attached = saved.terminalId ? await client.request("terminal.attach", { terminalId: saved.terminalId }) : undefined;
-        const session = attached?.state === "available" ? attached.session : saved.terminalId ? undefined : await client.request("terminal.create", { cols: 80, rows: 24 });
-        if (!session) {
-          const terminalId = saved.terminalId!;
-          terminalBuffers.current.set(terminalId, "\r\n[terminal session is no longer available]\r\n");
-          return { index, tab: { id: crypto.randomUUID(), terminalId, title: saved.displayName, status: "unavailable" as const } };
-        }
+        const reattached = attached?.state === "available";
+        const session = reattached ? attached.session : await client.request("terminal.create", { cols: 80, rows: 24 });
+        const recovery = reattached ? (session.status === "running" ? "reattached" as const : undefined) : "recreated" as const;
         terminalBuffers.current.set(session.terminalId, `${session.output}${session.status === "exited" ? `\r\n[process exited${session.exitCode === undefined ? "" : ` with code ${session.exitCode}`}]\r\n` : ""}`);
-        return { index, tab: { id: crypto.randomUUID(), terminalId: session.terminalId, title: saved.displayName, status: session.status } };
+        return { index, tab: { id: crypto.randomUUID(), terminalId: session.terminalId, title: saved.displayName, status: session.status, ...(session.exitCode === undefined ? {} : { exitCode: session.exitCode }), recovery } };
       } catch {
         const terminalId = saved.terminalId ?? crypto.randomUUID();
-        terminalBuffers.current.set(terminalId, "\r\n[terminal session could not be restored]\r\n");
+        terminalBuffers.current.set(terminalId, "\r\n[terminal recovery failed; no replacement shell was started]\r\n");
         return { index, tab: { id: crypto.randomUUID(), terminalId, title: saved.displayName, status: "unavailable" as const } };
       }
     }));
@@ -528,7 +526,7 @@ export function App() {
         terminalBuffers.current.set(event.payload.terminalId, ((terminalBuffers.current.get(event.payload.terminalId) ?? "") + exitMessage).slice(-1_000_000));
         const writer = terminalWriters.current.get(event.payload.terminalId);
         writer?.(exitMessage);
-        updateTerminalGroup((current) => ({ ...current, tabs: current.tabs.map((tab) => tab.terminalId === event.payload.terminalId ? { ...tab, status: "exited" } : tab) }));
+        updateTerminalGroup((current) => ({ ...current, tabs: current.tabs.map((tab) => tab.terminalId === event.payload.terminalId ? { ...tab, status: "exited", exitCode: event.payload.exitCode } : tab) }));
         return;
       }
       if (event.type === "java.output") {
@@ -738,7 +736,7 @@ export function App() {
   useEffect(() => setSelectedGitPaths((current) => new Set([...current].filter((path) => gitEntries.some((entry) => entry.path === path)))), [gitEntries]);
 
   const selectedRollbackEntries = useMemo(() => selectedGitEntries(gitEntries, selectedGitPaths), [gitEntries, selectedGitPaths]);
-  const gitOperationRunning = gitCommitting || gitPushing || gitRollingBack;
+  const gitOperationRunning = gitCommitting || gitPushing || gitFetching || gitRollingBack;
 
   const openFile = async (node: FileTreeNode) => {
     const existing = group.tabs.find((tab) => tab.type === "file" && tab.path === node.path);
@@ -930,6 +928,22 @@ export function App() {
       showStatus("Changes pushed successfully", "success");
     } catch (error) { setStatusMessage(error instanceof Error ? error.message : "Could not push"); }
     finally { setGitPushing(false); }
+  };
+
+  const fetchGit = async () => {
+    if (!clientRef.current) return;
+    if (gitFetching) {
+      await clientRef.current.request("git.cancelFetch", {});
+      return;
+    }
+    if (gitOperationRunning) return;
+    setGitFetching(true); showStatus("Fetching remote changes...", "progress");
+    try {
+      await clientRef.current.request("git.fetch", {});
+      await refreshGit();
+      showStatus("Remote changes fetched successfully", "success");
+    } catch (error) { setStatusMessage(error instanceof Error ? error.message : "Could not fetch remote changes"); }
+    finally { setGitFetching(false); }
   };
 
   const openGitHunkDialog = async (path: string, hunk: GitDiffHunk, x: number, y: number) => {
@@ -1495,7 +1509,7 @@ export function App() {
       const attached = await clientRef.current.request("terminal.attach", { terminalId });
       if (attached.state === "stale") { setStatusMessage("That terminal is no longer available."); return false; }
       terminalBuffers.current.set(attached.session.terminalId, attached.session.output);
-      updateTerminalGroup((current) => { const id = crypto.randomUUID(); return { ...current, tabs: [...current.tabs, { id, terminalId: attached.session.terminalId, title, status: attached.session.status === "running" ? "running" : "exited" }], activeTabId: id }; });
+      updateTerminalGroup((current) => { const id = crypto.randomUUID(); return { ...current, tabs: [...current.tabs, { id, terminalId: attached.session.terminalId, title, status: attached.session.status === "running" ? "running" : "exited", ...(attached.session.exitCode === undefined ? {} : { exitCode: attached.session.exitCode }), ...(attached.session.status === "running" ? { recovery: "reattached" as const } : {}) }], activeTabId: id }; });
     } else updateTerminalGroup((current) => ({ ...current, activeTabId: existing.id }));
     setLayout((current) => ({ ...current, panels: [...current.panels.filter((panel) => !["terminal", "java", "problems", "gitlog"].includes(panel.type)), { id: "terminal", type: "terminal" }] }));
     return true;
@@ -2076,7 +2090,7 @@ export function App() {
           <div className="workspace-name" onContextMenu={(event) => { event.preventDefault(); setTreeContextMenu({ x: Math.min(event.clientX, window.innerWidth - 220), y: Math.min(event.clientY, window.innerHeight - 110), node: { name: "REMOTE WORKSPACE", path: "", type: "directory" } }); }}><ChevronDown size={13} />REMOTE WORKSPACE</div>
           <ProjectTree nodes={tree} query={projectFilter} activePath={activeTab?.path} fileColors={fileColors} gitStatuses={projectGitStatuses} onAction={runProjectTreeAction} onContextMenu={(node, x, y) => setTreeContextMenu({ x: Math.min(x, window.innerWidth - 220), y: Math.min(y, window.innerHeight - 110), node })} />
         </> : classicSideView === "git" ? <>
-          <header className="panel-header"><span>Git Changes</span><GitToolbarActions selectedCount={selectedRollbackEntries.length} operationRunning={gitOperationRunning} pushing={gitPushing} rollingBack={gitRollingBack} upstream={gitUpstream} onRollbackSelected={openRollbackSelected} onPush={() => void pushGit()} onRefresh={() => void refreshGit()} /></header><div className="git-branch"><GitBranch size={13} /><span>{gitBranch}</span></div>
+          <header className="panel-header"><span>Git Changes</span><GitToolbarActions selectedCount={selectedRollbackEntries.length} operationRunning={gitOperationRunning} pushing={gitPushing} fetching={gitFetching} rollingBack={gitRollingBack} upstream={gitUpstream} onRollbackSelected={openRollbackSelected} onPush={() => void pushGit()} onFetch={() => void fetchGit()} onRefresh={() => void refreshGit()} /></header><div className="git-branch"><GitBranch size={13} /><span>{gitBranch}</span>{gitUpstream && <small title={gitUpstream.lastFetch ? `Last fetched ${new Date(gitUpstream.lastFetch).toLocaleString()}` : "Not fetched in this Core session"}>{gitUpstream.upstream} · {gitUpstream.ahead} ahead · {gitUpstream.behind} behind</small>}</div>
           <KeyboardGitChangesView entries={gitEntries} error={gitError} selectedPaths={selectedGitPaths} onTogglePath={(path) => setSelectedGitPaths((current) => { const next = new Set(current); next.has(path) ? next.delete(path) : next.add(path); return next; })} activePath={activeTab?.path} onOpenDiff={openDiff} onOpenFile={(entry) => void openFile({ name: entry.path.split("/").pop() ?? entry.path, path: entry.path, type: "file" })} onContextMenu={(event, entry) => { event.preventDefault(); setGitRollbackMenu({ x: Math.min(event.clientX, window.innerWidth - 220), y: Math.min(event.clientY, window.innerHeight - 50), entry }); }} />
           <GitCommitPanel message={gitCommitMessage} selectedCount={selectedGitPaths.size} operationRunning={gitOperationRunning} committing={gitCommitting} onMessageChange={setGitCommitMessage} onCommit={() => void commitSelectedFiles()} />
         </> : classicSideView === "taskGit" && selectedTaskId ? <><header className="panel-header"><span>Task Git</span><button title="Refresh task comparison" onClick={() => void refreshTaskGit()}><RefreshCw size={14} /></button></header><div className="git-branch"><GitCompareArrows size={13} /><span>{tasks.find((task) => task.id === selectedTaskId)?.baseBranch ?? "Base branch"}</span></div><GitChangesView entries={taskGitEntries} error={taskGitError} emptyMessage="No changes from base branch" groupTitle="Changes from Base" activePath={activeTab?.path} onOpenDiff={openTaskDiff} onOpenFile={(entry) => void openFile({ name: entry.path.split("/").pop() ?? entry.path, path: entry.path, type: "file" })} /></> : classicSideView === "useful" ? <><header className="panel-header"><span>Useful Files</span><button title="Refresh useful files" onClick={() => void refreshUsefulFiles()}><RefreshCw size={14} /></button></header><div className="useful-files-list"><UsefulFileSection title="Global" scope="global" files={usefulFiles} activeTab={activeTab} onOpen={openUsefulFile} onCreate={(scope) => setUsefulDialog({ mode: "create", scope })} onRename={(file) => setUsefulDialog({ mode: "rename", scope: file.scope, file })} onDelete={(file) => void deleteUsefulFile(file)} /><UsefulFileSection title="Local" scope="local" files={usefulFiles} activeTab={activeTab} onOpen={openUsefulFile} onCreate={(scope) => setUsefulDialog({ mode: "create", scope })} onRename={(file) => setUsefulDialog({ mode: "rename", scope: file.scope, file })} onDelete={(file) => void deleteUsefulFile(file)} /></div></> : classicSideView === "agents" ? <AgentsPanel agents={agents} activeTab={activeTab} onRefresh={() => void refreshAgents()} onOpen={(file) => void openAgentFile(file)} onCreate={(scope) => setAgentDialog({ mode: "create", scope })} onRename={(file) => { if (file.scope !== "workspace") setAgentDialog({ mode: "rename", scope: file.scope, file }); }} onDelete={(file) => void deleteAgent(file)} /> : <><header className="panel-header"><span>Java Project</span><button title="Refresh Java project" onClick={() => void refreshJavaTree()}><RefreshCw size={14} /></button></header><div className="java-project-meta"><Coffee size={13} /><span>{javaOptions?.pomPath}</span></div><div className="tree java-tree">{javaOptions && <JavaProjectTree nodes={javaTree} activePath={activeTab?.path} onOpen={openFile} />}</div></>}
@@ -2133,8 +2147,8 @@ export function App() {
           <ProjectTree nodes={tree} query={projectFilter} activePath={activeTab?.path} fileColors={fileColors} gitStatuses={projectGitStatuses} onAction={runProjectTreeAction} onContextMenu={(node, x, y) => setTreeContextMenu({ x: Math.min(x, window.innerWidth - 220), y: Math.min(y, window.innerHeight - 110), node })} />
         </section>}
         {rightPanels.git && <section key="git" className="stacked-panel">
-          <header className="panel-header"><span>Git Changes</span><GitToolbarActions selectedCount={selectedRollbackEntries.length} operationRunning={gitOperationRunning} pushing={gitPushing} rollingBack={gitRollingBack} upstream={gitUpstream} onRollbackSelected={openRollbackSelected} onPush={() => void pushGit()} onRefresh={() => void refreshGit()} /></header>
-          <div className="git-branch"><GitBranch size={13} /><span>{gitBranch}</span></div>
+          <header className="panel-header"><span>Git Changes</span><GitToolbarActions selectedCount={selectedRollbackEntries.length} operationRunning={gitOperationRunning} pushing={gitPushing} fetching={gitFetching} rollingBack={gitRollingBack} upstream={gitUpstream} onRollbackSelected={openRollbackSelected} onPush={() => void pushGit()} onFetch={() => void fetchGit()} onRefresh={() => void refreshGit()} /></header>
+          <div className="git-branch"><GitBranch size={13} /><span>{gitBranch}</span>{gitUpstream && <small title={gitUpstream.lastFetch ? `Last fetched ${new Date(gitUpstream.lastFetch).toLocaleString()}` : "Not fetched in this Core session"}>{gitUpstream.upstream} · {gitUpstream.ahead} ahead · {gitUpstream.behind} behind</small>}</div>
           <KeyboardGitChangesView entries={gitEntries} error={gitError} selectedPaths={selectedGitPaths} onTogglePath={(path) => setSelectedGitPaths((current) => { const next = new Set(current); next.has(path) ? next.delete(path) : next.add(path); return next; })} activePath={activeTab?.path} onOpenDiff={openDiff} onOpenFile={(entry) => void openFile({ name: entry.path.split("/").pop() ?? entry.path, path: entry.path, type: "file" })} onContextMenu={(event, entry) => { event.preventDefault(); setGitRollbackMenu({ x: Math.min(event.clientX, window.innerHeight - 220), y: Math.min(event.clientY, window.innerHeight - 50), entry }); }} />
           <GitCommitPanel message={gitCommitMessage} selectedCount={selectedGitPaths.size} operationRunning={gitOperationRunning} committing={gitCommitting} onMessageChange={setGitCommitMessage} onCommit={() => void commitSelectedFiles()} />
         </section>}

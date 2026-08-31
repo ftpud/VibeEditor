@@ -60,7 +60,7 @@ multi-surface work).
   Constraint: distinguish index, worktree, untracked, and conflict states in the
   protocol; apply patches against the exact blob/version and refresh on mismatch.
   This is the foundation for amend and richer conflict workflows.
-- [ ] **Remote tracking summary and fetch — Project.** Value: show upstream,
+- [x] **Remote tracking summary and fetch — Project.** Value: show upstream,
   ahead/behind counts, last fetch, and a visible Push/Fetch state before users act.
   Constraint: Git/network work stays on Core, is cancellable where possible, and
   reports authentication/progress without exposing credentials. Extend the current
@@ -151,7 +151,7 @@ multi-surface work).
   long-running remote shells understandable. Constraint: persist display metadata
   separately from PTY identity and retain the current rule that closing a tab ends
   its Core process.
-- [ ] **Terminal recovery clarity — Project.** Value: distinguish a live reattach from
+- [x] **Terminal recovery clarity — Project.** Value: distinguish a live reattach from
   a recreated shell after reconnect/task switch. Constraint: Core remains process
   owner; show exit/recreation reason and working-directory limitations instead of
   implying shell state was restored.
