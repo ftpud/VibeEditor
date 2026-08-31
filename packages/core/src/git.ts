@@ -1,9 +1,9 @@
 import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
 import path from "node:path";
-import { readFile, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
-import type { GitBranch, GitBranchDeletePreview, GitCommit, GitCommitFile, GitConflictOperationKind, GitConflictWorkspace, GitDiffHunk, GitHistoryRewritePreview, GitPullPreview, GitPullResult, GitPullStrategy, GitRollbackFailure, GitStash, GitStashInclusion, GitStashPreview, GitStatusEntry, GitTag, GitUpstreamStatus } from "@remote-ide/protocol";
+import type { GitBranch, GitBranchDeletePreview, GitCommit, GitCommitFile, GitConflictOperationKind, GitConflictWorkspace, GitDiffHunk, GitHistoryRewritePreview, GitPullPreview, GitPullResult, GitPullStrategy, GitRebasePreview, GitRebaseResult, GitRebaseTodoItem, GitRollbackFailure, GitStash, GitStashInclusion, GitStashPreview, GitStatusEntry, GitTag, GitUpstreamStatus } from "@remote-ide/protocol";
 import { CoreError } from "./errors.js";
 import { WorkspaceFileSystem } from "./filesystem.js";
 
@@ -121,6 +121,7 @@ export class GitService {
     const command = operation === "cherry-pick" ? ["cherry-pick", `--${action}`] : [operation, `--${action}`];
     try {
       await execFileAsync("git", ["-C", this.workspace, ...command], { encoding: "utf8", env: { ...process.env, GIT_EDITOR: "true", GIT_SEQUENCE_EDITOR: "true" } });
+      if (operation === "rebase" && (action === "abort" || !await this.rebaseInProgress())) await this.cleanupRebasePlan();
       return `${operation} ${action} completed`;
     } catch (error) { throw new CoreError("GIT_FAILED", `Could not ${action} ${operation}. ${error instanceof Error ? error.message : String(error)} ${conflictRecovery(operation)}`); }
   }
@@ -444,6 +445,62 @@ export class GitService {
     return { strategy, branch: status.branch, head: resultHead, outcome: `Pulled ${status.upstream.upstream} with ${strategy}.`, recovery: strategy === "merge" ? "The merge can be inspected in Git history." : "The rebased local commits now have new commit IDs; use reflog if recovery is needed." };
   }
 
+  async rebasePreview(): Promise<GitRebasePreview> {
+    let status = await this.status();
+    if (status.upstream && (await this.git(["rev-parse", "--symbolic-full-name", status.upstream.upstream])).trim().startsWith("refs/remotes/")) { await this.fetch(); status = await this.status(); }
+    const blockers: string[] = [];
+    if (status.entries.length) blockers.push(`Working tree has ${status.entries.length} changed path${status.entries.length === 1 ? "" : "s"}; commit or explicitly stash them first.`);
+    if (!status.upstream) {
+      return { branch: status.branch, upstream: "", base: "", head: await this.git(["rev-parse", "HEAD"]).then((value) => value.trim()), upstreamHead: "", items: [], truncated: false, blockers: [...blockers, "This branch has no resolvable upstream, so publication safety cannot be established."], recovery: rebaseRecovery() };
+    }
+    const [head, upstreamHead, base] = await Promise.all([this.git(["rev-parse", "HEAD"]), this.git(["rev-parse", status.upstream.upstream]), this.git(["merge-base", "HEAD", status.upstream.upstream])]);
+    if (status.upstream.behind > 0) blockers.push(`Upstream is ${status.upstream.behind} commit${status.upstream.behind === 1 ? "" : "s"} ahead; pull before rewriting local commits.`);
+    const commits = parseGitLog(await this.git(["log", "--reverse", "--max-count=51", "--format=%H%x00%h%x00%an%x00%aI%x00%s%x00", `${status.upstream.upstream}..HEAD`]));
+    if (!commits.length) blockers.push("There are no unpublished commits to rewrite.");
+    if (commits.length > 50) blockers.push("More than 50 unpublished commits are present; narrow the history before using the bounded planner.");
+    for (const commit of commits.slice(0, 50)) {
+      const publishedRefs = (await this.git(["for-each-ref", "--format=%(refname:short)", "--contains", commit.hash, "refs/remotes"])).split("\n").filter((ref) => ref && !ref.endsWith("/HEAD"));
+      if (publishedRefs.length) blockers.push(`Commit ${commit.shortHash} (${commit.subject}) is already published on ${publishedRefs.join(", ")}; rewriting published commits is not allowed.`);
+    }
+    return { branch: status.branch, upstream: status.upstream.upstream, base: base.trim(), head: head.trim(), upstreamHead: upstreamHead.trim(), items: commits.slice(0, 50).map((commit) => ({ action: "pick", commit })), truncated: commits.length > 50, blockers, recovery: rebaseRecovery() };
+  }
+
+  async rebaseStart(expectedHead: string, expectedUpstreamHead: string, base: string, items: GitRebaseTodoItem[]): Promise<GitRebaseResult> {
+    validateFullHash(expectedHead); validateFullHash(expectedUpstreamHead); validateFullHash(base);
+    const preview = await this.rebasePreview();
+    if (preview.blockers.length) throw new CoreError("GIT_FAILED", preview.blockers.join(" "));
+    if (preview.head !== expectedHead || preview.upstreamHead !== expectedUpstreamHead || preview.base !== base) throw new CoreError("GIT_FAILED", "The branch or upstream changed after the preview. Open a fresh rebase plan.");
+    const validated = validateRebaseItems(items, preview.items);
+    const planDir = await this.rebasePlanDirectory();
+    await rm(planDir, { recursive: true, force: true }); await mkdir(planDir, { recursive: true });
+    const lines: string[] = [];
+    for (const [index, item] of validated.entries()) {
+      if (item.action === "reword") {
+        const messagePath = path.join(planDir, `message-${index}.txt`);
+        await writeFile(messagePath, `${item.message!.trim()}\n`, "utf8");
+        lines.push(`pick ${item.commit.hash} ${item.commit.subject}`, `exec git commit --amend -F ${shellQuote(messagePath)}`);
+      } else lines.push(`${item.action} ${item.commit.hash} ${item.commit.subject}`);
+    }
+    const todoPath = path.join(planDir, "todo"); const editorPath = path.join(planDir, "sequence-editor.cjs");
+    await writeFile(todoPath, `${lines.join("\n")}\n`, "utf8");
+    await writeFile(editorPath, `#!/usr/bin/env node\nrequire("node:fs").copyFileSync(${JSON.stringify(todoPath)}, process.argv[2]);\n`, "utf8"); await chmod(editorPath, 0o700);
+    try {
+      await execFileAsync("git", ["-C", this.workspace, "rebase", "--interactive", base], { encoding: "utf8", maxBuffer: 16 * 1024 * 1024, env: { ...process.env, GIT_SEQUENCE_EDITOR: editorPath, GIT_EDITOR: "true" } });
+    } catch (error) {
+      if (await this.rebaseInProgress() && (await this.status()).entries.some((entry) => entry.states.includes("conflict"))) return { state: "conflicts", branch: preview.branch, head: (await this.git(["rev-parse", "HEAD"])).trim(), outcome: "Interactive rebase stopped for conflicts.", recovery: rebaseRecovery() };
+      await this.git(["rebase", "--abort"]).catch(() => undefined); await this.cleanupRebasePlan();
+      throw new CoreError("GIT_FAILED", `Interactive rebase failed and was aborted. ${error instanceof Error ? error.message : String(error)} ${rebaseRecovery()}`);
+    }
+    await this.cleanupRebasePlan();
+    return { state: "completed", branch: preview.branch, head: (await this.git(["rev-parse", "HEAD"])).trim(), outcome: `Rebased ${items.length} unpublished commit${items.length === 1 ? "" : "s"}.`, recovery: rebaseRecovery() };
+  }
+
+  async rebaseAbort(): Promise<{ outcome: string; recovery: string }> {
+    if (!await this.rebaseInProgress()) throw new CoreError("GIT_FAILED", "There is no interactive rebase to abort.");
+    await this.git(["rebase", "--abort"]); await this.cleanupRebasePlan();
+    return { outcome: "Interactive rebase aborted; the branch was restored to its pre-rebase state.", recovery: rebaseRecovery() };
+  }
+
   async diffStats(): Promise<{ additions: number; deletions: number }> {
     let additions = 0; let deletions = 0;
     try {
@@ -455,6 +512,20 @@ export class GitService {
       for (const file of untracked) { try { const content = await readFile(path.join(this.workspace, file), "utf8"); if (!content.includes("\0")) additions += content ? content.split("\n").length - (content.endsWith("\n") ? 1 : 0) : 0; } catch { /* Binary and unreadable files do not have line stats. */ } }
     } catch { /* Ignore unavailable untracked stats. */ }
     return { additions, deletions };
+  }
+
+  private async rebasePlanDirectory(): Promise<string> {
+    const gitPath = (await this.git(["rev-parse", "--git-path", "vibe-rebase-plan"])).trim();
+    return path.isAbsolute(gitPath) ? gitPath : path.resolve(this.workspace, gitPath);
+  }
+
+  private async cleanupRebasePlan(): Promise<void> { await rm(await this.rebasePlanDirectory(), { recursive: true, force: true }).catch(() => undefined); }
+
+  private async rebaseInProgress(): Promise<boolean> {
+    for (const name of ["rebase-merge", "rebase-apply"]) {
+      try { const target = (await this.git(["rev-parse", "--git-path", name])).trim(); if ((await stat(path.isAbsolute(target) ? target : path.resolve(this.workspace, target))).isDirectory()) return true; } catch { /* Try the other native rebase directory. */ }
+    }
+    return false;
   }
 
   private async git(args: string[]): Promise<string> {
@@ -559,6 +630,27 @@ function conflictRecovery(operation: GitConflictOperationKind): string {
   if (operation === "stash") return "A stash application has no native continue or abort. Resolve and stage every path, then commit when ready; to discard it, restore the affected paths deliberately after preserving any work you need.";
   return `Resolve and stage every path, then continue the ${operation}; abort returns Git to the pre-${operation} state.`;
 }
+
+function rebaseRecovery(): string { return "No stash or force push is performed. Abort restores the pre-rebase branch; after completion, use git reflog to find the previous HEAD if recovery is needed."; }
+
+function validateRebaseItems(items: GitRebaseTodoItem[], original: GitRebaseTodoItem[]): GitRebaseTodoItem[] {
+  if (!Array.isArray(items) || items.length !== original.length || !items.length) throw new CoreError("INVALID_REQUEST", "The todo plan must contain every previewed commit exactly once.");
+  const expected = new Map(original.map((item) => [item.commit.hash, item.commit])); const seen = new Set<string>(); let retained = false;
+  const actions = new Set(["pick", "squash", "fixup", "reword", "drop"]);
+  for (const item of items) {
+    if (!item || !actions.has(item.action) || !item.commit || typeof item.commit.hash !== "string") throw new CoreError("INVALID_REQUEST", "The todo plan contains an invalid action or commit.");
+    const commit = expected.get(item.commit.hash);
+    if (!commit || seen.has(item.commit.hash) || commit.subject !== item.commit.subject || commit.author !== item.commit.author || commit.date !== item.commit.date) throw new CoreError("INVALID_REQUEST", "The todo plan contains a stale, duplicate, or unknown commit identity.");
+    seen.add(item.commit.hash);
+    if ((item.action === "squash" || item.action === "fixup") && !retained) throw new CoreError("INVALID_REQUEST", `${item.action} cannot be the first retained todo action.`);
+    if (item.action === "reword" && (typeof item.message !== "string" || !item.message.trim() || item.message.includes("\0"))) throw new CoreError("INVALID_REQUEST", "Every reword action requires a non-empty commit message.");
+    if (item.action !== "drop") retained = true;
+  }
+  if (seen.size !== expected.size) throw new CoreError("INVALID_REQUEST", "The todo plan must contain every previewed commit exactly once.");
+  return items;
+}
+
+function shellQuote(value: string): string { return `'${value.replace(/'/g, `'"'"'`)}'`; }
 
 function isUntracked(entry: GitStatusEntry): boolean { return entry.indexStatus === "?" && entry.worktreeStatus === "?"; }
 

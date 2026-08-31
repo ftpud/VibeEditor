@@ -67,6 +67,14 @@ export type GitPullPreview = {
   recovery: string;
 };
 export type GitPullResult = { strategy: GitPullStrategy; branch: string; head: string; outcome: string; recovery: string };
+export type GitRebaseAction = "pick" | "squash" | "fixup" | "reword" | "drop";
+export type GitRebaseTodoItem = { action: GitRebaseAction; commit: GitCommit; message?: string };
+/** Core-authoritative, bounded snapshot. Every identity is revalidated before history is changed. */
+export type GitRebasePreview = {
+  branch: string; upstream: string; base: string; head: string; upstreamHead: string;
+  items: GitRebaseTodoItem[]; truncated: boolean; blockers: string[]; recovery: string;
+};
+export type GitRebaseResult = { state: "completed" | "conflicts"; branch: string; head: string; outcome: string; recovery: string };
 export type GitBranch = { name: string; current: boolean; remote: boolean };
 export type GitBranchDeletePreview = { branch: string; remote: boolean; unmerged: GitCommit[]; confirmationRequired: boolean };
 /** A tag stored in this workspace's local Git repository. It is not a remote tag operation. */
@@ -372,6 +380,9 @@ export type ProtocolOperations = {
   "git.cancelFetch": { payload: Record<string, never>; result: { cancelled: boolean } };
   "git.pullPreview": { payload: Record<string, never>; result: GitPullPreview };
   "git.pull": { payload: { strategy: GitPullStrategy; expectedHead: string; expectedUpstreamHead: string }; result: GitPullResult };
+  "git.rebasePreview": { payload: Record<string, never>; result: GitRebasePreview };
+  "git.rebaseStart": { payload: { expectedHead: string; expectedUpstreamHead: string; base: string; items: GitRebaseTodoItem[] }; result: GitRebaseResult };
+  "git.rebaseAbort": { payload: Record<string, never>; result: { outcome: string; recovery: string } };
   "taskGit.history": { payload: Record<string, never>; result: { checkpoints: TaskCheckpoint[] } };
   /** Text bodies are capped by Core; callers must not use this as bulk file retrieval. */
   "taskGit.diff": { payload: { checkpointId: string; path: string }; result: { originalContent: string; modifiedContent: string; binary: boolean; truncated: boolean } };
@@ -622,6 +633,9 @@ const requestTypeRegistry: Record<RequestType, true> = {
   "git.cancelFetch": true,
   "git.pullPreview": true,
   "git.pull": true,
+  "git.rebasePreview": true,
+  "git.rebaseStart": true,
+  "git.rebaseAbort": true,
   "taskGit.history": true,
   "taskGit.diff": true,
   "taskGit.review": true,
