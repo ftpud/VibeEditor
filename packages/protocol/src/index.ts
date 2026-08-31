@@ -33,6 +33,7 @@ export type GitChangeState = "index" | "worktree" | "untracked" | "conflict";
 /** The configured upstream and the last remote information Core successfully obtained. */
 export type GitUpstreamStatus = { upstream: string; ahead: number; behind: number; lastFetch?: string };
 export type GitBranch = { name: string; current: boolean; remote: boolean };
+export type GitBranchDeletePreview = { branch: string; remote: boolean; unmerged: GitCommit[]; confirmationRequired: boolean };
 /** A tag stored in this workspace's local Git repository. It is not a remote tag operation. */
 export type GitTag = { name: string; target: string; annotated: boolean };
 export type GitCommit = { hash: string; shortHash: string; author: string; date: string; subject: string; parents?: string[]; refs?: string[]; graph?: string };
@@ -273,6 +274,11 @@ export type ProtocolOperations = {
   "git.deleteTag": { payload: { name: string }; result: Record<string, never> };
   "git.checkoutBranch": { payload: { branch: string; remote?: boolean }; result: { branch: string } };
   "git.renameBranch": { payload: { branch: string; newName: string }; result: { branch: string } };
+  "git.createBranch": { payload: { name: string }; result: { branch: string } };
+  "git.branchDeletePreview": { payload: { branch: string; remote: boolean }; result: GitBranchDeletePreview };
+  "git.deleteBranch": { payload: { branch: string; remote: boolean; force: boolean; confirm: boolean }; result: Record<string, never> };
+  "git.publishBranch": { payload: { branch: string; remote: string; force: boolean; confirm: boolean }; result: Record<string, never> };
+  "git.setBranchUpstream": { payload: { branch: string; remote: string; upstream: string; confirm: boolean }; result: Record<string, never> };
   "git.log": { payload: { branch: string; limit?: number }; result: { commits: GitCommit[] } };
   "git.commitFiles": { payload: { hash: string }; result: { files: GitCommitFile[] } };
   "git.commitMessage": { payload: { hash: string }; result: { message: string } };
@@ -499,6 +505,11 @@ const requestTypeRegistry: Record<RequestType, true> = {
   "git.deleteTag": true,
   "git.checkoutBranch": true,
   "git.renameBranch": true,
+  "git.createBranch": true,
+  "git.branchDeletePreview": true,
+  "git.deleteBranch": true,
+  "git.publishBranch": true,
+  "git.setBranchUpstream": true,
   "git.log": true,
   "git.commitFiles": true,
   "git.commitMessage": true,
