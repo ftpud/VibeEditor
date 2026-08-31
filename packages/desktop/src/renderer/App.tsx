@@ -36,6 +36,7 @@ import { EditorStatusBar, type EditorStatusBarHandle } from "./EditorStatusBar";
 import { adjacentEditorTabId, editorShortcutEligible, editorTabShortcut } from "./editor-shortcuts";
 import { orderPinnedTabs, pinnedFilePaths, togglePinnedTab } from "./pinned-tabs";
 import { EditorViewStateStore } from "./editor-view-state";
+import { reconcileProjectTree } from "./project-tree-reconciliation";
 
 type ConnectionStatus = "idle" | "connecting" | "connected" | "failed" | "disconnected" | "workspace-error";
 type StatusKind = "progress" | "success" | "error";
@@ -578,43 +579,32 @@ export function App() {
         }).catch(() => undefined);
       };
       if (event.type === "git.changed") { refreshDiffs(); return; }
-      refreshDiffs(event.payload.path);
-      if (javaOptionsRef.current && (event.payload.path.endsWith(".java") || event.payload.kind === "addDir" || event.payload.kind === "unlinkDir")) {
+      const changedPaths = event.payload.paths;
+      refreshDiffs(changedPaths.length === 1 ? changedPaths[0] : undefined);
+      if (javaOptionsRef.current && changedPaths.some((changedPath) => changedPath.endsWith(".java"))) {
         if (javaRefreshTimer.current) clearTimeout(javaRefreshTimer.current);
         javaRefreshTimer.current = setTimeout(() => {
           void client.request("java.getProjectTree", {}).then((result) => setJavaTree(result.tree)).catch(() => undefined);
         }, 200);
       }
-      if (treeRefreshTimer.current) clearTimeout(treeRefreshTimer.current);
-      treeRefreshTimer.current = setTimeout(() => {
-        void client.request("filesystem.listTree", { includeIgnored: showIgnoredRef.current })
-          .then((result) => setTree(result.tree))
-          .catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : "Automatic refresh failed"));
-      }, 150);
-
-      const { path, kind } = event.payload;
-      const openTab = layoutRef.current.editorGroups[0]?.tabs.find((tab) => tab.path === path);
-      if (!openTab) return;
-      if (kind === "unlink") {
-        updateGroup((tabs, active) => ({
-          tabs: tabs.map((tab) => tab.path === path ? { ...tab, error: "File was deleted outside the editor" } : tab),
-          activeTabId: active
-        }));
-        return;
-      }
-      if (kind !== "change" || (selfWriteUntil.current.get(path) ?? 0) > Date.now()) return;
-      void client.request("filesystem.readFile", { path }).then((result) => {
-        if (openTab.dirty) { setExternalConflict({ tabId: openTab.id, path, externalContent: result.content, externalRevision: result.revision }); return; }
-        updateGroup((tabs, active) => ({
-          tabs: tabs.map((tab) => tab.path !== path || tab.dirty ? tab : { ...tab, content: result.content, savedContent: result.content, revision: result.revision, error: undefined }),
-          activeTabId: active
-        }));
-      }).catch((error: unknown) => {
-        updateGroup((tabs, active) => ({
-          tabs: tabs.map((tab) => tab.path === path ? { ...tab, error: error instanceof Error ? error.message : "Automatic reload failed" } : tab),
-          activeTabId: active
-        }));
-      });
+      if (event.payload.health === "degraded") showStatus(event.payload.message ?? "Filesystem watcher degraded; synchronization may be incomplete.", "error");
+      if (!changedPaths.length) return;
+      void client.request("filesystem.snapshot", { paths: changedPaths }).then(async ({ entries }) => {
+        setTree((current) => reconcileProjectTree(current, entries));
+        const existing = new Set(entries.filter((entry) => entry.type === "file").map((entry) => entry.path));
+        for (const openTab of layoutRef.current.editorGroups[0]?.tabs.filter((tab) => tab.type === "file" && changedPaths.includes(tab.path)) ?? []) {
+          if (!existing.has(openTab.path)) {
+            updateGroup((tabs, active) => ({ tabs: tabs.map((tab) => tab.id === openTab.id ? { ...tab, error: "File was deleted outside the editor" } : tab), activeTabId: active }));
+            continue;
+          }
+          if ((selfWriteUntil.current.get(openTab.path) ?? 0) > Date.now()) continue;
+          try {
+            const result = await client.request("filesystem.readFile", { path: openTab.path });
+            if (openTab.dirty) setExternalConflict({ tabId: openTab.id, path: openTab.path, externalContent: result.content, externalRevision: result.revision });
+            else updateGroup((tabs, active) => ({ tabs: tabs.map((tab) => tab.id === openTab.id && !tab.dirty ? { ...tab, content: result.content, savedContent: result.content, revision: result.revision, error: undefined } : tab), activeTabId: active }));
+          } catch (error) { updateGroup((tabs, active) => ({ tabs: tabs.map((tab) => tab.id === openTab.id ? { ...tab, error: error instanceof Error ? error.message : "Automatic reload failed" } : tab), activeTabId: active })); }
+        }
+      }).catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : "Automatic synchronization failed"));
     };
     try {
       await client.connect(host.trim(), Number(port));

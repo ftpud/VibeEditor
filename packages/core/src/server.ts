@@ -4,7 +4,7 @@ import chokidar from "chokidar";
 import path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { requestTypes, type FileChangeKind, type Request, type RequestType, type Response, type ServerEvent, type WorkspaceOptions } from "@remote-ide/protocol";
+import { requestTypes, type Request, type RequestType, type Response, type ServerEvent, type WorkspaceOptions } from "@remote-ide/protocol";
 import { CoreError } from "./errors.js";
 import { WorkspaceFileSystem } from "./filesystem.js";
 import { TerminalSessionHost } from "./process-manager.js";
@@ -54,7 +54,31 @@ export function sendWebSocketData(socket: WebSocket, data: string): boolean {
   }
 }
 
-const coreProtocolCompatibility = { minimum: 1, maximum: 1 } as const;
+const coreProtocolCompatibility = { minimum: 2, maximum: 2 } as const;
+
+/** Collapses noisy watcher streams into a bounded, state-reconciliation signal. */
+export class WorkspaceWatchBatcher {
+  private paths = new Set<string>();
+  private overflow = false;
+  private degraded?: string;
+  private timer?: ReturnType<typeof setTimeout>;
+  constructor(private readonly emit: (event: Extract<ServerEvent, { type: "filesystem.changed" }>) => void, private readonly delay = 120, private readonly limit = 256) {}
+  change(relativePath: string): void {
+    if (this.paths.size >= this.limit) this.overflow = true;
+    else this.paths.add(relativePath);
+    this.schedule();
+  }
+  degrade(message: string): void { this.degraded = message; this.overflow = true; this.schedule(); }
+  flush(): void {
+    if (this.timer) clearTimeout(this.timer);
+    this.timer = undefined;
+    if (!this.paths.size && !this.degraded) return;
+    this.emit({ type: "filesystem.changed", payload: { paths: [...this.paths], overflow: this.overflow, health: this.degraded ? "degraded" : "healthy", ...(this.degraded ? { message: this.degraded } : {}) } });
+    this.paths.clear(); this.overflow = false; this.degraded = undefined;
+  }
+  dispose(): void { if (this.timer) clearTimeout(this.timer); }
+  private schedule(): void { if (!this.timer) this.timer = setTimeout(() => this.flush(), this.delay); }
+}
 
 export function protocolHandshake(compatibility: { minimum: number; maximum: number }): { compatibility: typeof coreProtocolCompatibility; compatible: boolean; message?: string } {
   const valid = Number.isInteger(compatibility.minimum) && Number.isInteger(compatibility.maximum) && compatibility.minimum > 0 && compatibility.minimum <= compatibility.maximum;
@@ -166,24 +190,19 @@ export async function createServer(host: string, port: number, workspacePath: st
     const encoded = JSON.stringify({ type: "git.changed", payload: {} } satisfies ServerEvent);
     for (const socket of activeSessions) sendWebSocketData(socket, encoded);
   });
-  const broadcastChange = (kind: FileChangeKind, absolutePath: string) => {
-    const relativePath = absolutePath.slice(workspace.length + 1).split("\\").join("/");
-    if (!relativePath) return;
-    const event: ServerEvent = { type: "filesystem.changed", payload: { path: relativePath, kind } };
+  const rootBatcher = new WorkspaceWatchBatcher((event) => {
     const encoded = JSON.stringify(event);
-    for (const socket of activeSessions) {
-      sendWebSocketData(socket, encoded);
-    }
-    console.log(`[core] filesystem ${kind}: ${relativePath}`);
+    for (const socket of activeSessions) sendWebSocketData(socket, encoded);
+  });
+  const broadcastChange = (absolutePath: string) => {
+    const relativePath = path.relative(workspace, absolutePath).split(path.sep).join("/");
+    if (relativePath && !relativePath.startsWith("..")) rootBatcher.change(relativePath);
   };
   watcher
-    .on("add", (file) => broadcastChange("add", file))
-    .on("change", (file) => broadcastChange("change", file))
-    .on("unlink", (file) => broadcastChange("unlink", file))
-    .on("addDir", (directory) => broadcastChange("addDir", directory))
-    .on("unlinkDir", (directory) => broadcastChange("unlinkDir", directory))
-    .on("error", (error) => console.error(`[core] watcher error: ${String(error)}`));
-  server.on("close", () => { terminalHost.closeAll(); void watcher.close(); void gitIndexWatcher.close(); void runConfigWatcher.close(); void appEventWatcher.close(); void appCommandWatcher.close(); });
+    .on("add", broadcastChange).on("change", broadcastChange).on("unlink", broadcastChange).on("addDir", broadcastChange).on("unlinkDir", broadcastChange)
+    .on("raw", (eventName) => { if (String(eventName).includes("OVERFLOW")) rootBatcher.degrade("Filesystem watcher overflow; synchronizing affected files."); })
+    .on("error", (error) => { console.error(`[core] watcher error: ${String(error)}`); rootBatcher.degrade(`Filesystem watcher degraded: ${String(error)}`); });
+  server.on("close", () => { rootBatcher.dispose(); terminalHost.closeAll(); void watcher.close(); void gitIndexWatcher.close(); void runConfigWatcher.close(); void appEventWatcher.close(); void appCommandWatcher.close(); });
   server.on("listening", () => console.log(`[core] listening on ws://${host}:${port}`));
   server.on("connection", (socket, request) => {
     let protocolAccepted = false;
@@ -208,7 +227,9 @@ export async function createServer(host: string, port: number, workspacePath: st
     let switching: Promise<void> = Promise.resolve();
     let switchedWatcher: ReturnType<typeof chokidar.watch> | undefined;
     let switchedGitIndexWatcher: ReturnType<typeof chokidar.watch> | undefined;
+    let switchedBatcher: WorkspaceWatchBatcher | undefined;
     const watchSwitchedWorkspace = async (nextWorkspace: string) => {
+      switchedBatcher?.dispose();
       await switchedWatcher?.close();
       await switchedGitIndexWatcher?.close();
       if (nextWorkspace === workspace) { switchedWatcher = undefined; switchedGitIndexWatcher = undefined; return; }
@@ -224,12 +245,15 @@ export async function createServer(host: string, port: number, workspacePath: st
         switchedWatcher!.once("ready", resolve);
         switchedWatcher!.once("error", reject);
       });
-      const sendChange = (kind: FileChangeKind, absolutePath: string) => {
+      const batcher = new WorkspaceWatchBatcher((event) => sendWebSocketData(socket, JSON.stringify(event)));
+      switchedBatcher = batcher;
+      const sendChange = (absolutePath: string) => {
         const relativePath = path.relative(nextWorkspace, absolutePath).split(path.sep).join("/");
-        if (!relativePath) return;
-        sendWebSocketData(socket, JSON.stringify({ type: "filesystem.changed", payload: { path: relativePath, kind } } satisfies ServerEvent));
+        if (relativePath && !relativePath.startsWith("..")) batcher.change(relativePath);
       };
-      switchedWatcher.on("add", (file) => sendChange("add", file)).on("change", (file) => sendChange("change", file)).on("unlink", (file) => sendChange("unlink", file)).on("addDir", (directory) => sendChange("addDir", directory)).on("unlinkDir", (directory) => sendChange("unlinkDir", directory));
+      switchedWatcher.on("add", sendChange).on("change", sendChange).on("unlink", sendChange).on("addDir", sendChange).on("unlinkDir", sendChange)
+        .on("raw", (eventName) => { if (String(eventName).includes("OVERFLOW")) batcher.degrade("Filesystem watcher overflow; synchronizing affected files."); })
+        .on("error", (error) => batcher.degrade(`Filesystem watcher degraded: ${String(error)}`));
       switchedGitIndexWatcher = chokidar.watch(await gitIndexPath(nextWorkspace), { ignoreInitial: true });
       switchedGitIndexWatcher.on("all", () => {
         sendWebSocketData(socket, JSON.stringify({ type: "git.changed", payload: {} } satisfies ServerEvent));
@@ -304,6 +328,7 @@ export async function createServer(host: string, port: number, workspacePath: st
     socket.on("close", () => {
       activeSessions.delete(socket);
       terminalSubscriptions.delete(socket);
+      switchedBatcher?.dispose();
       void servicesPromise.then((services) => { services.java.close(); services.jdt.close(); });
       void switchedWatcher?.close();
       void switchedGitIndexWatcher?.close();
@@ -458,6 +483,7 @@ async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStor
     case "agents.delete": await agents.delete(request.payload.scope, request.payload.name, workspacePath); return {};
     case "http.execute": return executeHttpRequest(request.payload.method, request.payload.url, request.payload.headers, request.payload.body);
     case "filesystem.listTree": return { tree: await filesystem.listTree(request.payload.includeIgnored === true) };
+    case "filesystem.snapshot": return { entries: await filesystem.snapshot(request.payload.paths) };
     case "filesystem.readFile": {
       if (typeof request.payload.path !== "string") throw new CoreError("INVALID_REQUEST", "path must be a string");
       const file = await filesystem.read(request.payload.path);

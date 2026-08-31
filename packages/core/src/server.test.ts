@@ -1,12 +1,21 @@
 import { describe, expect, it } from "vitest";
 import { WebSocket } from "ws";
-import { assertSessionChangeAllowed, permissionTargetWorkspace, protocolHandshake, renameWorkspacePaths, sendWebSocketData } from "./server.js";
+import { assertSessionChangeAllowed, permissionTargetWorkspace, protocolHandshake, renameWorkspacePaths, sendWebSocketData, WorkspaceWatchBatcher } from "./server.js";
 
 describe("protocol handshake", () => {
   it("accepts overlapping ranges and describes incompatible Desktops", () => {
-    expect(protocolHandshake({ minimum: 1, maximum: 1 })).toMatchObject({ compatible: true, compatibility: { minimum: 1, maximum: 1 } });
-    expect(protocolHandshake({ minimum: 2, maximum: 3 })).toEqual({ compatible: false, compatibility: { minimum: 1, maximum: 1 }, message: "Core supports protocol 1-1; this Desktop supports 2-3" });
+    expect(protocolHandshake({ minimum: 2, maximum: 2 })).toMatchObject({ compatible: true, compatibility: { minimum: 2, maximum: 2 } });
+    expect(protocolHandshake({ minimum: 3, maximum: 3 })).toEqual({ compatible: false, compatibility: { minimum: 2, maximum: 2 }, message: "Core supports protocol 2-2; this Desktop supports 3-3" });
     expect(protocolHandshake({ minimum: 3, maximum: 1 }).compatible).toBe(false);
+  });
+});
+
+describe("workspace watcher batching", () => {
+  it("coalesces bursts and marks bounded batches as overflowed", () => {
+    const events: unknown[] = [];
+    const batcher = new WorkspaceWatchBatcher((event) => events.push(event), 60_000, 2);
+    batcher.change("a.ts"); batcher.change("b.ts"); batcher.change("c.ts"); batcher.degrade("overflow"); batcher.flush();
+    expect(events).toEqual([{ type: "filesystem.changed", payload: { paths: ["a.ts", "b.ts"], overflow: true, health: "degraded", message: "overflow" } }]);
   });
 });
 import { withAppTools } from "./app-tools.js";

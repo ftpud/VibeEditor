@@ -4,6 +4,8 @@ export type FileTreeNode = {
   type: "file" | "directory";
   children?: FileTreeNode[];
 };
+/** A bounded, Core-authoritative view of paths affected by a watcher burst. */
+export type FilesystemSnapshotEntry = { path: string; type?: "file" | "directory" };
 /** Opaque Core-issued file identity and content revision used for conditional saves. */
 export type FileRevision = { identity: string; version: string };
 /**
@@ -211,6 +213,10 @@ export type ProtocolOperations = {
     payload: { includeIgnored?: boolean };
     result: { tree: FileTreeNode[] };
   };
+  "filesystem.snapshot": {
+    payload: { paths: string[] };
+    result: { entries: FilesystemSnapshotEntry[] };
+  };
   "filesystem.readFile": {
     payload: { path: string };
     result: { path: string; content: string; revision: FileRevision };
@@ -417,11 +423,9 @@ export type Response<T extends RequestType = RequestType> =
   | { id: string; ok: true; result: ProtocolOperations[T]["result"] }
   | { id: string; ok: false; error: ProtocolError };
 
-export type FileChangeKind = "add" | "change" | "unlink" | "addDir" | "unlinkDir";
-
 export type FilesystemChangedEvent = {
   type: "filesystem.changed";
-  payload: { path: string; kind: FileChangeKind };
+  payload: { paths: string[]; overflow: boolean; health: "healthy" | "degraded"; message?: string };
 };
 
 export type TerminalOutputEvent = {
@@ -505,6 +509,7 @@ const requestTypeRegistry: Record<RequestType, true> = {
   "agents.delete": true,
   "http.execute": true,
   "filesystem.listTree": true,
+  "filesystem.snapshot": true,
   "filesystem.readFile": true,
   "filesystem.writeFile": true,
   "filesystem.createFile": true,
