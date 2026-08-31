@@ -11,7 +11,7 @@
     "start": "node ../../scripts/start-electron.mjs desktop",
     "build": "vite build && tsc -p tsconfig.electron.json",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.electron.json --noEmit",
-    "test": "vitest run --environment happy-dom",
+    "test": "vitest run --environment happy-dom && npm run test:electron",
     "test:electron": "vitest run --config vitest.electron.config.ts"
   },
   "dependencies": {
