@@ -2,7 +2,7 @@ import { ChevronDown, ChevronRight, FileCode2, Folder, FolderOpen } from "lucide
 import { useEffect, useMemo, useState, type KeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
 import type { GitStatusEntry } from "@remote-ide/protocol";
 
-type Props = { entries: GitStatusEntry[]; error: string; emptyMessage?: string; groupTitle?: string; selectedPaths?: Set<string>; onTogglePath?(path: string): void; activePath?: string; onOpenDiff(entry: GitStatusEntry): void; onOpenFile(entry: GitStatusEntry): void; onContextMenu?(event: ReactMouseEvent, entry: GitStatusEntry): void };
+type Props = { entries: GitStatusEntry[]; error: string; emptyMessage?: string; groupTitle?: string; selectedPaths?: Set<string>; onTogglePath?(path: string): void; activePath?: string; onOpenDiff(entry: GitStatusEntry): void; onOpenConflict?(entry: GitStatusEntry): void; onOpenFile(entry: GitStatusEntry): void; onContextMenu?(event: ReactMouseEvent, entry: GitStatusEntry): void };
 
 function focusRelativeRow(event: KeyboardEvent<HTMLElement>, direction: -1 | 1 | "first" | "last") {
   const rows = [...(event.currentTarget.closest(".git-changes")?.querySelectorAll<HTMLElement>("[data-git-row]") ?? [])];
@@ -20,7 +20,7 @@ function rowNavigation(event: KeyboardEvent<HTMLButtonElement>, onEnter: () => v
   if (event.key === " " && onSpace) { event.preventDefault(); onSpace(); }
 }
 
-export function GitChangesView({ entries, error, emptyMessage = "No local changes", groupTitle, selectedPaths, onTogglePath, activePath, onOpenDiff, onOpenFile, onContextMenu }: Props) {
+export function GitChangesView({ entries, error, emptyMessage = "No local changes", groupTitle, selectedPaths, onTogglePath, activePath, onOpenDiff, onOpenConflict, onOpenFile, onContextMenu }: Props) {
   if (error) return <div className="git-empty error" role="alert">{error}</div>;
   if (entries.length === 0) return <div className="git-empty">{emptyMessage}</div>;
   const groups = groupTitle ? [{ title: groupTitle, entries }] : [
@@ -29,10 +29,10 @@ export function GitChangesView({ entries, error, emptyMessage = "No local change
     { title: "Staged", entries: entries.filter((entry) => entry.indexStatus !== " " && entry.indexStatus !== "?" && entry.indexStatus !== "U" && !["AA", "DD"].includes(entry.indexStatus + entry.worktreeStatus)) },
     { title: "Changes", entries: entries.filter((entry) => entry.indexStatus === " " && entry.worktreeStatus !== " " && entry.worktreeStatus !== "?" && entry.worktreeStatus !== "U") }
   ].filter((group) => group.entries.length > 0);
-  return <div className="git-changes" aria-label="Git changes. Enter reviews a change; Space selects it for commit.">{groups.map((group) => <GitChangeGroup key={group.title} title={group.title} entries={group.entries} selectedPaths={selectedPaths} onTogglePath={onTogglePath} activePath={activePath} onOpenDiff={onOpenDiff} onOpenFile={onOpenFile} onContextMenu={onContextMenu} />)}</div>;
+  return <div className="git-changes" aria-label="Git changes. Enter reviews a change; Space selects it for commit.">{groups.map((group) => <GitChangeGroup key={group.title} title={group.title} entries={group.entries} selectedPaths={selectedPaths} onTogglePath={onTogglePath} activePath={activePath} onOpenDiff={onOpenDiff} onOpenConflict={onOpenConflict} onOpenFile={onOpenFile} onContextMenu={onContextMenu} />)}</div>;
 }
 
-function GitChangeGroup({ title, entries, selectedPaths, onTogglePath, activePath, onOpenDiff, onOpenFile, onContextMenu }: Omit<Props, "error" | "emptyMessage" | "groupTitle"> & { title: string }) {
+function GitChangeGroup({ title, entries, selectedPaths, onTogglePath, activePath, onOpenDiff, onOpenConflict, onOpenFile, onContextMenu }: Omit<Props, "error" | "emptyMessage" | "groupTitle"> & { title: string }) {
   const [expanded, setExpanded] = useState(true);
   const selectable = Boolean(onTogglePath);
   const selectedCount = entries.filter((entry) => selectedPaths?.has(entry.path)).length;
@@ -43,14 +43,14 @@ function GitChangeGroup({ title, entries, selectedPaths, onTogglePath, activePat
     <button data-git-row className="git-group-title" aria-expanded={expanded} onClick={toggle} onKeyDown={(event) => { rowNavigation(event, toggle); if (event.key === "ArrowRight" && !expanded) { event.preventDefault(); toggle(); } if (event.key === "ArrowLeft" && expanded) { event.preventDefault(); toggle(); } }}>
       {expanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />}{selectable && <input type="checkbox" aria-label={`Select all ${title.toLowerCase()} files`} checked={allSelected} ref={(input) => { if (input) input.indeterminate = selectedCount > 0 && !allSelected; }} onClick={(event) => event.stopPropagation()} onChange={toggleAll} />}<span>{title}</span><span className="git-count">{entries.length}</span>
     </button>
-    {expanded && <GitStatusTree entries={entries} selectedPaths={selectedPaths} onTogglePath={onTogglePath} activePath={activePath} onOpenDiff={onOpenDiff} onOpenFile={onOpenFile} onContextMenu={onContextMenu} />}
+    {expanded && <GitStatusTree entries={entries} selectedPaths={selectedPaths} onTogglePath={onTogglePath} activePath={activePath} onOpenDiff={onOpenDiff} onOpenConflict={onOpenConflict} onOpenFile={onOpenFile} onContextMenu={onContextMenu} />}
   </section>;
 }
 
 type GitTreeNode = { type: "directory"; name: string; path: string; children: GitTreeNode[] } | { type: "file"; name: string; path: string; entry: GitStatusEntry };
 type TreeProps = Omit<Props, "error" | "emptyMessage" | "groupTitle">;
 
-function GitStatusTree({ entries, selectedPaths, onTogglePath, activePath, onOpenDiff, onOpenFile, onContextMenu }: TreeProps) {
+function GitStatusTree({ entries, selectedPaths, onTogglePath, activePath, onOpenDiff, onOpenConflict, onOpenFile, onContextMenu }: TreeProps) {
   const nodes = useMemo(() => buildGitTree(entries), [entries]);
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set(collectGitDirectories(nodes)));
   useEffect(() => setExpanded((current) => new Set([...current, ...collectGitDirectories(nodes)])), [nodes]);
@@ -66,7 +66,7 @@ function GitStatusTree({ entries, selectedPaths, onTogglePath, activePath, onOpe
       </div>;
     }
     const entry = node.entry; const deleted = entry.indexStatus === "D" || entry.worktreeStatus === "D"; const status = entry.indexStatus === "?" ? "U" : `${entry.indexStatus}${entry.worktreeStatus}`.trim(); const kind = entry.indexStatus === "U" || entry.worktreeStatus === "U" ? "conflict" : entry.indexStatus === "?" ? "untracked" : deleted ? "deleted" : entry.indexStatus === "A" ? "added" : "modified"; const checked = selectedPaths?.has(entry.path) ?? false; const active = activePath === entry.path;
-    const review = () => onOpenDiff(entry); const openFile = () => { if (!deleted) onOpenFile(entry); };
+    const conflicted = entry.states.includes("conflict"); const review = () => conflicted && onOpenConflict ? onOpenConflict(entry) : onOpenDiff(entry); const openFile = () => { if (!deleted) onOpenFile(entry); };
     return <button data-git-row key={node.path} className={`git-file-row ${checked ? "checked-for-commit" : ""} ${active ? "active-diff" : ""}`} aria-current={active ? "page" : undefined} style={{ paddingLeft: (onTogglePath ? 9 : 27) + depth * 13 }} title={deleted ? `${entry.path} (deleted)` : `${entry.path} — Enter: review diff; Shift+Enter: open file`} onClick={review} onDoubleClick={openFile} onKeyDown={(event) => { if (event.key === "Enter" && event.shiftKey) { event.preventDefault(); openFile(); return; } rowNavigation(event, review, onTogglePath ? () => onTogglePath(entry.path) : undefined); }} onContextMenu={onContextMenu ? (event) => onContextMenu(event, entry) : undefined}>
       {onTogglePath && <input type="checkbox" aria-label={`Select ${entry.path} for commit`} checked={checked} onClick={(event) => event.stopPropagation()} onChange={() => onTogglePath(entry.path)} />}<FileCode2 size={14} /><span className="git-file-name">{node.name}</span><span className={`git-status ${kind}`}>{status}</span>
     </button>;

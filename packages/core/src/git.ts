@@ -1,9 +1,9 @@
 import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
 import path from "node:path";
-import { readFile } from "node:fs/promises";
+import { readFile, rm, stat, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
-import type { GitBranch, GitBranchDeletePreview, GitCommit, GitCommitFile, GitDiffHunk, GitHistoryRewritePreview, GitPullPreview, GitPullResult, GitPullStrategy, GitRollbackFailure, GitStash, GitStashInclusion, GitStashPreview, GitStatusEntry, GitTag, GitUpstreamStatus } from "@remote-ide/protocol";
+import type { GitBranch, GitBranchDeletePreview, GitCommit, GitCommitFile, GitConflictOperationKind, GitConflictWorkspace, GitDiffHunk, GitHistoryRewritePreview, GitPullPreview, GitPullResult, GitPullStrategy, GitRollbackFailure, GitStash, GitStashInclusion, GitStashPreview, GitStatusEntry, GitTag, GitUpstreamStatus } from "@remote-ide/protocol";
 import { CoreError } from "./errors.js";
 import { WorkspaceFileSystem } from "./filesystem.js";
 
@@ -81,6 +81,63 @@ export class GitService {
 
   async stage(filePath: string, hunk?: GitDiffHunk): Promise<void> { await this.updateIndex("stage", filePath, hunk); }
   async unstage(filePath: string, hunk?: GitDiffHunk): Promise<void> { await this.updateIndex("unstage", filePath, hunk); }
+
+  async conflicts(): Promise<GitConflictWorkspace> {
+    const entries = (await this.status()).entries.filter((entry) => entry.states.includes("conflict"));
+    if (!entries.length) throw new CoreError("GIT_FAILED", "There are no unresolved Git conflicts. Refresh Git status to continue.");
+    const operation = await this.conflictOperation();
+    const files = await Promise.all(entries.map(async (entry) => {
+      this.validateConflictPath(entry.path);
+      const [base, ours, theirs, result] = await Promise.all([
+        this.showIndexStage(1, entry.path), this.showIndexStage(2, entry.path), this.showIndexStage(3, entry.path),
+        readFile(path.join(this.workspace, entry.path), "utf8").then((content) => content as string | undefined).catch(() => undefined)
+      ]);
+      return { path: entry.path, ...(base !== undefined ? { base } : {}), ...(ours !== undefined ? { ours } : {}), ...(theirs !== undefined ? { theirs } : {}), ...(result !== undefined ? { result } : {}), resultDeleted: result === undefined };
+    }));
+    const native = operation !== "stash";
+    return { operation, files, canContinue: native, canAbort: native, recovery: conflictRecovery(operation) };
+  }
+
+  async resolveConflict(filePath: string, result: string | null): Promise<GitConflictWorkspace> {
+    this.validateConflictPath(filePath);
+    const entry = (await this.status()).entries.find((item) => item.path === filePath && item.states.includes("conflict"));
+    if (!entry) throw new CoreError("GIT_FAILED", `Path is no longer an unresolved conflict: ${filePath}. Refresh the conflict workspace.`);
+    const absolute = path.join(this.workspace, filePath);
+    if (result === null) { await rm(absolute, { force: true }); await this.git(["rm", "--cached", "--ignore-unmatch", "--", filePath]); }
+    else { await writeFile(absolute, result, "utf8"); await this.git(["add", "--", filePath]); }
+    if ((await this.status()).entries.some((item) => item.path === filePath && item.states.includes("conflict"))) throw new CoreError("GIT_FAILED", `Git did not accept the resolution for ${filePath}. Review the result and retry.`);
+    const remaining = (await this.status()).entries.filter((item) => item.states.includes("conflict"));
+    if (!remaining.length) { const operation = await this.conflictOperation(); const native = operation !== "stash"; return { operation, files: [], canContinue: native, canAbort: native, recovery: conflictRecovery(operation) }; }
+    return this.conflicts();
+  }
+
+  async conflictAction(action: "continue" | "abort"): Promise<string> {
+    const operation = await this.conflictOperation();
+    if (operation === "stash") throw new CoreError("GIT_FAILED", `Git stash has no native ${action} command. ${conflictRecovery(operation)}`);
+    if (action === "continue") {
+      const unresolved = (await this.status()).entries.filter((entry) => entry.states.includes("conflict"));
+      if (unresolved.length) throw new CoreError("GIT_FAILED", `Resolve every conflicted path before continuing: ${unresolved.map((entry) => entry.path).join(", ")}`);
+    }
+    const command = operation === "cherry-pick" ? ["cherry-pick", `--${action}`] : [operation, `--${action}`];
+    try {
+      await execFileAsync("git", ["-C", this.workspace, ...command], { encoding: "utf8", env: { ...process.env, GIT_EDITOR: "true", GIT_SEQUENCE_EDITOR: "true" } });
+      return `${operation} ${action} completed`;
+    } catch (error) { throw new CoreError("GIT_FAILED", `Could not ${action} ${operation}. ${error instanceof Error ? error.message : String(error)} ${conflictRecovery(operation)}`); }
+  }
+
+  private async conflictOperation(): Promise<GitConflictOperationKind> {
+    const exists = async (name: string, directory = false) => { try { const target = (await this.git(["rev-parse", "--git-path", name])).trim(); const info = await stat(path.resolve(this.workspace, target)); return directory ? info.isDirectory() : true; } catch { return false; } };
+    return detectConflictOperation({ rebase: await exists("rebase-merge", true) || await exists("rebase-apply", true), cherryPick: await exists("CHERRY_PICK_HEAD"), merge: await exists("MERGE_HEAD") });
+  }
+
+  private validateConflictPath(filePath: string): void {
+    const normalized = path.normalize(filePath);
+    if (!filePath || path.isAbsolute(filePath) || filePath.includes("\0") || normalized === ".." || normalized.startsWith(`..${path.sep}`)) throw new CoreError("INVALID_REQUEST", "Conflict path must stay inside the workspace");
+  }
+
+  private async showIndexStage(stage: 1 | 2 | 3, filePath: string): Promise<string | undefined> {
+    try { return await this.git(["show", `:${stage}:${filePath}`]); } catch { return undefined; }
+  }
 
   async branches(): Promise<GitBranch[]> {
     const output = await this.git(["for-each-ref", "--format=%(refname)%00%(refname:short)%00%(HEAD)%00", "refs/heads", "refs/remotes"]);
@@ -479,6 +536,10 @@ export class GitService {
   }
 }
 
+export function detectConflictOperation(state: { rebase: boolean; cherryPick: boolean; merge: boolean }): GitConflictOperationKind {
+  return state.rebase ? "rebase" : state.cherryPick ? "cherry-pick" : state.merge ? "merge" : "stash";
+}
+
 function parseStashes(output: string): GitStash[] {
   return output.split("\n").filter(Boolean).map((line) => {
     const [reference, hash, message, date] = line.split("\0");
@@ -492,6 +553,11 @@ function gitNetworkError(error: unknown): string {
   const safe = message.replace(/([a-z][a-z0-9+.-]*:\/\/)[^\s/@]+@/gi, "$1***@");
   if (/authentication failed|could not read username|terminal prompts disabled|permission denied \(publickey\)/i.test(safe)) return "Git authentication failed. Check your remote credentials and try again.";
   return `Could not fetch remote: ${safe}`;
+}
+
+function conflictRecovery(operation: GitConflictOperationKind): string {
+  if (operation === "stash") return "A stash application has no native continue or abort. Resolve and stage every path, then commit when ready; to discard it, restore the affected paths deliberately after preserving any work you need.";
+  return `Resolve and stage every path, then continue the ${operation}; abort returns Git to the pre-${operation} state.`;
 }
 
 function isUntracked(entry: GitStatusEntry): boolean { return entry.indexStatus === "?" && entry.worktreeStatus === "?"; }

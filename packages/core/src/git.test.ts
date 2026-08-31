@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
-import { GitService, parseCommitFiles, parseGitGraphLog, parseGitLog, parseGitStatus, validateTagName } from "./git.js";
+import { detectConflictOperation, GitService, parseCommitFiles, parseGitGraphLog, parseGitLog, parseGitStatus, validateTagName } from "./git.js";
 import { WorkspaceFileSystem } from "./filesystem.js";
 
 const execFileAsync = promisify(execFile);
@@ -241,6 +241,41 @@ describe("parseGitStatus", () => {
     expect((await execFileAsync("git", ["-C", root, "show", "HEAD:picked.txt"])).stdout).toBe("picked\n");
   });
 });
+
+describe("Git conflict resolution", () => {
+  it("prioritizes active rebase, cherry-pick, merge, then stash state", () => {
+    expect(detectConflictOperation({ rebase: true, cherryPick: true, merge: true })).toBe("rebase"); expect(detectConflictOperation({ rebase: false, cherryPick: true, merge: true })).toBe("cherry-pick"); expect(detectConflictOperation({ rebase: false, cherryPick: false, merge: true })).toBe("merge"); expect(detectConflictOperation({ rebase: false, cherryPick: false, merge: false })).toBe("stash");
+  });
+  it("detects a merge, validates and stages the result, then continues natively", async () => {
+    const root = await conflictedMerge("continue"); const service = new GitService(root);
+    const workspace = await service.conflicts(); expect(workspace).toMatchObject({ operation: "merge", canContinue: true, canAbort: true, files: [{ path: "file.txt", base: "base\n", ours: "ours\n", theirs: "theirs\n", resultDeleted: false }] });
+    await expect(service.resolveConflict("../outside.txt", "bad\n")).rejects.toThrow("inside the workspace");
+    const resolved = await service.resolveConflict("file.txt", "combined\n"); expect(resolved.files).toEqual([]); expect(await service.conflictAction("continue")).toContain("merge continue completed");
+    expect(await readFile(path.join(root, "file.txt"), "utf8")).toBe("combined\n"); expect((await execFileAsync("git", ["-C", root, "log", "-1", "--pretty=%P"])).stdout.trim().split(" ")).toHaveLength(2);
+  });
+
+  it("refuses to continue unresolved paths and exposes native abort", async () => {
+    const root = await conflictedMerge("abort"); const service = new GitService(root);
+    await expect(service.conflictAction("continue")).rejects.toThrow("Resolve every conflicted path"); expect(await service.conflictAction("abort")).toContain("merge abort completed");
+    expect((await service.status()).entries).toEqual([]); expect(await readFile(path.join(root, "file.txt"), "utf8")).toBe("ours\n");
+  });
+
+  it("recognizes stash conflicts and does not offer nonexistent native actions", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "remote-ide-git-stash-conflict-")); await initRepository(root);
+    await writeFile(path.join(root, "file.txt"), "base\n"); await execFileAsync("git", ["-C", root, "add", "file.txt"]); await execFileAsync("git", ["-C", root, "commit", "-m", "base"]);
+    await writeFile(path.join(root, "file.txt"), "stashed\n"); await execFileAsync("git", ["-C", root, "stash", "push", "-m", "conflict"]); await writeFile(path.join(root, "file.txt"), "current\n"); await execFileAsync("git", ["-C", root, "add", "file.txt"]); await execFileAsync("git", ["-C", root, "commit", "-m", "current"]); await execFileAsync("git", ["-C", root, "stash", "apply"]).catch(() => undefined);
+    const service = new GitService(root); await expect(service.conflicts()).resolves.toMatchObject({ operation: "stash", canContinue: false, canAbort: false }); await expect(service.conflictAction("abort")).rejects.toThrow("no native abort");
+  });
+});
+
+async function initRepository(root: string): Promise<void> {
+  await execFileAsync("git", ["-C", root, "init"]); await execFileAsync("git", ["-C", root, "config", "user.email", "test@example.com"]); await execFileAsync("git", ["-C", root, "config", "user.name", "Test"]);
+}
+
+async function conflictedMerge(name: string): Promise<string> {
+  const root = await mkdtemp(path.join(tmpdir(), `remote-ide-git-conflict-${name}-`)); await initRepository(root); await writeFile(path.join(root, "file.txt"), "base\n"); await execFileAsync("git", ["-C", root, "add", "file.txt"]); await execFileAsync("git", ["-C", root, "commit", "-m", "base"]); const branch = (await execFileAsync("git", ["-C", root, "branch", "--show-current"])).stdout.trim();
+  await execFileAsync("git", ["-C", root, "checkout", "-b", "theirs"]); await writeFile(path.join(root, "file.txt"), "theirs\n"); await execFileAsync("git", ["-C", root, "commit", "-am", "theirs"]); await execFileAsync("git", ["-C", root, "checkout", branch]); await writeFile(path.join(root, "file.txt"), "ours\n"); await execFileAsync("git", ["-C", root, "commit", "-am", "ours"]); await execFileAsync("git", ["-C", root, "merge", "theirs"]).catch(() => undefined); return root;
+}
 
 describe("Git stashes", () => {
   it("creates explicit stashes, previews overlap, and retains a failed pop", async () => {
