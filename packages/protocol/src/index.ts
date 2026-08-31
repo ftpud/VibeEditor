@@ -37,6 +37,15 @@ export type GitBranch = { name: string; current: boolean; remote: boolean };
 export type GitTag = { name: string; target: string; annotated: boolean };
 export type GitCommit = { hash: string; shortHash: string; author: string; date: string; subject: string; parents?: string[]; refs?: string[]; graph?: string };
 export type GitCommitFile = { path: string; status: string; originalPath?: string };
+export type GitHistoryRewritePreview = {
+  commit: GitCommit;
+  commitFiles: GitCommitFile[];
+  indexEntries: GitStatusEntry[];
+  worktreeEntries: GitStatusEntry[];
+  publication: "unpublished" | "published" | "unknown";
+  confirmationRequired: boolean;
+  recovery: string;
+};
 /** Patch and version are opaque Core-issued values; they prevent applying a hunk after its source changed. */
 export type GitDiffHunk = { originalStart: number; originalLines: number; modifiedStart: number; modifiedLines: number; source: "index" | "worktree"; patch: string; version: string };
 export type GitRollbackFailure = { path: string; message: string };
@@ -264,6 +273,7 @@ export type ProtocolOperations = {
   "git.renameBranch": { payload: { branch: string; newName: string }; result: { branch: string } };
   "git.log": { payload: { branch: string; limit?: number }; result: { commits: GitCommit[] } };
   "git.commitFiles": { payload: { hash: string }; result: { files: GitCommitFile[] } };
+  "git.commitMessage": { payload: { hash: string }; result: { message: string } };
   "git.commitDiff": { payload: { hash: string; path: string; originalPath?: string }; result: { originalContent: string; modifiedContent: string } };
   "git.cherryPick": { payload: { hash: string; commit: boolean }; result: { branch: string } };
   "git.fileHistory": { payload: { path: string; startLine?: number; endLine?: number }; result: { commits: GitCommit[] } };
@@ -272,6 +282,9 @@ export type ProtocolOperations = {
   "git.rollback": { payload: { path: string }; result: Record<string, never> };
   "git.rollbackSelected": { payload: { paths: string[]; deleteUntracked: boolean }; result: { rolledBack: string[]; failures: GitRollbackFailure[] } };
   "git.commit": { payload: { paths: string[]; message: string }; result: { hash: string } };
+  "git.historyRewritePreview": { payload: Record<string, never>; result: GitHistoryRewritePreview };
+  "git.amend": { payload: { confirmHistoryRewrite: boolean }; result: { hash: string } };
+  "git.undoLastCommit": { payload: { confirmHistoryRewrite: boolean }; result: { undone: string } };
   "git.push": { payload: Record<string, never>; result: Record<string, never> };
   "git.fetch": { payload: Record<string, never>; result: { fetchedAt: string } };
   "git.cancelFetch": { payload: Record<string, never>; result: { cancelled: boolean } };
@@ -486,6 +499,7 @@ const requestTypeRegistry: Record<RequestType, true> = {
   "git.renameBranch": true,
   "git.log": true,
   "git.commitFiles": true,
+  "git.commitMessage": true,
   "git.commitDiff": true,
   "git.cherryPick": true,
   "git.fileHistory": true,
@@ -494,6 +508,9 @@ const requestTypeRegistry: Record<RequestType, true> = {
   "git.rollback": true,
   "git.rollbackSelected": true,
   "git.commit": true,
+  "git.historyRewritePreview": true,
+  "git.amend": true,
+  "git.undoLastCommit": true,
   "git.push": true,
   "git.fetch": true,
   "git.cancelFetch": true,
