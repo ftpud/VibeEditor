@@ -218,7 +218,7 @@ multi-surface work).
   clone/install/build/start failures diagnosable and recoverable. Constraint: stream
   bounded redacted logs, distinguish retryable stages, and never reset the configured
   project repository (only the dedicated Vibe application checkout).
-- [ ] **Version compatibility and controlled updates — Project.** Value: prevent a
+- [x] **Version compatibility and controlled updates — Project.** Value: prevent a
   cached Desktop from silently speaking an incompatible protocol to Core. Constraint:
   add an explicit handshake/version range before offering update or rollback; verify
   transferred artifacts and preserve the last known-good client.

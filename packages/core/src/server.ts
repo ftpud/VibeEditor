@@ -4,7 +4,7 @@ import chokidar from "chokidar";
 import path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { requestTypes, type FileChangeKind, type Request, type RequestType, type Response, type ServerEvent, type WorkspaceOptions } from "@remote-ide/protocol";
+import { protocolCompatibility, protocolRangesOverlap, requestTypes, type FileChangeKind, type Request, type RequestType, type Response, type ServerEvent, type WorkspaceOptions } from "@remote-ide/protocol";
 import { CoreError } from "./errors.js";
 import { WorkspaceFileSystem } from "./filesystem.js";
 import { TerminalSessionHost } from "./process-manager.js";
@@ -52,6 +52,13 @@ export function sendWebSocketData(socket: WebSocket, data: string): boolean {
   } catch {
     return false;
   }
+}
+
+export function protocolHandshake(compatibility: { minimum: number; maximum: number }): { compatible: boolean; compatibility: typeof protocolCompatibility; message?: string } {
+  const compatible = protocolRangesOverlap(compatibility, protocolCompatibility);
+  return compatible
+    ? { compatible, compatibility: protocolCompatibility }
+    : { compatible, compatibility: protocolCompatibility, message: `Core supports protocol ${protocolCompatibility.minimum}-${protocolCompatibility.maximum}; this Desktop supports ${compatibility.minimum}-${compatibility.maximum}` };
 }
 
 export async function createServer(host: string, port: number, workspacePath: string): Promise<WebSocketServer> {
@@ -176,6 +183,7 @@ export async function createServer(host: string, port: number, workspacePath: st
   server.on("close", () => { terminalHost.closeAll(); void watcher.close(); void gitIndexWatcher.close(); void runConfigWatcher.close(); void appEventWatcher.close(); void appCommandWatcher.close(); });
   server.on("listening", () => console.log(`[core] listening on ws://${host}:${port}`));
   server.on("connection", (socket, request) => {
+    let protocolAccepted = false;
     const makeServices = async (nextWorkspace: string): Promise<SessionServices> => {
       const filesystem = new WorkspaceFileSystem();
       await filesystem.open(nextWorkspace);
@@ -244,6 +252,16 @@ export async function createServer(host: string, port: number, workspacePath: st
         const parsed = parseRequest(data);
         id = parsed.id;
         console.log(`[core] request ${parsed.id}: ${parsed.type}`);
+        if (parsed.type === "protocol.handshake") {
+          if (protocolAccepted) throw new CoreError("INVALID_REQUEST", "Protocol handshake has already completed");
+          const result = protocolHandshake(parsed.payload.compatibility);
+          const compatible = result.compatible;
+          sendWebSocketData(socket, JSON.stringify({ id, ok: true, result } satisfies Response));
+          if (!compatible) setTimeout(() => socket.close(1008, "Incompatible protocol"), 0);
+          else protocolAccepted = true;
+          return;
+        }
+        if (!protocolAccepted) throw new CoreError("INVALID_REQUEST", "Complete protocol.handshake before sending requests");
         // Requests are handled concurrently, so anything that arrives while a task switch is
         // rebuilding the services has to wait for it. Otherwise it would run against the
         // previous worktree and answer the client with another task's state.

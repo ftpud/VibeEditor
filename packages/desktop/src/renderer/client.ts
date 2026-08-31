@@ -1,4 +1,4 @@
-import type { ProtocolOperations, Request, RequestType, Response, ServerEvent } from "@remote-ide/protocol";
+import { protocolCompatibility, type ProtocolOperations, type Request, type RequestType, type Response, type ServerEvent } from "@remote-ide/protocol";
 
 type Pending = { socket: WebSocket; timer: ReturnType<typeof setTimeout>; resolve(value: unknown): void; reject(error: Error): void };
 
@@ -29,7 +29,19 @@ export class CoreClient {
         previous.close();
       }
       let opened = false;
-      socket.onopen = () => { if (this.socket === socket) { opened = true; resolve(); } };
+      socket.onopen = () => {
+        if (this.socket !== socket) return;
+        opened = true;
+        this.request("protocol.handshake", { compatibility: protocolCompatibility, clientVersion: "0.1.0" }).then((result) => {
+          if (!result.compatible) throw new Error(result.message ?? "Desktop and Core protocol versions are incompatible");
+          resolve();
+        }).catch((error: unknown) => {
+          const message = error instanceof Error ? error.message : "Could not negotiate a compatible protocol";
+          this.socket = undefined;
+          socket.close();
+          reject(new Error(message));
+        });
+      };
       socket.onerror = () => { if (!opened && this.socket === socket) reject(new Error("Could not connect to the backend")); };
       socket.onmessage = (event) => { if (this.socket === socket) this.handleMessage(String(event.data)); };
       socket.onclose = () => {
