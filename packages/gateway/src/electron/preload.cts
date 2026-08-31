@@ -16,6 +16,8 @@ contextBridge.exposeInMainWorld("gateway", {
   startPortTunnel: (id: string) => ipcRenderer.invoke("gateway:startPortTunnel", id),
   stopPortTunnel: (id: string) => ipcRenderer.invoke("gateway:stopPortTunnel", id),
   startServer: (id: string) => ipcRenderer.invoke("gateway:startServer", id),
+  repairServer: (id: string) => ipcRenderer.invoke("gateway:repairServer", id),
+  cancelProvisioning: (id: string) => ipcRenderer.invoke("gateway:cancelProvisioning", id),
   stopServer: (id: string) => ipcRenderer.invoke("gateway:stopServer", id),
   startClient: (id: string) => ipcRenderer.invoke("gateway:startClient", id),
   onStatus: (listener: (id: string, status: unknown) => void) => { const handler = (_event: unknown, id: string, status: unknown) => listener(id, status); ipcRenderer.on("gateway:status", handler); return () => ipcRenderer.removeListener("gateway:status", handler); },

@@ -38,3 +38,9 @@ test("disabled auto-update retains an existing checkout without fetching", () =>
   assert.doesNotMatch(command, /fetch origin/);
   assert.match(command, /git clone --branch 'main'/);
 });
+
+test("repair only removes dedicated Vibe dependencies and generated artifacts", () => {
+  const command = provisionCommand(defaultRepositorySettings, "export PATH=/bin", true);
+  assert.match(command, /rm -rf ~\/\.vibe\/node_modules ~\/\.vibe-build/);
+  assert.doesNotMatch(command, /git reset/);
+});

@@ -11,6 +11,7 @@ import { connectionConfig, normalizeStoredAuthentication, sshConnectionError, te
 import { defaultRepositorySettings, normalizeRepositorySettings, provisionCommand, repositorySettingsOrDefault, type RepositorySettings } from "./repository-settings.js";
 import { parseDiscoveredWorkspaceDirectories, parseValidatedWorkspaceDirectory, validateWorkspaceDirectoryInput, workspaceDiscoveryCommand, workspaceValidationCommand } from "./workspace-path.js";
 import { compatibleClient, readCompatibility, type Compatibility } from "./client-compatibility.js";
+import { boundedProvisioningLog, classifyProvisioningFailure } from "./provisioning.js";
 
 type Connection = { id: string; name: string; host: string; port: number; username: string } & ConnectionAuth;
 type Workspace = { id: string; connectionId: string; name: string; directory: string; remotePort: number };
@@ -18,7 +19,7 @@ type PortTunnel = { id: string; connectionId: string; port: number };
 type StoredConnection = { id: string; name: string; host: string; port: number; username: string; authenticationMethod?: AuthenticationMethod; password: string; privateKeyPath?: string; passphrase?: string };
 type State = { connections: StoredConnection[]; workspaces: Workspace[]; portTunnels: PortTunnel[]; repository: RepositorySettings };
 type PublicState = { connections: { id: string; name: string; host: string; port: number; username: string; authenticationMethod: AuthenticationMethod; privateKeyPath?: string }[]; workspaces: Workspace[]; portTunnels: PortTunnel[] };
-type Runtime = { status: "idle" | "working" | "server" | "client" | "error"; message: string };
+type Runtime = { status: "idle" | "working" | "server" | "client" | "error"; message: string; logs?: string[]; retryable?: boolean; repairable?: boolean };
 type TunnelRuntime = { status: "idle" | "working" | "running" | "error"; message: string };
 
 const directory = path.dirname(fileURLToPath(import.meta.url));
@@ -29,6 +30,8 @@ const tunnels = new Map<string, { ssh: Client; server: Server }>();
 const portTunnelRuntimes = new Map<string, TunnelRuntime>();
 const portTunnels = new Map<string, { ssh: Client; server: Server }>();
 const connectionRuntimes = new Map<string, ConnectionRuntime>();
+const provisioningClients = new Map<string, Client>();
+const cancelledProvisioning = new Set<string>();
 
 app.name = "Vibe Gateway";
 app.setName("Vibe Gateway");
@@ -58,8 +61,8 @@ function publicState(state: State): PublicState {
 }
 function id(): string { return crypto.randomUUID(); }
 function shell(value: string): string { return `'${value.replaceAll("'", `'"'"'`)}'`; }
-function runtime(workspaceId: string, status: Runtime["status"], message: string): void {
-  const value = { status, message }; runtimes.set(workspaceId, value);
+function runtime(workspaceId: string, status: Runtime["status"], message: string, details: Omit<Runtime, "status" | "message"> = {}): void {
+  const value = { status, message, ...details }; runtimes.set(workspaceId, value);
   for (const window of BrowserWindow.getAllWindows()) window.webContents.send("gateway:status", workspaceId, value);
 }
 function portTunnelRuntime(tunnelId: string, status: TunnelRuntime["status"], message: string): void {
@@ -84,12 +87,14 @@ function connectWithConfig(config: Parameters<Client["connect"]>[0]): Promise<Cl
   });
 }
 async function connect(connection: ConnectionDetails): Promise<Client> { return connectWithConfig(await connectionConfig(connection, readFile)); }
-function execute(client: Client, command: string): Promise<string> {
+function execute(client: Client, command: string, onOutput?: (line: string) => void): Promise<string> {
   return new Promise((resolve, reject) => client.exec(command, (error, stream) => {
     if (error) { reject(error); return; }
     let stdout = ""; let stderr = "";
-    stream.on("data", (data: Buffer) => { stdout += data.toString(); });
-    stream.stderr.on("data", (data: Buffer) => { stderr += data.toString(); });
+    let pending = "";
+    const receive = (data: Buffer) => { const text = data.toString(); stdout += text; pending += text; const lines = pending.split(/\r?\n/); pending = lines.pop() ?? ""; for (const line of lines) onOutput?.(line); };
+    stream.on("data", receive);
+    stream.stderr.on("data", receive);
     stream.on("close", (code: number) => {
       if (code === 0) { resolve(stdout); return; }
       const output = [stdout.trim(), stderr.trim()].filter(Boolean).join("\n");
@@ -129,18 +134,24 @@ async function refreshStatuses(connectionId?: string): Promise<void> {
     } finally { client?.end(); }
   }));
 }
-async function provision(client: Client, settings: RepositorySettings): Promise<{ commit: string; rebuilt: boolean }> {
-  const command = provisionCommand(settings, remoteNodeEnvironment);
-  const output = await execute(client, `bash -lc ${shell(command)}`);
+async function provision(workspaceId: string, client: Client, settings: RepositorySettings, repair = false): Promise<{ commit: string; rebuilt: boolean }> {
+  const command = provisionCommand(settings, remoteNodeEnvironment, repair);
+  const logs: string[] = [];
+  const output = await execute(client, `bash -lc ${shell(command)}`, (line) => {
+    logs.push(line);
+    const stage = line.match(/^VIBE_STAGE:(.+)$/)?.[1];
+    runtime(workspaceId, "working", stage ? `${stage.replaceAll("-", " ")}…` : "Provisioning remote Vibe application…", { logs: boundedProvisioningLog(logs) });
+  });
+  if (cancelledProvisioning.has(workspaceId)) throw new Error("Provisioning cancelled");
   const match = output.match(/VIBE_RESULT:([0-9a-f]{40,64}):([01])/);
   if (!match?.[1]) throw new Error("Remote Git revision could not be determined");
   return { commit: match[1], rebuilt: match[2] === "1" };
 }
-async function startServer(workspaceId: string): Promise<{ remotePort: number }> {
+async function startServer(workspaceId: string, repair = false): Promise<{ remotePort: number }> {
   const { workspace, connection } = await withWorkspace(workspaceId); runtime(workspaceId, "working", "Updating and building remote server...");
-  const client = await connect(connection);
+  const client = await connect(connection); provisioningClients.set(workspaceId, client); cancelledProvisioning.delete(workspaceId);
   try {
-    const build = await provision(client, (await readState()).repository);
+    const build = await provision(workspaceId, client, (await readState()).repository, repair);
     const portScript = `const net=require("net");const preferred=${workspace.remotePort};let fallback=false;const open=port=>{const server=net.createServer();server.unref();server.once("error",error=>{if(error.code==="EADDRINUSE"&&!fallback){fallback=true;open(0);return}throw error});server.listen(port,"127.0.0.1",()=>{console.log(server.address().port);server.close()})};open(preferred)`;
     const selectedPort = Number((await execute(client, `bash -lc ${shell(`${remoteNodeEnvironment}; node -e ${shell(portScript)}`)}`)).trim());
     if (!Number.isInteger(selectedPort) || selectedPort < 1) throw new Error("Could not allocate a remote Core port");
@@ -152,7 +163,11 @@ async function startServer(workspaceId: string): Promise<{ remotePort: number }>
     const run = `set -e; ${remoteNodeEnvironment}; if [ -f ${pidFile} ]; then kill $(cat ${pidFile}) 2>/dev/null || true; rm -f ${pidFile}; fi; cd ~/.vibe; nohup node packages/core/dist/index.js --host 127.0.0.1 --port ${workspace.remotePort} --workspace ${shell(workspace.directory)} > ${logFile} 2>&1 < /dev/null & echo $! > ${pidFile}; sleep 2; if ! kill -0 $(cat ${pidFile}) 2>/dev/null; then echo "Core failed to start. Remote log:" >&2; tail -n 40 ${logFile} >&2; rm -f ${pidFile}; exit 1; fi`;
     await execute(client, `bash -lc ${shell(run)}`); runtime(workspaceId, "server", `Server listening remotely on ${workspace.remotePort}${build.rebuilt ? " (rebuilt)" : " (build reused)"}`);
     return { remotePort: workspace.remotePort };
-  } finally { client.end(); }
+  } catch (error) {
+    const failure = classifyProvisioningFailure(cancelledProvisioning.has(workspaceId) ? new Error("Provisioning cancelled") : error);
+    runtime(workspaceId, "error", failure.message, { logs: runtimes.get(workspaceId)?.logs, retryable: failure.retryable, repairable: failure.repairable });
+    throw error;
+  } finally { provisioningClients.delete(workspaceId); cancelledProvisioning.delete(workspaceId); client.end(); }
 }
 async function stopServer(workspaceId: string): Promise<void> {
   const { workspace, connection } = await withWorkspace(workspaceId); runtime(workspaceId, "working", "Stopping remote server...");
@@ -370,6 +385,8 @@ ipcMain.handle("gateway:deletePortTunnel", async (_event, tunnelId: string) => {
 ipcMain.handle("gateway:startPortTunnel", (_event, tunnelId: string) => startPortTunnel(tunnelId));
 ipcMain.handle("gateway:stopPortTunnel", (_event, tunnelId: string) => stopPortTunnel(tunnelId));
 ipcMain.handle("gateway:startServer", (_event, workspaceId: string) => startServer(workspaceId));
+ipcMain.handle("gateway:repairServer", (_event, workspaceId: string) => startServer(workspaceId, true));
+ipcMain.handle("gateway:cancelProvisioning", (_event, workspaceId: string) => { cancelledProvisioning.add(workspaceId); provisioningClients.get(workspaceId)?.end(); runtime(workspaceId, "idle", "Provisioning cancelled"); });
 ipcMain.handle("gateway:stopServer", (_event, workspaceId: string) => stopServer(workspaceId));
 ipcMain.handle("gateway:startClient", (_event, workspaceId: string) => startClient(workspaceId));
 
