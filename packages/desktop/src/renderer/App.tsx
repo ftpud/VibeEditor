@@ -44,6 +44,7 @@ import { EditorViewStateStore } from "./editor-view-state";
 import { StableEditor } from "./StableEditor";
 import { reconcileProjectTree } from "./project-tree-reconciliation";
 import { NavigationHistory, type EditorLocation } from "./navigation-history";
+import { ModalFocusManager } from "./accessibility";
 
 type ConnectionStatus = "idle" | "connecting" | "connected" | "failed" | "disconnected" | "workspace-error";
 type StatusKind = "progress" | "success" | "error";
@@ -64,6 +65,13 @@ const gitHunkDecorations = (hunks: GitDiffHunk[]): editor.IModelDeltaDecoration[
 type ParsedHttpRequest = { line: number; method: string; url: string; headers: Record<string, string>; body?: string };
 /** Identifies which workspace, provider and request order an AI session snapshot was fetched for. */
 type AiSnapshotToken = { sequence: number; workspace: string; provider: AiProvider };
+export function keyboardResize(event: { key: string; shiftKey: boolean; preventDefault(): void }, value: number, update: (value: number) => void, minimum: number, maximum: number, reverse = false) {
+  const direction = event.key === "ArrowLeft" ? -1 : event.key === "ArrowRight" ? 1 : 0;
+  if (!direction) return;
+  event.preventDefault();
+  const step = event.shiftKey ? 50 : 10;
+  update(Math.max(minimum, Math.min(maximum, value + direction * step * (reverse ? -1 : 1))));
+}
 function parseHttpRequests(content: string): ParsedHttpRequest[] {
   const lines = content.split("\n"); const requests: ParsedHttpRequest[] = [];
   let blockStart = 0;
@@ -2195,7 +2203,7 @@ export function App() {
 
   if (status !== "connected") return <ConnectionScreen {...{ host, port, status, statusMessage, setHost, setPort, connect }} />;
 
-  return <div className="ide-shell">
+  return <div className="ide-shell"><ModalFocusManager />
     {statusMessage && <div className={`status-toast ${statusKind}`} role={statusKind === "error" ? "alert" : "status"} aria-live={statusKind === "error" ? "assertive" : "polite"}>
       {statusKind === "progress" ? <LoaderCircle className="status-toast-spinner" size={16} /> : statusKind === "success" ? <Check size={16} /> : <CircleAlert size={16} />}
       <span>{statusMessage}</span>
@@ -2215,7 +2223,7 @@ export function App() {
           {!showRootTask && filteredTasks.length === 0 && <div className="filter-empty">No matching tasks</div>}
         </div></section>}
         {leftPanels.ai && <section key="ai" className="stacked-panel"><header className="panel-header"><span>AI</span><AgentPicker agents={agents} value={selectedAgentKey} disabled={aiSession.status === "in_progress"} onChange={selectAgent} /><span className={`ai-status ${aiSession.status}`}>{formatAiStatus(aiSession.status)}</span></header><AiPanel key={`${activeWorkspace}:${selectedTaskId ?? "root"}:${aiProvider}:${aiSession.id ?? "legacy"}`} provider={aiProvider} providers={aiProviders} session={aiSession} sessions={aiSessions} models={aiModels} usage={aiUsage} attachments={currentAiAttachments} draft={currentAiDraft} permissionOwner={{ provider: aiProvider, ...(selectedTaskId ? { taskId: selectedTaskId } : {}), ...(aiSession.id ? { sessionId: aiSession.id } : {}) }} permissionActionsDisabled={taskSwitching} sessionChangesDisabled={selectedTaskTimerActive} onProviderChange={(provider) => void switchAiProvider(provider)} onConfigurationChange={configureAi} onAttachmentsChange={updateAiAttachments} onDraftChange={updateAiDraft} onSend={sendAiPrompt} onSendAsTask={selectedTaskId ? undefined : sendAiPromptAsTask} onSteer={steerAiPrompt} onInterrupt={() => void interruptAi()} onNewSession={() => void newAiSession()} onSwitchSession={(session) => void switchAiSession(session)} onRemoveSession={(session) => void removeAiSession(session)} onResolvePermission={resolveAiPermission} /></section>}
-      </ResizablePanelStack></aside><div className="resize-handle" onPointerDown={beginLeftSidebarResize} /></>}
+      </ResizablePanelStack></aside><div className="resize-handle" role="separator" aria-label="Resize left sidebar" aria-orientation="vertical" aria-valuemin={280} aria-valuemax={Math.round(Math.min(900, window.innerWidth * .65))} aria-valuenow={Math.round(leftSidebarWidth)} tabIndex={0} onKeyDown={(event) => keyboardResize(event, leftSidebarWidth, setLeftSidebarWidth, 280, Math.min(900, window.innerWidth * .65))} onPointerDown={beginLeftSidebarResize} /></>}
       </> : <>
       <nav className="tool-stripe" aria-label="Left tool windows">
         <button className={`tool-stripe-button ${classicSideView === "project" ? "active" : ""}`} title="Project" onClick={() => selectClassicSideView("project")}><Folder size={15} /><span>Project</span></button>
@@ -2237,7 +2245,7 @@ export function App() {
           <KeyboardGitChangesView entries={gitEntries} error={gitError} selectedPaths={selectedGitPaths} onTogglePath={(path) => setSelectedGitPaths((current) => { const next = new Set(current); next.has(path) ? next.delete(path) : next.add(path); return next; })} activePath={activeTab?.path} onOpenDiff={openDiff} onOpenFile={(entry) => void openFile({ name: entry.path.split("/").pop() ?? entry.path, path: entry.path, type: "file" })} onContextMenu={(event, entry) => { event.preventDefault(); setGitRollbackMenu({ x: Math.min(event.clientX, window.innerWidth - 220), y: Math.min(event.clientY, window.innerHeight - 50), entry }); }} />
           <GitCommitPanel message={gitCommitMessage} selectedCount={selectedGitPaths.size} operationRunning={gitOperationRunning} committing={gitCommitting} onMessageChange={setGitCommitMessage} onCommit={() => void commitSelectedFiles()} stagedCount={gitEntries.filter((entry) => entry.states.includes("index")).length} onAmend={() => void previewHistoryRewrite("amend")} />
         </> : classicSideView === "taskGit" && selectedTaskId ? <><header className="panel-header"><span>Task Git</span><button title="Refresh task comparison" onClick={() => void refreshTaskGit()}><RefreshCw size={14} /></button></header><div className="git-branch"><GitCompareArrows size={13} /><span>{tasks.find((task) => task.id === selectedTaskId)?.baseBranch ?? "Base branch"}</span></div><GitChangesView entries={taskGitEntries} error={taskGitError} emptyMessage="No changes from base branch" groupTitle="Changes from Base" activePath={activeTab?.path} onOpenDiff={openTaskDiff} onOpenFile={(entry) => void openFile({ name: entry.path.split("/").pop() ?? entry.path, path: entry.path, type: "file" })} /></> : classicSideView === "useful" ? <><header className="panel-header"><span>Useful Files</span><button title="Refresh useful files" onClick={() => void refreshUsefulFiles()}><RefreshCw size={14} /></button></header><div className="useful-files-list"><UsefulFileSection title="Global" scope="global" files={usefulFiles} activeTab={activeTab} onOpen={openUsefulFile} onCreate={(scope) => setUsefulDialog({ mode: "create", scope })} onRename={(file) => setUsefulDialog({ mode: "rename", scope: file.scope, file })} onDelete={(file) => void deleteUsefulFile(file)} /><UsefulFileSection title="Local" scope="local" files={usefulFiles} activeTab={activeTab} onOpen={openUsefulFile} onCreate={(scope) => setUsefulDialog({ mode: "create", scope })} onRename={(file) => setUsefulDialog({ mode: "rename", scope: file.scope, file })} onDelete={(file) => void deleteUsefulFile(file)} /></div></> : classicSideView === "agents" ? <AgentsPanel agents={agents} activeTab={activeTab} onRefresh={() => void refreshAgents()} onOpen={(file) => void openAgentFile(file)} onCreate={(scope) => setAgentDialog({ mode: "create", scope })} onRename={(file) => { if (file.scope !== "workspace") setAgentDialog({ mode: "rename", scope: file.scope, file }); }} onDelete={(file) => void deleteAgent(file)} /> : <><header className="panel-header"><span>Java Project</span><button title="Refresh Java project" onClick={() => void refreshJavaTree()}><RefreshCw size={14} /></button></header><div className="java-project-meta"><Coffee size={13} /><span>{javaOptions?.pomPath}</span></div><div className="tree java-tree">{javaOptions && <JavaProjectTree nodes={javaTree} activePath={activeTab?.path} onOpen={openFile} />}</div></>}
-      </aside><div className="resize-handle" onPointerDown={beginClassicLeftResize} />
+      </aside><div className="resize-handle" role="separator" aria-label="Resize left sidebar" aria-orientation="vertical" aria-valuemin={180} aria-valuemax={500} aria-valuenow={Math.round(classicLeftWidth)} tabIndex={0} onKeyDown={(event) => keyboardResize(event, classicLeftWidth, setClassicLeftWidth, 180, 500)} onPointerDown={beginClassicLeftResize} />
       </>}
       <main className="workbench">
         <div className="titlebar-actions">
@@ -2281,7 +2289,7 @@ export function App() {
         {httpResult && <section className="http-response-panel"><header><span>{httpResult.request.method} {httpResult.request.url}</span>{httpResult.loading ? <small>Sending...</small> : httpResult.response ? <small className={httpResult.response.status >= 400 ? "error" : "success"}>{httpResult.response.status} {httpResult.response.statusText} · {httpResult.response.durationMs} ms</small> : null}<button title="Close response" onClick={() => setHttpResult(undefined)}><X size={14} /></button></header>{httpResult.error ? <div className="http-response-error">{httpResult.error}</div> : httpResult.response ? <div className="http-response-content"><pre className="http-response-headers">{Object.entries(httpResult.response.headers).map(([name, value]) => `${name}: ${value}`).join("\n")}</pre><pre className="http-response-body">{httpResult.response.body}</pre></div> : <div className="http-response-loading">Waiting for response...</div>}</section>}
       </main>
       {sideLayout === "ai-focused" ? <>
-      {rightSidebarOpen && <><div className="right-resize-handle" onPointerDown={beginRightSidebarResize} />
+      {rightSidebarOpen && <><div className="right-resize-handle" role="separator" aria-label="Resize right sidebar" aria-orientation="vertical" aria-valuemin={180} aria-valuemax={Math.round(Math.min(700, window.innerWidth * .55))} aria-valuenow={Math.round(rightSidebarWidth)} tabIndex={0} onKeyDown={(event) => keyboardResize(event, rightSidebarWidth, setRightSidebarWidth, 180, Math.min(700, window.innerWidth * .55), true)} onPointerDown={beginRightSidebarResize} />
       <aside className="side-panel side-panel-right" style={{ width: rightSidebarWidth }}><ResizablePanelStack workspace={activeWorkspace} setting="focused.rightSizes" ids={[...(rightPanels.project ? ["project"] : []), ...(rightPanels.git ? ["git"] : []), ...(rightPanels.taskGit && selectedTaskId ? ["taskGit"] : []), ...(rightPanels.promptHistory && selectedTaskId ? ["promptHistory"] : []), ...(rightPanels.java && javaOptions ? ["java"] : []), ...(rightPanels.useful ? ["useful"] : []), ...(rightPanels.agents ? ["agents"] : [])]}>
         {rightPanels.project && <section key="project" className="stacked-panel">
           <header className="panel-header"><span>Project</span><div className="panel-header-actions"><button title={showIgnored ? "Hide ignored files" : "Show all files (including Git-ignored)"} className={showIgnored ? "active" : ""} onClick={toggleShowIgnored}>{showIgnored ? <Eye size={14} /> : <EyeOff size={14} />}</button><button title="Synchronize files" onClick={() => void refreshTree()}><RefreshCw size={14} /></button></div></header>
@@ -2311,7 +2319,7 @@ export function App() {
         <button className={`tool-stripe-button right ${rightPanels.agents ? "active" : ""}`} title={rightPanels.agents ? "Hide Agents" : "Show Agents"} onClick={() => setRightPanels((current) => { if (!current.agents) void refreshAgents(); return { ...current, agents: !current.agents }; })}><Bot size={15} /><span>Agents</span></button>
       </nav>
       </> : <>
-      {(classicTasksOpen || classicAiOpen || (rightPanels.promptHistory && selectedTaskId)) && <><div className="right-resize-handle" onPointerDown={beginClassicRightResize} /><aside className="side-panel classic-right-panel" style={{ width: classicRightWidth }}>
+      {(classicTasksOpen || classicAiOpen || (rightPanels.promptHistory && selectedTaskId)) && <><div className="right-resize-handle" role="separator" aria-label="Resize right sidebar" aria-orientation="vertical" aria-valuemin={240} aria-valuemax={Math.round(Math.min(960, window.innerWidth * .72))} aria-valuenow={Math.round(classicRightWidth)} tabIndex={0} onKeyDown={(event) => keyboardResize(event, classicRightWidth, setClassicRightWidth, 240, Math.min(960, window.innerWidth * .72), true)} onPointerDown={beginClassicRightResize} /><aside className="side-panel classic-right-panel" style={{ width: classicRightWidth }}>
         {classicTasksOpen && <section className="stacked-panel" style={classicAiOpen ? { flex: `0 0 ${classicSplit}%` } : undefined}><header className="panel-header"><span>Tasks</span><button title="Create task" disabled={taskSwitching} onClick={() => setShowCreateTaskDialog(true)}><Plus size={15} /></button></header><div className="task-filters"><QuickFilter value={taskFilter} placeholder="Filter tasks" label="Filter tasks" onChange={setTaskFilter} /><select aria-label="Task lifecycle filter" value={taskLifecycleFilter} onChange={(event) => setTaskLifecycleFilter(event.target.value as typeof taskLifecycleFilter)}><option value="active">Active</option><option value="finished">Finished</option><option value="archived">Archived</option><option value="all">All</option></select></div><div className="tasks-list">
           {showRootTask && <TaskRow icon={<Folder size={15} />} name="Root workspace" summary={aiStatuses.root} selected={selectedTaskId === undefined} disabled={taskSwitching} onClick={() => openTask(undefined, aiStatuses.root.pendingPermission)} onCancelTimer={() => void timerAction(undefined, "cancel")} onFireTimer={() => void timerAction(undefined, "fire")} />}
           {filteredTasks.map((task) => { const summary = aiStatuses.tasks[task.id] ?? emptyAiSummary; return <TaskRow key={task.id} icon={<ListTodo size={15} />} name={task.name} branch={task.branch} summary={summary} finished={task.status === "finished"} archived={task.archived} selected={selectedTaskId === task.id} disabled={taskSwitching} onClick={() => openTask(task.id, summary.pendingPermission)} onSetFinished={() => void setTaskStatus(task, task.status === "finished" ? "active" : "finished")} onRename={() => void renameTask(task)} onSetArchived={() => void setTaskArchived(task, !task.archived)} onMerge={() => setMergeDialog(task)} onDelete={() => void deleteTask(task)} onCancelTimer={() => void timerAction(task, "cancel")} onFireTimer={() => void timerAction(task, "fire")} />; })}
@@ -2486,7 +2494,16 @@ function ResizablePanelStack({ children, workspace, setting, ids }: { children: 
     const end = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", end); };
     window.addEventListener("pointermove", move); window.addEventListener("pointerup", end);
   };
-  return <div className="resizable-panel-stack" ref={rootRef}>{items.map((item, index) => <div className="resizable-panel-item" key={isValidElement(item) && item.key != null ? item.key : index} style={{ flexGrow: sizes[index] ?? 1 / Math.max(1, items.length) }}>{item}{index < items.length - 1 && <div className="focused-panel-divider" onPointerDown={(event) => beginResize(event, index)} />}</div>)}</div>;
+  const keyboardStackResize = (event: React.KeyboardEvent, index: number) => {
+    const direction = event.key === "ArrowUp" ? -1 : event.key === "ArrowDown" ? 1 : 0;
+    if (!direction) return;
+    event.preventDefault();
+    const combined = sizes[index]! + sizes[index + 1]!;
+    const step = event.shiftKey ? .1 : .025;
+    const first = Math.max(.1, Math.min(combined - .1, sizes[index]! + direction * step));
+    saveSizes(sizes.map((value, itemIndex) => itemIndex === index ? first : itemIndex === index + 1 ? combined - first : value));
+  };
+  return <div className="resizable-panel-stack" ref={rootRef}>{items.map((item, index) => <div className="resizable-panel-item" key={isValidElement(item) && item.key != null ? item.key : index} style={{ flexGrow: sizes[index] ?? 1 / Math.max(1, items.length) }}>{item}{index < items.length - 1 && <div className="focused-panel-divider" role="separator" aria-label={`Resize ${ids[index] ?? "upper"} panel`} aria-orientation="horizontal" aria-valuemin={10} aria-valuemax={90} aria-valuenow={Math.round((sizes[index] ?? .5) * 100)} tabIndex={0} onKeyDown={(event) => keyboardStackResize(event, index)} onPointerDown={(event) => beginResize(event, index)} />}</div>)}</div>;
 }
 
 function QuickFilter({ value, placeholder, label, onChange }: { value: string; placeholder: string; label: string; onChange(value: string): void }) {
