@@ -206,10 +206,15 @@ describe("parseGitStatus", () => {
     await expect(service.amend(false)).rejects.toThrow("publication state is unknown");
     await service.amend(true);
     expect((await execFileAsync("git", ["-C", root, "show", "HEAD:file.txt"])).stdout).toBe("staged\n");
+    await writeFile(path.join(root, "child.txt"), "child\n"); await execFileAsync("git", ["-C", root, "add", "child.txt"]); await execFileAsync("git", ["-C", root, "commit", "-m", "child"]);
     const undone = await service.undoLastCommit(true);
     expect(undone).toMatch(/^[0-9a-f]{40}$/);
-    expect((await execFileAsync("git", ["-C", root, "status", "--porcelain"])).stdout).toContain(" M file.txt");
+    expect((await execFileAsync("git", ["-C", root, "status", "--porcelain"])).stdout).toContain("?? child.txt");
     expect((await execFileAsync("git", ["-C", root, "status", "--porcelain"])).stdout).toContain("?? other.txt");
+    const rootPreview = await service.historyRewritePreview();
+    expect(rootPreview).toMatchObject({ canUndo: false, undoUnavailableReason: "The root commit cannot be undone safely from this interface." });
+    await expect(service.undoLastCommit(true)).rejects.toThrow("root commit cannot be undone safely");
+    expect((await execFileAsync("git", ["-C", root, "rev-parse", "HEAD"])).stdout.trim()).toBe(rootPreview.commit.hash);
   });
 
   it("cherry-picks a commit or applies it without committing", async () => {
