@@ -29,6 +29,9 @@ export type FilesystemTransferRequest = { source: string; destination: string };
 export type FilesystemTransferItem = FilesystemTransferRequest & { type: "file" | "directory"; collision: boolean; overwrite: boolean; caseOnlyRename: boolean; crossDevice: boolean; openFiles: string[]; dirtyFiles: string[] };
 export type FilesystemTransferPreflight = { kind: FilesystemTransferKind; items: FilesystemTransferItem[]; skipped: { source: string; reason: string }[]; collisions: number; overwrites: number; caseOnlyRenames: number; crossDeviceMoves: number; openFiles: string[]; dirtyFiles: string[]; confirmationRequired: boolean };
 export type FilesystemTransferResult = { completed: FilesystemTransferRequest[]; failures: (FilesystemTransferRequest & { message: string })[] };
+export const remoteTransferDefaultLimit = 512 * 1024 * 1024;
+export type RemoteTransferDirection = "upload" | "download";
+export type RemoteTransferTicket = { token: string; direction: RemoteTransferDirection; name: string; size: number; maxBytes: number; expiresAt: string };
 
 export type GitStatusEntry = {
   path: string;
@@ -287,6 +290,12 @@ export type ProtocolOperations = {
     payload: { kind: FilesystemTransferKind; items: FilesystemTransferRequest[]; overwritePaths?: string[]; openFiles?: string[]; dirtyFiles?: string[]; confirmed: boolean };
     result: FilesystemTransferResult;
   };
+  /** Creates a short-lived ticket for the separate binary transfer channel. File bodies never use this JSON operation. */
+  "filesystem.remoteTransferBegin": {
+    payload: { direction: RemoteTransferDirection; path: string; size?: number; overwrite?: boolean; mode?: number };
+    result: RemoteTransferTicket;
+  };
+  "filesystem.remoteTransferCancel": { payload: { token: string }; result: { cancelled: boolean } };
   "filesystem.previewDelete": {
     payload: { path: string };
     result: FilesystemDeletePreview;
@@ -579,6 +588,8 @@ const requestTypeRegistry: Record<RequestType, true> = {
   "filesystem.rename": true,
   "filesystem.transferPreflight": true,
   "filesystem.transferApply": true,
+  "filesystem.remoteTransferBegin": true,
+  "filesystem.remoteTransferCancel": true,
   "filesystem.previewDelete": true,
   "filesystem.delete": true,
   "filesystem.restore": true,

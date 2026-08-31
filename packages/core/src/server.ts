@@ -24,6 +24,7 @@ import { AppEventBridge } from "./app-events.js";
 import { AiTimerService, AiTimerStore } from "./ai-timers.js";
 import { AppToolService, withAppTools } from "./app-tools.js";
 import { TaskCheckpointStore } from "./task-checkpoints.js";
+import { RemoteTransferService } from "./remote-transfer.js";
 import type { AiProvider } from "@remote-ide/protocol";
 
 const execFileAsync = promisify(execFile);
@@ -109,6 +110,7 @@ export async function createServer(host: string, port: number, workspacePath: st
     watcher.once("error", reject);
   });
   const server = new WebSocketServer({ host, port });
+  const remoteTransfers = new RemoteTransferService();
   const activeSessions = new Set<WebSocket>();
   const terminalSubscriptions = new Map<WebSocket, { workspace: string; terminalIds: Set<string> }>();
   let runConfigs: RunConfigService;
@@ -205,6 +207,7 @@ export async function createServer(host: string, port: number, workspacePath: st
   server.on("close", () => { rootBatcher.dispose(); terminalHost.closeAll(); void watcher.close(); void gitIndexWatcher.close(); void runConfigWatcher.close(); void appEventWatcher.close(); void appCommandWatcher.close(); });
   server.on("listening", () => console.log(`[core] listening on ws://${host}:${port}`));
   server.on("connection", (socket, request) => {
+    if (remoteTransfers.accepts(request.url)) { void remoteTransfers.attach(socket, request.url); return; }
     let protocolAccepted = false;
     const makeServices = async (nextWorkspace: string): Promise<SessionServices> => {
       const filesystem = new WorkspaceFileSystem();
@@ -308,7 +311,7 @@ export async function createServer(host: string, port: number, workspacePath: st
             await watchSwitchedWorkspace(selected.workspace);
           }
         } finally { release?.(); }
-        const result = await handleRequest(services, tasks, acp, usefulFiles, agents, terminalHost, runConfigs, aiTimers, rootWorkspace, parsed);
+        const result = await handleRequest(services, tasks, acp, usefulFiles, agents, terminalHost, runConfigs, aiTimers, remoteTransfers, rootWorkspace, parsed);
         if (["tasks.create", "tasks.createFromPrompt", "tasks.status", "tasks.rename", "tasks.archive", "tasks.delete"].includes(parsed.type)) await onTasksChanged();
         const terminalSubscription = terminalSubscriptions.get(socket);
         if (terminalSubscription && parsed.type === "terminal.create") terminalSubscription.terminalIds.add((result as { terminalId: string }).terminalId);
@@ -355,9 +358,11 @@ function parseRequest(data: RawData): Request {
   return value as Request;
 }
 
-async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStore, acp: AcpRegistry, usefulFiles: UsefulFilesStore, agents: AgentsStore, terminalHost: TerminalSessionHost, runConfigs: RunConfigService, aiTimers: AiTimerService, rootWorkspace: string, request: Request): Promise<unknown> {
+async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStore, acp: AcpRegistry, usefulFiles: UsefulFilesStore, agents: AgentsStore, terminalHost: TerminalSessionHost, runConfigs: RunConfigService, aiTimers: AiTimerService, remoteTransfers: RemoteTransferService, rootWorkspace: string, request: Request): Promise<unknown> {
   const { filesystem, search, git, java, jdt, workspaceState, workspacePath, checkpoints } = services;
   if (request.type !== "workspace.open") filesystem.getWorkspace();
+  if (request.type === "filesystem.remoteTransferBegin") return remoteTransfers.begin(workspacePath, request.payload);
+  if (request.type === "filesystem.remoteTransferCancel") return { cancelled: remoteTransfers.cancel(request.payload.token) };
   switch (request.type) {
     case "workspace.open": {
       const tree = await filesystem.open(workspacePath, request.payload.includeIgnored === true);

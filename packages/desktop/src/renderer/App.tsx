@@ -1,11 +1,12 @@
 import { DiffEditor, type Monaco } from "@monaco-editor/react";
-import { Archive, ArrowUp, ArrowUpRight, Bot, Bug, Check, ChevronDown, ChevronRight, ChevronUp, CircleAlert, ClipboardCopy, Coffee, Columns2, Eye, EyeOff, File, FileCode2, FileDiff, FileText, Folder, FolderOpen, GitBranch, GitCompareArrows, GitMerge, Library, ListTodo, ListTree, LoaderCircle, LogOut, MoreVertical, Package, Palette, Pencil, Pin, PinOff, Play, Plus, RefreshCw, Save, Search, Settings, ShieldAlert, Square, SquareTerminal, Trash2, X } from "lucide-react";
+import { Archive, ArrowDown, ArrowUp, ArrowUpRight, Bot, Bug, Check, ChevronDown, ChevronRight, ChevronUp, CircleAlert, ClipboardCopy, Coffee, Columns2, Eye, EyeOff, File, FileCode2, FileDiff, FileText, Folder, FolderOpen, GitBranch, GitCompareArrows, GitMerge, Library, ListTodo, ListTree, LoaderCircle, LogOut, MoreVertical, Package, Palette, Pencil, Pin, PinOff, Play, Plus, RefreshCw, Save, Search, Settings, ShieldAlert, Square, SquareTerminal, Trash2, X } from "lucide-react";
 import { Children, isValidElement, useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
 import type { AgentFile, AgentFileScope, AiConfiguration, AiModel, AiProvider, AiProviderDescriptor, AiSession, AiStatus, AiTaskSummary, AiUsage, FileColor, FileRevision, FileTreeNode, GitBranch as GitBranchInfo, GitDiffHunk, GitHistoryRewritePreview, GitStatusEntry, GitUpstreamStatus, HttpResponse, JavaBreakpoint, JavaDebugState, JavaDiagnostic, JavaLspLocation, JavaMainClass, JavaProjectNode, JavaProjectOptions, JavaTypeSuggestion, RunConfig, RunConfigScope, SearchResult, TaskCheckpoint, TaskCheckpointFile, UsefulFile, UsefulFileScope, WorkspaceOptions, WorkspaceSearchQueries, WorkspaceSymbol, WorkspaceTask } from "@remote-ide/protocol";
 import type { editor } from "monaco-editor";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { CoalescedAsyncAction, CoreClient } from "./client";
+import { remoteUploadDestination, treeContainsPath } from "./remote-transfer";
 import { hasWorkspaceSetting, readSetting, readSettingNumber, readWorkspaceSetting, resetWorkspaceSetting, workspaceSettingKey, writeSetting, writeWorkspaceSetting } from "./settings";
 import { SettingsMenu, type DesktopSettings } from "./SettingsMenu";
 import { readAiPromptDraft, writeAiPromptDraft } from "./ai-prompt-drafts";
@@ -248,7 +249,24 @@ export function App() {
   const [showRunConfigurationDialog, setShowRunConfigurationDialog] = useState(false);
   const [treeContextMenu, setTreeContextMenu] = useState<{ x: number; y: number; nodes: FileTreeNode[] }>();
   const [projectSelection, setProjectSelection] = useState<Set<string>>(new Set());
+  const [projectTransfer, setProjectTransfer] = useState<{ operationId: string; token: string; label: string; bytes: number; total: number }>();
   const [projectPathDialog, setProjectPathDialog] = useState<{ mode: "file" | "directory" | "rename"; node: FileTreeNode; parentPath: string }>();
+  useEffect(() => window.desktop?.onProjectTransferProgress((progress) => setProjectTransfer((current) => {
+    if (!current || current.operationId !== progress.operationId) return current;
+    if (progress.error) { showStatus(progress.error, "error"); return undefined; }
+    if (progress.done) { setStatusMessage(`${current.label} complete`); void refreshTree(); return undefined; }
+    showStatus(`${current.label}: ${Math.floor(progress.bytes / Math.max(1, progress.total) * 100)}%`, "progress"); return { ...current, bytes: progress.bytes };
+  })), []);
+
+  const uploadToWorkspace = async (node: FileTreeNode) => {
+    if (!window.desktop || !clientRef.current) return showStatus("Uploads require the Electron desktop app", "error");
+    try { const local = await window.desktop.chooseUpload(); if (!local) return; const destination = remoteUploadDestination(node, local.name); const overwrite = treeContainsPath(tree, destination); if (overwrite && !window.confirm(`${local.name} already exists in this workspace. Replace it?`)) return; const ticket = await clientRef.current.request("filesystem.remoteTransferBegin", { direction: "upload", path: destination, size: local.size, overwrite, mode: 0o644 }); const started = await window.desktop.startProjectTransfer({ localId: local.id, token: ticket.token, host, port: Number(port), direction: "upload", size: ticket.size }); setProjectTransfer({ operationId: started.operationId, token: ticket.token, label: `Uploading ${ticket.name}`, bytes: 0, total: ticket.size }); showStatus(`Uploading ${ticket.name}: 0%`, "progress"); } catch (error) { showStatus(error instanceof Error ? error.message : "Could not upload file", "error"); }
+  };
+  const downloadFromWorkspace = async (node: FileTreeNode) => {
+    if (!window.desktop || !clientRef.current || node.type !== "file") return showStatus("Downloads require a workspace file in the Electron desktop app", "error");
+    try { const ticket = await clientRef.current.request("filesystem.remoteTransferBegin", { direction: "download", path: node.path }); const local = await window.desktop.chooseDownload(ticket.name); if (!local) { await clientRef.current.request("filesystem.remoteTransferCancel", { token: ticket.token }); return; } const started = await window.desktop.startProjectTransfer({ localId: local.id, token: ticket.token, host, port: Number(port), direction: "download", size: ticket.size }); setProjectTransfer({ operationId: started.operationId, token: ticket.token, label: `Downloading ${ticket.name}`, bytes: 0, total: ticket.size }); showStatus(`Downloading ${ticket.name}: 0%`, "progress"); } catch (error) { showStatus(error instanceof Error ? error.message : "Could not download file", "error"); }
+  };
+  const cancelProjectTransfer = async () => { const current = projectTransfer; if (!current || !window.desktop || !clientRef.current) return; await Promise.allSettled([window.desktop.cancelProjectTransfer(current.operationId), clientRef.current.request("filesystem.remoteTransferCancel", { token: current.token })]); setProjectTransfer(undefined); setStatusMessage("Transfer cancelled"); };
   const [editorGitMenu, setEditorGitMenu] = useState<{ x: number; y: number; path: string; startLine?: number; endLine?: number }>();
   const [gitRollbackMenu, setGitRollbackMenu] = useState<{ x: number; y: number; entry: GitStatusEntry }>();
   const [tabContextMenu, setTabContextMenu] = useState<{ x: number; y: number; tab: EditorTab }>();
@@ -2267,6 +2285,7 @@ export function App() {
     {statusMessage && <div className={`status-toast ${statusKind}`} role={statusKind === "error" ? "alert" : "status"} aria-live={statusKind === "error" ? "assertive" : "polite"}>
       {statusKind === "progress" ? <LoaderCircle className="status-toast-spinner" size={16} /> : statusKind === "success" ? <Check size={16} /> : <CircleAlert size={16} />}
       <span>{statusMessage}</span>
+      {projectTransfer && <button title="Cancel file transfer" onClick={() => void cancelProjectTransfer()}><X size={14} /></button>}
       {lastDeleted && statusKind === "success" && <button onClick={() => void restoreLastDeleted()}>Undo</button>}
       {statusKind !== "progress" && <button title="Dismiss" aria-label="Dismiss status message" onClick={() => setStatusMessageState("")}><X size={14} /></button>}
     </div>}
@@ -2410,6 +2429,8 @@ export function App() {
         <div className="context-menu-separator" role="separator" />
         <button disabled={treeContextMenu.nodes.length !== 1} onClick={() => { runProjectTreeAction("rename", treeContextMenu.nodes); setTreeContextMenu(undefined); }}><Pencil size={14} /><span>Rename...</span></button>
         <button disabled={treeContextMenu.nodes.length !== 1 || treeContextMenu.nodes[0]?.type !== "file"} onClick={() => { runProjectTreeAction("open", treeContextMenu.nodes); setTreeContextMenu(undefined); }}><FileText size={14} /><span>Open</span></button>
+        <button disabled={treeContextMenu.nodes.length !== 1 || Boolean(projectTransfer)} onClick={() => { void uploadToWorkspace(treeContextMenu.nodes[0]!); setTreeContextMenu(undefined); }}><ArrowUp size={14} /><span>Upload file...</span></button>
+        <button disabled={treeContextMenu.nodes.length !== 1 || treeContextMenu.nodes[0]?.type !== "file" || Boolean(projectTransfer)} onClick={() => { void downloadFromWorkspace(treeContextMenu.nodes[0]!); setTreeContextMenu(undefined); }}><ArrowDown size={14} /><span>Download file...</span></button>
         <button onClick={() => { runProjectTreeAction("duplicate", treeContextMenu.nodes); setTreeContextMenu(undefined); }}><ClipboardCopy size={14} /><span>Duplicate</span></button>
         <button onClick={() => { runProjectTreeAction("copyTo", treeContextMenu.nodes); setTreeContextMenu(undefined); }}><ClipboardCopy size={14} /><span>Copy to...</span></button>
         <button onClick={() => { runProjectTreeAction("moveTo", treeContextMenu.nodes); setTreeContextMenu(undefined); }}><ArrowUpRight size={14} /><span>Move to...</span></button>
