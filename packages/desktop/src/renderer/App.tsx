@@ -34,7 +34,8 @@ import { copyProjectTreeActions } from "./project-context-menu";
 import { QuickOpenDialog, workspaceFiles } from "./QuickOpenDialog";
 import { CommandPalette } from "./CommandPalette";
 import { WorkspaceSymbolDialog } from "./WorkspaceSymbolDialog";
-import type { Command, CommandContext } from "./command-registry";
+import { commandEnabled, defaultShortcutBindings, desktopPlatform, shortcutMatches, type Command, type CommandContext, type CommandId } from "./command-registry";
+import { KEYBOARD_SHORTCUTS_SETTING, migrateShortcutSetting, parseShortcutSetting, serializeShortcutSetting, updateShortcut } from "./keyboard-shortcuts";
 import { EditorStatusBar, type EditorStatusBarHandle } from "./EditorStatusBar";
 import { adjacentEditorTabId, editorShortcutEligible, editorTabShortcut } from "./editor-shortcuts";
 import { orderPinnedTabs, pinnedFilePaths, togglePinnedTab } from "./pinned-tabs";
@@ -99,6 +100,10 @@ export function App() {
   const [uiFontSize, setUiFontSize] = useState(() => readSettingNumber("uiFontSize", 13, 10, 20));
   const [uiLineHeight, setUiLineHeight] = useState(() => readSettingNumber("uiLineHeight", 1.2, 1, 2));
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const platform = useMemo(desktopPlatform, []);
+  const [shortcutBindings, setShortcutBindings] = useState(() => { const stored = readSetting(KEYBOARD_SHORTCUTS_SETTING); const migrated = migrateShortcutSetting(stored, desktopPlatform()); if (migrated) writeSetting(KEYBOARD_SHORTCUTS_SETTING, migrated); return parseShortcutSetting(stored, desktopPlatform()); });
+  const changeShortcut = (id: CommandId, shortcut?: string) => setShortcutBindings((current) => { const next = updateShortcut(current, id, shortcut); writeSetting(KEYBOARD_SHORTCUTS_SETTING, serializeShortcutSetting(next)); return next; });
+  const resetShortcuts = () => { const next = defaultShortcutBindings(platform); setShortcutBindings(next); writeSetting(KEYBOARD_SHORTCUTS_SETTING, serializeShortcutSetting(next)); };
   const [, setSettingsRevision] = useState(0);
   useEffect(() => { document.documentElement.dataset.theme = theme; document.documentElement.style.colorScheme = theme; wsSave("theme", theme); }, [theme]);
   useEffect(() => { wsSave("highlightTheme", highlightTheme); }, [highlightTheme]);
@@ -1434,53 +1439,6 @@ export function App() {
   }, [status, group.tabs, saveFileTab]);
 
   useEffect(() => {
-    const listener = (event: KeyboardEvent) => { if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") { event.preventDefault(); void saveActive(); } };
-    window.addEventListener("keydown", listener); return () => window.removeEventListener("keydown", listener);
-  }, [saveActive]);
-
-  useEffect(() => {
-    const listener = (event: KeyboardEvent) => {
-      if ((!event.ctrlKey && !event.metaKey) || event.altKey || event.key.toLowerCase() !== "p") return;
-      if (status !== "connected") return;
-      if ((event.target as Element | null)?.closest?.(".terminal-panel")) return;
-      if (!quickOpen && document.querySelector('[role="dialog"], [role="alertdialog"], .context-menu-layer, .floating-window-layer')) return;
-      event.preventDefault();
-      if (!quickOpen) setQuickOpen(true);
-    };
-    window.addEventListener("keydown", listener); return () => window.removeEventListener("keydown", listener);
-  }, [quickOpen, status]);
-
-  useEffect(() => {
-    const listener = (event: KeyboardEvent) => {
-      if ((!event.ctrlKey && !event.metaKey) || event.shiftKey || event.altKey || event.key.toLowerCase() !== "t" || status !== "connected") return;
-      if ((event.target as Element | null)?.closest?.(".terminal-panel")) return;
-      if (!workspaceSymbolsOpen && document.querySelector('[role="dialog"], [role="alertdialog"], .context-menu-layer, .floating-window-layer')) return;
-      event.preventDefault(); if (!workspaceSymbolsOpen) setWorkspaceSymbolsOpen(true);
-    };
-    window.addEventListener("keydown", listener); return () => window.removeEventListener("keydown", listener);
-  }, [status, workspaceSymbolsOpen]);
-
-  useEffect(() => {
-    const listener = (event: KeyboardEvent) => {
-      if (!event.altKey || event.ctrlKey || event.metaKey || event.shiftKey || !["ArrowLeft", "ArrowRight"].includes(event.key) || status !== "connected") return;
-      if ((event.target as Element | null)?.closest?.(".terminal-panel")) return;
-      event.preventDefault(); void navigateHistory(event.key === "ArrowLeft" ? "back" : "forward");
-    };
-    window.addEventListener("keydown", listener); return () => window.removeEventListener("keydown", listener);
-  }, [status]);
-
-  useEffect(() => {
-    const listener = (event: KeyboardEvent) => {
-      if ((!event.ctrlKey && !event.metaKey) || !event.shiftKey || event.altKey || event.key.toLowerCase() !== "p") return;
-      if (status !== "connected" || (event.target as Element | null)?.closest?.(".terminal-panel")) return;
-      if (!commandPaletteOpen && document.querySelector('[role="dialog"], [role="alertdialog"], .context-menu-layer, .floating-window-layer')) return;
-      event.preventDefault();
-      if (!commandPaletteOpen) setCommandPaletteOpen(true);
-    };
-    window.addEventListener("keydown", listener); return () => window.removeEventListener("keydown", listener);
-  }, [commandPaletteOpen, status]);
-
-  useEffect(() => {
     const listener = (event: KeyboardEvent) => {
       const shortcut = editorTabShortcut(event);
       if (!shortcut || !editorShortcutEligible(event.target, document)) return;
@@ -2182,10 +2140,11 @@ export function App() {
   const rightSidebarOpen = rightPanels.project || rightPanels.git || rightPanels.useful || rightPanels.agents || ((rightPanels.taskGit || rightPanels.promptHistory) && Boolean(selectedTaskId)) || (rightPanels.java && Boolean(javaOptions));
   const commandContext: CommandContext = { connected: status === "connected", hasActiveEditor: Boolean(activeTab), activeEditorDirty: Boolean(activeTab?.dirty), gitBusy: gitOperationRunning, taskSwitching, aiBusy: aiSession.status === "in_progress" };
   const commands: Command[] = [
-    { id: "project.quickOpen", label: "Go to File", category: "Project", shortcut: "Ctrl/Cmd+P", when: (context) => context.connected, execute: () => setQuickOpen(true) },
-    { id: "project.workspaceSymbols", label: "Go to Workspace Symbol", category: "Project", shortcut: "Ctrl/Cmd+T", when: (context) => context.connected, execute: () => setWorkspaceSymbolsOpen(true) },
-    { id: "editor.navigateBack", label: "Go Back", category: "Editor", shortcut: "Alt+Left", when: (context) => context.connected, execute: () => navigateHistory("back") },
-    { id: "editor.navigateForward", label: "Go Forward", category: "Editor", shortcut: "Alt+Right", when: (context) => context.connected, execute: () => navigateHistory("forward") },
+    { id: "project.commandPalette", label: "Show Command Palette", category: "Project", when: (context) => context.connected, execute: () => setCommandPaletteOpen(true) },
+    { id: "project.quickOpen", label: "Go to File", category: "Project", when: (context) => context.connected, execute: () => setQuickOpen(true) },
+    { id: "project.workspaceSymbols", label: "Go to Workspace Symbol", category: "Project", when: (context) => context.connected, execute: () => setWorkspaceSymbolsOpen(true) },
+    { id: "editor.navigateBack", label: "Go Back", category: "Editor", when: (context) => context.connected, execute: () => navigateHistory("back") },
+    { id: "editor.navigateForward", label: "Go Forward", category: "Editor", when: (context) => context.connected, execute: () => navigateHistory("forward") },
     { id: "project.refresh", label: "Refresh Project", category: "Project", when: (context) => context.connected, execute: () => refreshTree() },
     { id: "project.findInFiles", label: "Find in Files", category: "Project", when: (context) => context.connected, execute: () => setSearchScope("") },
     { id: "git.refresh", label: "Refresh Git Changes", category: "Git", when: (context) => context.connected && !context.gitBusy, execute: () => refreshGit() },
@@ -2193,8 +2152,21 @@ export function App() {
     { id: "terminal.toggle", label: "Toggle Terminal Panel", category: "Terminal", when: (context) => context.connected, execute: toggleTerminalPanel },
     { id: "task.create", label: "Create Task", category: "Task", when: (context) => context.connected && !context.taskSwitching, execute: () => setShowCreateTaskDialog(true) },
     { id: "ai.open", label: "Open AI", category: "AI", when: (context) => context.connected, execute: () => { if (sideLayout === "classic") setClassicAiOpen(true); else setLeftPanels((current) => ({ ...current, ai: true })); void refreshAi(); } },
-    { id: "editor.save", label: "Save Active Editor", category: "Editor", shortcut: "Ctrl/Cmd+S", when: (context) => context.hasActiveEditor && context.activeEditorDirty, execute: () => saveActive() }
+    { id: "editor.save", label: "Save Active Editor", category: "Editor", when: (context) => context.hasActiveEditor && context.activeEditorDirty, execute: () => saveActive() }
   ];
+
+  useEffect(() => {
+    const listener = (event: KeyboardEvent) => {
+      const command = commands.find((candidate) => shortcutMatches(event, shortcutBindings[candidate.id]));
+      if (!command) return;
+      if (!commandEnabled(command, commandContext)) { if (command.id === "editor.save") event.preventDefault(); return; }
+      if ((event.target as Element | null)?.closest?.(".terminal-panel") && command.id !== "editor.save") return;
+      const overlayOpen = Boolean(document.querySelector('[role="dialog"], [role="alertdialog"], .context-menu-layer, .floating-window-layer'));
+      if (overlayOpen && (command.id === "project.commandPalette" || command.id === "project.quickOpen" && !quickOpen || command.id === "project.workspaceSymbols" && !workspaceSymbolsOpen)) return;
+      event.preventDefault(); void command.execute();
+    };
+    window.addEventListener("keydown", listener); return () => window.removeEventListener("keydown", listener);
+  }, [commands, commandContext, quickOpen, shortcutBindings, workspaceSymbolsOpen]);
 
   if (status !== "connected") return <ConnectionScreen {...{ host, port, status, statusMessage, setHost, setPort, connect }} />;
 
@@ -2251,7 +2223,7 @@ export function App() {
             <button title="Stop Java process" disabled={!javaRunning} onClick={() => void stopJava()}><Square size={13} /></button>
             <select aria-label="Java run configuration" value={javaOptions.selectedRunConfigurationId ?? ""} onChange={(event) => event.target.value === "__create__" ? setShowRunConfigurationDialog(true) : void selectRunConfiguration(event.target.value)}><option value="" disabled>Select run configuration</option>{javaOptions.runConfigurations.map((configuration) => <option key={configuration.id} value={configuration.id}>{configuration.name}</option>)}<option value="__create__">Create new...</option></select>
           </div>}
-          <span className="connection-dot" />{host}:{port}<div className="settings-anchor"><button title="Settings" onClick={() => setSettingsOpen((open) => !open)}><Settings size={15} /></button>{settingsOpen && <SettingsMenu workspace={activeWorkspace} sideLayout={sideLayout} onSideLayoutChange={changeSideLayout} values={{ theme, highlightTheme, uiFontFamily, uiFontSize, uiLineHeight }} isWorkspaceOverride={(setting) => hasWorkspaceSetting(activeWorkspace, setting)} onChange={(setting, value) => { workspaceDefaultsRef.current.delete(setting); if (setting === "theme") setTheme(value as DesktopSettings["theme"]); else if (setting === "highlightTheme") setHighlightTheme(value as DesktopSettings["highlightTheme"]); else if (setting === "uiFontFamily") setUiFontFamily(value as DesktopSettings["uiFontFamily"]); else if (setting === "uiFontSize") setUiFontSize(value as number); else setUiLineHeight(value as number); }} onReset={(setting) => { resetWorkspaceSetting(activeWorkspace, setting); workspaceDefaultsRef.current.add(setting); const value = readSetting(setting); if (setting === "theme") setTheme(value === "light" ? "light" : "dark"); else if (setting === "highlightTheme") setHighlightTheme(value === "ftpud" ? "ftpud" : "default"); else if (setting === "uiFontFamily") setUiFontFamily(value === "inter" ? "inter" : "jetbrains"); else if (setting === "uiFontSize") setUiFontSize(readSettingNumber(setting, 13, 10, 20)); else setUiLineHeight(readSettingNumber(setting, 1.2, 1, 2)); setSettingsRevision((revision) => revision + 1); }} />}</div><button title="Disconnect" onClick={disconnect}><LogOut size={15} /></button>
+          <span className="connection-dot" />{host}:{port}<div className="settings-anchor"><button title="Settings" onClick={() => setSettingsOpen((open) => !open)}><Settings size={15} /></button>{settingsOpen && <SettingsMenu workspace={activeWorkspace} sideLayout={sideLayout} onSideLayoutChange={changeSideLayout} commands={commands} shortcutBindings={shortcutBindings} platform={platform} onShortcutChange={changeShortcut} onShortcutsReset={resetShortcuts} values={{ theme, highlightTheme, uiFontFamily, uiFontSize, uiLineHeight }} isWorkspaceOverride={(setting) => hasWorkspaceSetting(activeWorkspace, setting)} onChange={(setting, value) => { workspaceDefaultsRef.current.delete(setting); if (setting === "theme") setTheme(value as DesktopSettings["theme"]); else if (setting === "highlightTheme") setHighlightTheme(value as DesktopSettings["highlightTheme"]); else if (setting === "uiFontFamily") setUiFontFamily(value as DesktopSettings["uiFontFamily"]); else if (setting === "uiFontSize") setUiFontSize(value as number); else setUiLineHeight(value as number); }} onReset={(setting) => { resetWorkspaceSetting(activeWorkspace, setting); workspaceDefaultsRef.current.add(setting); const value = readSetting(setting); if (setting === "theme") setTheme(value === "light" ? "light" : "dark"); else if (setting === "highlightTheme") setHighlightTheme(value === "ftpud" ? "ftpud" : "default"); else if (setting === "uiFontFamily") setUiFontFamily(value === "inter" ? "inter" : "jetbrains"); else if (setting === "uiFontSize") setUiFontSize(readSettingNumber(setting, 13, 10, 20)); else setUiLineHeight(readSettingNumber(setting, 1.2, 1, 2)); setSettingsRevision((revision) => revision + 1); }} />}</div><button title="Disconnect" onClick={disconnect}><LogOut size={15} /></button>
         </div>
         <div className="tabs" role="tablist" aria-label="Open editors">
           {group.tabs.map((tab) => <div className={`tab ${tab.pinned ? "pinned" : ""} ${tab.id === group.activeTabId ? "active" : ""} ${tab.id === draggedTabId ? "dragging" : ""}`} role="tab" aria-selected={tab.id === group.activeTabId} aria-label={tab.pinned ? `${tab.title} (pinned)` : tab.title} tabIndex={tab.id === group.activeTabId ? 0 : -1} title={`${tab.title}${tab.pinned ? " · Pinned" : ""} · Ctrl+Tab to switch · Ctrl/Cmd+W to close`} key={tab.id} draggable onDragStart={(event) => { setDraggedTabId(tab.id); event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/plain", tab.id); }} onDragEnd={() => setDraggedTabId(undefined)} onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = "move"; }} onDrop={(event) => { event.preventDefault(); moveTab(tab.id); }} onContextMenu={(event) => { event.preventDefault(); setTabContextMenu({ x: Math.min(event.clientX, window.innerWidth - 220), y: Math.min(event.clientY, window.innerHeight - 125), tab }); }} onMouseDown={(event) => { if (event.button === 1) event.preventDefault(); }} onAuxClick={(event) => { if (event.button === 1) { event.preventDefault(); closeTab(tab); } }} onClick={() => void activateEditorTab(tab)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); void activateEditorTab(tab); } }}>
@@ -2364,7 +2336,7 @@ export function App() {
     {searchScope !== undefined && <FindInFilesDialog client={clientRef.current!} scope={searchScope} queries={searchQueries} onQueriesChange={setSearchQueries} onClose={() => setSearchScope(undefined)} onNavigate={(result, matchLength) => void navigateToSearchResult(result, matchLength)} />}
     {quickOpen && <QuickOpenDialog files={workspaceFiles(tree)} onClose={() => setQuickOpen(false)} onOpen={(file) => { setQuickOpen(false); void openFile(file); }} />}
     {workspaceSymbolsOpen && <WorkspaceSymbolDialog search={searchWorkspaceSymbols} onClose={() => setWorkspaceSymbolsOpen(false)} onOpen={(symbol) => void openWorkspaceSymbol(symbol)} />}
-    {commandPaletteOpen && <CommandPalette commands={commands} context={commandContext} onClose={() => setCommandPaletteOpen(false)} />}
+    {commandPaletteOpen && <CommandPalette commands={commands} context={commandContext} bindings={shortcutBindings} platform={platform} onClose={() => setCommandPaletteOpen(false)} />}
     {importChoices && <div className="dialog-overlay" onMouseDown={() => setImportChoices(undefined)}><section className="import-chooser" role="dialog" aria-modal="true" aria-label="Choose Java import" onMouseDown={(event) => event.stopPropagation()}><header><span>Import class</span><button title="Close" onClick={() => setImportChoices(undefined)}><X size={15} /></button></header><div>{importChoices.suggestions.map((suggestion) => <button key={suggestion.qualifiedName} onClick={() => applyJavaImport(suggestion)}><span>{suggestion.simpleName}</span><code>{suggestion.qualifiedName}</code><small>{suggestion.source}</small></button>)}</div></section></div>}
     {javaUsages && <div className="dialog-overlay" onMouseDown={() => setJavaUsages(undefined)}><section className="import-chooser usage-chooser" role="dialog" aria-modal="true" aria-label="Java usages" onMouseDown={(event) => event.stopPropagation()}><header><span>Usages ({javaUsages.length})</span><button title="Close" onClick={() => setJavaUsages(undefined)}><X size={15} /></button></header><div>{javaUsages.length === 0 ? <div className="problems-empty">No project usages found</div> : javaUsages.map((location, index) => <button key={`${location.path}:${location.startLine}:${location.startColumn}:${index}`} onClick={() => void openJavaLocation(location)}><span>{location.path.split("/").pop()}</span><code>{location.path}</code><small>{location.startLine}:{location.startColumn}</small></button>)}</div></section></div>}
     {gitHistory && <GitHistoryDialog client={clientRef.current!} path={gitHistory.path} startLine={gitHistory.startLine} endLine={gitHistory.endLine} onClose={() => setGitHistory(undefined)} />}
