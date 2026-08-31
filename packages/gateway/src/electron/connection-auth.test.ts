@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { connectionConfig, normalizeStoredAuthentication, sshConnectionError, testSshConnection } from "./connection-auth.js";
+import { connectionConfig, formatHostFingerprint, hostKeyVerifier, normalizeStoredAuthentication, sshConnectionError, testSshConnection } from "./connection-auth.js";
 
 // Deliberately generated test-only keys. They are not used by any host.
 const rsaPrivateKey = `-----BEGIN OPENSSH PRIVATE KEY-----
@@ -56,6 +56,27 @@ test("builds password and key SSH configs without mixing credentials", async () 
   const key = await connectionConfig({ host: "host", port: 22, username: "user", authenticationMethod: "privateKey", privateKeyPath: "/keys/id", passphrase: "fixture passphrase" }, async () => Buffer.from(encryptedEd25519PrivateKey));
   assert.deepEqual(key.privateKey, Buffer.from(encryptedEd25519PrivateKey)); assert.equal(key.passphrase, "fixture passphrase"); assert.equal(key.password, undefined);
 });
+test("uses an OS SSH agent without persisting or reading private-key material", async () => {
+  const previous = process.env.SSH_AUTH_SOCK; process.env.SSH_AUTH_SOCK = "/tmp/test-agent.sock";
+  try {
+    const config = await connectionConfig({ host: "host", port: 22, username: "user", authenticationMethod: "agent" }, async () => { throw new Error("private key must not be read"); });
+    assert.equal(config.agent, "/tmp/test-agent.sock"); assert.equal(config.privateKey, undefined); assert.equal(config.password, undefined);
+  } finally {
+    if (previous === undefined) delete process.env.SSH_AUTH_SOCK; else process.env.SSH_AUTH_SOCK = previous;
+  }
+});
+test("requires a supported OS SSH agent for agent authentication", async () => {
+  const previous = process.env.SSH_AUTH_SOCK; delete process.env.SSH_AUTH_SOCK;
+  try { await assert.rejects(connectionConfig({ host: "host", port: 22, username: "user", authenticationMethod: "agent" }, async () => Buffer.alloc(0)), /SSH_AUTH_SOCK/); }
+  finally { if (previous !== undefined) process.env.SSH_AUTH_SOCK = previous; }
+});
+test("formats and pins SHA-256 host fingerprints", () => {
+  let observed = "";
+  const verifier = hostKeyVerifier("SHA256:known", (value) => { observed = value; });
+  assert.equal(verifier("known"), true); assert.equal(observed, "SHA256:known");
+  assert.equal(verifier("changed"), false); assert.equal(observed, "SHA256:changed");
+  assert.equal(formatHostFingerprint("SHA256:value"), "SHA256:value");
+});
 test("omits an empty key passphrase and gives useful key-file failures", async () => {
   const config = await connectionConfig({ host: "host", port: 22, username: "user", authenticationMethod: "privateKey", privateKeyPath: "/keys/id", passphrase: "" }, async () => Buffer.from(rsaPrivateKey));
   assert.equal(config.passphrase, undefined);
@@ -79,6 +100,7 @@ test("rejects public, malformed, missing-passphrase, and wrong-passphrase key in
 test("translates rejected private-key authentication without exposing key material", () => {
   assert.match(sshConnectionError(new Error("All configured authentication methods failed"), "privateKey").message, /authorized_keys/);
   assert.equal(sshConnectionError(new Error("Connection timed out"), "privateKey").message, "Connection timed out");
+  assert.match(sshConnectionError(new Error("Host denied (verification failed)"), "password").message, /does not match/);
 });
 test("test connection propagates its config, closes a ready client, and returns failures", async () => {
   let ended = false; const config = { host: "host", port: 22, username: "user", password: "secret" };

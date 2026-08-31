@@ -210,7 +210,7 @@ multi-surface work).
 
 ### Gateway and remote workflow
 
-- [ ] **SSH key/agent and host-key verification UX — Project.** Value: replace the
+- [x] **SSH key/agent and host-key verification UX — Project.** Value: replace the
   password-only path with safer, more common remote authentication. Constraint:
   never copy private keys into project/Core state; show fingerprints and changed-key
   failures explicitly, using OS-backed secret storage only where needed.

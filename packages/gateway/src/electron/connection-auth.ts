@@ -1,13 +1,13 @@
 import ssh2 from "ssh2";
 import type { ConnectConfig } from "ssh2";
 
-export type AuthenticationMethod = "password" | "privateKey";
+export type AuthenticationMethod = "password" | "privateKey" | "agent";
 export type StoredConnectionAuth = { authenticationMethod?: AuthenticationMethod; password: string; privateKeyPath?: string; passphrase?: string };
-export type ConnectionAuth = { authenticationMethod: "password"; password: string } | { authenticationMethod: "privateKey"; privateKeyPath: string; passphrase?: string };
-export type ConnectionDetails = { host: string; port: number; username: string } & ConnectionAuth;
+export type ConnectionAuth = { authenticationMethod: "password"; password: string } | { authenticationMethod: "privateKey"; privateKeyPath: string; passphrase?: string } | { authenticationMethod: "agent" };
+export type ConnectionDetails = { host: string; port: number; username: string; hostKeyFingerprint?: string } & ConnectionAuth;
 
 export function normalizeStoredAuthentication<T extends StoredConnectionAuth>(value: T): T & Required<Pick<StoredConnectionAuth, "authenticationMethod" | "password">> {
-  return { ...value, authenticationMethod: value.authenticationMethod === "privateKey" ? "privateKey" : "password", password: value.password ?? "" };
+  return { ...value, authenticationMethod: value.authenticationMethod === "privateKey" || value.authenticationMethod === "agent" ? value.authenticationMethod : "password", password: value.password ?? "" };
 }
 
 /** Validate locally so ssh2 does not turn an invalid key into a generic auth failure. */
@@ -36,15 +36,36 @@ export function validatePrivateKeyPath(privateKeyPath: string): void {
 
 export function sshConnectionError(error: unknown, method: AuthenticationMethod): Error {
   const message = error instanceof Error ? error.message : String(error);
+  if (/host denied|host key verification failed/i.test(message)) return new Error("The SSH server host key does not match the fingerprint you trusted. This can indicate a server rebuild or a security risk; edit the connection and test it before trusting the new fingerprint.");
   if (method === "privateKey" && /all configured authentication methods failed|authentication failed/i.test(message)) {
     return new Error("The SSH server rejected this private key. Confirm its matching public key is in the remote user's ~/.ssh/authorized_keys and that the username is correct.");
+  }
+  if (method === "agent" && /all configured authentication methods failed|authentication failed/i.test(message)) {
+    return new Error("The SSH agent did not offer a key accepted by this server. Add the matching key to your OS SSH agent and confirm its public key is in ~/.ssh/authorized_keys.");
   }
   return new Error(message);
 }
 
-export async function connectionConfig(connection: ConnectionDetails, readPrivateKey: (path: string) => Promise<Buffer>): Promise<ConnectConfig> {
+export function formatHostFingerprint(hash: string): string { return `SHA256:${hash.replace(/^SHA256:/, "")}`; }
+
+export function hostKeyVerifier(expected: string | undefined, observed: (fingerprint: string) => void): (hash: string) => boolean {
+  return (hash) => {
+    const fingerprint = formatHostFingerprint(hash);
+    observed(fingerprint);
+    return !expected || fingerprint === formatHostFingerprint(expected);
+  };
+}
+
+export async function connectionConfig(connection: ConnectionDetails, readPrivateKey: (path: string) => Promise<Buffer>, observedHostKey: (fingerprint: string) => void = () => {}): Promise<ConnectConfig> {
+  const agent = process.env.SSH_AUTH_SOCK;
   const base: ConnectConfig = { host: connection.host, port: connection.port, username: connection.username, readyTimeout: 20_000, keepaliveInterval: 10_000 };
+  base.hostHash = "sha256";
+  base.hostVerifier = hostKeyVerifier(connection.hostKeyFingerprint, observedHostKey);
   if (connection.authenticationMethod === "password") return { ...base, password: connection.password };
+  if (connection.authenticationMethod === "agent") {
+    if (!agent) throw new Error("SSH-agent authentication is unavailable because SSH_AUTH_SOCK is not set. Start your OS SSH agent and add a key, or choose another authentication method.");
+    return { ...base, agent };
+  }
   if (!connection.privateKeyPath.trim()) throw new Error("A private key file is required for key authentication");
   validatePrivateKeyPath(connection.privateKeyPath);
   let privateKey: Buffer;
