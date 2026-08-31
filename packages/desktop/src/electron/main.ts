@@ -2,6 +2,7 @@ import { app, BrowserWindow, clipboard, dialog, ipcMain, nativeImage, shell } fr
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { SettingsStore } from "./settings-store.js";
+import { registerProjectTransferIpc } from "./project-transfer.js";
 
 const directory = path.dirname(fileURLToPath(import.meta.url));
 const appIcon = path.join(directory, "../assets/app-icon.png");
@@ -25,6 +26,7 @@ app.setAppUserModelId("com.vibe-editor.desktop");
 app.commandLine.appendSwitch("class", "VibeEditor");
 
 const settings = new SettingsStore(path.join(app.getPath("userData"), "settings.json"));
+registerProjectTransferIpc();
 ipcMain.on("desktop:settings-load", (event) => { event.returnValue = settings.all(); });
 ipcMain.on("desktop:settings-write", (_event, key: unknown, value: unknown) => settings.set(key, value));
 app.on("before-quit", () => settings.flush());
