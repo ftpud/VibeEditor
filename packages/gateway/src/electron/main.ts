@@ -1,7 +1,6 @@
-import { app, BrowserWindow, clipboard, dialog, ipcMain, nativeImage, safeStorage } from "electron";
+import { app, BrowserWindow, clipboard, dialog, ipcMain, nativeImage, powerMonitor, safeStorage } from "electron";
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { createServer, type Server } from "node:net";
 import { access, copyFile, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -13,6 +12,7 @@ import { parseDiscoveredWorkspaceDirectories, parseValidatedWorkspaceDirectory, 
 import { compatibleClient, readCompatibility, type Compatibility } from "./client-compatibility.js";
 import { boundedProvisioningLog, classifyProvisioningFailure } from "./provisioning.js";
 import { buildConnectionDiagnostics } from "./diagnostics.js";
+import { SshTunnel } from "./ssh-tunnel.js";
 
 type Connection = { id: string; name: string; host: string; port: number; username: string } & ConnectionAuth;
 type Workspace = { id: string; connectionId: string; name: string; directory: string; remotePort: number };
@@ -28,9 +28,9 @@ const directory = path.dirname(fileURLToPath(import.meta.url));
 const appIcon = path.join(directory, "../assets/app-icon.png");
 const remoteNodeEnvironment = `export PATH="$HOME/.local/bin:$HOME/.volta/bin:$HOME/.fnm:$HOME/.nvm/versions/node/current/bin:/usr/local/bin:$PATH"; export NVM_DIR="$HOME/.nvm"; if [ -s "$NVM_DIR/nvm.sh" ]; then . "$NVM_DIR/nvm.sh"; fi; command -v npm >/dev/null 2>&1 || { echo "npm was not found on the SSH host. Install Node.js 20+ for this user or configure NVM in ~/.bashrc." >&2; exit 127; }`;
 const runtimes = new Map<string, Runtime>();
-const tunnels = new Map<string, { ssh: Client; server: Server }>();
+const tunnels = new Map<string, SshTunnel>();
 const portTunnelRuntimes = new Map<string, TunnelRuntime>();
-const portTunnels = new Map<string, { ssh: Client; server: Server }>();
+const portTunnels = new Map<string, SshTunnel>();
 const connectionRuntimes = new Map<string, ConnectionRuntimeSnapshot>();
 const provisioningClients = new Map<string, Client>();
 const cancelledProvisioning = new Set<string>();
@@ -87,7 +87,17 @@ async function credentials(connectionId: string): Promise<Connection> {
 function connectWithConfig(config: Parameters<Client["connect"]>[0]): Promise<Client> {
   return new Promise((resolve, reject) => {
     const client = new Client();
-    client.once("ready", () => resolve(client)).once("error", (error) => reject(sshConnectionError(error, config.privateKey ? "privateKey" : config.agent ? "agent" : "password"))).connect(config);
+    const onReady = () => {
+      client.off("error", onError);
+      // Every ready SSH client needs a durable error listener. Individual
+      // operations and managed tunnels add their own reporting, while this
+      // guard prevents a later transport error from reaching Electron as an
+      // uncaught exception and native system error dialog.
+      client.on("error", () => undefined);
+      resolve(client);
+    };
+    const onError = (error: Error) => { client.off("ready", onReady); reject(sshConnectionError(error, config.privateKey ? "privateKey" : config.agent ? "agent" : "password")); };
+    client.once("ready", onReady).once("error", onError).connect(config);
   });
 }
 async function connect(connection: ConnectionDetails): Promise<Client> { return connectWithConfig(await connectionConfig(connection, readFile)); }
@@ -176,7 +186,7 @@ async function startServer(workspaceId: string, repair = false): Promise<{ remot
 }
 async function stopServer(workspaceId: string): Promise<void> {
   const { workspace, connection } = await withWorkspace(workspaceId); runtime(workspaceId, "working", "Stopping remote server...");
-  tunnels.get(workspaceId)?.server.close(); tunnels.get(workspaceId)?.ssh.end(); tunnels.delete(workspaceId);
+  tunnels.get(workspaceId)?.stop(); tunnels.delete(workspaceId);
   const client = await connect(connection);
   try { await execute(client, `bash -lc ${shell(`if [ -f ~/.vibe-server-${workspace.id}.pid ]; then kill $(cat ~/.vibe-server-${workspace.id}.pid) 2>/dev/null || true; rm -f ~/.vibe-server-${workspace.id}.pid; fi`)}`); }
   finally { client.end(); }
@@ -194,15 +204,19 @@ function runLocal(command: string, args: string[], cwd: string, env = process.en
   });
 }
 async function createTunnel(workspaceId: string, connection: Connection, remotePort: number): Promise<number> {
-  tunnels.get(workspaceId)?.server.close(); tunnels.get(workspaceId)?.ssh.end();
-  const ssh = await connect(connection);
-  const server = createServer((socket) => ssh.forwardOut("127.0.0.1", socket.remotePort ?? 0, "127.0.0.1", remotePort, (error, stream) => {
-    if (error) { socket.destroy(error); return; } socket.pipe(stream).pipe(socket);
-  }));
-  await new Promise<void>((resolve, reject) => server.once("error", reject).listen(0, "127.0.0.1", resolve));
-  tunnels.set(workspaceId, { ssh, server });
-  const address = server.address(); if (!address || typeof address === "string") throw new Error("Could not allocate local tunnel port");
-  return address.port;
+  tunnels.get(workspaceId)?.stop();
+  const tunnel = new SshTunnel({
+    localPort: 0,
+    remotePort,
+    connect: () => connect(connection),
+    onStatus: (status, localPort) => {
+      if (status === "reconnecting") runtime(workspaceId, "working", `SSH tunnel reconnecting on local port ${localPort}...`);
+      else if (status === "running" && localPort) runtime(workspaceId, "client", `Client connected through local port ${localPort}`);
+    },
+  });
+  const localPort = await tunnel.start();
+  tunnels.set(workspaceId, tunnel);
+  return localPort;
 }
 async function startPortTunnel(tunnelId: string): Promise<void> {
   const state = await readState();
@@ -211,27 +225,19 @@ async function startPortTunnel(tunnelId: string): Promise<void> {
   if (!Number.isInteger(tunnel.port) || tunnel.port < 1 || tunnel.port > 65535) throw new Error("Tunnel port must be between 1 and 65535");
   portTunnelRuntime(tunnelId, "working", "Connecting over SSH...");
   stopPortTunnel(tunnelId, false);
-  let ssh: Client | undefined;
   try {
-    ssh = await connect(await credentials(tunnel.connectionId));
-    const server = createServer((socket) => ssh!.forwardOut("127.0.0.1", socket.remotePort ?? 0, "127.0.0.1", tunnel.port, (error, stream) => {
-      if (error) { socket.destroy(error); return; }
-      socket.pipe(stream).pipe(socket);
-    }));
-    await new Promise<void>((resolve, reject) => server.once("error", reject).listen(tunnel.port, "127.0.0.1", resolve));
-    portTunnels.set(tunnelId, { ssh, server });
-    server.on("error", (error) => {
-      if (portTunnels.has(tunnelId)) portTunnelRuntime(tunnelId, "error", error.message);
+    const managed = new SshTunnel({
+      localPort: tunnel.port,
+      remotePort: tunnel.port,
+      connect: async () => connect(await credentials(tunnel.connectionId)),
+      onStatus: (status, localPort, error) => {
+        if (status === "running") portTunnelRuntime(tunnelId, "running", `127.0.0.1:${localPort} → remote 127.0.0.1:${tunnel.port}`);
+        else portTunnelRuntime(tunnelId, "working", error ? `Reconnecting after SSH error: ${error.message}` : "Connecting over SSH...");
+      },
     });
-    ssh.on("close", () => {
-      if (portTunnels.delete(tunnelId)) {
-        server.close();
-        portTunnelRuntime(tunnelId, "error", "SSH connection closed");
-      }
-    });
-    portTunnelRuntime(tunnelId, "running", `127.0.0.1:${tunnel.port} → remote 127.0.0.1:${tunnel.port}`);
+    await managed.start();
+    portTunnels.set(tunnelId, managed);
   } catch (error) {
-    ssh?.end();
     const message = error instanceof Error ? error.message : String(error);
     portTunnelRuntime(tunnelId, "error", message);
     throw error;
@@ -240,8 +246,7 @@ async function startPortTunnel(tunnelId: string): Promise<void> {
 function stopPortTunnel(tunnelId: string, notify = true): void {
   const active = portTunnels.get(tunnelId);
   portTunnels.delete(tunnelId);
-  active?.server.close();
-  active?.ssh.end();
+  active?.stop();
   if (notify) portTunnelRuntime(tunnelId, "idle", "Stopped");
 }
 async function startClient(workspaceId: string): Promise<void> {
@@ -318,7 +323,7 @@ async function launchClient(workspaceId: string, workspace: Workspace, connectio
       child.once("error", (error) => reject(new Error(`Could not launch Vibe Editor using ${desktopExecutable}: ${error.message}`)));
     });
   } catch (error) {
-    tunnels.get(workspaceId)?.server.close(); tunnels.get(workspaceId)?.ssh.end(); tunnels.delete(workspaceId);
+    tunnels.get(workspaceId)?.stop(); tunnels.delete(workspaceId);
     throw error;
   }
   child.unref(); runtime(workspaceId, "client", `Client connected through local port ${localPort}${clientBuilt ? " (artifacts reused)" : " (artifacts downloaded)"}`);
@@ -437,7 +442,11 @@ function createWindow(): void {
 app.whenReady().then(() => {
   app.setName("Vibe Gateway"); process.title = "Vibe Gateway";
   if (process.platform === "darwin") app.dock.setIcon(nativeImage.createFromPath(appIcon));
+  powerMonitor.on("resume", () => {
+    for (const tunnel of tunnels.values()) tunnel.reconnect();
+    for (const tunnel of portTunnels.values()) tunnel.reconnect();
+  });
   createWindow();
 });
-app.on("window-all-closed", () => { for (const tunnel of tunnels.values()) { tunnel.server.close(); tunnel.ssh.end(); } for (const tunnel of portTunnels.values()) { tunnel.server.close(); tunnel.ssh.end(); } if (process.platform !== "darwin") app.quit(); });
+app.on("window-all-closed", () => { for (const tunnel of tunnels.values()) tunnel.stop(); for (const tunnel of portTunnels.values()) tunnel.stop(); if (process.platform !== "darwin") app.quit(); });
 app.on("activate", () => { if (!BrowserWindow.getAllWindows().length) createWindow(); });
