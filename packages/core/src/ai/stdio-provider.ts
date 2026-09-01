@@ -484,6 +484,10 @@ export abstract class StdioAcpProvider extends AcpProvider {
   private async connect(workspace: string, configuration: AiConfiguration, servers?: AcpSendRequest["mcpServers"], savedSessionId?: string): Promise<Connected> {
     const launch = this.command(configuration);
     const child = spawn(launch.command, launch.args, { cwd: workspace, env: { ...process.env, ...launch.env }, stdio: "pipe" });
+    // Spawn failures (most commonly an optional provider CLI missing from PATH)
+    // are emitted asynchronously. Listen before constructing the ACP transport so
+    // ENOENT rejects discovery instead of becoming an unhandled process error.
+    const spawnFailure = new Promise<never>((_resolve, reject) => { child.once("error", reject); });
     let stderr = "";
     child.stderr.on("data", (chunk: Buffer) => { stderr = (stderr + chunk.toString()).slice(-20_000); });
     const stream = ndJsonStream(Writable.toWeb(child.stdin) as WritableStream<Uint8Array>, Readable.toWeb(child.stdout) as ReadableStream<Uint8Array>);
@@ -497,7 +501,10 @@ export abstract class StdioAcpProvider extends AcpProvider {
     const connection = new ClientSideConnection(() => client, stream);
     let authHint = "";
     try {
-      const initialized = await connection.initialize({ protocolVersion: PROTOCOL_VERSION, clientCapabilities: {}, clientInfo: { name: "Vibe Editor", version: "0.1.0" } });
+      const initialized = await Promise.race([
+        connection.initialize({ protocolVersion: PROTOCOL_VERSION, clientCapabilities: {}, clientInfo: { name: "Vibe Editor", version: "0.1.0" } }),
+        spawnFailure
+      ]);
       authHint = initialized.authMethods?.map((method) => method.description ?? method.name).join("; ") ?? "";
       const steering = (initialized._meta as { steering?: { supported?: boolean } } | undefined)?.steering?.supported === true;
       let created: CreatedSession;

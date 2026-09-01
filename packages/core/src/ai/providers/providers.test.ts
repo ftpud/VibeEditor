@@ -19,6 +19,12 @@ class FakeProvider extends StdioAcpProvider {
   protected async fallbackModels(): Promise<AiModel[]> { return [{ id: "fallback", name: "Fallback", defaultReasoning: "medium", reasoningLevels: ["medium"] }]; }
 }
 
+class MissingProvider extends StdioAcpProvider {
+  readonly descriptor: AiProviderDescriptor = { id: "missing", name: "Missing ACP", description: "test", settings: { title: "t", description: "d", sections: [] }, options: [], capabilities: { models: true, usage: false, mcp: false, agents: false, contextWindow: false } };
+  protected command() { return { command: path.join(os.tmpdir(), `missing-acp-${crypto.randomUUID()}`), args: [] }; }
+  protected async fallbackModels(): Promise<AiModel[]> { return [{ id: "fallback", name: "Fallback", defaultReasoning: "", reasoningLevels: [] }]; }
+}
+
 async function settle(provider: FakeProvider, workspace: string): Promise<AiSession> {
   for (let attempt = 0; attempt < 200; attempt += 1) {
     const session = await provider.get(workspace);
@@ -29,6 +35,11 @@ async function settle(provider: FakeProvider, workspace: string): Promise<AiSess
 }
 
 describe("ACP integration", () => {
+  it("falls back without crashing when an optional provider executable is missing", async () => {
+    const provider = new MissingProvider(() => undefined);
+    await expect(provider.models()).resolves.toEqual([{ id: "fallback", name: "Fallback", defaultReasoning: "", reasoningLevels: [] }]);
+  });
+
   it("keeps a session owned by another live process in progress but marks an abandoned session as error", async () => {
     const state = await mkdtemp(path.join(os.tmpdir(), "remote-ide-ai-owner-"));
     const workspace = process.cwd();
