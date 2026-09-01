@@ -12,9 +12,23 @@ export function validateWorkspaceDirectoryInput(directory: string): string {
 
 export function quoteWorkspaceShellArgument(value: string): string { return `'${value.replaceAll("'", `'"'"'`)}'`; }
 
-/** Lists direct home folders plus one level below conventional project folders. */
+const remoteWorkspaceRegistry = "$HOME/.vibe/workspaces";
+
+/** Lists registered workspaces first, then direct home folders and conventional project folders. */
 export function workspaceDiscoveryCommand(): string {
-  return "bash -lc 'set -eu; count=0; emit() { printf \"%s\\n\" \"$1\"; count=$((count + 1)); }; emit \"$HOME\"; for child in \"$HOME\"/*; do [ -d \"$child\" ] || continue; emit \"$child\"; [ \"$count\" -ge 64 ] && break; done; [ \"$count\" -ge 64 ] || for name in projects Projects workspace workspaces code Code src repos repositories; do root=\"$HOME/$name\"; [ -d \"$root\" ] || continue; for child in \"$root\"/*; do [ -d \"$child\" ] || continue; emit \"$child\"; [ \"$count\" -ge 64 ] && break 2; done; done'";
+  return `bash -lc 'set -eu; count=0; emit() { printf "%s\\n" "$1"; count=$((count + 1)); }; registry=${remoteWorkspaceRegistry}; if [ -f "$registry" ]; then while IFS= read -r child; do [ -d "$child" ] || continue; emit "$child"; [ "$count" -ge 64 ] && break; done < "$registry"; fi; [ "$count" -ge 64 ] || emit "$HOME"; for child in "$HOME"/*; do [ "$count" -lt 64 ] || break; [ -d "$child" ] || continue; emit "$child"; done; [ "$count" -ge 64 ] || for name in projects Projects workspace workspaces code Code src repos repositories; do root="$HOME/$name"; [ -d "$root" ] || continue; for child in "$root"/*; do [ -d "$child" ] || continue; emit "$child"; [ "$count" -ge 64 ] && break 2; done; done'`;
+}
+
+/** Adds a validated path to the SSH user's durable Gateway workspace registry. */
+export function workspaceRegistrationCommand(directory: string): string {
+  const value = validateWorkspaceDirectoryInput(directory);
+  return `bash -lc ${quoteWorkspaceShellArgument(`set -eu; directory=${quoteWorkspaceShellArgument(value)}; registry=${remoteWorkspaceRegistry}; mkdir -p -- "$HOME/.vibe"; touch -- "$registry"; grep -Fqx -- "$directory" "$registry" || printf '%s\\n' "$directory" >> "$registry"`)}`;
+}
+
+/** Removes a validated path from the SSH user's durable Gateway workspace registry. */
+export function workspaceUnregistrationCommand(directory: string): string {
+  const value = validateWorkspaceDirectoryInput(directory);
+  return `bash -lc ${quoteWorkspaceShellArgument(`set -eu; directory=${quoteWorkspaceShellArgument(value)}; registry=${remoteWorkspaceRegistry}; [ -f "$registry" ] || exit 0; temporary="$registry.tmp.$$"; trap 'rm -f -- "$temporary"' EXIT; while IFS= read -r child; do [ "$child" = "$directory" ] || printf '%s\\n' "$child"; done < "$registry" > "$temporary"; mv -- "$temporary" "$registry"; trap - EXIT`)}`;
 }
 
 /** Checks one manually entered directory without enumerating any parent or sibling paths. */
