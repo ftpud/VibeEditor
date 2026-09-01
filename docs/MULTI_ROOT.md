@@ -31,7 +31,10 @@ Legacy workspace option files contain only relative paths. They are loaded solel
 the primary root's path-derived state store. They are never copied or guessed into a
 new root. On first use the root registry contains only that primary canonical path.
 
-Removing a root unregisters metadata only. Core refuses removal of the primary or
-selected root and roots with task worktrees, persisted open files, terminal sessions,
-or transfer tickets. Desktop additionally refuses roots with live editor or terminal
-tabs. No removal operation deletes the registered directory.
+Removing a root unregisters metadata only. Core refuses removal of the primary root,
+any root selected (or being selected) by any connected client, and roots with task
+worktrees, persisted open files, terminal sessions, or transfer tickets. Disconnect
+releases the client's selection and drains its per-root watchers; successful removal
+also closes retained watchers before deleting the in-memory context. Desktop additionally
+refuses roots with live editor or terminal tabs. No removal operation deletes the
+registered directory.
