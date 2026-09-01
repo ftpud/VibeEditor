@@ -519,6 +519,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .diff-navigation button { width: 34px; height: 32px; display: grid; place-items: center; border: 0; border-right: 1px solid #4a4d52; background: transparent; color: #d2d4d7; cursor: pointer; }
 .diff-navigation button:last-child { border-right: 0; }
 .diff-navigation button:hover { background: #3574f0; color: white; }
+.git-history-content .diff-navigation, .commit-diff .diff-navigation { bottom: 16px; }
 .empty-editor, .editor-error { height: 100%; display: grid; place-items: center; color: #777; }
 .editor-error { color: #f0a7a7; padding: 24px; text-align: center; }
 .inline-error { position: absolute; z-index: 2; top: 8px; right: 20px; max-width: 55%; padding: 7px 9px; border: 1px solid #6d3333; border-radius: 3px; background: #321f1f; color: #f2b5b5; }
