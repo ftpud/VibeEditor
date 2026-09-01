@@ -1,10 +1,22 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { App, ConnectionDialog, DiagnosticsCopyButton, GatewayErrorNotice, RepositoryDialog, gatewayErrorMessage } from "./App";
+import { App, ConnectionDialog, DiagnosticsCopyButton, GatewayErrorNotice, RepositoryDialog, WorkspaceDialog, gatewayErrorMessage } from "./App";
 
 afterEach(cleanup);
 
 describe("Gateway dialogs", () => {
+  it("discovers remote workspaces on open and fills the form from a selection", async () => {
+    window.gateway = { discoverWorkspaceDirectories: vi.fn().mockResolvedValue(["/home/dev/projects/api", "/home/dev/projects/configured"]) } as unknown as Window["gateway"];
+    render(<WorkspaceDialog value={{ remotePort: 7331 }} connectionId="connection-1" discoverOnOpen configuredDirectories={["/home/dev/projects/configured"]} onClose={vi.fn()} onSave={vi.fn()} onFailure={vi.fn()} />);
+
+    const discovered = await screen.findByRole("combobox", { name: "Discovered workspaces" });
+    expect(window.gateway.discoverWorkspaceDirectories).toHaveBeenCalledWith("connection-1");
+    expect(screen.queryByRole("option", { name: "/home/dev/projects/configured" })).toBeNull();
+    fireEvent.change(discovered, { target: { value: "/home/dev/projects/api" } });
+    expect((screen.getByRole("textbox", { name: "Name" }) as HTMLInputElement).value).toBe("api");
+    expect((screen.getByRole("textbox", { name: "Remote directory" }) as HTMLInputElement).value).toBe("/home/dev/projects/api");
+  });
+
   it("names the modal, moves focus inside, closes with Escape, and restores focus", () => {
     const opener = document.body.appendChild(document.createElement("button"));
     opener.focus();
