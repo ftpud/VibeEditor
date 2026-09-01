@@ -115,6 +115,14 @@ export async function createServer(host: string, port: number, workspacePath: st
     return context;
   };
   const savedTasks = await tasks.list();
+  const workspaceOwners = new Map<string, string>([[path.resolve(rootWorkspace), roots.primary().id], ...savedTasks.tasks.map((task) => [path.resolve(tasks.taskPath(task.id)), roots.primary().id] as const)]);
+  const ownerRootId = async (target: string): Promise<string | undefined> => {
+    const resolved = path.resolve(target); const known = workspaceOwners.get(resolved); if (known) return known;
+    const direct = roots.list().filter((root) => resolved === root.path || resolved.startsWith(`${root.path}${path.sep}`)).sort((left, right) => right.path.length - left.path.length)[0];
+    if (direct) { workspaceOwners.set(resolved, direct.id); return direct.id; }
+    for (const [rootId, context] of rootContexts) { const registry = await context.tasks.list(); if (registry.tasks.some((task) => path.resolve(context.tasks.taskPath(task.id)) === resolved)) { workspaceOwners.set(resolved, rootId); return rootId; } }
+    return undefined;
+  };
   if (savedTasks.selectedTaskId) workspacePath = tasks.taskPath(savedTasks.selectedTaskId);
   const validation = new WorkspaceFileSystem();
   await validation.open(workspacePath);
@@ -132,28 +140,26 @@ export async function createServer(host: string, port: number, workspacePath: st
   const server = new WebSocketServer({ host, port });
   const remoteTransfers = new RemoteTransferService();
   const activeSessions = new Set<WebSocket>();
-  const terminalSubscriptions = new Map<WebSocket, { workspace: string; terminalIds: Set<string> }>();
+  const terminalSubscriptions = new Map<WebSocket, { rootId: string; workspace: string; terminalIds: Set<string> }>();
+  const terminalOwners = new Map<string, { socket: WebSocket; rootId: string; workspace: string }>();
   let runConfigs: RunConfigService;
   const terminalHost = new TerminalSessionHost((event) => {
     runConfigs?.onTerminalEvent(event);
-    const message: ServerEvent = event.type === "output"
-      ? { type: "terminal.output", payload: { terminalId: event.terminalId, data: event.data } }
-      : { type: "terminal.exit", payload: { terminalId: event.terminalId, exitCode: event.exitCode } };
-    const encoded = JSON.stringify(message);
-    for (const [socket, subscription] of terminalSubscriptions) {
-      if (subscription.workspace === event.workspace && subscription.terminalIds.has(event.terminalId)) sendWebSocketData(socket, encoded);
+    const owner = terminalOwners.get(event.terminalId);
+    if (owner && owner.workspace === event.workspace) {
+      const message: ServerEvent = event.type === "output"
+        ? { type: "terminal.output", payload: { rootId: owner.rootId, terminalId: event.terminalId, data: event.data } }
+        : { type: "terminal.exit", payload: { rootId: owner.rootId, terminalId: event.terminalId, exitCode: event.exitCode } };
+      sendWebSocketData(owner.socket, JSON.stringify(message));
     }
   });
   runConfigs = new RunConfigService(terminalHost, (changedWorkspace) => {
-    void runConfigs.list(changedWorkspace).then((configs) => {
-      const encoded = JSON.stringify({ type: "runConfig.changed", payload: { workspace: changedWorkspace, configs } } satisfies ServerEvent);
-      for (const [socket, subscription] of terminalSubscriptions) if (subscription.workspace === path.resolve(changedWorkspace)) sendWebSocketData(socket, encoded);
-    });
+    void Promise.all([runConfigs.list(changedWorkspace), ownerRootId(changedWorkspace)]).then(([configs, rootId]) => { if (!rootId) return; const encoded = JSON.stringify({ type: "runConfig.changed", payload: { rootId, configs } } satisfies ServerEvent); for (const socket of activeSessions) sendWebSocketData(socket, encoded); });
   }, rootWorkspace);
   const runConfigWatcher = chokidar.watch([runConfigs.directory(rootWorkspace, "global"), runConfigs.directory(rootWorkspace, "local")], { ignoreInitial: true, depth: 0, awaitWriteFinish: { stabilityThreshold: 150, pollInterval: 50 } });
   runConfigWatcher.on("all", () => {
-    for (const changedWorkspace of new Set([...terminalSubscriptions.values()].map((subscription) => subscription.workspace))) {
-      void runConfigs.list(changedWorkspace).then((configs) => { const encoded = JSON.stringify({ type: "runConfig.changed", payload: { workspace: changedWorkspace, configs } } satisfies ServerEvent); for (const [socket, subscription] of terminalSubscriptions) if (subscription.workspace === changedWorkspace) sendWebSocketData(socket, encoded); });
+    for (const [changedWorkspace, rootId] of workspaceOwners) {
+      void runConfigs.list(changedWorkspace).then((configs) => { const encoded = JSON.stringify({ type: "runConfig.changed", payload: { rootId, configs } } satisfies ServerEvent); for (const socket of activeSessions) sendWebSocketData(socket, encoded); });
     }
   });
   const appEvents = new AppEventBridge(rootWorkspace);
@@ -163,21 +169,21 @@ export async function createServer(host: string, port: number, workspacePath: st
   appEventWatcher.on("add", (file) => {
     void appEvents.consume(file).then((event) => {
       if (!event) return;
-      const message: ServerEvent = event.type === "tasks.changed" ? { type: "tasks.changed", payload: {} }
-        : event.type === "ai.changed" ? { type: "ai.changed", payload: { workspace: event.workspace } }
-        : { type: "commit-message.changed", payload: { workspace: event.workspace, message: event.message } };
+      const rootId = roots.primary().id;
+      const message: ServerEvent = event.type === "tasks.changed" ? { type: "tasks.changed", payload: { rootId } }
+        : event.type === "ai.changed" ? { type: "ai.changed", payload: { rootId } }
+        : { type: "commit-message.changed", payload: { rootId, message: event.message } };
       const encoded = JSON.stringify(message);
       for (const socket of activeSessions) sendWebSocketData(socket, encoded);
     }).catch((error) => console.error(`[core] app event error: ${error instanceof Error ? error.message : String(error)}`));
   });
   const aiChanged = (changedWorkspace: string) => {
-    const encoded = JSON.stringify({ type: "ai.changed", payload: { workspace: changedWorkspace } } satisfies ServerEvent);
-    for (const socket of activeSessions) sendWebSocketData(socket, encoded);
+    void ownerRootId(changedWorkspace).then((rootId) => { if (!rootId) return; const encoded = JSON.stringify({ type: "ai.changed", payload: { rootId } } satisfies ServerEvent); for (const socket of activeSessions) sendWebSocketData(socket, encoded); });
   };
   const checkpointStores = new Map<string, TaskCheckpointStore>();
   const checkpointStore = (target: string) => { const key = path.resolve(target); let store = checkpointStores.get(key); if (!store) { store = new TaskCheckpointStore(key); checkpointStores.set(key, store); } return store; };
   await Promise.all([rootWorkspace, ...savedTasks.tasks.map((task) => tasks.taskPath(task.id))].map((target) => checkpointStore(target).recover()));
-  const taskGitChanged = (changedWorkspace: string) => { const encoded = JSON.stringify({ type: "taskGit.changed", payload: { workspace: changedWorkspace } } satisfies ServerEvent); for (const socket of activeSessions) sendWebSocketData(socket, encoded); };
+  const taskGitChanged = (changedWorkspace: string) => { void ownerRootId(changedWorkspace).then((rootId) => { if (!rootId) return; const encoded = JSON.stringify({ type: "taskGit.changed", payload: { rootId } } satisfies ServerEvent); for (const socket of activeSessions) sendWebSocketData(socket, encoded); }); };
   const acp = createAcpRegistry(aiChanged, {
     begin: async (target, provider, prompt, sessionId, provenance) => { const id = await checkpointStore(target).begin(provider as AiProvider, prompt, sessionId, undefined, provenance); taskGitChanged(target); return id; },
     complete: async (target, ids, status, provenance) => { await Promise.all(ids.map((id) => checkpointStore(target).complete(id, status, provenance))); taskGitChanged(target); }
@@ -185,31 +191,24 @@ export async function createServer(host: string, port: number, workspacePath: st
   const aiTimers = new AiTimerService(new AiTimerStore(rootWorkspace), acp, rootWorkspace, aiChanged);
   await aiTimers.start();
   const onTasksChanged = async () => {
-    const encoded = JSON.stringify({ type: "tasks.changed", payload: {} } satisfies ServerEvent);
+    const encoded = JSON.stringify({ type: "tasks.changed", payload: { rootId: roots.primary().id } } satisfies ServerEvent);
     for (const socket of activeSessions) sendWebSocketData(socket, encoded);
   };
   const onCommitMessageChanged = async (changedWorkspace: string, message: string) => {
-    const encoded = JSON.stringify({ type: "commit-message.changed", payload: { workspace: changedWorkspace, message } } satisfies ServerEvent);
-    for (const socket of activeSessions) sendWebSocketData(socket, encoded);
+    const rootId = await ownerRootId(changedWorkspace); if (!rootId) return; const encoded = JSON.stringify({ type: "commit-message.changed", payload: { rootId, message } } satisfies ServerEvent); for (const socket of activeSessions) sendWebSocketData(socket, encoded);
   };
   const appCommandWatcher = chokidar.watch(appEvents.commandsDirectory, { ignoreInitial: true, depth: 0 });
   await new Promise<void>((resolve, reject) => { appCommandWatcher.once("ready", resolve); appCommandWatcher.once("error", reject); });
   appCommandWatcher.on("add", (file) => {
-    void appEvents.consumeCommand(file, (command) => new AppToolService(
-      tasks,
-      acp,
-      command.currentWorkspace ?? rootWorkspace,
-      onTasksChanged,
-      onCommitMessageChanged,
-      command.currentProvider,
-      agents,
-      rootWorkspace,
-      aiTimers
-    ).call(command.name, command.args));
+    void appEvents.consumeCommand(file, async (command) => {
+      const currentWorkspace = command.currentWorkspace ?? rootWorkspace; const rootId = await ownerRootId(currentWorkspace) ?? roots.primary().id; const root = roots.get(rootId); const context = contextFor(rootId);
+      const changed = async () => { const encoded = JSON.stringify({ type: "tasks.changed", payload: { rootId } } satisfies ServerEvent); for (const socket of activeSessions) sendWebSocketData(socket, encoded); };
+      return new AppToolService(context.tasks, acp, currentWorkspace, changed, onCommitMessageChanged, command.currentProvider, context.agents, root.path, aiTimers, rootWorkspace).call(command.name, command.args);
+    });
   });
   const gitIndexWatcher = chokidar.watch(await gitIndexPath(workspace), { ignoreInitial: true });
   gitIndexWatcher.on("all", () => {
-    const encoded = JSON.stringify({ type: "git.changed", payload: {} } satisfies ServerEvent);
+    const encoded = JSON.stringify({ type: "git.changed", payload: { rootId: roots.primary().id } } satisfies ServerEvent);
     for (const socket of activeSessions) sendWebSocketData(socket, encoded);
   });
   const rootBatcher = new WorkspaceWatchBatcher(roots.primary().id, (event) => {
@@ -230,7 +229,8 @@ export async function createServer(host: string, port: number, workspacePath: st
     if (remoteTransfers.accepts(request.url)) { void remoteTransfers.attach(socket, request.url); return; }
     let protocolAccepted = false;
     let selectedRoot = roots.primary();
-    const makeServices = async (nextWorkspace: string): Promise<SessionServices> => {
+    const makeServices = async (nextWorkspace: string, ownerRootId = selectedRoot.id): Promise<SessionServices> => {
+      workspaceOwners.set(path.resolve(nextWorkspace), ownerRootId);
       const filesystem = new WorkspaceFileSystem();
       await filesystem.open(nextWorkspace);
       const workspaceState = new WorkspaceStateStore(nextWorkspace, process.env.REMOTE_IDE_STATE_DIR);
@@ -238,9 +238,9 @@ export async function createServer(host: string, port: number, workspacePath: st
       const git = new GitService(nextWorkspace);
       const java = new JavaProjectService(filesystem, workspaceState, (event) => {
       if (socket.readyState !== WebSocket.OPEN) return;
-      const message: ServerEvent = event.type === "output" ? { type: "java.output", payload: { data: event.data } }
-        : event.type === "debug" ? { type: "java.debug.state", payload: event.state }
-        : { type: "java.exit", payload: { exitCode: event.exitCode, signal: event.signal } };
+      const message: ServerEvent = event.type === "output" ? { type: "java.output", payload: { rootId: ownerRootId, data: event.data } }
+        : event.type === "debug" ? { type: "java.debug.state", payload: { ...event.state, rootId: ownerRootId } }
+        : { type: "java.exit", payload: { rootId: ownerRootId, exitCode: event.exitCode, signal: event.signal } };
       sendWebSocketData(socket, JSON.stringify(message));
       });
       const jdt = new JdtLanguageService(filesystem);
@@ -250,15 +250,11 @@ export async function createServer(host: string, port: number, workspacePath: st
     let servicesPromise: Promise<SessionServices>;
     /** Resolves once no task switch is in flight for this connection. */
     let switching: Promise<void> = Promise.resolve();
-    let switchedWatcher: ReturnType<typeof chokidar.watch> | undefined;
-    let switchedGitIndexWatcher: ReturnType<typeof chokidar.watch> | undefined;
-    let switchedBatcher: WorkspaceWatchBatcher | undefined;
-    const watchSwitchedWorkspace = async (nextWorkspace: string) => {
-      switchedBatcher?.dispose();
-      await switchedWatcher?.close();
-      await switchedGitIndexWatcher?.close();
-      if (nextWorkspace === workspace) { switchedWatcher = undefined; switchedGitIndexWatcher = undefined; return; }
-      switchedWatcher = chokidar.watch(nextWorkspace, {
+    const switchedWatches = new Map<string, { watcher: ReturnType<typeof chokidar.watch>; gitWatcher: ReturnType<typeof chokidar.watch>; batcher: WorkspaceWatchBatcher }>();
+    const watchSwitchedWorkspace = async (nextWorkspace: string, ownerRootId = selectedRoot.id) => {
+      const previous = switchedWatches.get(ownerRootId); previous?.batcher.dispose(); await previous?.watcher.close(); await previous?.gitWatcher.close(); switchedWatches.delete(ownerRootId);
+      if (nextWorkspace === workspace) return;
+      const switchedWatcher = chokidar.watch(nextWorkspace, {
         ignoreInitial: true,
         ignored: (watchPath) => path.relative(nextWorkspace, watchPath).split(path.sep).some((part) => part === ".git" || part === "node_modules"),
         awaitWriteFinish: { stabilityThreshold: 150, pollInterval: 50 }
@@ -267,11 +263,10 @@ export async function createServer(host: string, port: number, workspacePath: st
       // gitIndexPath() below is still running. Registering after that await misses the one-shot
       // event and leaves tasks.switch (and the renderer's switching state) pending forever.
       const watcherReady = new Promise<void>((resolve, reject) => {
-        switchedWatcher!.once("ready", resolve);
-        switchedWatcher!.once("error", reject);
+        switchedWatcher.once("ready", resolve);
+        switchedWatcher.once("error", reject);
       });
-      const batcher = new WorkspaceWatchBatcher(selectedRoot.id, (event) => sendWebSocketData(socket, JSON.stringify(event)));
-      switchedBatcher = batcher;
+      const batcher = new WorkspaceWatchBatcher(ownerRootId, (event) => sendWebSocketData(socket, JSON.stringify(event)));
       const sendChange = (absolutePath: string) => {
         const relativePath = path.relative(nextWorkspace, absolutePath).split(path.sep).join("/");
         if (relativePath && !relativePath.startsWith("..")) batcher.change(relativePath);
@@ -279,10 +274,11 @@ export async function createServer(host: string, port: number, workspacePath: st
       switchedWatcher.on("add", sendChange).on("change", sendChange).on("unlink", sendChange).on("addDir", sendChange).on("unlinkDir", sendChange)
         .on("raw", (eventName) => { if (String(eventName).includes("OVERFLOW")) batcher.degrade("Filesystem watcher overflow; synchronizing affected files."); })
         .on("error", (error) => batcher.degrade(`Filesystem watcher degraded: ${String(error)}`));
-      switchedGitIndexWatcher = chokidar.watch(await gitIndexPath(nextWorkspace), { ignoreInitial: true });
+      const switchedGitIndexWatcher = chokidar.watch(await gitIndexPath(nextWorkspace), { ignoreInitial: true });
       switchedGitIndexWatcher.on("all", () => {
-        sendWebSocketData(socket, JSON.stringify({ type: "git.changed", payload: {} } satisfies ServerEvent));
+        sendWebSocketData(socket, JSON.stringify({ type: "git.changed", payload: { rootId: ownerRootId } } satisfies ServerEvent));
       });
+      switchedWatches.set(ownerRootId, { watcher: switchedWatcher, gitWatcher: switchedGitIndexWatcher, batcher });
       await watcherReady;
     };
     // Task selection is durable server state and may have changed since Core started. A fresh
@@ -292,7 +288,7 @@ export async function createServer(host: string, port: number, workspacePath: st
     servicesPromise = (async () => {
       const registry = await tasks.list();
       const selectedWorkspace = registry.selectedTaskId ? tasks.taskPath(registry.selectedTaskId) : rootWorkspace;
-      terminalSubscriptions.set(socket, { workspace: selectedWorkspace, terminalIds: new Set() });
+      terminalSubscriptions.set(socket, { rootId: selectedRoot.id, workspace: selectedWorkspace, terminalIds: new Set() });
       await watchSwitchedWorkspace(selectedWorkspace);
       return makeServices(selectedWorkspace);
     })();
@@ -329,14 +325,25 @@ export async function createServer(host: string, port: number, workspacePath: st
           const target = roots.get(parsed.payload.rootId);
           const targetContext = contextFor(target.id);
           const [targetTasks, targetOptions] = await Promise.all([targetContext.tasks.list(), new WorkspaceStateStore(target.path, process.env.REMOTE_IDE_STATE_DIR).load()]);
-          if (targetTasks.tasks.length) throw new CoreError("INVALID_REQUEST", "Remove or relocate this root's task worktrees before unregistering it");
-          if (targetOptions.openFiles.length) throw new CoreError("INVALID_REQUEST", "Close this root's persisted open files before unregistering it");
-          if (terminalHost.hasWorkspace(target.path)) throw new CoreError("INVALID_REQUEST", "Close this root's terminal sessions before unregistering it");
-          if (remoteTransfers.hasWorkspace(target.path)) throw new CoreError("INVALID_REQUEST", "Finish or cancel this root's file transfers before unregistering it");
+          const blocker = rootRemovalBlocker({ tasks: targetTasks.tasks.length, openFiles: targetOptions.openFiles.length, terminals: terminalHost.hasWorkspace(target.path), transfers: remoteTransfers.hasWorkspace(target.path) });
+          if (blocker) throw new CoreError("INVALID_REQUEST", blocker);
           await roots.remove(parsed.payload.rootId);
           rootContexts.delete(parsed.payload.rootId);
           sendWebSocketData(socket, JSON.stringify({ id, ok: true, rootId: parsed.rootId, result: { roots: roots.list(), selectedRootId: selectedRoot.id } }));
           return;
+        }
+        if (parsed.type === "filesystem.searchRoots") {
+          const rootIds = [...new Set(parsed.payload.rootIds)]; if (!rootIds.length || rootIds.length > 16) throw new CoreError("INVALID_REQUEST", "Search must name between 1 and 16 registered roots");
+          const results = await Promise.all(rootIds.map(async (rootId) => {
+            const root = roots.get(rootId); const context = contextFor(rootId); const taskRegistry = await context.tasks.list(); const target = taskRegistry.selectedTaskId ? context.tasks.taskPath(taskRegistry.selectedTaskId) : root.path;
+            const filesystem = new WorkspaceFileSystem(); await filesystem.open(target); const result = await new WorkspaceSearch(filesystem).search(parsed.payload.query, parsed.payload.path, parsed.payload.matchCase, { include: parsed.payload.include, exclude: parsed.payload.exclude });
+            return { matches: result.matches.map((match) => ({ ...match, rootId })), truncated: result.truncated };
+          }));
+          const matches = results.flatMap((result) => result.matches).slice(0, 500); sendWebSocketData(socket, JSON.stringify({ id, ok: true, rootId: parsed.rootId, result: { matches, truncated: results.some((result) => result.truncated) || results.reduce((count, result) => count + result.matches.length, 0) > matches.length } })); return;
+        }
+        if (parsed.type === "filesystem.readRootFile") {
+          const root = roots.get(parsed.payload.targetRootId); const context = contextFor(root.id); const taskRegistry = await context.tasks.list(); const target = taskRegistry.selectedTaskId ? context.tasks.taskPath(taskRegistry.selectedTaskId) : root.path;
+          const filesystem = new WorkspaceFileSystem(); await filesystem.open(target); const file = await filesystem.read(parsed.payload.path); sendWebSocketData(socket, JSON.stringify({ id, ok: true, rootId: parsed.rootId, result: { rootId: root.id, path: parsed.payload.path, ...file } })); return;
         }
         // Requests are handled concurrently, so anything that arrives while a task switch is
         // rebuilding the services has to wait for it. Otherwise it would run against the
@@ -354,25 +361,25 @@ export async function createServer(host: string, port: number, workspacePath: st
             services.java.close(); services.jdt.close();
             servicesPromise = makeServices(selectedRoot.path);
             services = await servicesPromise;
-            terminalSubscriptions.set(socket, { workspace: selectedRoot.path, terminalIds: new Set() });
+            terminalSubscriptions.set(socket, { rootId: selectedRoot.id, workspace: selectedRoot.path, terminalIds: new Set() });
             await watchSwitchedWorkspace(selectedRoot.path);
           } else if (parsed.type === "tasks.switch" || (parsed.type === "tasks.delete" && (await rootContext.tasks.list()).selectedTaskId === parsed.payload.taskId)) {
             const selected = await rootContext.tasks.select(parsed.type === "tasks.switch" ? parsed.payload.taskId : undefined);
             services.java.close(); services.jdt.close();
             servicesPromise = makeServices(selected.workspace);
             services = await servicesPromise;
-            terminalSubscriptions.set(socket, { workspace: selected.workspace, terminalIds: new Set() });
+            terminalSubscriptions.set(socket, { rootId: selectedRoot.id, workspace: selected.workspace, terminalIds: new Set() });
             await watchSwitchedWorkspace(selected.workspace);
           }
         } finally { release?.(); }
         const result = parsed.type === "workspace.selectRoot"
           ? { root: selectedRoot, workspace: services.workspacePath, projectName: selectedRoot.alias, tree: await services.filesystem.listTree(parsed.payload.includeIgnored === true), options: await services.workspaceState.load() }
-          : await handleRequest(services, rootContext.tasks, acp, rootContext.usefulFiles, rootContext.agents, terminalHost, runConfigs, aiTimers, remoteTransfers, selectedRoot.path, parsed);
-        if (["tasks.create", "tasks.createFromPrompt", "tasks.status", "tasks.rename", "tasks.archive", "tasks.delete"].includes(parsed.type)) await onTasksChanged();
+          : await handleRequest(services, rootContext.tasks, acp, rootContext.usefulFiles, rootContext.agents, terminalHost, runConfigs, aiTimers, remoteTransfers, selectedRoot.path, parsed, rootWorkspace);
+        if (["tasks.create", "tasks.createFromPrompt", "tasks.status", "tasks.rename", "tasks.archive", "tasks.delete"].includes(parsed.type)) { const encoded = JSON.stringify({ type: "tasks.changed", payload: { rootId: selectedRoot.id } } satisfies ServerEvent); for (const session of activeSessions) sendWebSocketData(session, encoded); }
         const terminalSubscription = terminalSubscriptions.get(socket);
-        if (terminalSubscription && parsed.type === "terminal.create") terminalSubscription.terminalIds.add((result as { terminalId: string }).terminalId);
-        if (terminalSubscription && parsed.type === "terminal.attach" && (result as { state: string }).state === "available") terminalSubscription.terminalIds.add(parsed.payload.terminalId);
-        if (terminalSubscription && parsed.type === "terminal.close") terminalSubscription.terminalIds.delete(parsed.payload.terminalId);
+        if (terminalSubscription && parsed.type === "terminal.create") { const terminalId = (result as { terminalId: string }).terminalId; terminalSubscription.terminalIds.add(terminalId); terminalOwners.set(terminalId, { socket, rootId: parsed.rootId, workspace: services.workspacePath }); }
+        if (terminalSubscription && parsed.type === "terminal.attach" && (result as { state: string }).state === "available") { terminalSubscription.terminalIds.add(parsed.payload.terminalId); terminalOwners.set(parsed.payload.terminalId, { socket, rootId: parsed.rootId, workspace: services.workspacePath }); }
+        if (terminalSubscription && parsed.type === "terminal.close") { terminalSubscription.terminalIds.delete(parsed.payload.terminalId); terminalOwners.delete(parsed.payload.terminalId); }
         if (terminalSubscription && (parsed.type === "runConfig.run" || parsed.type === "runConfig.restart" || parsed.type === "runConfig.openTerminal")) {
           const terminalId = (result as { config: { terminalId?: string } }).config.terminalId; if (terminalId) terminalSubscription.terminalIds.add(terminalId);
         }
@@ -387,10 +394,8 @@ export async function createServer(host: string, port: number, workspacePath: st
     socket.on("close", () => {
       activeSessions.delete(socket);
       terminalSubscriptions.delete(socket);
-      switchedBatcher?.dispose();
+      for (const subscription of switchedWatches.values()) { subscription.batcher.dispose(); void subscription.watcher.close(); void subscription.gitWatcher.close(); }
       void servicesPromise.then((services) => { services.java.close(); services.jdt.close(); });
-      void switchedWatcher?.close();
-      void switchedGitIndexWatcher?.close();
       console.log(`[core] disconnected: ${client}`);
     });
     socket.on("error", (error) => console.error(`[core] socket error: ${error.message}`));
@@ -420,7 +425,15 @@ export function assertRequestRoot(request: Request, selectedRootId: string): voi
   if (request.type !== "workspace.selectRoot" && request.rootId !== selectedRootId) throw new CoreError("INVALID_REQUEST", `Request root ${request.rootId} is not the selected root ${selectedRootId}`);
 }
 
-async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStore, acp: AcpRegistry, usefulFiles: UsefulFilesStore, agents: AgentsStore, terminalHost: TerminalSessionHost, runConfigs: RunConfigService, aiTimers: AiTimerService, remoteTransfers: RemoteTransferService, rootWorkspace: string, request: Request): Promise<unknown> {
+export function rootRemovalBlocker(state: { tasks: number; openFiles: number; terminals: boolean; transfers: boolean }): string | undefined {
+  if (state.tasks) return "Remove or relocate this root's task worktrees before unregistering it";
+  if (state.openFiles) return "Close this root's persisted open files before unregistering it";
+  if (state.terminals) return "Close this root's terminal sessions before unregistering it";
+  if (state.transfers) return "Finish or cancel this root's file transfers before unregistering it";
+  return undefined;
+}
+
+async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStore, acp: AcpRegistry, usefulFiles: UsefulFilesStore, agents: AgentsStore, terminalHost: TerminalSessionHost, runConfigs: RunConfigService, aiTimers: AiTimerService, remoteTransfers: RemoteTransferService, rootWorkspace: string, request: Request, bridgeWorkspace = rootWorkspace): Promise<unknown> {
   const { filesystem, search, git, java, jdt, workspaceState, workspacePath, checkpoints } = services;
   if (request.type !== "workspace.open") filesystem.getWorkspace();
   if (request.type === "filesystem.remoteTransferBegin") return remoteTransfers.begin(workspacePath, request.payload);
@@ -440,7 +453,7 @@ async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStor
       if (workspacePath !== rootWorkspace) throw new CoreError("INVALID_REQUEST", "New tasks can only be started from the root workspace");
       const task = await tasks.createRandom(false);
       try {
-        const appTools = withAppTools(rootWorkspace, tasks.taskPath(task.id), request.payload.mcpServers, request.payload.agent, request.payload.provider);
+        const appTools = withAppTools(rootWorkspace, tasks.taskPath(task.id), request.payload.mcpServers, request.payload.agent, request.payload.provider, bridgeWorkspace);
         await acp.get(request.payload.provider).send(tasks.taskPath(task.id), {
           prompt: request.payload.prompt,
           content: request.payload.content,
@@ -482,7 +495,7 @@ async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStor
     case "ai.models": return { models: await acp.get(request.payload.provider).models() };
     case "ai.configure": return { session: await acp.get(request.payload.provider).configure(workspacePath, { ...request.payload.configuration, ...(request.payload.model ? { model: request.payload.model } : {}), ...(request.payload.reasoning ? { reasoning: request.payload.reasoning } : {}) }) };
     case "ai.send": {
-      const appTools = withAppTools(rootWorkspace, workspacePath, request.payload.mcpServers, request.payload.agent, request.payload.provider);
+      const appTools = withAppTools(rootWorkspace, workspacePath, request.payload.mcpServers, request.payload.agent, request.payload.provider, bridgeWorkspace);
       return { session: await acp.get(request.payload.provider).send(workspacePath, { prompt: request.payload.prompt, content: request.payload.content, configuration: { ...request.payload.configuration, ...(request.payload.model ? { model: request.payload.model } : {}), ...(request.payload.reasoning ? { reasoning: request.payload.reasoning } : {}) }, mcpServers: appTools.servers, agent: appTools.agent, agentPreset: request.payload.agentPreset }) };
     }
     case "ai.permission.resolve": {
@@ -593,7 +606,8 @@ async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStor
     case "filesystem.restore": return { path: await filesystem.restore(request.payload.recoveryId) };
     case "filesystem.search": {
       if (typeof request.payload.query !== "string" || typeof request.payload.path !== "string" || typeof request.payload.matchCase !== "boolean") throw new CoreError("INVALID_REQUEST", "query, path, and matchCase are required");
-      return search.search(request.payload.query, request.payload.path, request.payload.matchCase, { include: request.payload.include, exclude: request.payload.exclude });
+      const result = await search.search(request.payload.query, request.payload.path, request.payload.matchCase, { include: request.payload.include, exclude: request.payload.exclude });
+      return { ...result, matches: result.matches.map((match) => ({ ...match, rootId: request.rootId })) };
     }
     case "filesystem.replacePreview": {
       if (typeof request.payload.query !== "string" || typeof request.payload.replacement !== "string" || typeof request.payload.path !== "string" || typeof request.payload.matchCase !== "boolean") throw new CoreError("INVALID_REQUEST", "query, replacement, path, and matchCase are required");
@@ -706,7 +720,10 @@ async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStor
       return java.addSourceRoot(request.payload.path);
     }
     case "java.getProjectTree": return { tree: await java.getProjectTree() };
-    case "java.workspaceSymbols": return jdt.workspaceSymbols(request.payload.query, request.payload.limit);
+    case "java.workspaceSymbols": {
+      const result = await jdt.workspaceSymbols(request.payload.query, request.payload.limit);
+      return { ...result, symbols: result.symbols.map((symbol) => ({ ...symbol, rootId: request.rootId })) };
+    }
     case "java.listMainClasses": return { classes: await java.listMainClasses() };
     case "java.addRunConfiguration": {
       if (typeof request.payload.name !== "string" || typeof request.payload.mainClass !== "string") throw new CoreError("INVALID_REQUEST", "name and mainClass must be strings");
@@ -721,14 +738,14 @@ async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStor
     case "java.stop": java.stop(); return {};
     case "java.debug.start": await java.debug(request.payload.breakpoints); return {};
     case "java.debug.command": java.debugCommand(request.payload.command); return {};
-    case "java.check": return { diagnostics: await java.check() };
+    case "java.check": return { diagnostics: (await java.check()).map((diagnostic) => ({ ...diagnostic, rootId: request.rootId })) };
     case "java.completeType": {
       if (typeof request.payload.prefix !== "string") throw new CoreError("INVALID_REQUEST", "prefix must be a string");
       return { suggestions: await java.completeType(request.payload.prefix) };
     }
     case "java.completion": return { items: await jdt.completion(request.payload.path, request.payload.content, request.payload.line, request.payload.column) };
-    case "java.definition": return { locations: await jdt.definition(request.payload.path, request.payload.content, request.payload.line, request.payload.column) };
-    case "java.references": return { locations: await jdt.references(request.payload.path, request.payload.content, request.payload.line, request.payload.column) };
+    case "java.definition": return { locations: (await jdt.definition(request.payload.path, request.payload.content, request.payload.line, request.payload.column)).map((location) => ({ ...location, rootId: request.rootId })) };
+    case "java.references": return { locations: (await jdt.references(request.payload.path, request.payload.content, request.payload.line, request.payload.column)).map((location) => ({ ...location, rootId: request.rootId })) };
     case "java.semanticTokens": return { tokens: await jdt.semanticTokens(request.payload.path, request.payload.content) };
   }
 }

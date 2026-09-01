@@ -11,15 +11,16 @@ const execFileAsync = promisify(execFile);
 const MAX_RESULTS = 500; const MAX_PREVIEW_FILES = 100; const CONTEXT_LINES = 2; const MAX_PREVIEW_LENGTH = 300; const MAX_CONTEXT_LINE_LENGTH = 200;
 type Filters = { include?: string; exclude?: string };
 type Replacement = { files: { path: string; revision: FileRevision; content: string }[] };
+type LocalSearchResult = Omit<SearchResult, "rootId">;
 
 export class WorkspaceSearch {
   private readonly replacements = new Map<string, Replacement>();
   constructor(private readonly filesystem: WorkspaceFileSystem) {}
 
-  async search(query: string, scope: string, matchCase: boolean, filters: Filters = {}): Promise<{ matches: SearchResult[]; truncated: boolean }> {
+  async search(query: string, scope: string, matchCase: boolean, filters: Filters = {}): Promise<{ matches: LocalSearchResult[]; truncated: boolean }> {
     this.validate(query, matchCase, filters);
     const root = this.filesystem.getWorkspace(); const absoluteScope = scope ? await this.filesystem.resolveExisting(scope) : root; const info = await stat(absoluteScope);
-    const files = await this.filesForScope(root, absoluteScope, info.isFile(), filters); const matches: SearchResult[] = []; const needle = matchCase ? query : query.toLocaleLowerCase();
+    const files = await this.filesForScope(root, absoluteScope, info.isFile(), filters); const matches: LocalSearchResult[] = []; const needle = matchCase ? query : query.toLocaleLowerCase();
     for (const relativePath of files) {
       let content: string; try { content = (await this.filesystem.read(relativePath)).content; } catch { continue; }
       const lines = content.split(/\r?\n/);
@@ -33,7 +34,7 @@ export class WorkspaceSearch {
 
   async previewReplace(query: string, replacement: string, scope: string, matchCase: boolean, filters: Filters = {}): Promise<SearchReplacePreview> {
     if (typeof replacement !== "string" || replacement.length > 10_000) throw new CoreError("INVALID_REQUEST", "Replacement must contain at most 10000 characters");
-    const result = await this.search(query, scope, matchCase, filters); const grouped = new Map<string, SearchResult[]>(); for (const match of result.matches) grouped.set(match.path, [...(grouped.get(match.path) ?? []), match]);
+    const result = await this.search(query, scope, matchCase, filters); const grouped = new Map<string, LocalSearchResult[]>(); for (const match of result.matches) grouped.set(match.path, [...(grouped.get(match.path) ?? []), match]);
     const files: SearchReplacePreview["files"] = []; const stored: Replacement["files"] = [];
     for (const [filePath, matches] of [...grouped].slice(0, MAX_PREVIEW_FILES)) {
       const file = await this.filesystem.read(filePath); const lines = file.content.split(/\r?\n/); const occurrences = matches.map((match) => { const before = lines[match.line - 1] ?? ""; const start = match.column - 1; const after = `${before.slice(0, start)}${replacement}${before.slice(start + query.length)}`; return { line: match.line, column: match.column, before: before.slice(0, MAX_PREVIEW_LENGTH), after: after.slice(0, MAX_PREVIEW_LENGTH) }; });

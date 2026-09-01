@@ -1,6 +1,6 @@
 import { protocolCompatibility, type ProtocolOperations, type Request, type RequestType, type Response, type ServerEvent } from "@remote-ide/protocol";
 
-type Pending = { socket: WebSocket; timer: ReturnType<typeof setTimeout>; resolve(value: unknown): void; reject(error: Error): void };
+type Pending = { socket: WebSocket; rootId?: string; timer: ReturnType<typeof setTimeout>; resolve(value: unknown): void; reject(error: Error): void };
 
 export class CoreClient {
   private socket?: WebSocket;
@@ -76,7 +76,7 @@ export class CoreClient {
         this.pending.delete(id);
         reject(new Error(`Request ${type} timed out after ${this.requestTimeoutMs}ms`));
       }, this.requestTimeoutMs);
-      this.pending.set(id, { socket, timer, resolve: resolve as (value: unknown) => void, reject });
+      this.pending.set(id, { socket, rootId: unscoped ? undefined : this.rootId, timer, resolve: resolve as (value: unknown) => void, reject });
       try { socket.send(JSON.stringify(request)); }
       catch (error) {
         clearTimeout(timer);
@@ -105,7 +105,8 @@ export class CoreClient {
     if (!pending) return;
     clearTimeout(pending.timer);
     this.pending.delete(response.id);
-    if (response.ok) pending.resolve(response.result);
+    if (response.ok && pending.rootId && response.rootId && response.rootId !== pending.rootId) pending.reject(new Error(`Stale cross-root response: expected ${pending.rootId}, received ${response.rootId}`));
+    else if (response.ok) pending.resolve(response.result);
     else pending.reject(new Error(`${response.error.code}: ${response.error.message}`));
   }
 }

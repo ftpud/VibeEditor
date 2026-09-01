@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { WebSocket } from "ws";
-import { assertRequestRoot, assertSessionChangeAllowed, permissionTargetWorkspace, protocolHandshake, renameWorkspacePaths, sendWebSocketData, WorkspaceWatchBatcher } from "./server.js";
+import { assertRequestRoot, assertSessionChangeAllowed, permissionTargetWorkspace, protocolHandshake, renameWorkspacePaths, rootRemovalBlocker, sendWebSocketData, WorkspaceWatchBatcher } from "./server.js";
 
 describe("protocol handshake", () => {
   it("accepts overlapping ranges and describes incompatible Desktops", () => {
@@ -24,6 +24,14 @@ describe("workspace root request boundary", () => {
     expect(() => assertRequestRoot({ id: "1", type: "filesystem.readFile", rootId: "root-a", payload: { path: "README.md" } }, "root-a")).not.toThrow();
     expect(() => assertRequestRoot({ id: "2", type: "filesystem.readFile", rootId: "root-b", payload: { path: "README.md" } }, "root-a")).toThrow("not the selected root");
     expect(() => assertRequestRoot({ id: "3", type: "filesystem.readFile", payload: { path: "README.md" } } as never, "root-a")).toThrow("requires an explicit rootId");
+  });
+
+  it("reports every material removal blocker without touching the directory", () => {
+    expect(rootRemovalBlocker({ tasks: 1, openFiles: 0, terminals: false, transfers: false })).toContain("task worktrees");
+    expect(rootRemovalBlocker({ tasks: 0, openFiles: 1, terminals: false, transfers: false })).toContain("open files");
+    expect(rootRemovalBlocker({ tasks: 0, openFiles: 0, terminals: true, transfers: false })).toContain("terminal sessions");
+    expect(rootRemovalBlocker({ tasks: 0, openFiles: 0, terminals: false, transfers: true })).toContain("transfers");
+    expect(rootRemovalBlocker({ tasks: 0, openFiles: 0, terminals: false, transfers: false })).toBeUndefined();
   });
 });
 import { withAppTools } from "./app-tools.js";
