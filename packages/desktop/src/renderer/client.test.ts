@@ -31,7 +31,8 @@ class FakeWebSocket {
     this.sent.push(data);
     const request = JSON.parse(data) as { id: string; type: string };
     if (request.type === "protocol.handshake") this.receive({ id: request.id, ok: true, result: { compatible: true, compatibility: { minimum: 1, maximum: 1 } } });
-    if (request.type === "workspace.roots") this.receive({ id: request.id, ok: true, result: { roots: [{ id: "root-primary", alias: "project", path: "/project", primary: true }], selectedRootId: "root-primary" } });
+    if (request.type === "workspace.roots") this.receive({ id: request.id, ok: true, result: { roots: [{ id: "root-primary", alias: "project", path: "/project", primary: true }, { id: "root-api", alias: "api", path: "/api", primary: false }], selectedRootId: "root-primary" } });
+    if (request.type === "workspace.selectRoot") this.receive({ id: request.id, ok: true, rootId: "root-api", result: { root: { id: "root-api", alias: "api", path: "/api", primary: false }, workspace: "/api", projectName: "api", tree: [], options: { openFiles: [] } } });
   }
   close(): void { this.readyState = FakeWebSocket.CLOSED; this.onclose?.(); }
   receive(value: unknown): void { this.onmessage?.({ data: JSON.stringify(value) }); }
@@ -51,6 +52,21 @@ describe("CoreClient streaming disconnects", () => {
     expect(request).toMatchObject({ rootId: "root-primary", payload: { path: "README.md" } });
     socket.receive({ id: request.id, ok: true, result: { path: "README.md", content: "", revision: { identity: "a", version: "b" } } });
     await pending;
+  });
+
+  it("rejects a response carrying another root's identity", async () => {
+    const client = new CoreClient(); const connecting = client.connect("core", 7331); const socket = FakeWebSocket.instances[0]!; socket.open(); await connecting;
+    client.setRoot("root-api"); const pending = client.request("git.status", {}); const request = JSON.parse(socket.sent.at(-1)!) as { id: string };
+    socket.receive({ id: request.id, ok: true, rootId: "root-primary", result: { branch: "main", entries: [] } });
+    await expect(pending).rejects.toThrow("Stale cross-root response");
+  });
+
+  it("reselects the same stable root after reconnect", async () => {
+    const client = new CoreClient(); let connecting = client.connect("core", 7331); let socket = FakeWebSocket.instances[0]!; socket.open(); await connecting;
+    client.setRoot("root-api"); socket.close();
+    connecting = client.connect("core", 7331); socket = FakeWebSocket.instances[1]!; socket.open(); await connecting;
+    expect(client.getRoot()).toBe("root-api");
+    expect(socket.sent.map((item) => JSON.parse(item) as { type: string }).some((item) => item.type === "workspace.selectRoot")).toBe(true);
   });
 
   it("rejects the interrupted send, reconnects, and restores the durable AI snapshot", async () => {

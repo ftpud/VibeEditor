@@ -8,6 +8,10 @@ const tab: TerminalTab = { id: "tab-1", terminalId: "terminal-1", title: "Develo
 afterEach(cleanup);
 
 describe("TerminalTabButton", () => {
+  it("visibly identifies the owning root", () => {
+    render(<TerminalTabButton tab={{ ...tab, rootId: "root-api" }} rootAlias="API" active={false} onActivate={vi.fn()} onClose={vi.fn()} />);
+    expect(screen.getByText("API").classList.contains("root-badge")).toBe(true);
+  });
   it("closes on middle mouse down without activating the tab", () => {
     const onActivate = vi.fn();
     const onClose = vi.fn();

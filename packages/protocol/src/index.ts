@@ -192,6 +192,9 @@ export type JavaLspRange = { startLine: number; startColumn: number; endLine: nu
 export type JavaLspCompletion = { label: string; detail?: string; insertText: string; range?: JavaLspRange; additionalTextEdits: { range: JavaLspRange; text: string }[] };
 export type JavaLspLocation = { path: string } & JavaLspRange;
 export type WorkspaceSymbol = { name: string; kind: number; path: string; line: number; column: number; container?: string };
+export type RootedJavaDiagnostic = JavaDiagnostic & { rootId: string };
+export type RootedJavaLspLocation = JavaLspLocation & { rootId: string };
+export type RootedWorkspaceSymbol = WorkspaceSymbol & { rootId: string };
 export type JavaSemanticToken = JavaLspRange & { type: string; modifiers: string[] };
 
 export type JavaProjectNode = {
@@ -203,7 +206,7 @@ export type JavaProjectNode = {
 
 export type SearchContextLine = { line: number; text: string; truncated: boolean };
 export type SearchMatchContext = { before: SearchContextLine[]; after: SearchContextLine[]; truncatedBefore: boolean; truncatedAfter: boolean };
-export type SearchResult = { path: string; line: number; column: number; preview: string; previewTruncated?: boolean; context?: SearchMatchContext };
+export type SearchResult = { rootId: WorkspaceRootId; path: string; line: number; column: number; preview: string; previewTruncated?: boolean; context?: SearchMatchContext };
 export type SearchReplacePreviewFile = { path: string; revision: FileRevision; occurrences: { line: number; column: number; before: string; after: string }[] };
 export type SearchReplacePreview = { id: string; files: SearchReplacePreviewFile[]; truncated: boolean };
 export type SearchReplaceApplyResult = { applied: { path: string; revision: FileRevision }[]; failures: { path: string; code: string; message: string }[] };
@@ -328,6 +331,14 @@ export type ProtocolOperations = {
     payload: { query: string; path: string; matchCase: boolean; include?: string; exclude?: string };
     result: { matches: SearchResult[]; truncated: boolean };
   };
+  "filesystem.searchRoots": {
+    payload: { rootIds: WorkspaceRootId[]; query: string; path: string; matchCase: boolean; include?: string; exclude?: string };
+    result: { matches: SearchResult[]; truncated: boolean };
+  };
+  "filesystem.readRootFile": {
+    payload: { targetRootId: WorkspaceRootId; path: string };
+    result: { rootId: WorkspaceRootId; path: string; content: string; revision: FileRevision };
+  };
   "filesystem.replacePreview": {
     payload: { query: string; replacement: string; path: string; matchCase: boolean; include?: string; exclude?: string };
     result: SearchReplacePreview;
@@ -432,7 +443,7 @@ export type ProtocolOperations = {
     payload: Record<string, never>;
     result: { tree: JavaProjectNode[] };
   };
-  "java.workspaceSymbols": { payload: { query: string; limit?: number }; result: { symbols: WorkspaceSymbol[]; truncated: boolean } };
+  "java.workspaceSymbols": { payload: { query: string; limit?: number }; result: { symbols: RootedWorkspaceSymbol[]; truncated: boolean } };
   "java.listMainClasses": {
     payload: Record<string, never>;
     result: { classes: JavaMainClass[] };
@@ -467,20 +478,21 @@ export type ProtocolOperations = {
   };
   "java.check": {
     payload: Record<string, never>;
-    result: { diagnostics: JavaDiagnostic[] };
+    result: { diagnostics: RootedJavaDiagnostic[] };
   };
   "java.completeType": {
     payload: { prefix: string };
     result: { suggestions: JavaTypeSuggestion[] };
   };
   "java.completion": { payload: { path: string; content: string; line: number; column: number }; result: { items: JavaLspCompletion[] } };
-  "java.definition": { payload: { path: string; content: string; line: number; column: number }; result: { locations: JavaLspLocation[] } };
-  "java.references": { payload: { path: string; content: string; line: number; column: number }; result: { locations: JavaLspLocation[] } };
+  "java.definition": { payload: { path: string; content: string; line: number; column: number }; result: { locations: RootedJavaLspLocation[] } };
+  "java.references": { payload: { path: string; content: string; line: number; column: number }; result: { locations: RootedJavaLspLocation[] } };
   "java.semanticTokens": { payload: { path: string; content: string }; result: { tokens: JavaSemanticToken[] } };
 };
 
 export type RequestType = keyof ProtocolOperations;
 
+/** All nested relative paths and opaque root-owned references inherit this envelope root. */
 export type Request<T extends RequestType = RequestType> = T extends RequestType
   ? { id: string; type: T; payload: ProtocolOperations[T]["payload"] } & (T extends "protocol.handshake" | "workspace.roots" | "workspace.addRoot" ? { rootId?: never } : { rootId: WorkspaceRootId })
   : never;
@@ -519,24 +531,24 @@ export type FilesystemChangedEvent = {
 
 export type TerminalOutputEvent = {
   type: "terminal.output";
-  payload: { terminalId: string; data: string };
+  payload: { rootId: WorkspaceRootId; terminalId: string; data: string };
 };
 
 export type TerminalExitEvent = {
   type: "terminal.exit";
-  payload: { terminalId: string; exitCode: number };
+  payload: { rootId: WorkspaceRootId; terminalId: string; exitCode: number };
 };
 
-export type GitChangedEvent = { type: "git.changed"; payload: Record<string, never> };
-export type TaskGitChangedEvent = { type: "taskGit.changed"; payload: { workspace: string } };
+export type GitChangedEvent = { type: "git.changed"; payload: { rootId: WorkspaceRootId } };
+export type TaskGitChangedEvent = { type: "taskGit.changed"; payload: { rootId: WorkspaceRootId } };
 
-export type JavaOutputEvent = { type: "java.output"; payload: { data: string } };
-export type JavaExitEvent = { type: "java.exit"; payload: { exitCode: number | null; signal: string | null } };
-export type JavaDebugStateEvent = { type: "java.debug.state"; payload: JavaDebugState };
-export type AiChangedEvent = { type: "ai.changed"; payload: { workspace: string } };
-export type TasksChangedEvent = { type: "tasks.changed"; payload: Record<string, never> };
-export type CommitMessageChangedEvent = { type: "commit-message.changed"; payload: { workspace: string; message: string } };
-export type RunConfigChangedEvent = { type: "runConfig.changed"; payload: { workspace: string; configs: RunConfig[] } };
+export type JavaOutputEvent = { type: "java.output"; payload: { rootId: WorkspaceRootId; data: string } };
+export type JavaExitEvent = { type: "java.exit"; payload: { rootId: WorkspaceRootId; exitCode: number | null; signal: string | null } };
+export type JavaDebugStateEvent = { type: "java.debug.state"; payload: JavaDebugState & { rootId: WorkspaceRootId } };
+export type AiChangedEvent = { type: "ai.changed"; payload: { rootId: WorkspaceRootId } };
+export type TasksChangedEvent = { type: "tasks.changed"; payload: { rootId: WorkspaceRootId } };
+export type CommitMessageChangedEvent = { type: "commit-message.changed"; payload: { rootId: WorkspaceRootId; message: string } };
+export type RunConfigChangedEvent = { type: "runConfig.changed"; payload: { rootId: WorkspaceRootId; configs: RunConfig[] } };
 
 export type ServerEvent = FilesystemChangedEvent | TerminalOutputEvent | TerminalExitEvent | GitChangedEvent | TaskGitChangedEvent | JavaOutputEvent | JavaExitEvent | JavaDebugStateEvent | AiChangedEvent | TasksChangedEvent | CommitMessageChangedEvent | RunConfigChangedEvent;
 
@@ -616,6 +628,8 @@ const requestTypeRegistry: Record<RequestType, true> = {
   "filesystem.delete": true,
   "filesystem.restore": true,
   "filesystem.search": true,
+  "filesystem.searchRoots": true,
+  "filesystem.readRootFile": true,
   "filesystem.replacePreview": true,
   "filesystem.replaceApply": true,
   "terminal.create": true,

@@ -185,7 +185,8 @@ export class AppToolService {
     private readonly currentProvider?: AiProvider,
     private readonly agents?: Pick<AgentsStore, "list">,
     private readonly rootWorkspace?: string,
-    private readonly timers?: Pick<AiTimerService, "schedule" | "next" | "cancelWorkspace">
+    private readonly timers?: Pick<AiTimerService, "schedule" | "next" | "cancelWorkspace">,
+    private readonly bridgeWorkspace?: string
   ) {}
 
   async call(name: string, args: Record<string, unknown>): Promise<unknown> {
@@ -220,7 +221,7 @@ export class AppToolService {
       const manager = this.acp.get(this.currentProvider);
       const current = await manager.get(this.currentWorkspace);
       const selectedAgent = await this.resolveAgent(undefined, current);
-      const appTools = this.rootWorkspace ? withAppTools(this.rootWorkspace, this.currentWorkspace, [], selectedAgent?.agent, this.currentProvider) : { servers: [], agent: selectedAgent?.agent };
+      const appTools = this.rootWorkspace ? withAppTools(this.rootWorkspace, this.currentWorkspace, [], selectedAgent?.agent, this.currentProvider, this.bridgeWorkspace) : { servers: [], agent: selectedAgent?.agent };
       const session = await manager.startFreshSession(this.currentWorkspace, { prompt, configuration: current.configuration ?? { model: current.model, reasoning: current.reasoning }, ...(appTools.servers.length ? { mcpServers: appTools.servers } : {}), ...(appTools.agent ? { agent: appTools.agent, agentPreset: selectedAgent!.preset } : {}) });
       return { provider: this.currentProvider, workspace: this.currentWorkspace, status: session.status, transition: "queued", prompt };
     }
@@ -246,7 +247,7 @@ export class AppToolService {
       await this.onTasksChanged();
       try {
         const workspace = this.tasks.taskPath(task.id);
-        const appTools = this.rootWorkspace ? withAppTools(this.rootWorkspace, workspace, [], selectedAgent?.agent, provider) : { servers: [], agent: selectedAgent?.agent };
+        const appTools = this.rootWorkspace ? withAppTools(this.rootWorkspace, workspace, [], selectedAgent?.agent, provider, this.bridgeWorkspace) : { servers: [], agent: selectedAgent?.agent };
         const session = await manager.send(workspace, { prompt, configuration, ...(appTools.servers.length > 0 ? { mcpServers: appTools.servers } : {}), ...(appTools.agent ? { agent: appTools.agent, agentPreset: selectedAgent!.preset } : {}) });
         return { task, session: { status: session.status, model: session.model } };
       } catch (error) {
@@ -437,7 +438,7 @@ async function main() {
   const currentWorkspace = process.env.VIBE_EDITOR_CURRENT_WORKSPACE;
   if (!currentWorkspace) throw new Error("VIBE_EDITOR_CURRENT_WORKSPACE is required");
   const currentProvider = process.env.VIBE_EDITOR_CURRENT_PROVIDER;
-  const bridge = new AppEventBridge(rootWorkspace);
+  const bridge = new AppEventBridge(process.env.VIBE_EDITOR_BRIDGE_WORKSPACE ?? rootWorkspace);
   const lines = createInterface({ input: process.stdin, terminal: false });
   for await (const line of lines) {
     if (!line.trim()) continue;
@@ -476,20 +477,20 @@ function inheritedAutopilot(parentOptions: AiOption[], parent: AiSession, childO
   return { [childAutopilot.option.id]: enabled ? childAutopilot.on : childAutopilot.off };
 }
 
-export function withAppTools(rootWorkspace: string, currentWorkspace: string, servers?: AiMcpServer[], agent?: AiAgent, currentProvider?: AiProvider): { servers: AiMcpServer[]; agent?: AiAgent } {
+export function withAppTools(rootWorkspace: string, currentWorkspace: string, servers?: AiMcpServer[], agent?: AiAgent, currentProvider?: AiProvider, bridgeWorkspace = rootWorkspace): { servers: AiMcpServer[]; agent?: AiAgent } {
   if (!agent?.mcpServers?.includes("vibe-editor")) return { servers: servers ?? [], ...(agent ? { agent } : {}) };
-  const appServer = appToolServer(rootWorkspace, currentWorkspace, currentProvider);
+  const appServer = appToolServer(rootWorkspace, currentWorkspace, currentProvider, bridgeWorkspace);
   const filtered = (servers ?? []).filter((server) => server.name !== appServer.name);
   return { servers: [...filtered, appServer], agent };
 }
 
-export function appToolServer(rootWorkspace: string, currentWorkspace: string, currentProvider?: AiProvider): AiMcpServer {
+export function appToolServer(rootWorkspace: string, currentWorkspace: string, currentProvider?: AiProvider, bridgeWorkspace = rootWorkspace): AiMcpServer {
   const compiled = fileURLToPath(new URL("app-tools.js", import.meta.url));
   const source = fileURLToPath(new URL("app-tools.ts", import.meta.url));
   const runningFromSource = import.meta.url.endsWith("/src/app-tools.ts");
   return runningFromSource
-    ? { transport: "stdio", name: "vibe-editor", command: process.execPath, args: ["--import", "tsx", source], env: { VIBE_EDITOR_ROOT_WORKSPACE: rootWorkspace, VIBE_EDITOR_CURRENT_WORKSPACE: currentWorkspace, ...(currentProvider ? { VIBE_EDITOR_CURRENT_PROVIDER: currentProvider } : {}) } }
-    : { transport: "stdio", name: "vibe-editor", command: process.execPath, args: [compiled], env: { VIBE_EDITOR_ROOT_WORKSPACE: rootWorkspace, VIBE_EDITOR_CURRENT_WORKSPACE: currentWorkspace, ...(currentProvider ? { VIBE_EDITOR_CURRENT_PROVIDER: currentProvider } : {}) } };
+    ? { transport: "stdio", name: "vibe-editor", command: process.execPath, args: ["--import", "tsx", source], env: { VIBE_EDITOR_ROOT_WORKSPACE: rootWorkspace, VIBE_EDITOR_CURRENT_WORKSPACE: currentWorkspace, VIBE_EDITOR_BRIDGE_WORKSPACE: bridgeWorkspace, ...(currentProvider ? { VIBE_EDITOR_CURRENT_PROVIDER: currentProvider } : {}) } }
+    : { transport: "stdio", name: "vibe-editor", command: process.execPath, args: [compiled], env: { VIBE_EDITOR_ROOT_WORKSPACE: rootWorkspace, VIBE_EDITOR_CURRENT_WORKSPACE: currentWorkspace, VIBE_EDITOR_BRIDGE_WORKSPACE: bridgeWorkspace, ...(currentProvider ? { VIBE_EDITOR_CURRENT_PROVIDER: currentProvider } : {}) } };
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) void main();
