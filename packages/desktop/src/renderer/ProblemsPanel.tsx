@@ -1,11 +1,11 @@
 import { AlertCircle, AlertTriangle, RefreshCw, Search, X } from "lucide-react";
 import { useEffect, useId, useMemo, useRef, useState } from "react";
-import type { JavaDiagnostic } from "@remote-ide/protocol";
+import type { RootedJavaDiagnostic } from "@remote-ide/protocol";
 
-type Props = { height: number; diagnostics: JavaDiagnostic[]; checking: boolean; onRefresh(): void; onOpen(diagnostic: JavaDiagnostic): void; onResizeStart(event: React.PointerEvent): void; };
+type Props = { height: number; diagnostics: RootedJavaDiagnostic[]; checking: boolean; onRefresh(): void; onOpen(diagnostic: RootedJavaDiagnostic): void; onResizeStart(event: React.PointerEvent): void; };
 
-function sourceOf(diagnostic: JavaDiagnostic): string {
-  const source = (diagnostic as JavaDiagnostic & { source?: unknown }).source;
+function sourceOf(diagnostic: RootedJavaDiagnostic): string {
+  const source = (diagnostic as RootedJavaDiagnostic & { source?: unknown }).source;
   return typeof source === "string" ? source : "";
 }
 

@@ -31,7 +31,7 @@ function contextLine(line: { line: number; text: string; truncated: boolean }) {
 const searchKey = (search: WorkspaceSearchQuery) => `${search.query}\0${search.path}\0${search.matchCase ? "1" : "0"}\0${search.include ?? ""}\0${search.exclude ?? ""}`;
 const sameSearch = (left: WorkspaceSearchQuery, right: WorkspaceSearchQuery) => searchKey(left) === searchKey(right);
 
-export function FindInFilesDialog({ client, scope, queries = {}, onQueriesChange, onClose, onNavigate }: { client: CoreClient; scope: string; queries?: WorkspaceSearchQueries; onQueriesChange?(queries: WorkspaceSearchQueries): void; onClose(): void; onNavigate(result: SearchResult, matchLength: number): void }) {
+export function FindInFilesDialog({ client, rootAlias = "workspace", rootIds, rootAliases = {}, scope, queries = {}, onQueriesChange, onClose, onNavigate }: { client: CoreClient; rootAlias?: string; rootIds?: string[]; rootAliases?: Record<string, string>; scope: string; queries?: WorkspaceSearchQueries; onQueriesChange?(queries: WorkspaceSearchQueries): void; onClose(): void; onNavigate(result: SearchResult, matchLength: number): void }) {
   const [query, setQuery] = useState("");
   const [matchCase, setMatchCase] = useState(false);
   const [include, setInclude] = useState("");
@@ -53,7 +53,7 @@ export function FindInFilesDialog({ client, scope, queries = {}, onQueriesChange
   const searchVersion = useRef(0);
   const groups = useMemo(() => {
     const byPath = new Map<string, SearchResult[]>();
-    for (const match of matches) byPath.set(match.path, [...(byPath.get(match.path) ?? []), match]);
+    for (const match of matches) { const key = `${match.rootId}\0${match.path}`; byPath.set(key, [...(byPath.get(key) ?? []), match]); }
     return [...byPath.entries()];
   }, [matches]);
   const currentSearch = (): WorkspaceSearchQuery | undefined => query.trim() ? { query: query.trim(), path: searchPath, ...(matchCase ? { matchCase: true } : {}), ...(include.trim() ? { include: include.trim() } : {}), ...(exclude.trim() ? { exclude: exclude.trim() } : {}) } : undefined;
@@ -73,7 +73,7 @@ export function FindInFilesDialog({ client, scope, queries = {}, onQueriesChange
     if (!query.trim()) { setMatches([]); setSelected(undefined); setTruncated(false); setLoading(false); setError(""); return; }
     const timer = setTimeout(() => {
       setLoading(true); setError("");
-      void client.request("filesystem.search", { query, path: searchPath, matchCase, ...(include.trim() ? { include: include.trim() } : {}), ...(exclude.trim() ? { exclude: exclude.trim() } : {}) }).then((result) => {
+      void (rootIds?.length ? client.request("filesystem.searchRoots", { rootIds, query, path: searchPath, matchCase, ...(include.trim() ? { include: include.trim() } : {}), ...(exclude.trim() ? { exclude: exclude.trim() } : {}) }) : client.request("filesystem.search", { query, path: searchPath, matchCase, ...(include.trim() ? { include: include.trim() } : {}), ...(exclude.trim() ? { exclude: exclude.trim() } : {}) })).then((result) => {
         if (version !== searchVersion.current) return;
         setMatches(result.matches); setSelected(result.matches[0]); setCollapsedPaths(new Set()); setTruncated(result.truncated); const saved = currentSearch(); if (saved) addRecent(saved);
       }).catch((searchError: unknown) => {
@@ -98,7 +98,7 @@ export function FindInFilesDialog({ client, scope, queries = {}, onQueriesChange
     if (!selected) { setPreviewContent(""); setPreviewError(""); return; }
     let current = true;
     setPreviewError("");
-    void client.request("filesystem.readFile", { path: selected.path }).then((result) => {
+    void client.request("filesystem.readRootFile", { targetRootId: selected.rootId, path: selected.path }).then((result) => {
       if (current) setPreviewContent(result.content);
     }).catch((readError: unknown) => {
       if (current) { setPreviewContent(""); setPreviewError(readError instanceof Error ? readError.message : "Could not load preview"); }
@@ -115,7 +115,7 @@ export function FindInFilesDialog({ client, scope, queries = {}, onQueriesChange
   const selectedParts = selected ? resultParts(selected.path) : undefined;
   return <div className="dialog-overlay find-dialog-overlay" onMouseDown={onClose}>
     <section className="find-dialog" role="dialog" aria-modal="true" aria-label="Find in Files" onMouseDown={(event) => event.stopPropagation()}>
-      <header><div className="find-dialog-heading"><h2>Find in Files</h2><span title={searchPath || "Remote workspace"}>{searchPath || "Remote workspace"}</span></div><button type="button" title="Close" aria-label="Close" onClick={onClose}><X size={15} /></button></header>
+      <header><div className="find-dialog-heading"><h2>Find in Files <small className="root-badge">{rootAlias}</small></h2><span title={searchPath || rootAlias}>{searchPath || rootAlias}</span></div><button type="button" title="Close" aria-label="Close" onClick={onClose}><X size={15} /></button></header>
       <div className="find-controls">
         <input ref={inputRef} value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Text to find" aria-label="Text to find" maxLength={200} />
         <label className="match-case" title="Match case"><input type="checkbox" aria-label="Match case" checked={matchCase} onChange={(event) => setMatchCase(event.target.checked)} /><CaseSensitive size={17} /></label>
@@ -138,13 +138,15 @@ export function FindInFilesDialog({ client, scope, queries = {}, onQueriesChange
           <div className="find-pane-header"><Search size={13} /><span className="find-pane-title">Occurrences</span>{truncated && <span className="find-pane-meta">First 500</span>}</div>
           <div className="find-results">
             {!loading && !error && matches.length === 0 && query && <div className="find-empty">No matches</div>}
-            {groups.map(([path, group]) => {
+            {groups.map(([groupKey, group]) => {
+              const path = group[0]!.path; const resultRootId = group[0]!.rootId;
               const { filename, directory } = resultParts(path);
-              const collapsed = collapsedPaths.has(path);
-              return <section className="find-result-group" key={path} aria-label={`${path}, ${group.length} match${group.length === 1 ? "" : "es"}`}>
-                <button type="button" className="find-result-group-header" aria-expanded={!collapsed} onClick={() => setCollapsedPaths((paths) => { const next = new Set(paths); if (next.has(path)) next.delete(path); else next.add(path); return next; })}>
+              const collapsed = collapsedPaths.has(groupKey);
+              return <section className="find-result-group" key={groupKey} aria-label={`${rootAliases[resultRootId] ?? resultRootId}: ${path}, ${group.length} match${group.length === 1 ? "" : "es"}`}>
+                <button type="button" className="find-result-group-header" aria-expanded={!collapsed} onClick={() => setCollapsedPaths((paths) => { const next = new Set(paths); if (next.has(groupKey)) next.delete(groupKey); else next.add(groupKey); return next; })}>
                   {collapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} />}
                   <span className="find-result-file" title={filename}>{filename}</span>
+                  <small className="root-badge">{rootAliases[resultRootId] ?? resultRootId}</small>
                   {directory && <span className="find-result-path" title={directory}>{directory}</span>}
                   <span className="find-group-count">{group.length}</span>
                 </button>
