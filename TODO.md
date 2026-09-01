@@ -215,7 +215,7 @@ multi-surface work).
 - [x] **Saved searches and search history — Small.** Value: retain useful remote
   investigation queries per workspace. Constraint: store compact query metadata,
   not result contents or sensitive file excerpts.
-- [ ] **Multi-root workspace model — Project.** Value: support related repositories
+- [x] **Multi-root workspace model — Project.** Value: support related repositories
   on one remote machine without pretending they are local folders. Constraint: every
   protocol path gains an explicit root identity and Git/task/state boundaries remain
   unambiguous; pursue only after single-root file mutation and transfer semantics are

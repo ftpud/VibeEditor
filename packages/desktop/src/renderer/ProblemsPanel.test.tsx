@@ -1,13 +1,13 @@
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
-import type { JavaDiagnostic } from "@remote-ide/protocol";
+import type { RootedJavaDiagnostic } from "@remote-ide/protocol";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ProblemsPanel } from "./ProblemsPanel";
 
 const diagnostics = [
-  { path: "/workspace/src/App.java", line: 4, column: 2, severity: "error", message: "Missing symbol", source: "javac" },
-  { path: "/workspace/test/AppTest.java", line: 9, column: 1, severity: "warning", message: "Unused import", source: "jdt" },
-  { path: "/workspace/src/Other.java", line: 12, column: 3, severity: "warning", message: "Unchecked conversion" }
-] as Array<JavaDiagnostic & { source?: string }>;
+  { rootId: "root-a", path: "/workspace/src/App.java", line: 4, column: 2, severity: "error", message: "Missing symbol", source: "javac" },
+  { rootId: "root-a", path: "/workspace/test/AppTest.java", line: 9, column: 1, severity: "warning", message: "Unused import", source: "jdt" },
+  { rootId: "root-a", path: "/workspace/src/Other.java", line: 12, column: 3, severity: "warning", message: "Unchecked conversion" }
+] as Array<RootedJavaDiagnostic & { source?: string }>;
 
 function setup(onOpen = vi.fn()) {
   render(<ProblemsPanel height={220} diagnostics={diagnostics} checking={false} onRefresh={vi.fn()} onOpen={onOpen} onResizeStart={vi.fn()} />);

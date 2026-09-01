@@ -9,6 +9,7 @@ vi.mock("./theme", () => ({ configureMonacoThemes: vi.fn(), monacoTheme: () => "
 
 const longSegment = "component-with-an-extremely-long-unbroken-name-that-must-never-expand-the-dialog";
 const matches: SearchResult[] = Array.from({ length: 80 }, (_, index) => ({
+  rootId: "root-primary",
   path: `packages/desktop/src/renderer/features/deeply/nested/${longSegment}-${index}.tsx`,
   line: index + 1,
   column: 123456,
@@ -36,6 +37,14 @@ beforeEach(() => vi.useFakeTimers());
 afterEach(() => { cleanup(); vi.useRealTimers(); });
 
 describe("FindInFilesDialog responsive result layout", () => {
+  it("keeps same-path results from two roots distinct and visibly rooted", async () => {
+    const rooted: SearchResult[] = [{ rootId: "root-ui", path: "src/index.ts", line: 1, column: 1, preview: "needle" }, { rootId: "root-api", path: "src/index.ts", line: 2, column: 1, preview: "needle" }];
+    const client = { request: vi.fn((type: string, payload: { path?: string }) => type === "filesystem.searchRoots" ? Promise.resolve({ matches: rooted, truncated: false }) : Promise.resolve({ content: `preview:${payload.path}` })) } as unknown as CoreClient;
+    const onNavigate = vi.fn(); render(<FindInFilesDialog client={client} rootIds={["root-ui", "root-api"]} rootAliases={{ "root-ui": "UI", "root-api": "API" }} scope="" onClose={vi.fn()} onNavigate={onNavigate} />);
+    await search();
+    expect(screen.getByText("UI").classList.contains("root-badge")).toBe(true); expect(screen.getByText("API").classList.contains("root-badge")).toBe(true);
+    fireEvent.doubleClick(screen.getByRole("button", { name: "src/index.ts, line 2, column 1" })); expect(onNavigate).toHaveBeenCalledWith(rooted[1], 6);
+  });
   it("records compact recent searches and lets saved searches be reused or deleted", async () => {
     const onQueriesChange = vi.fn();
     const saved = { query: "saved query", path: "src", matchCase: true };
@@ -110,7 +119,7 @@ describe("FindInFilesDialog responsive result layout", () => {
 
   it("renders bounded context and makes omitted or shortened lines explicit", async () => {
     const contextualMatch: SearchResult = {
-      path: "src/context.ts", line: 4, column: 3, preview: "needle suffix", previewTruncated: true,
+      rootId: "root-primary",       path: "src/context.ts", line: 4, column: 3, preview: "needle suffix", previewTruncated: true,
       context: {
         before: [{ line: 2, text: "before", truncated: false }, { line: 3, text: "long before", truncated: true }],
         after: [{ line: 5, text: "after", truncated: false }], truncatedBefore: true, truncatedAfter: true
@@ -143,8 +152,8 @@ describe("FindInFilesDialog responsive result layout", () => {
 
   it("keeps every occurrence from a file available in its result group", async () => {
     const sameLineMatches = [
-      { path: "src/repeated.ts", line: 4, column: 1, preview: "needle needle" },
-      { path: "src/repeated.ts", line: 4, column: 8, preview: "needle needle" }
+      { rootId: "root-primary", path: "src/repeated.ts", line: 4, column: 1, preview: "needle needle" },
+      { rootId: "root-primary", path: "src/repeated.ts", line: 4, column: 8, preview: "needle needle" }
     ];
     const onNavigate = vi.fn();
     render(<FindInFilesDialog client={clientWith({ matches: sameLineMatches, truncated: false })} scope="" onClose={vi.fn()} onNavigate={onNavigate} />);

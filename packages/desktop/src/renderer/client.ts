@@ -1,14 +1,17 @@
 import { protocolCompatibility, type ProtocolOperations, type Request, type RequestType, type Response, type ServerEvent } from "@remote-ide/protocol";
 
-type Pending = { socket: WebSocket; timer: ReturnType<typeof setTimeout>; resolve(value: unknown): void; reject(error: Error): void };
+type Pending = { socket: WebSocket; rootId?: string; timer: ReturnType<typeof setTimeout>; resolve(value: unknown): void; reject(error: Error): void };
 
 export class CoreClient {
   private socket?: WebSocket;
   private pending = new Map<string, Pending>();
   onDisconnected?: (message: string) => void;
   onServerEvent?: (event: ServerEvent) => void;
+  private rootId?: string;
 
   constructor(private readonly requestTimeoutMs = 30_000) {}
+  setRoot(rootId: string): void { this.rootId = rootId; }
+  getRoot(): string | undefined { return this.rootId; }
 
   private rejectPendingFor(socket: WebSocket, error: Error): void {
     for (const [id, item] of this.pending) {
@@ -34,7 +37,12 @@ export class CoreClient {
         opened = true;
         this.request("protocol.handshake", { compatibility: protocolCompatibility, clientVersion: "0.1.0" }).then((result) => {
           if (!result.compatible) throw new Error(result.message ?? "Desktop and Core protocol versions are incompatible");
-          resolve();
+          return this.request("workspace.roots", {}).then(async (roots) => {
+            const desired = this.rootId && roots.roots.some((root) => root.id === this.rootId) ? this.rootId : roots.selectedRootId;
+            this.rootId = desired;
+            if (desired !== roots.selectedRootId) await this.request("workspace.selectRoot", { rootId: desired });
+            resolve();
+          });
         }).catch((error: unknown) => {
           const message = error instanceof Error ? error.message : "Could not negotiate a compatible protocol";
           this.socket = undefined;
@@ -58,7 +66,9 @@ export class CoreClient {
     if (!this.socket || this.socket.readyState !== WebSocket.OPEN) return Promise.reject(new Error("Not connected"));
     const id = crypto.randomUUID();
     const socket = this.socket;
-    const request = { id, type, payload } as Request<T>;
+    const unscoped = type === "protocol.handshake" || type === "workspace.roots" || type === "workspace.addRoot";
+    if (!unscoped && !this.rootId) return Promise.reject(new Error(`No workspace root selected for ${type}`));
+    const request = { id, type, payload, ...(!unscoped ? { rootId: this.rootId } : {}) } as Request<T>;
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         const item = this.pending.get(id);
@@ -66,7 +76,7 @@ export class CoreClient {
         this.pending.delete(id);
         reject(new Error(`Request ${type} timed out after ${this.requestTimeoutMs}ms`));
       }, this.requestTimeoutMs);
-      this.pending.set(id, { socket, timer, resolve: resolve as (value: unknown) => void, reject });
+      this.pending.set(id, { socket, rootId: unscoped ? undefined : this.rootId, timer, resolve: resolve as (value: unknown) => void, reject });
       try { socket.send(JSON.stringify(request)); }
       catch (error) {
         clearTimeout(timer);
@@ -95,7 +105,8 @@ export class CoreClient {
     if (!pending) return;
     clearTimeout(pending.timer);
     this.pending.delete(response.id);
-    if (response.ok) pending.resolve(response.result);
+    if (response.ok && pending.rootId && response.rootId && response.rootId !== pending.rootId) pending.reject(new Error(`Stale cross-root response: expected ${pending.rootId}, received ${response.rootId}`));
+    else if (response.ok) pending.resolve(response.result);
     else pending.reject(new Error(`${response.error.code}: ${response.error.message}`));
   }
 }

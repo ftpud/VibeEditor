@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { WebSocket } from "ws";
-import { assertSessionChangeAllowed, permissionTargetWorkspace, protocolHandshake, renameWorkspacePaths, sendWebSocketData, WorkspaceWatchBatcher } from "./server.js";
+import { assertRequestRoot, assertRootRemovalAllowed, assertSessionChangeAllowed, LiveRootSelections, permissionTargetWorkspace, protocolHandshake, renameWorkspacePaths, rootRemovalBlocker, sendWebSocketData, transactionalRootSelection, WorkspaceWatchBatcher } from "./server.js";
 
 describe("protocol handshake", () => {
   it("accepts overlapping ranges and describes incompatible Desktops", () => {
-    expect(protocolHandshake({ minimum: 2, maximum: 2 })).toMatchObject({ compatible: true, compatibility: { minimum: 2, maximum: 2 } });
-    expect(protocolHandshake({ minimum: 3, maximum: 3 })).toEqual({ compatible: false, compatibility: { minimum: 2, maximum: 2 }, message: "Core supports protocol 2-2; this Desktop supports 3-3" });
+    expect(protocolHandshake({ minimum: 3, maximum: 3 })).toMatchObject({ compatible: true, compatibility: { minimum: 3, maximum: 3 } });
+    expect(protocolHandshake({ minimum: 2, maximum: 2 })).toEqual({ compatible: false, compatibility: { minimum: 3, maximum: 3 }, message: "Core supports protocol 3-3; this Desktop supports 2-2" });
     expect(protocolHandshake({ minimum: 3, maximum: 1 }).compatible).toBe(false);
   });
 });
@@ -15,7 +15,54 @@ describe("workspace watcher batching", () => {
     const events: unknown[] = [];
     const batcher = new WorkspaceWatchBatcher((event) => events.push(event), 60_000, 2);
     batcher.change("a.ts"); batcher.change("b.ts"); batcher.change("c.ts"); batcher.degrade("overflow"); batcher.flush();
-    expect(events).toEqual([{ type: "filesystem.changed", payload: { paths: ["a.ts", "b.ts"], overflow: true, health: "degraded", message: "overflow" } }]);
+    expect(events).toEqual([{ type: "filesystem.changed", payload: { rootId: "legacy", paths: ["a.ts", "b.ts"], overflow: true, health: "degraded", message: "overflow" } }]);
+  });
+});
+
+describe("workspace root request boundary", () => {
+  it("accepts the selected identity and rejects missing or cross-root identities", () => {
+    expect(() => assertRequestRoot({ id: "1", type: "filesystem.readFile", rootId: "root-a", payload: { path: "README.md" } }, "root-a")).not.toThrow();
+    expect(() => assertRequestRoot({ id: "2", type: "filesystem.readFile", rootId: "root-b", payload: { path: "README.md" } }, "root-a")).toThrow("not the selected root");
+    expect(() => assertRequestRoot({ id: "3", type: "filesystem.readFile", payload: { path: "README.md" } } as never, "root-a")).toThrow("requires an explicit rootId");
+  });
+
+  it("keeps the previous root authoritative when preparing a switch fails", async () => {
+    let selectedRootId = "root-a"; let disposed = false;
+    await expect(transactionalRootSelection<{ rootId: string }>(
+      async () => { throw new Error("watcher setup failed"); },
+      ({ rootId }: { rootId: string }) => { selectedRootId = rootId; },
+      () => { disposed = true; }
+    )).rejects.toThrow("watcher setup failed");
+    expect(selectedRootId).toBe("root-a");
+    expect(disposed).toBe(false);
+    expect(() => assertRequestRoot({ id: "after-failure", type: "filesystem.readFile", rootId: "root-a", payload: { path: "README.md" } }, selectedRootId)).not.toThrow();
+  });
+
+  it("blocks removal while either client selects a root and releases it on disconnect", () => {
+    const selections = new LiveRootSelections<object>(); const first = {}; const second = {};
+    selections.connect(first, "root-a"); selections.connect(second, "root-b");
+    expect(selections.isSelected("root-b")).toBe(true);
+    expect(() => assertRootRemovalAllowed(selections, "root-b")).toThrow("Every connected client");
+    selections.beginSelection(first, "root-c");
+    expect(selections.isSelected("root-c")).toBe(true);
+    selections.cancelSelection(first);
+    expect(selections.isSelected("root-c")).toBe(false);
+    selections.select(first, "root-b");
+    expect(selections.isSelected("root-a")).toBe(false);
+    selections.disconnect(second);
+    expect(selections.isSelected("root-b")).toBe(true);
+    selections.disconnect(first);
+    expect(selections.isSelected("root-b")).toBe(false);
+    expect(() => assertRootRemovalAllowed(selections, "root-b")).not.toThrow();
+    expect(selections.selected(first)).toBeUndefined();
+  });
+
+  it("reports every material removal blocker without touching the directory", () => {
+    expect(rootRemovalBlocker({ tasks: 1, openFiles: 0, terminals: false, transfers: false })).toContain("task worktrees");
+    expect(rootRemovalBlocker({ tasks: 0, openFiles: 1, terminals: false, transfers: false })).toContain("open files");
+    expect(rootRemovalBlocker({ tasks: 0, openFiles: 0, terminals: true, transfers: false })).toContain("terminal sessions");
+    expect(rootRemovalBlocker({ tasks: 0, openFiles: 0, terminals: false, transfers: true })).toContain("transfers");
+    expect(rootRemovalBlocker({ tasks: 0, openFiles: 0, terminals: false, transfers: false })).toBeUndefined();
   });
 });
 import { withAppTools } from "./app-tools.js";

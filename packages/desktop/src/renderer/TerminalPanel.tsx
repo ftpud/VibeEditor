@@ -25,13 +25,14 @@ type Props = {
   onResizeStart(event: React.PointerEvent): void;
   registerWriter(terminalId: string, writer?: (data: string) => void): void;
   highlightedTerminalIds?: Set<string>;
+  rootAliases?: Record<string, string>;
 };
 
-export function TerminalPanel({ theme, fontFamily, fontSize, lineHeight, client, group, height, onActivate, onCreate, onClose, onRename, onDuplicate, onMove, onResizeStart, registerWriter, highlightedTerminalIds }: Props) {
+export function TerminalPanel({ theme, fontFamily, fontSize, lineHeight, client, group, height, onActivate, onCreate, onClose, onRename, onDuplicate, onMove, onResizeStart, registerWriter, highlightedTerminalIds, rootAliases = {} }: Props) {
   return <section className="terminal-panel" style={{ height }}>
     <div className="terminal-resize-handle" onPointerDown={onResizeStart} />
     <div className="terminal-tabs" role="tablist">
-      {group.tabs.map((tab) => <TerminalTabButton key={tab.id} tab={tab} active={tab.id === group.activeTabId} highlighted={highlightedTerminalIds?.has(tab.terminalId)} onActivate={onActivate} onClose={onClose} onRename={onRename} onDuplicate={onDuplicate} onMove={onMove} />)}
+      {group.tabs.map((tab) => <TerminalTabButton key={tab.id} tab={tab} rootAlias={tab.rootId ? rootAliases[tab.rootId] : undefined} active={tab.id === group.activeTabId} highlighted={highlightedTerminalIds?.has(tab.terminalId)} onActivate={onActivate} onClose={onClose} onRename={onRename} onDuplicate={onDuplicate} onMove={onMove} />)}
       <button className="terminal-action" title="New terminal" onClick={onCreate}><Plus size={15} /></button>
     </div>
     <div className="terminal-content">
@@ -41,7 +42,7 @@ export function TerminalPanel({ theme, fontFamily, fontSize, lineHeight, client,
   </section>;
 }
 
-export function TerminalTabButton({ tab, active, highlighted, onActivate, onClose, onRename, onDuplicate, onMove }: { tab: TerminalTab; active: boolean; highlighted?: boolean; onActivate(id: string): void; onClose(tab: TerminalTab): void; onRename?(tab: TerminalTab, title: string): void; onDuplicate?(tab: TerminalTab): void; onMove?(tabId: string, targetTabId: string): void }) {
+export function TerminalTabButton({ tab, rootAlias, active, highlighted, onActivate, onClose, onRename, onDuplicate, onMove }: { tab: TerminalTab; rootAlias?: string; active: boolean; highlighted?: boolean; onActivate(id: string): void; onClose(tab: TerminalTab): void; onRename?(tab: TerminalTab, title: string): void; onDuplicate?(tab: TerminalTab): void; onMove?(tabId: string, targetTabId: string): void }) {
   const statusLabel = tab.status === "running" ? "running" : tab.status;
   const visibleStatus = tab.status === "running" ? "" : ` (${tab.status})`;
   const [menu, setMenu] = useState<{ x: number; y: number }>();
@@ -77,7 +78,7 @@ export function TerminalTabButton({ tab, active, highlighted, onActivate, onClos
     onDrop={(event) => { event.preventDefault(); const sourceId = event.dataTransfer.getData("text/plain"); if (sourceId && sourceId !== tab.id) onMove?.(sourceId, tab.id); }}
     onContextMenu={(event) => { event.preventDefault(); setMenu({ x: Math.min(event.clientX, window.innerWidth - 160), y: Math.min(event.clientY, window.innerHeight - 74) }); }}
   >
-    <span>{tab.title}{visibleStatus}</span>
+    <span>{tab.title}{rootAlias && <small className="root-badge">{rootAlias}</small>}{visibleStatus}</span>
     <span className="close" title={`Close ${tab.title}`} onClick={(event) => { event.stopPropagation(); onClose(tab); }}><X size={13} /></span>
   </button>}
     {menu && <div className="terminal-context-menu terminal-tab-menu" style={{ left: menu.x, top: menu.y }} onMouseDown={(event) => event.stopPropagation()}>
