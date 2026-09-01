@@ -557,7 +557,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .terminal-action { width: 30px; flex: 0 0 30px; display: grid; place-items: center; border: 0; background: transparent; color: #aaa; cursor: pointer; }
 .terminal-action:hover { background: #333; color: white; }
 .terminal-content { min-height: 0; flex: 1; position: relative; padding: 5px 7px; }
-.terminal-recovery-notice { position: absolute; z-index: 2; top: 8px; left: 12px; right: 12px; padding: 6px 9px; border: 1px solid #8c6a2d; border-radius: 4px; background: #3b3020; color: #f1d6a0; font-size: 12px; line-height: 1.35; pointer-events: none; }
+.terminal-recovery-notice { flex: 0 0 auto; padding: 4px 9px; border-bottom: 1px solid #8c6a2d; background: #3b3020; color: #f1d6a0; font-size: 11px; line-height: 1.3; pointer-events: none; }
 .terminal-recovery-notice.live { border-color: #397557; background: #20372b; color: #b8e4c7; }
 .terminal-recovery-notice.exited { border-color: #79464b; background: #3a2527; color: #efb8bc; }
 .terminal-instance { position: absolute; inset: 5px 7px; visibility: hidden; }
