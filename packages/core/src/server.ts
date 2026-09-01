@@ -4,7 +4,7 @@ import chokidar from "chokidar";
 import path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { protocolCompatibility, requestTypes, type Request, type RequestType, type Response, type ServerEvent, type WorkspaceOptions } from "@remote-ide/protocol";
+import { protocolCompatibility, requestTypes, type FileTreeNode, type Request, type RequestType, type Response, type ServerEvent, type WorkspaceOptions, type WorkspaceRoot } from "@remote-ide/protocol";
 import { CoreError } from "./errors.js";
 import { WorkspaceFileSystem } from "./filesystem.js";
 import { TerminalSessionHost } from "./process-manager.js";
@@ -41,6 +41,8 @@ type SessionServices = {
   checkpoints: TaskCheckpointStore;
 };
 
+type SwitchedWatch = { watcher: ReturnType<typeof chokidar.watch>; gitWatcher: ReturnType<typeof chokidar.watch>; batcher: WorkspaceWatchBatcher };
+
 /**
  * `readyState` can change between the check and `send`. Supplying a callback keeps
  * ws from surfacing that race as an uncaught error, while the try/catch also makes
@@ -54,6 +56,28 @@ export function sendWebSocketData(socket: WebSocket, data: string): boolean {
   } catch {
     return false;
   }
+}
+
+export class LiveRootSelections<T extends object> {
+  private readonly selections = new Map<T, string>();
+  private readonly pending = new Map<T, string>();
+  connect(session: T, rootId: string): void { this.selections.set(session, rootId); }
+  beginSelection(session: T, rootId: string): void { if (!this.selections.has(session)) throw new Error("Session is not connected"); this.pending.set(session, rootId); }
+  select(session: T, rootId: string): void { if (!this.selections.has(session)) throw new Error("Session is not connected"); this.selections.set(session, rootId); this.pending.delete(session); }
+  cancelSelection(session: T): void { this.pending.delete(session); }
+  disconnect(session: T): void { this.selections.delete(session); this.pending.delete(session); }
+  isSelected(rootId: string): boolean { return [...this.selections.values(), ...this.pending.values()].some((selected) => selected === rootId); }
+  selected(session: T): string | undefined { return this.selections.get(session); }
+}
+
+export function assertRootRemovalAllowed<T extends object>(selections: LiveRootSelections<T>, rootId: string): void {
+  if (selections.isSelected(rootId)) throw new CoreError("INVALID_REQUEST", "Every connected client must select another root before removing this root");
+}
+
+export async function transactionalRootSelection<T>(prepare: () => Promise<T>, commit: (candidate: T) => Promise<void> | void, dispose: (candidate: T) => Promise<void> | void): Promise<T> {
+  let candidate: T | undefined;
+  try { candidate = await prepare(); await commit(candidate); return candidate; }
+  catch (error) { if (candidate !== undefined) await dispose(candidate); throw error; }
 }
 
 const coreProtocolCompatibility = protocolCompatibility;
@@ -140,6 +164,10 @@ export async function createServer(host: string, port: number, workspacePath: st
   const server = new WebSocketServer({ host, port });
   const remoteTransfers = new RemoteTransferService();
   const activeSessions = new Set<WebSocket>();
+  const liveRootSelections = new LiveRootSelections<WebSocket>();
+  const rootWatchSubscriptionsForServer = new Map<string, Set<SwitchedWatch>>();
+  const rootWatchOwnersForServer = new Map<SwitchedWatch, () => void>();
+  const removingRoots = new Set<string>();
   const terminalSubscriptions = new Map<WebSocket, { rootId: string; workspace: string; terminalIds: Set<string> }>();
   const terminalOwners = new Map<string, { socket: WebSocket; rootId: string; workspace: string }>();
   let runConfigs: RunConfigService;
@@ -229,10 +257,11 @@ export async function createServer(host: string, port: number, workspacePath: st
     if (remoteTransfers.accepts(request.url)) { void remoteTransfers.attach(socket, request.url); return; }
     let protocolAccepted = false;
     let selectedRoot = roots.primary();
+    liveRootSelections.connect(socket, selectedRoot.id);
     const makeServices = async (nextWorkspace: string, ownerRootId = selectedRoot.id): Promise<SessionServices> => {
-      workspaceOwners.set(path.resolve(nextWorkspace), ownerRootId);
       const filesystem = new WorkspaceFileSystem();
       await filesystem.open(nextWorkspace);
+      workspaceOwners.set(path.resolve(nextWorkspace), ownerRootId);
       const workspaceState = new WorkspaceStateStore(nextWorkspace, process.env.REMOTE_IDE_STATE_DIR);
       const search = new WorkspaceSearch(filesystem);
       const git = new GitService(nextWorkspace);
@@ -250,10 +279,16 @@ export async function createServer(host: string, port: number, workspacePath: st
     let servicesPromise: Promise<SessionServices>;
     /** Resolves once no task switch is in flight for this connection. */
     let switching: Promise<void> = Promise.resolve();
-    const switchedWatches = new Map<string, { watcher: ReturnType<typeof chokidar.watch>; gitWatcher: ReturnType<typeof chokidar.watch>; batcher: WorkspaceWatchBatcher }>();
-    const watchSwitchedWorkspace = async (nextWorkspace: string, ownerRootId = selectedRoot.id) => {
-      const previous = switchedWatches.get(ownerRootId); previous?.batcher.dispose(); await previous?.watcher.close(); await previous?.gitWatcher.close(); switchedWatches.delete(ownerRootId);
-      if (nextWorkspace === workspace) return;
+    const switchedWatches = new Map<string, SwitchedWatch>();
+    const rootWatchSubscriptions = rootWatchSubscriptionsForServer;
+    const closeSwitchedWatch = async (rootId: string, subscription: SwitchedWatch) => {
+      rootWatchOwnersForServer.get(subscription)?.(); rootWatchOwnersForServer.delete(subscription);
+      subscription.batcher.dispose(); await Promise.all([subscription.watcher.close(), subscription.gitWatcher.close()]);
+      rootWatchSubscriptions.get(rootId)?.delete(subscription);
+      if (!rootWatchSubscriptions.get(rootId)?.size) rootWatchSubscriptions.delete(rootId);
+    };
+    const prepareSwitchedWatch = async (nextWorkspace: string, ownerRootId = selectedRoot.id): Promise<SwitchedWatch | undefined> => {
+      if (nextWorkspace === workspace) return undefined;
       const switchedWatcher = chokidar.watch(nextWorkspace, {
         ignoreInitial: true,
         ignored: (watchPath) => path.relative(nextWorkspace, watchPath).split(path.sep).some((part) => part === ".git" || part === "node_modules"),
@@ -274,12 +309,27 @@ export async function createServer(host: string, port: number, workspacePath: st
       switchedWatcher.on("add", sendChange).on("change", sendChange).on("unlink", sendChange).on("addDir", sendChange).on("unlinkDir", sendChange)
         .on("raw", (eventName) => { if (String(eventName).includes("OVERFLOW")) batcher.degrade("Filesystem watcher overflow; synchronizing affected files."); })
         .on("error", (error) => batcher.degrade(`Filesystem watcher degraded: ${String(error)}`));
-      const switchedGitIndexWatcher = chokidar.watch(await gitIndexPath(nextWorkspace), { ignoreInitial: true });
-      switchedGitIndexWatcher.on("all", () => {
-        sendWebSocketData(socket, JSON.stringify({ type: "git.changed", payload: { rootId: ownerRootId } } satisfies ServerEvent));
-      });
-      switchedWatches.set(ownerRootId, { watcher: switchedWatcher, gitWatcher: switchedGitIndexWatcher, batcher });
-      await watcherReady;
+      let switchedGitIndexWatcher: ReturnType<typeof chokidar.watch> | undefined;
+      try {
+        switchedGitIndexWatcher = chokidar.watch(await gitIndexPath(nextWorkspace), { ignoreInitial: true });
+        switchedGitIndexWatcher.on("all", () => {
+          sendWebSocketData(socket, JSON.stringify({ type: "git.changed", payload: { rootId: ownerRootId } } satisfies ServerEvent));
+        });
+        await watcherReady;
+        return { watcher: switchedWatcher, gitWatcher: switchedGitIndexWatcher, batcher };
+      } catch (error) {
+        batcher.dispose(); await switchedWatcher.close(); await switchedGitIndexWatcher?.close(); throw error;
+      }
+    };
+    const commitSwitchedWatch = async (rootId: string, next: SwitchedWatch | undefined) => {
+      const previous = switchedWatches.get(rootId);
+      if (next) {
+        switchedWatches.set(rootId, next);
+        let subscriptions = rootWatchSubscriptions.get(rootId); if (!subscriptions) { subscriptions = new Set(); rootWatchSubscriptions.set(rootId, subscriptions); }
+        subscriptions.add(next);
+        rootWatchOwnersForServer.set(next, () => { if (switchedWatches.get(rootId) === next) switchedWatches.delete(rootId); });
+      } else switchedWatches.delete(rootId);
+      if (previous) await closeSwitchedWatch(rootId, previous).catch((error) => console.error(`[core] watcher cleanup error: ${String(error)}`));
     };
     // Task selection is durable server state and may have changed since Core started. A fresh
     // post-sleep socket must be routed to that selected worktree before workspace.open runs.
@@ -289,7 +339,7 @@ export async function createServer(host: string, port: number, workspacePath: st
       const registry = await tasks.list();
       const selectedWorkspace = registry.selectedTaskId ? tasks.taskPath(registry.selectedTaskId) : rootWorkspace;
       terminalSubscriptions.set(socket, { rootId: selectedRoot.id, workspace: selectedWorkspace, terminalIds: new Set() });
-      await watchSwitchedWorkspace(selectedWorkspace);
+      await commitSwitchedWatch(selectedRoot.id, await prepareSwitchedWatch(selectedWorkspace));
       return makeServices(selectedWorkspace);
     })();
     const client = request.socket.remoteAddress ?? "unknown";
@@ -321,14 +371,20 @@ export async function createServer(host: string, port: number, workspacePath: st
         }
         assertRequestRoot(parsed, selectedRoot.id);
         if (parsed.type === "workspace.removeRoot") {
-          if (parsed.payload.rootId === selectedRoot.id) throw new CoreError("INVALID_REQUEST", "Select another root before removing this root");
+          assertRootRemovalAllowed(liveRootSelections, parsed.payload.rootId);
           const target = roots.get(parsed.payload.rootId);
           const targetContext = contextFor(target.id);
           const [targetTasks, targetOptions] = await Promise.all([targetContext.tasks.list(), new WorkspaceStateStore(target.path, process.env.REMOTE_IDE_STATE_DIR).load()]);
           const blocker = rootRemovalBlocker({ tasks: targetTasks.tasks.length, openFiles: targetOptions.openFiles.length, terminals: terminalHost.hasWorkspace(target.path), transfers: remoteTransfers.hasWorkspace(target.path) });
           if (blocker) throw new CoreError("INVALID_REQUEST", blocker);
-          await roots.remove(parsed.payload.rootId);
-          rootContexts.delete(parsed.payload.rootId);
+          assertRootRemovalAllowed(liveRootSelections, target.id);
+          removingRoots.add(target.id);
+          try {
+            const subscriptions = [...(rootWatchSubscriptions.get(target.id) ?? [])];
+            await Promise.all(subscriptions.map((subscription) => closeSwitchedWatch(target.id, subscription)));
+            await roots.remove(parsed.payload.rootId);
+            rootContexts.delete(parsed.payload.rootId);
+          } finally { removingRoots.delete(target.id); }
           sendWebSocketData(socket, JSON.stringify({ id, ok: true, rootId: parsed.rootId, result: { roots: roots.list(), selectedRootId: selectedRoot.id } }));
           return;
         }
@@ -354,26 +410,44 @@ export async function createServer(host: string, port: number, workspacePath: st
         let release: (() => void) | undefined;
         if (switchesWorkspace) { const previous = switching; switching = new Promise<void>((resolve) => { release = resolve; }); await previous; }
         let services: SessionServices;
+        let rootSelectionResult: { root: WorkspaceRoot; workspace: string; projectName: string; tree: FileTreeNode[]; options: WorkspaceOptions } | undefined;
         try {
           services = await servicesPromise;
           if (parsed.type === "workspace.selectRoot") {
-            selectedRoot = roots.get(parsed.payload.rootId);
-            services.java.close(); services.jdt.close();
-            servicesPromise = makeServices(selectedRoot.path);
-            services = await servicesPromise;
-            terminalSubscriptions.set(socket, { rootId: selectedRoot.id, workspace: selectedRoot.path, terminalIds: new Set() });
-            await watchSwitchedWorkspace(selectedRoot.path);
+            const nextRoot = roots.get(parsed.payload.rootId);
+            if (removingRoots.has(nextRoot.id)) throw new CoreError("INVALID_REQUEST", "Workspace root is being removed");
+            liveRootSelections.beginSelection(socket, nextRoot.id);
+            const previousServices = services;
+            let candidate: { nextServices: SessionServices; nextWatch: SwitchedWatch | undefined; result: { root: WorkspaceRoot; workspace: string; projectName: string; tree: FileTreeNode[]; options: WorkspaceOptions } };
+            try { candidate = await transactionalRootSelection(async () => {
+              const nextServices = await makeServices(nextRoot.path, nextRoot.id);
+              let nextWatch: SwitchedWatch | undefined;
+              try {
+                nextWatch = await prepareSwitchedWatch(nextRoot.path, nextRoot.id);
+                const result = { root: nextRoot, workspace: nextServices.workspacePath, projectName: nextRoot.alias, tree: await nextServices.filesystem.listTree(parsed.payload.includeIgnored === true), options: await nextServices.workspaceState.load() };
+                return { nextServices, nextWatch, result };
+              } catch (error) { nextServices.java.close(); nextServices.jdt.close(); if (nextWatch) await closeSwitchedWatch(nextRoot.id, nextWatch); throw error; }
+            }, async ({ nextServices, nextWatch }) => {
+              await commitSwitchedWatch(nextRoot.id, nextWatch);
+              selectedRoot = nextRoot; liveRootSelections.select(socket, nextRoot.id);
+              servicesPromise = Promise.resolve(nextServices);
+              terminalSubscriptions.set(socket, { rootId: nextRoot.id, workspace: nextRoot.path, terminalIds: new Set() });
+              previousServices.java.close(); previousServices.jdt.close();
+            }, async ({ nextServices, nextWatch }) => {
+              nextServices.java.close(); nextServices.jdt.close(); if (nextWatch) await closeSwitchedWatch(nextRoot.id, nextWatch);
+            }); } catch (error) { liveRootSelections.cancelSelection(socket); throw error; }
+            services = candidate.nextServices; rootSelectionResult = candidate.result;
           } else if (parsed.type === "tasks.switch" || (parsed.type === "tasks.delete" && (await rootContext.tasks.list()).selectedTaskId === parsed.payload.taskId)) {
             const selected = await rootContext.tasks.select(parsed.type === "tasks.switch" ? parsed.payload.taskId : undefined);
             services.java.close(); services.jdt.close();
             servicesPromise = makeServices(selected.workspace);
             services = await servicesPromise;
             terminalSubscriptions.set(socket, { rootId: selectedRoot.id, workspace: selected.workspace, terminalIds: new Set() });
-            await watchSwitchedWorkspace(selected.workspace);
+            await commitSwitchedWatch(selectedRoot.id, await prepareSwitchedWatch(selected.workspace));
           }
         } finally { release?.(); }
         const result = parsed.type === "workspace.selectRoot"
-          ? { root: selectedRoot, workspace: services.workspacePath, projectName: selectedRoot.alias, tree: await services.filesystem.listTree(parsed.payload.includeIgnored === true), options: await services.workspaceState.load() }
+          ? rootSelectionResult!
           : await handleRequest(services, rootContext.tasks, acp, rootContext.usefulFiles, rootContext.agents, terminalHost, runConfigs, aiTimers, remoteTransfers, selectedRoot.path, parsed, rootWorkspace);
         if (["tasks.create", "tasks.createFromPrompt", "tasks.status", "tasks.rename", "tasks.archive", "tasks.delete"].includes(parsed.type)) { const encoded = JSON.stringify({ type: "tasks.changed", payload: { rootId: selectedRoot.id } } satisfies ServerEvent); for (const session of activeSessions) sendWebSocketData(session, encoded); }
         const terminalSubscription = terminalSubscriptions.get(socket);
@@ -393,8 +467,9 @@ export async function createServer(host: string, port: number, workspacePath: st
     });
     socket.on("close", () => {
       activeSessions.delete(socket);
+      liveRootSelections.disconnect(socket);
       terminalSubscriptions.delete(socket);
-      for (const subscription of switchedWatches.values()) { subscription.batcher.dispose(); void subscription.watcher.close(); void subscription.gitWatcher.close(); }
+      for (const [rootId, subscription] of switchedWatches) void closeSwitchedWatch(rootId, subscription);
       void servicesPromise.then((services) => { services.java.close(); services.jdt.close(); });
       console.log(`[core] disconnected: ${client}`);
     });

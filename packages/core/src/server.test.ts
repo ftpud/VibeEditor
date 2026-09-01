@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { WebSocket } from "ws";
-import { assertRequestRoot, assertSessionChangeAllowed, permissionTargetWorkspace, protocolHandshake, renameWorkspacePaths, rootRemovalBlocker, sendWebSocketData, WorkspaceWatchBatcher } from "./server.js";
+import { assertRequestRoot, assertRootRemovalAllowed, assertSessionChangeAllowed, LiveRootSelections, permissionTargetWorkspace, protocolHandshake, renameWorkspacePaths, rootRemovalBlocker, sendWebSocketData, transactionalRootSelection, WorkspaceWatchBatcher } from "./server.js";
 
 describe("protocol handshake", () => {
   it("accepts overlapping ranges and describes incompatible Desktops", () => {
@@ -24,6 +24,37 @@ describe("workspace root request boundary", () => {
     expect(() => assertRequestRoot({ id: "1", type: "filesystem.readFile", rootId: "root-a", payload: { path: "README.md" } }, "root-a")).not.toThrow();
     expect(() => assertRequestRoot({ id: "2", type: "filesystem.readFile", rootId: "root-b", payload: { path: "README.md" } }, "root-a")).toThrow("not the selected root");
     expect(() => assertRequestRoot({ id: "3", type: "filesystem.readFile", payload: { path: "README.md" } } as never, "root-a")).toThrow("requires an explicit rootId");
+  });
+
+  it("keeps the previous root authoritative when preparing a switch fails", async () => {
+    let selectedRootId = "root-a"; let disposed = false;
+    await expect(transactionalRootSelection<{ rootId: string }>(
+      async () => { throw new Error("watcher setup failed"); },
+      ({ rootId }: { rootId: string }) => { selectedRootId = rootId; },
+      () => { disposed = true; }
+    )).rejects.toThrow("watcher setup failed");
+    expect(selectedRootId).toBe("root-a");
+    expect(disposed).toBe(false);
+    expect(() => assertRequestRoot({ id: "after-failure", type: "filesystem.readFile", rootId: "root-a", payload: { path: "README.md" } }, selectedRootId)).not.toThrow();
+  });
+
+  it("blocks removal while either client selects a root and releases it on disconnect", () => {
+    const selections = new LiveRootSelections<object>(); const first = {}; const second = {};
+    selections.connect(first, "root-a"); selections.connect(second, "root-b");
+    expect(selections.isSelected("root-b")).toBe(true);
+    expect(() => assertRootRemovalAllowed(selections, "root-b")).toThrow("Every connected client");
+    selections.beginSelection(first, "root-c");
+    expect(selections.isSelected("root-c")).toBe(true);
+    selections.cancelSelection(first);
+    expect(selections.isSelected("root-c")).toBe(false);
+    selections.select(first, "root-b");
+    expect(selections.isSelected("root-a")).toBe(false);
+    selections.disconnect(second);
+    expect(selections.isSelected("root-b")).toBe(true);
+    selections.disconnect(first);
+    expect(selections.isSelected("root-b")).toBe(false);
+    expect(() => assertRootRemovalAllowed(selections, "root-b")).not.toThrow();
+    expect(selections.selected(first)).toBeUndefined();
   });
 
   it("reports every material removal blocker without touching the directory", () => {
