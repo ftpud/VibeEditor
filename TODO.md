@@ -209,7 +209,7 @@ multi-surface work).
   upstream safety checks, preview the todo list, preserve reflog-based recovery, and
   route conflicts through the conflict workspace. Depends on remote tracking,
   amend, and conflict resolution.
-- [ ] **Merge branch/tag from history — Project.** Value: complete the graph-to-action
+- [x] **Merge branch/tag from history — Project.** Value: complete the graph-to-action
   workflow. Constraint: preview merge base and incoming commits, never auto-commit
   unresolved conflicts, and expose abort/recovery. Depends on conflict resolution.
 - [x] **Saved searches and search history — Small.** Value: retain useful remote
