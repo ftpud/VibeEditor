@@ -19,6 +19,23 @@ describe("WorkspaceStateStore", () => {
     await expect(new WorkspaceStateStore("/workspace/missing", stateDirectory).load()).resolves.toEqual({ openFiles: [] });
   });
 
+  it("serializes rapid saves and retains the latest options", async () => {
+    const stateDirectory = await mkdtemp(path.join(tmpdir(), "remote-ide-state-"));
+    const store = new WorkspaceStateStore("/workspace/rapid-edits", stateDirectory);
+    const messages = Array.from({ length: 50 }, (_, index) => `Commit message ${index}`);
+    await expect(Promise.all(messages.map((gitCommitMessage) => store.save({ openFiles: [], gitCommitMessage })))).resolves.toHaveLength(messages.length);
+    await expect(store.load()).resolves.toEqual({ openFiles: [], gitCommitMessage: messages.at(-1) });
+  });
+
+  it("does not collide when stores for the same workspace save concurrently", async () => {
+    const stateDirectory = await mkdtemp(path.join(tmpdir(), "remote-ide-state-"));
+    const first = new WorkspaceStateStore("/workspace/shared", stateDirectory);
+    const second = new WorkspaceStateStore("/workspace/shared", stateDirectory);
+    const messages = Array.from({ length: 50 }, (_, index) => `Commit message ${index}`);
+    await expect(Promise.all(messages.map((gitCommitMessage, index) => (index % 2 ? first : second).save({ openFiles: [], gitCommitMessage })))).resolves.toHaveLength(messages.length);
+    expect(messages).toContain((await first.load()).gitCommitMessage);
+  });
+
   it("migrates legacy title-only terminal tabs to display metadata", () => {
     expect(validateWorkspaceOptions({ openFiles: [], terminal: { tabs: [{ title: "Legacy" }], activeTabIndex: 0, panelOpen: true } }).terminal).toEqual({ tabs: [{ displayName: "Legacy" }], activeTabIndex: 0, panelOpen: true });
   });
