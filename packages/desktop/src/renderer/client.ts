@@ -7,8 +7,11 @@ export class CoreClient {
   private pending = new Map<string, Pending>();
   onDisconnected?: (message: string) => void;
   onServerEvent?: (event: ServerEvent) => void;
+  private rootId?: string;
 
   constructor(private readonly requestTimeoutMs = 30_000) {}
+  setRoot(rootId: string): void { this.rootId = rootId; }
+  getRoot(): string | undefined { return this.rootId; }
 
   private rejectPendingFor(socket: WebSocket, error: Error): void {
     for (const [id, item] of this.pending) {
@@ -34,7 +37,12 @@ export class CoreClient {
         opened = true;
         this.request("protocol.handshake", { compatibility: protocolCompatibility, clientVersion: "0.1.0" }).then((result) => {
           if (!result.compatible) throw new Error(result.message ?? "Desktop and Core protocol versions are incompatible");
-          resolve();
+          return this.request("workspace.roots", {}).then(async (roots) => {
+            const desired = this.rootId && roots.roots.some((root) => root.id === this.rootId) ? this.rootId : roots.selectedRootId;
+            this.rootId = desired;
+            if (desired !== roots.selectedRootId) await this.request("workspace.selectRoot", { rootId: desired });
+            resolve();
+          });
         }).catch((error: unknown) => {
           const message = error instanceof Error ? error.message : "Could not negotiate a compatible protocol";
           this.socket = undefined;
@@ -58,7 +66,9 @@ export class CoreClient {
     if (!this.socket || this.socket.readyState !== WebSocket.OPEN) return Promise.reject(new Error("Not connected"));
     const id = crypto.randomUUID();
     const socket = this.socket;
-    const request = { id, type, payload } as Request<T>;
+    const unscoped = type === "protocol.handshake" || type === "workspace.roots" || type === "workspace.addRoot";
+    if (!unscoped && !this.rootId) return Promise.reject(new Error(`No workspace root selected for ${type}`));
+    const request = { id, type, payload, ...(!unscoped ? { rootId: this.rootId } : {}) } as Request<T>;
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         const item = this.pending.get(id);

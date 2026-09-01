@@ -39,6 +39,7 @@ export class RemoteTransferService {
   }
 
   cancel(token: string): boolean { const entry = this.entries.get(token); if (!entry) return false; entry.cancelled = true; entry.socket?.close(4000, "Transfer cancelled"); void this.cleanup(entry); this.entries.delete(token); return true; }
+  hasWorkspace(workspace: string): boolean { const target = path.resolve(workspace); return [...this.entries.values()].some((entry) => entry.workspace === target); }
   accepts(url: string | undefined): boolean { return Boolean(url?.startsWith("/project-transfer?")); }
   async attach(socket: WebSocket, requestUrl: string | undefined): Promise<void> {
     const token = new URL(requestUrl ?? "", "ws://core").searchParams.get("token") ?? "";

@@ -4,6 +4,9 @@ export type FileTreeNode = {
   type: "file" | "directory";
   children?: FileTreeNode[];
 };
+/** Stable, Core-issued identity for a remote directory in this workspace group. */
+export type WorkspaceRootId = string;
+export type WorkspaceRoot = { id: WorkspaceRootId; alias: string; path: string; primary: boolean };
 /** A bounded, Core-authoritative view of paths affected by a watcher burst. */
 export type FilesystemSnapshotEntry = { path: string; type?: "file" | "directory" };
 /** Opaque Core-issued file identity and content revision used for conditional saves. */
@@ -13,7 +16,7 @@ export type FileRevision = { identity: string; version: string };
  * Desktop can prove it is safe to talk to a newly deployed Core.
  */
 export type ProtocolCompatibility = { minimum: number; maximum: number };
-export const protocolCompatibility: ProtocolCompatibility = { minimum: 2, maximum: 2 };
+export const protocolCompatibility: ProtocolCompatibility = { minimum: 3, maximum: 3 };
 
 export function protocolRangeIsValid(range: ProtocolCompatibility): boolean {
   return Number.isInteger(range.minimum) && Number.isInteger(range.maximum) && range.minimum > 0 && range.minimum <= range.maximum;
@@ -207,6 +210,10 @@ export type SearchReplaceApplyResult = { applied: { path: string; revision: File
 
 export type ProtocolOperations = {
   "protocol.handshake": { payload: { compatibility: ProtocolCompatibility; clientVersion?: string }; result: { compatible: boolean; compatibility: ProtocolCompatibility; message?: string } };
+  "workspace.roots": { payload: Record<string, never>; result: { roots: WorkspaceRoot[]; selectedRootId: WorkspaceRootId } };
+  "workspace.addRoot": { payload: { path: string; alias: string }; result: { root: WorkspaceRoot; roots: WorkspaceRoot[] } };
+  "workspace.selectRoot": { payload: { rootId: WorkspaceRootId; includeIgnored?: boolean }; result: { root: WorkspaceRoot; workspace: string; projectName: string; tree: FileTreeNode[]; options: WorkspaceOptions } };
+  "workspace.removeRoot": { payload: { rootId: WorkspaceRootId }; result: { roots: WorkspaceRoot[]; selectedRootId: WorkspaceRootId } };
   "workspace.open": {
     payload: { includeIgnored?: boolean };
     result: { workspace: string; projectName: string; tree: FileTreeNode[]; options: WorkspaceOptions };
@@ -475,7 +482,7 @@ export type ProtocolOperations = {
 export type RequestType = keyof ProtocolOperations;
 
 export type Request<T extends RequestType = RequestType> = T extends RequestType
-  ? { id: string; type: T; payload: ProtocolOperations[T]["payload"] }
+  ? { id: string; type: T; payload: ProtocolOperations[T]["payload"] } & (T extends "protocol.handshake" | "workspace.roots" | "workspace.addRoot" ? { rootId?: never } : { rootId: WorkspaceRootId })
   : never;
 
 export type ErrorCode =
@@ -502,12 +509,12 @@ export type ErrorCode =
 export type ProtocolError = { code: ErrorCode; message: string };
 
 export type Response<T extends RequestType = RequestType> =
-  | { id: string; ok: true; result: ProtocolOperations[T]["result"] }
+  | ({ id: string; ok: true; result: ProtocolOperations[T]["result"] } & (T extends "protocol.handshake" | "workspace.roots" | "workspace.addRoot" ? { rootId?: never } : { rootId: WorkspaceRootId }))
   | { id: string; ok: false; error: ProtocolError };
 
 export type FilesystemChangedEvent = {
   type: "filesystem.changed";
-  payload: { paths: string[]; overflow: boolean; health: "healthy" | "degraded"; message?: string };
+  payload: { rootId: WorkspaceRootId; paths: string[]; overflow: boolean; health: "healthy" | "degraded"; message?: string };
 };
 
 export type TerminalOutputEvent = {
@@ -540,6 +547,10 @@ export type ServerEvent = FilesystemChangedEvent | TerminalOutputEvent | Termina
  */
 const requestTypeRegistry: Record<RequestType, true> = {
   "protocol.handshake": true,
+  "workspace.roots": true,
+  "workspace.addRoot": true,
+  "workspace.selectRoot": true,
+  "workspace.removeRoot": true,
   "workspace.open": true,
   "workspace.saveOptions": true,
   "tasks.list": true,
