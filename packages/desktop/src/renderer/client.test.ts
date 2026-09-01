@@ -31,6 +31,7 @@ class FakeWebSocket {
     this.sent.push(data);
     const request = JSON.parse(data) as { id: string; type: string };
     if (request.type === "protocol.handshake") this.receive({ id: request.id, ok: true, result: { compatible: true, compatibility: { minimum: 1, maximum: 1 } } });
+    if (request.type === "workspace.roots") this.receive({ id: request.id, ok: true, result: { roots: [{ id: "root-primary", alias: "project", path: "/project", primary: true }], selectedRootId: "root-primary" } });
   }
   close(): void { this.readyState = FakeWebSocket.CLOSED; this.onclose?.(); }
   receive(value: unknown): void { this.onmessage?.({ data: JSON.stringify(value) }); }
@@ -42,6 +43,15 @@ describe("CoreClient streaming disconnects", () => {
     vi.stubGlobal("WebSocket", FakeWebSocket);
   });
   afterEach(() => vi.unstubAllGlobals());
+
+  it("adds the selected root identity to every scoped request", async () => {
+    const client = new CoreClient(); const connecting = client.connect("core", 7331); const socket = FakeWebSocket.instances[0]!; socket.open(); await connecting;
+    const pending = client.request("filesystem.readFile", { path: "README.md" });
+    const request = JSON.parse(socket.sent[2]!) as { id: string; rootId?: string; payload: unknown };
+    expect(request).toMatchObject({ rootId: "root-primary", payload: { path: "README.md" } });
+    socket.receive({ id: request.id, ok: true, result: { path: "README.md", content: "", revision: { identity: "a", version: "b" } } });
+    await pending;
+  });
 
   it("rejects the interrupted send, reconnects, and restores the durable AI snapshot", async () => {
     const client = new CoreClient();
@@ -62,7 +72,7 @@ describe("CoreClient streaming disconnects", () => {
     second.open();
     await reconnecting;
     const restoring = client.request("ai.get", {});
-    const request = JSON.parse(second.sent[1]!) as { id: string };
+    const request = JSON.parse(second.sent[2]!) as { id: string };
     let restored = false;
     void restoring.then(() => { restored = true; });
     first.receive({ id: request.id, ok: true, result: { session: { status: "done", messages: [] } } });
@@ -109,7 +119,7 @@ describe("CoreClient streaming disconnects", () => {
     loading = true;
     const switched = client.request("tasks.switch", { taskId: "task-b", includeIgnored: false })
       .finally(() => { loading = false; });
-    const request = JSON.parse(second.sent[1]!) as { id: string };
+    const request = JSON.parse(second.sent[2]!) as { id: string };
     second.receive({ id: request.id, ok: true, result: { workspace: "/task-b", projectName: "project", tree: [], options: {}, tasks: [], selectedTaskId: "task-b" } });
 
     await expect(switched).resolves.toMatchObject({ selectedTaskId: "task-b" });

@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { WebSocket } from "ws";
-import { assertSessionChangeAllowed, permissionTargetWorkspace, protocolHandshake, renameWorkspacePaths, sendWebSocketData, WorkspaceWatchBatcher } from "./server.js";
+import { assertRequestRoot, assertSessionChangeAllowed, permissionTargetWorkspace, protocolHandshake, renameWorkspacePaths, sendWebSocketData, WorkspaceWatchBatcher } from "./server.js";
 
 describe("protocol handshake", () => {
   it("accepts overlapping ranges and describes incompatible Desktops", () => {
-    expect(protocolHandshake({ minimum: 2, maximum: 2 })).toMatchObject({ compatible: true, compatibility: { minimum: 2, maximum: 2 } });
-    expect(protocolHandshake({ minimum: 3, maximum: 3 })).toEqual({ compatible: false, compatibility: { minimum: 2, maximum: 2 }, message: "Core supports protocol 2-2; this Desktop supports 3-3" });
+    expect(protocolHandshake({ minimum: 3, maximum: 3 })).toMatchObject({ compatible: true, compatibility: { minimum: 3, maximum: 3 } });
+    expect(protocolHandshake({ minimum: 2, maximum: 2 })).toEqual({ compatible: false, compatibility: { minimum: 3, maximum: 3 }, message: "Core supports protocol 3-3; this Desktop supports 2-2" });
     expect(protocolHandshake({ minimum: 3, maximum: 1 }).compatible).toBe(false);
   });
 });
@@ -15,7 +15,15 @@ describe("workspace watcher batching", () => {
     const events: unknown[] = [];
     const batcher = new WorkspaceWatchBatcher((event) => events.push(event), 60_000, 2);
     batcher.change("a.ts"); batcher.change("b.ts"); batcher.change("c.ts"); batcher.degrade("overflow"); batcher.flush();
-    expect(events).toEqual([{ type: "filesystem.changed", payload: { paths: ["a.ts", "b.ts"], overflow: true, health: "degraded", message: "overflow" } }]);
+    expect(events).toEqual([{ type: "filesystem.changed", payload: { rootId: "legacy", paths: ["a.ts", "b.ts"], overflow: true, health: "degraded", message: "overflow" } }]);
+  });
+});
+
+describe("workspace root request boundary", () => {
+  it("accepts the selected identity and rejects missing or cross-root identities", () => {
+    expect(() => assertRequestRoot({ id: "1", type: "filesystem.readFile", rootId: "root-a", payload: { path: "README.md" } }, "root-a")).not.toThrow();
+    expect(() => assertRequestRoot({ id: "2", type: "filesystem.readFile", rootId: "root-b", payload: { path: "README.md" } }, "root-a")).toThrow("not the selected root");
+    expect(() => assertRequestRoot({ id: "3", type: "filesystem.readFile", payload: { path: "README.md" } } as never, "root-a")).toThrow("requires an explicit rootId");
   });
 });
 import { withAppTools } from "./app-tools.js";

@@ -25,6 +25,7 @@ import { AiTimerService, AiTimerStore } from "./ai-timers.js";
 import { AppToolService, withAppTools } from "./app-tools.js";
 import { TaskCheckpointStore } from "./task-checkpoints.js";
 import { RemoteTransferService } from "./remote-transfer.js";
+import { WorkspaceRootRegistry } from "./workspace-roots.js";
 import type { AiProvider } from "@remote-ide/protocol";
 
 const execFileAsync = promisify(execFile);
@@ -63,7 +64,18 @@ export class WorkspaceWatchBatcher {
   private overflow = false;
   private degraded?: string;
   private timer?: ReturnType<typeof setTimeout>;
-  constructor(private readonly emit: (event: Extract<ServerEvent, { type: "filesystem.changed" }>) => void, private readonly delay = 120, private readonly limit = 256) {}
+  private readonly rootId: string;
+  private readonly emit: (event: Extract<ServerEvent, { type: "filesystem.changed" }>) => void;
+  private readonly delay: number;
+  private readonly limit: number;
+  constructor(emit: (event: Extract<ServerEvent, { type: "filesystem.changed" }>) => void, delay?: number, limit?: number);
+  constructor(rootId: string, emit: (event: Extract<ServerEvent, { type: "filesystem.changed" }>) => void, delay?: number, limit?: number);
+  constructor(rootOrEmit: string | ((event: Extract<ServerEvent, { type: "filesystem.changed" }>) => void), emitOrDelay?: ((event: Extract<ServerEvent, { type: "filesystem.changed" }>) => void) | number, delayOrLimit = 120, limit = 256) {
+    this.rootId = typeof rootOrEmit === "string" ? rootOrEmit : "legacy";
+    this.emit = typeof rootOrEmit === "string" ? emitOrDelay as (event: Extract<ServerEvent, { type: "filesystem.changed" }>) => void : rootOrEmit;
+    this.delay = typeof rootOrEmit === "string" ? delayOrLimit : typeof emitOrDelay === "number" ? emitOrDelay : 120;
+    this.limit = typeof rootOrEmit === "string" ? limit : delayOrLimit;
+  }
   change(relativePath: string): void {
     if (this.paths.size >= this.limit) this.overflow = true;
     else this.paths.add(relativePath);
@@ -74,7 +86,7 @@ export class WorkspaceWatchBatcher {
     if (this.timer) clearTimeout(this.timer);
     this.timer = undefined;
     if (!this.paths.size && !this.degraded) return;
-    this.emit({ type: "filesystem.changed", payload: { paths: [...this.paths], overflow: this.overflow, health: this.degraded ? "degraded" : "healthy", ...(this.degraded ? { message: this.degraded } : {}) } });
+    this.emit({ type: "filesystem.changed", payload: { rootId: this.rootId, paths: [...this.paths], overflow: this.overflow, health: this.degraded ? "degraded" : "healthy", ...(this.degraded ? { message: this.degraded } : {}) } });
     this.paths.clear(); this.overflow = false; this.degraded = undefined;
   }
   dispose(): void { if (this.timer) clearTimeout(this.timer); }
@@ -91,9 +103,17 @@ export function protocolHandshake(compatibility: { minimum: number; maximum: num
 
 export async function createServer(host: string, port: number, workspacePath: string): Promise<WebSocketServer> {
   const rootWorkspace = workspacePath;
+  const roots = await WorkspaceRootRegistry.open(rootWorkspace);
   const tasks = new WorkspaceTaskStore(rootWorkspace);
   const usefulFiles = new UsefulFilesStore(rootWorkspace);
   const agents = new AgentsStore(rootWorkspace);
+  const rootContexts = new Map<string, { tasks: WorkspaceTaskStore; usefulFiles: UsefulFilesStore; agents: AgentsStore }>();
+  rootContexts.set(roots.primary().id, { tasks, usefulFiles, agents });
+  const contextFor = (rootId: string) => {
+    let context = rootContexts.get(rootId);
+    if (!context) { const root = roots.get(rootId); context = { tasks: new WorkspaceTaskStore(root.path), usefulFiles: new UsefulFilesStore(root.path), agents: new AgentsStore(root.path) }; rootContexts.set(rootId, context); }
+    return context;
+  };
   const savedTasks = await tasks.list();
   if (savedTasks.selectedTaskId) workspacePath = tasks.taskPath(savedTasks.selectedTaskId);
   const validation = new WorkspaceFileSystem();
@@ -192,7 +212,7 @@ export async function createServer(host: string, port: number, workspacePath: st
     const encoded = JSON.stringify({ type: "git.changed", payload: {} } satisfies ServerEvent);
     for (const socket of activeSessions) sendWebSocketData(socket, encoded);
   });
-  const rootBatcher = new WorkspaceWatchBatcher((event) => {
+  const rootBatcher = new WorkspaceWatchBatcher(roots.primary().id, (event) => {
     const encoded = JSON.stringify(event);
     for (const socket of activeSessions) sendWebSocketData(socket, encoded);
   });
@@ -209,6 +229,7 @@ export async function createServer(host: string, port: number, workspacePath: st
   server.on("connection", (socket, request) => {
     if (remoteTransfers.accepts(request.url)) { void remoteTransfers.attach(socket, request.url); return; }
     let protocolAccepted = false;
+    let selectedRoot = roots.primary();
     const makeServices = async (nextWorkspace: string): Promise<SessionServices> => {
       const filesystem = new WorkspaceFileSystem();
       await filesystem.open(nextWorkspace);
@@ -223,7 +244,8 @@ export async function createServer(host: string, port: number, workspacePath: st
       sendWebSocketData(socket, JSON.stringify(message));
       });
       const jdt = new JdtLanguageService(filesystem);
-      return { workspacePath: nextWorkspace, filesystem, search, git, java, jdt, workspaceState, checkpoints: checkpointStore(nextWorkspace) };
+      const checkpoints = checkpointStore(nextWorkspace); await checkpoints.recover();
+      return { workspacePath: nextWorkspace, filesystem, search, git, java, jdt, workspaceState, checkpoints };
     };
     let servicesPromise: Promise<SessionServices>;
     /** Resolves once no task switch is in flight for this connection. */
@@ -248,7 +270,7 @@ export async function createServer(host: string, port: number, workspacePath: st
         switchedWatcher!.once("ready", resolve);
         switchedWatcher!.once("error", reject);
       });
-      const batcher = new WorkspaceWatchBatcher((event) => sendWebSocketData(socket, JSON.stringify(event)));
+      const batcher = new WorkspaceWatchBatcher(selectedRoot.id, (event) => sendWebSocketData(socket, JSON.stringify(event)));
       switchedBatcher = batcher;
       const sendChange = (absolutePath: string) => {
         const relativePath = path.relative(nextWorkspace, absolutePath).split(path.sep).join("/");
@@ -292,18 +314,50 @@ export async function createServer(host: string, port: number, workspacePath: st
           return;
         }
         if (!protocolAccepted) throw new CoreError("INVALID_REQUEST", "Complete protocol.handshake before sending requests");
+        if (parsed.type === "workspace.roots") {
+          sendWebSocketData(socket, JSON.stringify({ id, ok: true, result: { roots: roots.list(), selectedRootId: selectedRoot.id } }));
+          return;
+        }
+        if (parsed.type === "workspace.addRoot") {
+          const root = await roots.add(parsed.payload.path, parsed.payload.alias);
+          sendWebSocketData(socket, JSON.stringify({ id, ok: true, result: { root, roots: roots.list() } }));
+          return;
+        }
+        assertRequestRoot(parsed, selectedRoot.id);
+        if (parsed.type === "workspace.removeRoot") {
+          if (parsed.payload.rootId === selectedRoot.id) throw new CoreError("INVALID_REQUEST", "Select another root before removing this root");
+          const target = roots.get(parsed.payload.rootId);
+          const targetContext = contextFor(target.id);
+          const [targetTasks, targetOptions] = await Promise.all([targetContext.tasks.list(), new WorkspaceStateStore(target.path, process.env.REMOTE_IDE_STATE_DIR).load()]);
+          if (targetTasks.tasks.length) throw new CoreError("INVALID_REQUEST", "Remove or relocate this root's task worktrees before unregistering it");
+          if (targetOptions.openFiles.length) throw new CoreError("INVALID_REQUEST", "Close this root's persisted open files before unregistering it");
+          if (terminalHost.hasWorkspace(target.path)) throw new CoreError("INVALID_REQUEST", "Close this root's terminal sessions before unregistering it");
+          if (remoteTransfers.hasWorkspace(target.path)) throw new CoreError("INVALID_REQUEST", "Finish or cancel this root's file transfers before unregistering it");
+          await roots.remove(parsed.payload.rootId);
+          rootContexts.delete(parsed.payload.rootId);
+          sendWebSocketData(socket, JSON.stringify({ id, ok: true, rootId: parsed.rootId, result: { roots: roots.list(), selectedRootId: selectedRoot.id } }));
+          return;
+        }
         // Requests are handled concurrently, so anything that arrives while a task switch is
         // rebuilding the services has to wait for it. Otherwise it would run against the
         // previous worktree and answer the client with another task's state.
-        const switchesWorkspace = parsed.type === "tasks.switch" || parsed.type === "tasks.delete";
+        const rootContext = contextFor(parsed.type === "workspace.selectRoot" ? parsed.payload.rootId : selectedRoot.id);
+        const switchesWorkspace = parsed.type === "tasks.switch" || parsed.type === "tasks.delete" || parsed.type === "workspace.selectRoot";
         if (!switchesWorkspace) await switching;
         let release: (() => void) | undefined;
         if (switchesWorkspace) { const previous = switching; switching = new Promise<void>((resolve) => { release = resolve; }); await previous; }
         let services: SessionServices;
         try {
           services = await servicesPromise;
-          if (parsed.type === "tasks.switch" || (parsed.type === "tasks.delete" && (await tasks.list()).selectedTaskId === parsed.payload.taskId)) {
-            const selected = await tasks.select(parsed.type === "tasks.switch" ? parsed.payload.taskId : undefined);
+          if (parsed.type === "workspace.selectRoot") {
+            selectedRoot = roots.get(parsed.payload.rootId);
+            services.java.close(); services.jdt.close();
+            servicesPromise = makeServices(selectedRoot.path);
+            services = await servicesPromise;
+            terminalSubscriptions.set(socket, { workspace: selectedRoot.path, terminalIds: new Set() });
+            await watchSwitchedWorkspace(selectedRoot.path);
+          } else if (parsed.type === "tasks.switch" || (parsed.type === "tasks.delete" && (await rootContext.tasks.list()).selectedTaskId === parsed.payload.taskId)) {
+            const selected = await rootContext.tasks.select(parsed.type === "tasks.switch" ? parsed.payload.taskId : undefined);
             services.java.close(); services.jdt.close();
             servicesPromise = makeServices(selected.workspace);
             services = await servicesPromise;
@@ -311,7 +365,9 @@ export async function createServer(host: string, port: number, workspacePath: st
             await watchSwitchedWorkspace(selected.workspace);
           }
         } finally { release?.(); }
-        const result = await handleRequest(services, tasks, acp, usefulFiles, agents, terminalHost, runConfigs, aiTimers, remoteTransfers, rootWorkspace, parsed);
+        const result = parsed.type === "workspace.selectRoot"
+          ? { root: selectedRoot, workspace: services.workspacePath, projectName: selectedRoot.alias, tree: await services.filesystem.listTree(parsed.payload.includeIgnored === true), options: await services.workspaceState.load() }
+          : await handleRequest(services, rootContext.tasks, acp, rootContext.usefulFiles, rootContext.agents, terminalHost, runConfigs, aiTimers, remoteTransfers, selectedRoot.path, parsed);
         if (["tasks.create", "tasks.createFromPrompt", "tasks.status", "tasks.rename", "tasks.archive", "tasks.delete"].includes(parsed.type)) await onTasksChanged();
         const terminalSubscription = terminalSubscriptions.get(socket);
         if (terminalSubscription && parsed.type === "terminal.create") terminalSubscription.terminalIds.add((result as { terminalId: string }).terminalId);
@@ -321,7 +377,7 @@ export async function createServer(host: string, port: number, workspacePath: st
           const terminalId = (result as { config: { terminalId?: string } }).config.terminalId; if (terminalId) terminalSubscription.terminalIds.add(terminalId);
         }
         if (parsed.type === "workspace.open") activeSessions.add(socket);
-        sendWebSocketData(socket, JSON.stringify({ id, ok: true, result }));
+        sendWebSocketData(socket, JSON.stringify({ id, ok: true, rootId: parsed.rootId, result }));
       } catch (error) {
         const coreError = error instanceof CoreError ? error : new CoreError("INVALID_REQUEST", error instanceof Error ? error.message : "Invalid request");
         console.error(`[core] error ${id}: ${coreError.code} ${coreError.message}`);
@@ -356,6 +412,12 @@ function parseRequest(data: RawData): Request {
     throw new CoreError("INVALID_REQUEST", "Request must contain a valid id, type, and payload");
   }
   return value as Request;
+}
+
+export function assertRequestRoot(request: Request, selectedRootId: string): void {
+  if (request.type === "protocol.handshake" || request.type === "workspace.roots" || request.type === "workspace.addRoot") return;
+  if (!request.rootId) throw new CoreError("INVALID_REQUEST", `Request ${request.type} requires an explicit rootId`);
+  if (request.type !== "workspace.selectRoot" && request.rootId !== selectedRootId) throw new CoreError("INVALID_REQUEST", `Request root ${request.rootId} is not the selected root ${selectedRootId}`);
 }
 
 async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStore, acp: AcpRegistry, usefulFiles: UsefulFilesStore, agents: AgentsStore, terminalHost: TerminalSessionHost, runConfigs: RunConfigService, aiTimers: AiTimerService, remoteTransfers: RemoteTransferService, rootWorkspace: string, request: Request): Promise<unknown> {

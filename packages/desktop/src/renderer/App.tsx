@@ -1,7 +1,7 @@
 import { DiffEditor, type Monaco } from "@monaco-editor/react";
 import { Archive, ArrowDown, ArrowUp, ArrowUpRight, Bot, Bug, Check, ChevronDown, ChevronRight, ChevronUp, CircleAlert, ClipboardCopy, Coffee, Columns2, Eye, EyeOff, File, FileCode2, FileDiff, FileText, Folder, FolderOpen, GitBranch, GitCompareArrows, GitMerge, Library, ListTodo, ListTree, LoaderCircle, LogOut, MoreVertical, Package, Palette, Pencil, Pin, PinOff, Play, Plus, RefreshCw, Save, Search, Settings, ShieldAlert, Square, SquareTerminal, Trash2, X } from "lucide-react";
 import { Children, isValidElement, useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
-import type { AgentFile, AgentFileScope, AiConfiguration, AiModel, AiProvider, AiProviderDescriptor, AiSession, AiStatus, AiTaskSummary, AiUsage, FileColor, FileRevision, FileTreeNode, GitBranch as GitBranchInfo, GitDiffHunk, GitHistoryRewritePreview, GitStatusEntry, GitUpstreamStatus, HttpResponse, JavaBreakpoint, JavaDebugState, JavaDiagnostic, JavaLspLocation, JavaMainClass, JavaProjectNode, JavaProjectOptions, JavaTypeSuggestion, RunConfig, RunConfigScope, SearchResult, TaskCheckpoint, TaskCheckpointFile, UsefulFile, UsefulFileScope, WorkspaceOptions, WorkspaceSearchQueries, WorkspaceSymbol, WorkspaceTask } from "@remote-ide/protocol";
+import type { AgentFile, AgentFileScope, AiConfiguration, AiModel, AiProvider, AiProviderDescriptor, AiSession, AiStatus, AiTaskSummary, AiUsage, FileColor, FileRevision, FileTreeNode, GitBranch as GitBranchInfo, GitDiffHunk, GitHistoryRewritePreview, GitStatusEntry, GitUpstreamStatus, HttpResponse, JavaBreakpoint, JavaDebugState, JavaDiagnostic, JavaLspLocation, JavaMainClass, JavaProjectNode, JavaProjectOptions, JavaTypeSuggestion, RunConfig, RunConfigScope, SearchResult, TaskCheckpoint, TaskCheckpointFile, UsefulFile, UsefulFileScope, WorkspaceOptions, WorkspaceRoot, WorkspaceSearchQueries, WorkspaceSymbol, WorkspaceTask } from "@remote-ide/protocol";
 import type { editor } from "monaco-editor";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -193,6 +193,8 @@ export function App() {
   const [agentDialog, setAgentDialog] = useState<{ mode: "create" | "rename"; scope: Exclude<AgentFileScope, "workspace">; file?: AgentFile }>();
   const [activeWorkspace, setActiveWorkspace] = useState("");
   const [projectName, setProjectName] = useState("");
+  const [workspaceRoots, setWorkspaceRoots] = useState<WorkspaceRoot[]>([]);
+  const [selectedRootId, setSelectedRootId] = useState("");
   const [aiSession, setAiSession] = useState<AiSession>({ model: "gpt-5.6-sol", reasoning: "low", status: "idle", messages: [] });
   const [aiSessions, setAiSessions] = useState<AiSession[]>([]);
   const [aiProvider, setAiProvider] = useState<AiProvider>(() => readSetting("aiProvider") === "copilot" ? "copilot" : "codex");
@@ -551,6 +553,7 @@ export function App() {
           try {
             await client.connect(host.trim(), Number(port));
             if (clientRef.current !== client) { client.disconnect(); return; }
+            const rootRegistry = await client.request("workspace.roots", {}); client.setRoot(rootRegistry.selectedRootId); setWorkspaceRoots(rootRegistry.roots); setSelectedRootId(rootRegistry.selectedRootId);
             const result = await client.request("workspace.open", { includeIgnored: showIgnoredRef.current });
             if (clientRef.current !== client) return;
             setActiveWorkspace(result.workspace); activeWorkspaceRef.current = result.workspace;
@@ -570,6 +573,7 @@ export function App() {
       })();
     };
     client.onServerEvent = (event) => {
+      if ("rootId" in event.payload && event.payload.rootId !== client.getRoot()) return;
       if (event.type === "terminal.output") {
         terminalBuffers.current.set(event.payload.terminalId, ((terminalBuffers.current.get(event.payload.terminalId) ?? "") + event.payload.data).slice(-1_000_000));
         const writer = terminalWriters.current.get(event.payload.terminalId);
@@ -658,6 +662,7 @@ export function App() {
     try {
       await client.connect(host.trim(), Number(port));
       try {
+        const rootRegistry = await client.request("workspace.roots", {}); client.setRoot(rootRegistry.selectedRootId); setWorkspaceRoots(rootRegistry.roots); setSelectedRootId(rootRegistry.selectedRootId);
         const result = await client.request("workspace.open", { includeIgnored: showIgnoredRef.current });
         clientRef.current = client;
         setActiveWorkspace(result.workspace); activeWorkspaceRef.current = result.workspace;
@@ -2248,6 +2253,40 @@ export function App() {
   }).slice().sort((left, right) => Number(left.archived) - Number(right.archived) || Number(left.status === "finished") - Number(right.status === "finished")), [aiStatuses.tasks, normalizedTaskFilter, taskLifecycleFilter, tasks]);
   const showRootTask = !normalizedTaskFilter || `root workspace ${aiStatuses.root.status} ${aiStatuses.root.preview}`.toLowerCase().includes(normalizedTaskFilter);
   const selectedTaskTimerActive = Boolean(selectedTaskId && aiStatuses.tasks[selectedTaskId]?.waitingUntil);
+  const selectWorkspaceRoot = async (rootId: string) => {
+    const client = clientRef.current;
+    if (!client || rootId === selectedRootId) return;
+    if (hasDirtyTabs) { setStatusMessage("Save or close dirty files before switching workspace roots"); return; }
+    if (layout.terminalGroup.tabs.some((tab) => tab.status === "running")) { setStatusMessage("Close running terminals before switching workspace roots"); return; }
+    const previous = selectedRootId;
+    setTaskSwitching(true);
+    try {
+      const currentGroup = layoutRef.current.editorGroups[0]!; const currentFiles = currentGroup.tabs.filter((tab) => tab.type === "file"); const currentTerminal = layoutRef.current.terminalGroup; const activeTerminalIndex = currentTerminal.tabs.findIndex((tab) => tab.id === currentTerminal.activeTabId);
+      await client.request("workspace.saveOptions", { options: { openFiles: currentFiles.map((tab) => tab.path), ...(pinnedFilePaths(currentFiles).length ? { pinnedFiles: pinnedFilePaths(currentFiles) } : {}), ...(currentFiles.find((tab) => tab.id === currentGroup.activeTabId) ? { activeFile: currentFiles.find((tab) => tab.id === currentGroup.activeTabId)!.path } : {}), ...(javaOptionsRef.current ? { javaProject: javaOptionsRef.current } : {}), terminal: { tabs: currentTerminal.tabs.map((tab) => ({ displayName: tab.title, terminalId: tab.terminalId })), ...(activeTerminalIndex >= 0 ? { activeTabIndex: activeTerminalIndex } : {}), panelOpen: layoutRef.current.panels.some((panel) => panel.type === "terminal") }, ...(Object.keys(fileColors).length ? { fileColors } : {}), ...(gitCommitMessage ? { gitCommitMessage } : {}), ...(Object.keys(searchQueries).length ? { searchQueries } : {}) } });
+      client.setRoot(rootId);
+      const result = await client.request("workspace.selectRoot", { rootId, includeIgnored: showIgnoredRef.current });
+      setSelectedRootId(rootId); setActiveWorkspace(result.workspace); activeWorkspaceRef.current = result.workspace; setProjectName(result.projectName); setTree(result.tree);
+      workspaceKeyRef.current = result.workspace; cursorPositions.setWorkspace(result.workspace);
+      setTasks([]); setSelectedTaskId(undefined); setGitEntries([]); setTaskGitEntries([]); setJavaOptions(result.options.javaProject);
+      await restoreWorkspaceOptions(result.options, client);
+      await Promise.all([refreshTasks(client), refreshGit(client), refreshAi(client), refreshUsefulFiles(client), refreshRunConfigs(client), refreshAgents(client)]);
+    } catch (error) { client.setRoot(previous); setStatusMessage(error instanceof Error ? error.message : "Could not switch workspace root"); }
+    finally { setTaskSwitching(false); }
+  };
+  const addWorkspaceRoot = async () => {
+    const client = clientRef.current; if (!client) return;
+    const remotePath = window.prompt("Absolute path on the remote Core machine:"); if (!remotePath?.trim()) return;
+    const alias = window.prompt("Root name:", remotePath.trim().split(/[\\/]/).filter(Boolean).at(-1) ?? "root"); if (!alias?.trim()) return;
+    try { const result = await client.request("workspace.addRoot", { path: remotePath.trim(), alias: alias.trim() }); setWorkspaceRoots(result.roots); await selectWorkspaceRoot(result.root.id); }
+    catch (error) { setStatusMessage(error instanceof Error ? error.message : "Could not add workspace root"); }
+  };
+  const removeWorkspaceRoot = async () => {
+    const client = clientRef.current; const removable = workspaceRoots.filter((root) => !root.primary && root.id !== selectedRootId); if (!client || !removable.length) return;
+    const alias = window.prompt(`Root to unregister (${removable.map((root) => root.alias).join(", ")}):`); const root = removable.find((item) => item.alias === alias?.trim());
+    if (!root || !window.confirm(`Unregister ${root.alias}? Its remote directory will not be deleted.`)) return;
+    try { const result = await client.request("workspace.removeRoot", { rootId: root.id }); setWorkspaceRoots(result.roots); }
+    catch (error) { setStatusMessage(error instanceof Error ? error.message : "Could not remove workspace root"); }
+  };
   const rightSidebarOpen = rightPanels.project || rightPanels.git || rightPanels.useful || rightPanels.agents || ((rightPanels.taskGit || rightPanels.promptHistory) && Boolean(selectedTaskId)) || (rightPanels.java && Boolean(javaOptions));
   const commandContext: CommandContext = { connected: status === "connected", hasActiveEditor: Boolean(activeTab), activeEditorDirty: Boolean(activeTab?.dirty), gitBusy: gitOperationRunning, taskSwitching, aiBusy: aiSession.status === "in_progress" };
   const commands: Command[] = [
@@ -2317,7 +2356,7 @@ export function App() {
         {classicSideView === "project" ? <>
           <header className="panel-header"><span>Project</span><div className="panel-header-actions"><button title={showIgnored ? "Hide ignored files" : "Show all files (including Git-ignored)"} className={showIgnored ? "active" : ""} onClick={toggleShowIgnored}>{showIgnored ? <Eye size={14} /> : <EyeOff size={14} />}</button><button title="Synchronize files" onClick={() => void refreshTree()}><RefreshCw size={14} /></button></div></header>
           <QuickFilter value={projectFilter} placeholder="Filter files" label="Filter project files" onChange={setProjectFilter} />
-          <div className="workspace-name" onContextMenu={(event) => { event.preventDefault(); setTreeContextMenu({ x: Math.min(event.clientX, window.innerWidth - 220), y: Math.min(event.clientY, window.innerHeight - 110), nodes: [{ name: "REMOTE WORKSPACE", path: "", type: "directory" }] }); }}><ChevronDown size={13} />REMOTE WORKSPACE</div>
+          <div className="workspace-name"><select aria-label="Workspace root" value={selectedRootId} disabled={taskSwitching} onChange={(event) => void selectWorkspaceRoot(event.target.value)}>{workspaceRoots.map((root) => <option key={root.id} value={root.id}>{root.alias}</option>)}</select><button title="Add remote workspace root" onClick={() => void addWorkspaceRoot()}><Plus size={13} /></button><button title="Unregister an inactive workspace root" disabled={!workspaceRoots.some((root) => !root.primary && root.id !== selectedRootId)} onClick={() => void removeWorkspaceRoot()}><Trash2 size={13} /></button></div>
           <ProjectTree nodes={tree} query={projectFilter} activePath={activeTab?.path} selectedPaths={projectSelection} fileColors={fileColors} gitStatuses={projectGitStatuses} onAction={runProjectTreeAction} onSelectionChange={setProjectSelection} onContextMenu={(nodes, x, y) => setTreeContextMenu({ x: Math.min(x, window.innerWidth - 220), y: Math.min(y, window.innerHeight - 180), nodes })} />
         </> : classicSideView === "git" ? <>
           <header className="panel-header"><span>Git Changes</span><div className="panel-header-actions"><button title="Stash manager" onClick={() => setGitStashDialog(true)}><Archive size={14} /></button><GitToolbarActions selectedCount={selectedRollbackEntries.length} operationRunning={gitOperationRunning} pushing={gitPushing} fetching={gitFetching} rollingBack={gitRollingBack} upstream={gitUpstream} onRollbackSelected={openRollbackSelected} onUndoLastCommit={() => void previewHistoryRewrite("undo")} onPush={() => void pushGit()} onFetch={() => void fetchGit()} onRefresh={() => void refreshGit()} /></div></header><div className="git-branch"><GitBranch size={13} /><span>{gitBranch}</span>{gitUpstream && <small title={gitUpstream.lastFetch ? `Last fetched ${new Date(gitUpstream.lastFetch).toLocaleString()}` : "Not fetched in this Core session"}>{gitUpstream.upstream} · {gitUpstream.ahead} ahead · {gitUpstream.behind} behind</small>}</div>
@@ -2373,7 +2412,7 @@ export function App() {
         {rightPanels.project && <section key="project" className="stacked-panel">
           <header className="panel-header"><span>Project</span><div className="panel-header-actions"><button title={showIgnored ? "Hide ignored files" : "Show all files (including Git-ignored)"} className={showIgnored ? "active" : ""} onClick={toggleShowIgnored}>{showIgnored ? <Eye size={14} /> : <EyeOff size={14} />}</button><button title="Synchronize files" onClick={() => void refreshTree()}><RefreshCw size={14} /></button></div></header>
           <QuickFilter value={projectFilter} placeholder="Filter files" label="Filter project files" onChange={setProjectFilter} />
-          <div className="workspace-name" onContextMenu={(event) => { event.preventDefault(); setTreeContextMenu({ x: Math.min(event.clientX, window.innerWidth - 220), y: Math.min(event.clientY, window.innerHeight - 110), nodes: [{ name: "REMOTE WORKSPACE", path: "", type: "directory" }] }); }}><ChevronDown size={13} />REMOTE WORKSPACE</div>
+          <div className="workspace-name"><select aria-label="Workspace root" value={selectedRootId} disabled={taskSwitching} onChange={(event) => void selectWorkspaceRoot(event.target.value)}>{workspaceRoots.map((root) => <option key={root.id} value={root.id}>{root.alias}</option>)}</select><button title="Add remote workspace root" onClick={() => void addWorkspaceRoot()}><Plus size={13} /></button><button title="Unregister an inactive workspace root" disabled={!workspaceRoots.some((root) => !root.primary && root.id !== selectedRootId)} onClick={() => void removeWorkspaceRoot()}><Trash2 size={13} /></button></div>
           <ProjectTree nodes={tree} query={projectFilter} activePath={activeTab?.path} selectedPaths={projectSelection} fileColors={fileColors} gitStatuses={projectGitStatuses} onAction={runProjectTreeAction} onSelectionChange={setProjectSelection} onContextMenu={(nodes, x, y) => setTreeContextMenu({ x: Math.min(x, window.innerWidth - 220), y: Math.min(y, window.innerHeight - 180), nodes })} />
         </section>}
         {rightPanels.git && <section key="git" className="stacked-panel">
