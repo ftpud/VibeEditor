@@ -93,10 +93,12 @@ describe("TerminalRecoveryNotice", () => {
   it("automatically dismisses recovery notices", () => {
     vi.useFakeTimers();
     try {
-      render(<TerminalRecoveryNotice tab={{ ...tab, recovery: "recreated" }} />);
+      const onDismiss = vi.fn();
+      render(<TerminalRecoveryNotice tab={{ ...tab, recovery: "recreated" }} onDismiss={onDismiss} />);
       expect(screen.getByRole("status")).toBeTruthy();
-      act(() => vi.advanceTimersByTime(6_000));
+      act(() => vi.advanceTimersByTime(2_500));
       expect(screen.queryByRole("status")).toBeNull();
+      expect(onDismiss).toHaveBeenCalledOnce();
     } finally { vi.useRealTimers(); }
   });
 });

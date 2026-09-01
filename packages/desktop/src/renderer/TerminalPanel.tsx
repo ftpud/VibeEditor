@@ -22,21 +22,22 @@ type Props = {
   onRename(tab: TerminalTab, title: string): void;
   onDuplicate(tab: TerminalTab): void;
   onMove(tabId: string, targetTabId: string): void;
+  onRecoveryShown?(tabId: string): void;
   onResizeStart(event: React.PointerEvent): void;
   registerWriter(terminalId: string, writer?: (data: string) => void): void;
   highlightedTerminalIds?: Set<string>;
   rootAliases?: Record<string, string>;
 };
 
-export function TerminalPanel({ theme, fontFamily, fontSize, lineHeight, client, group, height, onActivate, onCreate, onClose, onRename, onDuplicate, onMove, onResizeStart, registerWriter, highlightedTerminalIds, rootAliases = {} }: Props) {
+export function TerminalPanel({ theme, fontFamily, fontSize, lineHeight, client, group, height, onActivate, onCreate, onClose, onRename, onDuplicate, onMove, onRecoveryShown, onResizeStart, registerWriter, highlightedTerminalIds, rootAliases = {} }: Props) {
   return <section className="terminal-panel" style={{ height }}>
     <div className="terminal-resize-handle" onPointerDown={onResizeStart} />
     <div className="terminal-tabs" role="tablist">
       {group.tabs.map((tab) => <TerminalTabButton key={tab.id} tab={tab} rootAlias={tab.rootId ? rootAliases[tab.rootId] : undefined} active={tab.id === group.activeTabId} highlighted={highlightedTerminalIds?.has(tab.terminalId)} onActivate={onActivate} onClose={onClose} onRename={onRename} onDuplicate={onDuplicate} onMove={onMove} />)}
       <button className="terminal-action" title="New terminal" onClick={onCreate}><Plus size={15} /></button>
     </div>
+    {group.tabs.filter((tab) => tab.id === group.activeTabId).map((tab) => <TerminalRecoveryNotice key={tab.id} tab={tab} onDismiss={() => onRecoveryShown?.(tab.id)} />)}
     <div className="terminal-content">
-      {group.tabs.filter((tab) => tab.id === group.activeTabId).map((tab) => <TerminalRecoveryNotice key={tab.id} tab={tab} />)}
       {group.tabs.map((tab) => <TerminalView key={tab.id} theme={theme} fontFamily={fontFamily} fontSize={fontSize} lineHeight={lineHeight} client={client} tab={tab} active={tab.id === group.activeTabId} registerWriter={registerWriter} />)}
     </div>
   </section>;
@@ -88,12 +89,14 @@ export function TerminalTabButton({ tab, rootAlias, active, highlighted, onActiv
   </>;
 }
 
-export function TerminalRecoveryNotice({ tab }: { tab: TerminalTab }) {
+export function TerminalRecoveryNotice({ tab, onDismiss }: { tab: TerminalTab; onDismiss?(): void }) {
   const [recoveryVisible, setRecoveryVisible] = useState(Boolean(tab.recovery));
+  const onDismissRef = useRef(onDismiss);
+  onDismissRef.current = onDismiss;
   useEffect(() => {
     setRecoveryVisible(Boolean(tab.recovery));
     if (!tab.recovery) return;
-    const timer = window.setTimeout(() => setRecoveryVisible(false), 6_000);
+    const timer = window.setTimeout(() => { setRecoveryVisible(false); onDismissRef.current?.(); }, 2_500);
     return () => window.clearTimeout(timer);
   }, [tab.recovery, tab.terminalId]);
   if (recoveryVisible && tab.recovery === "reattached") return <div className="terminal-recovery-notice live" role="status">Live process reattached — this is the same Core-owned terminal process.</div>;
