@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import os from "node:os";
 import path from "node:path";
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import type { JavaProjectOptions, JavaRunConfiguration, WorkspaceOptions, WorkspaceSearchQuery, WorkspaceSearchQueries } from "@remote-ide/protocol";
 import { CoreError } from "./errors.js";
 
@@ -9,6 +9,7 @@ const EMPTY_OPTIONS: WorkspaceOptions = { openFiles: [] };
 
 export class WorkspaceStateStore {
   private readonly stateFile: string;
+  private saveQueue: Promise<void> = Promise.resolve();
 
   constructor(workspace: string, stateDirectory = path.join(os.homedir(), ".remote-ide", "workspaces")) {
     const key = crypto.createHash("sha256").update(workspace).digest("hex");
@@ -26,15 +27,22 @@ export class WorkspaceStateStore {
     }
   }
 
-  async save(options: WorkspaceOptions): Promise<void> {
+  save(options: WorkspaceOptions): Promise<void> {
     const validated = validateWorkspaceOptions(options);
+    const pending = this.saveQueue.then(() => this.write(validated));
+    this.saveQueue = pending.catch(() => undefined);
+    return pending;
+  }
+
+  private async write(options: WorkspaceOptions): Promise<void> {
     const directory = path.dirname(this.stateFile);
-    const temporary = `${this.stateFile}.${process.pid}.tmp`;
+    const temporary = `${this.stateFile}.${process.pid}.${crypto.randomUUID()}.tmp`;
     try {
       await mkdir(directory, { recursive: true });
-      await writeFile(temporary, `${JSON.stringify(validated, null, 2)}\n`, "utf8");
+      await writeFile(temporary, `${JSON.stringify(options, null, 2)}\n`, "utf8");
       await rename(temporary, this.stateFile);
     } catch (error) {
+      await unlink(temporary).catch(() => undefined);
       throw new CoreError("WRITE_FAILED", `Could not save workspace options: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
