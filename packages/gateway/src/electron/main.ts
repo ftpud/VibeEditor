@@ -255,12 +255,12 @@ async function startClient(workspaceId: string): Promise<void> {
   const clientsDirectory = path.join(app.getPath("userData"), "clients", workspace.id);
   const clientRoot = path.join(clientsDirectory, commit); const archive = path.join(app.getPath("temp"), `vibe-${workspace.id}-${commit}.tar.gz`);
   const buildMarker = path.join(clientRoot, ".gateway-client-built");
-  const expectedMarker = `artifact-v1:${commit}`;
+  const expectedMarker = `artifact-v2:${commit}`;
   let clientBuilt = false;
   try {
     const marker = (await readFile(buildMarker, "utf8")).trim();
     clientBuilt = marker === expectedMarker || marker === commit;
-    await access(path.join(clientRoot, "package.json")); await access(path.join(clientRoot, "compatibility.json")); await access(path.join(clientRoot, "dist-electron", "main.js")); await access(path.join(clientRoot, "dist-renderer", "index.html"));
+    await access(path.join(clientRoot, "package.json")); await access(path.join(clientRoot, "compatibility.json")); await access(path.join(clientRoot, "dist-electron", "main.js")); await access(path.join(clientRoot, "dist-renderer", "index.html")); await access(path.join(clientRoot, "node_modules", "ws", "package.json"));
     const compatibility = readCompatibility(JSON.parse(await readFile(path.join(clientRoot, "compatibility.json"), "utf8")));
     clientBuilt = clientBuilt && !!compatibility && compatibleClient(compatibility, remoteCompatibility);
     if (clientBuilt && marker !== expectedMarker) await writeFile(buildMarker, `${expectedMarker}\n`, "utf8");
@@ -273,8 +273,8 @@ async function startClient(workspaceId: string): Promise<void> {
       try {
         const marker = (await readFile(path.join(candidate, ".gateway-client-built"), "utf8")).trim();
         const compatibility = readCompatibility(JSON.parse(await readFile(path.join(candidate, "compatibility.json"), "utf8")));
-        await access(path.join(candidate, "dist-electron", "main.js")); await access(path.join(candidate, "dist-renderer", "index.html"));
-        return marker.startsWith("artifact-v1:") && compatibility && compatibleClient(compatibility, remoteCompatibility) ? candidate : undefined;
+        await access(path.join(candidate, "dist-electron", "main.js")); await access(path.join(candidate, "dist-renderer", "index.html")); await access(path.join(candidate, "node_modules", "ws", "package.json"));
+        return marker.startsWith("artifact-v2:") && compatibility && compatibleClient(compatibility, remoteCompatibility) ? candidate : undefined;
       } catch { return undefined; }
     }))).find(Boolean);
     if (rollback) {
@@ -286,7 +286,7 @@ async function startClient(workspaceId: string): Promise<void> {
   if (!clientBuilt) {
   try {
     const remoteArchive = `/tmp/vibe-${workspace.id}.tar.gz`;
-    const checksum = (await execute(client, `bash -lc ${shell(`set -e; test -f ~/.vibe/packages/desktop/compatibility.json; cd ~/.vibe/packages/desktop; files="package.json compatibility.json dist-electron dist-renderer"; if [ -d assets ]; then files="$files assets"; fi; tar -czf ${remoteArchive} $files; sha256sum ${remoteArchive}`)}`)).trim().split(/\s+/)[0];
+    const checksum = (await execute(client, `bash -lc ${shell(`set -e; test -f ~/.vibe/packages/desktop/compatibility.json; test -f ~/.vibe/node_modules/ws/package.json; cd ~/.vibe/packages/desktop; files="package.json compatibility.json dist-electron dist-renderer"; if [ -d assets ]; then files="$files assets"; fi; tar -czf ${remoteArchive} $files -C ../.. node_modules/ws; sha256sum ${remoteArchive}`)}`)).trim().split(/\s+/)[0];
     await mkdir(path.dirname(archive), { recursive: true }); await download(client, `/tmp/vibe-${workspace.id}.tar.gz`, archive);
     const actual = createHash("sha256").update(await readFile(archive)).digest("hex");
     if (actual !== checksum) throw new Error("Downloaded Desktop artifacts failed checksum verification");
