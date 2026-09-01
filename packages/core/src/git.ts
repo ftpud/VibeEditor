@@ -3,7 +3,7 @@ import { promisify } from "node:util";
 import path from "node:path";
 import { chmod, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
-import type { GitBranch, GitBranchDeletePreview, GitCommit, GitCommitFile, GitConflictOperationKind, GitConflictWorkspace, GitDiffHunk, GitHistoryRewritePreview, GitPullPreview, GitPullResult, GitPullStrategy, GitRebasePreview, GitRebaseResult, GitRebaseTodoItem, GitRollbackFailure, GitStash, GitStashInclusion, GitStashPreview, GitStatusEntry, GitTag, GitUpstreamStatus } from "@remote-ide/protocol";
+import type { GitBranch, GitBranchDeletePreview, GitCommit, GitCommitFile, GitConflictOperationKind, GitConflictWorkspace, GitDiffHunk, GitHistoryRewritePreview, GitMergePreview, GitMergeRef, GitMergeResult, GitPullPreview, GitPullResult, GitPullStrategy, GitRebasePreview, GitRebaseResult, GitRebaseTodoItem, GitRollbackFailure, GitStash, GitStashInclusion, GitStashPreview, GitStatusEntry, GitTag, GitUpstreamStatus } from "@remote-ide/protocol";
 import { CoreError } from "./errors.js";
 import { WorkspaceFileSystem } from "./filesystem.js";
 
@@ -198,6 +198,68 @@ export class GitService {
   async log(branch: string, limit = 200): Promise<GitCommit[]> {
     if (!/^[\w./@{}~^:+-]+$/.test(branch)) throw new CoreError("INVALID_REQUEST", "Invalid Git branch");
     return parseGitGraphLog(await this.git(["log", branch, "--graph", "--date-order", `--max-count=${Math.max(1, Math.min(500, limit))}`, "--format=%x1e%H%x1f%h%x1f%an%x1f%aI%x1f%s%x1f%P%x1f%D"]));
+  }
+
+  async mergePreview(source: GitMergeRef): Promise<GitMergePreview> {
+    const { fullRef, refHead } = await this.resolveMergeRef(source);
+    const status = await this.status();
+    if (status.branch === "HEAD") throw new CoreError("GIT_FAILED", "A local merge requires a checked-out branch; detached HEAD is not supported.");
+    const head = (await this.git(["rev-parse", "HEAD"])).trim();
+    let mergeBase: string;
+    try { mergeBase = (await this.git(["merge-base", head, refHead])).trim(); }
+    catch { throw new CoreError("GIT_FAILED", `Cannot merge '${source.name}' because it has no common ancestor with ${status.branch}.`); }
+    const alreadyMerged = await this.isAncestor(refHead, head);
+    const fastForward = !alreadyMerged && await this.isAncestor(head, refHead);
+    const outcome = alreadyMerged ? "already-merged" as const : fastForward ? "fast-forward" as const : "merge-commit" as const;
+    const listed = parseGitLog(await this.git(["log", "--max-count=101", "--format=%H%x00%h%x00%an%x00%aI%x00%s%x00", `${head}..${refHead}`]));
+    const active = await this.activeOperation();
+    const blockers = [
+      ...(status.entries.length ? [`Working tree must be clean (${status.entries.length} changed path${status.entries.length === 1 ? "" : "s"}).`] : []),
+      ...(active ? [`Finish or abort the active ${active} operation first.`] : [])
+    ];
+    return { source, fullRef, branch: status.branch, head, refHead, mergeBase, outcome, incoming: listed.slice(0, 100), incomingTruncated: listed.length > 100, blockers, recovery: mergeRecovery(outcome) };
+  }
+
+  async merge(source: GitMergeRef, expectedHead: string, expectedRefHead: string, expectedMergeBase: string): Promise<GitMergeResult> {
+    validateFullHash(expectedHead); validateFullHash(expectedRefHead); validateFullHash(expectedMergeBase);
+    const preview = await this.mergePreview(source);
+    if (preview.head !== expectedHead || preview.refHead !== expectedRefHead || preview.mergeBase !== expectedMergeBase) throw new CoreError("GIT_FAILED", "The branch, source ref, or merge base changed after preview. Refresh the preview before merging.");
+    if (preview.blockers.length) throw new CoreError("GIT_FAILED", preview.blockers.join(" "));
+    if (preview.outcome === "already-merged") return { state: "completed", outcome: preview.outcome, branch: preview.branch, head: preview.head, message: `'${source.name}' is already merged into ${preview.branch}.`, recovery: preview.recovery };
+    try {
+      await execFileAsync("git", ["-C", this.workspace, "merge", preview.outcome === "fast-forward" ? "--ff-only" : "--no-ff", "--no-edit", preview.fullRef], { encoding: "utf8", env: { ...process.env, GIT_EDITOR: "true" } });
+    } catch (error) {
+      if (await this.activeOperation() === "merge" && (await this.status()).entries.some((entry) => entry.states.includes("conflict"))) {
+        return { state: "conflicts", outcome: preview.outcome, branch: preview.branch, head: (await this.git(["rev-parse", "HEAD"])).trim(), message: `Merge of '${source.name}' stopped for conflicts.`, recovery: mergeRecovery(preview.outcome) };
+      }
+      throw new CoreError("GIT_FAILED", `Could not merge '${source.name}'. ${error instanceof Error ? error.message : String(error)} ${mergeRecovery(preview.outcome)}`);
+    }
+    const head = (await this.git(["rev-parse", "HEAD"])).trim();
+    return { state: "completed", outcome: preview.outcome, branch: preview.branch, head, message: preview.outcome === "fast-forward" ? `Fast-forwarded ${preview.branch} to '${source.name}'.` : `Created a local merge commit from '${source.name}'.`, recovery: mergeRecovery(preview.outcome) };
+  }
+
+  private async resolveMergeRef(source: GitMergeRef): Promise<{ fullRef: string; refHead: string }> {
+    if (!source || !["local-branch", "remote-branch", "tag"].includes(source.kind) || typeof source.name !== "string") throw new CoreError("INVALID_REQUEST", "Choose a local branch, remote-tracking branch, or local tag to merge.");
+    if (source.kind === "tag") validateTagName(source.name); else validateBranchName(source.name);
+    const fullRef = source.kind === "local-branch" ? `refs/heads/${source.name}` : source.kind === "remote-branch" ? `refs/remotes/${source.name}` : `refs/tags/${source.name}`;
+    try {
+      await this.git(["show-ref", "--verify", fullRef]);
+      const refHead = (await this.git(["rev-parse", `${fullRef}^{commit}`])).trim();
+      validateFullHash(refHead);
+      return { fullRef, refHead };
+    } catch { throw new CoreError("INVALID_REQUEST", `The exact ${source.kind.replace("-", " ")} '${source.name}' does not exist or does not point to a commit.`); }
+  }
+
+  private async isAncestor(ancestor: string, descendant: string): Promise<boolean> {
+    try { await this.git(["merge-base", "--is-ancestor", ancestor, descendant]); return true; } catch { return false; }
+  }
+
+  private async activeOperation(): Promise<GitConflictOperationKind | undefined> {
+    const exists = async (name: string, directory = false) => { try { const target = (await this.git(["rev-parse", "--git-path", name])).trim(); const info = await stat(path.resolve(this.workspace, target)); return directory ? info.isDirectory() : true; } catch { return false; } };
+    if (await exists("rebase-merge", true) || await exists("rebase-apply", true)) return "rebase";
+    if (await exists("CHERRY_PICK_HEAD")) return "cherry-pick";
+    if (await exists("MERGE_HEAD")) return "merge";
+    return undefined;
   }
 
   async commitFiles(hash: string): Promise<GitCommitFile[]> {
@@ -632,6 +694,10 @@ function conflictRecovery(operation: GitConflictOperationKind): string {
 }
 
 function rebaseRecovery(): string { return "No stash or force push is performed. Abort restores the pre-rebase branch; after completion, use git reflog to find the previous HEAD if recovery is needed."; }
+function mergeRecovery(outcome: "already-merged" | "fast-forward" | "merge-commit"): string {
+  if (outcome === "already-merged") return "No repository state will change.";
+  return "This changes the checked-out local branch only and never pushes. If conflicts occur, use the conflict workspace to resolve and continue, or abort to restore the pre-merge state.";
+}
 
 function validateRebaseItems(items: GitRebaseTodoItem[], original: GitRebaseTodoItem[]): GitRebaseTodoItem[] {
   if (!Array.isArray(items) || items.length !== original.length || !items.length) throw new CoreError("INVALID_REQUEST", "The todo plan must contain every previewed commit exactly once.");

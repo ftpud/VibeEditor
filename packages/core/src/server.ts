@@ -594,6 +594,8 @@ async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStor
     case "git.publishBranch": await git.publishBranch(request.payload.branch, request.payload.remote, request.payload.force, request.payload.confirm); return {};
     case "git.setBranchUpstream": await git.setBranchUpstream(request.payload.branch, request.payload.remote, request.payload.upstream, request.payload.confirm); return {};
     case "git.log": return { commits: await git.log(request.payload.branch, request.payload.limit) };
+    case "git.mergePreview": return git.mergePreview(request.payload.source);
+    case "git.merge": return git.merge(request.payload.source, request.payload.expectedHead, request.payload.expectedRefHead, request.payload.expectedMergeBase);
     case "git.commitFiles": return { files: await git.commitFiles(request.payload.hash) };
     case "git.commitMessage": return { message: await git.commitMessage(request.payload.hash) };
     case "git.commitDiff": return git.commitDiff(request.payload.hash, request.payload.path, request.payload.originalPath);

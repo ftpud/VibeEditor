@@ -277,6 +277,61 @@ async function conflictedMerge(name: string): Promise<string> {
   await execFileAsync("git", ["-C", root, "checkout", "-b", "theirs"]); await writeFile(path.join(root, "file.txt"), "theirs\n"); await execFileAsync("git", ["-C", root, "commit", "-am", "theirs"]); await execFileAsync("git", ["-C", root, "checkout", branch]); await writeFile(path.join(root, "file.txt"), "ours\n"); await execFileAsync("git", ["-C", root, "commit", "-am", "ours"]); await execFileAsync("git", ["-C", root, "merge", "theirs"]).catch(() => undefined); return root;
 }
 
+describe("Git ref merges", () => {
+  it("previews and fast-forwards an exact local branch and local tag", async () => {
+    const root = await mergeRepository("fast-forward"); const service = new GitService(root);
+    const branchPreview = await service.mergePreview({ kind: "local-branch", name: "feature" });
+    expect(branchPreview).toMatchObject({ outcome: "fast-forward", incoming: [{ subject: "feature" }], blockers: [], incomingTruncated: false });
+    await execFileAsync("git", ["-C", root, "tag", "release/one", "feature"]);
+    await expect(service.mergePreview({ kind: "tag", name: "release/one" })).resolves.toMatchObject({ outcome: "fast-forward", source: { kind: "tag" } });
+    const result = await service.merge(branchPreview.source, branchPreview.head, branchPreview.refHead, branchPreview.mergeBase);
+    expect(result).toMatchObject({ state: "completed", outcome: "fast-forward" });
+    expect((await execFileAsync("git", ["-C", root, "rev-parse", "HEAD"])).stdout.trim()).toBe(branchPreview.refHead);
+  });
+
+  it("creates a local merge commit and then reports already merged", async () => {
+    const root = await mergeRepository("diverged"); const service = new GitService(root);
+    const preview = await service.mergePreview({ kind: "local-branch", name: "feature" });
+    expect(preview.outcome).toBe("merge-commit");
+    const result = await service.merge(preview.source, preview.head, preview.refHead, preview.mergeBase);
+    expect(result.outcome).toBe("merge-commit");
+    expect((await execFileAsync("git", ["-C", root, "rev-list", "--parents", "-n", "1", "HEAD"])).stdout.trim().split(" ")).toHaveLength(3);
+    await expect(service.mergePreview(preview.source)).resolves.toMatchObject({ outcome: "already-merged", incoming: [] });
+  });
+
+  it("blocks dirty state, rejects unsafe refs, and detects a stale source tip", async () => {
+    const root = await mergeRepository("fast-forward"); const service = new GitService(root);
+    const preview = await service.mergePreview({ kind: "local-branch", name: "feature" });
+    await writeFile(path.join(root, "dirty.txt"), "dirty\n");
+    expect((await service.mergePreview(preview.source)).blockers[0]).toContain("clean");
+    await execFileAsync("git", ["-C", root, "clean", "-f"]);
+    await execFileAsync("git", ["-C", root, "checkout", "feature"]); await writeFile(path.join(root, "later.txt"), "later\n"); await execFileAsync("git", ["-C", root, "add", "."]); await execFileAsync("git", ["-C", root, "commit", "-m", "later"]); await execFileAsync("git", ["-C", root, "checkout", preview.branch]);
+    await expect(service.merge(preview.source, preview.head, preview.refHead, preview.mergeBase)).rejects.toThrow("changed after preview");
+    await expect(service.mergePreview({ kind: "local-branch", name: "feature^{commit}" })).rejects.toThrow("Invalid Git branch name");
+  });
+
+  it("routes conflicts to the conflict workspace and abort restores HEAD", async () => {
+    const root = await mergeRepository("conflict"); const service = new GitService(root);
+    const preview = await service.mergePreview({ kind: "local-branch", name: "feature" });
+    const result = await service.merge(preview.source, preview.head, preview.refHead, preview.mergeBase);
+    expect(result.state).toBe("conflicts");
+    expect(result.recovery).toContain("abort");
+    expect((await service.mergePreview(preview.source)).blockers).toContain("Finish or abort the active merge operation first.");
+    await expect(service.conflicts()).resolves.toMatchObject({ operation: "merge", canAbort: true });
+    expect(await service.conflictAction("abort")).toContain("merge abort completed");
+    expect((await execFileAsync("git", ["-C", root, "rev-parse", "HEAD"])).stdout.trim()).toBe(preview.head);
+  });
+});
+
+async function mergeRepository(mode: "fast-forward" | "diverged" | "conflict"): Promise<string> {
+  const root = await mkdtemp(path.join(tmpdir(), `remote-ide-git-merge-${mode}-`)); await initRepository(root);
+  await writeFile(path.join(root, "base.txt"), "base\n"); if (mode === "conflict") await writeFile(path.join(root, "shared.txt"), "base\n");
+  await execFileAsync("git", ["-C", root, "add", "."]); await execFileAsync("git", ["-C", root, "commit", "-m", "base"]); const branch = (await execFileAsync("git", ["-C", root, "branch", "--show-current"])).stdout.trim();
+  await execFileAsync("git", ["-C", root, "checkout", "-b", "feature"]); await writeFile(path.join(root, mode === "conflict" ? "shared.txt" : "feature.txt"), "feature\n"); await execFileAsync("git", ["-C", root, "add", "."]); await execFileAsync("git", ["-C", root, "commit", "-m", "feature"]); await execFileAsync("git", ["-C", root, "checkout", branch]);
+  if (mode !== "fast-forward") { await writeFile(path.join(root, mode === "conflict" ? "shared.txt" : "main.txt"), "main\n"); await execFileAsync("git", ["-C", root, "add", "."]); await execFileAsync("git", ["-C", root, "commit", "-m", "main"]); }
+  return root;
+}
+
 describe("Git stashes", () => {
   it("creates explicit stashes, previews overlap, and retains a failed pop", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "remote-ide-git-stash-"));

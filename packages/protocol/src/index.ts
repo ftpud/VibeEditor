@@ -83,6 +83,15 @@ export type GitBranchDeletePreview = { branch: string; remote: boolean; unmerged
 /** A tag stored in this workspace's local Git repository. It is not a remote tag operation. */
 export type GitTag = { name: string; target: string; annotated: boolean };
 export type GitCommit = { hash: string; shortHash: string; author: string; date: string; subject: string; parents?: string[]; refs?: string[]; graph?: string };
+export type GitMergeRef = { kind: "local-branch" | "remote-branch" | "tag"; name: string };
+export type GitMergeOutcome = "already-merged" | "fast-forward" | "merge-commit";
+/** A bounded, Core-authoritative local merge preview. The ref identity must be supplied unchanged when applying it. */
+export type GitMergePreview = {
+  source: GitMergeRef; fullRef: string; branch: string; head: string; refHead: string; mergeBase: string;
+  outcome: GitMergeOutcome; incoming: GitCommit[]; incomingTruncated: boolean; blockers: string[];
+  recovery: string;
+};
+export type GitMergeResult = { state: "completed" | "conflicts"; outcome: GitMergeOutcome; branch: string; head: string; message: string; recovery: string };
 export type GitCommitFile = { path: string; status: string; originalPath?: string };
 export type GitHistoryRewritePreview = {
   commit: GitCommit;
@@ -365,6 +374,8 @@ export type ProtocolOperations = {
   "git.publishBranch": { payload: { branch: string; remote: string; force: boolean; confirm: boolean }; result: Record<string, never> };
   "git.setBranchUpstream": { payload: { branch: string; remote: string; upstream: string; confirm: boolean }; result: Record<string, never> };
   "git.log": { payload: { branch: string; limit?: number }; result: { commits: GitCommit[] } };
+  "git.mergePreview": { payload: { source: GitMergeRef }; result: GitMergePreview };
+  "git.merge": { payload: { source: GitMergeRef; expectedHead: string; expectedRefHead: string; expectedMergeBase: string }; result: GitMergeResult };
   "git.commitFiles": { payload: { hash: string }; result: { files: GitCommitFile[] } };
   "git.commitMessage": { payload: { hash: string }; result: { message: string } };
   "git.commitDiff": { payload: { hash: string; path: string; originalPath?: string }; result: { originalContent: string; modifiedContent: string } };
@@ -620,6 +631,8 @@ const requestTypeRegistry: Record<RequestType, true> = {
   "git.publishBranch": true,
   "git.setBranchUpstream": true,
   "git.log": true,
+  "git.mergePreview": true,
+  "git.merge": true,
   "git.commitFiles": true,
   "git.commitMessage": true,
   "git.commitDiff": true,
