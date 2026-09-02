@@ -24,6 +24,11 @@ export type EditorTab = {
   runConfigScope?: "global" | "local";
 };
 export type EditorGroup = { id: string; tabs: EditorTab[]; activeTabId?: string };
+
+/** File tabs are named from their path so a malformed tree label cannot replace the filename. */
+export function editorTabLabel(tab: EditorTab): string {
+  return tab.type === "file" ? (tab.path.split("/").pop() ?? tab.title) : tab.title;
+}
 /** Renderer-only recovery state. A recreated tab is a new Core-owned shell, never a restored process. */
 export type TerminalRecovery = "reattached" | "recreated";
 export type TerminalTab = { id: string; terminalId: string; rootId?: string; title: string; status: "running" | "exited" | "unavailable"; exitCode?: number; recovery?: TerminalRecovery };

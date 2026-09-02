@@ -4,7 +4,7 @@ import { ShortcutSettings } from "./ShortcutSettings";
 
 export type DesktopSettings = {
   theme: "dark" | "light";
-  highlightTheme: "default" | "ftpud";
+  highlightTheme: "default" | "ftpud" | "ftpud-dark";
   uiFontFamily: "jetbrains" | "inter";
   uiFontSize: number;
   uiLineHeight: number;
@@ -34,7 +34,7 @@ export function SettingsMenu({ workspace, sideLayout, values, isWorkspaceOverrid
     <input className="settings-search" aria-label="Search settings" placeholder="Search settings" value={query} onChange={(event) => setQuery(event.target.value)} autoFocus />
     {matches("Layout") && <div className="settings-row settings-choice"><div><label>Layout</label><small>Global default</small></div><div className="theme-switch"><button className={sideLayout === "classic" ? "active" : ""} onClick={() => onSideLayoutChange("classic")}>Classic</button><button className={sideLayout === "ai-focused" ? "active" : ""} onClick={() => onSideLayoutChange("ai-focused")}>AI focused</button></div></div>}
     {row("theme", <div className="theme-switch"><button className={values.theme === "dark" ? "active" : ""} onClick={() => onChange("theme", "dark")}>Dark</button><button className={values.theme === "light" ? "active" : ""} onClick={() => onChange("theme", "light")}>Light</button></div>)}
-    {row("highlightTheme", <div className="theme-switch"><button className={values.highlightTheme === "default" ? "active" : ""} onClick={() => onChange("highlightTheme", "default")}>Default</button><button className={values.highlightTheme === "ftpud" ? "active" : ""} onClick={() => onChange("highlightTheme", "ftpud")}>Ftpud</button></div>)}
+    {row("highlightTheme", <div className="theme-switch"><button className={values.highlightTheme === "default" ? "active" : ""} onClick={() => onChange("highlightTheme", "default")}>Default</button><button className={values.highlightTheme === "ftpud" ? "active" : ""} onClick={() => onChange("highlightTheme", "ftpud")}>Ftpud</button><button className={values.highlightTheme === "ftpud-dark" ? "active" : ""} onClick={() => onChange("highlightTheme", "ftpud-dark")}>Ftpud Dark</button></div>)}
     {row("uiFontFamily", <select aria-label="Font" value={values.uiFontFamily} onChange={(event) => onChange("uiFontFamily", event.target.value as DesktopSettings["uiFontFamily"])}><option value="jetbrains">JetBrains Mono</option><option value="inter">Inter</option></select>)}
     {row("uiFontSize", <input aria-label="Size" type="number" min="10" max="20" step="1" value={values.uiFontSize} onChange={(event) => onChange("uiFontSize", Math.min(20, Math.max(10, Number(event.target.value) || 13)))} />)}
     {row("uiLineHeight", <input aria-label="Line height" type="number" min="1" max="2" step="0.05" value={values.uiLineHeight} onChange={(event) => onChange("uiLineHeight", Math.min(2, Math.max(1, Number(event.target.value) || 1.2)))} />)}
