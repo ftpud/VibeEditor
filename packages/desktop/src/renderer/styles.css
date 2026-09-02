@@ -602,6 +602,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .monaco-editor .ftpud-dark-java-interface { background: #49392d; color: #ddcdbe !important; }
 .monaco-editor .ftpud-dark-java-annotation { background: #304231; color: #c2c07e !important; }
 .monaco-editor .ftpud-dark-java-constant { background: #304231; color: #caa2d1 !important; font-weight: 700; font-style: italic; }
+.monaco-editor .ftpud-java-function, .monaco-editor .ftpud-dark-java-function { font-weight: 700 !important; }
 .http-response-panel { height: min(300px, 38%); min-height: 130px; flex: 0 0 auto; display: flex; flex-direction: column; border-top: 1px solid #4a4d52; background: #1e1f22; }
 .http-response-panel > header { height: 32px; flex: 0 0 32px; padding: 0 6px 0 10px; display: flex; align-items: center; gap: 9px; border-bottom: 1px solid #393b40; background: #292b2e; }
 .http-response-panel > header > span { min-width: 0; flex: 1; overflow: hidden; color: #c7c9cc; font: 10px Menlo, Monaco, Consolas, monospace; text-overflow: ellipsis; white-space: nowrap; }

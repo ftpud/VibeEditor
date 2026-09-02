@@ -23,6 +23,7 @@ describe("editor highlighting themes", () => {
     const dark = themes.get("ftpud-dark")!;
     expect(dark.rules.find((rule) => rule.token === "class")?.background).toBe("29384A");
     expect(dark.rules.find((rule) => rule.token === "function")?.fontStyle).toContain("bold");
+    expect(dark.rules.find((rule) => rule.token === "identifier.function")?.fontStyle).toContain("bold");
     expect(themes.get("ftpud")!.rules.find((rule) => rule.token === "function")?.fontStyle).toContain("bold");
   });
 });
