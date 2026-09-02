@@ -2072,7 +2072,7 @@ export function App() {
         const result = await clientRef.current.request("java.semanticTokens", { path: filePath, content: instance.getValue() });
         semanticDecorations = instance.deltaDecorations(semanticDecorations, result.tokens.flatMap((token) => {
           const constant = (token.modifiers.includes("readonly") || token.type === "enumMember") && (token.modifiers.includes("static") || token.type === "enumMember");
-          const kind = constant ? "constant" : token.type === "interface" ? "interface" : ["class", "type", "enum", "struct"].includes(token.type) ? "class" : token.type === "decorator" ? "annotation" : undefined;
+          const kind = constant ? "constant" : token.type === "interface" ? "interface" : ["class", "type", "enum", "struct"].includes(token.type) ? "class" : token.type === "decorator" ? "annotation" : ["function", "method", "constructor"].includes(token.type) ? "function" : undefined;
           return kind ? [{ range: { startLineNumber: token.startLine, startColumn: token.startColumn, endLineNumber: token.endLine, endColumn: token.endColumn }, options: { inlineClassName: `ftpud${theme === "dark" ? "-dark" : ""}-java-${kind}`, inlineClassNameAffectsLetterSpacing: false } }] : [];
         }));
       } catch { semanticDecorations = instance.deltaDecorations(semanticDecorations, []); }
