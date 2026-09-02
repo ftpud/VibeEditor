@@ -491,6 +491,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .tab.pinned { box-shadow: inset 0 2px 0 #c49a4a; }
 .tab.dragging { opacity: .4; }
 .tab-file-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.tab > .root-badge { min-width: 0; max-width: 64px; flex: 0 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tab-file-name.git-modified { color: #e2b86b; }
 .tab-file-name.git-created { color: #68b871; }
 :root[data-theme="light"] .tab-file-name.git-modified { color: #8c5d00; }
@@ -597,6 +598,10 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .monaco-editor .ftpud-java-interface { background: #ffd8b5; color: #000000 !important; }
 .monaco-editor .ftpud-java-annotation { background: #e3ffd4; color: #808000 !important; }
 .monaco-editor .ftpud-java-constant { background: #e3ffd4; color: #660e7a !important; font-weight: 700; font-style: italic; }
+.monaco-editor .ftpud-dark-java-class { background: #294d78; color: #e7f0ff !important; }
+.monaco-editor .ftpud-dark-java-interface { background: #68482e; color: #fff0df !important; }
+.monaco-editor .ftpud-dark-java-annotation { background: #3b5731; color: #dbd883 !important; }
+.monaco-editor .ftpud-dark-java-constant { background: #3b5731; color: #e5b4ee !important; font-weight: 700; font-style: italic; }
 .http-response-panel { height: min(300px, 38%); min-height: 130px; flex: 0 0 auto; display: flex; flex-direction: column; border-top: 1px solid #4a4d52; background: #1e1f22; }
 .http-response-panel > header { height: 32px; flex: 0 0 32px; padding: 0 6px 0 10px; display: flex; align-items: center; gap: 9px; border-bottom: 1px solid #393b40; background: #292b2e; }
 .http-response-panel > header > span { min-width: 0; flex: 1; overflow: hidden; color: #c7c9cc; font: 10px Menlo, Monaco, Consolas, monospace; text-overflow: ellipsis; white-space: nowrap; }

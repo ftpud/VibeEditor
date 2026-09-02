@@ -2,18 +2,19 @@ import type { Monaco } from "@monaco-editor/react";
 import { readSetting } from "./settings";
 
 export type AppTheme = "dark" | "light";
-export type HighlightTheme = "default" | "ftpud";
+export type HighlightTheme = "default" | "ftpud" | "ftpud-dark";
 
 export function currentTheme(): AppTheme {
   return readSetting("theme") === "light" ? "light" : "dark";
 }
 
 export function currentHighlightTheme(): HighlightTheme {
-  return readSetting("highlightTheme") === "ftpud" ? "ftpud" : "default";
+  const value = readSetting("highlightTheme");
+  return value === "ftpud" || value === "ftpud-dark" ? value : "default";
 }
 
-export function monacoTheme(appTheme = currentTheme(), highlightTheme = currentHighlightTheme()): "light" | "vs-dark" | "ftpud" {
-  return highlightTheme === "ftpud" ? "ftpud" : appTheme === "light" ? "light" : "vs-dark";
+export function monacoTheme(appTheme = currentTheme(), highlightTheme = currentHighlightTheme()): "light" | "vs-dark" | "ftpud" | "ftpud-dark" {
+  return highlightTheme === "ftpud" || highlightTheme === "ftpud-dark" ? highlightTheme : appTheme === "light" ? "light" : "vs-dark";
 }
 
 export function configureMonacoThemes(monaco: Monaco): void {
@@ -67,9 +68,9 @@ export function configureMonacoThemes(monaco: Monaco): void {
       { token: "variable", foreground: "000000" },
       { token: "variable.predefined", foreground: "0033B3" },
       { token: "property", foreground: "871094" },
-      { token: "function", foreground: "000000" },
-      { token: "function.declaration", foreground: "00627A" },
-      { token: "method", foreground: "000000" },
+      { token: "function", foreground: "000000", fontStyle: "bold" },
+      { token: "function.declaration", foreground: "00627A", fontStyle: "bold" },
+      { token: "method", foreground: "000000", fontStyle: "bold" },
       { token: "method.static", foreground: "00627A", fontStyle: "italic" },
       { token: "constant", foreground: "871094", fontStyle: "italic" },
       { token: "variable.constant", foreground: "871094", fontStyle: "italic" },
@@ -129,6 +130,63 @@ export function configureMonacoThemes(monaco: Monaco): void {
       "editorError.background": "#FF1100",
       "editorError.foreground": "#FF0000",
       "editorOverviewRuler.errorForeground": "#CF5B56"
+    }
+  });
+  monaco.editor.defineTheme("ftpud-dark", {
+    base: "vs-dark",
+    inherit: true,
+    rules: [
+      { token: "", foreground: "D4D4D4", background: "1E1F22" },
+      { token: "identifier", foreground: "D4D4D4" },
+      { token: "keyword", foreground: "7AA2F7" },
+      { token: "number", foreground: "8DB6FF" },
+      { token: "attribute", foreground: "82AAFF" },
+      { token: "entity", foreground: "82AAFF" },
+      { token: "property", foreground: "D9A0E8" },
+      { token: "variable.predefined", foreground: "7AA2F7" },
+      { token: "function", foreground: "F0F0F0", fontStyle: "bold" },
+      { token: "function.declaration", foreground: "80D8E8", fontStyle: "bold" },
+      { token: "method", foreground: "F0F0F0", fontStyle: "bold" },
+      { token: "method.declaration", foreground: "F0F0F0", fontStyle: "bold" },
+      { token: "method.extension", fontStyle: "bold" },
+      { token: "method.static", foreground: "80D8E8", fontStyle: "bold italic" },
+      { token: "constructor.declaration", foreground: "F0F0F0", fontStyle: "bold" },
+      { token: "comment", foreground: "A8B2A9", background: "254B3A", fontStyle: "italic" },
+      { token: "comment.doc", foreground: "A8B2A9", background: "254B3A", fontStyle: "italic" },
+      { token: "string", foreground: "9DDBA8", background: "244B32", fontStyle: "bold" },
+      { token: "string.escape", foreground: "9DDBA8", background: "244B32", fontStyle: "bold" },
+      { token: "string.quoted", foreground: "9DDBA8", background: "244B32", fontStyle: "bold" },
+      { token: "type", foreground: "E7F0FF", background: "294D78" },
+      { token: "type.identifier", foreground: "E7F0FF", background: "294D78" },
+      { token: "class", foreground: "E7F0FF", background: "294D78" },
+      { token: "class.declaration", foreground: "E7F0FF", background: "294D78" },
+      { token: "interface", foreground: "FFF0DF", background: "68482E" },
+      { token: "interface.declaration", foreground: "FFF0DF", background: "68482E" },
+      { token: "annotation", foreground: "DBD883", background: "3B5731" },
+      { token: "annotation.name", foreground: "DBD883", background: "3B5731" },
+      { token: "constant", foreground: "E5B4EE", background: "3B5731", fontStyle: "bold italic" },
+      { token: "variable.constant", foreground: "E5B4EE", background: "3B5731", fontStyle: "bold italic" },
+      { token: "field.static.readonly", foreground: "E5B4EE", background: "3B5731", fontStyle: "bold italic" },
+      { token: "invalid", background: "8B3037" }
+    ],
+    colors: {
+      "editor.background": "#1E1F22",
+      "editor.foreground": "#D4D4D4",
+      "editor.lineHighlightBackground": "#26282D",
+      "editorLineNumber.foreground": "#60636B",
+      "editorLineNumber.activeForeground": "#A4A7AE",
+      "editor.selectionBackground": "#365880",
+      "editor.inactiveSelectionBackground": "#2B405B",
+      "editorIndentGuide.background1": "#34363B",
+      "editorIndentGuide.activeBackground1": "#5A5D65",
+      "editorGutter.background": "#1E1F22",
+      "editor.foldBackground": "#294333",
+      "editorBracketMatch.background": "#31595B",
+      "editorBracketMatch.border": "#65AEB0",
+      "diffEditor.insertedLineBackground": "#203B2A88",
+      "diffEditor.removedLineBackground": "#41272B88",
+      "diffEditor.insertedTextBackground": "#315B3C99",
+      "diffEditor.removedTextBackground": "#66343A99"
     }
   });
 }

@@ -23,4 +23,11 @@ describe("SettingsMenu", () => {
     fireEvent.click(screen.getByRole("button", { name: "Reset" }));
     expect(onReset).toHaveBeenCalledWith("theme");
   });
+
+  it("offers the dark ftpud highlighting variant", () => {
+    const onChange = vi.fn();
+    render(<SettingsMenu {...shortcutProps} workspace="/project" sideLayout="classic" onSideLayoutChange={vi.fn()} values={values} isWorkspaceOverride={() => false} onChange={onChange} onReset={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: "Ftpud Dark" }));
+    expect(onChange).toHaveBeenCalledWith("highlightTheme", "ftpud-dark");
+  });
 });
