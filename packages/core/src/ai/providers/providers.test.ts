@@ -201,6 +201,17 @@ describe("ACP integration", () => {
     await provider.clear(workspace);
   });
 
+  it("keeps an accepted model when the agent acknowledges configuration without returning options", async () => {
+    const state = await mkdtemp(path.join(os.tmpdir(), "remote-ide-ai-config-ack-"));
+    const provider = new FakeProvider(() => undefined, state, { FAKE_CONFIG_ACK_ONLY: "on" });
+    const workspace = process.cwd();
+    await provider.send(workspace, { prompt: "hello", configuration: { model: "model-b", reasoning: "" } });
+    const session = await settle(provider, workspace);
+    expect(session.model).toBe("model-b");
+    const fresh = await provider.clear(workspace);
+    expect(fresh.model).toBe("model-b");
+  });
+
   it("reports token usage for the latest turn", async () => {
     const state = await mkdtemp(path.join(os.tmpdir(), "remote-ide-ai-usage-"));
     const provider = new FakeProvider(() => undefined, state);
