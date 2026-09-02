@@ -515,7 +515,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .editor-status-bar span, .editor-status-bar button { height: 100%; padding: 0 9px; display: inline-flex; align-items: center; border: 0; border-left: 1px solid transparent; background: transparent; color: inherit; font: inherit; white-space: nowrap; }
 .editor-status-bar button { cursor: pointer; }
 .editor-status-bar button:hover, .editor-status-bar button:focus-visible { background: #35383d; color: #f0f1f2; }
-.diff-navigation { position: absolute; z-index: 8; right: 18px; bottom: 38px; display: flex; overflow: hidden; border: 1px solid #4a4d52; border-radius: 5px; background: #2b2d30; box-shadow: 0 5px 16px rgba(0,0,0,.35); }
+.diff-navigation { position: absolute; z-index: 8; right: 32px; bottom: 38px; display: flex; overflow: hidden; border: 1px solid #4a4d52; border-radius: 5px; background: #2b2d30; box-shadow: 0 5px 16px rgba(0,0,0,.35); }
 .diff-navigation button { width: 34px; height: 32px; display: grid; place-items: center; border: 0; border-right: 1px solid #4a4d52; background: transparent; color: #d2d4d7; cursor: pointer; }
 .diff-navigation button:last-child { border-right: 0; }
 .diff-navigation button:hover { background: #3574f0; color: white; }

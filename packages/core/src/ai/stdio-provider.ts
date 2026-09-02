@@ -579,7 +579,11 @@ export abstract class StdioAcpProvider extends AcpProvider {
         if (option.type === "boolean") { await runtime.connection.setSessionConfigOption({ sessionId: runtime.sessionId, configId: option.id, type: "boolean", value: Boolean(value) }); return; }
         if (!selectValues(option).includes(String(value))) { warnings.push(`• ${option.name}: "${value}" is not offered by ${this.descriptor.name}, keeping "${option.currentValue}".`); return; }
         const response = await runtime.connection.setSessionConfigOption({ sessionId: runtime.sessionId, configId: option.id, value: String(value) });
+        // Some agents (notably Copilot) acknowledge a setting without returning
+        // the refreshed option list. Keep that accepted value locally; otherwise
+        // syncFromOptions below copies the pre-change default back over the session.
         if (response.configOptions) current = response.configOptions;
+        else current = current.map((candidate) => candidate.id === option.id ? { ...candidate, currentValue: String(value) } as SessionConfigOption : candidate);
       } catch (error) { warnings.push(`• ${option.name}: ${error instanceof Error ? error.message : String(error)}`); }
     };
 
