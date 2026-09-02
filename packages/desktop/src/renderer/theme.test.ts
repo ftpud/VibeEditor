@@ -3,9 +3,9 @@ import type { Monaco } from "@monaco-editor/react";
 import { configureMonacoThemes, monacoTheme } from "./theme";
 
 describe("editor highlighting themes", () => {
-  it("selects the dark ftpud variant independently of the app chrome theme", () => {
-    expect(monacoTheme("light", "ftpud-dark")).toBe("ftpud-dark");
-    expect(monacoTheme("dark", "ftpud")).toBe("ftpud");
+  it("selects the ftpud variant that matches the app chrome theme", () => {
+    expect(monacoTheme("light", "ftpud")).toBe("ftpud");
+    expect(monacoTheme("dark", "ftpud")).toBe("ftpud-dark");
   });
 
   it("defines dark class backgrounds and bold function names", () => {
@@ -21,7 +21,7 @@ describe("editor highlighting themes", () => {
     } as unknown as Monaco;
     configureMonacoThemes(monaco);
     const dark = themes.get("ftpud-dark")!;
-    expect(dark.rules.find((rule) => rule.token === "class")?.background).toBe("294D78");
+    expect(dark.rules.find((rule) => rule.token === "class")?.background).toBe("29384A");
     expect(dark.rules.find((rule) => rule.token === "function")?.fontStyle).toContain("bold");
     expect(themes.get("ftpud")!.rules.find((rule) => rule.token === "function")?.fontStyle).toContain("bold");
   });

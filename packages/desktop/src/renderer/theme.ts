@@ -2,7 +2,7 @@ import type { Monaco } from "@monaco-editor/react";
 import { readSetting } from "./settings";
 
 export type AppTheme = "dark" | "light";
-export type HighlightTheme = "default" | "ftpud" | "ftpud-dark";
+export type HighlightTheme = "default" | "ftpud";
 
 export function currentTheme(): AppTheme {
   return readSetting("theme") === "light" ? "light" : "dark";
@@ -10,11 +10,11 @@ export function currentTheme(): AppTheme {
 
 export function currentHighlightTheme(): HighlightTheme {
   const value = readSetting("highlightTheme");
-  return value === "ftpud" || value === "ftpud-dark" ? value : "default";
+  return value === "ftpud" || value === "ftpud-dark" ? "ftpud" : "default";
 }
 
 export function monacoTheme(appTheme = currentTheme(), highlightTheme = currentHighlightTheme()): "light" | "vs-dark" | "ftpud" | "ftpud-dark" {
-  return highlightTheme === "ftpud" || highlightTheme === "ftpud-dark" ? highlightTheme : appTheme === "light" ? "light" : "vs-dark";
+  return highlightTheme === "ftpud" ? (appTheme === "dark" ? "ftpud-dark" : "ftpud") : appTheme === "light" ? "light" : "vs-dark";
 }
 
 export function configureMonacoThemes(monaco: Monaco): void {
@@ -82,22 +82,22 @@ export function configureMonacoThemes(monaco: Monaco): void {
       { token: "string.escape", foreground: "0037A6" },
       { token: "string.escape.invalid", foreground: "067D17", background: "FFCCCC" },
       // Explicit Ftpud2.icls overrides, including their text backgrounds.
-      { token: "comment", foreground: "8C8C8C", background: "9EDDB9", fontStyle: "italic" },
-      { token: "comment.doc", foreground: "8C8C8C", background: "9EDDB9", fontStyle: "italic" },
-      { token: "string", foreground: "008000", background: "DDFFE9", fontStyle: "bold" },
-      { token: "string.escape", foreground: "008000", background: "DDFFE9", fontStyle: "bold" },
-      { token: "string.quoted", foreground: "008000", background: "DDFFE9", fontStyle: "bold" },
-      { token: "type", foreground: "000000", background: "B0CCFF" },
-      { token: "type.identifier", foreground: "000000", background: "B0CCFF" },
-      { token: "class", foreground: "000000", background: "B0CCFF" },
-      { token: "class.declaration", foreground: "000000", background: "B0CCFF" },
-      { token: "interface", foreground: "000000", background: "FFD8B5" },
-      { token: "interface.declaration", foreground: "000000", background: "FFD8B5" },
-      { token: "annotation", foreground: "808000", background: "E3FFD4" },
-      { token: "annotation.name", foreground: "808000", background: "E3FFD4" },
-      { token: "constant", foreground: "660E7A", background: "E3FFD4", fontStyle: "bold italic" },
-      { token: "variable.constant", foreground: "660E7A", background: "E3FFD4", fontStyle: "bold italic" },
-      { token: "field.static.readonly", foreground: "660E7A", background: "E3FFD4", fontStyle: "bold italic" },
+      { token: "comment", foreground: "69756D", background: "DCEEE3", fontStyle: "italic" },
+      { token: "comment.doc", foreground: "69756D", background: "DCEEE3", fontStyle: "italic" },
+      { token: "string", foreground: "167029", background: "EAF6EE", fontStyle: "bold" },
+      { token: "string.escape", foreground: "167029", background: "EAF6EE", fontStyle: "bold" },
+      { token: "string.quoted", foreground: "167029", background: "EAF6EE", fontStyle: "bold" },
+      { token: "type", foreground: "17243A", background: "DCE8FA" },
+      { token: "type.identifier", foreground: "17243A", background: "DCE8FA" },
+      { token: "class", foreground: "17243A", background: "DCE8FA" },
+      { token: "class.declaration", foreground: "17243A", background: "DCE8FA" },
+      { token: "interface", foreground: "3A2A1D", background: "F5E6D8" },
+      { token: "interface.declaration", foreground: "3A2A1D", background: "F5E6D8" },
+      { token: "annotation", foreground: "687000", background: "E8F2E3" },
+      { token: "annotation.name", foreground: "687000", background: "E8F2E3" },
+      { token: "constant", foreground: "6A2775", background: "E8F2E3", fontStyle: "bold italic" },
+      { token: "variable.constant", foreground: "6A2775", background: "E8F2E3", fontStyle: "bold italic" },
+      { token: "field.static.readonly", foreground: "6A2775", background: "E8F2E3", fontStyle: "bold italic" },
       { token: "constructor.declaration", foreground: "000000", fontStyle: "bold" },
       { token: "method.declaration", foreground: "000000", fontStyle: "bold" },
       { token: "method.extension", fontStyle: "bold" },
@@ -151,22 +151,22 @@ export function configureMonacoThemes(monaco: Monaco): void {
       { token: "method.extension", fontStyle: "bold" },
       { token: "method.static", foreground: "80D8E8", fontStyle: "bold italic" },
       { token: "constructor.declaration", foreground: "F0F0F0", fontStyle: "bold" },
-      { token: "comment", foreground: "A8B2A9", background: "254B3A", fontStyle: "italic" },
-      { token: "comment.doc", foreground: "A8B2A9", background: "254B3A", fontStyle: "italic" },
-      { token: "string", foreground: "9DDBA8", background: "244B32", fontStyle: "bold" },
-      { token: "string.escape", foreground: "9DDBA8", background: "244B32", fontStyle: "bold" },
-      { token: "string.quoted", foreground: "9DDBA8", background: "244B32", fontStyle: "bold" },
-      { token: "type", foreground: "E7F0FF", background: "294D78" },
-      { token: "type.identifier", foreground: "E7F0FF", background: "294D78" },
-      { token: "class", foreground: "E7F0FF", background: "294D78" },
-      { token: "class.declaration", foreground: "E7F0FF", background: "294D78" },
-      { token: "interface", foreground: "FFF0DF", background: "68482E" },
-      { token: "interface.declaration", foreground: "FFF0DF", background: "68482E" },
-      { token: "annotation", foreground: "DBD883", background: "3B5731" },
-      { token: "annotation.name", foreground: "DBD883", background: "3B5731" },
-      { token: "constant", foreground: "E5B4EE", background: "3B5731", fontStyle: "bold italic" },
-      { token: "variable.constant", foreground: "E5B4EE", background: "3B5731", fontStyle: "bold italic" },
-      { token: "field.static.readonly", foreground: "E5B4EE", background: "3B5731", fontStyle: "bold italic" },
+      { token: "comment", foreground: "99A39B", background: "293A32", fontStyle: "italic" },
+      { token: "comment.doc", foreground: "99A39B", background: "293A32", fontStyle: "italic" },
+      { token: "string", foreground: "9AC8A2", background: "293D30", fontStyle: "bold" },
+      { token: "string.escape", foreground: "9AC8A2", background: "293D30", fontStyle: "bold" },
+      { token: "string.quoted", foreground: "9AC8A2", background: "293D30", fontStyle: "bold" },
+      { token: "type", foreground: "CBD8E8", background: "29384A" },
+      { token: "type.identifier", foreground: "CBD8E8", background: "29384A" },
+      { token: "class", foreground: "CBD8E8", background: "29384A" },
+      { token: "class.declaration", foreground: "CBD8E8", background: "29384A" },
+      { token: "interface", foreground: "DDCDBE", background: "49392D" },
+      { token: "interface.declaration", foreground: "DDCDBE", background: "49392D" },
+      { token: "annotation", foreground: "C2C07E", background: "304231" },
+      { token: "annotation.name", foreground: "C2C07E", background: "304231" },
+      { token: "constant", foreground: "CAA2D1", background: "304231", fontStyle: "bold italic" },
+      { token: "variable.constant", foreground: "CAA2D1", background: "304231", fontStyle: "bold italic" },
+      { token: "field.static.readonly", foreground: "CAA2D1", background: "304231", fontStyle: "bold italic" },
       { token: "invalid", background: "8B3037" }
     ],
     colors: {

@@ -24,10 +24,13 @@ describe("SettingsMenu", () => {
     expect(onReset).toHaveBeenCalledWith("theme");
   });
 
-  it("offers the dark ftpud highlighting variant", () => {
+  it("offers one ftpud choice whose palette follows the selected theme", () => {
     const onChange = vi.fn();
-    render(<SettingsMenu {...shortcutProps} workspace="/project" sideLayout="classic" onSideLayoutChange={vi.fn()} values={values} isWorkspaceOverride={() => false} onChange={onChange} onReset={vi.fn()} />);
-    fireEvent.click(screen.getByRole("button", { name: "Ftpud Dark" }));
-    expect(onChange).toHaveBeenCalledWith("highlightTheme", "ftpud-dark");
+    const view = render(<SettingsMenu {...shortcutProps} workspace="/project" sideLayout="classic" onSideLayoutChange={vi.fn()} values={values} isWorkspaceOverride={() => false} onChange={onChange} onReset={vi.fn()} />);
+    const button = [...view.container.querySelectorAll("button")].find((item) => item.textContent === "Ftpud");
+    expect(button).toBeTruthy();
+    fireEvent.click(button!);
+    expect(onChange).toHaveBeenCalledWith("highlightTheme", "ftpud");
+    expect([...view.container.querySelectorAll("button")].some((item) => item.textContent === "Ftpud Dark")).toBe(false);
   });
 });

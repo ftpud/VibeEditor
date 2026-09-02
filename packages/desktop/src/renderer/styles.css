@@ -594,14 +594,14 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .monaco-editor .git-change-marker.deleted { height: 4px !important; margin-top: 9px; background: #d45d65; }
 .monaco-editor .http-run-marker { cursor: pointer; }
 .monaco-editor .http-run-marker::after { content: "▶"; position: absolute; left: 4px; top: 3px; color: #65b56f; font-size: 0.9231rem; line-height: 16px; }
-.monaco-editor .ftpud-java-class { background: #b0ccff; color: #000000 !important; }
-.monaco-editor .ftpud-java-interface { background: #ffd8b5; color: #000000 !important; }
-.monaco-editor .ftpud-java-annotation { background: #e3ffd4; color: #808000 !important; }
-.monaco-editor .ftpud-java-constant { background: #e3ffd4; color: #660e7a !important; font-weight: 700; font-style: italic; }
-.monaco-editor .ftpud-dark-java-class { background: #294d78; color: #e7f0ff !important; }
-.monaco-editor .ftpud-dark-java-interface { background: #68482e; color: #fff0df !important; }
-.monaco-editor .ftpud-dark-java-annotation { background: #3b5731; color: #dbd883 !important; }
-.monaco-editor .ftpud-dark-java-constant { background: #3b5731; color: #e5b4ee !important; font-weight: 700; font-style: italic; }
+.monaco-editor .ftpud-java-class { background: #dce8fa; color: #17243a !important; }
+.monaco-editor .ftpud-java-interface { background: #f5e6d8; color: #3a2a1d !important; }
+.monaco-editor .ftpud-java-annotation { background: #e8f2e3; color: #687000 !important; }
+.monaco-editor .ftpud-java-constant { background: #e8f2e3; color: #6a2775 !important; font-weight: 700; font-style: italic; }
+.monaco-editor .ftpud-dark-java-class { background: #29384a; color: #cbd8e8 !important; }
+.monaco-editor .ftpud-dark-java-interface { background: #49392d; color: #ddcdbe !important; }
+.monaco-editor .ftpud-dark-java-annotation { background: #304231; color: #c2c07e !important; }
+.monaco-editor .ftpud-dark-java-constant { background: #304231; color: #caa2d1 !important; font-weight: 700; font-style: italic; }
 .http-response-panel { height: min(300px, 38%); min-height: 130px; flex: 0 0 auto; display: flex; flex-direction: column; border-top: 1px solid #4a4d52; background: #1e1f22; }
 .http-response-panel > header { height: 32px; flex: 0 0 32px; padding: 0 6px 0 10px; display: flex; align-items: center; gap: 9px; border-bottom: 1px solid #393b40; background: #292b2e; }
 .http-response-panel > header > span { min-width: 0; flex: 1; overflow: hidden; color: #c7c9cc; font: 10px Menlo, Monaco, Consolas, monospace; text-overflow: ellipsis; white-space: nowrap; }
