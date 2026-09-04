@@ -16,4 +16,15 @@ describe("horizontal editor layout containment", () => {
     expect(editorArea).toContain("min-width: 0");
     expect(editorArea).toContain("overflow: hidden");
   });
+
+  it("reserves click targets for workspace actions beside the flexible root selector", () => {
+    const selector = declarations(".workspace-name select");
+    expect(selector).toContain("width: 0");
+    expect(selector).toContain("min-width: 0");
+
+    const actions = declarations(".workspace-name button");
+    expect(actions).toContain("width: 24px");
+    expect(actions).toContain("height: 24px");
+    expect(actions).toContain("flex: 0 0 24px");
+  });
 });
