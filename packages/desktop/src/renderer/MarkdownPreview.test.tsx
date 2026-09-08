@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { MarkdownPreview, resolveMarkdownLink } from "./MarkdownPreview";
+import { MarkdownPreview, resolveMarkdownLink, toggleMarkdownTask } from "./MarkdownPreview";
 
 afterEach(cleanup);
 
@@ -20,6 +20,22 @@ describe("resolveMarkdownLink", () => {
   it("maps file URLs inside the workspace and rejects files outside it", () => {
     expect(resolveMarkdownLink("file:///work/project/docs/guide.md", "README.md", "/work/project")).toEqual({ type: "file", path: "docs/guide.md" });
     expect(resolveMarkdownLink("file:///work/other/secret.md", "README.md", "/work/project")).toEqual({ type: "unsupported" });
+  });
+});
+
+describe("MarkdownPreview task checkboxes", () => {
+  it("updates the source marker when a task is clicked", () => {
+    const onChange = vi.fn();
+    render(<MarkdownPreview sourcePath="README.md" onOpenFile={vi.fn()} onOpenExternal={vi.fn()} onChange={onChange}>{"- [ ] First\n- [x] Second"}</MarkdownPreview>);
+
+    const boxes = screen.getAllByRole<HTMLInputElement>("checkbox");
+    expect(boxes[0]!.disabled).toBe(false);
+    fireEvent.click(boxes[0]!);
+    expect(onChange).toHaveBeenCalledWith("- [x] First\n- [x] Second");
+  });
+
+  it("only changes the task marker on the selected source line", () => {
+    expect(toggleMarkdownTask("- [ ] parent\n  1. [X] nested", 1, false)).toBe("- [ ] parent\n  1. [ ] nested");
   });
 });
 

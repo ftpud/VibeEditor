@@ -647,6 +647,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .markdown-preview th { background: #292b2f; }
 .markdown-preview img { max-width: 100%; height: auto; }
 .markdown-preview hr { border: 0; border-top: 1px solid #44474c; }
+.markdown-preview .task-list-item input[type="checkbox"] { cursor: pointer; }
 .terminal-panel { min-height: 130px; max-height: 520px; flex: 0 0 auto; position: relative; display: flex; flex-direction: column; border-top: 1px solid #393b40; background: #1e1f22; }
 .terminal-resize-handle { position: absolute; z-index: 5; top: -3px; left: 0; right: 0; height: 6px; cursor: row-resize; }
 .terminal-resize-handle:hover { background: #3574f0; }
