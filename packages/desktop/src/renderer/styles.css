@@ -191,6 +191,31 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .conflict-pane-resizer { cursor: col-resize; touch-action: none; border-radius: 3px; background: #34363a; margin: 0 1px; }
 .conflict-pane-resizer:hover, .conflict-pane-resizer:focus-visible { background: #689cf5; }
 .conflict-resize-hint { margin-right: auto; font-size: 10px; }
+.commit-patch-dialog { width: min(1000px, calc(100vw - 40px)); height: min(800px, calc(100vh - 40px)); min-width: min(580px, calc(100vw - 40px)); min-height: 360px; max-width: calc(100vw - 24px); max-height: calc(100vh - 24px); resize: both; overflow: hidden; display: flex; flex-direction: column; background: #2b2d30; color: #d5d7da; border: 1px solid #505359; border-radius: 8px; box-shadow: 0 24px 80px #0008; }
+.commit-patch-dialog > header, .commit-patch-dialog > footer, .commit-patch-toolbar { display: flex; align-items: center; gap: 10px; padding: 12px 16px; }
+.commit-patch-dialog > header { justify-content: space-between; border-bottom: 1px solid #505359; }
+.commit-patch-dialog h2 { margin: 0 0 5px; font-size: 16px; }
+.commit-patch-dialog > p { margin: 12px 16px 0; line-height: 1.5; }
+.commit-patch-dialog small, .commit-patch-toolbar > span { color: #aeb1b6; }
+.commit-patch-toolbar { flex-wrap: wrap; }
+.commit-patch-toolbar > span, .commit-patch-dialog > footer > small { margin-right: auto; }
+.commit-patch-dialog > main { flex: 1; min-height: 0; overflow: auto; padding: 0 16px 16px; }
+.commit-patch-file h3 { font-size: 13px; overflow-wrap: anywhere; }
+.commit-patch-file article { margin: 10px 0; border: 1px solid #505359; border-radius: 5px; overflow: hidden; }
+.commit-patch-file article.selected { border-color: #689cf5; }
+.commit-patch-file article > label { display: flex; gap: 10px; align-items: center; padding: 8px 10px; background: #34363a; cursor: pointer; }
+.commit-patch-file article > label > code { color: #aeb1b6; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.commit-patch-file pre { margin: 0; padding: 8px 0; background: #1f2023; overflow: auto; font-size: 12px; line-height: 1.6; }
+.commit-patch-file pre > span { display: block; min-width: max-content; padding: 0 12px; }
+.commit-patch-file .addition { background: #244a354d; color: #a3dcb5; }
+.commit-patch-file .deletion { background: #622d364d; color: #efa3aa; }
+.commit-patch-dialog > footer { border-top: 1px solid #505359; }
+.commit-patch-dialog button { cursor: pointer; }
+.commit-patch-dialog button:disabled { opacity: .5; cursor: default; }
+:root[data-theme="light"] .commit-patch-dialog { background: #f5f6f8; color: #30343b; }
+:root[data-theme="light"] .commit-patch-file pre { background: #fff; }
+:root[data-theme="light"] .commit-patch-file .addition { color: #27633d; }
+:root[data-theme="light"] .commit-patch-file .deletion { color: #9d2737; }
 .conflict-progress, .conflict-navigation { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; font-size: 12px; }
 .conflict-progress { padding: 9px 12px; background: #25272a; border-radius: 5px; }
 .conflict-progress > strong { color: #edc781; }

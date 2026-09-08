@@ -113,6 +113,7 @@ export type GitStash = { reference: string; hash: string; message: string; branc
 export type GitStashPreview = { stash: GitStash; files: GitCommitFile[]; conflictRisk: "none" | "possible"; blockers: string[]; recovery: string };
 /** Patch and version are opaque Core-issued values; they prevent applying a hunk after its source changed. */
 export type GitDiffHunk = { originalStart: number; originalLines: number; modifiedStart: number; modifiedLines: number; source: "index" | "worktree"; patch: string; version: string };
+export type GitCommitPatch = { hash: string; indexVersion: string; files: { path: string; reason?: string; hunks: { id: string; content: string }[] }[] };
 export type GitRollbackFailure = { path: string; message: string };
 export type TaskCheckpointFile = { path: string; status: "A" | "M" | "D" | "R"; originalPath?: string; binary: boolean; size: number };
 /** The result of comparing a checkpoint's before/after snapshots with the live worktree. */
@@ -398,6 +399,8 @@ export type ProtocolOperations = {
   "git.commitMessage": { payload: { hash: string }; result: { message: string } };
   "git.commitDiff": { payload: { hash: string; path: string; originalPath?: string }; result: { originalContent: string; modifiedContent: string } };
   "git.cherryPick": { payload: { hash: string; commit: boolean }; result: { branch: string } };
+  "git.commitPatch": { payload: { hash: string }; result: GitCommitPatch };
+  "git.applyCommitHunks": { payload: { hash: string; indexVersion: string; hunkIds: string[] }; result: { applied: number } };
   "git.fileHistory": { payload: { path: string; startLine?: number; endLine?: number }; result: { commits: GitCommit[] } };
   "git.compareFiles": { payload: { ref: string; path?: string }; result: { files: GitCommitFile[] } };
   "git.compareDiff": { payload: { ref: string; path: string; originalPath?: string }; result: { originalContent: string; modifiedContent: string } };
@@ -662,6 +665,8 @@ const requestTypeRegistry: Record<RequestType, true> = {
   "git.commitMessage": true,
   "git.commitDiff": true,
   "git.cherryPick": true,
+  "git.commitPatch": true,
+  "git.applyCommitHunks": true,
   "git.fileHistory": true,
   "git.compareFiles": true,
   "git.compareDiff": true,
