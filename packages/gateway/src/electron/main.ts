@@ -1,7 +1,7 @@
 import { app, BrowserWindow, clipboard, dialog, ipcMain, nativeImage, powerMonitor, safeStorage } from "electron";
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { access, copyFile, mkdir, readFile, readdir, realpath, rm, stat, writeFile } from "node:fs/promises";
+import { access, copyFile, mkdir, open, readFile, readdir, realpath, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { Client } from "ssh2";
@@ -139,10 +139,21 @@ async function startLocalServer(workspaceId: string): Promise<{ remotePort: numb
   await access(coreMain).catch(() => { throw new Error("Local Core is not built. Run npm run build before starting a local workspace."); });
   localServers.get(workspaceId)?.kill();
   runtime(workspaceId, "working", "Starting local Core...");
-  const child = spawn(process.env.VIBE_NODE_EXECUTABLE || "node", [coreMain, "--host", "127.0.0.1", "--port", String(workspace.remotePort), "--workspace", workspace.directory], { cwd: workspace.directory, env: process.env, stdio: "ignore" });
-  await new Promise<void>((resolve, reject) => { child.once("spawn", resolve); child.once("error", reject); });
+  const logDirectory = path.join(app.getPath("userData"), "logs");
+  const logPath = path.join(logDirectory, `local-core-${workspace.id}.log`);
+  await mkdir(logDirectory, { recursive: true });
+  const log = await open(logPath, "a");
+  const child = spawn(process.env.VIBE_NODE_EXECUTABLE || "node", [coreMain, "--host", "127.0.0.1", "--port", String(workspace.remotePort), "--workspace", workspace.directory], {
+    cwd: workspace.directory,
+    env: process.env,
+    // macOS child processes such as Git and node-pty need valid inherited descriptors.
+    // Keep stdin attached to /dev/null and retain Core output in a durable diagnostic log.
+    stdio: ["ignore", log.fd, log.fd]
+  });
+  try { await new Promise<void>((resolve, reject) => { child.once("spawn", resolve); child.once("error", reject); }); }
+  finally { await log.close(); }
   child.once("exit", (code) => { if (localServers.get(workspaceId) !== child) return; localServers.delete(workspaceId); runtime(workspaceId, code === 0 ? "idle" : "error", code === 0 ? "Stopped" : `Local Core exited with ${code}`); });
-  localServers.set(workspaceId, child); runtime(workspaceId, "server", `Server listening locally on ${workspace.remotePort}`);
+  localServers.set(workspaceId, child); runtime(workspaceId, "server", `Server listening locally on ${workspace.remotePort} (log: ${logPath})`);
   return { remotePort: workspace.remotePort };
 }
 async function startLocalClient(workspaceId: string): Promise<void> {
