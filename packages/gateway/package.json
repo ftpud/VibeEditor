@@ -1,7 +1,7 @@
 {
   "name": "@remote-ide/gateway",
   "productName": "Vibe Gateway",
-  "description": "SSH connection and remote workspace launcher for Vibe Editor",
+  "description": "Local and SSH workspace launcher for Vibe Editor",
   "version": "0.1.0",
   "private": true,
   "type": "module",
