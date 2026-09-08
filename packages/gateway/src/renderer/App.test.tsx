@@ -23,9 +23,9 @@ describe("Gateway dialogs", () => {
     const onClose = vi.fn();
     const view = render(<ConnectionDialog value={{ port: 22, authenticationMethod: "password", password: "", passphrase: "" }} onClose={onClose} onSave={vi.fn()} />);
 
-    expect(screen.getByRole("dialog", { name: "New SSH connection" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Close New SSH connection" })).toBeTruthy();
-    expect(document.activeElement).toBe(screen.getByRole("textbox", { name: "Name" }));
+    expect(screen.getByRole("dialog", { name: "New connection" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Close New connection" })).toBeTruthy();
+    expect(document.activeElement).toBe(screen.getByRole("combobox", { name: "Connection type" }));
 
     fireEvent.keyDown(document.activeElement!, { key: "Escape" });
     expect(onClose).toHaveBeenCalledOnce();
@@ -36,7 +36,7 @@ describe("Gateway dialogs", () => {
 
   it("keeps Tab focus within the dialog", () => {
     render(<ConnectionDialog value={{ port: 22, authenticationMethod: "password", password: "", passphrase: "" }} onClose={vi.fn()} onSave={vi.fn()} />);
-    const first = screen.getByRole("button", { name: "Close New SSH connection" });
+    const first = screen.getByRole("button", { name: "Close New connection" });
     const last = screen.getByRole("button", { name: "Save connection" });
 
     last.focus();
@@ -45,6 +45,22 @@ describe("Gateway dialogs", () => {
     first.focus();
     fireEvent.keyDown(first, { key: "Tab", shiftKey: true });
     expect(document.activeElement).toBe(last);
+  });
+
+  it("offers a local Mac connection without SSH fields", () => {
+    render(<ConnectionDialog value={{ kind: "ssh", port: 22, authenticationMethod: "password", password: "", passphrase: "" }} onClose={vi.fn()} onSave={vi.fn()} />);
+    fireEvent.change(screen.getByRole("combobox", { name: "Connection type" }), { target: { value: "local" } });
+    expect(screen.getByText(/run Core and Vibe Editor directly on this Mac/)).toBeTruthy();
+    expect(screen.queryByRole("textbox", { name: "Host" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Test connection" })).toBeNull();
+  });
+
+  it("chooses a local project directory and derives its name", async () => {
+    window.gateway = { pickWorkspaceDirectory: vi.fn().mockResolvedValue("/Users/me/Projects/api") } as unknown as Window["gateway"];
+    render(<WorkspaceDialog value={{ remotePort: 7331 }} connectionId="local-1" local onClose={vi.fn()} onSave={vi.fn()} onFailure={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: "Choose local project directory" }));
+    await waitFor(() => expect((screen.getByRole("textbox", { name: "Local project directory" }) as HTMLInputElement).value).toBe("/Users/me/Projects/api"));
+    expect((screen.getByRole("textbox", { name: "Name" }) as HTMLInputElement).value).toBe("api");
   });
 });
 

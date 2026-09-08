@@ -1,7 +1,7 @@
 import { app, BrowserWindow, clipboard, dialog, ipcMain, nativeImage, powerMonitor, safeStorage } from "electron";
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { access, copyFile, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { access, copyFile, mkdir, readFile, readdir, realpath, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { Client } from "ssh2";
@@ -17,9 +17,9 @@ import { SshTunnel } from "./ssh-tunnel.js";
 type Connection = { id: string; name: string; host: string; port: number; username: string } & ConnectionAuth;
 type Workspace = { id: string; connectionId: string; name: string; directory: string; remotePort: number };
 type PortTunnel = { id: string; connectionId: string; port: number };
-type StoredConnection = { id: string; name: string; host: string; port: number; username: string; authenticationMethod?: AuthenticationMethod; password: string; privateKeyPath?: string; passphrase?: string; hostKeyFingerprint?: string };
+type StoredConnection = { id: string; kind?: "ssh" | "local"; name: string; host: string; port: number; username: string; authenticationMethod?: AuthenticationMethod; password: string; privateKeyPath?: string; passphrase?: string; hostKeyFingerprint?: string };
 type State = { connections: StoredConnection[]; workspaces: Workspace[]; portTunnels: PortTunnel[]; repository: RepositorySettings };
-type PublicState = { connections: { id: string; name: string; host: string; port: number; username: string; authenticationMethod: AuthenticationMethod; privateKeyPath?: string; hostKeyFingerprint?: string }[]; workspaces: Workspace[]; portTunnels: PortTunnel[] };
+type PublicState = { connections: { id: string; kind: "ssh" | "local"; name: string; host: string; port: number; username: string; authenticationMethod: AuthenticationMethod; privateKeyPath?: string; hostKeyFingerprint?: string }[]; workspaces: Workspace[]; portTunnels: PortTunnel[] };
 type Runtime = { status: "idle" | "working" | "server" | "client" | "error"; message: string; updatedAt: string; stage: string; logs?: string[]; retryable?: boolean; repairable?: boolean };
 type TunnelRuntime = { status: "idle" | "working" | "running" | "error"; message: string; updatedAt: string; stage: string };
 type ConnectionRuntimeSnapshot = ConnectionRuntime & { updatedAt: string; stage: string };
@@ -34,6 +34,7 @@ const portTunnels = new Map<string, SshTunnel>();
 const connectionRuntimes = new Map<string, ConnectionRuntimeSnapshot>();
 const provisioningClients = new Map<string, Client>();
 const cancelledProvisioning = new Set<string>();
+const localServers = new Map<string, ReturnType<typeof spawn>>();
 
 app.name = "Vibe Gateway";
 app.setName("Vibe Gateway");
@@ -59,7 +60,7 @@ function encrypt(password: string): string {
 }
 function decrypt(password: string): string { return safeStorage.decryptString(Buffer.from(password, "base64")); }
 function publicState(state: State): PublicState {
-  return { connections: state.connections.map((connection) => { const item = normalizeStoredAuthentication(connection); return { id: item.id, name: item.name, host: item.host, port: item.port, username: item.username, authenticationMethod: item.authenticationMethod, ...(item.privateKeyPath ? { privateKeyPath: item.privateKeyPath } : {}), ...(item.hostKeyFingerprint ? { hostKeyFingerprint: item.hostKeyFingerprint } : {}) }; }), workspaces: state.workspaces, portTunnels: state.portTunnels };
+  return { connections: state.connections.map((connection) => { const item = normalizeStoredAuthentication(connection); return { id: item.id, kind: connection.kind === "local" ? "local" : "ssh", name: item.name, host: item.host, port: item.port, username: item.username, authenticationMethod: item.authenticationMethod, ...(item.privateKeyPath ? { privateKeyPath: item.privateKeyPath } : {}), ...(item.hostKeyFingerprint ? { hostKeyFingerprint: item.hostKeyFingerprint } : {}) }; }), workspaces: state.workspaces, portTunnels: state.portTunnels };
 }
 function id(): string { return crypto.randomUUID(); }
 function shell(value: string): string { return `'${value.replaceAll("'", `'"'"'`)}'`; }
@@ -121,12 +122,50 @@ async function withWorkspace(workspaceId: string): Promise<{ workspace: Workspac
   if (!workspace) throw new Error("Workspace was not found");
   return { workspace, connection: await credentials(workspace.connectionId) };
 }
+async function workspaceAndStoredConnection(workspaceId: string): Promise<{ workspace: Workspace; connection: StoredConnection }> {
+  const state = await readState(); const workspace = state.workspaces.find((item) => item.id === workspaceId);
+  if (!workspace) throw new Error("Workspace was not found");
+  const connection = state.connections.find((item) => item.id === workspace.connectionId);
+  if (!connection) throw new Error("Connection was not found");
+  return { workspace, connection };
+}
+function localArtifactPaths(): { coreMain: string; desktopRoot: string } {
+  const repositoryRoot = path.resolve(directory, "../../..");
+  return { coreMain: path.join(repositoryRoot, "packages/core/dist/index.js"), desktopRoot: path.join(repositoryRoot, "packages/desktop") };
+}
+async function startLocalServer(workspaceId: string): Promise<{ remotePort: number }> {
+  const { workspace } = await workspaceAndStoredConnection(workspaceId);
+  const { coreMain } = localArtifactPaths();
+  await access(coreMain).catch(() => { throw new Error("Local Core is not built. Run npm run build before starting a local workspace."); });
+  localServers.get(workspaceId)?.kill();
+  runtime(workspaceId, "working", "Starting local Core...");
+  const child = spawn(process.env.VIBE_NODE_EXECUTABLE || "node", [coreMain, "--host", "127.0.0.1", "--port", String(workspace.remotePort), "--workspace", workspace.directory], { cwd: workspace.directory, env: process.env, stdio: "ignore" });
+  await new Promise<void>((resolve, reject) => { child.once("spawn", resolve); child.once("error", reject); });
+  child.once("exit", (code) => { if (localServers.get(workspaceId) !== child) return; localServers.delete(workspaceId); runtime(workspaceId, code === 0 ? "idle" : "error", code === 0 ? "Stopped" : `Local Core exited with ${code}`); });
+  localServers.set(workspaceId, child); runtime(workspaceId, "server", `Server listening locally on ${workspace.remotePort}`);
+  return { remotePort: workspace.remotePort };
+}
+async function startLocalClient(workspaceId: string): Promise<void> {
+  const { workspace } = await workspaceAndStoredConnection(workspaceId); const { desktopRoot } = localArtifactPaths();
+  const desktopMain = path.join(desktopRoot, "dist-electron/main.js"); await access(desktopMain).catch(() => { throw new Error("Local Desktop is not built. Run npm run build before starting a local workspace."); });
+  const executable = process.env.VIBE_DESKTOP_EXECUTABLE || process.execPath;
+  const child = spawn(executable, [desktopMain, "--host", "127.0.0.1", "--port", String(workspace.remotePort)], { cwd: desktopRoot, env: { ...process.env, VITE_DEV_SERVER_URL: "" }, detached: true, stdio: "ignore" });
+  await new Promise<void>((resolve, reject) => { child.once("spawn", resolve); child.once("error", reject); });
+  child.unref(); runtime(workspaceId, "client", `Client connected locally on port ${workspace.remotePort}`);
+}
 async function refreshStatuses(connectionId?: string): Promise<void> {
   const state = await readState();
   const workspaces = state.workspaces.filter((workspace) => !connectionId || workspace.connectionId === connectionId);
-  for (const workspace of workspaces) runtime(workspace.id, "working", "Checking remote server...");
+  const localConnectionIds = new Set(state.connections.filter((connection) => connection.kind === "local").map((connection) => connection.id));
+  for (const localId of localConnectionIds) {
+    if (connectionId && connectionId !== localId) continue;
+    connectionRuntime(localId, { status: "online", message: "Local Mac is available", latencyMs: 0 });
+    for (const workspace of workspaces.filter((item) => item.connectionId === localId)) runtime(workspace.id, localServers.has(workspace.id) ? "server" : "idle", localServers.has(workspace.id) ? `Server listening locally on ${workspace.remotePort}` : "Stopped");
+  }
+  const remoteWorkspaces = workspaces.filter((workspace) => !localConnectionIds.has(workspace.connectionId));
+  for (const workspace of remoteWorkspaces) runtime(workspace.id, "working", "Checking remote server...");
   const groups = new Map<string, Workspace[]>();
-  for (const workspace of workspaces) groups.set(workspace.connectionId, [...(groups.get(workspace.connectionId) ?? []), workspace]);
+  for (const workspace of remoteWorkspaces) groups.set(workspace.connectionId, [...(groups.get(workspace.connectionId) ?? []), workspace]);
   await Promise.all([...groups.entries()].map(async ([currentConnectionId, items]) => {
     let client: Client | undefined;
     const previous = connectionRuntimes.get(currentConnectionId);
@@ -366,7 +405,8 @@ ipcMain.handle("gateway:pickPrivateKey", async () => {
   }
   return selectedPath;
 });
-ipcMain.handle("gateway:testConnection", async (_event, input: { id?: string; host: string; port: number; username: string; authenticationMethod: AuthenticationMethod; password?: string; privateKeyPath?: string; passphrase?: string; hostKeyFingerprint?: string }) => {
+ipcMain.handle("gateway:testConnection", async (_event, input: { id?: string; kind?: "ssh" | "local"; host: string; port: number; username: string; authenticationMethod: AuthenticationMethod; password?: string; privateKeyPath?: string; passphrase?: string; hostKeyFingerprint?: string }) => {
+  if (input.kind === "local") return { message: "Local Mac connection is ready." };
   const authenticationMethod = input.authenticationMethod === "privateKey" || input.authenticationMethod === "agent" ? input.authenticationMethod : "password";
   if (!input.host.trim() || !input.username.trim() || !Number.isInteger(input.port) || input.port < 1 || input.port > 65535) throw new Error("Host, username, and a valid SSH port are required");
   const existing = input.id ? (await readState()).connections.find((item) => item.id === input.id) : undefined;
@@ -381,8 +421,13 @@ ipcMain.handle("gateway:testConnection", async (_event, input: { id?: string; ho
   await testSshConnection(await connectionConfig(connection, readFile, (value) => { fingerprint = value; }), connectWithConfig);
   return { message: `SSH connection succeeded. Server host key: ${fingerprint ?? "unavailable"}`, hostKeyFingerprint: fingerprint };
 });
-ipcMain.handle("gateway:saveConnection", async (_event, input: { id?: string; name: string; host: string; port: number; username: string; authenticationMethod: AuthenticationMethod; password?: string; privateKeyPath?: string; passphrase?: string; hostKeyFingerprint?: string }) => {
+ipcMain.handle("gateway:saveConnection", async (_event, input: { id?: string; kind?: "ssh" | "local"; name: string; host: string; port: number; username: string; authenticationMethod: AuthenticationMethod; password?: string; privateKeyPath?: string; passphrase?: string; hostKeyFingerprint?: string }) => {
   const state = await readState(); const existing = input.id ? state.connections.find((item) => item.id === input.id) : undefined;
+  if (input.kind === "local") {
+    const item: StoredConnection = { id: input.id ?? id(), kind: "local", name: input.name.trim(), host: "localhost", port: 0, username: process.env.USER ?? "local", authenticationMethod: "agent", password: "" };
+    if (!item.name) throw new Error("Connection name is required");
+    state.connections = [...state.connections.filter((value) => value.id !== item.id), item]; await saveState(state); return publicState(state);
+  }
   if (!input.hostKeyFingerprint) throw new Error("Test the SSH connection and explicitly trust its server host-key fingerprint before saving.");
   const item: StoredConnection = { id: input.id ?? id(), name: input.name, host: input.host, port: input.port, username: input.username, authenticationMethod: input.authenticationMethod, password: "", hostKeyFingerprint: input.hostKeyFingerprint };
   if (input.authenticationMethod === "password") { item.password = input.password ? encrypt(input.password) : existing?.authenticationMethod !== "privateKey" ? existing?.password ?? "" : ""; if (!item.password) throw new Error("Password is required"); }
@@ -391,17 +436,32 @@ ipcMain.handle("gateway:saveConnection", async (_event, input: { id?: string; na
 });
 ipcMain.handle("gateway:deleteConnection", async (_event, connectionId: string) => { const state = await readState(); for (const tunnel of state.portTunnels.filter((item) => item.connectionId === connectionId)) stopPortTunnel(tunnel.id, false); state.connections = state.connections.filter((item) => item.id !== connectionId); state.workspaces = state.workspaces.filter((item) => item.connectionId !== connectionId); state.portTunnels = state.portTunnels.filter((item) => item.connectionId !== connectionId); await saveState(state); return publicState(state); });
 ipcMain.handle("gateway:discoverWorkspaceDirectories", async (_event, connectionId: string) => {
+  const stored = (await readState()).connections.find((item) => item.id === connectionId);
+  if (stored?.kind === "local") return [];
   const client = await connect(await credentials(connectionId));
   try { return parseDiscoveredWorkspaceDirectories(await execute(client, workspaceDiscoveryCommand())); }
   finally { client.end(); }
 });
+ipcMain.handle("gateway:pickWorkspaceDirectory", async () => {
+  const selected = await dialog.showOpenDialog({ title: "Choose local project", properties: ["openDirectory", "createDirectory"] });
+  return selected.canceled ? undefined : selected.filePaths[0];
+});
 ipcMain.handle("gateway:saveWorkspace", async (_event, input: Omit<Workspace, "id"> & { id?: string }) => {
-  const directory = validateWorkspaceDirectoryInput(input.directory);
+  const directory = input.directory.trim();
   if (!input.name.trim()) throw new Error("Workspace name is required");
   if (!Number.isInteger(input.remotePort) || input.remotePort < 1024 || input.remotePort > 65535) throw new Error("Core port must be between 1024 and 65535");
   const state = await readState();
   const previous = input.id ? state.workspaces.find((item) => item.id === input.id) : undefined;
-  if (!state.connections.some((item) => item.id === input.connectionId)) throw new Error("SSH connection was not found");
+  const storedConnection = state.connections.find((item) => item.id === input.connectionId);
+  if (!storedConnection) throw new Error("Connection was not found");
+  if (storedConnection.kind === "local") {
+    if (!path.isAbsolute(directory)) throw new Error("The local project directory must be an absolute path");
+    const stats = await stat(directory).catch(() => undefined);
+    if (!stats?.isDirectory()) throw new Error("The local project directory does not exist or is not a directory");
+    const item = { ...input, name: input.name.trim(), directory: await realpath(directory), id: input.id ?? id() } as Workspace;
+    state.workspaces = [...state.workspaces.filter((value) => value.id !== item.id), item]; await saveState(state); return publicState(state);
+  }
+  validateWorkspaceDirectoryInput(directory);
   const client = await connect(await credentials(input.connectionId));
   let validatedDirectory: string;
   try {
@@ -416,7 +476,8 @@ ipcMain.handle("gateway:saveWorkspace", async (_event, input: Omit<Workspace, "i
 ipcMain.handle("gateway:deleteWorkspace", async (_event, workspaceId: string) => {
   const state = await readState(); const workspace = state.workspaces.find((item) => item.id === workspaceId);
   state.workspaces = state.workspaces.filter((item) => item.id !== workspaceId); await saveState(state);
-  if (workspace && !state.workspaces.some((item) => item.connectionId === workspace.connectionId && item.directory === workspace.directory)) {
+  const storedConnection = workspace ? state.connections.find((item) => item.id === workspace.connectionId) : undefined;
+  if (workspace && storedConnection?.kind !== "local" && !state.workspaces.some((item) => item.connectionId === workspace.connectionId && item.directory === workspace.directory)) {
     let client: Client | undefined;
     try { client = await connect(await credentials(workspace.connectionId)); await execute(client, workspaceUnregistrationCommand(workspace.directory)); }
     catch { /* Local removal must remain possible while the SSH server is offline. */ }
@@ -428,11 +489,11 @@ ipcMain.handle("gateway:savePortTunnel", async (_event, input: Omit<PortTunnel, 
 ipcMain.handle("gateway:deletePortTunnel", async (_event, tunnelId: string) => { stopPortTunnel(tunnelId, false); const state = await readState(); state.portTunnels = state.portTunnels.filter((item) => item.id !== tunnelId); await saveState(state); portTunnelRuntimes.delete(tunnelId); return publicState(state); });
 ipcMain.handle("gateway:startPortTunnel", (_event, tunnelId: string) => startPortTunnel(tunnelId));
 ipcMain.handle("gateway:stopPortTunnel", (_event, tunnelId: string) => stopPortTunnel(tunnelId));
-ipcMain.handle("gateway:startServer", (_event, workspaceId: string) => startServer(workspaceId));
-ipcMain.handle("gateway:repairServer", (_event, workspaceId: string) => startServer(workspaceId, true));
+ipcMain.handle("gateway:startServer", async (_event, workspaceId: string) => (await workspaceAndStoredConnection(workspaceId)).connection.kind === "local" ? startLocalServer(workspaceId) : startServer(workspaceId));
+ipcMain.handle("gateway:repairServer", async (_event, workspaceId: string) => (await workspaceAndStoredConnection(workspaceId)).connection.kind === "local" ? startLocalServer(workspaceId) : startServer(workspaceId, true));
 ipcMain.handle("gateway:cancelProvisioning", (_event, workspaceId: string) => { cancelledProvisioning.add(workspaceId); provisioningClients.get(workspaceId)?.end(); runtime(workspaceId, "idle", "Provisioning cancelled"); });
-ipcMain.handle("gateway:stopServer", (_event, workspaceId: string) => stopServer(workspaceId));
-ipcMain.handle("gateway:startClient", (_event, workspaceId: string) => startClient(workspaceId));
+ipcMain.handle("gateway:stopServer", async (_event, workspaceId: string) => { if ((await workspaceAndStoredConnection(workspaceId)).connection.kind !== "local") return stopServer(workspaceId); localServers.get(workspaceId)?.kill(); localServers.delete(workspaceId); runtime(workspaceId, "idle", "Stopped"); });
+ipcMain.handle("gateway:startClient", async (_event, workspaceId: string) => (await workspaceAndStoredConnection(workspaceId)).connection.kind === "local" ? startLocalClient(workspaceId) : startClient(workspaceId));
 
 function createWindow(): void {
   const window = new BrowserWindow({ width: 1040, height: 720, minWidth: 820, minHeight: 560, icon: appIcon, backgroundColor: "#202124", webPreferences: { preload: path.join(directory, "preload.cjs"), contextIsolation: true, nodeIntegration: false } });
@@ -448,5 +509,5 @@ app.whenReady().then(() => {
   });
   createWindow();
 });
-app.on("window-all-closed", () => { for (const tunnel of tunnels.values()) tunnel.stop(); for (const tunnel of portTunnels.values()) tunnel.stop(); if (process.platform !== "darwin") app.quit(); });
+app.on("window-all-closed", () => { for (const tunnel of tunnels.values()) tunnel.stop(); for (const tunnel of portTunnels.values()) tunnel.stop(); for (const server of localServers.values()) server.kill(); localServers.clear(); if (process.platform !== "darwin") app.quit(); });
 app.on("activate", () => { if (!BrowserWindow.getAllWindows().length) createWindow(); });
