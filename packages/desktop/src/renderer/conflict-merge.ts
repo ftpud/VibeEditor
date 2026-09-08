@@ -35,11 +35,11 @@ export function mergeBlocks(base: string, ours: string, theirs: string): MergeBl
   const groups: { start: number; end: number }[] = [];
   for (const edit of [...a, ...b].sort((x, y) => x.start - y.start || x.end - y.end)) {
     const previous = groups.at(-1);
-    // Touching edits are grouped conservatively, including insertions at a replacement boundary.
-    if (previous && edit.start <= previous.end) previous.end = Math.max(previous.end, edit.end);
+    // Insertions at a replacement boundary are ambiguous; adjacent line replacements are independent.
+    if (previous && (edit.start < previous.end || edit.start === previous.end && (edit.start === edit.end || previous.start === previous.end))) previous.end = Math.max(previous.end, edit.end);
     else groups.push({ start: edit.start, end: edit.end });
   }
-  const sourceLine = (edits: Change[], start: number) => start + 1 + edits.filter((edit) => edit.end < start).reduce((offset, edit) => offset + lines(edit.text).length - (edit.end - edit.start), 0);
+  const sourceLine = (edits: Change[], start: number) => start + 1 + edits.filter((edit) => edit.end <= start && edit.start < start).reduce((offset, edit) => offset + lines(edit.text).length - (edit.end - edit.start), 0);
   return groups.map(({ start, end }) => {
     const originalText = original.slice(start, end).join("");
     const oursText = project(original, a, start, end), theirsText = project(original, b, start, end);
@@ -52,7 +52,7 @@ export function resultRange(base: string, result: string, block: MergeBlock): { 
   for (const edit of changes(base, result)) {
     const delta = lines(edit.text).length - (edit.end - edit.start);
     if (edit.end < block.start || (edit.end === block.start && edit.start < block.start)) { start += delta; end += delta; }
-    else if (edit.start <= block.end && edit.end >= block.start) {
+    else if (edit.start < block.end || edit.start === block.end && edit.start === edit.end) {
       if (edit.start < block.start || edit.end > block.end) return undefined;
       end += delta;
     }
