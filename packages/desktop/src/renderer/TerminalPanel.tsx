@@ -43,6 +43,11 @@ export function TerminalPanel({ theme, fontFamily, fontSize, lineHeight, client,
   </section>;
 }
 
+/** A delayed terminal activation must not override a click that focused another control. */
+export function focusTerminalIfUnchanged(focusOwner: Element | null, focus: () => void): void {
+  if (document.activeElement === focusOwner) focus();
+}
+
 export function TerminalTabButton({ tab, rootAlias, active, highlighted, onActivate, onClose, onRename, onDuplicate, onMove }: { tab: TerminalTab; rootAlias?: string; active: boolean; highlighted?: boolean; onActivate(id: string): void; onClose(tab: TerminalTab): void; onRename?(tab: TerminalTab, title: string): void; onDuplicate?(tab: TerminalTab): void; onMove?(tabId: string, targetTabId: string): void }) {
   const statusLabel = tab.status === "running" ? "running" : tab.status;
   const visibleStatus = tab.status === "running" ? "" : ` (${tab.status})`;
@@ -155,7 +160,11 @@ function TerminalView({ theme, fontFamily, fontSize, lineHeight, client, tab, ac
       if (tab.status === "running" && terminal.cols > 0 && terminal.rows > 0) void client.request("terminal.resize", { terminalId: tab.terminalId, cols: terminal.cols, rows: terminal.rows });
     });
     observer.observe(container);
-    requestAnimationFrame(() => { fit.fit(); terminal.focus(); });
+    const focusOwner = document.activeElement;
+    requestAnimationFrame(() => {
+      fit.fit();
+      if (active) focusTerminalIfUnchanged(focusOwner, () => terminal.focus());
+    });
     return () => {
       container.removeEventListener("paste", handlePaste, true);
       observer.disconnect(); input.dispose(); registerWriter(tab.terminalId); terminal.dispose();
@@ -164,7 +173,11 @@ function TerminalView({ theme, fontFamily, fontSize, lineHeight, client, tab, ac
 
   useEffect(() => {
     if (!active) return;
-    requestAnimationFrame(() => { fitRef.current?.fit(); terminalRef.current?.focus(); });
+    const focusOwner = document.activeElement;
+    requestAnimationFrame(() => {
+      fitRef.current?.fit();
+      focusTerminalIfUnchanged(focusOwner, () => terminalRef.current?.focus());
+    });
   }, [active]);
 
   useEffect(() => {
