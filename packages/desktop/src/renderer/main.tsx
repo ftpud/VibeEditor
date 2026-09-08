@@ -5,7 +5,11 @@ import "@fontsource-variable/jetbrains-mono/wght.css";
 import { App } from "./App";
 import { readSetting, readSettingNumber } from "./settings";
 import { DetachedEditor } from "./DetachedEditor";
+import { installNativeDialogFocusRecovery } from "./native-dialog-focus";
 import "./styles.css";
+
+const removeDialogFocusRecovery = installNativeDialogFocusRecovery(window);
+if (import.meta.hot) import.meta.hot.dispose(removeDialogFocusRecovery);
 
 document.documentElement.dataset.theme = readSetting("theme") === "light" ? "light" : "dark";
 document.documentElement.dataset.platform = navigator.platform.toLowerCase().includes("win") ? "windows" : navigator.platform.toLowerCase().includes("mac") ? "mac" : "linux";
