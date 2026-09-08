@@ -1,4 +1,4 @@
-type GatewayConnection = { id: string; name: string; host: string; port: number; username: string; authenticationMethod: "password" | "privateKey" | "agent"; privateKeyPath?: string; hostKeyFingerprint?: string };
+type GatewayConnection = { id: string; kind: "ssh" | "local"; name: string; host: string; port: number; username: string; authenticationMethod: "password" | "privateKey" | "agent"; privateKeyPath?: string; hostKeyFingerprint?: string };
 type GatewayWorkspace = { id: string; connectionId: string; name: string; directory: string; remotePort: number };
 type GatewayPortTunnel = { id: string; connectionId: string; port: number };
 type GatewayState = { connections: GatewayConnection[]; workspaces: GatewayWorkspace[]; portTunnels: GatewayPortTunnel[] };
@@ -14,10 +14,11 @@ interface Window {
     refreshStatuses(connectionId?: string): Promise<void>;
     copyDiagnostics(connectionId: string): Promise<{ copiedAt: string }>;
     pickPrivateKey(): Promise<string | undefined>;
-    testConnection(value: { id?: string; host: string; port: number; username: string; authenticationMethod: "password" | "privateKey" | "agent"; password?: string; privateKeyPath?: string; passphrase?: string; hostKeyFingerprint?: string }): Promise<{ message: string; hostKeyFingerprint?: string }>;
-    saveConnection(value: Partial<GatewayConnection> & { name: string; host: string; port: number; username: string; authenticationMethod: "password" | "privateKey" | "agent"; password?: string; passphrase?: string }): Promise<GatewayState>;
+    testConnection(value: { id?: string; kind?: "ssh" | "local"; host: string; port: number; username: string; authenticationMethod: "password" | "privateKey" | "agent"; password?: string; privateKeyPath?: string; passphrase?: string; hostKeyFingerprint?: string }): Promise<{ message: string; hostKeyFingerprint?: string }>;
+    saveConnection(value: Partial<GatewayConnection> & { kind?: "ssh" | "local"; name: string; host: string; port: number; username: string; authenticationMethod: "password" | "privateKey" | "agent"; password?: string; passphrase?: string }): Promise<GatewayState>;
     deleteConnection(id: string): Promise<GatewayState>;
     discoverWorkspaceDirectories(connectionId: string): Promise<string[]>;
+    pickWorkspaceDirectory(): Promise<string | undefined>;
     saveWorkspace(value: Partial<GatewayWorkspace> & { connectionId: string; name: string; directory: string; remotePort: number }): Promise<GatewayState>;
     deleteWorkspace(id: string): Promise<GatewayState>;
     savePortTunnel(value: Partial<GatewayPortTunnel> & { connectionId: string; port: number }): Promise<GatewayState>;
