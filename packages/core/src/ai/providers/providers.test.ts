@@ -121,6 +121,22 @@ describe("ACP integration", () => {
     await provider.clear(workspace);
   });
 
+  it("uses an explicitly selected model instead of a stale queued model on the first prompt", async () => {
+    const state = await mkdtemp(path.join(os.tmpdir(), "remote-ide-ai-explicit-model-"));
+    const provider = new FakeProvider(() => undefined, state);
+    const workspace = process.cwd();
+    await provider.configureNext(workspace, { model: "model-a", reasoning: "high" });
+    await provider.configure(workspace, { model: "model-b", reasoning: "" });
+
+    expect((await provider.get(workspace)).nextConfiguration).toBeUndefined();
+    await provider.send(workspace, { prompt: "first", configuration: { model: "model-b", reasoning: "" } });
+
+    const session = await settle(provider, workspace);
+    expect(session.model).toBe("model-b");
+    expect(session.messages.filter((message) => message.role === "assistant").every((message) => message.model === "model-b")).toBe(true);
+    await provider.clear(workspace);
+  });
+
   it("forces a model-authored continuation into a new turn that consumes the queued model", async () => {
     const state = await mkdtemp(path.join(os.tmpdir(), "remote-ide-ai-model-continuation-"));
     const provider = new FakeProvider(() => undefined, state, { FAKE_SLOW: "on" });

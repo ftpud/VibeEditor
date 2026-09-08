@@ -134,6 +134,7 @@ export abstract class StdioAcpProvider extends AcpProvider {
     const session = runtime?.session ?? await this.get(workspace);
     const desired = typeof configuration === "string" ? { model: configuration, reasoning: legacyReasoning ?? session.reasoning } : configuration;
     applyConfiguration(session, desired);
+    if (typeof desired.model === "string" || typeof desired.reasoning === "string") session.nextConfiguration = undefined;
     if (runtime) {
       const warnings = await this.applyAcpConfiguration(runtime, runtime.configOptions, runtime.modes);
       if (warnings.length > 0) session.messages.push(this.message("activity", `Session configuration\n${warnings.join("\n")}`));
