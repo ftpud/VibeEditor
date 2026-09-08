@@ -155,6 +155,13 @@ export async function createServer(host: string, port: number, workspacePath: st
   const watcher = chokidar.watch(workspace, {
     ignoreInitial: true,
     ignored: (watchPath) => path.relative(workspace, watchPath).split(path.sep).some((part) => part === ".git" || part === "node_modules"),
+    // chokidar 4 falls back to kqueue-backed fs.watch on macOS, which retains a
+    // descriptor for every file. A root plus its task worktree can then leave
+    // enough descriptors in flight for later Git/node-pty spawns to fail with
+    // EBADF. Polling trades a little latency for a bounded descriptor count.
+    usePolling: process.platform === "darwin",
+    interval: 1_000,
+    binaryInterval: 1_500,
     awaitWriteFinish: { stabilityThreshold: 150, pollInterval: 50 }
   });
   await new Promise<void>((resolve, reject) => {
@@ -292,6 +299,9 @@ export async function createServer(host: string, port: number, workspacePath: st
       const switchedWatcher = chokidar.watch(nextWorkspace, {
         ignoreInitial: true,
         ignored: (watchPath) => path.relative(nextWorkspace, watchPath).split(path.sep).some((part) => part === ".git" || part === "node_modules"),
+        usePolling: process.platform === "darwin",
+        interval: 1_000,
+        binaryInterval: 1_500,
         awaitWriteFinish: { stabilityThreshold: 150, pollInterval: 50 }
       });
       // Subscribe immediately: on a small/cached worktree chokidar can become ready while
