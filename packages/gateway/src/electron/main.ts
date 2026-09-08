@@ -434,7 +434,7 @@ ipcMain.handle("gateway:saveConnection", async (_event, input: { id?: string; ki
   else if (input.authenticationMethod === "privateKey") { item.privateKeyPath = input.privateKeyPath?.trim() || (existing?.authenticationMethod === "privateKey" ? existing.privateKeyPath : ""); if (!item.privateKeyPath) throw new Error("A private key file is required for key authentication"); validatePrivateKeyPath(item.privateKeyPath); let key: Buffer; try { key = await readFile(item.privateKeyPath); } catch { throw new Error(`Could not read the private key file at ${item.privateKeyPath}`); } validatePrivateKey(key, input.passphrase || (existing?.authenticationMethod === "privateKey" && existing.passphrase ? decrypt(existing.passphrase) : undefined)); item.passphrase = input.passphrase ? encrypt(input.passphrase) : existing?.authenticationMethod === "privateKey" ? existing.passphrase : undefined; }
   state.connections = [...state.connections.filter((value) => value.id !== item.id), item]; await saveState(state); return publicState(state);
 });
-ipcMain.handle("gateway:deleteConnection", async (_event, connectionId: string) => { const state = await readState(); for (const tunnel of state.portTunnels.filter((item) => item.connectionId === connectionId)) stopPortTunnel(tunnel.id, false); state.connections = state.connections.filter((item) => item.id !== connectionId); state.workspaces = state.workspaces.filter((item) => item.connectionId !== connectionId); state.portTunnels = state.portTunnels.filter((item) => item.connectionId !== connectionId); await saveState(state); return publicState(state); });
+ipcMain.handle("gateway:deleteConnection", async (_event, connectionId: string) => { const state = await readState(); for (const workspace of state.workspaces.filter((item) => item.connectionId === connectionId)) { localServers.get(workspace.id)?.kill(); localServers.delete(workspace.id); } for (const tunnel of state.portTunnels.filter((item) => item.connectionId === connectionId)) stopPortTunnel(tunnel.id, false); state.connections = state.connections.filter((item) => item.id !== connectionId); state.workspaces = state.workspaces.filter((item) => item.connectionId !== connectionId); state.portTunnels = state.portTunnels.filter((item) => item.connectionId !== connectionId); await saveState(state); return publicState(state); });
 ipcMain.handle("gateway:discoverWorkspaceDirectories", async (_event, connectionId: string) => {
   const stored = (await readState()).connections.find((item) => item.id === connectionId);
   if (stored?.kind === "local") return [];
@@ -475,6 +475,7 @@ ipcMain.handle("gateway:saveWorkspace", async (_event, input: Omit<Workspace, "i
 });
 ipcMain.handle("gateway:deleteWorkspace", async (_event, workspaceId: string) => {
   const state = await readState(); const workspace = state.workspaces.find((item) => item.id === workspaceId);
+  localServers.get(workspaceId)?.kill(); localServers.delete(workspaceId);
   state.workspaces = state.workspaces.filter((item) => item.id !== workspaceId); await saveState(state);
   const storedConnection = workspace ? state.connections.find((item) => item.id === workspace.connectionId) : undefined;
   if (workspace && storedConnection?.kind !== "local" && !state.workspaces.some((item) => item.connectionId === workspace.connectionId && item.directory === workspace.directory)) {
