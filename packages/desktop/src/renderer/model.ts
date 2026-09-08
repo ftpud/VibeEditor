@@ -43,7 +43,14 @@ export const initialLayout: LayoutModel = {
 
 /** Replaces one root's restored state without discarding tabs owned by other roots. */
 export function mergeRootOwnedTabs<T extends { rootId?: string }>(existing: T[], restored: T[], rootId: string, identity: (item: T) => string): T[] {
-  const retained = existing.filter((item) => item.rootId);
-  const known = new Set(retained.filter((item) => item.rootId === rootId).map(identity));
-  return [...retained, ...restored.filter((item) => !known.has(identity(item)))];
+  const restoredByIdentity = new Map(restored.map((item) => [identity(item), item]));
+  const merged: T[] = [];
+  for (const item of existing) {
+    if (!item.rootId) continue;
+    if (item.rootId !== rootId) { merged.push(item); continue; }
+    const replacement = restoredByIdentity.get(identity(item));
+    if (replacement) { merged.push(replacement); restoredByIdentity.delete(identity(item)); }
+  }
+  merged.push(...restoredByIdentity.values());
+  return merged;
 }
