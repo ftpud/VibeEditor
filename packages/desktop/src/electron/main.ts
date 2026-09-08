@@ -3,6 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { SettingsStore } from "./settings-store.js";
 import { registerProjectTransferIpc } from "./project-transfer.js";
+import { restoreWindowInputFocus } from "./window-focus.js";
 
 const directory = path.dirname(fileURLToPath(import.meta.url));
 const appIcon = path.join(directory, "../assets/app-icon.png");
@@ -33,6 +34,7 @@ app.on("before-quit", () => settings.flush());
 
 ipcMain.on("editor:dirty-state", (_event, dirty: boolean) => { hasDirtyTabs = dirty; });
 ipcMain.handle("desktop:clipboard-read", () => clipboard.readText());
+ipcMain.handle("desktop:restore-input-focus", (event) => restoreWindowInputFocus(BrowserWindow.fromWebContents(event.sender)));
 ipcMain.handle("desktop:clipboard-write", (_event, text: unknown) => { if (typeof text === "string" && text.length <= 2_000_000) clipboard.writeText(text); });
 ipcMain.handle("desktop:open-external", async (_event, value: unknown) => {
   if (typeof value !== "string" || value.length > 4096) return;
@@ -79,6 +81,7 @@ function createWindow(extraQuery: Record<string, string> = {}): void {
       detail: "Closing now will discard those changes."
     });
     if (choice === 1) { allowClose = true; window.close(); }
+    else restoreWindowInputFocus(window);
   });
   const devUrl = process.env.VITE_DEV_SERVER_URL;
   const query = { ...Object.fromEntries(

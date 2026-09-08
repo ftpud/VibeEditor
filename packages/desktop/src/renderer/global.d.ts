@@ -3,6 +3,7 @@ interface Window {
     setDirtyState(dirty: boolean): void;
     openEditorWindow(options: { host: string; port: string; type: "file" | "useful"; path: string; scope?: "global" | "local" }): void;
     readClipboard(): Promise<string>;
+    restoreInputFocus?(): Promise<void>;
     writeClipboard(text: string): Promise<void>;
     openExternal(url: string): Promise<void>;
     chooseUpload(): Promise<{ id: string; name: string; size: number } | undefined>;
