@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { WebSocket } from "ws";
-import { assertRequestRoot, assertRootRemovalAllowed, assertSessionChangeAllowed, LiveRootSelections, permissionTargetWorkspace, protocolHandshake, renameWorkspacePaths, rootRemovalBlocker, sendWebSocketData, transactionalRootSelection, WorkspaceWatchBatcher } from "./server.js";
+import { assertRequestRoot, assertRootRemovalAllowed, assertSessionChangeAllowed, LiveRootSelections, permissionTargetWorkspace, protocolHandshake, renameWorkspacePaths, rootRemovalBlocker, selectRootWorkspace, sendWebSocketData, transactionalRootSelection, WorkspaceWatchBatcher } from "./server.js";
 
 describe("protocol handshake", () => {
   it("accepts overlapping ranges and describes incompatible Desktops", () => {
@@ -20,6 +20,15 @@ describe("workspace watcher batching", () => {
 });
 
 describe("workspace root request boundary", () => {
+  it("clears the persisted task selection when activating a project root", async () => {
+    let selectedTaskId: string | undefined = "task-a";
+    const tasks = { select: async (taskId?: string) => { selectedTaskId = taskId; return { workspace: "/root", registry: { tasks: [] } }; } };
+
+    await selectRootWorkspace(tasks);
+
+    expect(selectedTaskId).toBeUndefined();
+  });
+
   it("accepts the selected identity and rejects missing or cross-root identities", () => {
     expect(() => assertRequestRoot({ id: "1", type: "filesystem.readFile", rootId: "root-a", payload: { path: "README.md" } }, "root-a")).not.toThrow();
     expect(() => assertRequestRoot({ id: "2", type: "filesystem.readFile", rootId: "root-b", payload: { path: "README.md" } }, "root-a")).toThrow("not the selected root");
