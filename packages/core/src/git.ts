@@ -6,6 +6,7 @@ import { createHash } from "node:crypto";
 import type { GitBranch, GitBranchDeletePreview, GitCommit, GitCommitFile, GitConflictOperationKind, GitConflictWorkspace, GitDiffHunk, GitHistoryRewritePreview, GitMergePreview, GitMergeRef, GitMergeResult, GitPullPreview, GitPullResult, GitPullStrategy, GitRebasePreview, GitRebaseResult, GitRebaseTodoItem, GitRollbackFailure, GitStash, GitStashInclusion, GitStashPreview, GitStatusEntry, GitTag, GitUpstreamStatus } from "@remote-ide/protocol";
 import { CoreError } from "./errors.js";
 import { WorkspaceFileSystem } from "./filesystem.js";
+import type { GitCommitPatch } from "@remote-ide/protocol";
 
 const execFileAsync = promisify(execFile);
 
@@ -283,6 +284,45 @@ export class GitService {
     validateHash(hash);
     await this.git(["cherry-pick", ...(commit ? [] : ["--no-commit"]), hash]);
     return (await this.status()).branch;
+  }
+
+  private async commitPatchData(hash: string) {
+    validateHash(hash);
+    const ancestry = (await this.git(["rev-list", "--parents", "-n", "1", hash])).trim().split(/\s+/);
+    if (ancestry.length > 2) throw new CoreError("INVALID_REQUEST", "Select a non-merge commit to apply individual changes. Merge commits require choosing a parent.");
+    const resolvedHash = ancestry[0]!;
+    validateFullHash(resolvedHash);
+    const paths = (await this.git(["diff-tree", "--root", "--no-commit-id", "--name-only", "--no-renames", "-r", "-z", resolvedHash])).split("\0").filter(Boolean);
+    const files = [];
+    for (const filePath of paths) {
+      const patch = await this.git(["diff-tree", "--root", "--no-commit-id", "-r", "-p", "--no-ext-diff", "--no-textconv", "--no-renames", "--no-color", "--unified=3", resolvedHash, "--", `:(literal)${filePath}`]);
+      const hunks = parseDiffHunks(patch);
+      const reason = /^(?:old mode|new mode|(?:new file|deleted file) mode (?:120000|160000)|index .* (?:120000|160000)$)/m.test(patch) ? "File mode, symbolic link, or submodule changes cannot be selected as text blocks." : !hunks.length ? "This change has no selectable text blocks (binary, empty file, or metadata only)." : undefined;
+      files.push({ path: filePath, header: patch.slice(0, patch.indexOf("@@ ")), reason, hunks: reason ? [] : hunks.map((hunk) => ({ id: hunk.version, content: hunk.patch.slice(hunk.patch.indexOf("@@ ")) })) });
+    }
+    return { hash: resolvedHash, files };
+  }
+
+  private async indexVersion(): Promise<string> {
+    return createHash("sha256").update(await this.git(["ls-files", "--stage", "-z"])).digest("hex");
+  }
+
+  async commitPatch(hash: string): Promise<GitCommitPatch> {
+    const data = await this.commitPatchData(hash);
+    return { hash: data.hash, indexVersion: await this.indexVersion(), files: data.files.map(({ header: _header, ...file }) => file) };
+  }
+
+  async applyCommitHunks(hash: string, indexVersion: string, hunkIds: string[]): Promise<{ applied: number }> {
+    if (!Array.isArray(hunkIds) || !hunkIds.length || hunkIds.length > 10000 || hunkIds.some((id) => typeof id !== "string" || !/^[0-9a-f]{64}$/.test(id)) || new Set(hunkIds).size !== hunkIds.length) throw new CoreError("INVALID_REQUEST", "Select valid commit change blocks to apply.");
+    const data = await this.commitPatchData(hash);
+    const selected = new Set(hunkIds);
+    const known = new Set(data.files.flatMap((file) => file.hunks.map((hunk) => hunk.id)));
+    if (hunkIds.some((id) => !known.has(id))) throw new CoreError("INVALID_REQUEST", "Selected blocks do not belong to this commit. Refresh the patch.");
+    if (indexVersion !== await this.indexVersion()) throw new CoreError("GIT_FAILED", "The index changed after preview. Refresh the patch and review your selection again.");
+    const patch = data.files.map((file) => { const hunks = file.hunks.filter((hunk) => selected.has(hunk.id)); return hunks.length ? file.header + hunks.map((hunk) => hunk.content).join("") : ""; }).join("");
+    try { await applyGitPatch(this.workspace, patch, false, false); }
+    catch { throw new CoreError("GIT_FAILED", "The selected changes do not apply cleanly to the current index. No selected changes were applied. Refresh or choose different blocks."); }
+    return { applied: hunkIds.length };
   }
 
   async fileHistory(filePath: string, startLine?: number, endLine?: number): Promise<GitCommit[]> {
@@ -808,11 +848,12 @@ function isGitHunk(value: GitDiffHunk): boolean {
   return (value.source === "index" || value.source === "worktree") && Number.isInteger(value.originalStart) && Number.isInteger(value.originalLines) && Number.isInteger(value.modifiedStart) && Number.isInteger(value.modifiedLines) && value.originalStart >= 0 && value.originalLines >= 0 && value.modifiedStart >= 0 && value.modifiedLines >= 0 && typeof value.patch === "string" && value.patch.length > 0 && value.patch.length <= 4 * 1024 * 1024 && /^[0-9a-f]{64}$/.test(value.version);
 }
 
-async function applyGitPatch(workspace: string, patch: string, reverse: boolean): Promise<void> {
+async function applyGitPatch(workspace: string, patch: string, reverse: boolean, zeroContext = true): Promise<void> {
   await new Promise<void>((resolve, reject) => {
-    const child = spawn("git", ["-C", workspace, "apply", "--cached", "--unidiff-zero", ...(reverse ? ["--reverse"] : [])], { stdio: ["pipe", "ignore", "pipe"] });
+    const child = spawn("git", ["-C", workspace, "apply", "--cached", ...(zeroContext ? ["--unidiff-zero"] : []), ...(reverse ? ["--reverse"] : [])], { stdio: ["pipe", "ignore", "pipe"] });
     let stderr = ""; child.stderr.on("data", (chunk: Buffer) => { stderr += chunk.toString(); });
     child.on("error", reject); child.on("close", (code) => code === 0 ? resolve() : reject(new Error(stderr || "git apply failed")));
+    child.stdin.on("error", reject);
     child.stdin.end(patch);
   });
 }

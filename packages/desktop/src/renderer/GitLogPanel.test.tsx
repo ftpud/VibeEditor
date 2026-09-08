@@ -5,22 +5,28 @@ import type { CoreClient } from "./client";
 
 afterEach(cleanup);
 
-it("smart cherry-picks only changes and refreshes repository state", async () => {
+it("applies a whole commit without committing and refreshes repository state", async () => {
   const hash = "a".repeat(40);
   const request = vi.fn(async (type: string) => {
     if (type === "git.branches") return { branches: [{ name: "main", current: true, remote: false }] };
     if (type === "git.tags") return { tags: [] };
     if (type === "git.log") return { commits: [{ hash, shortHash: "aaaaaaa", subject: "Add feature", author: "Dev", date: "2026-01-01", parents: [], refs: [] }] };
     if (type === "git.cherryPick") return { branch: "main" };
+    if (type === "git.commitPatch") return { hash, indexVersion: "version", files: [] };
     throw new Error(type);
   });
   const onRepositoryChanged = vi.fn();
   render(<GitLogPanel client={{ request } as unknown as CoreClient} height={400} onResizeStart={vi.fn()} onRepositoryChanged={onRepositoryChanged} />);
   fireEvent.contextMenu(await screen.findByRole("button", { name: /Add feature/ }));
-  fireEvent.click(screen.getByRole("button", { name: /Smart Cherry-pick/ }));
+  fireEvent.click(screen.getByRole("button", { name: /Apply Whole Commit Without Committing/ }));
   await waitFor(() => expect(request).toHaveBeenCalledWith("git.cherryPick", { hash, commit: false }));
   await waitFor(() => expect(onRepositoryChanged).toHaveBeenCalledOnce());
   expect(request.mock.calls.filter(([type]) => type === "git.log")).toHaveLength(1);
+  fireEvent.contextMenu(screen.getByRole("button", { name: /Add feature/ }));
+  fireEvent.click(screen.getByRole("button", { name: /Apply Selected Commit Changes/ }));
+  await screen.findByRole("dialog", { name: "Apply selected commit changes" });
+  await waitFor(() => expect(request).toHaveBeenCalledWith("git.commitPatch", { hash }));
+  expect(request.mock.calls.filter(([type]) => type === "git.cherryPick")).toHaveLength(1);
 });
 
 describe("TagGroup", () => {
