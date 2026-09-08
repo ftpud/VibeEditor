@@ -45,6 +45,82 @@ describe("CoreClient streaming disconnects", () => {
   });
   afterEach(() => vi.unstubAllGlobals());
 
+  it("settles a connection cancelled before the socket opens", async () => {
+    const client = new CoreClient();
+    const connecting = client.connect("core", 7331);
+    const rejection = expect(connecting).rejects.toThrow("Connection replaced or closed");
+    client.disconnect();
+    await rejection;
+  });
+
+  it("does not let a replaced handshake clear or use the new connection", async () => {
+    const client = new CoreClient();
+    const firstConnect = client.connect("core", 7331);
+    const rejection = expect(firstConnect).rejects.toThrow("Connection replaced or closed");
+    const first = FakeWebSocket.instances[0]!;
+    first.open();
+    // The handshake response has arrived, but its continuation has not run.
+    const secondConnect = client.connect("core", 7331);
+    const second = FakeWebSocket.instances[1]!;
+    second.open();
+    await rejection;
+    await secondConnect;
+    expect(second.readyState).toBe(FakeWebSocket.OPEN);
+    expect(second.sent.map((data) => JSON.parse(data).type)).toEqual(["protocol.handshake", "workspace.roots"]);
+    const pending = client.request("tasks.list", {});
+    const request = JSON.parse(second.sent.at(-1)!);
+    second.receive({ id: request.id, ok: true, result: { tasks: [] } });
+    await expect(pending).resolves.toEqual({ tasks: [] });
+    client.disconnect();
+  });
+
+  it("keeps the new socket usable when an outstanding old handshake rejects", async () => {
+    const client = new CoreClient();
+    const firstConnect = client.connect("core", 7331);
+    const rejection = expect(firstConnect).rejects.toThrow("Connection replaced or closed");
+    const first = FakeWebSocket.instances[0]!;
+    first.send = (data) => { first.sent.push(data); };
+    first.open();
+    const secondConnect = client.connect("core", 7331);
+    const second = FakeWebSocket.instances[1]!;
+    second.open();
+    await rejection;
+    await secondConnect;
+    expect(second.readyState).toBe(FakeWebSocket.OPEN);
+    const pending = client.request("tasks.list", {});
+    second.receive({ id: JSON.parse(second.sent.at(-1)!).id, ok: true, result: { tasks: [] } });
+    await expect(pending).resolves.toEqual({ tasks: [] });
+    client.disconnect();
+  });
+
+  it("times out a socket that never opens", async () => {
+    vi.useFakeTimers();
+    try {
+      const client = new CoreClient(1_000);
+      const connecting = client.connect("core", 7331);
+      const rejection = expect(connecting).rejects.toThrow("Connection timed out");
+      await vi.advanceTimersByTimeAsync(1_000);
+      await rejection;
+      expect(FakeWebSocket.instances[0]!.readyState).toBe(FakeWebSocket.CLOSED);
+    } finally { vi.useRealTimers(); }
+  });
+
+  it("ignores malformed messages without throwing or losing a pending request", async () => {
+    const client = new CoreClient();
+    const connecting = client.connect("core", 7331);
+    const socket = FakeWebSocket.instances[0]!;
+    socket.open();
+    await connecting;
+    const pending = client.request("tasks.list", {});
+    const request = JSON.parse(socket.sent.at(-1)!);
+    for (const value of [null, 42, true, "text", [], { id: request.id, ok: false }]) {
+      expect(() => socket.receive(value)).not.toThrow();
+    }
+    socket.receive({ id: request.id, ok: true, result: { tasks: [] } });
+    await expect(pending).resolves.toEqual({ tasks: [] });
+    client.disconnect();
+  });
+
   it("adds the selected root identity to every scoped request", async () => {
     const client = new CoreClient(); const connecting = client.connect("core", 7331); const socket = FakeWebSocket.instances[0]!; socket.open(); await connecting;
     const pending = client.request("filesystem.readFile", { path: "README.md" });
