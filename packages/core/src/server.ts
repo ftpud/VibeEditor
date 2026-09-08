@@ -429,6 +429,7 @@ export async function createServer(host: string, port: number, workspacePath: st
               } catch (error) { nextServices.java.close(); nextServices.jdt.close(); if (nextWatch) await closeSwitchedWatch(nextRoot.id, nextWatch); throw error; }
             }, async ({ nextServices, nextWatch }) => {
               await commitSwitchedWatch(nextRoot.id, nextWatch);
+              await selectRootWorkspace(rootContext.tasks);
               selectedRoot = nextRoot; liveRootSelections.select(socket, nextRoot.id);
               servicesPromise = Promise.resolve(nextServices);
               terminalSubscriptions.set(socket, { rootId: nextRoot.id, workspace: nextRoot.path, terminalIds: new Set() });
@@ -498,6 +499,10 @@ export function assertRequestRoot(request: Request, selectedRootId: string): voi
   if (request.type === "protocol.handshake" || request.type === "workspace.roots" || request.type === "workspace.addRoot") return;
   if (!request.rootId) throw new CoreError("INVALID_REQUEST", `Request ${request.type} requires an explicit rootId`);
   if (request.type !== "workspace.selectRoot" && request.rootId !== selectedRootId) throw new CoreError("INVALID_REQUEST", `Request root ${request.rootId} is not the selected root ${selectedRootId}`);
+}
+
+export async function selectRootWorkspace(tasks: Pick<WorkspaceTaskStore, "select">): Promise<void> {
+  await tasks.select(undefined);
 }
 
 export function rootRemovalBlocker(state: { tasks: number; openFiles: number; terminals: boolean; transfers: boolean }): string | undefined {
