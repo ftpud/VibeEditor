@@ -16,6 +16,7 @@ export function ModelPicker({ models, value, label, disabled, onChange }: { mode
   const searchRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const selected = models.find((model) => model.id === value);
+  const hasCostMultipliers = models.some((model) => multiplierLabel(model.price));
   const visible = useMemo(() => {
     const needle = query.trim().toLowerCase();
     if (!needle) return models;
@@ -48,11 +49,12 @@ export function ModelPicker({ models, value, label, disabled, onChange }: { mode
     <span>Model</span>
     <button type="button" className="ai-model-trigger" aria-label={label} aria-haspopup="listbox" aria-expanded={open} disabled={disabled} onClick={() => setOpen((value) => !value)}>
       <span className="ai-model-trigger-name">{selected?.name ?? value ?? "Select a model"}</span>
-      {selected?.price && <span className={`ai-model-price ${tierClass(selected)}`}>{selected.price}</span>}
+      {selected?.price && <span className={`ai-model-price ${tierClass(selected)}`} title={priceTitle(selected)}>{costLabel(selected)}</span>}
       <ChevronDown size={12} />
     </button>
     {open && <div className="ai-model-menu" role="listbox" onKeyDown={keyDown}>
       <div className="ai-model-search"><Search size={13} /><input ref={searchRef} value={query} placeholder="Search models" onChange={(event) => { setQuery(event.target.value); setActive(0); }} /></div>
+      {hasCostMultipliers && <p className="ai-model-cost-help"><strong>Cost efficiency</strong> is the provider’s relative model-cost category. The × value is secondary legacy request guidance, not an AIC estimate; AIC cost depends on tokens, model pricing, and your Copilot plan.</p>}
       <div className="ai-model-list" ref={listRef}>
         {visible.length === 0 && <div className="ai-model-empty">No model matches “{query}”.</div>}
         {visible.map((model, index) => <div
@@ -66,7 +68,7 @@ export function ModelPicker({ models, value, label, disabled, onChange }: { mode
         >
           <div className="ai-model-item-head">
             <span className="ai-model-item-name">{model.name}</span>
-            {model.price && <span className={`ai-model-price ${tierClass(model)}`} title={priceTitle(model)}>{model.price}</span>}
+            {model.price && <span className={`ai-model-price ${tierClass(model)}`} title={priceTitle(model)}>{costLabel(model)}</span>}
             {model.contextWindow && <span className="ai-model-tag" title={contextTitle(model)}>{compact(model.contextWindow)} ctx</span>}
             {model.available === false && <span className="ai-model-tag warn">unavailable</span>}
             {model.id === value && <Check className="ai-model-check" size={13} />}
@@ -84,7 +86,24 @@ export function ModelPicker({ models, value, label, disabled, onChange }: { mode
 }
 
 function tierClass(model: AiModel): string { return model.priceTier ? `tier-${model.priceTier.replace(/[^a-z]+/gi, "-").toLowerCase()}` : ""; }
-function priceTitle(model: AiModel): string { return `Costs ${model.price} of a request${model.priceTier ? ` (${model.priceTier.replace(/_/g, " ")} cost)` : ""}`; }
+function multiplierLabel(price?: string): string | undefined {
+  const match = price?.match(/^([0-9]+(?:\.[0-9]+)?)x$/i);
+  return match ? `${match[1]}×` : undefined;
+}
+function efficiencyLabel(tier?: string): string | undefined {
+  if (tier === "low") return "High efficiency";
+  if (tier === "medium") return "Balanced efficiency";
+  if (tier === "high") return "Low efficiency";
+  if (tier === "very_high") return "Very low efficiency";
+  return tier ? `${tier.replace(/_/g, " ")} cost` : undefined;
+}
+function costLabel(model: AiModel): string { return [efficiencyLabel(model.priceTier), multiplierLabel(model.price) ?? model.price].filter(Boolean).join(" · "); }
+function priceTitle(model: AiModel): string {
+  const multiplier = multiplierLabel(model.price);
+  return multiplier
+    ? `${efficiencyLabel(model.priceTier) ?? "Provider-reported relative cost"}. ${multiplier} is legacy request guidance, not an AIC estimate. Actual AIC cost depends on tokens, model pricing, and your Copilot plan.`
+    : `Provider-reported cost: ${model.price}${model.priceTier ? ` (${model.priceTier.replace(/_/g, " ")} relative cost)` : ""}`;
+}
 function contextTitle(model: AiModel): string { return `Context window: ${model.contextWindow?.toLocaleString()} tokens${model.maxContextWindow ? ` (up to ${model.maxContextWindow.toLocaleString()})` : ""}`; }
 
 /** 272000 -> "272K", 1000000 -> "1M". */

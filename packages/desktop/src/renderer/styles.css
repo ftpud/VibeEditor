@@ -280,6 +280,8 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .ai-model-menu { position: absolute; z-index: 30; top: 100%; left: 0; width: max(320px, 100%); max-width: min(460px, 92vw); margin-top: 4px; display: grid; border: 1px solid #4b4d52; border-radius: 6px; background: #26282c; box-shadow: 0 12px 28px rgba(0, 0, 0, .45); overflow: hidden; }
 .ai-model-search { display: flex; align-items: center; gap: 6px; padding: 7px 9px; border-bottom: 1px solid #34373b; color: #85888e; }
 .ai-model-search input { flex: 1; min-width: 0; border: 0; outline: none; background: transparent; color: #d7d9dc; font: inherit; font-size: .8462rem; }
+.ai-model-cost-help { margin: 0; padding: 7px 10px; border-bottom: 1px solid #34373b; color: #92969d; font-size: .6923rem; line-height: 1.4; }
+.ai-model-cost-help strong { color: #c6c9ce; }
 .ai-model-list { max-height: 320px; overflow: auto; }
 .ai-model-item { padding: 7px 10px; display: grid; gap: 3px; cursor: pointer; border-left: 2px solid transparent; }
 .ai-model-item[data-active="true"] { background: #2f3237; }
