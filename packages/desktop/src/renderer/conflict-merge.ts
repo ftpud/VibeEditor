@@ -48,8 +48,12 @@ export function mergeBlocks(base: string, ours: string, theirs: string): MergeBl
 }
 
 export function resultRange(base: string, result: string, block: MergeBlock): { start: number; end: number } | undefined {
+  return mappedRange(changes(base, result), block);
+}
+
+function mappedRange(edits: Change[], block: MergeBlock): { start: number; end: number } | undefined {
   let start = block.start, end = block.end;
-  for (const edit of changes(base, result)) {
+  for (const edit of edits) {
     const delta = lines(edit.text).length - (edit.end - edit.start);
     if (edit.end < block.start || (edit.end === block.start && edit.start < block.start)) { start += delta; end += delta; }
     else if (edit.start < block.end || edit.start === block.end && edit.start === edit.end) {
@@ -60,8 +64,42 @@ export function resultRange(base: string, result: string, block: MergeBlock): { 
   return { start, end };
 }
 
-export function applyBlock(base: string, result: string, block: MergeBlock, side: "ours" | "theirs"): string {
-  const range = resultRange(base, result, block);
+export type BlockState = { status: "conflict" | "pending" | "merged" | "review"; range?: { start: number; end: number }; text?: string };
+// Line diff coalesces adjacent replacements. Recover their boundaries when the
+// result contains an unambiguous sequence of known block choices.
+function resultChanges(base: string, result: string, blocks: MergeBlock[]): Change[] {
+  return changes(base, result).flatMap((edit) => {
+    const covered = blocks.filter((block) => block.start >= edit.start && block.end <= edit.end);
+    if (covered.length < 2 || covered.length > 100 || covered[0]!.start !== edit.start || covered.at(-1)!.end !== edit.end || covered.some((block, index) => index > 0 && covered[index - 1]!.end !== block.start)) return [edit];
+    let attempts = 0;
+    const solutions: Change[][] = [];
+    const visit = (index: number, offset: number, parts: Change[]) => {
+      if (++attempts > 1000 || solutions.length > 1) return;
+      if (index === covered.length) { if (offset === edit.text.length) solutions.push(parts); return; }
+      const block = covered[index]!;
+      for (const text of new Set([block.base, block.ours, block.theirs])) {
+        if (edit.text.startsWith(text, offset)) visit(index + 1, offset + text.length, [...parts, { start: block.start, end: block.end, text }]);
+      }
+    };
+    visit(0, 0, []);
+    return attempts <= 1000 && solutions.length === 1 ? solutions[0]! : [edit];
+  });
+}
+export function blockStates(base: string, result: string, blocks: MergeBlock[]): BlockState[] {
+  const edits = resultChanges(base, result, blocks), content = lines(result);
+  return blocks.map((block) => {
+    const range = mappedRange(edits, block);
+    if (!range) return { status: "review" };
+    const text = content.slice(range.start, range.end).join("");
+    const markers = /^(?:<{7,}|={7,}|>{7,}|\|{7,})(?:\s|$)/m.test(text);
+    const chosen = block.conflict ? text === block.ours || text === block.theirs : text === (block.ours !== block.base ? block.ours : block.theirs);
+    const status = markers ? "conflict" : chosen ? "merged" : text === block.base ? block.conflict ? "conflict" : "pending" : "review";
+    return { status, range, text };
+  });
+}
+
+export function applyBlock(base: string, result: string, block: MergeBlock, side: "ours" | "theirs", blocks: MergeBlock[] = [block]): string {
+  const range = mappedRange(resultChanges(base, result, blocks), block);
   if (!range) throw new Error("Manual edits span multiple blocks. Undo those edits or finish this block in the result editor.");
   const content = lines(result);
   return content.slice(0, range.start).join("") + block[side] + content.slice(range.end).join("");

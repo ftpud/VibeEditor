@@ -1,7 +1,20 @@
 import { describe, expect, it } from "vitest";
-import { applyBlock, mergeBlocks, mergeNonConflicting } from "./conflict-merge";
+import { applyBlock, blockStates, mergeBlocks, mergeNonConflicting } from "./conflict-merge";
 
 describe("three-way conflict merging", () => {
+  it("tracks adjacent merged changes even when the line diff combines replacements", () => {
+    const base = "a\nb\nc\n";
+    const blocks = mergeBlocks(base, "A\nb\nc\n", "a\nB\nc\n");
+    const result = mergeNonConflicting(base, base, blocks);
+    expect(blockStates(base, result, blocks).map((state) => state.status)).toEqual(["merged", "merged"]);
+    expect(applyBlock(base, result, blocks[0]!, "theirs", blocks)).toBe("a\nB\nc\n");
+  });
+  it("distinguishes unresolved markers, chosen versions, and custom results", () => {
+    const blocks = mergeBlocks("base\n", "ours\n", "theirs\n");
+    expect(blockStates("base\n", "<<<<<<< HEAD\nours\n=======\ntheirs\n>>>>>>> branch\n", blocks)[0]!.status).toBe("conflict");
+    expect(blockStates("base\n", "ours\n", blocks)[0]!.status).toBe("merged");
+    expect(blockStates("base\n", "custom\n", blocks)[0]!.status).toBe("review");
+  });
   it("merges independent changes, including adjacent edits", () => {
     const base = "a\nb\nc\n";
     const blocks = mergeBlocks(base, "A\nb\nc\n", "a\nB\nc\n");
