@@ -154,11 +154,42 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .git-status.added, .git-status.untracked { color: #68b871; }
 .git-status.deleted { color: #d66c75; }
 .git-status.conflict { color: #e05f65; }
-.conflict-workspace { width: min(1050px, calc(100vw - 32px)); height: min(760px, calc(100vh - 32px)); display: flex; flex-direction: column; background: #2b2d30; border: 1px solid #505359; border-radius: 8px; box-shadow: 0 18px 50px rgba(0,0,0,.48); }
+.conflict-workspace { width: min(1440px, calc(100vw - 32px)); height: min(960px, calc(100vh - 32px)); display: flex; flex-direction: column; background: #2b2d30; border: 1px solid #505359; border-radius: 10px; box-shadow: 0 24px 80px rgba(0,0,0,.5); overflow: hidden; }
 .conflict-workspace > header, .conflict-actions { padding: 12px 14px; display: flex; align-items: center; justify-content: space-between; gap: 8px; border-bottom: 1px solid #44474c; }.conflict-workspace h2 { margin: 0; font-size: 1.08rem; }.conflict-workspace small, .conflict-workspace > aside { color: #aeb1b6; }
 .conflict-body { min-height: 0; flex: 1; display: grid; grid-template-columns: minmax(170px, 25%) 1fr; }.conflict-body nav { overflow: auto; border-right: 1px solid #44474c; }.conflict-body nav button { width: 100%; padding: 8px 10px; border: 0; background: transparent; color: #d5d7da; text-align: left; overflow-wrap: anywhere; }.conflict-body nav button.active { background: #374f76; color: white; }
-.conflict-body main { min-width: 0; min-height: 0; padding: 10px; display: flex; flex-direction: column; gap: 8px; }.conflict-versions { display: flex; gap: 5px; }.conflict-versions button.active { background: #3574f0; color: white; }.conflict-body textarea, .conflict-body pre { min-height: 0; flex: 1; margin: 0; padding: 10px; resize: none; overflow: auto; border: 1px solid #505359; background: #1f2023; color: #e4e5e7; font: 12px/1.5 var(--font-mono); white-space: pre; }.conflict-body main > footer { display: flex; flex-wrap: wrap; gap: 6px; }
+.conflict-body main { min-width: 0; min-height: 0; padding: 12px; display: flex; flex-direction: column; gap: 10px; overflow: auto; }.conflict-body main > footer { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
 .conflict-workspace > aside { padding: 9px 14px; border-top: 1px solid #44474c; line-height: 1.4; }.conflict-actions { justify-content: flex-end; border-top: 1px solid #44474c; border-bottom: 0; }.conflict-workspace button { min-height: 27px; border: 1px solid #505359; border-radius: 3px; background: #34363a; color: #d5d7da; cursor: pointer; }.conflict-workspace button:disabled { opacity: .45; cursor: default; }
+.conflict-workspace > header { gap: 12px; padding: 16px; }
+.conflict-workspace > header > svg { color: #8cb4ff; flex-shrink: 0; }
+.conflict-workspace > header > div { flex: 1; }
+.conflict-workspace > header small { display: block; margin-top: 5px; }
+.conflict-count { padding: 5px 9px; border-radius: 20px; background: #443b2b; color: #edc781; white-space: nowrap; }
+.conflict-body { grid-template-columns: minmax(150px, 19%) minmax(0, 1fr); }
+.conflict-nav-title { padding: 15px 12px 10px; color: #aeb1b6; font-size: 11px; text-transform: uppercase; letter-spacing: .06em; }
+.conflict-body nav button { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-radius: 0; }
+.conflict-body nav button svg { flex-shrink: 0; color: #edc781; }
+.conflict-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.conflict-toolbar > strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.conflict-toolbar label { flex-shrink: 0; color: #aeb1b6; font-size: 12px; }
+.conflict-toolbar select { padding: 5px 8px; border: 1px solid #505359; border-radius: 4px; color: #d5d7da; background: #34363a; }
+.conflict-comparison, .conflict-result { flex: 1; min-height: 180px; display: flex; flex-direction: column; overflow: hidden; border: 1px solid #44474c; border-radius: 6px; }
+.conflict-pane-labels { display: grid; grid-template-columns: 1fr 1fr; background: #26282b; }
+.conflict-pane-labels > span { display: flex; align-items: center; gap: 10px; padding: 9px 12px; border-top: 2px solid #858a93; text-transform: capitalize; }
+.conflict-pane-labels > .conflict-version-ours { border-color: #72b79a; }
+.conflict-pane-labels > .conflict-version-theirs { border-color: #88aaff; }
+.conflict-pane-labels small { font-size: 11px; text-transform: none; }
+.conflict-diff, .conflict-result-editor { position: relative; flex: 1; min-height: 0; }
+.conflict-result > header { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 8px 12px; background: #26282b; border-top: 2px solid #b79bea; }
+.conflict-result > header > div { display: flex; align-items: center; gap: 8px; }
+.conflict-result > header small, .conflict-body main > footer > span { font-size: 11px; color: #aeb1b6; }
+.conflict-body main > footer > span { margin-right: auto; }
+.conflict-workspace button.conflict-primary { display: inline-flex; align-items: center; justify-content: center; gap: 6px; background: #3574f0; border-color: #4a83f3; color: white; padding: 5px 10px; }
+.conflict-workspace button:not(:disabled):hover { filter: brightness(1.15); }
+.conflict-empty { flex: 1; display: flex; flex-direction: column; justify-content: center; align-items: center; text-align: center; color: #aeb1b6; }
+.conflict-empty > svg { color: #72b79a; }
+:root[data-theme="light"] .conflict-workspace { background: #f5f6f8; color: #30343b; }
+:root[data-theme="light"] .conflict-pane-labels, :root[data-theme="light"] .conflict-result > header { background: #e9ecf1; }
+@media (max-width: 800px) { .conflict-body { grid-template-columns: 150px minmax(0, 1fr); } .conflict-toolbar { flex-wrap: wrap; } .conflict-result > header small, .conflict-pane-labels small { display: none; } .conflict-workspace > header small { max-width: 38ch; } }
 .git-empty { padding: 18px 12px; color: #898c92; text-align: center; line-height: 1.5; }
 .stash-dialog { width: min(620px, calc(100vw - 32px)); max-height: 78vh; overflow: auto; background: #2b2d30; border: 1px solid #505359; border-radius: 8px; padding: 16px; display: grid; gap: 12px; box-shadow: 0 18px 50px rgba(0, 0, 0, .48); }.stash-dialog > header, .stash-dialog section > header, .stash-dialog footer { display: flex; justify-content: space-between; gap: 8px; }.stash-dialog section { display: grid; gap: 8px; }.stash-dialog input { padding: 6px; }.stash-dialog label { margin-right: 10px; }.stash-dialog section > button { text-align: left; }
 .git-empty.error { color: #d88a8f; text-align: left; }
