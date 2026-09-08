@@ -54,7 +54,7 @@ export function ModelPicker({ models, value, label, disabled, onChange }: { mode
     </button>
     {open && <div className="ai-model-menu" role="listbox" onKeyDown={keyDown}>
       <div className="ai-model-search"><Search size={13} /><input ref={searchRef} value={query} placeholder="Search models" onChange={(event) => { setQuery(event.target.value); setActive(0); }} /></div>
-      {hasCostMultipliers && <p className="ai-model-cost-help"><strong>Cost efficiency</strong> is the provider’s relative model-cost category. The × value is secondary legacy request guidance, not an AIC estimate; AIC cost depends on tokens, model pricing, and your Copilot plan.</p>}
+      {hasCostMultipliers && <p className="ai-model-cost-help"><strong>Cost</strong> is the provider’s relative cost category. The × multiplier applies only to legacy request-based Copilot plans; current AI Credit usage depends on tokens and model pricing.</p>}
       <div className="ai-model-list" ref={listRef}>
         {visible.length === 0 && <div className="ai-model-empty">No model matches “{query}”.</div>}
         {visible.map((model, index) => <div
@@ -90,18 +90,21 @@ function multiplierLabel(price?: string): string | undefined {
   const match = price?.match(/^([0-9]+(?:\.[0-9]+)?)x$/i);
   return match ? `${match[1]}×` : undefined;
 }
-function efficiencyLabel(tier?: string): string | undefined {
-  if (tier === "low") return "High efficiency";
-  if (tier === "medium") return "Balanced efficiency";
-  if (tier === "high") return "Low efficiency";
-  if (tier === "very_high") return "Very low efficiency";
+function costTierLabel(tier?: string): string | undefined {
+  if (tier === "low") return "Low cost";
+  if (tier === "medium") return "Medium cost";
+  if (tier === "high") return "High cost";
+  if (tier === "very_high") return "Very high cost";
   return tier ? `${tier.replace(/_/g, " ")} cost` : undefined;
 }
-function costLabel(model: AiModel): string { return [efficiencyLabel(model.priceTier), multiplierLabel(model.price) ?? model.price].filter(Boolean).join(" · "); }
+function costLabel(model: AiModel): string {
+  const multiplier = multiplierLabel(model.price);
+  return [costTierLabel(model.priceTier), multiplier ? `${multiplier} legacy` : model.price].filter(Boolean).join(" · ");
+}
 function priceTitle(model: AiModel): string {
   const multiplier = multiplierLabel(model.price);
   return multiplier
-    ? `${efficiencyLabel(model.priceTier) ?? "Provider-reported relative cost"}. ${multiplier} is legacy request guidance, not an AIC estimate. Actual AIC cost depends on tokens, model pricing, and your Copilot plan.`
+    ? `${costTierLabel(model.priceTier) ?? "Provider-reported relative cost"}. ${multiplier} applies only to legacy request-based Copilot plans. Current AI Credit usage depends on tokens and model pricing.`
     : `Provider-reported cost: ${model.price}${model.priceTier ? ` (${model.priceTier.replace(/_/g, " ")} relative cost)` : ""}`;
 }
 function contextTitle(model: AiModel): string { return `Context window: ${model.contextWindow?.toLocaleString()} tokens${model.maxContextWindow ? ` (up to ${model.maxContextWindow.toLocaleString()})` : ""}`; }
