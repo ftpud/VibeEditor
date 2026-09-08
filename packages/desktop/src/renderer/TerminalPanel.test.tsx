@@ -1,11 +1,24 @@
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { TerminalTab } from "./model";
-import { TerminalRecoveryNotice, TerminalTabButton } from "./TerminalPanel";
+import { focusTerminalIfUnchanged, TerminalRecoveryNotice, TerminalTabButton } from "./TerminalPanel";
 
 const tab: TerminalTab = { id: "tab-1", terminalId: "terminal-1", title: "Development server", status: "running" };
 
 afterEach(cleanup);
+
+describe("terminal focus", () => {
+  it("does not steal focus from an input after terminal activation was scheduled", () => {
+    const originalOwner = document.body;
+    const input = document.createElement("input");
+    document.body.append(input);
+    input.focus();
+    const focus = vi.fn();
+    focusTerminalIfUnchanged(originalOwner, focus);
+    expect(focus).not.toHaveBeenCalled();
+    input.remove();
+  });
+});
 
 describe("TerminalTabButton", () => {
   it("visibly identifies the owning root", () => {
