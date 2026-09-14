@@ -1,9 +1,13 @@
+import { execFile } from "node:child_process";
 import { mkdtemp, mkdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
 import { WorkspaceFileSystem } from "./filesystem.js";
 import { WorkspaceSearch } from "./search.js";
+
+const execFileAsync = promisify(execFile);
 
 describe("WorkspaceSearch", () => {
   it("searches recursively inside a selected directory", async () => {
@@ -23,6 +27,14 @@ describe("WorkspaceSearch", () => {
       truncatedBefore: false,
       truncatedAfter: false
     });
+  });
+
+  it("searches inside a directory Git reports as one embedded-repository entry", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "remote-ide-search-")); const nested = path.join(root, "nested");
+    await execFileAsync("git", ["init", "-q", root]); await mkdir(nested); await execFileAsync("git", ["init", "-q", nested]); await writeFile(path.join(nested, "a.txt"), "target\n");
+    const filesystem = new WorkspaceFileSystem(); await filesystem.open(root);
+    const result = await new WorkspaceSearch(filesystem).search("target", "nested", false);
+    expect(result.matches.map((match) => match.path)).toEqual(["nested/a.txt"]);
   });
 
   it("returns bounded surrounding context and marks omitted or shortened content", async () => {
