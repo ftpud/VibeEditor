@@ -51,7 +51,20 @@ export class WorkspaceSearch {
   }
 
   private validate(query: string, matchCase: boolean, filters: Filters): void { if (!query || query.length > 200 || typeof matchCase !== "boolean") throw new CoreError("INVALID_REQUEST", "Search query must contain 1 to 200 characters"); for (const value of [filters.include, filters.exclude]) if (value !== undefined && (typeof value !== "string" || value.length > 200)) throw new CoreError("INVALID_REQUEST", "Search glob must contain at most 200 characters"); }
-  private async filesForScope(root: string, scope: string, isFile: boolean, filters: Filters): Promise<string[]> { const scopePath = path.relative(root, scope).split(path.sep).join("/"); const visible = await gitVisiblePaths(root); if (visible) return [...visible].filter((relative) => (isFile ? relative === scopePath : !scopePath || relative.startsWith(`${scopePath}/`)) && matchesFilters(relative, filters)); const all = isFile ? [scope] : await this.collectFiles(scope); return all.map((absolute) => path.relative(root, absolute).split(path.sep).join("/")).filter((relative) => matchesFilters(relative, filters)); }
+  private async filesForScope(root: string, scope: string, isFile: boolean, filters: Filters): Promise<string[]> {
+    const scopePath = path.relative(root, scope).split(path.sep).join("/"); const visible = await gitVisiblePaths(root);
+    if (visible) {
+      const files: string[] = [];
+      for (const relative of visible) {
+        const normalized = relative.replace(/\/$/, "");
+        if (isFile ? normalized !== scopePath : scopePath && normalized !== scopePath && !normalized.startsWith(`${scopePath}/`)) continue;
+        const absolute = path.join(root, normalized);
+        try { const info = await stat(absolute); if (info.isDirectory()) files.push(...await this.collectFiles(absolute)); else if (info.isFile()) files.push(absolute); } catch { continue; }
+      }
+      return [...new Set(files.map((absolute) => path.relative(root, absolute).split(path.sep).join("/")))].filter((relative) => matchesFilters(relative, filters)).sort();
+    }
+    const all = isFile ? [scope] : await this.collectFiles(scope); return all.map((absolute) => path.relative(root, absolute).split(path.sep).join("/")).filter((relative) => matchesFilters(relative, filters));
+  }
   private contextFor(lines: string[], lineIndex: number): SearchMatchContext { const line = (index: number) => ({ line: index + 1, text: lines[index]!.slice(0, MAX_CONTEXT_LINE_LENGTH), truncated: lines[index]!.length > MAX_CONTEXT_LINE_LENGTH }); const beforeStart = Math.max(0, lineIndex - CONTEXT_LINES); const afterEnd = Math.min(lines.length, lineIndex + CONTEXT_LINES + 1); return { before: Array.from({ length: lineIndex - beforeStart }, (_, offset) => line(beforeStart + offset)), after: Array.from({ length: afterEnd - lineIndex - 1 }, (_, offset) => line(lineIndex + offset + 1)), truncatedBefore: beforeStart > 0, truncatedAfter: afterEnd < lines.length }; }
   private async collectFiles(directory: string): Promise<string[]> { const files: string[] = []; for (const entry of (await readdir(directory, { withFileTypes: true })).sort((a, b) => a.name.localeCompare(b.name))) { if (entry.name === ".git" || entry.name === ".vibe-trash") continue; const absolute = path.join(directory, entry.name); if (entry.isSymbolicLink()) continue; if (entry.isDirectory()) files.push(...await this.collectFiles(absolute)); else if (entry.isFile()) files.push(absolute); } return files; }
 }

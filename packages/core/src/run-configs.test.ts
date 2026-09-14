@@ -27,6 +27,14 @@ describe("RunConfigService", () => {
     expect(terminal.input).toHaveBeenCalledWith(workspace, "terminal-1", "printf 'faithful'\nexit $?\n"); await expect(service.run(workspace, "local", "dev")).rejects.toThrow("already active");
     service.onTerminalEvent({ type: "exit", workspace, terminalId: "terminal-1", exitCode: 0 }); expect(await service.read(workspace, "local", "dev")).toMatchObject({ status: "succeeded", exitCode: 0 });
   });
+  it("starts local and global configurations in the active workspace", async () => {
+    const { service, workspace, terminal } = await fixture();
+    await service.create(workspace, "local", "local", "pwd"); await service.run(workspace, "local", "local");
+    service.onTerminalEvent({ type: "exit", workspace, terminalId: "terminal-1", exitCode: 0 });
+    await service.create(workspace, "global", "global", "pwd"); await service.run(workspace, "global", "global");
+    expect(terminal.create).toHaveBeenNthCalledWith(1, workspace, 80, 24, path.resolve(workspace));
+    expect(terminal.create).toHaveBeenNthCalledWith(2, workspace, 80, 24, path.resolve(workspace));
+  });
   it("marks an active run interrupted when its terminal is explicitly closed", async () => {
     const { service, workspace } = await fixture(); await service.create(workspace, "local", "watch", "sleep 10"); await service.run(workspace, "local", "watch");
     service.onTerminalClosed(workspace, "terminal-1"); expect(await service.read(workspace, "local", "watch")).toMatchObject({ status: "failed", exitCode: 130 });
