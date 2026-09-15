@@ -1,11 +1,33 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AiSession } from "@remote-ide/protocol";
-import { AiPanel, ContextUsageIndicator, contextUsage } from "./AiPanel";
+import { AiPanel, ContextUsageIndicator, contextUsage, resolveAiLink } from "./AiPanel";
 
 afterEach(cleanup);
 
 const session = (id: string, prompt: string): AiSession => ({ id, model: "test", reasoning: "low", status: "done", messages: [{ id: `${id}-message`, role: "user", text: prompt, timestamp: "2026-08-30T12:00:00.000Z" }] });
+
+describe("chat links", () => {
+  it("resolves workspace files with line locations and rejects paths outside the workspace", () => {
+    expect(resolveAiLink("/work/project/src/App.tsx:42:7", "/work/project")).toEqual({ type: "file", path: "src/App.tsx", line: 42, column: 7 });
+    expect(resolveAiLink("packages/core/src/server.ts:10", "/work/project")).toEqual({ type: "file", path: "packages/core/src/server.ts", line: 10 });
+    expect(resolveAiLink("README.md:5", "/work/project")).toEqual({ type: "file", path: "README.md", line: 5 });
+    expect(resolveAiLink("/work/other/secret.txt:1", "/work/project")).toEqual({ type: "unsupported" });
+  });
+
+  it("prevents renderer navigation and routes file and web links", () => {
+    const onOpenFile = vi.fn();
+    const onOpenExternal = vi.fn();
+    const conversation: AiSession = { id: "one", model: "test", reasoning: "low", status: "done", messages: [{ id: "answer", role: "assistant", text: "[Source](/work/project/src/App.tsx:42) [Docs](https://example.com/)", timestamp: "2026-08-30T12:00:00.000Z" }] };
+    render(<AiPanel provider="codex" providers={[]} session={conversation} sessions={[conversation]} models={[]} attachments={[]} workspacePath="/work/project" permissionOwner={{ provider: "codex" }} onProviderChange={vi.fn()} onConfigurationChange={vi.fn()} onAttachmentsChange={vi.fn()} onSend={vi.fn()} onSteer={vi.fn()} onInterrupt={vi.fn()} onNewSession={vi.fn()} onSwitchSession={vi.fn()} onRemoveSession={vi.fn()} onResolvePermission={vi.fn()} onOpenFile={onOpenFile} onOpenExternal={onOpenExternal} />);
+    const click = new MouseEvent("click", { bubbles: true, cancelable: true });
+    screen.getByRole("link", { name: "Source" }).dispatchEvent(click);
+    fireEvent.click(screen.getByRole("link", { name: "Docs" }));
+    expect(click.defaultPrevented).toBe(true);
+    expect(onOpenFile).toHaveBeenCalledWith("src/App.tsx", 42, undefined);
+    expect(onOpenExternal).toHaveBeenCalledWith("https://example.com/");
+  });
+});
 
 describe("context usage indicator", () => {
   it("calculates and clamps the active session percentage", () => {
