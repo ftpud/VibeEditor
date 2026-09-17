@@ -4,9 +4,9 @@ import { assertRequestRoot, assertRootRemovalAllowed, assertSessionChangeAllowed
 
 describe("protocol handshake", () => {
   it("accepts overlapping ranges and describes incompatible Desktops", () => {
-    expect(protocolHandshake({ minimum: 3, maximum: 3 })).toMatchObject({ compatible: true, compatibility: { minimum: 3, maximum: 3 } });
-    expect(protocolHandshake({ minimum: 2, maximum: 2 })).toEqual({ compatible: false, compatibility: { minimum: 3, maximum: 3 }, message: "Core supports protocol 3-3; this Desktop supports 2-2" });
-    expect(protocolHandshake({ minimum: 3, maximum: 1 }).compatible).toBe(false);
+    expect(protocolHandshake({ minimum: 4, maximum: 4 })).toMatchObject({ compatible: true, compatibility: { minimum: 4, maximum: 4 } });
+    expect(protocolHandshake({ minimum: 3, maximum: 3 })).toEqual({ compatible: false, compatibility: { minimum: 4, maximum: 4 }, message: "Core supports protocol 4-4; this Desktop supports 3-3" });
+    expect(protocolHandshake({ minimum: 4, maximum: 1 }).compatible).toBe(false);
   });
 });
 
