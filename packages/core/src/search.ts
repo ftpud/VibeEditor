@@ -9,7 +9,7 @@ import { WorkspaceFileSystem } from "./filesystem.js";
 
 const execFileAsync = promisify(execFile);
 const MAX_RESULTS = 500; const MAX_PREVIEW_FILES = 100; const CONTEXT_LINES = 2; const MAX_PREVIEW_LENGTH = 300; const MAX_CONTEXT_LINE_LENGTH = 200;
-type Filters = { include?: string; exclude?: string };
+type Filters = { include?: string; exclude?: string; filesOnly?: boolean };
 type Replacement = { files: { path: string; revision: FileRevision; content: string }[] };
 type LocalSearchResult = Omit<SearchResult, "rootId">;
 
@@ -35,9 +35,11 @@ export class WorkspaceSearch {
     for (const relativePath of files) {
       let content: string; try { content = (await this.filesystem.read(relativePath)).content; } catch { continue; }
       const lines = content.split(/\r?\n/);
+      let fileMatched = false;
       for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
         const line = lines[lineIndex]!; const haystack = matchCase ? line : line.toLocaleLowerCase(); let column = haystack.indexOf(needle);
-        while (column >= 0) { const preview = line.trim(); matches.push({ path: relativePath, line: lineIndex + 1, column: column + 1, preview: preview.slice(0, MAX_PREVIEW_LENGTH), previewTruncated: preview.length > MAX_PREVIEW_LENGTH, context: this.contextFor(lines, lineIndex) }); if (matches.length >= MAX_RESULTS) return { matches, truncated: true }; column = haystack.indexOf(needle, column + needle.length); }
+        while (column >= 0) { const preview = line.trim(); matches.push({ path: relativePath, line: lineIndex + 1, column: column + 1, preview: preview.slice(0, MAX_PREVIEW_LENGTH), previewTruncated: preview.length > MAX_PREVIEW_LENGTH, context: this.contextFor(lines, lineIndex) }); if (matches.length >= MAX_RESULTS) return { matches, truncated: true }; if (filters.filesOnly) { fileMatched = true; break; } column = haystack.indexOf(needle, column + needle.length); }
+        if (fileMatched) break;
       }
     }
     return { matches, truncated: false };
@@ -61,7 +63,7 @@ export class WorkspaceSearch {
     return { applied, failures };
   }
 
-  private validate(query: string, matchCase: boolean, filters: Filters): void { if (!query || query.length > 200 || typeof matchCase !== "boolean") throw new CoreError("INVALID_REQUEST", "Search query must contain 1 to 200 characters"); for (const value of [filters.include, filters.exclude]) if (value !== undefined && (typeof value !== "string" || value.length > 200)) throw new CoreError("INVALID_REQUEST", "Search glob must contain at most 200 characters"); }
+  private validate(query: string, matchCase: boolean, filters: Filters): void { if (!query || query.length > 200 || typeof matchCase !== "boolean") throw new CoreError("INVALID_REQUEST", "Search query must contain 1 to 200 characters"); if (filters.filesOnly !== undefined && typeof filters.filesOnly !== "boolean") throw new CoreError("INVALID_REQUEST", "filesOnly must be a boolean"); for (const value of [filters.include, filters.exclude]) if (value !== undefined && (typeof value !== "string" || value.length > 200)) throw new CoreError("INVALID_REQUEST", "Search glob must contain at most 200 characters"); }
   private async filesForScope(root: string, scope: string, isFile: boolean, filters: Filters): Promise<string[]> {
     const scopePath = path.relative(root, scope).split(path.sep).join("/"); const visible = await gitVisiblePaths(root);
     if (visible) {

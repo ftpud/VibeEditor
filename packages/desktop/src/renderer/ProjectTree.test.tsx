@@ -2,7 +2,7 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { FileTreeNode } from "@remote-ide/protocol";
 import { useState } from "react";
-import { ProjectTree, compactProjectTree, filterProjectTree } from "./ProjectTree";
+import { ProjectTree, compactProjectTree, filterProjectTree, filterProjectTreeByPaths } from "./ProjectTree";
 
 const nodes: FileTreeNode[] = [{
   name: "src", path: "src", type: "directory", children: [
@@ -29,6 +29,13 @@ describe("ProjectTree", () => {
     const compacted = compactProjectTree(nodes);
     expect(compacted[0]).toMatchObject({ name: "src", path: "src" });
     expect(compacted[0]?.children?.[0]).toMatchObject({ name: "components", path: "src/components" });
+  });
+
+  it("keeps directory context when filtering by content-matched file paths", () => {
+    expect(filterProjectTreeByPaths(nodes, new Set(["src/components/Tree.tsx"]))).toEqual([expect.objectContaining({
+      path: "src",
+      children: [expect.objectContaining({ path: "src/components", children: [expect.objectContaining({ path: "src/components/Tree.tsx" })] })]
+    })]);
   });
 
   it("keeps stable ctrl and shift multi-selection across visible rows", () => {

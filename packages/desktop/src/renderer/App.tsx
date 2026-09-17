@@ -141,6 +141,9 @@ export function App() {
   const showStatus = useCallback((message: string, kind: StatusKind) => { setStatusKind(kind); setStatusMessageState(message); }, []);
   const [tree, setTree] = useState<FileTreeNode[]>([]);
   const [projectFilter, setProjectFilter] = useState("");
+  const [projectContentFilter, setProjectContentFilter] = useState(false);
+  const [projectContentPaths, setProjectContentPaths] = useState<Set<string>>();
+  const [projectContentFilterLoading, setProjectContentFilterLoading] = useState(false);
   const [showIgnored, setShowIgnored] = useState(() => readSetting("showIgnoredFiles") === "true");
   const showIgnoredRef = useRef(showIgnored);
   const [layout, setLayout] = useState<LayoutModel>(initialLayout);
@@ -287,6 +290,7 @@ export function App() {
   const [externalConflict, setExternalConflict] = useState<{ tabId: string; path: string; externalContent: string; externalRevision: FileRevision; error?: string }>();
   const [pendingNavigation, setPendingNavigation] = useState<{ result: SearchResult; matchLength: number }>();
   const clientRef = useRef<CoreClient>();
+  const projectContentFilterVersion = useRef(0);
   const gitRollbackRunningRef = useRef(false);
   const aiProviderRef = useRef<AiProvider>(readSetting("aiProvider") === "copilot" ? "copilot" : "codex");
   const didAutoConnect = useRef(false);
@@ -341,6 +345,23 @@ export function App() {
   useEffect(() => {
     document.title = status === "connected" && projectName ? `${projectName} — Vibe Editor` : "Vibe Editor";
   }, [projectName, status]);
+  useEffect(() => {
+    const version = ++projectContentFilterVersion.current;
+    const searchQuery = projectFilter.trim();
+    if (!projectContentFilter || !searchQuery || status !== "connected") { setProjectContentPaths(undefined); setProjectContentFilterLoading(false); return; }
+    const client = clientRef.current;
+    if (!client) return;
+    const rootId = client.getRoot();
+    setProjectContentFilterLoading(true);
+    const timer = window.setTimeout(() => {
+      void client.request("filesystem.search", { query: searchQuery, path: "", matchCase: false, filesOnly: true }).then((result) => {
+        if (version === projectContentFilterVersion.current && clientRef.current === client && client.getRoot() === rootId) setProjectContentPaths(new Set(result.matches.map((match) => match.path)));
+      }).catch((filterError: unknown) => {
+        if (version === projectContentFilterVersion.current) { setProjectContentPaths(new Set()); setStatusMessage(filterError instanceof Error ? filterError.message : "Could not filter file contents"); }
+      }).finally(() => { if (version === projectContentFilterVersion.current) setProjectContentFilterLoading(false); });
+    }, 300);
+    return () => window.clearTimeout(timer);
+  }, [projectContentFilter, projectFilter, selectedRootId, selectedTaskId, status, setStatusMessage]);
   useEffect(() => { window.desktop?.setDirtyState(hasDirtyTabs); }, [hasDirtyTabs]);
   useEffect(() => { layoutRef.current = layout; }, [layout]);
   useEffect(() => { javaOptionsRef.current = javaOptions; }, [javaOptions]);
@@ -2397,9 +2418,9 @@ export function App() {
       <aside className="side-panel classic-left-panel" style={{ width: classicLeftWidth }}>
         {classicSideView === "project" ? <>
           <header className="panel-header"><span>Project</span><div className="panel-header-actions"><button title={showIgnored ? "Hide ignored files" : "Show all files (including Git-ignored)"} className={showIgnored ? "active" : ""} onClick={toggleShowIgnored}>{showIgnored ? <Eye size={14} /> : <EyeOff size={14} />}</button><button title="Synchronize files" onClick={() => void refreshTree()}><RefreshCw size={14} /></button></div></header>
-          <QuickFilter value={projectFilter} placeholder="Filter files" label="Filter project files" onChange={setProjectFilter} />
+          <QuickFilter value={projectFilter} placeholder={projectContentFilter ? "Filter by file contents" : "Filter files"} label={projectContentFilter ? "Filter files by contents" : "Filter project files"} onChange={setProjectFilter} contentSearch={projectContentFilter} contentSearchLoading={projectContentFilterLoading} onContentSearchChange={setProjectContentFilter} />
           <div className="workspace-name"><select aria-label="Workspace root" value={selectedRootId} disabled={taskSwitching} onChange={(event) => void selectWorkspaceRoot(event.target.value)}>{workspaceRoots.map((root) => <option key={root.id} value={root.id}>{root.alias}</option>)}</select><button title="Add remote workspace root" onClick={() => setWorkspaceRootDialogOpen(true)}><Plus size={13} /></button><button title="Unregister an inactive workspace root" disabled={!workspaceRoots.some((root) => !root.primary && root.id !== selectedRootId)} onClick={() => void removeWorkspaceRoot()}><Trash2 size={13} /></button></div>
-          <ProjectTree nodes={tree} query={projectFilter} activePath={activeTab?.path} selectedPaths={projectSelection} fileColors={fileColors} gitStatuses={projectGitStatuses} onAction={runProjectTreeAction} onSelectionChange={setProjectSelection} onContextMenu={(nodes, x, y) => setTreeContextMenu({ x: Math.min(x, window.innerWidth - 220), y: Math.min(y, window.innerHeight - 180), nodes })} />
+          <ProjectTree nodes={tree} query={projectContentFilter ? "" : projectFilter} matchingPaths={projectContentFilter && projectFilter.trim() ? projectContentPaths ?? new Set() : undefined} activePath={activeTab?.path} selectedPaths={projectSelection} fileColors={fileColors} gitStatuses={projectGitStatuses} onAction={runProjectTreeAction} onSelectionChange={setProjectSelection} onContextMenu={(nodes, x, y) => setTreeContextMenu({ x: Math.min(x, window.innerWidth - 220), y: Math.min(y, window.innerHeight - 180), nodes })} />
         </> : classicSideView === "git" ? <>
           <header className="panel-header"><span>Git Changes</span><div className="panel-header-actions"><button title="Stash manager" onClick={() => setGitStashDialog(true)}><Archive size={14} /></button><GitToolbarActions selectedCount={selectedRollbackEntries.length} operationRunning={gitOperationRunning} pushing={gitPushing} fetching={gitFetching} rollingBack={gitRollingBack} upstream={gitUpstream} onRollbackSelected={openRollbackSelected} onUndoLastCommit={() => void previewHistoryRewrite("undo")} onPush={() => void pushGit()} onFetch={() => void fetchGit()} onRefresh={() => void refreshGit()} /></div></header><div className="git-branch"><GitBranch size={13} /><span>{gitBranch}</span>{gitUpstream && <small title={gitUpstream.lastFetch ? `Last fetched ${new Date(gitUpstream.lastFetch).toLocaleString()}` : "Not fetched in this Core session"}>{gitUpstream.upstream} · {gitUpstream.ahead} ahead · {gitUpstream.behind} behind</small>}</div>
           <KeyboardGitChangesView entries={gitEntries} error={gitError} selectedPaths={selectedGitPaths} onTogglePath={(path) => setSelectedGitPaths((current) => { const next = new Set(current); next.has(path) ? next.delete(path) : next.add(path); return next; })} activePath={activeTab?.path} onOpenDiff={openDiff} onOpenConflict={(entry) => setGitConflictPath(entry.path)} onOpenFile={(entry) => void openFile({ name: entry.path.split("/").pop() ?? entry.path, path: entry.path, type: "file" })} onContextMenu={(event, entry) => { event.preventDefault(); setGitRollbackMenu({ ...menuPosition(event.clientX, event.clientY, 220, 100, window.innerWidth, window.innerHeight), entry }); }} />
@@ -2453,9 +2474,9 @@ export function App() {
       <aside className="side-panel side-panel-right" style={{ width: rightSidebarWidth }}><ResizablePanelStack workspace={activeWorkspace} setting="focused.rightSizes" ids={[...(rightPanels.project ? ["project"] : []), ...(rightPanels.git ? ["git"] : []), ...(rightPanels.taskGit && selectedTaskId ? ["taskGit"] : []), ...(rightPanels.promptHistory && selectedTaskId ? ["promptHistory"] : []), ...(rightPanels.java && javaOptions ? ["java"] : []), ...(rightPanels.useful ? ["useful"] : []), ...(rightPanels.agents ? ["agents"] : [])]}>
         {rightPanels.project && <section key="project" className="stacked-panel">
           <header className="panel-header"><span>Project</span><div className="panel-header-actions"><button title={showIgnored ? "Hide ignored files" : "Show all files (including Git-ignored)"} className={showIgnored ? "active" : ""} onClick={toggleShowIgnored}>{showIgnored ? <Eye size={14} /> : <EyeOff size={14} />}</button><button title="Synchronize files" onClick={() => void refreshTree()}><RefreshCw size={14} /></button></div></header>
-          <QuickFilter value={projectFilter} placeholder="Filter files" label="Filter project files" onChange={setProjectFilter} />
+          <QuickFilter value={projectFilter} placeholder={projectContentFilter ? "Filter by file contents" : "Filter files"} label={projectContentFilter ? "Filter files by contents" : "Filter project files"} onChange={setProjectFilter} contentSearch={projectContentFilter} contentSearchLoading={projectContentFilterLoading} onContentSearchChange={setProjectContentFilter} />
           <div className="workspace-name"><select aria-label="Workspace root" value={selectedRootId} disabled={taskSwitching} onChange={(event) => void selectWorkspaceRoot(event.target.value)}>{workspaceRoots.map((root) => <option key={root.id} value={root.id}>{root.alias}</option>)}</select><button title="Add remote workspace root" onClick={() => setWorkspaceRootDialogOpen(true)}><Plus size={13} /></button><button title="Unregister an inactive workspace root" disabled={!workspaceRoots.some((root) => !root.primary && root.id !== selectedRootId)} onClick={() => void removeWorkspaceRoot()}><Trash2 size={13} /></button></div>
-          <ProjectTree nodes={tree} query={projectFilter} activePath={activeTab?.path} selectedPaths={projectSelection} fileColors={fileColors} gitStatuses={projectGitStatuses} onAction={runProjectTreeAction} onSelectionChange={setProjectSelection} onContextMenu={(nodes, x, y) => setTreeContextMenu({ x: Math.min(x, window.innerWidth - 220), y: Math.min(y, window.innerHeight - 180), nodes })} />
+          <ProjectTree nodes={tree} query={projectContentFilter ? "" : projectFilter} matchingPaths={projectContentFilter && projectFilter.trim() ? projectContentPaths ?? new Set() : undefined} activePath={activeTab?.path} selectedPaths={projectSelection} fileColors={fileColors} gitStatuses={projectGitStatuses} onAction={runProjectTreeAction} onSelectionChange={setProjectSelection} onContextMenu={(nodes, x, y) => setTreeContextMenu({ x: Math.min(x, window.innerWidth - 220), y: Math.min(y, window.innerHeight - 180), nodes })} />
         </section>}
         {rightPanels.git && <section key="git" className="stacked-panel">
           <header className="panel-header"><span>Git Changes</span><div className="panel-header-actions"><button title="Stash manager" onClick={() => setGitStashDialog(true)}><Archive size={14} /></button><GitToolbarActions selectedCount={selectedRollbackEntries.length} operationRunning={gitOperationRunning} pushing={gitPushing} fetching={gitFetching} rollingBack={gitRollingBack} upstream={gitUpstream} onRollbackSelected={openRollbackSelected} onUndoLastCommit={() => void previewHistoryRewrite("undo")} onPush={() => void pushGit()} onFetch={() => void fetchGit()} onRefresh={() => void refreshGit()} /></div></header>
@@ -2674,8 +2695,8 @@ function ResizablePanelStack({ children, workspace, setting, ids }: { children: 
   return <div className="resizable-panel-stack" ref={rootRef}>{items.map((item, index) => <div className="resizable-panel-item" key={isValidElement(item) && item.key != null ? item.key : index} style={{ flexGrow: sizes[index] ?? 1 / Math.max(1, items.length) }}>{item}{index < items.length - 1 && <div className="focused-panel-divider" role="separator" aria-label={`Resize ${ids[index] ?? "upper"} panel`} aria-orientation="horizontal" aria-valuemin={10} aria-valuemax={90} aria-valuenow={Math.round((sizes[index] ?? .5) * 100)} tabIndex={0} onKeyDown={(event) => keyboardStackResize(event, index)} onPointerDown={(event) => beginResize(event, index)} />}</div>)}</div>;
 }
 
-function QuickFilter({ value, placeholder, label, onChange }: { value: string; placeholder: string; label: string; onChange(value: string): void }) {
-  return <div className="quick-filter"><Search size={13} /><input aria-label={label} value={value} placeholder={placeholder} onChange={(event) => onChange(event.target.value)} />{value && <button title="Clear filter" aria-label="Clear filter" onClick={() => onChange("")}><X size={12} /></button>}</div>;
+function QuickFilter({ value, placeholder, label, onChange, contentSearch, contentSearchLoading, onContentSearchChange }: { value: string; placeholder: string; label: string; onChange(value: string): void; contentSearch?: boolean; contentSearchLoading?: boolean; onContentSearchChange?(enabled: boolean): void }) {
+  return <div className="quick-filter"><Search size={13} /><input aria-label={label} value={value} placeholder={placeholder} onChange={(event) => onChange(event.target.value)} />{value && <button title="Clear filter" aria-label="Clear filter" onClick={() => onChange("")}><X size={12} /></button>}{onContentSearchChange && <button className={contentSearch ? "active" : ""} title={contentSearch ? "Filter by file name" : "Filter by file contents"} aria-label="Filter by file contents" aria-pressed={contentSearch} onClick={() => onContentSearchChange(!contentSearch)}>{contentSearchLoading ? <LoaderCircle className="quick-filter-spinner" size={13} /> : <FileText size={13} />}</button>}</div>;
 }
 
 
