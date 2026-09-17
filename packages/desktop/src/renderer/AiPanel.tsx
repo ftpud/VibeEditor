@@ -11,6 +11,41 @@ export type AiAttachment = { id: string; name: string; path?: string; content?: 
 
 export type ContextUsage = { used: number; limit: number; percent: number };
 
+type AiLink = { type: "external"; url: string } | { type: "file"; path: string; line?: number; column?: number } | { type: "unsupported" };
+
+export function resolveAiLink(href: string, workspacePath = ""): AiLink {
+  if (/^https?:/i.test(href)) {
+    try { return { type: "external", url: new URL(href).toString() }; }
+    catch { return { type: "unsupported" }; }
+  }
+  let value = href.split(/[?#]/, 1)[0] ?? "";
+  const location = value.match(/:(\d+)(?::(\d+))?$/);
+  if (location) value = value.slice(0, location.index);
+  if (/^[a-z][a-z+.-]*:/i.test(value) && !/^file:/i.test(value)) return { type: "unsupported" };
+  try {
+    if (/^file:/i.test(value)) {
+      const url = new URL(value);
+      if (url.host) return { type: "unsupported" };
+      value = decodeURIComponent(url.pathname);
+    } else value = decodeURIComponent(value);
+  } catch { return { type: "unsupported" }; }
+  value = value.replaceAll("\\", "/");
+  const workspace = workspacePath.replaceAll("\\", "/").replace(/\/$/, "");
+  if (value.startsWith("/")) {
+    if (!workspace || (value !== workspace && !value.startsWith(`${workspace}/`))) return { type: "unsupported" };
+    value = value.slice(workspace.length + 1);
+  }
+  const parts: string[] = [];
+  for (const part of value.split("/")) {
+    if (!part || part === ".") continue;
+    if (part === "..") { if (!parts.length) return { type: "unsupported" }; parts.pop(); }
+    else parts.push(part);
+  }
+  const path = parts.join("/");
+  if (!path) return { type: "unsupported" };
+  return { type: "file", path, ...(location ? { line: Number(location[1]), ...(location[2] ? { column: Number(location[2]) } : {}) } : {}) };
+}
+
 /** Context accounting belongs to the active agent session, never account-rate quotas. */
 export function contextUsage(session: AiSession): ContextUsage | undefined {
   const { contextUsed: used, contextLimit: limit } = session;
@@ -26,7 +61,7 @@ export function ContextUsageIndicator({ session }: { session: AiSession }) {
   return <span className={`ai-context-usage${percent >= 80 ? " near-full" : ""}`} role="img" aria-label={label} title={label} style={{ "--context-usage": `${value.percent}%` } as React.CSSProperties} />;
 }
 
-export function AiPanel({ provider, providers, session, sessions, models, usage, attachments, draft = "", permissionOwner, permissionActionsDisabled, sessionChangesDisabled, onProviderChange, onConfigurationChange, onAttachmentsChange, onDraftChange = () => undefined, onSend, onSendAsTask, onSteer, onInterrupt, onNewSession, onSwitchSession, onRemoveSession, onResolvePermission }: { provider: AiProvider; providers: AiProviderDescriptor[]; session: AiSession; sessions: AiSession[]; models: AiModel[]; usage?: AiUsage; attachments: AiAttachment[]; draft?: string; permissionOwner: PermissionRequestOwner; permissionActionsDisabled?: boolean; sessionChangesDisabled?: boolean; onProviderChange(provider: AiProvider): void; onConfigurationChange(configuration: AiConfiguration): void; onAttachmentsChange(attachments: AiAttachment[]): void; onDraftChange?(draft: string): void; onSend(prompt: string, configuration: AiConfiguration, attachments: AiAttachment[]): Promise<void>; onSendAsTask?: (prompt: string, configuration: AiConfiguration, attachments: AiAttachment[]) => Promise<void>; onSteer(prompt: string): Promise<void>; onInterrupt(): void; onNewSession(): void; onSwitchSession(session: AiSession): void; onRemoveSession(session: AiSession): void; onResolvePermission(owner: PermissionRequestOwner, requestId: string, optionId?: string): Promise<void> }) {
+export function AiPanel({ provider, providers, session, sessions, models, usage, attachments, draft = "", workspacePath = "", permissionOwner, permissionActionsDisabled, sessionChangesDisabled, onProviderChange, onConfigurationChange, onAttachmentsChange, onDraftChange = () => undefined, onSend, onSendAsTask, onSteer, onInterrupt, onNewSession, onSwitchSession, onRemoveSession, onResolvePermission, onOpenFile = () => undefined, onOpenExternal = () => undefined, onOpenTerminal = (terminalId) => new Promise<boolean>((resolve) => window.dispatchEvent(new CustomEvent("vibe:open-terminal", { detail: { terminalId, resolve } }))) }: { provider: AiProvider; providers: AiProviderDescriptor[]; session: AiSession; sessions: AiSession[]; models: AiModel[]; usage?: AiUsage; attachments: AiAttachment[]; draft?: string; workspacePath?: string; permissionOwner: PermissionRequestOwner; permissionActionsDisabled?: boolean; sessionChangesDisabled?: boolean; onProviderChange(provider: AiProvider): void; onConfigurationChange(configuration: AiConfiguration): void; onAttachmentsChange(attachments: AiAttachment[]): void; onDraftChange?(draft: string): void; onSend(prompt: string, configuration: AiConfiguration, attachments: AiAttachment[]): Promise<void>; onSendAsTask?: (prompt: string, configuration: AiConfiguration, attachments: AiAttachment[]) => Promise<void>; onSteer(prompt: string): Promise<void>; onInterrupt(): void; onNewSession(): void; onSwitchSession(session: AiSession): void; onRemoveSession(session: AiSession): void; onResolvePermission(owner: PermissionRequestOwner, requestId: string, optionId?: string): Promise<void>; onOpenFile?(path: string, line?: number, column?: number): void; onOpenExternal?(url: string): void; onOpenTerminal?(terminalId: string): Promise<boolean> }) {
   const [prompt, setPrompt] = useState(draft);
   const [model, setModel] = useState(session.model);
   const [reasoning, setReasoning] = useState(session.reasoning);
@@ -134,7 +169,7 @@ export function AiPanel({ provider, providers, session, sessions, models, usage,
     </section>}
     <div className="ai-messages" ref={messagesRef} onScroll={(event) => { const element = event.currentTarget; pinnedRef.current = element.scrollHeight - element.scrollTop - element.clientHeight < 40; }}>
       {session.messages.length === 0 && !submitting && <div className="ai-empty">Start a {providerName} task for this workspace.</div>}
-      {session.messages.map((message, index) => message.role === "activity" ? <ActivityMessage key={`${message.id}:${index}`} text={message.text} content={message.content} /> : <article key={`${message.id}:${index}`} className={`ai-message ${message.role}`}><header>{message.role === "user" ? (message.senderModel ? modelName(models, message.senderModel) : "You") : message.role === "assistant" ? `${providerName} · ${modelName(models, message.model ?? session.model)}` : "Error"}</header><div>{message.role === "assistant" ? <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.text}</ReactMarkdown> : <pre>{message.text}</pre>}<RichContent content={message.content} /></div></article>)}
+      {session.messages.map((message, index) => message.role === "activity" ? <ActivityMessage key={`${message.id}:${index}`} text={message.text} content={message.content} terminalId={message.terminalId} onOpenTerminal={onOpenTerminal} onFollowLink={(href) => followAiLink(href, workspacePath, onOpenFile, onOpenExternal)} /> : <article key={`${message.id}:${index}`} className={`ai-message ${message.role}`}><header>{message.role === "user" ? (message.senderModel ? modelName(models, message.senderModel) : "You") : message.role === "assistant" ? `${providerName} · ${modelName(models, message.model ?? session.model)}` : "Error"}</header><div>{message.role === "assistant" ? <ChatMarkdown onFollowLink={(href) => followAiLink(href, workspacePath, onOpenFile, onOpenExternal)}>{message.text}</ChatMarkdown> : <pre>{message.text}</pre>}<RichContent content={message.content} onFollowLink={(href) => followAiLink(href, workspacePath, onOpenFile, onOpenExternal)} /></div></article>)}
       {session.pendingPermission && <PermissionRequestActions request={session.pendingPermission} owner={permissionOwner} disabled={permissionActionsDisabled} onResolve={onResolvePermission} />}
       {submitting && !running && <div className="ai-working ai-connecting" role="status" aria-live="polite"><span />Connecting to {providerName}...</div>}
       {running && <div className="ai-working" role="status" aria-live="polite"><span />{providerName} is working...</div>}
@@ -175,7 +210,8 @@ function selectValue(option: { choices?: { value: string }[]; defaultValue: stri
   return option.choices?.some((choice) => choice.value === current) ? current : String(option.defaultValue);
 }
 
-function ActivityMessage({ text, content }: { text: string; content?: AiContentBlock[] }) {
+function ActivityMessage({ text, content, terminalId, onOpenTerminal, onFollowLink }: { text: string; content?: AiContentBlock[]; terminalId?: string; onOpenTerminal(terminalId: string): Promise<boolean>; onFollowLink(href: string): void }) {
+  const [stale, setStale] = useState(false);
   const [firstLine, ...output] = text.split("\n");
   const summary = firstLine?.trim() || "Execution details";
   const reasoning = summary === "Reasoning";
@@ -189,12 +225,22 @@ function ActivityMessage({ text, content }: { text: string; content?: AiContentB
     </details>;
   }
   return <><details className="ai-activity">
-    <summary><span>Execution</span><code>{summary}</code></summary>
+    <summary><span>Execution</span><code>{summary}</code>{terminalId && <button type="button" title={stale ? "Terminal is no longer available" : "Open this activity's terminal"} disabled={stale} onClick={(event) => { event.preventDefault(); event.stopPropagation(); void onOpenTerminal(terminalId).then((opened) => { if (!opened) setStale(true); }); }}>Terminal{stale ? " unavailable" : ""}</button>}</summary>
     <pre>{output.length > 0 ? output.join("\n") : text}</pre>
-  </details><RichContent content={content} /></>;
+  </details><RichContent content={content} onFollowLink={onFollowLink} /></>;
 }
 
-function RichContent({ content }: { content?: AiContentBlock[] }) { return <>{content?.map((block, index) => block.type === "image" ? <img className="ai-content-image" key={index} src={`data:${block.mimeType};base64,${block.data}`} alt={block.name ?? "ACP image output"} /> : block.type === "resource" || block.type === "resource_link" ? <a className="ai-content-resource" key={index} href={block.uri} title={block.uri}>{block.type === "resource_link" ? block.name : block.name ?? block.uri}</a> : null)}</>; }
+function RichContent({ content, onFollowLink }: { content?: AiContentBlock[]; onFollowLink(href: string): void }) { return <>{content?.map((block, index) => block.type === "image" ? <img className="ai-content-image" key={index} src={`data:${block.mimeType};base64,${block.data}`} alt={block.name ?? "ACP image output"} /> : block.type === "resource" || block.type === "resource_link" ? <a className="ai-content-resource" key={index} href={block.uri} title={block.uri} onClick={(event) => { event.preventDefault(); onFollowLink(block.uri); }}>{block.type === "resource_link" ? block.name : block.name ?? block.uri}</a> : null)}</>; }
+
+function followAiLink(href: string, workspacePath: string, onOpenFile: (path: string, line?: number, column?: number) => void, onOpenExternal: (url: string) => void) {
+  const link = resolveAiLink(href, workspacePath);
+  if (link.type === "external") onOpenExternal(link.url);
+  else if (link.type === "file") onOpenFile(link.path, link.line, link.column);
+}
+
+function ChatMarkdown({ children, onFollowLink }: { children: string; onFollowLink(href: string): void }) {
+  return <ReactMarkdown remarkPlugins={[remarkGfm]} components={{ a: ({ href, children: label, ...props }) => <a {...props} href={href} onClick={(event) => { event.preventDefault(); if (href) onFollowLink(href); }}>{label}</a> }}>{children}</ReactMarkdown>;
+}
 
 function ReasoningMarkdown({ children }: { children: string }) {
   return <ReactMarkdown remarkPlugins={[remarkGfm]} components={{ strong: ({ children: value }) => <em>{value}</em> }}>{children}</ReactMarkdown>;

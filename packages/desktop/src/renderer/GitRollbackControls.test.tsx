@@ -4,35 +4,56 @@ import type { GitStatusEntry } from "@remote-ide/protocol";
 import { GitToolbarActions, RollbackSelectedDialog, executeRollbackSelection, selectedGitEntries, shouldApplyGitStatus } from "./GitRollbackControls";
 
 const noop = () => {};
-const entry = (path: string, indexStatus = " ", worktreeStatus = "M"): GitStatusEntry => ({ path, indexStatus, worktreeStatus });
+const entry = (path: string, indexStatus = " ", worktreeStatus = "M"): GitStatusEntry => ({ path, indexStatus, worktreeStatus, states: indexStatus === "?" ? ["untracked"] : indexStatus !== " " ? ["index"] : ["worktree"] });
 
 describe("Git rollback controls", () => {
   it("places Rollback Selected immediately before Push and disables it without a selection", () => {
-    const markup = renderToStaticMarkup(<GitToolbarActions selectedCount={0} operationRunning={false} pushing={false} rollingBack={false} onRollbackSelected={noop} onPush={noop} onRefresh={noop} />);
+    const markup = renderToStaticMarkup(<GitToolbarActions selectedCount={0} operationRunning={false} pushing={false} fetching={false} rollingBack={false} onRollbackSelected={noop} onUndoLastCommit={noop} onPush={noop} onFetch={noop} onRefresh={noop} />);
     expect(markup.indexOf("Rollback Selected")).toBeLessThan(markup.indexOf('aria-label="Push"'));
     expect(markup).toMatch(/aria-label="Rollback Selected"[^>]*disabled/);
   });
 
   it("disables every toolbar operation while a Git operation is running", () => {
-    const markup = renderToStaticMarkup(<GitToolbarActions selectedCount={2} operationRunning pushing={false} rollingBack onRollbackSelected={noop} onPush={noop} onRefresh={noop} />);
-    expect(markup.match(/disabled/g)).toHaveLength(3);
+    const markup = renderToStaticMarkup(<GitToolbarActions selectedCount={2} operationRunning pushing={false} fetching={false} rollingBack onRollbackSelected={noop} onUndoLastCommit={noop} onPush={noop} onFetch={noop} onRefresh={noop} />);
+    expect(markup.match(/disabled/g)).toHaveLength(7);
     expect(markup).toContain("status-toast-spinner");
   });
 
   it("shows an accessible ahead badge only for unpushed commits", () => {
-    const ahead = renderToStaticMarkup(<GitToolbarActions selectedCount={0} operationRunning={false} pushing={false} rollingBack={false} upstream={{ upstream: "origin/main", ahead: 2 }} onRollbackSelected={noop} onPush={noop} onRefresh={noop} />);
+    const ahead = renderToStaticMarkup(<GitToolbarActions selectedCount={0} operationRunning={false} pushing={false} fetching={false} rollingBack={false} upstream={{ upstream: "origin/main", ahead: 2, behind: 1, lastFetch: "2026-08-30T10:00:00.000Z" }} onRollbackSelected={noop} onUndoLastCommit={noop} onPush={noop} onFetch={noop} onRefresh={noop} />);
     expect(ahead).toContain('aria-label="Push 2 unpushed commits"');
     expect(ahead).toContain('class="git-push-badge"');
     expect(ahead).toContain("2 commits ahead of origin/main");
-    const synchronized = renderToStaticMarkup(<GitToolbarActions selectedCount={0} operationRunning={false} pushing={false} rollingBack={false} upstream={{ upstream: "origin/main", ahead: 0 }} onRollbackSelected={noop} onPush={noop} onRefresh={noop} />);
+    expect(ahead).toContain('aria-label="Fetch remote changes; 1 commit behind"');
+    const synchronized = renderToStaticMarkup(<GitToolbarActions selectedCount={0} operationRunning={false} pushing={false} fetching={false} rollingBack={false} upstream={{ upstream: "origin/main", ahead: 0, behind: 0 }} onRollbackSelected={noop} onUndoLastCommit={noop} onPush={noop} onFetch={noop} onRefresh={noop} />);
     expect(synchronized).not.toContain("git-push-badge");
     expect(synchronized).toContain("up to date with origin/main");
   });
 
+  it("offers pull only for a branch with an upstream", () => {
+    const published = renderToStaticMarkup(<GitToolbarActions selectedCount={0} operationRunning={false} pushing={false} fetching={false} rollingBack={false} upstream={{ upstream: "origin/main", ahead: 0, behind: 2 }} onRollbackSelected={noop} onUndoLastCommit={noop} onPush={noop} onFetch={noop} onRefresh={noop} />);
+    expect(published).toContain('aria-label="Pull remote changes"'); expect(published).not.toMatch(/aria-label="Pull remote changes"[^>]*disabled/);
+    const unpublished = renderToStaticMarkup(<GitToolbarActions selectedCount={0} operationRunning={false} pushing={false} fetching={false} rollingBack={false} onRollbackSelected={noop} onUndoLastCommit={noop} onPush={noop} onFetch={noop} onRefresh={noop} />);
+    expect(unpublished).toMatch(/aria-label="Pull remote changes"[^>]*disabled/);
+  });
+
+  it("offers interactive rebase planning only when publication can be checked", () => {
+    const published = renderToStaticMarkup(<GitToolbarActions selectedCount={0} operationRunning={false} pushing={false} fetching={false} rollingBack={false} upstream={{ upstream: "origin/main", ahead: 2, behind: 0 }} onRollbackSelected={noop} onUndoLastCommit={noop} onPush={noop} onFetch={noop} onRefresh={noop} />);
+    expect(published).not.toMatch(/aria-label="Plan interactive rebase"[^>]*disabled/);
+    const unknown = renderToStaticMarkup(<GitToolbarActions selectedCount={0} operationRunning={false} pushing={false} fetching={false} rollingBack={false} onRollbackSelected={noop} onUndoLastCommit={noop} onPush={noop} onFetch={noop} onRefresh={noop} />);
+    expect(unknown).toMatch(/aria-label="Plan interactive rebase"[^>]*disabled/);
+  });
+
   it("distinguishes a branch without an upstream without showing an ahead indicator", () => {
-    const markup = renderToStaticMarkup(<GitToolbarActions selectedCount={0} operationRunning={false} pushing={false} rollingBack={false} onRollbackSelected={noop} onPush={noop} onRefresh={noop} />);
+    const markup = renderToStaticMarkup(<GitToolbarActions selectedCount={0} operationRunning={false} pushing={false} fetching={false} rollingBack={false} onRollbackSelected={noop} onUndoLastCommit={noop} onPush={noop} onFetch={noop} onRefresh={noop} />);
     expect(markup).not.toContain("git-push-badge");
     expect(markup).toContain("branch is not published");
+  });
+
+  it("makes an in-progress fetch visibly cancellable", () => {
+    const markup = renderToStaticMarkup(<GitToolbarActions selectedCount={0} operationRunning fetching pushing={false} rollingBack={false} upstream={{ upstream: "origin/main", ahead: 0, behind: 0 }} onRollbackSelected={noop} onUndoLastCommit={noop} onPush={noop} onFetch={noop} onRefresh={noop} />);
+    expect(markup).toContain('aria-label="Cancel Git fetch"');
+    expect(markup).toContain("status-toast-spinner");
   });
 
   it("rejects Git status that completed after a task workspace switch", () => {

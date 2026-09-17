@@ -1,4 +1,4 @@
-import type { MouseEvent } from "react";
+import type { ChangeEvent, MouseEvent } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 
@@ -56,14 +56,28 @@ function markdownUrlTransform(url: string, key: string): string {
   return /^(?:[a-z][a-z+.-]*:)/i.test(url) && !/^(?:https?|ircs?|mailto|xmpp):/i.test(url) ? "" : url;
 }
 
-export function MarkdownPreview({ children, sourcePath, workspacePath, renderPre, onOpenFile, onOpenExternal }: {
+export function toggleMarkdownTask(source: string, taskIndex: number, checked: boolean): string {
+  const lines = source.split("\n");
+  let seen = 0;
+  const index = lines.findIndex((line) => {
+    if (!/^(\s*(?:(?:[-+*])|(?:\d+[.)]))\s+)\[[ xX]\]/.test(line)) return false;
+    return seen++ === taskIndex;
+  });
+  if (index < 0) return source;
+  lines[index] = lines[index]!.replace(/^(\s*(?:(?:[-+*])|(?:\d+[.)]))\s+)\[[ xX]\]/, `$1[${checked ? "x" : " "}]`);
+  return lines.join("\n");
+}
+
+export function MarkdownPreview({ children, sourcePath, workspacePath, renderPre, onOpenFile, onOpenExternal, onChange }: {
   children: string;
   sourcePath: string;
   workspacePath?: string;
   renderPre?: Components["pre"];
   onOpenFile(path: string): void;
   onOpenExternal(url: string): void;
+  onChange?(content: string): void;
 }) {
+  let taskIndex = 0;
   const followLink = (event: MouseEvent<HTMLAnchorElement>, href?: string) => {
     event.preventDefault();
     if (!href) return;
@@ -78,7 +92,16 @@ export function MarkdownPreview({ children, sourcePath, workspacePath, renderPre
     urlTransform={markdownUrlTransform}
     components={{
       ...(renderPre ? { pre: renderPre } : {}),
-      a: ({ href, children: label, ...props }) => <a {...props} href={href} onClick={(event) => followLink(event, href)}>{label}</a>
+      a: ({ href, children: label, ...props }) => <a {...props} href={href} onClick={(event) => followLink(event, href)}>{label}</a>,
+      input: ({ node: _node, ...props }) => {
+        if (props.type !== "checkbox" || !onChange) return <input {...props} />;
+        const index = taskIndex;
+        taskIndex += 1;
+        return <input {...props} disabled={false} onChange={(event: ChangeEvent<HTMLInputElement>) => {
+            const content = toggleMarkdownTask(children, index, event.target.checked);
+            if (content !== children) onChange(content);
+          }} />;
+      }
     }}
   >{children}</ReactMarkdown>;
 }

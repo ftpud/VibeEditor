@@ -85,6 +85,11 @@ export class TerminalSessionHost {
     }
   }
 
+  hasWorkspace(workspace: string): boolean {
+    const scopedWorkspace = path.resolve(workspace);
+    return [...this.sessions.values()].some((session) => session.workspace === scopedWorkspace);
+  }
+
   closeAll(): void {
     for (const session of this.sessions.values()) session.pty?.kill();
     this.sessions.clear();

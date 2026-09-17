@@ -49,7 +49,7 @@ export class RunConfigService {
   async run(workspace: string, scope: RunConfigScope, name: string): Promise<RunConfig> {
     const config = await this.read(workspace, scope, name); if (["starting", "running", "stopping"].includes(config.status)) throw new CoreError("RUN_CONFIG_RUNNING", `${config.name} is already active`);
     const state: Runtime = { status: "starting" }; this.runtime.set(key(workspace, scope, config.name), state); this.changed(workspace);
-    const cwd = scope === "local" ? path.resolve(workspace) : os.homedir(); const terminal = this.terminals.create(workspace, 80, 24, cwd); state.terminalId = terminal.terminalId; state.status = "running";
+    const terminal = this.terminals.create(workspace, 80, 24, path.resolve(workspace)); state.terminalId = terminal.terminalId; state.status = "running";
     this.terminals.input(workspace, terminal.terminalId, `${config.commands}${config.commands.endsWith("\n") ? "" : "\n"}exit $?\n`); this.changed(workspace); return this.read(workspace, scope, config.name);
   }
   async stop(workspace: string, scope: RunConfigScope, name: string): Promise<RunConfig> { const config = await this.read(workspace, scope, name); if (!config.terminalId || !["starting", "running"].includes(config.status)) return config; const state = this.runtime.get(key(workspace, scope, config.name))!; state.status = "stopping"; this.changed(workspace); this.terminals.terminate(workspace, config.terminalId); return this.read(workspace, scope, name); }

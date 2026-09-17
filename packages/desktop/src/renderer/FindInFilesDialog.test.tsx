@@ -9,6 +9,7 @@ vi.mock("./theme", () => ({ configureMonacoThemes: vi.fn(), monacoTheme: () => "
 
 const longSegment = "component-with-an-extremely-long-unbroken-name-that-must-never-expand-the-dialog";
 const matches: SearchResult[] = Array.from({ length: 80 }, (_, index) => ({
+  rootId: "root-primary",
   path: `packages/desktop/src/renderer/features/deeply/nested/${longSegment}-${index}.tsx`,
   line: index + 1,
   column: 123456,
@@ -36,6 +37,49 @@ beforeEach(() => vi.useFakeTimers());
 afterEach(() => { cleanup(); vi.useRealTimers(); });
 
 describe("FindInFilesDialog responsive result layout", () => {
+  it("keeps same-path results from two roots distinct and visibly rooted", async () => {
+    const rooted: SearchResult[] = [{ rootId: "root-ui", path: "src/index.ts", line: 1, column: 1, preview: "needle" }, { rootId: "root-api", path: "src/index.ts", line: 2, column: 1, preview: "needle" }];
+    const client = { request: vi.fn((type: string, payload: { path?: string }) => type === "filesystem.searchRoots" ? Promise.resolve({ matches: rooted, truncated: false }) : Promise.resolve({ content: `preview:${payload.path}` })) } as unknown as CoreClient;
+    const onNavigate = vi.fn(); render(<FindInFilesDialog client={client} rootIds={["root-ui", "root-api"]} rootAliases={{ "root-ui": "UI", "root-api": "API" }} scope="" onClose={vi.fn()} onNavigate={onNavigate} />);
+    await search();
+    expect(screen.getByText("UI").classList.contains("root-badge")).toBe(true); expect(screen.getByText("API").classList.contains("root-badge")).toBe(true);
+    fireEvent.doubleClick(screen.getByRole("button", { name: "src/index.ts, line 2, column 1" })); expect(onNavigate).toHaveBeenCalledWith(rooted[1], 6);
+  });
+  it("records compact recent searches and lets saved searches be reused or deleted", async () => {
+    const onQueriesChange = vi.fn();
+    const saved = { query: "saved query", path: "src", matchCase: true };
+    render(<FindInFilesDialog client={clientWith({ matches: [], truncated: false })} scope="src" queries={{ saved: [saved] }} onQueriesChange={onQueriesChange} onClose={vi.fn()} onNavigate={vi.fn()} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "saved query" }));
+    expect(screen.getByRole<HTMLInputElement>("textbox", { name: "Text to find" }).value).toBe("saved query");
+    expect(screen.getByRole<HTMLInputElement>("checkbox", { name: "Match case" }).checked).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "Delete saved search saved query" }));
+    expect(onQueriesChange).toHaveBeenLastCalledWith({ saved: [] });
+
+    await search("needle");
+    expect(onQueriesChange).toHaveBeenLastCalledWith({ saved: [saved], recent: [{ query: "needle", path: "src", matchCase: true }] });
+    fireEvent.click(screen.getByRole("button", { name: "Save current search" }));
+    expect(onQueriesChange).toHaveBeenLastCalledWith({ saved: [{ query: "needle", path: "src", matchCase: true }, saved] });
+  });
+
+  it("sends glob controls to Core and renders a per-file replacement preview", async () => {
+    const request = vi.fn((type: string) => {
+      if (type === "filesystem.search") return Promise.resolve({ matches: [], truncated: false });
+      if (type === "filesystem.replacePreview") return Promise.resolve({ id: "preview", truncated: false, files: [{ path: "src/a.ts", revision: { identity: "1", version: "1" }, occurrences: [{ line: 1, column: 1, before: "needle", after: "replacement" }] }] });
+      return Promise.resolve({ content: "" });
+    });
+    render(<FindInFilesDialog client={{ request } as unknown as CoreClient} scope="" onClose={vi.fn()} onNavigate={vi.fn()} />);
+    await search();
+    fireEvent.change(screen.getByRole("textbox", { name: "Include globs" }), { target: { value: "src/**/*.ts" } });
+    fireEvent.change(screen.getByRole("textbox", { name: "Exclude globs" }), { target: { value: "**/*.test.ts" } });
+    fireEvent.change(screen.getByRole("textbox", { name: "Replace with" }), { target: { value: "replacement" } });
+    fireEvent.click(screen.getByRole("button", { name: "Preview replace" }));
+    await act(async () => { await Promise.resolve(); });
+    expect(request).toHaveBeenCalledWith("filesystem.replacePreview", expect.objectContaining({ include: "src/**/*.ts", exclude: "**/*.test.ts", replacement: "replacement" }));
+    expect(screen.getByRole("region", { name: "Replace preview" }).textContent).toContain("src/a.ts");
+    expect(screen.getByText("+ replacement")).toBeTruthy();
+  });
+
   it("keeps loading status and controls accessible while a search is pending", () => {
     const pendingClient = { request: vi.fn(() => new Promise(() => undefined)) } as unknown as CoreClient;
     render(<FindInFilesDialog client={pendingClient} scope="src" onClose={vi.fn()} onNavigate={vi.fn()} />);
@@ -75,7 +119,7 @@ describe("FindInFilesDialog responsive result layout", () => {
 
   it("renders bounded context and makes omitted or shortened lines explicit", async () => {
     const contextualMatch: SearchResult = {
-      path: "src/context.ts", line: 4, column: 3, preview: "needle suffix", previewTruncated: true,
+      rootId: "root-primary",       path: "src/context.ts", line: 4, column: 3, preview: "needle suffix", previewTruncated: true,
       context: {
         before: [{ line: 2, text: "before", truncated: false }, { line: 3, text: "long before", truncated: true }],
         after: [{ line: 5, text: "after", truncated: false }], truncatedBefore: true, truncatedAfter: true
@@ -108,8 +152,8 @@ describe("FindInFilesDialog responsive result layout", () => {
 
   it("keeps every occurrence from a file available in its result group", async () => {
     const sameLineMatches = [
-      { path: "src/repeated.ts", line: 4, column: 1, preview: "needle needle" },
-      { path: "src/repeated.ts", line: 4, column: 8, preview: "needle needle" }
+      { rootId: "root-primary", path: "src/repeated.ts", line: 4, column: 1, preview: "needle needle" },
+      { rootId: "root-primary", path: "src/repeated.ts", line: 4, column: 8, preview: "needle needle" }
     ];
     const onNavigate = vi.fn();
     render(<FindInFilesDialog client={clientWith({ matches: sameLineMatches, truncated: false })} scope="" onClose={vi.fn()} onNavigate={onNavigate} />);

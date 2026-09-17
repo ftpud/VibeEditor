@@ -80,4 +80,13 @@ describe("TerminalSessionHost", () => {
     expect(host.attach("/workspace/root", root.terminalId)?.status).toBe("running");
     expect(ptys[1]!.killed).toBe(false);
   });
+
+  it("retains an exit code for an exited process rather than presenting it as a live reattach", () => {
+    const { host, ptys, factory } = setup();
+    const terminal = host.create("/workspace/task-a", 80, 24);
+    ptys[0]!.emitExit(23);
+
+    expect(host.attach("/workspace/task-a", terminal.terminalId)).toMatchObject({ status: "exited", exitCode: 23 });
+    expect(factory).toHaveBeenCalledTimes(1);
+  });
 });

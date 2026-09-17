@@ -1,20 +1,24 @@
 import type { FileTreeNode } from "@remote-ide/protocol";
 
-/** A single tree selection drives both its menu and keyboard commands. */
-export type ProjectTreeAction = "createFile" | "createDirectory" | "rename" | "open" | "copyRelativePath" | "copyAbsolutePath" | "delete";
-export type ProjectTreeSelection = { node: FileTreeNode };
+/** The focused node and stable selection count drive both menus and keyboard commands. */
+export type ProjectTreeAction = "createFile" | "createDirectory" | "rename" | "open" | "duplicate" | "copyTo" | "moveTo" | "copyRelativePath" | "copyAbsolutePath" | "delete";
+export type ProjectTreeSelection = { node: FileTreeNode; count?: number };
 
 export function projectTreeActions(selection: ProjectTreeSelection): Record<ProjectTreeAction, boolean> {
   const { node } = selection;
+  const single = (selection.count ?? 1) === 1;
+  const mutablePath = Boolean(node.path);
   return {
     // A file selection creates alongside that file; a directory creates within it.
-    createFile: true,
-    createDirectory: true,
-    rename: Boolean(node.path),
-    open: node.type === "file",
-    copyRelativePath: Boolean(node.path),
-    copyAbsolutePath: Boolean(node.path),
-    // Filesystem deletion deliberately remains unavailable until safe-delete exists.
-    delete: false
+    createFile: single,
+    createDirectory: single,
+    rename: single && mutablePath,
+    open: single && node.type === "file",
+    duplicate: mutablePath,
+    copyTo: mutablePath,
+    moveTo: mutablePath,
+    copyRelativePath: mutablePath,
+    copyAbsolutePath: mutablePath,
+    delete: single && mutablePath
   };
 }

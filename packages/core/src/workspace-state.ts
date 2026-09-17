@@ -1,14 +1,15 @@
 import crypto from "node:crypto";
 import os from "node:os";
 import path from "node:path";
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
-import type { JavaProjectOptions, JavaRunConfiguration, WorkspaceOptions } from "@remote-ide/protocol";
+import { mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
+import type { JavaProjectOptions, JavaRunConfiguration, WorkspaceOptions, WorkspaceSearchQuery, WorkspaceSearchQueries } from "@remote-ide/protocol";
 import { CoreError } from "./errors.js";
 
 const EMPTY_OPTIONS: WorkspaceOptions = { openFiles: [] };
 
 export class WorkspaceStateStore {
   private readonly stateFile: string;
+  private saveQueue: Promise<void> = Promise.resolve();
 
   constructor(workspace: string, stateDirectory = path.join(os.homedir(), ".remote-ide", "workspaces")) {
     const key = crypto.createHash("sha256").update(workspace).digest("hex");
@@ -26,15 +27,22 @@ export class WorkspaceStateStore {
     }
   }
 
-  async save(options: WorkspaceOptions): Promise<void> {
+  save(options: WorkspaceOptions): Promise<void> {
     const validated = validateWorkspaceOptions(options);
+    const pending = this.saveQueue.then(() => this.write(validated));
+    this.saveQueue = pending.catch(() => undefined);
+    return pending;
+  }
+
+  private async write(options: WorkspaceOptions): Promise<void> {
     const directory = path.dirname(this.stateFile);
-    const temporary = `${this.stateFile}.${process.pid}.tmp`;
+    const temporary = `${this.stateFile}.${process.pid}.${crypto.randomUUID()}.tmp`;
     try {
       await mkdir(directory, { recursive: true });
-      await writeFile(temporary, `${JSON.stringify(validated, null, 2)}\n`, "utf8");
+      await writeFile(temporary, `${JSON.stringify(options, null, 2)}\n`, "utf8");
       await rename(temporary, this.stateFile);
     } catch (error) {
+      await unlink(temporary).catch(() => undefined);
       throw new CoreError("WRITE_FAILED", `Could not save workspace options: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
@@ -58,9 +66,30 @@ export function validateWorkspaceOptions(value: unknown): WorkspaceOptions {
   const javaProject = candidate.javaProject === undefined ? undefined : validateJavaProjectOptions(candidate.javaProject);
   const terminal = candidate.terminal === undefined ? undefined : validateTerminalOptions(candidate.terminal);
   const fileColors = candidate.fileColors === undefined ? undefined : validateFileColors(candidate.fileColors);
+  const searchQueries = candidate.searchQueries === undefined ? undefined : validateSearchQueries(candidate.searchQueries);
   if (candidate.gitCommitMessage !== undefined && (typeof candidate.gitCommitMessage !== "string" || candidate.gitCommitMessage.length > 10_000)) throw new CoreError("INVALID_REQUEST", "Invalid Git commit message draft");
   const gitCommitMessage = typeof candidate.gitCommitMessage === "string" ? candidate.gitCommitMessage : undefined;
-  return { openFiles, ...(pinnedFiles?.length ? { pinnedFiles } : {}), ...(activeFile ? { activeFile } : {}), ...(javaProject ? { javaProject } : {}), ...(terminal ? { terminal } : {}), ...(fileColors && Object.keys(fileColors).length ? { fileColors } : {}), ...(gitCommitMessage ? { gitCommitMessage } : {}) };
+  return { openFiles, ...(pinnedFiles?.length ? { pinnedFiles } : {}), ...(activeFile ? { activeFile } : {}), ...(javaProject ? { javaProject } : {}), ...(terminal ? { terminal } : {}), ...(fileColors && Object.keys(fileColors).length ? { fileColors } : {}), ...(gitCommitMessage ? { gitCommitMessage } : {}), ...(searchQueries ? { searchQueries } : {}) };
+}
+
+function validateSearchQueries(value: unknown): WorkspaceSearchQueries {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new CoreError("INVALID_REQUEST", "Invalid saved search metadata");
+  const candidate = value as Record<string, unknown>;
+  const validateList = (list: unknown, limit: number, label: string): WorkspaceSearchQuery[] | undefined => {
+    if (list === undefined) return undefined;
+    if (!Array.isArray(list) || list.length > limit) throw new CoreError("INVALID_REQUEST", `Invalid ${label} searches`);
+    const seen = new Set<string>(); const result: WorkspaceSearchQuery[] = [];
+    for (const item of list) {
+      if (!item || typeof item !== "object" || Array.isArray(item)) throw new CoreError("INVALID_REQUEST", `Invalid ${label} search`);
+      const query = (item as Record<string, unknown>).query; const searchPath = (item as Record<string, unknown>).path; const matchCase = (item as Record<string, unknown>).matchCase; const include = (item as Record<string, unknown>).include; const exclude = (item as Record<string, unknown>).exclude;
+      if (typeof query !== "string" || !query.trim() || query.length > 200 || typeof searchPath !== "string" || (searchPath !== "" && !isSafeRelativePath(searchPath)) || (matchCase !== undefined && typeof matchCase !== "boolean") || (include !== undefined && (typeof include !== "string" || include.length > 200)) || (exclude !== undefined && (typeof exclude !== "string" || exclude.length > 200))) throw new CoreError("INVALID_REQUEST", `Invalid ${label} search`);
+      const normalized = { query: query.trim(), path: searchPath, ...(matchCase ? { matchCase: true } : {}), ...(include?.trim() ? { include: include.trim() } : {}), ...(exclude?.trim() ? { exclude: exclude.trim() } : {}) };
+      const key = JSON.stringify(normalized); if (!seen.has(key)) { seen.add(key); result.push(normalized); }
+    }
+    return result;
+  };
+  const recent = validateList(candidate.recent, 10, "recent"); const saved = validateList(candidate.saved, 20, "saved");
+  return { ...(recent?.length ? { recent } : {}), ...(saved?.length ? { saved } : {}) };
 }
 
 function validateFileColors(value: unknown): NonNullable<WorkspaceOptions["fileColors"]> {
@@ -76,12 +105,14 @@ function validateTerminalOptions(value: unknown): NonNullable<WorkspaceOptions["
   if (!Array.isArray(candidate.tabs) || candidate.tabs.length > 20 || !candidate.tabs.every((tab) => {
     if (!tab || typeof tab !== "object") return false;
     const item = tab as Record<string, unknown>;
-    return typeof item.title === "string" && item.title.length <= 100 && (item.terminalId === undefined || (typeof item.terminalId === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(item.terminalId)));
+    const displayName = typeof item.displayName === "string" ? item.displayName : item.title;
+    return typeof displayName === "string" && displayName.length <= 100 && (item.terminalId === undefined || (typeof item.terminalId === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(item.terminalId)));
   })) throw new CoreError("INVALID_REQUEST", "Terminal tabs must contain at most 20 valid entries");
   if (typeof candidate.panelOpen !== "boolean") throw new CoreError("INVALID_REQUEST", "Invalid terminal panel options");
   const tabs = candidate.tabs.map((tab) => {
-    const item = tab as { title: string; terminalId?: string };
-    return { title: (item.title.trim() || "Terminal").slice(0, 100), ...(item.terminalId ? { terminalId: item.terminalId } : {}) };
+    const item = tab as { displayName?: string; title?: string; terminalId?: string };
+    const displayName = item.displayName ?? item.title!;
+    return { displayName: (displayName.trim() || "Terminal").slice(0, 100), ...(item.terminalId ? { terminalId: item.terminalId } : {}) };
   });
   const activeTabIndex = Number.isInteger(candidate.activeTabIndex) && (candidate.activeTabIndex as number) >= 0 && (candidate.activeTabIndex as number) < tabs.length ? candidate.activeTabIndex as number : undefined;
   return { tabs, ...(activeTabIndex !== undefined ? { activeTabIndex } : {}), panelOpen: candidate.panelOpen };

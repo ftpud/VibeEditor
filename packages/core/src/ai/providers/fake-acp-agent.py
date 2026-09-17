@@ -16,6 +16,7 @@ SLOW = os.environ.get("FAKE_SLOW") == "on"
 LOAD = os.environ.get("FAKE_LOAD") == "on"
 PERMISSION = os.environ.get("FAKE_PERMISSION") == "on"
 ECHO_PROMPT = os.environ.get("FAKE_ECHO_PROMPT") == "on"
+CONFIG_ACK_ONLY = os.environ.get("FAKE_CONFIG_ACK_ONLY") == "on"
 state = {"live": None, "model": "model-a", "effort": "medium", "cancelled": False}
 write_lock = threading.Lock()
 permission_event = threading.Event()
@@ -79,7 +80,7 @@ def handle(request):
                 fail("The selected model does not support reasoning_effort configuration.")
                 return
             state["effort"] = value
-        ok({"configOptions": options()})
+        ok({} if CONFIG_ACK_ONLY else {"configOptions": options()})
     elif method == "_session/steering":
         if state["live"]:
             notify(state["live"], {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": f"[steered: {params['prompt'][0]['text']}]"}})
