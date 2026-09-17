@@ -10,7 +10,7 @@ function harness() {
     create: vi.fn(async () => task), createRandom: vi.fn(async () => task), delete: vi.fn(async () => ({ tasks: [] })),
     taskPath: vi.fn(() => "/tasks/task-1/workspace"), list: vi.fn(async () => ({ tasks: [task] })),
     setCommitMessage: vi.fn(async (_workspace: string, message: string) => ({ task, message, overwritten: false })),
-    setStatus: vi.fn(async (_taskId: string, status: "active" | "finished") => ({ ...task, status })),
+    setStatus: vi.fn(async (_taskId: string, status: "active" | "finished") => ({ ...task, status })), merge: vi.fn(async () => ({ targetBranch: "main" })),
     updateGitCommitMessage: vi.fn(async (_taskId: string, message: string) => ({
       task, previousCommit: "old-sha", commit: "new-sha", previousMessage: "Old message", message
     }))
@@ -31,17 +31,18 @@ function harness() {
 
 describe("Vibe Editor app tools", () => {
   it("publishes task start agent and reasoning parameters", () => {
-    expect(appToolDefinitions.map((tool) => tool.name)).toEqual(["ai_usage", "timer_set", "model_switch_next", "session_new", "task_create", "task_create_and_start", "task_list", "task_delete", "task_set_status", "task_ai_response_tail", "task_append_prompt", "set_commit_message", "task_update_commit_message"]);
-    expect(appToolDefinitions[1]).toMatchObject({ name: "timer_set", inputSchema: { required: ["seconds", "prompt"] } });
-    expect(appToolDefinitions[2]).toMatchObject({ name: "model_switch_next", inputSchema: { required: ["model", "reasoning"] } });
-    expect(appToolDefinitions[3]).toMatchObject({ name: "session_new", inputSchema: { required: ["prompt"] } });
-    expect(appToolDefinitions[5].inputSchema.required).toEqual(["prompt", "provider", "model"]);
-    expect(appToolDefinitions[5].inputSchema.properties.agent).toMatchObject({
+    expect(appToolDefinitions.map((tool) => tool.name)).toEqual(["workflow_run_stack", "ai_usage", "timer_set", "model_switch_next", "session_new", "task_create", "task_create_and_start", "task_list", "task_merge", "task_delete", "task_set_status", "task_ai_response_tail", "task_append_prompt", "set_commit_message", "task_update_commit_message"]);
+    expect(appToolDefinitions[0]).toMatchObject({ name: "workflow_run_stack", inputSchema: { required: ["inputs"] } });
+    expect(appToolDefinitions[2]).toMatchObject({ name: "timer_set", inputSchema: { required: ["seconds", "prompt"] } });
+    expect(appToolDefinitions[3]).toMatchObject({ name: "model_switch_next", inputSchema: { required: ["model", "reasoning"] } });
+    expect(appToolDefinitions[4]).toMatchObject({ name: "session_new", inputSchema: { required: ["prompt"] } });
+    expect(appToolDefinitions[6].inputSchema.required).toEqual(["prompt", "provider", "model"]);
+    expect(appToolDefinitions[6].inputSchema.properties.agent).toMatchObject({
       oneOf: [{ type: "object", required: ["scope", "name"] }, { type: "null" }]
     });
-    expect(appToolDefinitions[5].inputSchema.properties.reasoning).toMatchObject({ type: "string", minLength: 1 });
-    expect(appToolDefinitions[8]).toMatchObject({ name: "task_set_status", inputSchema: { required: ["task_id", "status"], properties: { status: { enum: ["active", "finished"] } } } });
-    expect(appToolDefinitions[11]).toMatchObject({
+    expect(appToolDefinitions[6].inputSchema.properties.reasoning).toMatchObject({ type: "string", minLength: 1 });
+    expect(appToolDefinitions[10]).toMatchObject({ name: "task_set_status", inputSchema: { required: ["task_id", "status"], properties: { status: { enum: ["active", "finished"] } } } });
+    expect(appToolDefinitions[13]).toMatchObject({
       name: "set_commit_message",
       inputSchema: {
         additionalProperties: false,
@@ -49,7 +50,7 @@ describe("Vibe Editor app tools", () => {
         properties: { message: { type: "string", minLength: 1, maxLength: 10_000, pattern: "\\S" } }
       }
     });
-    expect(appToolDefinitions[12]).toMatchObject({
+    expect(appToolDefinitions[14]).toMatchObject({
       name: "task_update_commit_message",
       inputSchema: {
         additionalProperties: false,
@@ -60,6 +61,26 @@ describe("Vibe Editor app tools", () => {
         }
       }
     });
+  });
+
+  it("runs a workflow stack through the active orchestration callback", async () => {
+    const { tasks, provider, onTasksChanged, onCommitMessageChanged, agents } = harness(); const runStack = vi.fn(async () => ({ blocks: [{ blockId: "worker", output: "done" }] }));
+    const service = new AppToolService(tasks as never, { get: vi.fn(() => provider), list: vi.fn(() => []) } as never, "/tasks/parent/workspace", onTasksChanged, onCommitMessageChanged, "codex", agents as never, "/workspace", undefined, undefined, { runId: "run", blockId: "parent", runStack });
+    await expect(service.call("workflow_run_stack", { inputs: ["one", "two"], path: "review" })).resolves.toEqual({ blocks: [{ blockId: "worker", output: "done" }] });
+    expect(runStack).toHaveBeenCalledWith(["one", "two"], "review");
+  });
+
+  it("keeps workflow identity on self-resume timers", async () => {
+    const { tasks, provider, onTasksChanged, onCommitMessageChanged, agents } = harness(); const timers = { schedule: vi.fn(async () => ({ id: "timer", dueAt: "later", prompt: "continue" })) };
+    const service = new AppToolService(tasks as never, { get: vi.fn(() => provider), list: vi.fn(() => []) } as never, "/workflow/session", onTasksChanged, onCommitMessageChanged, "codex", agents as never, "/workspace", timers as never, undefined, { runId: "run", blockId: "block", runStack: vi.fn() });
+    await service.call("timer_set", { seconds: 60, prompt: "continue" });
+    expect(timers.schedule).toHaveBeenCalledWith("/workflow/session", "codex", "continue", 60, { runId: "run", blockId: "block" });
+  });
+
+  it("merges and finishes a task through MCP", async () => {
+    const { service, tasks, onTasksChanged } = harness();
+    await expect(service.call("task_merge", { task_id: "task-1" })).resolves.toMatchObject({ targetBranch: "main", task: { id: "task-1", status: "finished" } });
+    expect(tasks.merge).toHaveBeenCalledWith("task-1", "smart"); expect(onTasksChanged).toHaveBeenCalled();
   });
 
   it("queues a validated model and reasoning override for the next turn", async () => {

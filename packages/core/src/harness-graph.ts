@@ -12,6 +12,10 @@ export function validateHarness(harness: HarnessDefinition): { valid: boolean; i
     const key = `${edge.from}\0${edge.to}`; if (edgeKeys.has(key)) issues.push({ code: "duplicate-edge", edgeId: edge.id, message: "This connection already exists" }); edgeKeys.add(key);
     outgoing.set(edge.from, [...outgoing.get(edge.from) ?? [], edge.to]); indegree.set(edge.to, (indegree.get(edge.to) ?? 0) + 1);
   }
+  for (const block of harness.blocks.filter((item) => item.routing === "ai")) {
+    const outgoingEdges = harness.edges.filter((edge) => edge.from === block.id); const labels = new Set<string>();
+    for (const edge of outgoingEdges) { const label = edge.label?.trim(); if (!label || labels.has(label)) issues.push({ code: "route-label", blockId: block.id, edgeId: edge.id, message: `AI-routed block '${block.label}' needs a unique label on every outgoing path` }); else labels.add(label); }
+  }
   const queue = harness.blocks.filter((block) => (indegree.get(block.id) ?? 0) === 0).map((block) => block.id); const order: string[] = []; const pending = new Map(indegree);
   while (queue.length) { const id = queue.shift()!; order.push(id); for (const next of outgoing.get(id) ?? []) { const count = (pending.get(next) ?? 0) - 1; pending.set(next, count); if (count === 0) queue.push(next); } }
   if (order.length !== harness.blocks.length && harness.blocks.length) issues.push({ code: "cycle", message: "Harness connections contain a cycle" });

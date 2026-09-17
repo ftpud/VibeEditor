@@ -6,17 +6,17 @@ import { dragPosition, edgePath, HarnessPanel, responsePreview } from "./Harness
 afterEach(cleanup);
 
 describe("HarnessPanel", () => {
-  it("creates a harness from the in-panel name form", async () => {
+  it("creates a workflow from the in-panel name form", async () => {
     const onCreate = vi.fn().mockResolvedValue({ id: "harness-1", name: "Review flow", version: 1, createdAt: "now", updatedAt: "now", blocks: [], edges: [] });
     render(<HarnessPanel harnesses={[]} runs={[]} providers={[]} agents={[]} onCreate={onCreate} onSave={vi.fn()} onDelete={vi.fn()} onRun={vi.fn()} onCancelRun={vi.fn()} onError={vi.fn()} />);
 
-    fireEvent.click(screen.getByText("Create harness", { selector: "button" }));
-    const name = screen.getByRole("textbox", { name: "Harness name" });
+    fireEvent.click(screen.getByText("Create workflow", { selector: "button" }));
+    const name = screen.getByRole("textbox", { name: "Workflow name" });
     fireEvent.change(name, { target: { value: "Review flow" } });
     fireEvent.click(screen.getByRole("button", { name: "Create" }));
 
     await waitFor(() => expect(onCreate).toHaveBeenCalledWith("Review flow"));
-    await waitFor(() => expect(screen.queryByRole("textbox", { name: "Harness name" })).toBeNull());
+    await waitFor(() => expect(screen.queryByRole("textbox", { name: "Workflow name" })).toBeNull());
   });
 
   it("connects output to input and renders a directional edge", async () => {
@@ -34,7 +34,7 @@ describe("HarnessPanel", () => {
 
     await waitFor(() => expect(onSave).toHaveBeenCalled());
     expect(onSave.mock.calls.at(0)?.[0].edges).toMatchObject([{ from: "a", to: "b" }]);
-    const edge = screen.getByLabelText("Harness connections").querySelector(".harness-edge");
+    const edge = screen.getByLabelText("Workflow connections").querySelector(".harness-edge");
     expect(edge?.getAttribute("marker-end")).toContain("harness-arrow");
     expect(edge?.textContent).toContain("Plan then Build");
   });
@@ -69,5 +69,19 @@ describe("HarnessPanel", () => {
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
 
     await waitFor(() => expect(onSave.mock.calls.at(0)?.[0].blocks[0].model).toBe("gpt-test"));
+  });
+
+  it("shows prompts, answers, and stack runs when a block is selected in view mode", async () => {
+    const harness: HarnessDefinition = { id: "harness-1", name: "Flow", version: 1, createdAt: "now", updatedAt: "now", blocks: [{ id: "a", type: "prompt", label: "Review", prompt: "{{input}}", position: { x: 20, y: 20 } }], edges: [] };
+    const runs = [{ id: "run-1", harnessId: harness.id, harnessVersion: 1, input: "task", status: "succeeded" as const, createdAt: "now", blocks: [{ blockId: "a", status: "succeeded" as const, prompt: "Review task", output: "combined", plannedRuns: 2, iterations: [{ index: 1, status: "succeeded" as const, startedAt: "now", prompt: "Review task 1", output: "answer one" }, { index: 2, status: "succeeded" as const, startedAt: "now", prompt: "Review task 2", output: "answer two" }] }] }];
+    render(<HarnessPanel harnesses={[harness]} runs={runs} providers={[]} agents={[]} onCreate={vi.fn()} onSave={vi.fn()} onDelete={vi.fn()} onRun={vi.fn()} onCancelRun={vi.fn()} onError={vi.fn()} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "View" }));
+    fireEvent.click(await screen.findByText("Review"));
+
+    const details = await screen.findByLabelText("Review run details");
+    expect(details.textContent).toContain("Stack items (2/2)");
+    expect(details.textContent).toContain("Review task 2");
+    expect(details.textContent).toContain("answer two");
   });
 });

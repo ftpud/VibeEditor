@@ -1,0 +1,51 @@
+{
+  "id": "7bc7c839-d765-4f5a-a075-46f56356adf7",
+  "name": "Three Tasks + 30s Worker + Summary",
+  "version": 1,
+  "createdAt": "2026-09-17T00:00:00.000Z",
+  "updatedAt": "2026-09-17T00:00:00.000Z",
+  "blocks": [
+    {
+      "id": "dispatcher",
+      "type": "prompt",
+      "label": "Dispatch 3 tasks",
+      "prompt": "You are the dispatcher. The user request is:\n\n{{input}}\n\nCall workflow_run_stack exactly once on the connected Task orchestrator block. Pass exactly three distinct, self-contained implementation prompts. Every prompt must include the complete user request above and identify itself as task 1, 2, or 3. Split the work into useful parallel responsibilities when possible. Wait for the tool result, then briefly report what the task orchestrator returned. Do not create tasks directly in this block.",
+      "provider": "codex",
+      "model": "gpt-5.6-terra",
+      "position": { "x": 30, "y": 40 }
+    },
+    {
+      "id": "task-orchestrator",
+      "type": "task",
+      "label": "Task orchestrator",
+      "prompt": "This is stack item {{iteration}}. Input:\n\n{{input}}\n\nImmediately call task_create_and_start exactly once with provider codex and model gpt-5.6-terra to create an isolated implementation task for this input. Keep the returned task id in this persistent session. For stack items 1 and 2, return immediately after the task starts so the next item can be dispatched. For stack item 3, after starting it, monitor all three saved task ids with task_list and task_ai_response_tail. If any task is still running or waiting, call timer_set for a short polling delay and continue monitoring when revived. Do not create duplicate tasks after revival. When all three tasks are finished, collect their final responses. Merge each successfully completed task with task_merge using strategy smart. Then return one consolidated report containing every task id, final response, and merge result. Do not call workflow_run_stack; the graph will release the Summary block after this block and the timed worker are both complete.",
+      "provider": "codex",
+      "model": "gpt-5.6-terra",
+      "position": { "x": 300, "y": 40 }
+    },
+    {
+      "id": "timed-worker",
+      "type": "prompt",
+      "label": "30-second worker",
+      "prompt": "The user request is:\n\n{{input}}\n\nOn the first turn, call timer_set once with exactly 30 seconds. Its continuation prompt must tell you that the timer elapsed and include the complete user request above. Do not execute the request before setting the timer and do not set another timer after revival. When the continuation arrives, execute or analyze the user request and return your result. Do not call workflow_run_stack; the graph will release the Summary block when both incoming paths finish.",
+      "provider": "codex",
+      "model": "gpt-5.6-terra",
+      "position": { "x": 300, "y": 260 }
+    },
+    {
+      "id": "summary",
+      "type": "prompt",
+      "label": "Summarize all outputs",
+      "prompt": "Both parallel branches are complete. Produce a concise but complete final response for the user from every output below. Clearly distinguish the three implementation-task results, their merge outcomes, and the 30-second worker result. Mention failures or missing outputs explicitly. Do not start more tasks and do not call workflow_run_stack.\n\n{{input}}",
+      "join": "all",
+      "provider": "codex",
+      "model": "gpt-5.6-terra",
+      "position": { "x": 610, "y": 150 }
+    }
+  ],
+  "edges": [
+    { "id": "dispatcher-to-tasks", "from": "dispatcher", "to": "task-orchestrator", "label": "three implementation prompts" },
+    { "id": "tasks-to-summary", "from": "task-orchestrator", "to": "summary", "label": "task results" },
+    { "id": "timer-to-summary", "from": "timed-worker", "to": "summary", "label": "timed result" }
+  ]
+}
