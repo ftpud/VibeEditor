@@ -1,7 +1,7 @@
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { Terminal } from "@xterm/xterm";
-import { ClipboardPaste, Plus, X } from "lucide-react";
+import { ClipboardPaste, Copy, Pencil, Plus, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { CoreClient } from "./client";
 import type { TerminalGroup, TerminalTab } from "./model";
@@ -19,28 +19,53 @@ type Props = {
   onActivate(id: string): void;
   onCreate(): void;
   onClose(tab: TerminalTab): void;
+  onRename(tab: TerminalTab, title: string): void;
+  onDuplicate(tab: TerminalTab): void;
+  onMove(tabId: string, targetTabId: string): void;
+  onRecoveryShown?(tabId: string): void;
   onResizeStart(event: React.PointerEvent): void;
   registerWriter(terminalId: string, writer?: (data: string) => void): void;
   highlightedTerminalIds?: Set<string>;
+  rootAliases?: Record<string, string>;
 };
 
-export function TerminalPanel({ theme, fontFamily, fontSize, lineHeight, client, group, height, onActivate, onCreate, onClose, onResizeStart, registerWriter, highlightedTerminalIds }: Props) {
+export function TerminalPanel({ theme, fontFamily, fontSize, lineHeight, client, group, height, onActivate, onCreate, onClose, onRename, onDuplicate, onMove, onRecoveryShown, onResizeStart, registerWriter, highlightedTerminalIds, rootAliases = {} }: Props) {
   return <section className="terminal-panel" style={{ height }}>
     <div className="terminal-resize-handle" onPointerDown={onResizeStart} />
     <div className="terminal-tabs" role="tablist">
-      {group.tabs.map((tab) => <TerminalTabButton key={tab.id} tab={tab} active={tab.id === group.activeTabId} highlighted={highlightedTerminalIds?.has(tab.terminalId)} onActivate={onActivate} onClose={onClose} />)}
+      {group.tabs.map((tab) => <TerminalTabButton key={tab.id} tab={tab} rootAlias={tab.rootId ? rootAliases[tab.rootId] : undefined} active={tab.id === group.activeTabId} highlighted={highlightedTerminalIds?.has(tab.terminalId)} onActivate={onActivate} onClose={onClose} onRename={onRename} onDuplicate={onDuplicate} onMove={onMove} />)}
       <button className="terminal-action" title="New terminal" onClick={onCreate}><Plus size={15} /></button>
     </div>
+    {group.tabs.filter((tab) => tab.id === group.activeTabId).map((tab) => <TerminalRecoveryNotice key={tab.id} tab={tab} onDismiss={() => onRecoveryShown?.(tab.id)} />)}
     <div className="terminal-content">
       {group.tabs.map((tab) => <TerminalView key={tab.id} theme={theme} fontFamily={fontFamily} fontSize={fontSize} lineHeight={lineHeight} client={client} tab={tab} active={tab.id === group.activeTabId} registerWriter={registerWriter} />)}
     </div>
   </section>;
 }
 
-export function TerminalTabButton({ tab, active, highlighted, onActivate, onClose }: { tab: TerminalTab; active: boolean; highlighted?: boolean; onActivate(id: string): void; onClose(tab: TerminalTab): void }) {
+/** A delayed terminal activation must not override a click that focused another control. */
+export function focusTerminalIfUnchanged(focusOwner: Element | null, focus: () => void): void {
+  if (document.activeElement === focusOwner) focus();
+}
+
+export function TerminalTabButton({ tab, rootAlias, active, highlighted, onActivate, onClose, onRename, onDuplicate, onMove }: { tab: TerminalTab; rootAlias?: string; active: boolean; highlighted?: boolean; onActivate(id: string): void; onClose(tab: TerminalTab): void; onRename?(tab: TerminalTab, title: string): void; onDuplicate?(tab: TerminalTab): void; onMove?(tabId: string, targetTabId: string): void }) {
   const statusLabel = tab.status === "running" ? "running" : tab.status;
   const visibleStatus = tab.status === "running" ? "" : ` (${tab.status})`;
-  return <button
+  const [menu, setMenu] = useState<{ x: number; y: number }>();
+  const [renaming, setRenaming] = useState(false);
+  const [draft, setDraft] = useState(tab.title);
+  const renameInputRef = useRef<HTMLInputElement>(null);
+  useEffect(() => { if (renaming) renameInputRef.current?.select(); }, [renaming]);
+  const beginRename = () => { setMenu(undefined); setDraft(tab.title); setRenaming(true); };
+  const finishRename = () => {
+    if (!renaming) return;
+    setRenaming(false);
+    const title = draft.trim();
+    if (title && title !== tab.title) onRename?.(tab, title);
+  };
+  return <>{renaming ? <div className={`terminal-tab terminal-tab-renaming ${active ? "active" : ""}`}>
+    <input ref={renameInputRef} aria-label={`Rename ${tab.title}`} value={draft} maxLength={100} onChange={(event) => setDraft(event.target.value)} onBlur={finishRename} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); finishRename(); } else if (event.key === "Escape") { event.preventDefault(); setRenaming(false); } }} />
+  </div> : <button
     className={`terminal-tab ${active ? "active" : ""} ${highlighted ? "run-config-running" : ""}`}
     role="tab"
     aria-selected={active}
@@ -52,10 +77,38 @@ export function TerminalTabButton({ tab, active, highlighted, onActivate, onClos
       onClose(tab);
     }}
     onClick={(event) => { if (event.button === 0) onActivate(tab.id); }}
+    onDoubleClick={(event) => { if (event.button === 0 && onRename) { event.preventDefault(); beginRename(); } }}
+    draggable
+    onDragStart={(event) => { event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/plain", tab.id); }}
+    onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = "move"; }}
+    onDrop={(event) => { event.preventDefault(); const sourceId = event.dataTransfer.getData("text/plain"); if (sourceId && sourceId !== tab.id) onMove?.(sourceId, tab.id); }}
+    onContextMenu={(event) => { event.preventDefault(); setMenu({ x: Math.min(event.clientX, window.innerWidth - 160), y: Math.min(event.clientY, window.innerHeight - 74) }); }}
   >
-    <span>{tab.title}{visibleStatus}</span>
+    <span>{tab.title}{rootAlias && <small className="root-badge">{rootAlias}</small>}{visibleStatus}</span>
     <span className="close" title={`Close ${tab.title}`} onClick={(event) => { event.stopPropagation(); onClose(tab); }}><X size={13} /></span>
-  </button>;
+  </button>}
+    {menu && <div className="terminal-context-menu terminal-tab-menu" style={{ left: menu.x, top: menu.y }} onMouseDown={(event) => event.stopPropagation()}>
+      <button onClick={beginRename}><Pencil size={14} /><span>Rename</span></button>
+      <button onClick={() => { setMenu(undefined); onDuplicate?.(tab); }}><Copy size={14} /><span>Duplicate</span></button>
+    </div>}
+  </>;
+}
+
+export function TerminalRecoveryNotice({ tab, onDismiss }: { tab: TerminalTab; onDismiss?(): void }) {
+  const [recoveryVisible, setRecoveryVisible] = useState(Boolean(tab.recovery));
+  const onDismissRef = useRef(onDismiss);
+  onDismissRef.current = onDismiss;
+  useEffect(() => {
+    setRecoveryVisible(Boolean(tab.recovery));
+    if (!tab.recovery) return;
+    const timer = window.setTimeout(() => { setRecoveryVisible(false); onDismissRef.current?.(); }, 2_500);
+    return () => window.clearTimeout(timer);
+  }, [tab.recovery, tab.terminalId]);
+  if (recoveryVisible && tab.recovery === "reattached") return <div className="terminal-recovery-notice live" role="status">Live process reattached — this is the same Core-owned terminal process.</div>;
+  if (recoveryVisible && tab.recovery === "recreated") return <div className="terminal-recovery-notice" role="status">New shell created because Core no longer has the previous terminal session. It starts in this task workspace; the former process, environment, and working directory were not restored.</div>;
+  if (tab.status === "exited") return <div className="terminal-recovery-notice exited" role="status">This terminal process exited{tab.exitCode === undefined ? "" : ` with code ${tab.exitCode}`} and cannot accept input.</div>;
+  if (tab.status === "unavailable") return <div className="terminal-recovery-notice exited" role="status">The previous terminal session is unavailable and no replacement shell was started.</div>;
+  return null;
 }
 
 function TerminalView({ theme, fontFamily, fontSize, lineHeight, client, tab, active, registerWriter }: { theme: AppTheme; fontFamily: string; fontSize: number; lineHeight: number; client: CoreClient; tab: TerminalTab; active: boolean; registerWriter: Props["registerWriter"] }) {
@@ -107,7 +160,11 @@ function TerminalView({ theme, fontFamily, fontSize, lineHeight, client, tab, ac
       if (tab.status === "running" && terminal.cols > 0 && terminal.rows > 0) void client.request("terminal.resize", { terminalId: tab.terminalId, cols: terminal.cols, rows: terminal.rows });
     });
     observer.observe(container);
-    requestAnimationFrame(() => { fit.fit(); terminal.focus(); });
+    const focusOwner = document.activeElement;
+    requestAnimationFrame(() => {
+      fit.fit();
+      if (active) focusTerminalIfUnchanged(focusOwner, () => terminal.focus());
+    });
     return () => {
       container.removeEventListener("paste", handlePaste, true);
       observer.disconnect(); input.dispose(); registerWriter(tab.terminalId); terminal.dispose();
@@ -116,7 +173,11 @@ function TerminalView({ theme, fontFamily, fontSize, lineHeight, client, tab, ac
 
   useEffect(() => {
     if (!active) return;
-    requestAnimationFrame(() => { fitRef.current?.fit(); terminalRef.current?.focus(); });
+    const focusOwner = document.activeElement;
+    requestAnimationFrame(() => {
+      fitRef.current?.fit();
+      focusTerminalIfUnchanged(focusOwner, () => terminalRef.current?.focus());
+    });
   }, [active]);
 
   useEffect(() => {

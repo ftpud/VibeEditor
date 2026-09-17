@@ -7,10 +7,11 @@ import { mkdir, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/p
 import { Readable, Writable } from "node:stream";
 import { ClientSideConnection, PROTOCOL_VERSION, ndJsonStream, type Client, type ContentBlock, type McpServer, type RequestPermissionRequest, type RequestPermissionResponse, type SessionConfigOption, type SessionNotification } from "@agentclientprotocol/sdk";
 import { AcpProvider, applyConfiguration, type AcpSendRequest, type AiConfiguration, type AiContentBlock, type AiMessage, type AiModel, type AiModelDetails, type AiOption, type AiProviderDescriptor, type AiSession, type AiUsage } from "@remote-ide/acp";
+import type { TaskCheckpointProvenance } from "@remote-ide/protocol";
 import { CoreError } from "../errors.js";
 import { agentFingerprint } from "../agent-profile.js";
 
-type ToolState = { title: string; name?: string; status?: string; command?: string; body: string[]; content: AiContentBlock[]; completion?: string };
+type ToolState = { title: string; name?: string; status?: string; command?: string; body: string[]; content: AiContentBlock[]; completion?: string; terminalId?: string };
 type Runtime = {
   child: ChildProcessWithoutNullStreams;
   connection: ClientSideConnection;
@@ -40,6 +41,18 @@ type PermissionWaiter = { workspace: string; resolve(response: RequestPermission
 
 const STEERING_METHOD = "_session/steering";
 
+function checkpointProvenance(session: AiSession, content?: AiContentBlock[], agent?: AcpSendRequest["agent"]): TaskCheckpointProvenance {
+  const attachments = content?.filter((block) => block.type !== "text").slice(0, 20).map((block) => ({
+    name: (block.name ?? (block.type === "image" ? "Image" : block.uri) ?? "Attachment").slice(0, 160), mimeType: block.mimeType,
+    kind: block.type
+  }));
+  return {
+    model: session.model, reasoning: session.reasoning,
+    ...(agent ? { agent: { name: agent.name, fingerprint: agentFingerprint(agent) } } : session.agent ? { agent: session.agent } : {}),
+    ...(attachments?.length ? { attachments } : {})
+  };
+}
+
 function stamp(session: AiSession): number { return Date.parse(session.updatedAt ?? session.createdAt ?? "") || 0; }
 
 /** Everything the session picker needs to label a conversation, without its transcript. */
@@ -56,8 +69,8 @@ const TERMINAL_ONLY_COMMANDS = new Set(["/diff", "/resume", "/theme", "/settings
 
 /** Genuine ACP v1 client transport over NDJSON/stdio. */
 export type AcpTurnObserver = {
-  begin(workspace: string, provider: string, prompt: string, sessionId?: string): Promise<string>;
-  complete(workspace: string, ids: string[], status: "completed" | "interrupted" | "error"): Promise<void>;
+  begin(workspace: string, provider: string, prompt: string, sessionId?: string, provenance?: TaskCheckpointProvenance): Promise<string>;
+  complete(workspace: string, ids: string[], status: "completed" | "interrupted" | "error", provenance?: Pick<TaskCheckpointProvenance, "usage">): Promise<void>;
 };
 export abstract class StdioAcpProvider extends AcpProvider {
   abstract readonly descriptor: AiProviderDescriptor;
@@ -65,6 +78,7 @@ export abstract class StdioAcpProvider extends AcpProvider {
   protected abstract fallbackModels(): Promise<AiModel[]>;
   private readonly runtimes = new Map<string, Runtime>();
   private readonly queues = new Map<string, Promise<void>>();
+  private readonly freshSessions = new Map<string, AcpSendRequest>();
   private readonly saveQueues = new Map<string, Promise<void>>();
   private modelCache?: { at: number; models: AiModel[] };
   private modelDiscovery?: Promise<AiModel[]>;
@@ -120,6 +134,7 @@ export abstract class StdioAcpProvider extends AcpProvider {
     const session = runtime?.session ?? await this.get(workspace);
     const desired = typeof configuration === "string" ? { model: configuration, reasoning: legacyReasoning ?? session.reasoning } : configuration;
     applyConfiguration(session, desired);
+    if (typeof desired.model === "string" || typeof desired.reasoning === "string") session.nextConfiguration = undefined;
     if (runtime) {
       const warnings = await this.applyAcpConfiguration(runtime, runtime.configOptions, runtime.modes);
       if (warnings.length > 0) session.messages.push(this.message("activity", `Session configuration\n${warnings.join("\n")}`));
@@ -151,8 +166,8 @@ export abstract class StdioAcpProvider extends AcpProvider {
     if (nextConfiguration) runtime.session.nextConfiguration = undefined;
     const visible = [prompt, ...(request.content ?? []).map(contentLabel)].filter(Boolean).join("\n");
     runtime.session.messages.push({ ...this.message("user", visible), content: request.content });
-    if (this.turns) try { runtime.checkpointIds.push(await this.turns.begin(workspace, this.descriptor.id, visible, runtime.session.id)); } catch (error) { runtime.session.messages.push(this.message("activity", `Prompt checkpoint could not be created: ${error instanceof Error ? error.message : String(error)}`)); }
-    this.runPrompt(workspace, runtime, this.withSessionAgent(content, request.agent, runtime.session));
+    if (this.turns) try { runtime.checkpointIds.push(await this.turns.begin(workspace, this.descriptor.id, visible, runtime.session.id, checkpointProvenance(runtime.session, request.content, request.agent))); } catch (error) { runtime.session.messages.push(this.message("activity", `Prompt checkpoint could not be created: ${error instanceof Error ? error.message : String(error)}`)); }
+    this.runPrompt(workspace, runtime, this.withSessionAgent(content, request.agent, request.agentPreset, runtime.session));
     await this.save(workspace, runtime.session); this.onChanged(workspace);
     return this.get(workspace);
   }
@@ -167,12 +182,22 @@ export abstract class StdioAcpProvider extends AcpProvider {
     const runtime = this.runtimes.get(workspace);
     if (!runtime?.running) throw new CoreError("INVALID_REQUEST", `${this.descriptor.name} is not currently working`);
     runtime.session.messages.push({ ...this.message("user", prompt), ...(options?.senderModel ? { senderModel: options.senderModel } : {}) });
-    if (this.turns) try { runtime.checkpointIds.push(await this.turns.begin(workspace, this.descriptor.id, prompt, runtime.session.id)); } catch (error) { runtime.session.messages.push(this.message("activity", `Prompt checkpoint could not be created: ${error instanceof Error ? error.message : String(error)}`)); }
+    if (this.turns) try { runtime.checkpointIds.push(await this.turns.begin(workspace, this.descriptor.id, prompt, runtime.session.id, checkpointProvenance(runtime.session))); } catch (error) { runtime.session.messages.push(this.message("activity", `Prompt checkpoint could not be created: ${error instanceof Error ? error.message : String(error)}`)); }
     runtime.anchors = {};
     if (runtime.steering && !options?.queue) {
       try { await runtime.connection.extMethod(STEERING_METHOD, { sessionId: runtime.sessionId, prompt: [{ type: "text", text: prompt }] }); }
       catch (error) { runtime.session.messages.push(this.message("activity", `Could not steer the running turn, queued instead: ${error instanceof Error ? error.message : String(error)}`)); runtime.pending.push({ prompt, senderModel: options?.senderModel }); }
     } else runtime.pending.push({ prompt, senderModel: options?.senderModel });
+    await this.save(workspace, runtime.session); this.onChanged(workspace);
+    return this.get(workspace);
+  }
+
+  async startFreshSession(workspace: string, request: AcpSendRequest): Promise<AiSession> {
+    this.validate(request.prompt);
+    const runtime = this.runtimes.get(workspace);
+    if (!runtime?.running) return super.startFreshSession(workspace, request);
+    runtime.pending = [];
+    this.freshSessions.set(workspace, request);
     await this.save(workspace, runtime.session); this.onChanged(workspace);
     return this.get(workspace);
   }
@@ -183,6 +208,7 @@ export abstract class StdioAcpProvider extends AcpProvider {
     // Retire the turn before cancelling so neither its late output nor its
     // completion status (agents may still report `end_turn`) lands afterwards.
     runtime.generation += 1;
+    this.freshSessions.delete(workspace);
     runtime.running = false; runtime.anchors = {}; runtime.pending = [];
     try { await runtime.connection.cancel({ sessionId: runtime.sessionId }); }
     catch (error) { runtime.session.messages.push(this.message("activity", `Cancel request failed: ${error instanceof Error ? error.message : String(error)}`)); }
@@ -204,7 +230,9 @@ export abstract class StdioAcpProvider extends AcpProvider {
       runtime.running = false; runtime.anchors = {};
       const usage = result.usage;
       if (usage) runtime.session.tokens = { total: usage.totalTokens, input: usage.inputTokens, output: usage.outputTokens, ...(usage.thoughtTokens != null ? { thought: usage.thoughtTokens } : {}), ...(usage.cachedReadTokens != null ? { cachedRead: usage.cachedReadTokens } : {}), ...(usage.cachedWriteTokens != null ? { cachedWrite: usage.cachedWriteTokens } : {}) };
-      const queued = result.stopReason === "cancelled" ? undefined : runtime.pending.shift();
+      const fresh = result.stopReason === "cancelled" ? undefined : this.freshSessions.get(workspace);
+      if (fresh) this.freshSessions.delete(workspace);
+      const queued = fresh || result.stopReason === "cancelled" ? undefined : runtime.pending.shift();
       if (queued !== undefined) {
         const nextConfiguration = runtime.session.nextConfiguration;
         if (nextConfiguration) {
@@ -222,9 +250,11 @@ export abstract class StdioAcpProvider extends AcpProvider {
       }
       if (queued === undefined) await this.completeCheckpoints(workspace, runtime, result.stopReason === "cancelled" ? "interrupted" : result.stopReason === "refusal" ? "error" : "completed");
       await this.save(workspace, runtime.session); this.onChanged(workspace);
+      if (fresh) { await this.clear(workspace); await this.send(workspace, fresh); }
     })).catch((error: unknown) => this.queue(workspace, async () => {
       if (runtime.generation !== generation) return;
       runtime.running = false; runtime.anchors = {}; runtime.pending = [];
+      this.freshSessions.delete(workspace);
       runtime.session.status = "error"; runtime.session.messages.push(this.message("error", this.describe(error, runtime)));
       await this.completeCheckpoints(workspace, runtime, "error");
       await this.save(workspace, runtime.session); this.onChanged(workspace);
@@ -238,7 +268,7 @@ export abstract class StdioAcpProvider extends AcpProvider {
 
   private async completeCheckpoints(workspace: string, runtime: Runtime, status: "completed" | "interrupted" | "error"): Promise<void> {
     const ids = runtime.checkpointIds.splice(0); if (!this.turns || ids.length === 0) return;
-    try { await this.turns.complete(workspace, ids, status); } catch (error) { runtime.session.messages.push(this.message("activity", `Prompt checkpoint could not be completed: ${error instanceof Error ? error.message : String(error)}`)); }
+    try { await this.turns.complete(workspace, ids, status, runtime.session.tokens ? { usage: runtime.session.tokens } : undefined); } catch (error) { runtime.session.messages.push(this.message("activity", `Prompt checkpoint could not be completed: ${error instanceof Error ? error.message : String(error)}`)); }
   }
 
   private promptContent(workspace: string, prompt: string, blocks?: AiContentBlock[]): ContentBlock[] {
@@ -279,9 +309,10 @@ export abstract class StdioAcpProvider extends AcpProvider {
   }
 
   /** Agent presets are durable session instructions, not per-turn user content. */
-  private withSessionAgent(content: ContentBlock[], agent: AcpSendRequest["agent"] | undefined, session: AiSession): ContentBlock[] {
-    if (!agent) { session.agent = undefined; return content; }
+  private withSessionAgent(content: ContentBlock[], agent: AcpSendRequest["agent"] | undefined, preset: AcpSendRequest["agentPreset"] | undefined, session: AiSession): ContentBlock[] {
+    if (!agent) { session.agent = undefined; session.agentPreset = undefined; return content; }
     const fingerprint = agentFingerprint(agent);
+    session.agentPreset = preset;
     if (session.agent?.fingerprint === fingerprint) return content;
     session.agent = { name: agent.name, fingerprint };
     return this.withAgent(content, agent);
@@ -301,6 +332,7 @@ export abstract class StdioAcpProvider extends AcpProvider {
 
   async clear(workspace: string): Promise<AiSession> {
     if (this.runtimes.get(workspace)?.running) throw new CoreError("INVALID_REQUEST", `${this.descriptor.name} is still working`);
+    this.freshSessions.delete(workspace);
     await this.closeRuntime(workspace);
     const current = await this.get(workspace);
     await this.archive(workspace, current);
@@ -453,6 +485,10 @@ export abstract class StdioAcpProvider extends AcpProvider {
   private async connect(workspace: string, configuration: AiConfiguration, servers?: AcpSendRequest["mcpServers"], savedSessionId?: string): Promise<Connected> {
     const launch = this.command(configuration);
     const child = spawn(launch.command, launch.args, { cwd: workspace, env: { ...process.env, ...launch.env }, stdio: "pipe" });
+    // Spawn failures (most commonly an optional provider CLI missing from PATH)
+    // are emitted asynchronously. Listen before constructing the ACP transport so
+    // ENOENT rejects discovery instead of becoming an unhandled process error.
+    const spawnFailure = new Promise<never>((_resolve, reject) => { child.once("error", reject); });
     let stderr = "";
     child.stderr.on("data", (chunk: Buffer) => { stderr = (stderr + chunk.toString()).slice(-20_000); });
     const stream = ndJsonStream(Writable.toWeb(child.stdin) as WritableStream<Uint8Array>, Readable.toWeb(child.stdout) as ReadableStream<Uint8Array>);
@@ -466,7 +502,10 @@ export abstract class StdioAcpProvider extends AcpProvider {
     const connection = new ClientSideConnection(() => client, stream);
     let authHint = "";
     try {
-      const initialized = await connection.initialize({ protocolVersion: PROTOCOL_VERSION, clientCapabilities: {}, clientInfo: { name: "Vibe Editor", version: "0.1.0" } });
+      const initialized = await Promise.race([
+        connection.initialize({ protocolVersion: PROTOCOL_VERSION, clientCapabilities: {}, clientInfo: { name: "Vibe Editor", version: "0.1.0" } }),
+        spawnFailure
+      ]);
       authHint = initialized.authMethods?.map((method) => method.description ?? method.name).join("; ") ?? "";
       const steering = (initialized._meta as { steering?: { supported?: boolean } } | undefined)?.steering?.supported === true;
       let created: CreatedSession;
@@ -541,7 +580,11 @@ export abstract class StdioAcpProvider extends AcpProvider {
         if (option.type === "boolean") { await runtime.connection.setSessionConfigOption({ sessionId: runtime.sessionId, configId: option.id, type: "boolean", value: Boolean(value) }); return; }
         if (!selectValues(option).includes(String(value))) { warnings.push(`• ${option.name}: "${value}" is not offered by ${this.descriptor.name}, keeping "${option.currentValue}".`); return; }
         const response = await runtime.connection.setSessionConfigOption({ sessionId: runtime.sessionId, configId: option.id, value: String(value) });
+        // Some agents (notably Copilot) acknowledge a setting without returning
+        // the refreshed option list. Keep that accepted value locally; otherwise
+        // syncFromOptions below copies the pre-change default back over the session.
         if (response.configOptions) current = response.configOptions;
+        else current = current.map((candidate) => candidate.id === option.id ? { ...candidate, currentValue: String(value) } as SessionConfigOption : candidate);
       } catch (error) { warnings.push(`• ${option.name}: ${error instanceof Error ? error.message : String(error)}`); }
     };
 
@@ -595,7 +638,7 @@ export abstract class StdioAcpProvider extends AcpProvider {
         runtime.anchors = {};
         const tool: ToolState = { title: update.title, name: update.name ?? undefined, status: update.status ?? undefined, ...toolBody(update) };
         runtime.tools.set(update.toolCallId, tool);
-        session.messages.push({ id: update.toolCallId, role: "activity", text: renderTool(tool), content: tool.content, timestamp: new Date().toISOString() });
+        session.messages.push({ id: update.toolCallId, role: "activity", text: renderTool(tool), content: tool.content, timestamp: new Date().toISOString(), ...(tool.terminalId ? { terminalId: tool.terminalId } : {}) });
         appendTaskCompletion(session, update.toolCallId, tool);
         break;
       }
@@ -608,10 +651,11 @@ export abstract class StdioAcpProvider extends AcpProvider {
         if (next.body.length > 0) tool.body = next.body;
         if (next.content.length > 0) tool.content = next.content;
         if (next.completion) tool.completion = next.completion;
+        if (next.terminalId) tool.terminalId = next.terminalId;
         runtime.tools.set(update.toolCallId, tool);
         const existing = session.messages.find((message) => message.id === update.toolCallId);
-        if (existing) { existing.text = renderTool(tool); existing.content = tool.content; }
-        else session.messages.push({ id: update.toolCallId, role: "activity", text: renderTool(tool), content: tool.content, timestamp: new Date().toISOString() });
+        if (existing) { existing.text = renderTool(tool); existing.content = tool.content; existing.terminalId = tool.terminalId; }
+        else session.messages.push({ id: update.toolCallId, role: "activity", text: renderTool(tool), content: tool.content, timestamp: new Date().toISOString(), ...(tool.terminalId ? { terminalId: tool.terminalId } : {}) });
         appendTaskCompletion(session, update.toolCallId, tool);
         break;
       }
@@ -832,21 +876,22 @@ function contentLabel(content: AiContentBlock): string {
   return `[Workspace resource: ${content.name}]`;
 }
 
-function toolBody(update: { rawInput?: unknown; content?: unknown }): { command?: string; body: string[]; content: AiContentBlock[]; completion?: string } {
+function toolBody(update: { rawInput?: unknown; content?: unknown }): { command?: string; body: string[]; content: AiContentBlock[]; completion?: string; terminalId?: string } {
   const lines: string[] = [];
   const content: AiContentBlock[] = [];
   const input = update.rawInput as Record<string, unknown> | undefined;
   const command = input && typeof input.command === "string" ? input.command : undefined;
   const completion = input && typeof input.summary === "string" ? input.summary.trim() : undefined;
   for (const key of ["path", "filePath", "url", "scope"] as const) if (input && typeof input[key] === "string") lines.push(`${key}: ${input[key]}`);
+  let terminalId: string | undefined;
   for (const item of Array.isArray(update.content) ? update.content : []) {
     const entry = item as { type?: string; content?: { type?: string; text?: string }; path?: string; newText?: string; terminalId?: string };
     if (entry.type === "content" && entry.content?.type === "text" && entry.content.text) lines.push(entry.content.text);
     else if (entry.type === "content" && entry.content?.type === "image") { const block = fromAcpContent(entry.content as ContentBlock); if (block) content.push(block); lines.push("[Image output]"); }
     else if (entry.type === "diff" && entry.path) lines.push(`--- ${entry.path}\n${entry.newText ?? ""}`);
-    else if (entry.type === "terminal" && entry.terminalId) lines.push(`terminal ${entry.terminalId}`);
+    else if (entry.type === "terminal" && entry.terminalId) { terminalId = entry.terminalId; lines.push(`terminal ${entry.terminalId}`); }
   }
-  return { ...(command === undefined ? {} : { command }), body: lines, content, ...(completion ? { completion } : {}) };
+  return { ...(command === undefined ? {} : { command }), body: lines, content, ...(completion ? { completion } : {}), ...(terminalId ? { terminalId } : {}) };
 }
 
 function renderTool(tool: ToolState): string {

@@ -1,8 +1,88 @@
 import { describe, expect, it } from "vitest";
 import { WebSocket } from "ws";
-import { assertSessionChangeAllowed, permissionTargetWorkspace, sendWebSocketData } from "./server.js";
+import { assertRequestRoot, assertRootRemovalAllowed, assertSessionChangeAllowed, LiveRootSelections, permissionTargetWorkspace, protocolHandshake, renameWorkspacePaths, rootRemovalBlocker, selectRootWorkspace, sendWebSocketData, transactionalRootSelection, WorkspaceWatchBatcher } from "./server.js";
+
+describe("protocol handshake", () => {
+  it("accepts overlapping ranges and describes incompatible Desktops", () => {
+    expect(protocolHandshake({ minimum: 3, maximum: 3 })).toMatchObject({ compatible: true, compatibility: { minimum: 3, maximum: 3 } });
+    expect(protocolHandshake({ minimum: 2, maximum: 2 })).toEqual({ compatible: false, compatibility: { minimum: 3, maximum: 3 }, message: "Core supports protocol 3-3; this Desktop supports 2-2" });
+    expect(protocolHandshake({ minimum: 3, maximum: 1 }).compatible).toBe(false);
+  });
+});
+
+describe("workspace watcher batching", () => {
+  it("coalesces bursts and marks bounded batches as overflowed", () => {
+    const events: unknown[] = [];
+    const batcher = new WorkspaceWatchBatcher((event) => events.push(event), 60_000, 2);
+    batcher.change("a.ts"); batcher.change("b.ts"); batcher.change("c.ts"); batcher.degrade("overflow"); batcher.flush();
+    expect(events).toEqual([{ type: "filesystem.changed", payload: { rootId: "legacy", paths: ["a.ts", "b.ts"], overflow: true, health: "degraded", message: "overflow" } }]);
+  });
+});
+
+describe("workspace root request boundary", () => {
+  it("clears the persisted task selection when activating a project root", async () => {
+    let selectedTaskId: string | undefined = "task-a";
+    const tasks = { select: async (taskId?: string) => { selectedTaskId = taskId; return { workspace: "/root", registry: { tasks: [] } }; } };
+
+    await selectRootWorkspace(tasks);
+
+    expect(selectedTaskId).toBeUndefined();
+  });
+
+  it("accepts the selected identity and rejects missing or cross-root identities", () => {
+    expect(() => assertRequestRoot({ id: "1", type: "filesystem.readFile", rootId: "root-a", payload: { path: "README.md" } }, "root-a")).not.toThrow();
+    expect(() => assertRequestRoot({ id: "2", type: "filesystem.readFile", rootId: "root-b", payload: { path: "README.md" } }, "root-a")).toThrow("not the selected root");
+    expect(() => assertRequestRoot({ id: "3", type: "filesystem.readFile", payload: { path: "README.md" } } as never, "root-a")).toThrow("requires an explicit rootId");
+  });
+
+  it("keeps the previous root authoritative when preparing a switch fails", async () => {
+    let selectedRootId = "root-a"; let disposed = false;
+    await expect(transactionalRootSelection<{ rootId: string }>(
+      async () => { throw new Error("watcher setup failed"); },
+      ({ rootId }: { rootId: string }) => { selectedRootId = rootId; },
+      () => { disposed = true; }
+    )).rejects.toThrow("watcher setup failed");
+    expect(selectedRootId).toBe("root-a");
+    expect(disposed).toBe(false);
+    expect(() => assertRequestRoot({ id: "after-failure", type: "filesystem.readFile", rootId: "root-a", payload: { path: "README.md" } }, selectedRootId)).not.toThrow();
+  });
+
+  it("blocks removal while either client selects a root and releases it on disconnect", () => {
+    const selections = new LiveRootSelections<object>(); const first = {}; const second = {};
+    selections.connect(first, "root-a"); selections.connect(second, "root-b");
+    expect(selections.isSelected("root-b")).toBe(true);
+    expect(() => assertRootRemovalAllowed(selections, "root-b")).toThrow("Every connected client");
+    selections.beginSelection(first, "root-c");
+    expect(selections.isSelected("root-c")).toBe(true);
+    selections.cancelSelection(first);
+    expect(selections.isSelected("root-c")).toBe(false);
+    selections.select(first, "root-b");
+    expect(selections.isSelected("root-a")).toBe(false);
+    selections.disconnect(second);
+    expect(selections.isSelected("root-b")).toBe(true);
+    selections.disconnect(first);
+    expect(selections.isSelected("root-b")).toBe(false);
+    expect(() => assertRootRemovalAllowed(selections, "root-b")).not.toThrow();
+    expect(selections.selected(first)).toBeUndefined();
+  });
+
+  it("reports every material removal blocker without touching the directory", () => {
+    expect(rootRemovalBlocker({ tasks: 1, openFiles: 0, terminals: false, transfers: false })).toContain("task worktrees");
+    expect(rootRemovalBlocker({ tasks: 0, openFiles: 1, terminals: false, transfers: false })).toContain("open files");
+    expect(rootRemovalBlocker({ tasks: 0, openFiles: 0, terminals: true, transfers: false })).toContain("terminal sessions");
+    expect(rootRemovalBlocker({ tasks: 0, openFiles: 0, terminals: false, transfers: true })).toContain("transfers");
+    expect(rootRemovalBlocker({ tasks: 0, openFiles: 0, terminals: false, transfers: false })).toBeUndefined();
+  });
+});
 import { withAppTools } from "./app-tools.js";
 import type { WorkspaceTaskStore } from "./tasks.js";
+
+describe("workspace paths after filesystem moves", () => {
+  it("updates tabs, colors, and Java project paths under a moved directory", () => {
+    const result = renameWorkspacePaths({ openFiles: ["src/App.java", "README.md"], pinnedFiles: ["src/App.java"], activeFile: "src/App.java", fileColors: { "src/App.java": "blue" }, javaProject: { type: "maven", pomPath: "src/pom.xml", mavenExecutable: "mvn", sourceRoots: ["src/main/java"], outputPath: "src/target/classes", testOutputPath: "src/target/test-classes", runConfigurations: [] } }, "src", "app");
+    expect(result).toMatchObject({ openFiles: ["app/App.java", "README.md"], pinnedFiles: ["app/App.java"], activeFile: "app/App.java", fileColors: { "app/App.java": "blue" }, javaProject: { pomPath: "app/pom.xml", sourceRoots: ["app/main/java"], outputPath: "app/target/classes" } });
+  });
+});
 
 describe("built-in app tool access", () => {
   it("does not grant tools without an explicit agent allowlist entry", () => {
@@ -20,7 +100,7 @@ describe("built-in app tool access", () => {
 
 describe("permission request task routing", () => {
   const tasks = {
-    list: async () => ({ tasks: [{ id: "task-a", name: "A", branch: "a", baseBranch: "main", status: "active" as const }, { id: "task-b", name: "B", branch: "b", baseBranch: "main", status: "active" as const }] }),
+    list: async () => ({ tasks: [{ id: "task-a", name: "A", branch: "a", baseBranch: "main", status: "active" as const, archived: false }, { id: "task-b", name: "B", branch: "b", baseBranch: "main", status: "active" as const, archived: false }] }),
     taskPath: (taskId: string) => `/tasks/${taskId}/workspace`
   } satisfies Pick<WorkspaceTaskStore, "list" | "taskPath">;
 

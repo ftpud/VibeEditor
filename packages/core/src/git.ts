@@ -1,14 +1,17 @@
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
 import path from "node:path";
-import { readFile } from "node:fs/promises";
-import type { GitBranch, GitCommit, GitCommitFile, GitDiffHunk, GitRollbackFailure, GitStatusEntry, GitUpstreamStatus } from "@remote-ide/protocol";
+import { chmod, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import type { FileRevision, GitBranch, GitBranchDeletePreview, GitCommit, GitCommitFile, GitConflictOperationKind, GitConflictWorkspace, GitDiffHunk, GitHistoryRewritePreview, GitMergePreview, GitMergeRef, GitMergeResult, GitPullPreview, GitPullResult, GitPullStrategy, GitRebasePreview, GitRebaseResult, GitRebaseTodoItem, GitRollbackFailure, GitStash, GitStashInclusion, GitStashPreview, GitStatusEntry, GitTag, GitUpstreamStatus } from "@remote-ide/protocol";
 import { CoreError } from "./errors.js";
 import { WorkspaceFileSystem } from "./filesystem.js";
+import type { GitCommitPatch } from "@remote-ide/protocol";
 
 const execFileAsync = promisify(execFile);
 
 export class GitService {
+  private static readonly fetches = new Map<string, { controller?: AbortController; lastSuccessful?: string }>();
   constructor(private readonly workspace: string) {}
 
   async status(): Promise<{ branch: string; entries: GitStatusEntry[]; upstream?: GitUpstreamStatus }> {
@@ -30,8 +33,16 @@ export class GitService {
   private async upstreamStatus(): Promise<GitUpstreamStatus | undefined> {
     try {
       const upstream = (await this.git(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"])).trim();
-      const ahead = Number((await this.git(["rev-list", "--count", `${upstream}..HEAD`])).trim());
-      return upstream && Number.isSafeInteger(ahead) && ahead >= 0 ? { upstream, ahead } : undefined;
+      const [aheadOutput = "", behindOutput = ""] = await Promise.all([
+        this.git(["rev-list", "--count", `${upstream}..HEAD`]),
+        this.git(["rev-list", "--count", `HEAD..${upstream}`])
+      ]);
+      const ahead = Number(aheadOutput.trim());
+      const behind = Number(behindOutput.trim());
+      const lastFetch = GitService.fetches.get(this.workspace)?.lastSuccessful;
+      return upstream && Number.isSafeInteger(ahead) && ahead >= 0 && Number.isSafeInteger(behind) && behind >= 0
+        ? { upstream, ahead, behind, ...(lastFetch ? { lastFetch } : {}) }
+        : undefined;
     } catch {
       // A detached HEAD or a branch without a configured, resolvable upstream is unpublished.
       return undefined;
@@ -51,21 +62,120 @@ export class GitService {
     } catch {
       // New files and repositories without HEAD have no original content.
     }
-    try { modifiedContent = await filesystem.read(entry.path); }
-    catch (error) {
-      if (!(error instanceof CoreError) || error.code !== "FILE_NOT_FOUND") throw error;
+    const hasIndexChange = entry.indexStatus !== " " && entry.indexStatus !== "?";
+    if (hasIndexChange) {
+      // The Git panel places mixed index/worktree entries in the Staged group.
+      // Show the index snapshot there, otherwise an index-only change appears
+      // unchanged because its working file is deliberately left untouched.
+      try { modifiedContent = await this.git(["show", `:${entry.path}`]); }
+      catch { /* A staged deletion has no index blob. */ }
+    } else {
+      try { modifiedContent = (await filesystem.read(entry.path)).content; }
+      catch (error) {
+        if (!(error instanceof CoreError) || error.code !== "FILE_NOT_FOUND") throw error;
+      }
     }
     let hunks: GitDiffHunk[] = [];
-    if (entry.indexStatus === "?" && entry.worktreeStatus === "?") hunks = modifiedContent ? [{ originalStart: 0, originalLines: 0, modifiedStart: 1, modifiedLines: modifiedContent.split("\n").length - (modifiedContent.endsWith("\n") ? 1 : 0) }] : [];
-    else {
-      try { hunks = parseDiffHunks(await this.git(["diff", "--unified=0", "HEAD", "--", entry.path])); } catch { /* Repositories without HEAD are treated as new files. */ }
+    if (isUntracked(entry)) {
+      const patch = await this.untrackedPatch(entry.path);
+      hunks = parseDiffHunks(patch, "worktree");
+    } else {
+      const [indexPatch, worktreePatch] = await Promise.all([
+        this.git(["diff", "--cached", "--unified=0", "--", entry.path]).catch(() => ""),
+        this.git(["diff", "--unified=0", "--", entry.path]).catch(() => "")
+      ]);
+      hunks = [...parseDiffHunks(indexPatch, "index"), ...parseDiffHunks(worktreePatch, "worktree")];
     }
     return { path: entry.path, originalContent, modifiedContent, hunks };
+  }
+
+  async stage(filePath: string, hunk?: GitDiffHunk): Promise<void> { await this.updateIndex("stage", filePath, hunk); }
+  async unstage(filePath: string, hunk?: GitDiffHunk): Promise<void> { await this.updateIndex("unstage", filePath, hunk); }
+
+  async conflicts(): Promise<GitConflictWorkspace> {
+    const entries = (await this.status()).entries.filter((entry) => entry.states.includes("conflict"));
+    if (!entries.length) throw new CoreError("GIT_FAILED", "There are no unresolved Git conflicts. Refresh Git status to continue.");
+    const operation = await this.conflictOperation();
+    const files = await Promise.all(entries.map(async (entry) => {
+      this.validateConflictPath(entry.path);
+      const [base, ours, theirs, result] = await Promise.all([
+        this.showIndexStage(1, entry.path), this.showIndexStage(2, entry.path), this.showIndexStage(3, entry.path),
+        readFile(path.join(this.workspace, entry.path), "utf8").then((content) => content as string | undefined).catch(() => undefined)
+      ]);
+      return { path: entry.path, ...(base !== undefined ? { base } : {}), ...(ours !== undefined ? { ours } : {}), ...(theirs !== undefined ? { theirs } : {}), ...(result !== undefined ? { result } : {}), resultDeleted: result === undefined };
+    }));
+    const native = operation !== "stash";
+    return { operation, files, canContinue: native, canAbort: native, recovery: conflictRecovery(operation) };
+  }
+
+  async resolveConflict(filePath: string, result: string | null): Promise<GitConflictWorkspace> {
+    this.validateConflictPath(filePath);
+    const entry = (await this.status()).entries.find((item) => item.path === filePath && item.states.includes("conflict"));
+    if (!entry) throw new CoreError("GIT_FAILED", `Path is no longer an unresolved conflict: ${filePath}. Refresh the conflict workspace.`);
+    const absolute = path.join(this.workspace, filePath);
+    if (result === null) { await rm(absolute, { force: true }); await this.git(["rm", "--cached", "--ignore-unmatch", "--", filePath]); }
+    else { await writeFile(absolute, result, "utf8"); await this.git(["add", "--", filePath]); }
+    if ((await this.status()).entries.some((item) => item.path === filePath && item.states.includes("conflict"))) throw new CoreError("GIT_FAILED", `Git did not accept the resolution for ${filePath}. Review the result and retry.`);
+    const remaining = (await this.status()).entries.filter((item) => item.states.includes("conflict"));
+    if (!remaining.length) { const operation = await this.conflictOperation(); const native = operation !== "stash"; return { operation, files: [], canContinue: native, canAbort: native, recovery: conflictRecovery(operation) }; }
+    return this.conflicts();
+  }
+
+  async conflictAction(action: "continue" | "abort"): Promise<string> {
+    const operation = await this.conflictOperation();
+    if (operation === "stash") throw new CoreError("GIT_FAILED", `Git stash has no native ${action} command. ${conflictRecovery(operation)}`);
+    if (action === "continue") {
+      const unresolved = (await this.status()).entries.filter((entry) => entry.states.includes("conflict"));
+      if (unresolved.length) throw new CoreError("GIT_FAILED", `Resolve every conflicted path before continuing: ${unresolved.map((entry) => entry.path).join(", ")}`);
+    }
+    const command = operation === "cherry-pick" ? ["cherry-pick", `--${action}`] : [operation, `--${action}`];
+    try {
+      await execFileAsync("git", ["-C", this.workspace, ...command], { encoding: "utf8", env: { ...process.env, GIT_EDITOR: "true", GIT_SEQUENCE_EDITOR: "true" } });
+      if (operation === "rebase" && (action === "abort" || !await this.rebaseInProgress())) await this.cleanupRebasePlan();
+      return `${operation} ${action} completed`;
+    } catch (error) { throw new CoreError("GIT_FAILED", `Could not ${action} ${operation}. ${error instanceof Error ? error.message : String(error)} ${conflictRecovery(operation)}`); }
+  }
+
+  private async conflictOperation(): Promise<GitConflictOperationKind> {
+    const exists = async (name: string, directory = false) => { try { const target = (await this.git(["rev-parse", "--git-path", name])).trim(); const info = await stat(path.resolve(this.workspace, target)); return directory ? info.isDirectory() : true; } catch { return false; } };
+    return detectConflictOperation({ rebase: await exists("rebase-merge", true) || await exists("rebase-apply", true), cherryPick: await exists("CHERRY_PICK_HEAD"), merge: await exists("MERGE_HEAD") });
+  }
+
+  private validateConflictPath(filePath: string): void {
+    const normalized = path.normalize(filePath);
+    if (!filePath || path.isAbsolute(filePath) || filePath.includes("\0") || normalized === ".." || normalized.startsWith(`..${path.sep}`)) throw new CoreError("INVALID_REQUEST", "Conflict path must stay inside the workspace");
+  }
+
+  private async showIndexStage(stage: 1 | 2 | 3, filePath: string): Promise<string | undefined> {
+    try { return await this.git(["show", `:${stage}:${filePath}`]); } catch { return undefined; }
   }
 
   async branches(): Promise<GitBranch[]> {
     const output = await this.git(["for-each-ref", "--format=%(refname)%00%(refname:short)%00%(HEAD)%00", "refs/heads", "refs/remotes"]);
     return output.split("\n").filter(Boolean).map((line) => { const [ref, name, head] = line.split("\0"); return { name: name!, current: head === "*", remote: ref!.startsWith("refs/remotes/") }; }).filter((item) => !item.name.endsWith("/HEAD"));
+  }
+
+  async tags(): Promise<GitTag[]> {
+    const output = await this.git(["for-each-ref", "--format=%(refname:strip=2)%00%(objectname)%00%(objecttype)", "refs/tags"]);
+    return output.split("\n").filter(Boolean).map((line) => {
+      const [name, target, type] = line.split("\0");
+      return { name: name!, target: target!, annotated: type === "tag" };
+    });
+  }
+
+  async createTag(name: string, target: string): Promise<GitTag> {
+    validateTagName(name); validateHash(target);
+    try { await this.git(["cat-file", "-e", `${target}^{commit}`]); }
+    catch { throw new CoreError("INVALID_REQUEST", "Tag target must be an existing commit"); }
+    await this.git(["tag", name, target]);
+    const tag = (await this.tags()).find((item) => item.name === name);
+    if (!tag) throw new CoreError("GIT_FAILED", `Git did not create local tag '${name}'`);
+    return tag;
+  }
+
+  async deleteTag(name: string): Promise<void> {
+    validateTagName(name);
+    await this.git(["tag", "-d", name]);
   }
 
   async checkoutBranch(branch: string, remote = false): Promise<string> {
@@ -80,18 +190,96 @@ export class GitService {
 
   async renameBranch(branch: string, newName: string): Promise<string> {
     validateBranchName(branch); validateBranchName(newName);
+    await this.ensureBranchNotCheckedOut(branch);
     await this.git(["branch", "-m", branch, newName]);
     return (await this.status()).branch;
   }
+
+  async createBranch(name: string): Promise<string> { validateBranchName(name); await this.git(["branch", name]); return name; }
+  async branchDeletePreview(branch: string, remote: boolean): Promise<GitBranchDeletePreview> { const reference = await this.branchReference(branch, remote); const unmerged = parseGitLog(await this.git(["log", "--max-count=50", "--format=%H%x00%h%x00%an%x00%aI%x00%s%x00", reference, "--not", "HEAD"])); return { branch, remote, unmerged, confirmationRequired: remote || unmerged.length > 0 }; }
+  async deleteBranch(branch: string, remote: boolean, force: boolean, confirm: boolean): Promise<void> {
+    if (typeof force !== "boolean" || typeof confirm !== "boolean") throw new CoreError("INVALID_REQUEST", "Branch deletion confirmation is required"); const reference = await this.branchReference(branch, remote);
+    if (!remote) { await this.ensureBranchNotCheckedOut(branch); const preview = await this.branchDeletePreview(branch, false); if ((force || preview.confirmationRequired) && !confirm) throw new CoreError("INVALID_REQUEST", "Confirm deletion of an unmerged or forced branch"); await this.git(["branch", force ? "-D" : "-d", branch]); return; }
+    if (!confirm) throw new CoreError("INVALID_REQUEST", "Confirm remote branch deletion"); const { remoteName, branchName } = splitRemoteBranch(reference); await this.networkGit(["push", remoteName, "--delete", branchName]);
+  }
+  async publishBranch(branch: string, remote: string, force: boolean, confirm: boolean): Promise<void> { validateBranchName(branch); await this.requireLocalBranch(branch); await this.requireRemote(remote); if (typeof force !== "boolean" || typeof confirm !== "boolean" || !confirm) throw new CoreError("INVALID_REQUEST", force ? "Confirm force publishing this branch" : "Confirm publishing this branch to the remote"); await this.networkGit(["push", ...(force ? ["--force-with-lease"] : []), "--set-upstream", remote, branch]); }
+  async setBranchUpstream(branch: string, remote: string, upstream: string, confirm: boolean): Promise<void> { validateBranchName(branch); validateBranchName(upstream); await this.requireLocalBranch(branch); await this.branchReference(`${remote}/${upstream}`, true); if (typeof confirm !== "boolean" || !confirm) throw new CoreError("INVALID_REQUEST", "Confirm changing this branch's upstream"); await this.git(["branch", "--set-upstream-to", `${remote}/${upstream}`, branch]); }
 
   async log(branch: string, limit = 200): Promise<GitCommit[]> {
     if (!/^[\w./@{}~^:+-]+$/.test(branch)) throw new CoreError("INVALID_REQUEST", "Invalid Git branch");
     return parseGitGraphLog(await this.git(["log", branch, "--graph", "--date-order", `--max-count=${Math.max(1, Math.min(500, limit))}`, "--format=%x1e%H%x1f%h%x1f%an%x1f%aI%x1f%s%x1f%P%x1f%D"]));
   }
 
+  async mergePreview(source: GitMergeRef): Promise<GitMergePreview> {
+    const { fullRef, refHead } = await this.resolveMergeRef(source);
+    const status = await this.status();
+    if (status.branch === "HEAD") throw new CoreError("GIT_FAILED", "A local merge requires a checked-out branch; detached HEAD is not supported.");
+    const head = (await this.git(["rev-parse", "HEAD"])).trim();
+    let mergeBase: string;
+    try { mergeBase = (await this.git(["merge-base", head, refHead])).trim(); }
+    catch { throw new CoreError("GIT_FAILED", `Cannot merge '${source.name}' because it has no common ancestor with ${status.branch}.`); }
+    const alreadyMerged = await this.isAncestor(refHead, head);
+    const fastForward = !alreadyMerged && await this.isAncestor(head, refHead);
+    const outcome = alreadyMerged ? "already-merged" as const : fastForward ? "fast-forward" as const : "merge-commit" as const;
+    const listed = parseGitLog(await this.git(["log", "--max-count=101", "--format=%H%x00%h%x00%an%x00%aI%x00%s%x00", `${head}..${refHead}`]));
+    const active = await this.activeOperation();
+    const blockers = [
+      ...(status.entries.length ? [`Working tree must be clean (${status.entries.length} changed path${status.entries.length === 1 ? "" : "s"}).`] : []),
+      ...(active ? [`Finish or abort the active ${active} operation first.`] : [])
+    ];
+    return { source, fullRef, branch: status.branch, head, refHead, mergeBase, outcome, incoming: listed.slice(0, 100), incomingTruncated: listed.length > 100, blockers, recovery: mergeRecovery(outcome) };
+  }
+
+  async merge(source: GitMergeRef, expectedHead: string, expectedRefHead: string, expectedMergeBase: string): Promise<GitMergeResult> {
+    validateFullHash(expectedHead); validateFullHash(expectedRefHead); validateFullHash(expectedMergeBase);
+    const preview = await this.mergePreview(source);
+    if (preview.head !== expectedHead || preview.refHead !== expectedRefHead || preview.mergeBase !== expectedMergeBase) throw new CoreError("GIT_FAILED", "The branch, source ref, or merge base changed after preview. Refresh the preview before merging.");
+    if (preview.blockers.length) throw new CoreError("GIT_FAILED", preview.blockers.join(" "));
+    if (preview.outcome === "already-merged") return { state: "completed", outcome: preview.outcome, branch: preview.branch, head: preview.head, message: `'${source.name}' is already merged into ${preview.branch}.`, recovery: preview.recovery };
+    try {
+      await execFileAsync("git", ["-C", this.workspace, "merge", preview.outcome === "fast-forward" ? "--ff-only" : "--no-ff", "--no-edit", preview.fullRef], { encoding: "utf8", env: { ...process.env, GIT_EDITOR: "true" } });
+    } catch (error) {
+      if (await this.activeOperation() === "merge" && (await this.status()).entries.some((entry) => entry.states.includes("conflict"))) {
+        return { state: "conflicts", outcome: preview.outcome, branch: preview.branch, head: (await this.git(["rev-parse", "HEAD"])).trim(), message: `Merge of '${source.name}' stopped for conflicts.`, recovery: mergeRecovery(preview.outcome) };
+      }
+      throw new CoreError("GIT_FAILED", `Could not merge '${source.name}'. ${error instanceof Error ? error.message : String(error)} ${mergeRecovery(preview.outcome)}`);
+    }
+    const head = (await this.git(["rev-parse", "HEAD"])).trim();
+    return { state: "completed", outcome: preview.outcome, branch: preview.branch, head, message: preview.outcome === "fast-forward" ? `Fast-forwarded ${preview.branch} to '${source.name}'.` : `Created a local merge commit from '${source.name}'.`, recovery: mergeRecovery(preview.outcome) };
+  }
+
+  private async resolveMergeRef(source: GitMergeRef): Promise<{ fullRef: string; refHead: string }> {
+    if (!source || !["local-branch", "remote-branch", "tag"].includes(source.kind) || typeof source.name !== "string") throw new CoreError("INVALID_REQUEST", "Choose a local branch, remote-tracking branch, or local tag to merge.");
+    if (source.kind === "tag") validateTagName(source.name); else validateBranchName(source.name);
+    const fullRef = source.kind === "local-branch" ? `refs/heads/${source.name}` : source.kind === "remote-branch" ? `refs/remotes/${source.name}` : `refs/tags/${source.name}`;
+    try {
+      await this.git(["show-ref", "--verify", fullRef]);
+      const refHead = (await this.git(["rev-parse", `${fullRef}^{commit}`])).trim();
+      validateFullHash(refHead);
+      return { fullRef, refHead };
+    } catch { throw new CoreError("INVALID_REQUEST", `The exact ${source.kind.replace("-", " ")} '${source.name}' does not exist or does not point to a commit.`); }
+  }
+
+  private async isAncestor(ancestor: string, descendant: string): Promise<boolean> {
+    try { await this.git(["merge-base", "--is-ancestor", ancestor, descendant]); return true; } catch { return false; }
+  }
+
+  private async activeOperation(): Promise<GitConflictOperationKind | undefined> {
+    const exists = async (name: string, directory = false) => { try { const target = (await this.git(["rev-parse", "--git-path", name])).trim(); const info = await stat(path.resolve(this.workspace, target)); return directory ? info.isDirectory() : true; } catch { return false; } };
+    if (await exists("rebase-merge", true) || await exists("rebase-apply", true)) return "rebase";
+    if (await exists("CHERRY_PICK_HEAD")) return "cherry-pick";
+    if (await exists("MERGE_HEAD")) return "merge";
+    return undefined;
+  }
+
   async commitFiles(hash: string): Promise<GitCommitFile[]> {
     validateHash(hash);
     return parseCommitFiles(await this.git(["diff-tree", "--root", "--no-commit-id", "--name-status", "-r", "-z", hash]));
+  }
+
+  async commitMessage(hash: string): Promise<string> {
+    validateHash(hash);
+    return (await this.git(["show", "-s", "--format=%B", hash])).replace(/\n$/, "");
   }
 
   async commitDiff(hash: string, filePath: string, originalPath?: string): Promise<{ originalContent: string; modifiedContent: string }> {
@@ -105,6 +293,105 @@ export class GitService {
     validateHash(hash);
     await this.git(["cherry-pick", ...(commit ? [] : ["--no-commit"]), hash]);
     return (await this.status()).branch;
+  }
+
+  private async commitPatchData(hash: string) {
+    validateHash(hash);
+    const ancestry = (await this.git(["rev-list", "--parents", "-n", "1", hash])).trim().split(/\s+/);
+    if (ancestry.length > 2) throw new CoreError("INVALID_REQUEST", "Select a non-merge commit to apply individual changes. Merge commits require choosing a parent.");
+    const resolvedHash = ancestry[0]!;
+    validateFullHash(resolvedHash);
+    const paths = (await this.git(["diff-tree", "--root", "--no-commit-id", "--name-only", "--no-renames", "-r", "-z", resolvedHash])).split("\0").filter(Boolean);
+    const files = [];
+    for (const filePath of paths) {
+      const patch = await this.git(["diff-tree", "--root", "--no-commit-id", "-r", "-p", "--no-ext-diff", "--no-textconv", "--no-renames", "--no-color", "--unified=3", resolvedHash, "--", `:(literal)${filePath}`]);
+      const hunks = parseDiffHunks(patch);
+      const reason = /^(?:old mode|new mode|(?:new file|deleted file) mode (?:120000|160000)|index .* (?:120000|160000)$)/m.test(patch) ? "File mode, symbolic link, or submodule changes cannot be selected as text blocks." : !hunks.length ? "This change has no selectable text blocks (binary, empty file, or metadata only)." : undefined;
+      files.push({ path: filePath, header: patch.slice(0, patch.indexOf("@@ ")), reason, hunks: reason ? [] : hunks.map((hunk) => ({ id: hunk.version, content: hunk.patch.slice(hunk.patch.indexOf("@@ ")) })) });
+    }
+    return { hash: resolvedHash, files };
+  }
+
+  private async indexVersion(): Promise<string> {
+    return createHash("sha256").update(await this.git(["ls-files", "--stage", "-z"])).digest("hex");
+  }
+
+  async commitPatch(hash: string): Promise<GitCommitPatch> {
+    const data = await this.commitPatchData(hash);
+    const indexVersion = await this.indexVersion();
+    const files = await Promise.all(data.files.map(async ({ header: _header, ...file }) => {
+      const entries = await this.git(["ls-files", "--stage", "-z", "--", `:(literal)${file.path}`]);
+      const unsafe = entries && !/^(100644|100755) [0-9a-f]+ 0\t/.test(entries);
+      const indexContent = unsafe ? undefined : entries ? await this.git(["show", `:${file.path}`]) : "";
+      const reason = file.reason ?? (unsafe ? "Resolve conflicts or non-text index entries before editing." : indexContent?.includes("\0") ? "The index contains binary content." : undefined);
+      return { ...file, reason, indexContent: reason ? undefined : indexContent };
+    }));
+    if (indexVersion !== await this.indexVersion()) throw new CoreError("GIT_FAILED", "The index changed while loading. Refresh the patch.");
+    return { hash: data.hash, indexVersion, files };
+  }
+
+  async saveCommitResults(hash: string, indexVersion: string, files: { path: string; content: string | null }[]): Promise<{ applied: number }> {
+    if (!Array.isArray(files) || !files.length || files.length > 10000 || files.some((file) => !file || typeof file.path !== "string") || new Set(files.map((file) => file.path)).size !== files.length) throw new CoreError("INVALID_REQUEST", "Choose unique result files to save.");
+    const preview = await this.commitPatch(hash);
+    if (preview.indexVersion !== indexVersion) throw new CoreError("GIT_FAILED", "The index changed after preview. Reopen the dialog and review your changes again.");
+    let patch = "";
+    const lines = (content: string, prefix: string) => content ? content.split("\n").map((line, i, all) => i === all.length - 1 ? line ? `${prefix}${line}\n\\ No newline at end of file\n` : "" : `${prefix}${line}\n`).join("") : "";
+    const count = (content: string) => content ? content.split("\n").length - (content.endsWith("\n") ? 1 : 0) : 0;
+    for (const result of files) {
+      const file = preview.files.find((item) => item.path === result.path);
+      if (!file || file.reason || file.indexContent === undefined || (result.content !== null && (typeof result.content !== "string" || result.content.includes("\0") || result.content.length > 4 * 1024 * 1024))) throw new CoreError("INVALID_REQUEST", "Invalid text result file.");
+      const entry = await this.git(["ls-files", "--stage", "-z", "--", `:(literal)${file.path}`]);
+      const old = file.indexContent; const next = result.content ?? "";
+      if (old === next && (result.content !== null || !entry)) continue;
+      const a = JSON.stringify(`a/${file.path}`); const b = JSON.stringify(`b/${file.path}`);
+      patch += `diff --git ${a} ${b}\n`;
+      if (!entry) {
+        const sourceEntry = await this.git(["ls-tree", hash, "--", `:(literal)${file.path}`]);
+        patch += `new file mode ${sourceEntry.startsWith("100755 ") ? "100755" : "100644"}\n`;
+      }
+      else if (result.content === null) patch += `deleted file mode ${entry.slice(0, 6)}\n`;
+      patch += `--- ${entry ? a : "/dev/null"}\n+++ ${result.content === null ? "/dev/null" : b}\n`;
+      if (old || next) patch += `@@ -${old ? 1 : 0},${count(old)} +${next ? 1 : 0},${count(next)} @@\n${lines(old, "-")}${lines(next, "+")}`;
+    }
+    if (indexVersion !== await this.indexVersion()) throw new CoreError("GIT_FAILED", "The index changed after preview. Reopen the dialog.");
+    if (patch) await applyGitPatch(this.workspace, patch, false);
+    return { applied: files.length };
+  }
+
+  async saveCommitWorktreeResults(hash: string, files: { path: string; content: string | null; expectedRevision?: FileRevision }[], filesystem: WorkspaceFileSystem): Promise<{ applied: number }> {
+    if (!Array.isArray(files) || !files.length || files.length > 10000 || files.some((file) => !file || typeof file.path !== "string") || new Set(files.map((file) => file.path)).size !== files.length) throw new CoreError("INVALID_REQUEST", "Choose unique result files to apply.");
+    const data = await this.commitPatchData(hash);
+    const allowed = new Set(data.files.filter((file) => !file.reason).map((file) => file.path));
+    for (const file of files) {
+      if (!allowed.has(file.path) || file.content !== null && (typeof file.content !== "string" || file.content.includes("\0") || Buffer.byteLength(file.content, "utf8") > 2 * 1024 * 1024)) throw new CoreError("INVALID_REQUEST", "Invalid text result file.");
+      try {
+        const current = await filesystem.read(file.path);
+        if (!file.expectedRevision || current.revision.identity !== file.expectedRevision.identity || current.revision.version !== file.expectedRevision.version) throw new CoreError("FILE_CHANGED", `File changed after preview: ${file.path}`);
+      } catch (error) {
+        if (error instanceof CoreError && error.code === "FILE_NOT_FOUND" && !file.expectedRevision) continue;
+        throw error;
+      }
+    }
+    for (const file of files) {
+      if (file.content === null) {
+        if (file.expectedRevision) await filesystem.delete(file.path, true);
+      } else if (file.expectedRevision) await filesystem.write(file.path, file.content, file.expectedRevision);
+      else await filesystem.write(file.path, file.content, undefined, false, true);
+    }
+    return { applied: files.length };
+  }
+
+  async applyCommitHunks(hash: string, indexVersion: string, hunkIds: string[]): Promise<{ applied: number }> {
+    if (!Array.isArray(hunkIds) || !hunkIds.length || hunkIds.length > 10000 || hunkIds.some((id) => typeof id !== "string" || !/^[0-9a-f]{64}$/.test(id)) || new Set(hunkIds).size !== hunkIds.length) throw new CoreError("INVALID_REQUEST", "Select valid commit change blocks to apply.");
+    const data = await this.commitPatchData(hash);
+    const selected = new Set(hunkIds);
+    const known = new Set(data.files.flatMap((file) => file.hunks.map((hunk) => hunk.id)));
+    if (hunkIds.some((id) => !known.has(id))) throw new CoreError("INVALID_REQUEST", "Selected blocks do not belong to this commit. Refresh the patch.");
+    if (indexVersion !== await this.indexVersion()) throw new CoreError("GIT_FAILED", "The index changed after preview. Refresh the patch and review your selection again.");
+    const patch = data.files.map((file) => { const hunks = file.hunks.filter((hunk) => selected.has(hunk.id)); return hunks.length ? file.header + hunks.map((hunk) => hunk.content).join("") : ""; }).join("");
+    try { await applyGitPatch(this.workspace, patch, false, false); }
+    catch { throw new CoreError("GIT_FAILED", "The selected changes do not apply cleanly to the current index. No selected changes were applied. Refresh or choose different blocks."); }
+    return { applied: hunkIds.length };
   }
 
   async fileHistory(filePath: string, startLine?: number, endLine?: number): Promise<GitCommit[]> {
@@ -126,7 +413,7 @@ export class GitService {
     validateRef(ref); validatePath(filePath); if (originalPath) validatePath(originalPath);
     const originalContent = await this.show(`${ref}:${originalPath ?? filePath}`);
     let modifiedContent = "";
-    try { modifiedContent = await filesystem.read(filePath); } catch (error) { if (!(error instanceof CoreError) || error.code !== "FILE_NOT_FOUND") throw error; }
+    try { modifiedContent = (await filesystem.read(filePath)).content; } catch (error) { if (!(error instanceof CoreError) || error.code !== "FILE_NOT_FOUND") throw error; }
     return { originalContent, modifiedContent };
   }
 
@@ -169,8 +456,220 @@ export class GitService {
     return (await this.git(["rev-parse", "HEAD"])).trim();
   }
 
+  async historyRewritePreview(): Promise<GitHistoryRewritePreview> {
+    const commit = await this.headCommit();
+    const [commitFiles, status, publication, hasParent] = await Promise.all([this.commitFiles(commit.hash), this.status(), this.headPublication(), this.hasHeadParent()]);
+    return {
+      commit,
+      commitFiles,
+      indexEntries: status.entries.filter((entry) => entry.states.includes("index")),
+      worktreeEntries: status.entries.filter((entry) => entry.states.includes("worktree") || entry.states.includes("untracked")),
+      publication,
+      confirmationRequired: publication !== "unpublished",
+      canUndo: hasParent,
+      ...(hasParent ? {} : { undoUnavailableReason: "The root commit cannot be undone safely from this interface." }),
+      recovery: `If needed, recover ${commit.shortHash} with git reflog, then git reset --hard ${commit.hash}.`
+    };
+  }
+
+  async amend(confirmHistoryRewrite: boolean): Promise<string> {
+    const preview = await this.historyRewritePreview();
+    this.requireRewriteConfirmation(preview, confirmHistoryRewrite);
+    if (preview.indexEntries.length === 0) throw new CoreError("INVALID_REQUEST", "Stage changes before amending; amend only uses the explicit Git index");
+    await this.git(["commit", "--amend", "--no-edit"]);
+    return (await this.git(["rev-parse", "HEAD"])).trim();
+  }
+
+  async undoLastCommit(confirmHistoryRewrite: boolean): Promise<string> {
+    const preview = await this.historyRewritePreview();
+    if (!preview.canUndo) throw new CoreError("INVALID_REQUEST", preview.undoUnavailableReason!);
+    this.requireRewriteConfirmation(preview, confirmHistoryRewrite);
+    await this.git(["reset", "--mixed", "HEAD^"]);
+    return preview.commit.hash;
+  }
+
+  async stashes(): Promise<GitStash[]> {
+    return parseStashes(await this.git(["stash", "list", "--format=%gd%x00%H%x00%gs%x00%ci"]));
+  }
+
+  async createStash(include: GitStashInclusion, message?: string, paths?: string[]): Promise<GitStash> {
+    if (!include || [include.staged, include.unstaged, include.untracked, include.ignored].some((value) => typeof value !== "boolean")) throw new CoreError("INVALID_REQUEST", "Explicit stash inclusion choices are required");
+    if (!include.staged && !include.unstaged && !include.untracked && !include.ignored) throw new CoreError("INVALID_REQUEST", "Choose at least one kind of change to stash");
+    if (include.ignored && !include.untracked) throw new CoreError("INVALID_REQUEST", "Ignored files require including untracked files");
+    if (include.staged && !include.unstaged && (include.untracked || include.ignored)) throw new CoreError("INVALID_REQUEST", "A staged-only stash cannot include untracked or ignored files; include unstaged changes too");
+    if (paths && (!Array.isArray(paths) || paths.length > 500)) throw new CoreError("INVALID_REQUEST", "Invalid stash path selection");
+    for (const filePath of paths ?? []) validatePath(filePath);
+    const args = ["stash", "push", "--message", (message?.trim() || "Vibe Editor stash")];
+    if (include.staged && !include.unstaged) args.push("--staged");
+    else if (!include.staged && include.unstaged) args.push("--keep-index");
+    else if (!include.staged && !include.unstaged && (include.untracked || include.ignored)) args.push("--keep-index");
+    if (include.ignored) args.push("--all"); else if (include.untracked) args.push("--include-untracked");
+    if (paths?.length) args.push("--", ...paths);
+    await this.git(args);
+    const stash = (await this.stashes())[0];
+    if (!stash) throw new CoreError("GIT_FAILED", "Git did not create a stash; there may be no matching changes");
+    return stash;
+  }
+
+  async stashPreview(reference: string): Promise<GitStashPreview> {
+    const stash = await this.stash(reference);
+    const files = parseCommitFiles(await this.git(["diff-tree", "--no-commit-id", "--name-status", "-r", "-z", `${stash.reference}^1`, stash.reference]));
+    const changed = new Set(files.map((file) => file.path));
+    const current = await this.status();
+    const blockers = current.entries.filter((entry) => changed.has(entry.path) || (!!entry.originalPath && changed.has(entry.originalPath))).map((entry) => entry.path);
+    return { stash, files, conflictRisk: blockers.length ? "possible" : "none", blockers, recovery: `If application fails, ${stash.reference} is retained. Resolve Git conflicts in the working tree, then retry apply or drop it manually.` };
+  }
+
+  async applyStash(reference: string): Promise<{ applied: boolean; stashRetained: boolean; outcome: string }> {
+    const stash = await this.stash(reference);
+    try { await this.git(["stash", "apply", "--index", stash.reference]); return { applied: true, stashRetained: true, outcome: `Applied ${stash.reference}; it was retained for recovery.` }; }
+    catch (error) { return { applied: false, stashRetained: true, outcome: `Could not apply ${stash.reference}; it was retained. ${error instanceof Error ? error.message : String(error)}` }; }
+  }
+
+  async popStash(reference: string, confirm: boolean): Promise<{ applied: boolean; stashRetained: boolean; outcome: string }> {
+    if (confirm !== true) throw new CoreError("INVALID_REQUEST", "Confirm popping a stash because successful application permanently drops it");
+    const applied = await this.applyStash(reference);
+    if (!applied.applied) return applied;
+    await this.git(["stash", "drop", reference]);
+    return { applied: true, stashRetained: false, outcome: `Applied and dropped ${reference}.` };
+  }
+
+  async dropStash(reference: string, confirm: boolean): Promise<void> {
+    if (confirm !== true) throw new CoreError("INVALID_REQUEST", "Confirm permanently dropping a stash");
+    await this.stash(reference); await this.git(["stash", "drop", reference]);
+  }
+
   async push(): Promise<void> {
     await this.git(["push"]);
+  }
+
+  private async stash(reference: string): Promise<GitStash> {
+    if (!/^stash@\{\d+\}$/.test(reference)) throw new CoreError("INVALID_REQUEST", "Invalid stash reference");
+    const stash = (await this.stashes()).find((item) => item.reference === reference);
+    if (!stash) throw new CoreError("GIT_FAILED", `Stash ${reference} no longer exists`);
+    return stash;
+  }
+
+  async fetch(): Promise<{ fetchedAt: string }> {
+    const existing = GitService.fetches.get(this.workspace);
+    if (existing?.controller) throw new CoreError("GIT_FAILED", "A Git fetch is already in progress");
+    const controller = new AbortController();
+    GitService.fetches.set(this.workspace, { controller, ...(existing?.lastSuccessful ? { lastSuccessful: existing.lastSuccessful } : {}) });
+    try {
+      await execFileAsync("git", ["-C", this.workspace, "fetch", "--prune"], { encoding: "utf8", maxBuffer: 16 * 1024 * 1024, signal: controller.signal });
+      const fetchedAt = new Date().toISOString();
+      GitService.fetches.set(this.workspace, { controller, lastSuccessful: fetchedAt });
+      return { fetchedAt };
+    } catch (error) {
+      if (controller.signal.aborted) throw new CoreError("GIT_FAILED", "Git fetch was cancelled");
+      throw new CoreError("GIT_FAILED", gitNetworkError(error));
+    } finally {
+      const current = GitService.fetches.get(this.workspace);
+      if (current?.controller === controller) GitService.fetches.set(this.workspace, { ...(current.lastSuccessful ? { lastSuccessful: current.lastSuccessful } : {}) });
+    }
+  }
+
+  cancelFetch(): boolean {
+    const fetch = GitService.fetches.get(this.workspace);
+    if (!fetch?.controller || fetch.controller.signal.aborted) return false;
+    fetch.controller.abort();
+    return true;
+  }
+
+  async pullPreview(): Promise<GitPullPreview> {
+    const { fetchedAt } = await this.fetch();
+    const status = await this.status();
+    if (!status.upstream) throw new CoreError("GIT_FAILED", "This branch has no configured upstream. Publish it or configure an upstream before pulling.");
+    const [head, upstreamHead, incomingOutput] = await Promise.all([
+      this.git(["rev-parse", "HEAD"]),
+      this.git(["rev-parse", status.upstream.upstream]),
+      this.git(["log", "--max-count=51", "--format=%H%x00%h%x00%an%x00%aI%x00%s%x00", `HEAD..${status.upstream.upstream}`])
+    ]);
+    const incoming = parseGitLog(incomingOutput);
+    return {
+      branch: status.branch, upstream: status.upstream.upstream, head: head.trim(), upstreamHead: upstreamHead.trim(), fetchedAt,
+      ahead: status.upstream.ahead, behind: status.upstream.behind, incoming: incoming.slice(0, 50), incomingTruncated: incoming.length > 50,
+      blockers: status.entries,
+      recovery: "No stash will be created. If conflicts occur, resolve them and continue, or abort with git merge --abort / git rebase --abort."
+    };
+  }
+
+  async pull(strategy: GitPullStrategy, expectedHead: string, expectedUpstreamHead: string): Promise<GitPullResult> {
+    if (strategy !== "merge" && strategy !== "rebase") throw new CoreError("INVALID_REQUEST", "Pull strategy must be merge or rebase");
+    validateFullHash(expectedHead); validateFullHash(expectedUpstreamHead);
+    await this.fetch();
+    const status = await this.status();
+    if (!status.upstream) throw new CoreError("GIT_FAILED", "This branch no longer has a configured upstream. Preview the pull again.");
+    const head = (await this.git(["rev-parse", "HEAD"])).trim();
+    const upstreamHead = (await this.git(["rev-parse", status.upstream.upstream])).trim();
+    if (head !== expectedHead || upstreamHead !== expectedUpstreamHead) throw new CoreError("GIT_FAILED", "The local or upstream branch changed after the preview. Review incoming commits again before pulling.");
+    if (status.entries.length) throw new CoreError("GIT_FAILED", `Pull blocked by ${status.entries.length} dirty path${status.entries.length === 1 ? "" : "s"}. Commit or explicitly stash them, then preview again. No automatic stash was created.`);
+    if (status.upstream.behind === 0) return { strategy, branch: status.branch, head, outcome: "Already up to date.", recovery: "No recovery action is needed." };
+    try {
+      if (strategy === "merge") await this.git(["merge", "--no-edit", status.upstream.upstream]);
+      else await this.git(["rebase", status.upstream.upstream]);
+    } catch (error) {
+      const guidance = strategy === "merge" ? "Resolve conflicts and commit the merge, or run git merge --abort to return to the pre-pull state." : "Resolve conflicts and run git rebase --continue, or run git rebase --abort to return to the pre-pull state.";
+      throw new CoreError("GIT_FAILED", `Pull with ${strategy} stopped. ${guidance} ${error instanceof Error ? error.message : String(error)}`);
+    }
+    const resultHead = (await this.git(["rev-parse", "HEAD"])).trim();
+    return { strategy, branch: status.branch, head: resultHead, outcome: `Pulled ${status.upstream.upstream} with ${strategy}.`, recovery: strategy === "merge" ? "The merge can be inspected in Git history." : "The rebased local commits now have new commit IDs; use reflog if recovery is needed." };
+  }
+
+  async rebasePreview(): Promise<GitRebasePreview> {
+    let status = await this.status();
+    if (status.upstream && (await this.git(["rev-parse", "--symbolic-full-name", status.upstream.upstream])).trim().startsWith("refs/remotes/")) { await this.fetch(); status = await this.status(); }
+    const blockers: string[] = [];
+    if (status.entries.length) blockers.push(`Working tree has ${status.entries.length} changed path${status.entries.length === 1 ? "" : "s"}; commit or explicitly stash them first.`);
+    if (!status.upstream) {
+      return { branch: status.branch, upstream: "", base: "", head: await this.git(["rev-parse", "HEAD"]).then((value) => value.trim()), upstreamHead: "", items: [], truncated: false, blockers: [...blockers, "This branch has no resolvable upstream, so publication safety cannot be established."], recovery: rebaseRecovery() };
+    }
+    const [head, upstreamHead, base] = await Promise.all([this.git(["rev-parse", "HEAD"]), this.git(["rev-parse", status.upstream.upstream]), this.git(["merge-base", "HEAD", status.upstream.upstream])]);
+    if (status.upstream.behind > 0) blockers.push(`Upstream is ${status.upstream.behind} commit${status.upstream.behind === 1 ? "" : "s"} ahead; pull before rewriting local commits.`);
+    const commits = parseGitLog(await this.git(["log", "--reverse", "--max-count=51", "--format=%H%x00%h%x00%an%x00%aI%x00%s%x00", `${status.upstream.upstream}..HEAD`]));
+    if (!commits.length) blockers.push("There are no unpublished commits to rewrite.");
+    if (commits.length > 50) blockers.push("More than 50 unpublished commits are present; narrow the history before using the bounded planner.");
+    for (const commit of commits.slice(0, 50)) {
+      const publishedRefs = (await this.git(["for-each-ref", "--format=%(refname:short)", "--contains", commit.hash, "refs/remotes"])).split("\n").filter((ref) => ref && !ref.endsWith("/HEAD"));
+      if (publishedRefs.length) blockers.push(`Commit ${commit.shortHash} (${commit.subject}) is already published on ${publishedRefs.join(", ")}; rewriting published commits is not allowed.`);
+    }
+    return { branch: status.branch, upstream: status.upstream.upstream, base: base.trim(), head: head.trim(), upstreamHead: upstreamHead.trim(), items: commits.slice(0, 50).map((commit) => ({ action: "pick", commit })), truncated: commits.length > 50, blockers, recovery: rebaseRecovery() };
+  }
+
+  async rebaseStart(expectedHead: string, expectedUpstreamHead: string, base: string, items: GitRebaseTodoItem[]): Promise<GitRebaseResult> {
+    validateFullHash(expectedHead); validateFullHash(expectedUpstreamHead); validateFullHash(base);
+    const preview = await this.rebasePreview();
+    if (preview.blockers.length) throw new CoreError("GIT_FAILED", preview.blockers.join(" "));
+    if (preview.head !== expectedHead || preview.upstreamHead !== expectedUpstreamHead || preview.base !== base) throw new CoreError("GIT_FAILED", "The branch or upstream changed after the preview. Open a fresh rebase plan.");
+    const validated = validateRebaseItems(items, preview.items);
+    const planDir = await this.rebasePlanDirectory();
+    await rm(planDir, { recursive: true, force: true }); await mkdir(planDir, { recursive: true });
+    const lines: string[] = [];
+    for (const [index, item] of validated.entries()) {
+      if (item.action === "reword") {
+        const messagePath = path.join(planDir, `message-${index}.txt`);
+        await writeFile(messagePath, `${item.message!.trim()}\n`, "utf8");
+        lines.push(`pick ${item.commit.hash} ${item.commit.subject}`, `exec git commit --amend -F ${shellQuote(messagePath)}`);
+      } else lines.push(`${item.action} ${item.commit.hash} ${item.commit.subject}`);
+    }
+    const todoPath = path.join(planDir, "todo"); const editorPath = path.join(planDir, "sequence-editor.cjs");
+    await writeFile(todoPath, `${lines.join("\n")}\n`, "utf8");
+    await writeFile(editorPath, `#!/usr/bin/env node\nrequire("node:fs").copyFileSync(${JSON.stringify(todoPath)}, process.argv[2]);\n`, "utf8"); await chmod(editorPath, 0o700);
+    try {
+      await execFileAsync("git", ["-C", this.workspace, "rebase", "--interactive", base], { encoding: "utf8", maxBuffer: 16 * 1024 * 1024, env: { ...process.env, GIT_SEQUENCE_EDITOR: editorPath, GIT_EDITOR: "true" } });
+    } catch (error) {
+      if (await this.rebaseInProgress() && (await this.status()).entries.some((entry) => entry.states.includes("conflict"))) return { state: "conflicts", branch: preview.branch, head: (await this.git(["rev-parse", "HEAD"])).trim(), outcome: "Interactive rebase stopped for conflicts.", recovery: rebaseRecovery() };
+      await this.git(["rebase", "--abort"]).catch(() => undefined); await this.cleanupRebasePlan();
+      throw new CoreError("GIT_FAILED", `Interactive rebase failed and was aborted. ${error instanceof Error ? error.message : String(error)} ${rebaseRecovery()}`);
+    }
+    await this.cleanupRebasePlan();
+    return { state: "completed", branch: preview.branch, head: (await this.git(["rev-parse", "HEAD"])).trim(), outcome: `Rebased ${items.length} unpublished commit${items.length === 1 ? "" : "s"}.`, recovery: rebaseRecovery() };
+  }
+
+  async rebaseAbort(): Promise<{ outcome: string; recovery: string }> {
+    if (!await this.rebaseInProgress()) throw new CoreError("GIT_FAILED", "There is no interactive rebase to abort.");
+    await this.git(["rebase", "--abort"]); await this.cleanupRebasePlan();
+    return { outcome: "Interactive rebase aborted; the branch was restored to its pre-rebase state.", recovery: rebaseRecovery() };
   }
 
   async diffStats(): Promise<{ additions: number; deletions: number }> {
@@ -186,9 +685,81 @@ export class GitService {
     return { additions, deletions };
   }
 
+  private async rebasePlanDirectory(): Promise<string> {
+    const gitPath = (await this.git(["rev-parse", "--git-path", "vibe-rebase-plan"])).trim();
+    return path.isAbsolute(gitPath) ? gitPath : path.resolve(this.workspace, gitPath);
+  }
+
+  private async cleanupRebasePlan(): Promise<void> { await rm(await this.rebasePlanDirectory(), { recursive: true, force: true }).catch(() => undefined); }
+
+  private async rebaseInProgress(): Promise<boolean> {
+    for (const name of ["rebase-merge", "rebase-apply"]) {
+      try { const target = (await this.git(["rev-parse", "--git-path", name])).trim(); if ((await stat(path.isAbsolute(target) ? target : path.resolve(this.workspace, target))).isDirectory()) return true; } catch { /* Try the other native rebase directory. */ }
+    }
+    return false;
+  }
+
   private async git(args: string[]): Promise<string> {
     try { return (await execFileAsync("git", ["-C", this.workspace, ...args], { encoding: "utf8", maxBuffer: 16 * 1024 * 1024 })).stdout; }
     catch (error) { throw new CoreError("GIT_FAILED", error instanceof Error ? error.message : String(error)); }
+  }
+  private async networkGit(args: string[]): Promise<string> { try { return (await execFileAsync("git", ["-C", this.workspace, ...args], { encoding: "utf8", maxBuffer: 16 * 1024 * 1024 })).stdout; } catch (error) { throw new CoreError("GIT_FAILED", gitNetworkError(error)); } }
+  private async requireLocalBranch(branch: string): Promise<void> { try { await this.git(["show-ref", "--verify", "--quiet", `refs/heads/${branch}`]); } catch { throw new CoreError("INVALID_REQUEST", `Local branch '${branch}' does not exist`); } }
+  private async requireRemote(remote: string): Promise<void> { if (!/^[A-Za-z0-9._-]+$/.test(remote)) throw new CoreError("INVALID_REQUEST", "Invalid Git remote"); const remotes = (await this.git(["remote"])).split("\n").filter(Boolean); if (!remotes.includes(remote)) throw new CoreError("INVALID_REQUEST", `Git remote '${remote}' does not exist`); }
+  private async branchReference(branch: string, remote: boolean): Promise<string> { if (!remote) { validateBranchName(branch); await this.requireLocalBranch(branch); return branch; } const { remoteName, branchName } = splitRemoteBranch(branch); await this.requireRemote(remoteName); try { await this.git(["show-ref", "--verify", "--quiet", `refs/remotes/${remoteName}/${branchName}`]); } catch { throw new CoreError("INVALID_REQUEST", `Remote branch '${branch}' does not exist`); } return branch; }
+  private async ensureBranchNotCheckedOut(branch: string): Promise<void> { const output = await this.git(["worktree", "list", "--porcelain"]); if (output.split("\n").some((line) => line === `branch refs/heads/${branch}`)) throw new CoreError("INVALID_REQUEST", "Cannot delete a branch checked out by a workspace or task worktree"); }
+
+  private async headCommit(): Promise<GitCommit> {
+    try {
+      const commit = parseGitLog(await this.git(["log", "-1", "--format=%H%x00%h%x00%an%x00%aI%x00%s%x00"]))[0];
+      if (!commit) throw new Error("No HEAD");
+      return commit;
+    }
+    catch { throw new CoreError("INVALID_REQUEST", "There is no local commit to amend or undo"); }
+  }
+
+  private async headPublication(): Promise<"unpublished" | "published" | "unknown"> {
+    try {
+      const upstream = (await this.git(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"])).trim();
+      if (!upstream) return "unknown";
+      const [head, base] = await Promise.all([this.git(["rev-parse", "HEAD"]), this.git(["merge-base", "HEAD", upstream])]);
+      return head.trim() === base.trim() ? "published" : "unpublished";
+    } catch { return "unknown"; }
+  }
+
+  private async hasHeadParent(): Promise<boolean> {
+    try { await this.git(["rev-parse", "--verify", "HEAD^"]); return true; }
+    catch { return false; }
+  }
+
+  private requireRewriteConfirmation(preview: GitHistoryRewritePreview, confirmed: boolean): void {
+    if (typeof confirmed !== "boolean") throw new CoreError("INVALID_REQUEST", "History rewrite confirmation is required");
+    if (preview.confirmationRequired && !confirmed) throw new CoreError("INVALID_REQUEST", preview.publication === "published" ? "This commit is published; confirm rewriting shared history to continue" : "The publication state is unknown; confirm history rewrite to continue");
+  }
+
+  private async updateIndex(action: "stage" | "unstage", filePath: string, hunk?: GitDiffHunk): Promise<void> {
+    validatePath(filePath);
+    const entry = (await this.status()).entries.find((item) => item.path === filePath);
+    if (!entry) throw new CoreError("GIT_FAILED", `Path has no Git changes: ${filePath}`);
+    if (entry.states.includes("conflict")) throw new CoreError("GIT_FAILED", "Cannot stage or unstage a conflicted file");
+    if (!hunk) {
+      const paths = entry.originalPath ? [entry.originalPath, filePath] : [filePath];
+      if (action === "stage") { await this.git(["add", "-A", "--", ...paths]); return; }
+      if (!await this.hasHead()) { await this.git(["rm", "--cached", "--ignore-unmatch", "--", ...paths]); return; }
+      await this.git(["restore", "--staged", "--", ...paths]); return;
+    }
+    if (!isGitHunk(hunk)) throw new CoreError("INVALID_REQUEST", "Invalid Git hunk");
+    if (hunk.source !== (action === "stage" ? "worktree" : "index")) throw new CoreError("INVALID_REQUEST", `A ${action} hunk must come from the ${action === "stage" ? "worktree" : "index"}`);
+    const currentPatch = hunk.source === "worktree" ? (isUntracked(entry) ? await this.untrackedPatch(filePath) : await this.git(["diff", "--unified=0", "--", filePath])) : await this.git(["diff", "--cached", "--unified=0", "--", filePath]);
+    const current = parseDiffHunks(currentPatch, hunk.source).find((item) => item.patch === hunk.patch && item.version === hunk.version);
+    if (!current) throw new CoreError("GIT_FAILED", "Git change no longer matches the reviewed hunk. Refresh the diff and try again.");
+    try { await applyGitPatch(this.workspace, hunk.patch, action === "unstage"); }
+    catch (error) { throw new CoreError("GIT_FAILED", `Git change no longer matches the ${hunk.source} version. Refresh the diff and try again.`); }
+  }
+
+  private async untrackedPatch(filePath: string): Promise<string> {
+    const result = await execFileAsync("git", ["-C", this.workspace, "diff", "--no-index", "--unified=0", "--", "/dev/null", filePath], { encoding: "utf8", maxBuffer: 16 * 1024 * 1024 }).catch((error: { stdout?: string }) => ({ stdout: error.stdout ?? "" }));
+    return result.stdout;
   }
 
   private async rollbackEntry(entry: GitStatusEntry): Promise<void> {
@@ -207,15 +778,75 @@ export class GitService {
   }
 }
 
+export function detectConflictOperation(state: { rebase: boolean; cherryPick: boolean; merge: boolean }): GitConflictOperationKind {
+  return state.rebase ? "rebase" : state.cherryPick ? "cherry-pick" : state.merge ? "merge" : "stash";
+}
+
+function parseStashes(output: string): GitStash[] {
+  return output.split("\n").filter(Boolean).map((line) => {
+    const [reference, hash, message, date] = line.split("\0");
+    const branch = message?.match(/^On ([^:]+):/)?.[1];
+    return { reference: reference!, hash: hash!, message: message!, ...(branch ? { branch } : {}), ...(date ? { date } : {}) };
+  });
+}
+
+function gitNetworkError(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  const safe = message.replace(/([a-z][a-z0-9+.-]*:\/\/)[^\s/@]+@/gi, "$1***@");
+  if (/authentication failed|could not read username|terminal prompts disabled|permission denied \(publickey\)/i.test(safe)) return "Git authentication failed. Check your remote credentials and try again.";
+  return `Could not fetch remote: ${safe}`;
+}
+
+function conflictRecovery(operation: GitConflictOperationKind): string {
+  if (operation === "stash") return "A stash application has no native continue or abort. Resolve and stage every path, then commit when ready; to discard it, restore the affected paths deliberately after preserving any work you need.";
+  return `Resolve and stage every path, then continue the ${operation}; abort returns Git to the pre-${operation} state.`;
+}
+
+function rebaseRecovery(): string { return "No stash or force push is performed. Abort restores the pre-rebase branch; after completion, use git reflog to find the previous HEAD if recovery is needed."; }
+function mergeRecovery(outcome: "already-merged" | "fast-forward" | "merge-commit"): string {
+  if (outcome === "already-merged") return "No repository state will change.";
+  return "This changes the checked-out local branch only and never pushes. If conflicts occur, use the conflict workspace to resolve and continue, or abort to restore the pre-merge state.";
+}
+
+function validateRebaseItems(items: GitRebaseTodoItem[], original: GitRebaseTodoItem[]): GitRebaseTodoItem[] {
+  if (!Array.isArray(items) || items.length !== original.length || !items.length) throw new CoreError("INVALID_REQUEST", "The todo plan must contain every previewed commit exactly once.");
+  const expected = new Map(original.map((item) => [item.commit.hash, item.commit])); const seen = new Set<string>(); let retained = false;
+  const actions = new Set(["pick", "squash", "fixup", "reword", "drop"]);
+  for (const item of items) {
+    if (!item || !actions.has(item.action) || !item.commit || typeof item.commit.hash !== "string") throw new CoreError("INVALID_REQUEST", "The todo plan contains an invalid action or commit.");
+    const commit = expected.get(item.commit.hash);
+    if (!commit || seen.has(item.commit.hash) || commit.subject !== item.commit.subject || commit.author !== item.commit.author || commit.date !== item.commit.date) throw new CoreError("INVALID_REQUEST", "The todo plan contains a stale, duplicate, or unknown commit identity.");
+    seen.add(item.commit.hash);
+    if ((item.action === "squash" || item.action === "fixup") && !retained) throw new CoreError("INVALID_REQUEST", `${item.action} cannot be the first retained todo action.`);
+    if (item.action === "reword" && (typeof item.message !== "string" || !item.message.trim() || item.message.includes("\0"))) throw new CoreError("INVALID_REQUEST", "Every reword action requires a non-empty commit message.");
+    if (item.action !== "drop") retained = true;
+  }
+  if (seen.size !== expected.size) throw new CoreError("INVALID_REQUEST", "The todo plan must contain every previewed commit exactly once.");
+  return items;
+}
+
+function shellQuote(value: string): string { return `'${value.replace(/'/g, `'"'"'`)}'`; }
+
 function isUntracked(entry: GitStatusEntry): boolean { return entry.indexStatus === "?" && entry.worktreeStatus === "?"; }
 
-export function parseDiffHunks(output: string): GitDiffHunk[] {
-  return [...output.matchAll(/^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/gm)].map((match) => ({ originalStart: Number(match[1]), originalLines: Number(match[2] ?? 1), modifiedStart: Number(match[3]), modifiedLines: Number(match[4] ?? 1) }));
+export function parseDiffHunks(output: string, source: "index" | "worktree" = "worktree"): GitDiffHunk[] {
+  const matches = [...output.matchAll(/^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@.*$/gm)];
+  const header = output.slice(0, matches[0]?.index ?? 0);
+  return matches.map((match, index) => {
+    const patch = header + output.slice(match.index, matches[index + 1]?.index);
+    return { originalStart: Number(match[1]), originalLines: Number(match[2] ?? 1), modifiedStart: Number(match[3]), modifiedLines: Number(match[4] ?? 1), source, patch, version: createHash("sha256").update(patch).digest("hex") };
+  });
 }
 
 function validateHash(hash: string): void { if (!/^[0-9a-f]{7,64}$/i.test(hash)) throw new CoreError("INVALID_REQUEST", "Invalid commit hash"); }
+function validateFullHash(hash: string): void { if (!/^[0-9a-f]{40,64}$/i.test(hash)) throw new CoreError("INVALID_REQUEST", "Invalid preview commit hash"); }
 function validateRef(ref: string): void { if (!/^[\w./@{}~^:+-]+$/.test(ref)) throw new CoreError("INVALID_REQUEST", "Invalid Git reference"); }
 function validateBranchName(name: string): void { if (!name || !/^[\w./-]+$/.test(name) || name.startsWith("-") || name.includes("..") || name.includes("//") || name.endsWith("/")) throw new CoreError("INVALID_REQUEST", "Invalid Git branch name"); }
+function splitRemoteBranch(value: string): { remoteName: string; branchName: string } { const [remoteName, ...parts] = value.split("/"); const branchName = parts.join("/"); if (!remoteName || !branchName) throw new CoreError("INVALID_REQUEST", "Remote branch must include a remote and branch name"); validateBranchName(branchName); return { remoteName, branchName }; }
+/** Accept a short, unambiguous local tag name; refs/tags/* and revision syntax are deliberately refused. */
+export function validateTagName(name: string): void {
+  if (!name || name.length > 255 || name.startsWith("-") || name.startsWith("refs/") || name === "@" || name === "HEAD" || /[\s~^:?*\\[\x00-\x1f\x7f]/.test(name) || name.includes("@{") || name.includes("..") || name.includes("//") || name.startsWith("/") || name.endsWith("/") || name.endsWith(".") || name.endsWith(".lock") || name.split("/").some((part) => !part || part.startsWith(".") || part.endsWith(".lock"))) throw new CoreError("INVALID_REQUEST", "Invalid or ambiguous local tag name");
+}
 function validatePath(filePath: string): void { if (!filePath || path.isAbsolute(filePath) || filePath.split(/[\\/]/).includes("..")) throw new CoreError("INVALID_REQUEST", "Invalid Git path"); }
 
 export function parseGitLog(output: string): GitCommit[] {
@@ -266,7 +897,7 @@ export function parseGitStatus(output: string): { branch: string; entries: GitSt
     }
     const indexStatus = record[0] ?? " ";
     const worktreeStatus = record[1] ?? " ";
-    const entry: GitStatusEntry = { path: record.slice(3), indexStatus, worktreeStatus };
+    const entry: GitStatusEntry = { path: record.slice(3), indexStatus, worktreeStatus, states: gitChangeStates(indexStatus, worktreeStatus) };
     if (indexStatus === "R" || indexStatus === "C" || worktreeStatus === "R" || worktreeStatus === "C") {
       entry.originalPath = records[index + 1];
       index += 1;
@@ -274,4 +905,24 @@ export function parseGitStatus(output: string): { branch: string; entries: GitSt
     entries.push(entry);
   }
   return { branch, entries };
+}
+
+function gitChangeStates(indexStatus: string, worktreeStatus: string): GitStatusEntry["states"] {
+  if (indexStatus === "?" && worktreeStatus === "?") return ["untracked"];
+  if (indexStatus === "U" || worktreeStatus === "U" || ["AA", "DD"].includes(indexStatus + worktreeStatus)) return ["conflict"];
+  return [indexStatus !== " " ? "index" : undefined, worktreeStatus !== " " ? "worktree" : undefined].filter((state): state is "index" | "worktree" => Boolean(state));
+}
+
+function isGitHunk(value: GitDiffHunk): boolean {
+  return (value.source === "index" || value.source === "worktree") && Number.isInteger(value.originalStart) && Number.isInteger(value.originalLines) && Number.isInteger(value.modifiedStart) && Number.isInteger(value.modifiedLines) && value.originalStart >= 0 && value.originalLines >= 0 && value.modifiedStart >= 0 && value.modifiedLines >= 0 && typeof value.patch === "string" && value.patch.length > 0 && value.patch.length <= 4 * 1024 * 1024 && /^[0-9a-f]{64}$/.test(value.version);
+}
+
+async function applyGitPatch(workspace: string, patch: string, reverse: boolean, zeroContext = true): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    const child = spawn("git", ["-C", workspace, "apply", "--cached", ...(zeroContext ? ["--unidiff-zero"] : []), ...(reverse ? ["--reverse"] : [])], { stdio: ["pipe", "ignore", "pipe"] });
+    let stderr = ""; child.stderr.on("data", (chunk: Buffer) => { stderr += chunk.toString(); });
+    child.on("error", reject); child.on("close", (code) => code === 0 ? resolve() : reject(new Error(stderr || "git apply failed")));
+    child.stdin.on("error", reject);
+    child.stdin.end(patch);
+  });
 }

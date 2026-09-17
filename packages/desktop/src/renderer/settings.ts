@@ -54,9 +54,27 @@ export function writeSetting(key: string, value: string): void {
   try { bridge?.writeSetting?.(key, value); } catch { /* Main process bridge is optional. */ }
 }
 
+/** Removes a persisted setting, allowing callers to fall back to its default. */
+export function removeSetting(key: string): void {
+  load();
+  cache.delete(key);
+  try { localStorage.removeItem(key); } catch { /* Storage may be unavailable. */ }
+  try { bridge?.writeSetting?.(key, null); } catch { /* Main process bridge is optional. */ }
+}
+
 /** Setting name scoped to a single remote workspace. */
 export function workspaceSettingKey(workspace: string, setting: string): string {
   return `workspace:${encodeURIComponent(workspace)}:${setting}`;
+}
+
+/** Whether this workspace has a value instead of inheriting the global default. */
+export function hasWorkspaceSetting(workspace: string, setting: string): boolean {
+  return Boolean(workspace) && readSetting(workspaceSettingKey(workspace, setting)) !== null;
+}
+
+/** Restores a workspace setting to the global default. */
+export function resetWorkspaceSetting(workspace: string, setting: string): void {
+  if (workspace) removeSetting(workspaceSettingKey(workspace, setting));
 }
 
 /** Reads a workspace setting and falls back to the global value used across workspaces. */

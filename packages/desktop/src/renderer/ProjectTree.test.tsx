@@ -1,7 +1,8 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { FileTreeNode } from "@remote-ide/protocol";
-import { ProjectTree, filterProjectTree } from "./ProjectTree";
+import { useState } from "react";
+import { ProjectTree, compactProjectTree, filterProjectTree, filterProjectTreeByPaths } from "./ProjectTree";
 
 const nodes: FileTreeNode[] = [{
   name: "src", path: "src", type: "directory", children: [
@@ -14,11 +15,39 @@ afterEach(cleanup);
 
 function renderTree(options: { query?: string; activePath?: string } = {}) {
   const onOpen = vi.fn();
-  render(<ProjectTree nodes={nodes} query={options.query ?? ""} activePath={options.activePath} fileColors={{}} gitStatuses={{}} onAction={(action, node) => { if (action === "open") onOpen(node); }} onContextMenu={vi.fn()} />);
+  render(<ProjectTree nodes={nodes} query={options.query ?? ""} activePath={options.activePath} selectedPaths={new Set()} fileColors={{}} gitStatuses={{}} onAction={(action, selected) => { if (action === "open") onOpen(selected[0]); }} onContextMenu={vi.fn()} onSelectionChange={vi.fn()} />);
   return onOpen;
 }
 
 describe("ProjectTree", () => {
+  it("compacts directory-only chains into one explorer row", () => {
+    const compacted = compactProjectTree([{ name: "packages", path: "packages", type: "directory", children: [{ name: "app", path: "packages/app", type: "directory", children: [{ name: "src", path: "packages/app/src", type: "directory", children: [{ name: "main.ts", path: "packages/app/src/main.ts", type: "file" }] }] }] }]);
+    expect(compacted).toEqual([{ name: "packages/app/src", path: "packages/app/src", type: "directory", children: [{ name: "main.ts", path: "packages/app/src/main.ts", type: "file" }] }]);
+  });
+
+  it("stops compacting when a directory also contains a file", () => {
+    const compacted = compactProjectTree(nodes);
+    expect(compacted[0]).toMatchObject({ name: "src", path: "src" });
+    expect(compacted[0]?.children?.[0]).toMatchObject({ name: "components", path: "src/components" });
+  });
+
+  it("keeps directory context when filtering by content-matched file paths", () => {
+    expect(filterProjectTreeByPaths(nodes, new Set(["src/components/Tree.tsx"]))).toEqual([expect.objectContaining({
+      path: "src",
+      children: [expect.objectContaining({ path: "src/components", children: [expect.objectContaining({ path: "src/components/Tree.tsx" })] })]
+    })]);
+  });
+
+  it("keeps stable ctrl and shift multi-selection across visible rows", () => {
+    const Harness = () => { const [selected, setSelected] = useState(new Set<string>()); return <ProjectTree nodes={nodes} query="" selectedPaths={selected} fileColors={{}} gitStatuses={{}} onAction={vi.fn()} onContextMenu={vi.fn()} onSelectionChange={setSelected} />; };
+    render(<Harness />);
+    fireEvent.click(screen.getByRole("treeitem", { name: "src" }));
+    fireEvent.click(screen.getByRole("treeitem", { name: "components" }), { ctrlKey: true });
+    expect(screen.getByRole("treeitem", { name: "src" }).getAttribute("aria-selected")).toBe("true");
+    expect(screen.getByRole("treeitem", { name: "components" }).getAttribute("aria-selected")).toBe("true");
+    fireEvent.click(screen.getByRole("treeitem", { name: "main.ts" }), { shiftKey: true });
+    expect(screen.getByRole("treeitem", { name: "main.ts" }).getAttribute("aria-selected")).toBe("true");
+  });
   it("supports expanding all and collapsing all folders", () => {
     renderTree();
     expect(screen.queryByText("Tree.tsx")).toBeNull();
@@ -43,13 +72,13 @@ describe("ProjectTree", () => {
 
   it("opens the shared action menu from the keyboard and renames with F2", () => {
     const onAction = vi.fn(); const onMenu = vi.fn();
-    render(<ProjectTree nodes={nodes} query="" fileColors={{}} gitStatuses={{}} onAction={onAction} onContextMenu={onMenu} />);
+    render(<ProjectTree nodes={nodes} query="" selectedPaths={new Set()} fileColors={{}} gitStatuses={{}} onAction={onAction} onContextMenu={onMenu} onSelectionChange={vi.fn()} />);
     const src = screen.getByRole("treeitem", { name: "src" });
     fireEvent.focus(src);
     fireEvent.keyDown(src, { key: "F2" });
     fireEvent.keyDown(src, { key: "ContextMenu" });
-    expect(onAction).toHaveBeenCalledWith("rename", expect.objectContaining({ path: "src" }));
-    expect(onMenu).toHaveBeenCalledWith(expect.objectContaining({ path: "src" }), expect.any(Number), expect.any(Number));
+    expect(onAction).toHaveBeenCalledWith("rename", [expect.objectContaining({ path: "src" })]);
+    expect(onMenu).toHaveBeenCalledWith([expect.objectContaining({ path: "src" })], expect.any(Number), expect.any(Number));
   });
 
   it("reveals the active file and reports filtered file counts", async () => {
@@ -70,12 +99,12 @@ describe("ProjectTree", () => {
 
   it("routes path-copy shortcuts through the shared tree action model", () => {
     const onAction = vi.fn();
-    render(<ProjectTree nodes={nodes} query="" fileColors={{}} gitStatuses={{}} onAction={onAction} onContextMenu={vi.fn()} />);
+    render(<ProjectTree nodes={nodes} query="" selectedPaths={new Set()} fileColors={{}} gitStatuses={{}} onAction={onAction} onContextMenu={vi.fn()} onSelectionChange={vi.fn()} />);
     const src = screen.getByRole("treeitem", { name: "src" }); fireEvent.focus(src);
     fireEvent.keyDown(src, { key: "c", ctrlKey: true, shiftKey: true });
     fireEvent.keyDown(src, { key: "c", ctrlKey: true, altKey: true });
-    expect(onAction).toHaveBeenNthCalledWith(1, "copyAbsolutePath", expect.objectContaining({ path: "src" }));
-    expect(onAction).toHaveBeenNthCalledWith(2, "copyRelativePath", expect.objectContaining({ path: "src" }));
+    expect(onAction).toHaveBeenNthCalledWith(1, "copyAbsolutePath", [expect.objectContaining({ path: "src" })]);
+    expect(onAction).toHaveBeenNthCalledWith(2, "copyRelativePath", [expect.objectContaining({ path: "src" })]);
   });
 
   it("keeps matching ancestor context while filtering", () => {

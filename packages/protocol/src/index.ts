@@ -4,24 +4,132 @@ export type FileTreeNode = {
   type: "file" | "directory";
   children?: FileTreeNode[];
 };
+/** Stable, Core-issued identity for a remote directory in this workspace group. */
+export type WorkspaceRootId = string;
+export type WorkspaceRoot = { id: WorkspaceRootId; alias: string; path: string; primary: boolean };
+/** A bounded, Core-authoritative view of paths affected by a watcher burst. */
+export type FilesystemSnapshotEntry = { path: string; type?: "file" | "directory" };
+/** Opaque Core-issued file identity and content revision used for conditional saves. */
+export type FileRevision = { identity: string; version: string };
+/**
+ * The wire contract is independently versioned from package releases so a cached
+ * Desktop can prove it is safe to talk to a newly deployed Core.
+ */
+export type ProtocolCompatibility = { minimum: number; maximum: number };
+export const protocolCompatibility: ProtocolCompatibility = { minimum: 3, maximum: 3 };
+
+export function protocolRangeIsValid(range: ProtocolCompatibility): boolean {
+  return Number.isInteger(range.minimum) && Number.isInteger(range.maximum) && range.minimum > 0 && range.minimum <= range.maximum;
+}
+
+export function protocolRangesOverlap(left: ProtocolCompatibility, right: ProtocolCompatibility): boolean {
+  return protocolRangeIsValid(left) && protocolRangeIsValid(right) && left.minimum <= right.maximum && right.minimum <= left.maximum;
+}
+export type FilesystemDeletePreview = { path: string; type: "file" | "directory"; children: string[]; childCount: number; recoverable: boolean };
+export type FilesystemDeleteResult = { path: string; recoveryId?: string; permanentlyDeleted: boolean };
+export type FilesystemTransferKind = "copy" | "move";
+export type FilesystemTransferRequest = { source: string; destination: string };
+export type FilesystemTransferItem = FilesystemTransferRequest & { type: "file" | "directory"; collision: boolean; overwrite: boolean; caseOnlyRename: boolean; crossDevice: boolean; openFiles: string[]; dirtyFiles: string[] };
+export type FilesystemTransferPreflight = { kind: FilesystemTransferKind; items: FilesystemTransferItem[]; skipped: { source: string; reason: string }[]; collisions: number; overwrites: number; caseOnlyRenames: number; crossDeviceMoves: number; openFiles: string[]; dirtyFiles: string[]; confirmationRequired: boolean };
+export type FilesystemTransferResult = { completed: FilesystemTransferRequest[]; failures: (FilesystemTransferRequest & { message: string })[] };
+export const remoteTransferDefaultLimit = 512 * 1024 * 1024;
+export type RemoteTransferDirection = "upload" | "download";
+export type RemoteTransferTicket = { token: string; direction: RemoteTransferDirection; name: string; size: number; maxBytes: number; expiresAt: string };
 
 export type GitStatusEntry = {
   path: string;
   originalPath?: string;
   indexStatus: string;
   worktreeStatus: string;
+  /** Separate Git areas represented by this row; a partially staged file has both index and worktree. */
+  states: GitChangeState[];
 };
-export type GitUpstreamStatus = { upstream: string; ahead: number };
+export type GitChangeState = "index" | "worktree" | "untracked" | "conflict";
+export type GitConflictOperationKind = "merge" | "rebase" | "cherry-pick" | "stash";
+export type GitConflictFile = {
+  path: string;
+  /** Index stages may be absent for add/delete conflicts. */
+  base?: string;
+  ours?: string;
+  theirs?: string;
+  result?: string;
+  resultDeleted: boolean;
+};
+export type GitConflictWorkspace = { operation: GitConflictOperationKind; files: GitConflictFile[]; canContinue: boolean; canAbort: boolean; recovery: string };
+/** The configured upstream and the last remote information Core successfully obtained. */
+export type GitUpstreamStatus = { upstream: string; ahead: number; behind: number; lastFetch?: string };
+export type GitPullStrategy = "merge" | "rebase";
+export type GitPullPreview = {
+  branch: string;
+  upstream: string;
+  head: string;
+  upstreamHead: string;
+  fetchedAt: string;
+  ahead: number;
+  behind: number;
+  incoming: GitCommit[];
+  incomingTruncated: boolean;
+  blockers: GitStatusEntry[];
+  recovery: string;
+};
+export type GitPullResult = { strategy: GitPullStrategy; branch: string; head: string; outcome: string; recovery: string };
+export type GitRebaseAction = "pick" | "squash" | "fixup" | "reword" | "drop";
+export type GitRebaseTodoItem = { action: GitRebaseAction; commit: GitCommit; message?: string };
+/** Core-authoritative, bounded snapshot. Every identity is revalidated before history is changed. */
+export type GitRebasePreview = {
+  branch: string; upstream: string; base: string; head: string; upstreamHead: string;
+  items: GitRebaseTodoItem[]; truncated: boolean; blockers: string[]; recovery: string;
+};
+export type GitRebaseResult = { state: "completed" | "conflicts"; branch: string; head: string; outcome: string; recovery: string };
 export type GitBranch = { name: string; current: boolean; remote: boolean };
+export type GitBranchDeletePreview = { branch: string; remote: boolean; unmerged: GitCommit[]; confirmationRequired: boolean };
+/** A tag stored in this workspace's local Git repository. It is not a remote tag operation. */
+export type GitTag = { name: string; target: string; annotated: boolean };
 export type GitCommit = { hash: string; shortHash: string; author: string; date: string; subject: string; parents?: string[]; refs?: string[]; graph?: string };
+export type GitMergeRef = { kind: "local-branch" | "remote-branch" | "tag"; name: string };
+export type GitMergeOutcome = "already-merged" | "fast-forward" | "merge-commit";
+/** A bounded, Core-authoritative local merge preview. The ref identity must be supplied unchanged when applying it. */
+export type GitMergePreview = {
+  source: GitMergeRef; fullRef: string; branch: string; head: string; refHead: string; mergeBase: string;
+  outcome: GitMergeOutcome; incoming: GitCommit[]; incomingTruncated: boolean; blockers: string[];
+  recovery: string;
+};
+export type GitMergeResult = { state: "completed" | "conflicts"; outcome: GitMergeOutcome; branch: string; head: string; message: string; recovery: string };
 export type GitCommitFile = { path: string; status: string; originalPath?: string };
-export type GitDiffHunk = { originalStart: number; originalLines: number; modifiedStart: number; modifiedLines: number };
+export type GitHistoryRewritePreview = {
+  commit: GitCommit;
+  commitFiles: GitCommitFile[];
+  indexEntries: GitStatusEntry[];
+  worktreeEntries: GitStatusEntry[];
+  publication: "unpublished" | "published" | "unknown";
+  confirmationRequired: boolean;
+  canUndo: boolean;
+  undoUnavailableReason?: string;
+  recovery: string;
+};
+/** Inclusion is deliberately explicit because Git's default stash behavior excludes untracked and ignored files. */
+export type GitStashInclusion = { staged: boolean; unstaged: boolean; untracked: boolean; ignored: boolean };
+export type GitStash = { reference: string; hash: string; message: string; branch?: string; date?: string };
+export type GitStashPreview = { stash: GitStash; files: GitCommitFile[]; conflictRisk: "none" | "possible"; blockers: string[]; recovery: string };
+/** Patch and version are opaque Core-issued values; they prevent applying a hunk after its source changed. */
+export type GitDiffHunk = { originalStart: number; originalLines: number; modifiedStart: number; modifiedLines: number; source: "index" | "worktree"; patch: string; version: string };
+export type GitCommitPatch = { hash: string; indexVersion: string; files: { path: string; indexContent?: string; reason?: string; hunks: { id: string; content: string }[] }[] };
 export type GitRollbackFailure = { path: string; message: string };
 export type TaskCheckpointFile = { path: string; status: "A" | "M" | "D" | "R"; originalPath?: string; binary: boolean; size: number };
+/** The result of comparing a checkpoint's before/after snapshots with the live worktree. */
+export type TaskCheckpointApplyResult = { applied: string[]; alreadyApplied: string[]; conflicts: { path: string; message: string }[] };
+/** Compact, redacted turn metadata. It deliberately excludes prompt/attachment bodies and logs. */
+export type TaskCheckpointProvenance = {
+  model?: string; reasoning?: string; agent?: { name: string; fingerprint: string };
+  attachments?: { name: string; mimeType?: string; kind: "image" | "resource" | "resource_link" | "text" }[];
+  usage?: { total: number; input: number; output: number; thought?: number; cachedRead?: number; cachedWrite?: number };
+  commit?: string;
+};
 export type TaskCheckpoint = {
   id: string; promptId: string; sessionId?: string; provider: AiProvider; prompt: string;
   startedAt: string; completedAt?: string; status: "running" | "completed" | "interrupted" | "error";
   files: TaskCheckpointFile[];
+  provenance?: TaskCheckpointProvenance;
 };
 
 export type WorkspaceOptions = {
@@ -33,13 +141,20 @@ export type WorkspaceOptions = {
   terminal?: WorkspaceTerminalOptions;
   fileColors?: Record<string, FileColor>;
   gitCommitMessage?: string;
+  searchQueries?: WorkspaceSearchQueries;
 };
+/** Compact Find in Files metadata. Search results and file contents are never persisted. */
+export type WorkspaceSearchQuery = { query: string; path: string; matchCase?: boolean; include?: string; exclude?: string };
+export type WorkspaceSearchQueries = { recent?: WorkspaceSearchQuery[]; saved?: WorkspaceSearchQuery[] };
 export type FileColor = "red" | "orange" | "yellow" | "green" | "blue" | "purple" | "gray";
-export type WorkspaceTerminalOptions = { tabs: { title: string; terminalId?: string }[]; activeTabIndex?: number; panelOpen: boolean };
+/** Durable terminal-tab metadata. The display name is UI state, not a PTY identity. */
+export type WorkspaceTerminalOptions = { tabs: { displayName: string; terminalId?: string }[]; activeTabIndex?: number; panelOpen: boolean };
 export type TerminalSessionSnapshot = { terminalId: string; status: "running" | "exited"; output: string; exitCode?: number };
-export type WorkspaceTask = { id: string; name: string; branch: string; baseBranch: string; status: "active" | "finished" };
-export type { AiAgent, AiCommand, AiConfiguration, AiContentBlock, AiMessage, AiModel, AiMcpServer, AiOption, AiPermissionRequest, AiProvider, AiProviderCapabilities, AiProviderDescriptor, AiSession, AiSettingsLayout, AiSettingsSection, AiStatus, AiTaskSummary, AiUsage } from "@remote-ide/acp";
-import type { AiAgent, AiConfiguration, AiContentBlock, AiMcpServer, AiModel, AiProvider, AiProviderDescriptor, AiSession, AiTaskSummary, AiUsage } from "@remote-ide/acp";
+/** Resolution is always against the currently selected workspace. A stale ID means Core no longer owns that process. */
+export type TerminalAttachResult = { state: "available"; session: TerminalSessionSnapshot } | { state: "stale"; reason: "session-unavailable" };
+export type WorkspaceTask = { id: string; name: string; branch: string; baseBranch: string; status: "active" | "finished"; archived: boolean };
+export type { AiAgent, AiAgentPreset, AiCommand, AiConfiguration, AiContentBlock, AiMessage, AiModel, AiMcpServer, AiOption, AiPermissionRequest, AiProvider, AiProviderCapabilities, AiProviderDescriptor, AiSession, AiSettingsLayout, AiSettingsSection, AiStatus, AiTaskSummary, AiUsage } from "@remote-ide/acp";
+import type { AiAgent, AiAgentPreset, AiConfiguration, AiContentBlock, AiMcpServer, AiModel, AiProvider, AiProviderDescriptor, AiSession, AiTaskSummary, AiUsage } from "@remote-ide/acp";
 export type UsefulFileScope = "global" | "local";
 export type UsefulFile = { scope: UsefulFileScope; name: string };
 export type RunConfigScope = "global" | "local";
@@ -77,6 +192,10 @@ export type JavaTypeSuggestion = { simpleName: string; qualifiedName: string; so
 export type JavaLspRange = { startLine: number; startColumn: number; endLine: number; endColumn: number };
 export type JavaLspCompletion = { label: string; detail?: string; insertText: string; range?: JavaLspRange; additionalTextEdits: { range: JavaLspRange; text: string }[] };
 export type JavaLspLocation = { path: string } & JavaLspRange;
+export type WorkspaceSymbol = { name: string; kind: number; path: string; line: number; column: number; container?: string };
+export type RootedJavaDiagnostic = JavaDiagnostic & { rootId: string };
+export type RootedJavaLspLocation = JavaLspLocation & { rootId: string };
+export type RootedWorkspaceSymbol = WorkspaceSymbol & { rootId: string };
 export type JavaSemanticToken = JavaLspRange & { type: string; modifiers: string[] };
 
 export type JavaProjectNode = {
@@ -88,9 +207,17 @@ export type JavaProjectNode = {
 
 export type SearchContextLine = { line: number; text: string; truncated: boolean };
 export type SearchMatchContext = { before: SearchContextLine[]; after: SearchContextLine[]; truncatedBefore: boolean; truncatedAfter: boolean };
-export type SearchResult = { path: string; line: number; column: number; preview: string; previewTruncated?: boolean; context?: SearchMatchContext };
+export type SearchResult = { rootId: WorkspaceRootId; path: string; line: number; column: number; preview: string; previewTruncated?: boolean; context?: SearchMatchContext };
+export type SearchReplacePreviewFile = { path: string; revision: FileRevision; occurrences: { line: number; column: number; before: string; after: string }[] };
+export type SearchReplacePreview = { id: string; files: SearchReplacePreviewFile[]; truncated: boolean };
+export type SearchReplaceApplyResult = { applied: { path: string; revision: FileRevision }[]; failures: { path: string; code: string; message: string }[] };
 
 export type ProtocolOperations = {
+  "protocol.handshake": { payload: { compatibility: ProtocolCompatibility; clientVersion?: string }; result: { compatible: boolean; compatibility: ProtocolCompatibility; message?: string } };
+  "workspace.roots": { payload: Record<string, never>; result: { roots: WorkspaceRoot[]; selectedRootId: WorkspaceRootId } };
+  "workspace.addRoot": { payload: { path: string; alias: string }; result: { root: WorkspaceRoot; roots: WorkspaceRoot[] } };
+  "workspace.selectRoot": { payload: { rootId: WorkspaceRootId; includeIgnored?: boolean }; result: { root: WorkspaceRoot; workspace: string; projectName: string; tree: FileTreeNode[]; options: WorkspaceOptions } };
+  "workspace.removeRoot": { payload: { rootId: WorkspaceRootId }; result: { roots: WorkspaceRoot[]; selectedRootId: WorkspaceRootId } };
   "workspace.open": {
     payload: { includeIgnored?: boolean };
     result: { workspace: string; projectName: string; tree: FileTreeNode[]; options: WorkspaceOptions };
@@ -101,18 +228,20 @@ export type ProtocolOperations = {
   };
   "tasks.list": { payload: Record<string, never>; result: { tasks: WorkspaceTask[]; selectedTaskId?: string } };
   "tasks.create": { payload: { branch: string; existing?: boolean; remote?: boolean }; result: { task: WorkspaceTask } };
-  "tasks.createFromPrompt": { payload: { provider?: AiProvider; prompt: string; content?: AiContentBlock[]; configuration: AiConfiguration; mcpServers?: AiMcpServer[]; agent?: AiAgent }; result: { task: WorkspaceTask } };
+  "tasks.createFromPrompt": { payload: { provider?: AiProvider; prompt: string; content?: AiContentBlock[]; configuration: AiConfiguration; mcpServers?: AiMcpServer[]; agent?: AiAgent; agentPreset?: AiAgentPreset }; result: { task: WorkspaceTask } };
   "tasks.merge": { payload: { taskId: string; strategy?: "merge" | "smart" }; result: { targetBranch: string } };
   "tasks.timer.cancel": { payload: { taskId?: string }; result: { cancelled: boolean } };
   "tasks.timer.fire": { payload: { taskId?: string }; result: { fired: boolean } };
   "tasks.status": { payload: { taskId: string; status: "active" | "finished" }; result: { task: WorkspaceTask } };
+  "tasks.rename": { payload: { taskId: string; name: string }; result: { task: WorkspaceTask } };
+  "tasks.archive": { payload: { taskId: string; archived: boolean }; result: { task: WorkspaceTask } };
   "tasks.switch": { payload: { taskId?: string; includeIgnored?: boolean }; result: { workspace: string; projectName: string; tree: FileTreeNode[]; options: WorkspaceOptions; tasks: WorkspaceTask[]; selectedTaskId?: string } };
   "tasks.delete": { payload: { taskId: string }; result: { tasks: WorkspaceTask[]; selectedTaskId?: string } };
   "ai.providers": { payload: Record<string, never>; result: { providers: AiProviderDescriptor[] } };
   "ai.get": { payload: { provider?: AiProvider }; result: { session: AiSession } };
   "ai.models": { payload: { provider?: AiProvider }; result: { models: AiModel[] } };
   "ai.configure": { payload: { provider?: AiProvider; model?: string; reasoning?: string; configuration?: AiConfiguration }; result: { session: AiSession } };
-  "ai.send": { payload: { provider?: AiProvider; prompt: string; content?: AiContentBlock[]; model?: string; reasoning?: string; configuration?: AiConfiguration; mcpServers?: AiMcpServer[]; agent?: AiAgent }; result: { session: AiSession } };
+  "ai.send": { payload: { provider?: AiProvider; prompt: string; content?: AiContentBlock[]; model?: string; reasoning?: string; configuration?: AiConfiguration; mcpServers?: AiMcpServer[]; agent?: AiAgent; agentPreset?: AiAgentPreset }; result: { session: AiSession } };
   "ai.permission.resolve": { payload: { provider?: AiProvider; requestId: string; optionId?: string; target?: { taskId?: string; sessionId?: string } }; result: { session: AiSession } };
   "ai.interrupt": { payload: { provider?: AiProvider }; result: { session: AiSession } };
   "ai.steer": { payload: { provider?: AiProvider; prompt: string }; result: { session: AiSession } };
@@ -149,13 +278,17 @@ export type ProtocolOperations = {
     payload: { includeIgnored?: boolean };
     result: { tree: FileTreeNode[] };
   };
+  "filesystem.snapshot": {
+    payload: { paths: string[] };
+    result: { entries: FilesystemSnapshotEntry[] };
+  };
   "filesystem.readFile": {
     payload: { path: string };
-    result: { path: string; content: string };
+    result: { path: string; content: string; revision: FileRevision };
   };
   "filesystem.writeFile": {
-    payload: { path: string; content: string };
-    result: { path: string; bytesWritten: number };
+    payload: { path: string; content: string; expectedRevision?: FileRevision; force?: boolean; create?: boolean };
+    result: { path: string; bytesWritten: number; revision: FileRevision };
   };
   "filesystem.createFile": {
     payload: { path: string };
@@ -169,9 +302,51 @@ export type ProtocolOperations = {
     payload: { path: string; newPath: string };
     result: { path: string };
   };
+  "filesystem.transferPreflight": {
+    payload: { kind: FilesystemTransferKind; items: FilesystemTransferRequest[]; overwritePaths?: string[]; openFiles?: string[]; dirtyFiles?: string[] };
+    result: FilesystemTransferPreflight;
+  };
+  "filesystem.transferApply": {
+    payload: { kind: FilesystemTransferKind; items: FilesystemTransferRequest[]; overwritePaths?: string[]; openFiles?: string[]; dirtyFiles?: string[]; confirmed: boolean };
+    result: FilesystemTransferResult;
+  };
+  /** Creates a short-lived ticket for the separate binary transfer channel. File bodies never use this JSON operation. */
+  "filesystem.remoteTransferBegin": {
+    payload: { direction: RemoteTransferDirection; path: string; size?: number; overwrite?: boolean; mode?: number };
+    result: RemoteTransferTicket;
+  };
+  "filesystem.remoteTransferCancel": { payload: { token: string }; result: { cancelled: boolean } };
+  "filesystem.previewDelete": {
+    payload: { path: string };
+    result: FilesystemDeletePreview;
+  };
+  "filesystem.delete": {
+    payload: { path: string; permanent?: boolean };
+    result: FilesystemDeleteResult;
+  };
+  "filesystem.restore": {
+    payload: { recoveryId: string };
+    result: { path: string };
+  };
   "filesystem.search": {
-    payload: { query: string; path: string; matchCase: boolean };
+    payload: { query: string; path: string; matchCase: boolean; include?: string; exclude?: string; filesOnly?: boolean };
     result: { matches: SearchResult[]; truncated: boolean };
+  };
+  "filesystem.searchRoots": {
+    payload: { rootIds: WorkspaceRootId[]; query: string; path: string; matchCase: boolean; include?: string; exclude?: string };
+    result: { matches: SearchResult[]; truncated: boolean };
+  };
+  "filesystem.readRootFile": {
+    payload: { targetRootId: WorkspaceRootId; path: string };
+    result: { rootId: WorkspaceRootId; path: string; content: string; revision: FileRevision };
+  };
+  "filesystem.replacePreview": {
+    payload: { query: string; replacement: string; path: string; matchCase: boolean; include?: string; exclude?: string };
+    result: SearchReplacePreview;
+  };
+  "filesystem.replaceApply": {
+    payload: { previewId: string; confirmed: boolean };
+    result: SearchReplaceApplyResult;
   };
   "terminal.create": {
     payload: { cols: number; rows: number };
@@ -179,7 +354,7 @@ export type ProtocolOperations = {
   };
   "terminal.attach": {
     payload: { terminalId: string };
-    result: { session?: TerminalSessionSnapshot };
+    result: TerminalAttachResult;
   };
   "terminal.input": {
     payload: { terminalId: string; data: string };
@@ -201,23 +376,62 @@ export type ProtocolOperations = {
     payload: { path: string };
     result: { path: string; originalContent: string; modifiedContent: string; hunks: GitDiffHunk[] };
   };
+  "git.stage": { payload: { path: string; hunk?: GitDiffHunk }; result: Record<string, never> };
+  "git.unstage": { payload: { path: string; hunk?: GitDiffHunk }; result: Record<string, never> };
+  "git.conflicts": { payload: Record<string, never>; result: GitConflictWorkspace };
+  "git.resolveConflict": { payload: { path: string; result: string | null }; result: GitConflictWorkspace };
+  "git.conflictAction": { payload: { action: "continue" | "abort" }; result: { outcome: string } };
   "git.branches": { payload: Record<string, never>; result: { branches: GitBranch[] } };
+  "git.tags": { payload: Record<string, never>; result: { tags: GitTag[] } };
+  "git.createTag": { payload: { name: string; target: string }; result: { tag: GitTag } };
+  "git.deleteTag": { payload: { name: string }; result: Record<string, never> };
   "git.checkoutBranch": { payload: { branch: string; remote?: boolean }; result: { branch: string } };
   "git.renameBranch": { payload: { branch: string; newName: string }; result: { branch: string } };
+  "git.createBranch": { payload: { name: string }; result: { branch: string } };
+  "git.branchDeletePreview": { payload: { branch: string; remote: boolean }; result: GitBranchDeletePreview };
+  "git.deleteBranch": { payload: { branch: string; remote: boolean; force: boolean; confirm: boolean }; result: Record<string, never> };
+  "git.publishBranch": { payload: { branch: string; remote: string; force: boolean; confirm: boolean }; result: Record<string, never> };
+  "git.setBranchUpstream": { payload: { branch: string; remote: string; upstream: string; confirm: boolean }; result: Record<string, never> };
   "git.log": { payload: { branch: string; limit?: number }; result: { commits: GitCommit[] } };
+  "git.mergePreview": { payload: { source: GitMergeRef }; result: GitMergePreview };
+  "git.merge": { payload: { source: GitMergeRef; expectedHead: string; expectedRefHead: string; expectedMergeBase: string }; result: GitMergeResult };
   "git.commitFiles": { payload: { hash: string }; result: { files: GitCommitFile[] } };
+  "git.commitMessage": { payload: { hash: string }; result: { message: string } };
   "git.commitDiff": { payload: { hash: string; path: string; originalPath?: string }; result: { originalContent: string; modifiedContent: string } };
   "git.cherryPick": { payload: { hash: string; commit: boolean }; result: { branch: string } };
+  "git.saveCommitResults": { payload: { hash: string; indexVersion: string; files: { path: string; content: string | null }[] }; result: { applied: number } };
+  "git.saveCommitWorktreeResults": { payload: { hash: string; files: { path: string; content: string | null; expectedRevision?: FileRevision }[] }; result: { applied: number } };
+  "git.commitPatch": { payload: { hash: string }; result: GitCommitPatch };
+  "git.applyCommitHunks": { payload: { hash: string; indexVersion: string; hunkIds: string[] }; result: { applied: number } };
   "git.fileHistory": { payload: { path: string; startLine?: number; endLine?: number }; result: { commits: GitCommit[] } };
   "git.compareFiles": { payload: { ref: string; path?: string }; result: { files: GitCommitFile[] } };
   "git.compareDiff": { payload: { ref: string; path: string; originalPath?: string }; result: { originalContent: string; modifiedContent: string } };
   "git.rollback": { payload: { path: string }; result: Record<string, never> };
   "git.rollbackSelected": { payload: { paths: string[]; deleteUntracked: boolean }; result: { rolledBack: string[]; failures: GitRollbackFailure[] } };
   "git.commit": { payload: { paths: string[]; message: string }; result: { hash: string } };
+  "git.historyRewritePreview": { payload: Record<string, never>; result: GitHistoryRewritePreview };
+  "git.amend": { payload: { confirmHistoryRewrite: boolean }; result: { hash: string } };
+  "git.undoLastCommit": { payload: { confirmHistoryRewrite: boolean }; result: { undone: string } };
+  "git.stashes": { payload: Record<string, never>; result: { stashes: GitStash[] } };
+  "git.createStash": { payload: { message?: string; paths?: string[]; include: GitStashInclusion }; result: { stash: GitStash } };
+  "git.stashPreview": { payload: { reference: string }; result: GitStashPreview };
+  "git.applyStash": { payload: { reference: string }; result: { applied: boolean; stashRetained: boolean; outcome: string } };
+  "git.popStash": { payload: { reference: string; confirm: boolean }; result: { applied: boolean; stashRetained: boolean; outcome: string } };
+  "git.dropStash": { payload: { reference: string; confirm: boolean }; result: Record<string, never> };
   "git.push": { payload: Record<string, never>; result: Record<string, never> };
+  "git.fetch": { payload: Record<string, never>; result: { fetchedAt: string } };
+  "git.cancelFetch": { payload: Record<string, never>; result: { cancelled: boolean } };
+  "git.pullPreview": { payload: Record<string, never>; result: GitPullPreview };
+  "git.pull": { payload: { strategy: GitPullStrategy; expectedHead: string; expectedUpstreamHead: string }; result: GitPullResult };
+  "git.rebasePreview": { payload: Record<string, never>; result: GitRebasePreview };
+  "git.rebaseStart": { payload: { expectedHead: string; expectedUpstreamHead: string; base: string; items: GitRebaseTodoItem[] }; result: GitRebaseResult };
+  "git.rebaseAbort": { payload: Record<string, never>; result: { outcome: string; recovery: string } };
   "taskGit.history": { payload: Record<string, never>; result: { checkpoints: TaskCheckpoint[] } };
-  "taskGit.diff": { payload: { checkpointId: string; path: string }; result: { originalContent: string; modifiedContent: string; binary: boolean } };
-  "taskGit.restore": { payload: { checkpointId: string }; result: { restored: string[] } };
+  /** Text bodies are capped by Core; callers must not use this as bulk file retrieval. */
+  "taskGit.diff": { payload: { checkpointId: string; path: string }; result: { originalContent: string; modifiedContent: string; binary: boolean; truncated: boolean } };
+  /** Applies selected checkpoint files only when a three-way comparison has no conflict. Git's index is untouched. */
+  "taskGit.review": { payload: { checkpointId: string; paths: string[] }; result: TaskCheckpointApplyResult };
+  "taskGit.restore": { payload: { checkpointId: string }; result: TaskCheckpointApplyResult };
   "java.loadMavenProject": {
     payload: { pomPath: string };
     result: { options: JavaProjectOptions; tree: JavaProjectNode[] };
@@ -234,6 +448,7 @@ export type ProtocolOperations = {
     payload: Record<string, never>;
     result: { tree: JavaProjectNode[] };
   };
+  "java.workspaceSymbols": { payload: { query: string; limit?: number }; result: { symbols: RootedWorkspaceSymbol[]; truncated: boolean } };
   "java.listMainClasses": {
     payload: Record<string, never>;
     result: { classes: JavaMainClass[] };
@@ -268,22 +483,23 @@ export type ProtocolOperations = {
   };
   "java.check": {
     payload: Record<string, never>;
-    result: { diagnostics: JavaDiagnostic[] };
+    result: { diagnostics: RootedJavaDiagnostic[] };
   };
   "java.completeType": {
     payload: { prefix: string };
     result: { suggestions: JavaTypeSuggestion[] };
   };
   "java.completion": { payload: { path: string; content: string; line: number; column: number }; result: { items: JavaLspCompletion[] } };
-  "java.definition": { payload: { path: string; content: string; line: number; column: number }; result: { locations: JavaLspLocation[] } };
-  "java.references": { payload: { path: string; content: string; line: number; column: number }; result: { locations: JavaLspLocation[] } };
+  "java.definition": { payload: { path: string; content: string; line: number; column: number }; result: { locations: RootedJavaLspLocation[] } };
+  "java.references": { payload: { path: string; content: string; line: number; column: number }; result: { locations: RootedJavaLspLocation[] } };
   "java.semanticTokens": { payload: { path: string; content: string }; result: { tokens: JavaSemanticToken[] } };
 };
 
 export type RequestType = keyof ProtocolOperations;
 
+/** All nested relative paths and opaque root-owned references inherit this envelope root. */
 export type Request<T extends RequestType = RequestType> = T extends RequestType
-  ? { id: string; type: T; payload: ProtocolOperations[T]["payload"] }
+  ? { id: string; type: T; payload: ProtocolOperations[T]["payload"] } & (T extends "protocol.handshake" | "workspace.roots" | "workspace.addRoot" ? { rootId?: never } : { rootId: WorkspaceRootId })
   : never;
 
 export type ErrorCode =
@@ -296,6 +512,7 @@ export type ErrorCode =
   | "BINARY_FILE"
   | "READ_FAILED"
   | "WRITE_FAILED"
+  | "FILE_CHANGED"
   | "TERMINAL_FAILED"
   | "RUN_CONFIG_NOT_FOUND"
   | "RUN_CONFIG_RUNNING"
@@ -309,36 +526,34 @@ export type ErrorCode =
 export type ProtocolError = { code: ErrorCode; message: string };
 
 export type Response<T extends RequestType = RequestType> =
-  | { id: string; ok: true; result: ProtocolOperations[T]["result"] }
+  | ({ id: string; ok: true; result: ProtocolOperations[T]["result"] } & (T extends "protocol.handshake" | "workspace.roots" | "workspace.addRoot" ? { rootId?: never } : { rootId: WorkspaceRootId }))
   | { id: string; ok: false; error: ProtocolError };
-
-export type FileChangeKind = "add" | "change" | "unlink" | "addDir" | "unlinkDir";
 
 export type FilesystemChangedEvent = {
   type: "filesystem.changed";
-  payload: { path: string; kind: FileChangeKind };
+  payload: { rootId: WorkspaceRootId; paths: string[]; overflow: boolean; health: "healthy" | "degraded"; message?: string };
 };
 
 export type TerminalOutputEvent = {
   type: "terminal.output";
-  payload: { terminalId: string; data: string };
+  payload: { rootId: WorkspaceRootId; terminalId: string; data: string };
 };
 
 export type TerminalExitEvent = {
   type: "terminal.exit";
-  payload: { terminalId: string; exitCode: number };
+  payload: { rootId: WorkspaceRootId; terminalId: string; exitCode: number };
 };
 
-export type GitChangedEvent = { type: "git.changed"; payload: Record<string, never> };
-export type TaskGitChangedEvent = { type: "taskGit.changed"; payload: { workspace: string } };
+export type GitChangedEvent = { type: "git.changed"; payload: { rootId: WorkspaceRootId } };
+export type TaskGitChangedEvent = { type: "taskGit.changed"; payload: { rootId: WorkspaceRootId } };
 
-export type JavaOutputEvent = { type: "java.output"; payload: { data: string } };
-export type JavaExitEvent = { type: "java.exit"; payload: { exitCode: number | null; signal: string | null } };
-export type JavaDebugStateEvent = { type: "java.debug.state"; payload: JavaDebugState };
-export type AiChangedEvent = { type: "ai.changed"; payload: { workspace: string } };
-export type TasksChangedEvent = { type: "tasks.changed"; payload: Record<string, never> };
-export type CommitMessageChangedEvent = { type: "commit-message.changed"; payload: { workspace: string; message: string } };
-export type RunConfigChangedEvent = { type: "runConfig.changed"; payload: { workspace: string; configs: RunConfig[] } };
+export type JavaOutputEvent = { type: "java.output"; payload: { rootId: WorkspaceRootId; data: string } };
+export type JavaExitEvent = { type: "java.exit"; payload: { rootId: WorkspaceRootId; exitCode: number | null; signal: string | null } };
+export type JavaDebugStateEvent = { type: "java.debug.state"; payload: JavaDebugState & { rootId: WorkspaceRootId } };
+export type AiChangedEvent = { type: "ai.changed"; payload: { rootId: WorkspaceRootId } };
+export type TasksChangedEvent = { type: "tasks.changed"; payload: { rootId: WorkspaceRootId } };
+export type CommitMessageChangedEvent = { type: "commit-message.changed"; payload: { rootId: WorkspaceRootId; message: string } };
+export type RunConfigChangedEvent = { type: "runConfig.changed"; payload: { rootId: WorkspaceRootId; configs: RunConfig[] } };
 
 export type ServerEvent = FilesystemChangedEvent | TerminalOutputEvent | TerminalExitEvent | GitChangedEvent | TaskGitChangedEvent | JavaOutputEvent | JavaExitEvent | JavaDebugStateEvent | AiChangedEvent | TasksChangedEvent | CommitMessageChangedEvent | RunConfigChangedEvent;
 
@@ -348,6 +563,11 @@ export type ServerEvent = FilesystemChangedEvent | TerminalOutputEvent | Termina
  * registered here, which would otherwise reject the request at runtime.
  */
 const requestTypeRegistry: Record<RequestType, true> = {
+  "protocol.handshake": true,
+  "workspace.roots": true,
+  "workspace.addRoot": true,
+  "workspace.selectRoot": true,
+  "workspace.removeRoot": true,
   "workspace.open": true,
   "workspace.saveOptions": true,
   "tasks.list": true,
@@ -357,6 +577,8 @@ const requestTypeRegistry: Record<RequestType, true> = {
   "tasks.timer.cancel": true,
   "tasks.timer.fire": true,
   "tasks.status": true,
+  "tasks.rename": true,
+  "tasks.archive": true,
   "tasks.switch": true,
   "tasks.delete": true,
   "ai.providers": true,
@@ -397,12 +619,24 @@ const requestTypeRegistry: Record<RequestType, true> = {
   "agents.delete": true,
   "http.execute": true,
   "filesystem.listTree": true,
+  "filesystem.snapshot": true,
   "filesystem.readFile": true,
   "filesystem.writeFile": true,
   "filesystem.createFile": true,
   "filesystem.createDirectory": true,
   "filesystem.rename": true,
+  "filesystem.transferPreflight": true,
+  "filesystem.transferApply": true,
+  "filesystem.remoteTransferBegin": true,
+  "filesystem.remoteTransferCancel": true,
+  "filesystem.previewDelete": true,
+  "filesystem.delete": true,
+  "filesystem.restore": true,
   "filesystem.search": true,
+  "filesystem.searchRoots": true,
+  "filesystem.readRootFile": true,
+  "filesystem.replacePreview": true,
+  "filesystem.replaceApply": true,
   "terminal.create": true,
   "terminal.attach": true,
   "terminal.input": true,
@@ -410,27 +644,65 @@ const requestTypeRegistry: Record<RequestType, true> = {
   "terminal.close": true,
   "git.status": true,
   "git.diff": true,
+  "git.stage": true,
+  "git.unstage": true,
+  "git.conflicts": true,
+  "git.resolveConflict": true,
+  "git.conflictAction": true,
   "git.branches": true,
+  "git.tags": true,
+  "git.createTag": true,
+  "git.deleteTag": true,
   "git.checkoutBranch": true,
   "git.renameBranch": true,
+  "git.createBranch": true,
+  "git.branchDeletePreview": true,
+  "git.deleteBranch": true,
+  "git.publishBranch": true,
+  "git.setBranchUpstream": true,
   "git.log": true,
+  "git.mergePreview": true,
+  "git.merge": true,
   "git.commitFiles": true,
+  "git.commitMessage": true,
   "git.commitDiff": true,
   "git.cherryPick": true,
+  "git.saveCommitResults": true,
+  "git.saveCommitWorktreeResults": true,
+  "git.commitPatch": true,
+  "git.applyCommitHunks": true,
   "git.fileHistory": true,
   "git.compareFiles": true,
   "git.compareDiff": true,
   "git.rollback": true,
   "git.rollbackSelected": true,
   "git.commit": true,
+  "git.historyRewritePreview": true,
+  "git.amend": true,
+  "git.undoLastCommit": true,
+  "git.stashes": true,
+  "git.createStash": true,
+  "git.stashPreview": true,
+  "git.applyStash": true,
+  "git.popStash": true,
+  "git.dropStash": true,
   "git.push": true,
+  "git.fetch": true,
+  "git.cancelFetch": true,
+  "git.pullPreview": true,
+  "git.pull": true,
+  "git.rebasePreview": true,
+  "git.rebaseStart": true,
+  "git.rebaseAbort": true,
   "taskGit.history": true,
   "taskGit.diff": true,
+  "taskGit.review": true,
   "taskGit.restore": true,
   "java.loadMavenProject": true,
   "java.getOptions": true,
   "java.addSourceRoot": true,
   "java.getProjectTree": true,
+  "java.workspaceSymbols": true,
   "java.listMainClasses": true,
   "java.addRunConfiguration": true,
   "java.selectRunConfiguration": true,

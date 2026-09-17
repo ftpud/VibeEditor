@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { access, lstat, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { access, lstat, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -24,6 +24,29 @@ describe("WorkspaceTaskStore", () => {
     expect(task.status).toBe("active");
     await expect(store.setStatus(task.id, "finished")).resolves.toMatchObject({ id: task.id, status: "finished" });
     await expect(store.list()).resolves.toMatchObject({ tasks: [expect.objectContaining({ id: task.id, status: "finished" })] });
+    await store.delete(task.id);
+  });
+
+  it("persists a display-name rename and archives without removing the worktree or branch", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "remote-ide-task-lifecycle-root-"));
+    const state = await mkdtemp(path.join(os.tmpdir(), "remote-ide-task-lifecycle-state-"));
+    await execFileAsync("git", ["init", root]);
+    await execFileAsync("git", ["-C", root, "config", "user.name", "Test"]);
+    await execFileAsync("git", ["-C", root, "config", "user.email", "test@example.com"]);
+    await writeFile(path.join(root, "tracked.txt"), "root\n");
+    await execFileAsync("git", ["-C", root, "add", "tracked.txt"]);
+    await execFileAsync("git", ["-C", root, "commit", "-m", "initial"]);
+    const store = new WorkspaceTaskStore(root, state);
+    const task = await store.create("feature/lifecycle", false, false, false);
+
+    const renamed = await store.rename(task.id, "Polished lifecycle");
+    expect(renamed).toMatchObject({ name: "Polished lifecycle", branch: "feature/lifecycle", archived: false });
+    const archived = await store.setArchived(task.id, true);
+    expect(archived).toMatchObject({ name: "Polished lifecycle", branch: "feature/lifecycle", status: "active", archived: true });
+    await expect(access(store.taskPath(task.id))).resolves.toBeUndefined();
+    await expect(execFileAsync("git", ["-C", root, "rev-parse", "--verify", "feature/lifecycle"])).resolves.toBeDefined();
+    await expect(new WorkspaceTaskStore(root, state).list()).resolves.toMatchObject({ tasks: [expect.objectContaining({ id: task.id, name: "Polished lifecycle", archived: true })] });
+
     await store.delete(task.id);
   });
 
@@ -158,13 +181,15 @@ describe("WorkspaceTaskStore", () => {
     expect((await store.list()).selectedTaskId).toBe(task.id);
     expect((await lstat(path.join(selected.workspace, ".git"))).isFile()).toBe(true);
     expect(await readFile(path.join(selected.workspace, ".git"), "utf8")).toContain("gitdir:");
-    expect((await execFileAsync("git", ["-C", root, "worktree", "list", "--porcelain"])).stdout).toContain(`worktree ${selected.workspace}`);
+    expect((await execFileAsync("git", ["-C", root, "worktree", "list", "--porcelain"])).stdout).toContain(`worktree ${await realpath(selected.workspace)}`);
     expect((await execFileAsync("git", ["-C", selected.workspace, "branch", "--show-current"])).stdout.trim()).toBe("feature/task-one");
-    await expect(execFileAsync("git", ["-C", selected.workspace, "rev-parse", "--abbrev-ref", "@{upstream}"])).rejects.toBeTruthy();
+    expect((await execFileAsync("git", ["-C", selected.workspace, "rev-parse", "--abbrev-ref", "@{upstream}"])).stdout.trim()).toBe(rootBranch);
     await writeFile(path.join(selected.workspace, "tracked.txt"), "task\n");
     expect(await readFile(path.join(root, "tracked.txt"), "utf8")).toBe("root\n");
     await execFileAsync("git", ["-C", selected.workspace, "add", "tracked.txt"]);
     await execFileAsync("git", ["-C", selected.workspace, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "task change"]);
+    expect((await execFileAsync("git", ["-C", selected.workspace, "rev-list", "--left-right", "--count", "@{upstream}...HEAD"])).stdout.trim()).toBe("0\t1");
+    expect((await execFileAsync("git", ["-C", selected.workspace, "status", "--short", "--branch"])).stdout).toContain("ahead 1");
     expect((await store.merge(task.id)).targetBranch).toBe(rootBranch);
     expect(await readFile(path.join(root, "tracked.txt"), "utf8")).toBe("task\n");
     expect((await store.select()).workspace).toBe(root);
@@ -174,7 +199,7 @@ describe("WorkspaceTaskStore", () => {
     await expect(execFileAsync("git", ["-C", root, "show-ref", "--verify", "refs/heads/feature/task-one"])).rejects.toBeTruthy();
   });
 
-  it("creates a new task from the local root branch and configures push for the matching remote branch", async () => {
+  it("creates a new task from the root tip and inherits its remote upstream", async () => {
     const parent = await mkdtemp(path.join(os.tmpdir(), "remote-ide-task-push-"));
     const remote = path.join(parent, "remote.git");
     const root = path.join(parent, "root");
@@ -196,10 +221,12 @@ describe("WorkspaceTaskStore", () => {
 
     expect(task.baseBranch).toBe(rootBranch);
     expect((await execFileAsync("git", ["-C", workspace, "rev-parse", "HEAD"])).stdout.trim()).toBe(rootHead);
-    expect((await execFileAsync("git", ["-C", workspace, "config", "--get", "branch.feature/pushable.remote"])).stdout.trim()).toBe("origin");
-    expect((await execFileAsync("git", ["-C", workspace, "config", "--get", "branch.feature/pushable.merge"])).stdout.trim()).toBe("refs/heads/feature/pushable");
-    await execFileAsync("git", ["-C", workspace, "push"]);
-    expect((await execFileAsync("git", ["-C", remote, "show-ref", "--verify", "refs/heads/feature/pushable"])).stdout).toContain("refs/heads/feature/pushable");
+    expect((await execFileAsync("git", ["-C", workspace, "rev-parse", "--abbrev-ref", "@{upstream}"])).stdout.trim()).toBe(`origin/${rootBranch}`);
+    expect((await execFileAsync("git", ["-C", workspace, "status", "--short", "--branch"])).stdout.trim()).toBe(`## feature/pushable...origin/${rootBranch}`);
+    await writeFile(path.join(workspace, "tracked.txt"), "task commit\n");
+    await execFileAsync("git", ["-C", workspace, "add", "tracked.txt"]);
+    await execFileAsync("git", ["-C", workspace, "commit", "-m", "task commit"]);
+    expect((await execFileAsync("git", ["-C", workspace, "status", "--short", "--branch"])).stdout).toContain("ahead 1");
     await store.delete(task.id);
   });
 

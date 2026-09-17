@@ -19,6 +19,12 @@ class FakeProvider extends StdioAcpProvider {
   protected async fallbackModels(): Promise<AiModel[]> { return [{ id: "fallback", name: "Fallback", defaultReasoning: "medium", reasoningLevels: ["medium"] }]; }
 }
 
+class MissingProvider extends StdioAcpProvider {
+  readonly descriptor: AiProviderDescriptor = { id: "missing", name: "Missing ACP", description: "test", settings: { title: "t", description: "d", sections: [] }, options: [], capabilities: { models: true, usage: false, mcp: false, agents: false, contextWindow: false } };
+  protected command() { return { command: path.join(os.tmpdir(), `missing-acp-${crypto.randomUUID()}`), args: [] }; }
+  protected async fallbackModels(): Promise<AiModel[]> { return [{ id: "fallback", name: "Fallback", defaultReasoning: "", reasoningLevels: [] }]; }
+}
+
 async function settle(provider: FakeProvider, workspace: string): Promise<AiSession> {
   for (let attempt = 0; attempt < 200; attempt += 1) {
     const session = await provider.get(workspace);
@@ -29,6 +35,11 @@ async function settle(provider: FakeProvider, workspace: string): Promise<AiSess
 }
 
 describe("ACP integration", () => {
+  it("falls back without crashing when an optional provider executable is missing", async () => {
+    const provider = new MissingProvider(() => undefined);
+    await expect(provider.models()).resolves.toEqual([{ id: "fallback", name: "Fallback", defaultReasoning: "", reasoningLevels: [] }]);
+  });
+
   it("keeps a session owned by another live process in progress but marks an abandoned session as error", async () => {
     const state = await mkdtemp(path.join(os.tmpdir(), "remote-ide-ai-owner-"));
     const workspace = process.cwd();
@@ -107,6 +118,22 @@ describe("ACP integration", () => {
     expect(session.model).toBe("model-b");
     expect(session.messages.filter((message) => message.role === "assistant").slice(0, 2).every((message) => message.model === "model-a")).toBe(true);
     expect(session.messages.filter((message) => message.role === "assistant").slice(-2).every((message) => message.model === "model-b")).toBe(true);
+    await provider.clear(workspace);
+  });
+
+  it("uses an explicitly selected model instead of a stale queued model on the first prompt", async () => {
+    const state = await mkdtemp(path.join(os.tmpdir(), "remote-ide-ai-explicit-model-"));
+    const provider = new FakeProvider(() => undefined, state);
+    const workspace = process.cwd();
+    await provider.configureNext(workspace, { model: "model-a", reasoning: "high" });
+    await provider.configure(workspace, { model: "model-b", reasoning: "" });
+
+    expect((await provider.get(workspace)).nextConfiguration).toBeUndefined();
+    await provider.send(workspace, { prompt: "first", configuration: { model: "model-b", reasoning: "" } });
+
+    const session = await settle(provider, workspace);
+    expect(session.model).toBe("model-b");
+    expect(session.messages.filter((message) => message.role === "assistant").every((message) => message.model === "model-b")).toBe(true);
     await provider.clear(workspace);
   });
 
@@ -190,6 +217,17 @@ describe("ACP integration", () => {
     await provider.clear(workspace);
   });
 
+  it("keeps an accepted model when the agent acknowledges configuration without returning options", async () => {
+    const state = await mkdtemp(path.join(os.tmpdir(), "remote-ide-ai-config-ack-"));
+    const provider = new FakeProvider(() => undefined, state, { FAKE_CONFIG_ACK_ONLY: "on" });
+    const workspace = process.cwd();
+    await provider.send(workspace, { prompt: "hello", configuration: { model: "model-b", reasoning: "" } });
+    const session = await settle(provider, workspace);
+    expect(session.model).toBe("model-b");
+    const fresh = await provider.clear(workspace);
+    expect(fresh.model).toBe("model-b");
+  });
+
   it("reports token usage for the latest turn", async () => {
     const state = await mkdtemp(path.join(os.tmpdir(), "remote-ide-ai-usage-"));
     const provider = new FakeProvider(() => undefined, state);
@@ -249,6 +287,42 @@ describe("ACP integration", () => {
     // Two full turns ran, so the scripted reply appears twice.
     expect(session.messages.filter((message) => message.text === "Hello, world")).toHaveLength(2);
     expect(session.status).toBe("done");
+    await provider.clear(workspace);
+  });
+
+  it("archives a running conversation and starts a context-empty handoff session", async () => {
+    const state = await mkdtemp(path.join(os.tmpdir(), "remote-ide-ai-fresh-"));
+    const provider = new FakeProvider(() => undefined, state, { FAKE_SLOW: "on" });
+    const workspace = process.cwd();
+    const first = await provider.send(workspace, { prompt: "old context", configuration: { model: "model-a", reasoning: "high" } });
+    await provider.startFreshSession(workspace, { prompt: "fresh handoff", configuration: first.configuration ?? { model: first.model, reasoning: first.reasoning } });
+    let fresh = await provider.get(workspace);
+    for (let attempt = 0; attempt < 240 && (fresh.id === first.id || fresh.status === "in_progress" || !fresh.messages.some((message) => message.text === "fresh handoff")); attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 25)); fresh = await provider.get(workspace);
+    }
+    expect(fresh.id).not.toBe(first.id);
+    expect(fresh.messages.filter((message) => message.role === "user").map((message) => message.text)).toEqual(["fresh handoff"]);
+    const archived = (await provider.sessions(workspace)).find((session) => session.id === first.id);
+    expect(archived?.messages.some((message) => message.text === "old context")).toBe(true);
+    await provider.clear(workspace);
+  });
+
+  it("carries the selected local agent preset into a queued fresh session", async () => {
+    const state = await mkdtemp(path.join(os.tmpdir(), "remote-ide-ai-fresh-agent-"));
+    const provider = new FakeProvider(() => undefined, state, { FAKE_SLOW: "on" });
+    const workspace = process.cwd();
+    const oleg = { name: "Oleg", instructions: "Implement repository features end to end." };
+    const preset = { scope: "local" as const, name: "Oleg.md" };
+    const first = await provider.send(workspace, { prompt: "old context", configuration: { model: "model-a" }, agent: oleg, agentPreset: preset });
+    await provider.startFreshSession(workspace, { prompt: "fresh handoff", configuration: { model: "model-a" }, agent: oleg, agentPreset: preset });
+    let fresh = await provider.get(workspace);
+    for (let attempt = 0; attempt < 240 && (fresh.id === first.id || fresh.status === "in_progress" || !fresh.messages.some((message) => message.text === "fresh handoff")); attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 25)); fresh = await provider.get(workspace);
+    }
+    expect(fresh.id).not.toBe(first.id);
+    expect(fresh.agentPreset).toEqual(preset);
+    expect(fresh.agent?.name).toBe("Oleg");
+    expect((await provider.sessions(workspace)).find((session) => session.id === first.id)?.messages.some((message) => message.text === "old context")).toBe(true);
     await provider.clear(workspace);
   });
 
