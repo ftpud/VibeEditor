@@ -1434,6 +1434,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 
 .commit-patch-split { grid-template-columns: minmax(210px, .28fr) minmax(0, .72fr); }
 .commit-result-code { flex: 1; min-height: 0; overflow: hidden; }
+.commit-block-diff { flex: 1; min-height: 160px; overflow: hidden; border-top: 1px solid #505359; }
 .commit-patch-source .commit-patch-block-tabs { display: grid; max-height: 40%; }
 .commit-patch-block-tabs button { text-align: left; padding: 8px 10px; border-left: 3px solid #569dff; }
 .commit-patch-block-tabs button.conflict { border-left-color: #ef6666; }

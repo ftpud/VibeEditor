@@ -1,6 +1,6 @@
 import { blockStates, lines, mergeBlocks, type MergeBlock } from "./conflict-merge";
 
-export type CommitResultPreview = { base: string; local: string; initial: string; blocks: MergeBlock[] };
+export type CommitResultPreview = { base: string; incoming: string; local: string; initial: string; blocks: MergeBlock[] };
 const terminated = (value: string) => value && !value.endsWith("\n") ? value + "\n" : value;
 export function buildCommitResultPreview(base: string, local: string, incoming: string): CommitResultPreview {
   const blocks = mergeBlocks(base, local, incoming).filter((block) => block.theirs !== block.base);
@@ -9,7 +9,7 @@ export function buildCommitResultPreview(base: string, local: string, incoming: 
     const text = block.conflict ? `<<<<<<< LOCAL\n${terminated(block.ours)}=======\n${terminated(block.theirs)}>>>>>>> COMMIT\n` : block.theirs;
     result.splice(block.oursLine - 1, lines(block.ours).length, text);
   }
-  return { base, local, initial: result.join(""), blocks };
+  return { base, incoming, local, initial: result.join(""), blocks };
 }
 export function commitResultStates(preview: CommitResultPreview, result: string) {
   return blockStates(preview.base, result, preview.blocks).map((state, index) => ({

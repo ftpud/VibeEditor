@@ -3,6 +3,7 @@ import type { editor } from "monaco-editor";
 import { useEffect, useMemo, useState } from "react";
 import { configureMonacoThemes, monacoTheme } from "./theme";
 import { commitResultStates, type CommitResultPreview } from "./commit-result-preview";
+import { languageForPath } from "./CommitBlockDiff";
 
 type Props = { path: string; preview: CommitResultPreview; result: string; selected: number; busy: boolean; onChange(value: string): void; onEditor(instance: editor.IStandaloneCodeEditor): void };
 export function CommitResultEditor({ path, preview, result, selected, busy, onChange, onEditor }: Props) {
@@ -39,6 +40,5 @@ export function CommitResultEditor({ path, preview, result, selected, busy, onCh
     modified.revealLineInCenter(line); modified.setPosition({ lineNumber: line, column: 1 });
     instance.getOriginalEditor().revealLineInCenter(block.oursLine);
   }, [instance, preview, selected]);
-  const language = ({ ts: "typescript", tsx: "typescript", js: "javascript", jsx: "javascript", java: "java", json: "json", css: "css", html: "html", md: "markdown", py: "python", cds: "sap-cds", sh: "shell", yaml: "yaml", yml: "yaml", sql: "sql", rs: "rust", go: "go", cpp: "cpp" } as Record<string, string>)[path.split(".").pop()?.toLowerCase() ?? ""] ?? "plaintext";
-  return <div className="commit-result-code"><DiffEditor original={preview.local} modified={result} language={language} beforeMount={configureMonacoThemes} theme={monacoTheme()} onMount={(value) => { setInstance(value); onEditor(value.getModifiedEditor()); }} options={{ automaticLayout: true, readOnly: busy, originalEditable: false, renderSideBySide: false, renderIndicators: true, minimap: { enabled: false }, fontSize: 13, lineNumbersMinChars: 4, scrollBeyondLastLine: false, padding: { top: 10 }, ariaLabel: `Result for ${path}`, diffWordWrap: "off" }} /></div>;
+  return <div className="commit-result-code"><DiffEditor original={preview.local} modified={result} language={languageForPath(path)} beforeMount={configureMonacoThemes} theme={monacoTheme()} onMount={(value) => { setInstance(value); onEditor(value.getModifiedEditor()); }} options={{ automaticLayout: true, readOnly: busy, originalEditable: false, renderSideBySide: false, renderIndicators: true, minimap: { enabled: false }, fontSize: 13, lineNumbersMinChars: 4, scrollBeyondLastLine: false, padding: { top: 10 }, ariaLabel: `Result for ${path}`, diffWordWrap: "off" }} /></div>;
 }
