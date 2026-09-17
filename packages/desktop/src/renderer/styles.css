@@ -583,8 +583,10 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .top-java-run select { width: min(240px, 28vw); min-width: 120px; height: 25px; padding: 0 24px 0 8px; border: 1px solid #4b4d52; border-radius: 3px; outline: none; background: #313338; color: #d7d9dc; font: inherit; }
 .top-java-run select:focus { border-color: #4b79a6; }
 .connection-dot { width: 7px; height: 7px; border-radius: 50%; background: #59a869; }
-.tabs { height: 35px; flex: 0 0 35px; display: flex; background: #2b2d30; border-bottom: 1px solid #393b40; overflow-x: auto; overflow-y: hidden; }
-.tab { height: 34px; max-width: 180px; min-width: 100px; display: flex; align-items: center; gap: 6px; padding: 0 7px 0 10px; border: 0; border-right: 1px solid #393b40; background: #2b2d30; color: #a8aaaf; cursor: pointer; }
+.tabs { height: 35px; flex: 0 0 35px; display: flex; background: #2b2d30; border-bottom: 1px solid #393b40; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; }
+.tabs::-webkit-scrollbar { display: none; }
+.tab { height: 34px; max-width: 180px; min-width: 100px; display: flex; align-items: center; gap: 6px; padding: 0 7px 0 10px; overflow: hidden; border: 0; border-right: 1px solid #393b40; background: #2b2d30; color: #a8aaaf; cursor: pointer; }
+.tab > svg { flex: 0 0 auto; }
 .tab:focus-visible { outline: 2px solid #3574f0; outline-offset: -2px; }
 .tab .close { display: inline-flex; flex: 0 0 auto; align-items: center; justify-content: center; padding: 2px; border: 0; background: transparent; color: inherit; cursor: pointer; }
 .tab .close:hover { color: #f0f0f0; }
@@ -592,7 +594,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .tab.active { background: #1e1f22; color: #f0f0f0; border-bottom: 2px solid #3574f0; }
 .tab.pinned { box-shadow: inset 0 2px 0 #c49a4a; }
 .tab.dragging { opacity: .4; }
-.tab-file-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.tab-file-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tab > .root-badge { min-width: 0; max-width: 64px; flex: 0 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tab-file-name.git-modified { color: #e2b86b; }
 .tab-file-name.git-created { color: #68b871; }
