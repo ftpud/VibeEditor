@@ -197,7 +197,7 @@ describe("WorkspaceTaskStore", () => {
     await expect(execFileAsync("git", ["-C", root, "show-ref", "--verify", "refs/heads/feature/task-one"])).rejects.toBeTruthy();
   });
 
-  it("creates a new task from the local root branch and configures push for the matching remote branch", async () => {
+  it("creates a new task from the local root branch without a missing upstream", async () => {
     const parent = await mkdtemp(path.join(os.tmpdir(), "remote-ide-task-push-"));
     const remote = path.join(parent, "remote.git");
     const root = path.join(parent, "root");
@@ -219,10 +219,8 @@ describe("WorkspaceTaskStore", () => {
 
     expect(task.baseBranch).toBe(rootBranch);
     expect((await execFileAsync("git", ["-C", workspace, "rev-parse", "HEAD"])).stdout.trim()).toBe(rootHead);
-    expect((await execFileAsync("git", ["-C", workspace, "config", "--get", "branch.feature/pushable.remote"])).stdout.trim()).toBe("origin");
-    expect((await execFileAsync("git", ["-C", workspace, "config", "--get", "branch.feature/pushable.merge"])).stdout.trim()).toBe("refs/heads/feature/pushable");
-    await execFileAsync("git", ["-C", workspace, "push"]);
-    expect((await execFileAsync("git", ["-C", remote, "show-ref", "--verify", "refs/heads/feature/pushable"])).stdout).toContain("refs/heads/feature/pushable");
+    await expect(execFileAsync("git", ["-C", workspace, "rev-parse", "--abbrev-ref", "@{upstream}"])).rejects.toBeTruthy();
+    expect((await execFileAsync("git", ["-C", workspace, "status", "--short", "--branch"])).stdout.trim()).toBe("## feature/pushable");
     await store.delete(task.id);
   });
 
