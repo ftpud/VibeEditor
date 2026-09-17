@@ -88,6 +88,8 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .quick-filter input::placeholder { color: #74777d; }
 .quick-filter button { width: 20px; height: 20px; padding: 0; display: grid; place-items: center; border: 0; border-radius: 3px; background: transparent; color: #85888e; cursor: pointer; }
 .quick-filter button:hover { background: #3a3c41; color: #e4e5e7; }
+.quick-filter button.active { background: #2e436e; color: #8cb7ff; }
+.quick-filter-spinner { animation: task-progress-spin 1s linear infinite; }
 .filter-empty { padding: 18px 10px; color: #85888e; font-size: .8462rem; text-align: center; }
 .project-tree-actions { height: 25px; flex: 0 0 25px; padding: 0 7px 0 10px; display: flex; align-items: center; color: #85888e; font-size: .7692rem; }
 .project-tree-actions span { flex: 1; }
@@ -1392,7 +1394,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .001ms !important; animation-iteration-count: 1 !important; transition-duration: .001ms !important; }
-  .status-toast-spinner, .task-progress-spinner { animation: none !important; }
+  .status-toast-spinner, .task-progress-spinner, .quick-filter-spinner { animation: none !important; }
   .status-toast-spinner::after, .task-progress-spinner::after { content: "…"; }
 }
 

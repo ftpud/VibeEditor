@@ -96,6 +96,17 @@ describe("WorkspaceSearch", () => {
     ]);
   });
 
+  it("returns at most one match per file for file-content filtering", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "remote-ide-search-"));
+    await writeFile(path.join(root, "a.txt"), "target target\ntarget\n");
+    await writeFile(path.join(root, "b.txt"), "target\n");
+    const filesystem = new WorkspaceFileSystem(); await filesystem.open(root);
+
+    const result = await new WorkspaceSearch(filesystem).search("target", "", false, { filesOnly: true });
+
+    expect(result.matches.map((match) => match.path)).toEqual(["a.txt", "b.txt"]);
+  });
+
   it("evaluates include and exclude globs in Core and excludes binary files", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "remote-ide-search-"));
     await mkdir(path.join(root, "src"));

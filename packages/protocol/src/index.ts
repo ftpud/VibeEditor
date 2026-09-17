@@ -329,7 +329,7 @@ export type ProtocolOperations = {
     result: { path: string };
   };
   "filesystem.search": {
-    payload: { query: string; path: string; matchCase: boolean; include?: string; exclude?: string };
+    payload: { query: string; path: string; matchCase: boolean; include?: string; exclude?: string; filesOnly?: boolean };
     result: { matches: SearchResult[]; truncated: boolean };
   };
   "filesystem.searchRoots": {

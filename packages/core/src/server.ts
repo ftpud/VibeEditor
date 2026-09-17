@@ -696,7 +696,7 @@ async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStor
     case "filesystem.restore": return { path: await filesystem.restore(request.payload.recoveryId) };
     case "filesystem.search": {
       if (typeof request.payload.query !== "string" || typeof request.payload.path !== "string" || typeof request.payload.matchCase !== "boolean") throw new CoreError("INVALID_REQUEST", "query, path, and matchCase are required");
-      const result = await search.search(request.payload.query, request.payload.path, request.payload.matchCase, { include: request.payload.include, exclude: request.payload.exclude });
+      const result = await search.search(request.payload.query, request.payload.path, request.payload.matchCase, { include: request.payload.include, exclude: request.payload.exclude, filesOnly: request.payload.filesOnly });
       return { ...result, matches: result.matches.map((match) => ({ ...match, rootId: request.rootId })) };
     }
     case "filesystem.replacePreview": {

@@ -15,6 +15,14 @@ export function filterProjectTree(nodes: FileTreeNode[], query: string): FileTre
   });
 }
 
+export function filterProjectTreeByPaths(nodes: FileTreeNode[], paths: ReadonlySet<string>): FileTreeNode[] {
+  return nodes.flatMap((node) => {
+    if (node.type === "file") return paths.has(node.path) ? [node] : [];
+    const children = filterProjectTreeByPaths(node.children ?? [], paths);
+    return children.length ? [{ ...node, children }] : [];
+  });
+}
+
 export function compactProjectTree(nodes: FileTreeNode[]): FileTreeNode[] {
   return nodes.map((node) => {
     if (node.type === "file") return node;
@@ -50,9 +58,10 @@ function countFiles(nodes: FileTreeNode[]): number {
   return nodes.reduce((total, node) => total + (node.type === "file" ? 1 : countFiles(node.children ?? [])), 0);
 }
 
-export function ProjectTree({ nodes, query, activePath, selectedPaths, fileColors, gitStatuses, onAction, onContextMenu, onSelectionChange }: {
+export function ProjectTree({ nodes, query, matchingPaths, activePath, selectedPaths, fileColors, gitStatuses, onAction, onContextMenu, onSelectionChange }: {
   nodes: FileTreeNode[];
   query: string;
+  matchingPaths?: ReadonlySet<string>;
   activePath?: string;
   selectedPaths: Set<string>;
   fileColors: Record<string, FileColor>;
@@ -62,9 +71,9 @@ export function ProjectTree({ nodes, query, activePath, selectedPaths, fileColor
   onSelectionChange(paths: Set<string>): void;
 }) {
   const compacted = useMemo(() => compactProjectTree(nodes), [nodes]);
-  const filtered = useMemo(() => filterProjectTree(compacted, query), [compacted, query]);
+  const filtered = useMemo(() => matchingPaths ? filterProjectTreeByPaths(compacted, matchingPaths) : filterProjectTree(compacted, query), [compacted, matchingPaths, query]);
   const allDirectories = useMemo(() => directoryPaths(compacted), [compacted]);
-  const filtering = Boolean(query.trim());
+  const filtering = matchingPaths !== undefined || Boolean(query.trim());
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set(compacted.length === 1 && compacted[0]?.type === "directory" ? [compacted[0].path] : []));
   const effectiveExpanded = useMemo(() => filtering ? new Set(directoryPaths(filtered)) : expanded, [expanded, filtered, filtering]);
   const visible = useMemo(() => visibleNodes(filtered, effectiveExpanded), [effectiveExpanded, filtered]);
