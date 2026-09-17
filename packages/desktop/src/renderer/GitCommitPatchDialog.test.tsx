@@ -3,6 +3,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { GitCommitPatchDialog } from "./GitCommitPatchDialog";
 import type { CoreClient } from "./client";
 vi.mock("./CommitResultEditor", () => ({ CommitResultEditor: ({ path, result, onChange, preview }: { path: string; result: string; preview: { local: string }; onChange(value: string): void }) => <><pre aria-label="Local comparison">{preview.local}</pre><textarea aria-label={`Result for ${path}`} value={result} onChange={(event) => onChange(event.target.value)} /></> }));
+vi.mock("./CommitBlockDiff", () => ({ CommitBlockDiff: ({ preview, selected }: { preview: { base: string; incoming: string }; selected: number }) => <div aria-label={`Source change for block ${selected + 1}`}><span>{preview.base}</span><span>{preview.incoming}</span></div> }));
 afterEach(cleanup);
 function setup(local = "old\n", failSave = false) {
   const request = vi.fn(async (type: string, payload: { path?: string }) => {
@@ -36,14 +37,15 @@ it("marks conflicts and blocks saving until resolved", async () => {
   expect(result.value).toContain("<<<<<<< LOCAL\nlocal edit\n=======\nnew\n");
   expect(screen.getByRole("button", { name: /Block 1 · Conflict/ }).className).toBe("conflict");
   expect((screen.getByRole("button", { name: "Save results to index" }) as HTMLButtonElement).disabled).toBe(true);
-  fireEvent.click(screen.getByRole("button", { name: "Apply block to result" }));
+  expect(screen.getByLabelText("Source change for block 1").textContent).toBe("old\nnew\n");
+  fireEvent.click(screen.getByRole("button", { name: "Apply exact change to result" }));
   expect(result.value).toBe("new\n");
   expect(screen.getByRole("button", { name: /Block 1 · Clean/ }).className).toBe("clean");
 });
 it("keeps the local block and protects unsaved drafts", async () => {
   const { onClose } = setup("local edit\n");
   const result = await screen.findByRole("textbox", { name: "Result for one.ts" }) as HTMLTextAreaElement;
-  fireEvent.click(screen.getByRole("button", { name: "Keep local block" }));
+  fireEvent.click(screen.getByRole("button", { name: "Keep target version" }));
   expect(result.value).toBe("local edit\n");
   fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
   expect(onClose).not.toHaveBeenCalled();
