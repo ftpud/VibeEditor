@@ -3,10 +3,40 @@ import path from "node:path";
 import { mkdtemp } from "node:fs/promises";
 import { describe, expect, it, vi } from "vitest";
 import type { HarnessBlock } from "@remote-ide/protocol";
-import { connectedInput, HarnessRunner } from "./harness-runner.js";
+import { connectedInput, HarnessRunner, nextWatchdogReset, isRecoverableWorkflowError } from "./harness-runner.js";
 import { HarnessStore } from "./harnesses.js";
 
 describe("HarnessRunner", () => {
+  it("waits for all exhausted quota windows and tolerates missing reset information", () => {
+    const now = Date.parse("2026-09-18T00:00:00Z");
+    const primary = { usedPercent: 100, remainingPercent: 0, resetsAt: "2026-09-18T01:00:00Z" };
+    const secondary = { usedPercent: 100, remainingPercent: 0, resetsAt: "2026-09-19T00:00:00Z" };
+    expect(nextWatchdogReset({ supported: true, accountQuota: { primary, secondary } }, now)).toBe("2026-09-19T00:00:00.000Z");
+    expect(nextWatchdogReset({ supported: true, accountQuota: { primary: { ...primary, remainingPercent: 50, usedPercent: 50 }, secondary } }, now)).toBe("2026-09-19T00:00:00.000Z");
+    expect(nextWatchdogReset(undefined, now)).toBe("2026-09-18T00:05:00.000Z");
+    expect(isRecoverableWorkflowError("Internal error: You've hit your usage limit")).toBe(true);
+    expect(isRecoverableWorkflowError("Merge conflict in main.ts")).toBe(false);
+    expect(isRecoverableWorkflowError("Permission denied")).toBe(false);
+  });
+
+  it("runs a Core watchdog independently without an AI session and cancels its sleep", async () => {
+    const state = await mkdtemp(path.join(os.tmpdir(), "core-watchdog-"));
+    const store = new HarnessStore("/workspace", state); const definition = await store.create("Core watchdog");
+    await store.update({ ...definition, blocks: ["watchdog", "main"].map((id) => ({ id, label: id, prompt: "work", type: "prompt" as const, watchdog: id === "watchdog", position: { x: 0, y: 0 } })), edges: [] });
+    const runner = new HarnessRunner(store, () => undefined);
+    const usage = vi.fn(async () => ({ supported: false }));
+    const run = await runner.start(definition.id, "work", async (block, _prompt, runtime) => block.watchdog ? runner.watch(runtime.runId, block.id, usage) : session("complete"));
+    try {
+      await vi.waitFor(async () => {
+        const current = (await store.runs())[0]!;
+        expect(current.blocks.find((b) => b.blockId === "main")?.status).toBe("succeeded");
+        expect(current.blocks.find((b) => b.blockId === "watchdog")?.waitingUntil).toBeTruthy();
+        expect(current.blocks.find((b) => b.blockId === "watchdog")?.sessionId).toBeUndefined();
+      });
+    } finally { await runner.cancel(run.id, async () => undefined); }
+    await vi.waitFor(() => expect(runner.isActive(run.id)).toBe(false));
+    expect(usage).toHaveBeenCalledOnce();
+  });
   it("runs the pipeline beside a sleeping watchdog and resumes failures without replaying completed stages", async () => {
     const state = await mkdtemp(path.join(os.tmpdir(), "workflow-watchdog-"));
     const store = new HarnessStore("/workspace", state); const definition = await store.create("Independent watchdog");
