@@ -19,7 +19,18 @@ export class WorkspaceSearch {
 
   async search(query: string, scope: string, matchCase: boolean, filters: Filters = {}): Promise<{ matches: LocalSearchResult[]; truncated: boolean }> {
     this.validate(query, matchCase, filters);
-    const root = this.filesystem.getWorkspace(); const absoluteScope = scope ? await this.filesystem.resolveExisting(scope) : root; const info = await stat(absoluteScope);
+    const root = this.filesystem.getWorkspace();
+    let absoluteScope = root;
+    if (scope) {
+      try { absoluteScope = await this.filesystem.resolveExisting(scope); }
+      catch (error) {
+        // A multi-root search applies the same relative scope to every root. A
+        // root that does not contain that directory simply has no matches.
+        if (error instanceof CoreError && error.code === "FILE_NOT_FOUND") return { matches: [], truncated: false };
+        throw error;
+      }
+    }
+    const info = await stat(absoluteScope);
     const files = await this.filesForScope(root, absoluteScope, info.isFile(), filters); const matches: LocalSearchResult[] = []; const needle = matchCase ? query : query.toLocaleLowerCase();
     for (const relativePath of files) {
       let content: string; try { content = (await this.filesystem.read(relativePath)).content; } catch { continue; }
