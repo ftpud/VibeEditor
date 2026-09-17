@@ -20,6 +20,18 @@ function requiredTaskStatus(args: Record<string, unknown>): WorkspaceTask["statu
 
 export const appToolDefinitions = [
   {
+    name: "workflow_run_stack",
+    description: "Run directly connected downstream workflow agents now, wait for every result, then return those results to this still-running agent so it can continue its response.",
+    inputSchema: {
+      type: "object", additionalProperties: false,
+      properties: {
+        inputs: { type: "array", minItems: 1, items: { type: "string", minLength: 1 }, description: "Distinct prompts for the downstream agent stack. There is no configured item-count limit." },
+        path: { type: "string", minLength: 1, description: "Named outgoing path. Required for AI-selected routing; omit to run every directly connected path." }
+      },
+      required: ["inputs"]
+    }
+  },
+  {
     name: "ai_usage",
     description: "Report the current AI session's token usage, remaining reported capacity, and reset time when the provider exposes one. Context-window capacity and account quota are identified separately.",
     inputSchema: {
@@ -104,6 +116,18 @@ export const appToolDefinitions = [
     inputSchema: { type: "object", additionalProperties: false, properties: {} }
   },
   {
+    name: "task_merge",
+    description: "Commit outstanding changes in a Vibe Editor task and merge its branch into the root workspace. Smart merge preserves root workspace changes.",
+    inputSchema: {
+      type: "object", additionalProperties: false,
+      properties: {
+        task_id: { type: "string", description: "Task id returned by task_create_and_start or task_list." },
+        strategy: { type: "string", enum: ["smart", "merge"], description: "Use smart unless the root workspace is known to be clean." }
+      },
+      required: ["task_id"]
+    }
+  },
+  {
     name: "task_delete",
     description: "Delete a Vibe Editor task, its worktree, and its task branch.",
     inputSchema: {
@@ -186,10 +210,15 @@ export class AppToolService {
     private readonly agents?: Pick<AgentsStore, "list">,
     private readonly rootWorkspace?: string,
     private readonly timers?: Pick<AiTimerService, "schedule" | "next" | "cancelWorkspace">,
-    private readonly bridgeWorkspace?: string
+    private readonly bridgeWorkspace?: string,
+    private readonly workflow?: { runId: string; blockId: string; runStack(inputs: string[], path?: string): Promise<unknown> }
   ) {}
 
   async call(name: string, args: Record<string, unknown>): Promise<unknown> {
+    if (name === "workflow_run_stack") {
+      if (!this.workflow) throw new Error("workflow_run_stack is only available inside an active workflow block");
+      return this.workflow.runStack(requiredStringArray(args, "inputs"), optionalString(args, "path"));
+    }
     if (name === "ai_usage") {
       const provider = optionalString(args, "provider") ?? this.currentProvider;
       if (!provider) throw new Error("provider is required when the invoking AI provider is not known");
@@ -200,7 +229,10 @@ export class AppToolService {
       if (!this.currentProvider) throw new Error("provider is required when the invoking AI provider is not known");
       const prompt = requiredString(args, "prompt");
       if (prompt.length > 10_000) throw new Error("prompt must be at most 10000 characters");
-      const timer = await this.timers.schedule(this.currentWorkspace, this.currentProvider, prompt, requiredInteger(args, "seconds", 1, 604_800));
+      const seconds = requiredInteger(args, "seconds", 1, 604_800);
+      const timer = this.workflow
+        ? await this.timers.schedule(this.currentWorkspace, this.currentProvider, prompt, seconds, { runId: this.workflow.runId, blockId: this.workflow.blockId })
+        : await this.timers.schedule(this.currentWorkspace, this.currentProvider, prompt, seconds);
       return { timer_id: timer.id, status: "waiting", due_at: timer.dueAt, continuation_prompt: timer.prompt };
     }
     if (name === "model_switch_next") {
@@ -261,6 +293,15 @@ export class AppToolService {
       const providers = this.acp.list();
       const tasks = await Promise.all(registry.tasks.map(async (task) => ({ ...task, ...await this.status(task) })));
       return { tasks };
+    }
+    if (name === "task_merge") {
+      const task = await this.task(requiredString(args, "task_id"));
+      const strategy = optionalString(args, "strategy") ?? "smart";
+      if (strategy !== "smart" && strategy !== "merge") throw new Error("strategy must be smart or merge");
+      const result = await this.tasks.merge(task.id, strategy);
+      const updated = await this.tasks.setStatus(task.id, "finished");
+      await this.onTasksChanged();
+      return { task: updated, ...result };
     }
     if (name === "task_delete") {
       const task = await this.task(requiredString(args, "task_id"));
@@ -425,6 +466,12 @@ function requiredInteger(args: Record<string, unknown>, key: string, minimum: nu
   return value as number;
 }
 
+function requiredStringArray(args: Record<string, unknown>, key: string): string[] {
+  const value = args[key];
+  if (!Array.isArray(value) || !value.length || !value.every((item) => typeof item === "string" && item.trim())) throw new Error(`${key} must be a non-empty array of strings`);
+  return value.map((item) => item.trim());
+}
+
 function requiredCommitMessage(args: Record<string, unknown>, key: string): string {
   const value = args[key];
   if (typeof value !== "string" || !value.trim()) throw new Error(`${key} must contain at least one non-whitespace character`);
@@ -451,7 +498,8 @@ async function main() {
       else if (request.method === "tools/list") result = { tools: appToolDefinitions };
       else if (request.method === "tools/call") {
         const params = request.params ?? {};
-        const value = await bridge.call({ name: requiredString(params, "name"), args: (params.arguments && typeof params.arguments === "object" ? params.arguments : {}) as Record<string, unknown>, currentWorkspace, ...(currentProvider ? { currentProvider } : {}) });
+        const workflowRunId = process.env.VIBE_EDITOR_WORKFLOW_RUN_ID; const workflowBlockId = process.env.VIBE_EDITOR_WORKFLOW_BLOCK_ID;
+        const value = await bridge.call({ name: requiredString(params, "name"), args: (params.arguments && typeof params.arguments === "object" ? params.arguments : {}) as Record<string, unknown>, currentWorkspace, ...(currentProvider ? { currentProvider } : {}), ...(workflowRunId ? { workflowRunId } : {}), ...(workflowBlockId ? { workflowBlockId } : {}) }, 3_600_000);
         result = toolResult(value);
       } else throw Object.assign(new Error(`Method not found: ${request.method}`), { code: -32601 });
       process.stdout.write(`${JSON.stringify({ jsonrpc: "2.0", id: request.id, result })}\n`);
@@ -484,13 +532,13 @@ export function withAppTools(rootWorkspace: string, currentWorkspace: string, se
   return { servers: [...filtered, appServer], agent };
 }
 
-export function appToolServer(rootWorkspace: string, currentWorkspace: string, currentProvider?: AiProvider, bridgeWorkspace = rootWorkspace): AiMcpServer {
+export function appToolServer(rootWorkspace: string, currentWorkspace: string, currentProvider?: AiProvider, bridgeWorkspace = rootWorkspace, workflow?: { runId: string; blockId: string }): AiMcpServer {
   const compiled = fileURLToPath(new URL("app-tools.js", import.meta.url));
   const source = fileURLToPath(new URL("app-tools.ts", import.meta.url));
   const runningFromSource = import.meta.url.endsWith("/src/app-tools.ts");
   return runningFromSource
-    ? { transport: "stdio", name: "vibe-editor", command: process.execPath, args: ["--import", "tsx", source], env: { VIBE_EDITOR_ROOT_WORKSPACE: rootWorkspace, VIBE_EDITOR_CURRENT_WORKSPACE: currentWorkspace, VIBE_EDITOR_BRIDGE_WORKSPACE: bridgeWorkspace, ...(currentProvider ? { VIBE_EDITOR_CURRENT_PROVIDER: currentProvider } : {}) } }
-    : { transport: "stdio", name: "vibe-editor", command: process.execPath, args: [compiled], env: { VIBE_EDITOR_ROOT_WORKSPACE: rootWorkspace, VIBE_EDITOR_CURRENT_WORKSPACE: currentWorkspace, VIBE_EDITOR_BRIDGE_WORKSPACE: bridgeWorkspace, ...(currentProvider ? { VIBE_EDITOR_CURRENT_PROVIDER: currentProvider } : {}) } };
+    ? { transport: "stdio", name: "vibe-editor", command: process.execPath, args: ["--import", "tsx", source], env: { VIBE_EDITOR_ROOT_WORKSPACE: rootWorkspace, VIBE_EDITOR_CURRENT_WORKSPACE: currentWorkspace, VIBE_EDITOR_BRIDGE_WORKSPACE: bridgeWorkspace, ...(currentProvider ? { VIBE_EDITOR_CURRENT_PROVIDER: currentProvider } : {}), ...(workflow ? { VIBE_EDITOR_WORKFLOW_RUN_ID: workflow.runId, VIBE_EDITOR_WORKFLOW_BLOCK_ID: workflow.blockId } : {}) } }
+    : { transport: "stdio", name: "vibe-editor", command: process.execPath, args: [compiled], env: { VIBE_EDITOR_ROOT_WORKSPACE: rootWorkspace, VIBE_EDITOR_CURRENT_WORKSPACE: currentWorkspace, VIBE_EDITOR_BRIDGE_WORKSPACE: bridgeWorkspace, ...(currentProvider ? { VIBE_EDITOR_CURRENT_PROVIDER: currentProvider } : {}), ...(workflow ? { VIBE_EDITOR_WORKFLOW_RUN_ID: workflow.runId, VIBE_EDITOR_WORKFLOW_BLOCK_ID: workflow.blockId } : {}) } };
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) void main();

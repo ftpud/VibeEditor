@@ -2,6 +2,9 @@ import type { RawData } from "ws";
 import { WebSocket, WebSocketServer } from "ws";
 import chokidar from "chokidar";
 import path from "node:path";
+import os from "node:os";
+import crypto from "node:crypto";
+import { mkdir, symlink } from "node:fs/promises";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { protocolCompatibility, requestTypes, type FileTreeNode, type Request, type RequestType, type Response, type ServerEvent, type WorkspaceOptions, type WorkspaceRoot } from "@remote-ide/protocol";
@@ -25,11 +28,12 @@ import { summarizeAiSessions } from "./ai/summary.js";
 import { createAcpRegistry, type AcpRegistry } from "./ai/index.js";
 import { AppEventBridge } from "./app-events.js";
 import { AiTimerService, AiTimerStore } from "./ai-timers.js";
-import { AppToolService, withAppTools } from "./app-tools.js";
+import { AppToolService, appToolServer, withAppTools } from "./app-tools.js";
 import { TaskCheckpointStore } from "./task-checkpoints.js";
 import { RemoteTransferService } from "./remote-transfer.js";
 import { WorkspaceRootRegistry } from "./workspace-roots.js";
 import type { AiProvider } from "@remote-ide/protocol";
+import { findAutopilotOption } from "@remote-ide/acp";
 
 const execFileAsync = promisify(execFile);
 const delay = (milliseconds: number) => new Promise<void>((resolve) => setTimeout(resolve, milliseconds));
@@ -232,7 +236,11 @@ export async function createServer(host: string, port: number, workspacePath: st
   const harnessRunner = (rootId: string) => {
     let runner = harnessRunners.get(rootId);
     if (!runner) {
-      runner = new HarnessRunner(contextFor(rootId).harnesses, (runId) => { const encoded = JSON.stringify({ type: "harness.changed", payload: { rootId, runId } } satisfies ServerEvent); for (const socket of activeSessions) sendWebSocketData(socket, encoded); });
+      runner = new HarnessRunner(contextFor(rootId).harnesses, (runId) => {
+        const harnessEvent = JSON.stringify({ type: "harness.changed", payload: { rootId, runId } } satisfies ServerEvent);
+        const tasksEvent = JSON.stringify({ type: "tasks.changed", payload: { rootId } } satisfies ServerEvent);
+        for (const socket of activeSessions) { sendWebSocketData(socket, harnessEvent); sendWebSocketData(socket, tasksEvent); }
+      });
       harnessRunners.set(rootId, runner);
     }
     return runner;
@@ -252,7 +260,8 @@ export async function createServer(host: string, port: number, workspacePath: st
     void appEvents.consumeCommand(file, async (command) => {
       const currentWorkspace = command.currentWorkspace ?? rootWorkspace; const rootId = await ownerRootId(currentWorkspace) ?? roots.primary().id; const root = roots.get(rootId); const context = contextFor(rootId);
       const changed = async () => { const encoded = JSON.stringify({ type: "tasks.changed", payload: { rootId } } satisfies ServerEvent); for (const socket of activeSessions) sendWebSocketData(socket, encoded); };
-      return new AppToolService(context.tasks, acp, currentWorkspace, changed, onCommitMessageChanged, command.currentProvider, context.agents, root.path, aiTimers, rootWorkspace).call(command.name, command.args);
+      const workflow = command.workflowRunId && command.workflowBlockId ? { runId: command.workflowRunId, blockId: command.workflowBlockId, runStack: (inputs: string[], path?: string) => harnessRunner(rootId).runStack(command.workflowRunId!, command.workflowBlockId!, inputs, path) } : undefined;
+      return new AppToolService(context.tasks, acp, currentWorkspace, changed, onCommitMessageChanged, command.currentProvider, context.agents, root.path, aiTimers, rootWorkspace, workflow).call(command.name, command.args);
     });
   });
   const gitIndexWatcher = chokidar.watch(await gitIndexPath(workspace), { ignoreInitial: true });
@@ -672,16 +681,28 @@ async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStor
     case "harnesses.delete": await harnesses.delete(request.payload.id); return {};
     case "harnesses.validate": return validateHarness(request.payload.harness);
     case "harnesses.runs": return { runs: await harnesses.runs(request.payload.harnessId) };
-    case "harnesses.run": return { run: await harnessRunner.start(request.payload.harnessId, request.payload.input, async (block, prompt) => {
+    case "harnesses.run": return { run: await harnessRunner.start(request.payload.harnessId, request.payload.input, async (block, prompt, runtime) => {
       const provider = acp.get(block.provider ?? request.payload.provider);
+      const sessionWorkspace = await workflowSessionWorkspace(workspacePath, runtime.runId, runtime.blockId); await runtime.started(sessionWorkspace);
       const agentFile = block.agent ? (await agents.list(workspacePath)).find((item) => item.scope === block.agent!.scope && item.name === block.agent!.name) : undefined;
       if (block.agent && !agentFile) throw new CoreError("FILE_NOT_FOUND", `Agent preset '${block.agent.name}' does not exist`);
-      const appTools = withAppTools(rootWorkspace, workspacePath, undefined, agentFile?.agent, provider.descriptor.id, bridgeWorkspace);
-      let session = await provider.startFreshSession(workspacePath, { prompt, configuration: block.model ? { model: block.model } : {}, mcpServers: appTools.servers, agent: appTools.agent, ...(block.agent ? { agentPreset: block.agent } : {}) });
-      while (session.status === "in_progress") { await delay(250); session = await provider.get(workspacePath); }
-      return session;
-    }, request.payload.provider) };
-    case "harnesses.cancel": return { run: await harnessRunner.cancel(request.payload.runId, async (provider) => { await acp.get(provider).interrupt(workspacePath); }) };
+      const appTools = withAppTools(rootWorkspace, sessionWorkspace, undefined, agentFile?.agent, provider.descriptor.id, bridgeWorkspace);
+      const workflowTools = appToolServer(rootWorkspace, sessionWorkspace, provider.descriptor.id, bridgeWorkspace, runtime);
+      const mcpServers = [...appTools.servers.filter((server) => server.name !== workflowTools.name), workflowTools];
+      const workflowAgent = appTools.agent ? { ...appTools.agent, mcpServers: [...new Set([...(appTools.agent.mcpServers ?? []), workflowTools.name])] } : undefined;
+      const autopilot = findAutopilotOption(provider.descriptor.options);
+      const configuration = { ...(block.model ? { model: block.model } : {}), ...(autopilot ? { [autopilot.option.id]: autopilot.on } : {}) };
+      await provider.startFreshSession(sessionWorkspace, { prompt, configuration, mcpServers, agent: workflowAgent, ...(block.agent ? { agentPreset: block.agent } : {}) });
+      return settleWorkflowSession(provider, sessionWorkspace, aiTimers);
+    }, request.payload.provider, async (block, prompt, runtime) => {
+      const provider = acp.get(block.provider ?? request.payload.provider); const current = await provider.get(runtime.workspace);
+      const workflowTools = appToolServer(rootWorkspace, runtime.workspace, provider.descriptor.id, bridgeWorkspace, { runId: runtime.runId, blockId: runtime.blockId });
+      if (current.status === "in_progress" || current.status === "user_prompt") await provider.steer(runtime.workspace, prompt);
+      else await provider.send(runtime.workspace, { prompt, configuration: current.configuration ?? { model: current.model, reasoning: current.reasoning }, mcpServers: [workflowTools] });
+      return settleWorkflowSession(provider, runtime.workspace, aiTimers);
+    }) };
+    case "harnesses.append": return { run: await harnessRunner.appendInput(request.payload.runId, request.payload.input) };
+    case "harnesses.cancel": return { run: await harnessRunner.cancel(request.payload.runId, async (provider, runtime) => { const target = runtime.workspace ?? await workflowSessionWorkspace(workspacePath, runtime.runId, runtime.blockId); await aiTimers.cancelWorkspace(target); await acp.get(provider).interrupt(target); }) };
     case "http.execute": return executeHttpRequest(request.payload.method, request.payload.url, request.payload.headers, request.payload.body);
     case "filesystem.listTree": return { tree: await filesystem.listTree(request.payload.includeIgnored === true) };
     case "filesystem.snapshot": return { entries: await filesystem.snapshot(request.payload.paths) };
@@ -871,6 +892,28 @@ async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStor
     case "java.definition": return { locations: (await jdt.definition(request.payload.path, request.payload.content, request.payload.line, request.payload.column)).map((location) => ({ ...location, rootId: request.rootId })) };
     case "java.references": return { locations: (await jdt.references(request.payload.path, request.payload.content, request.payload.line, request.payload.column)).map((location) => ({ ...location, rootId: request.rootId })) };
     case "java.semanticTokens": return { tokens: await jdt.semanticTokens(request.payload.path, request.payload.content) };
+  }
+}
+
+async function workflowSessionWorkspace(workspace: string, runId: string, blockId: string): Promise<string> {
+  const stateDirectory = process.env.REMOTE_IDE_STATE_DIR ?? path.join(os.homedir(), ".remote-ide", "workspaces");
+  const workspaceKey = crypto.createHash("sha256").update(path.resolve(workspace)).digest("hex");
+  const sessionKey = crypto.createHash("sha256").update(`${runId}:${blockId}`).digest("hex");
+  const directory = path.join(stateDirectory, "workflow-sessions", workspaceKey); const alias = path.join(directory, sessionKey);
+  await mkdir(directory, { recursive: true });
+  try { await symlink(path.resolve(workspace), alias, "dir"); }
+  catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; }
+  return alias;
+}
+
+async function settleWorkflowSession(provider: ReturnType<AcpRegistry["get"]>, workspace: string, timers: Pick<AiTimerService, "next">) {
+  let session = await provider.get(workspace);
+  for (;;) {
+    while (session.status === "in_progress") { await delay(250); session = await provider.get(workspace); }
+    const timer = await timers.next(workspace, provider.descriptor.id);
+    if (!timer) return session;
+    while (await timers.next(workspace, provider.descriptor.id)) await delay(Math.min(250, Math.max(10, new Date(timer.dueAt).getTime() - Date.now())));
+    await delay(250); session = await provider.get(workspace);
   }
 }
 
