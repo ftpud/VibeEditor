@@ -31,18 +31,19 @@ function harness() {
 
 describe("Vibe Editor app tools", () => {
   it("publishes task start agent and reasoning parameters", () => {
-    expect(appToolDefinitions.map((tool) => tool.name)).toEqual(["workflow_run_stack", "ai_usage", "timer_set", "model_switch_next", "session_new", "task_create", "task_create_and_start", "task_list", "task_merge", "task_delete", "task_set_status", "task_ai_response_tail", "task_append_prompt", "set_commit_message", "task_update_commit_message"]);
+    expect(appToolDefinitions.map((tool) => tool.name)).toEqual(["workflow_run_stack", "ai_usage", "timer_set", "timer_set_at", "model_switch_next", "session_new", "task_create", "task_create_and_start", "task_list", "task_merge", "task_delete", "task_set_status", "task_ai_response_tail", "task_append_prompt", "set_commit_message", "task_update_commit_message"]);
     expect(appToolDefinitions[0]).toMatchObject({ name: "workflow_run_stack", inputSchema: { required: ["inputs"] } });
     expect(appToolDefinitions[2]).toMatchObject({ name: "timer_set", inputSchema: { required: ["seconds", "prompt"] } });
-    expect(appToolDefinitions[3]).toMatchObject({ name: "model_switch_next", inputSchema: { required: ["model", "reasoning"] } });
-    expect(appToolDefinitions[4]).toMatchObject({ name: "session_new", inputSchema: { required: ["prompt"] } });
-    expect(appToolDefinitions[6].inputSchema.required).toEqual(["prompt", "provider", "model"]);
-    expect(appToolDefinitions[6].inputSchema.properties.agent).toMatchObject({
+    expect(appToolDefinitions[3]).toMatchObject({ name: "timer_set_at", inputSchema: { required: ["due_at", "prompt"] } });
+    expect(appToolDefinitions[4]).toMatchObject({ name: "model_switch_next", inputSchema: { required: ["model", "reasoning"] } });
+    expect(appToolDefinitions[5]).toMatchObject({ name: "session_new", inputSchema: { required: ["prompt"] } });
+    expect(appToolDefinitions[7].inputSchema.required).toEqual(["prompt", "provider", "model"]);
+    expect(appToolDefinitions[7].inputSchema.properties.agent).toMatchObject({
       oneOf: [{ type: "object", required: ["scope", "name"] }, { type: "null" }]
     });
-    expect(appToolDefinitions[6].inputSchema.properties.reasoning).toMatchObject({ type: "string", minLength: 1 });
-    expect(appToolDefinitions[10]).toMatchObject({ name: "task_set_status", inputSchema: { required: ["task_id", "status"], properties: { status: { enum: ["active", "finished"] } } } });
-    expect(appToolDefinitions[13]).toMatchObject({
+    expect(appToolDefinitions[7].inputSchema.properties.reasoning).toMatchObject({ type: "string", minLength: 1 });
+    expect(appToolDefinitions[11]).toMatchObject({ name: "task_set_status", inputSchema: { required: ["task_id", "status"], properties: { status: { enum: ["active", "finished"] } } } });
+    expect(appToolDefinitions[14]).toMatchObject({
       name: "set_commit_message",
       inputSchema: {
         additionalProperties: false,
@@ -50,7 +51,7 @@ describe("Vibe Editor app tools", () => {
         properties: { message: { type: "string", minLength: 1, maxLength: 10_000, pattern: "\\S" } }
       }
     });
-    expect(appToolDefinitions[14]).toMatchObject({
+    expect(appToolDefinitions[15]).toMatchObject({
       name: "task_update_commit_message",
       inputSchema: {
         additionalProperties: false,
@@ -136,6 +137,14 @@ describe("Vibe Editor app tools", () => {
 
     await expect(service.call("timer_set", { seconds: 30, prompt: "Check again" })).resolves.toEqual({ timer_id: "timer-1", status: "waiting", due_at: timer.dueAt, continuation_prompt: "Check again" });
     expect(timers.schedule).toHaveBeenCalledWith("/tasks/parent/workspace", "codex", "Check again", 30);
+  });
+
+  it("sets an exact continuation timer while preserving workflow identity", async () => {
+    const { tasks, provider, onTasksChanged, onCommitMessageChanged, agents } = harness(); const dueAt = new Date(Date.now() + 60_000).toISOString();
+    const timer = { id: "timer-exact", dueAt, prompt: "Resume at reset" }; const timers = { scheduleAt: vi.fn(async () => timer) };
+    const service = new AppToolService(tasks as never, { get: vi.fn(() => provider), list: vi.fn(() => []) } as never, "/workflow/session", onTasksChanged, onCommitMessageChanged, "codex", agents as never, "/workspace", timers as never, undefined, { runId: "run", blockId: "reviver", runStack: vi.fn() });
+    await expect(service.call("timer_set_at", { due_at: dueAt, prompt: "Resume at reset" })).resolves.toMatchObject({ timer_id: "timer-exact", due_at: dueAt });
+    expect(timers.scheduleAt).toHaveBeenCalledWith("/workflow/session", "codex", "Resume at reset", dueAt, { runId: "run", blockId: "reviver" });
   });
 
   it("reports usage and computes remaining capacity for the invoking provider", async () => {

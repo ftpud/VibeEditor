@@ -62,6 +62,18 @@ export const appToolDefinitions = [
     }
   },
   {
+    name: "timer_set_at",
+    description: "Set or replace a timer for this agent at an exact ISO-8601 timestamp. Use this with reset timestamps returned by ai_usage. After that instant, Vibe Editor sends the continuation prompt back to this same AI session.",
+    inputSchema: {
+      type: "object", additionalProperties: false,
+      properties: {
+        due_at: { type: "string", minLength: 1, description: "Exact future ISO-8601 timestamp, up to 7 days ahead." },
+        prompt: { type: "string", minLength: 1, maxLength: 10000, description: "Continuation prompt to send when the timer expires." }
+      },
+      required: ["due_at", "prompt"]
+    }
+  },
+  {
     name: "model_switch_next",
     description: "Use a provider-advertised model and reasoning effort for exactly the next new task turn in this AI session. When called during a running turn, automatically queue a continuation so the selection is exercised after the current turn; it never changes the current turn. A later call replaces the pending selection.",
     inputSchema: {
@@ -219,7 +231,7 @@ export class AppToolService {
     private readonly currentProvider?: AiProvider,
     private readonly agents?: Pick<AgentsStore, "list">,
     private readonly rootWorkspace?: string,
-    private readonly timers?: Pick<AiTimerService, "schedule" | "next" | "cancelWorkspace">,
+    private readonly timers?: Pick<AiTimerService, "schedule" | "scheduleAt" | "next" | "cancelWorkspace">,
     private readonly bridgeWorkspace?: string,
     private readonly workflow?: { runId: string; blockId: string; runStack(inputs: string[], path?: string): Promise<unknown> }
   ) {}
@@ -243,6 +255,19 @@ export class AppToolService {
       const timer = this.workflow
         ? await this.timers.schedule(this.currentWorkspace, this.currentProvider, prompt, seconds, { runId: this.workflow.runId, blockId: this.workflow.blockId })
         : await this.timers.schedule(this.currentWorkspace, this.currentProvider, prompt, seconds);
+      return { timer_id: timer.id, status: "waiting", due_at: timer.dueAt, continuation_prompt: timer.prompt };
+    }
+    if (name === "timer_set_at") {
+      if (!this.timers) throw new Error("Continuation timers are not available");
+      if (!this.currentProvider) throw new Error("provider is required when the invoking AI provider is not known");
+      const prompt = requiredString(args, "prompt");
+      if (prompt.length > 10_000) throw new Error("prompt must be at most 10000 characters");
+      const dueAt = requiredString(args, "due_at"); const due = new Date(dueAt).getTime(); const now = Date.now();
+      if (!Number.isFinite(due) || due <= now) throw new Error("due_at must be a valid future ISO-8601 timestamp");
+      if (due - now > 604_800_000) throw new Error("due_at must be no more than 7 days ahead");
+      const timer = this.workflow
+        ? await this.timers.scheduleAt(this.currentWorkspace, this.currentProvider, prompt, new Date(due).toISOString(), { runId: this.workflow.runId, blockId: this.workflow.blockId })
+        : await this.timers.scheduleAt(this.currentWorkspace, this.currentProvider, prompt, new Date(due).toISOString());
       return { timer_id: timer.id, status: "waiting", due_at: timer.dueAt, continuation_prompt: timer.prompt };
     }
     if (name === "model_switch_next") {

@@ -28,9 +28,13 @@ export class AiTimerStore {
   }
 
   async set(workspace: string, provider: AiProvider, prompt: string, seconds: number, workflow?: { runId: string; blockId: string }): Promise<AiContinuationTimer> {
+    return this.setAt(workspace, provider, prompt, new Date(Date.now() + seconds * 1_000).toISOString(), workflow);
+  }
+
+  async setAt(workspace: string, provider: AiProvider, prompt: string, dueAt: string, workflow?: { runId: string; blockId: string }): Promise<AiContinuationTimer> {
     const timers = await this.list();
     const now = new Date();
-    const timer = { id: crypto.randomUUID(), workspace: path.resolve(workspace), provider, prompt, createdAt: now.toISOString(), dueAt: new Date(now.getTime() + seconds * 1_000).toISOString(), ...(workflow ? { workflowRunId: workflow.runId, workflowBlockId: workflow.blockId } : {}) };
+    const timer = { id: crypto.randomUUID(), workspace: path.resolve(workspace), provider, prompt, createdAt: now.toISOString(), dueAt, ...(workflow ? { workflowRunId: workflow.runId, workflowBlockId: workflow.blockId } : {}) };
     await this.save([...timers.filter((item) => item.workspace !== timer.workspace || item.provider !== provider), timer]);
     return timer;
   }
@@ -67,6 +71,15 @@ export class AiTimerService {
 
   async schedule(workspace: string, provider: AiProvider, prompt: string, seconds: number, workflow?: { runId: string; blockId: string }): Promise<AiContinuationTimer> {
     const timer = await this.store.set(workspace, provider, prompt, seconds, workflow);
+    return this.activate(timer);
+  }
+
+  async scheduleAt(workspace: string, provider: AiProvider, prompt: string, dueAt: string, workflow?: { runId: string; blockId: string }): Promise<AiContinuationTimer> {
+    const timer = await this.store.setAt(workspace, provider, prompt, dueAt, workflow);
+    return this.activate(timer);
+  }
+
+  private async activate(timer: AiContinuationTimer): Promise<AiContinuationTimer> {
     const activeIds = new Set((await this.store.list()).map((item) => item.id));
     for (const [id, handle] of this.handles) {
       if (!activeIds.has(id)) { clearTimeout(handle); this.handles.delete(id); }

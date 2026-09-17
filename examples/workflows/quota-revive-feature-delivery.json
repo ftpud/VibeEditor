@@ -1,0 +1,81 @@
+{
+  "id": "ec7d6241-0fa6-46d4-b3fa-8df92dff5cc2",
+  "name": "Quota Revive → Feature Delivery Pipeline",
+  "version": 3,
+  "createdAt": "2026-09-17T00:00:00.000Z",
+  "updatedAt": "2026-09-17T00:00:00.000Z",
+  "blocks": [
+    {
+      "id": "reviver",
+      "type": "task",
+      "label": "Reset watchdog",
+      "prompt": "Persistent reset watchdog for this request:\n\n{{input}}\n\nOn the first turn call ai_usage for codex, select the earliest future reset timestamp exposed by account_quota.primary.resets_at, account_quota.secondary.resets_at, or resets_at, then call timer_set_at with that exact ISO timestamp. If no reset is exposed, use timer_set for 300 seconds. Do not start work before the timer.\n\nWhen revived, call workflow_run_stack exactly once on the connected Feature planner with a self-contained prompt containing the complete original request and the words RESET_ELAPSED. Wait for the planner result, then call ai_usage again and schedule the next exact reset timer. Always schedule the next timer, including after completion or errors. Never create tasks directly in this block.",
+      "provider": "codex",
+      "model": "gpt-6-astra",
+      "position": { "x": 20, "y": 260 }
+    },
+    {
+      "id": "planner",
+      "type": "prompt",
+      "label": "Feature planner",
+      "prompt": "You are the feature architect. Read the request and produce a precise implementation plan:\n\n{{input}}\n\nIdentify independently deliverable features, dependencies, acceptance criteria, API/data changes, risks, and targeted tests. Return valid JSON with original_request, features (each with id, title, scope, acceptance, tests, and dependencies), and integration_order. Do not create tasks or modify files.",
+      "provider": "codex",
+      "model": "gpt-6-astra",
+      "position": { "x": 280, "y": 260 }
+    },
+    {
+      "id": "dispatcher",
+      "type": "task",
+      "label": "Parallel implementation dispatcher",
+      "prompt": "Read the planner JSON below. For every feature with satisfied dependencies, immediately call task_create_and_start using provider codex, model gpt-5.6-sol, and a self-contained prompt containing the original request, feature scope, acceptance criteria, required tests, and integration constraints. Issue independent start calls together so features work concurrently. Do not wait for implementation completion. Return valid JSON containing the original request and a tasks array mapping every feature id to its created task_id.\n\nPLANNER JSON:\n{{input}}",
+      "provider": "codex",
+      "model": "gpt-5.6-sol",
+      "position": { "x": 520, "y": 260 }
+    },
+    {
+      "id": "reviewer",
+      "type": "task",
+      "label": "Review implementation",
+      "prompt": "Read the dispatcher JSON and inspect every task with task_list and task_ai_response_tail. Wait using timer_set when any task is active, then continue this same session after revival. Never duplicate tasks. Review completed work against acceptance criteria, interfaces, security, error handling, and test evidence. For each defect call task_append_prompt with a precise correction. Return valid JSON with task statuses, review findings, corrections requested, and review_passed. Do not merge until review_passed is true.\n\nDISPATCHER JSON:\n{{input}}",
+      "provider": "codex",
+      "model": "gpt-6-astra",
+      "position": { "x": 760, "y": 160 }
+    },
+    {
+      "id": "tester",
+      "type": "task",
+      "label": "Test and validate",
+      "prompt": "Read the review report below. If review_passed is false or corrections are pending, return the unresolved issues without testing. Otherwise inspect task responses and require targeted tests for every feature plus integration coverage. Use task_append_prompt for missing tests, and task_list/task_ai_response_tail to collect exact commands and results. Wait with timer_set and resume this same session if work is still active. Return valid JSON with per-feature test commands, results, failures, and tests_passed.\n\nREVIEW REPORT:\n{{input}}",
+      "provider": "codex",
+      "model": "gpt-5.6-sol",
+      "position": { "x": 760, "y": 360 }
+    },
+    {
+      "id": "merger",
+      "type": "task",
+      "label": "Merge verified features",
+      "prompt": "Read the validation report below. Merge nothing unless tests_passed is true and no review defects remain. Merge successful task IDs one at a time with task_merge strategy smart, respecting integration_order. If a merge fails, stop immediately and report the exact failure. After merging, verify the root diff and commit state. Return valid JSON with merge results, failures, and complete.\n\nVALIDATION REPORT:\n{{input}}",
+      "provider": "codex",
+      "model": "gpt-6-astra",
+      "position": { "x": 1020, "y": 260 }
+    },
+    {
+      "id": "reporter",
+      "type": "prompt",
+      "label": "Delivery report",
+      "prompt": "Summarize the complete feature-delivery pipeline from the reports below. Include the plan, feature/task mapping, concurrent execution status, review findings and corrections, exact test evidence, merge commits/results, unresolved issues, and next action. Clearly distinguish COMPLETE from BLOCKED. Do not call tools.\n\n{{input}}",
+      "join": "all",
+      "provider": "codex",
+      "model": "gpt-6-astra",
+      "position": { "x": 1260, "y": 260 }
+    }
+  ],
+  "edges": [
+    { "id": "reviver-planner", "from": "reviver", "to": "planner", "label": "RESET_ELAPSED request" },
+    { "id": "planner-dispatcher", "from": "planner", "to": "dispatcher", "label": "feature plan" },
+    { "id": "dispatcher-reviewer", "from": "dispatcher", "to": "reviewer", "label": "task IDs" },
+    { "id": "reviewer-tester", "from": "reviewer", "to": "tester", "label": "review report" },
+    { "id": "tester-merger", "from": "tester", "to": "merger", "label": "validation report" },
+    { "id": "merger-reporter", "from": "merger", "to": "reporter", "label": "merge report" }
+  ]
+}
