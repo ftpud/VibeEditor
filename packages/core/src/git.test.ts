@@ -77,6 +77,7 @@ describe("parseGitStatus", () => {
     expect((await execFileAsync("git", ["-C", root, "diff", "--cached"])).stdout).toContain("ONE");
     expect(await readFile(path.join(root, "file.txt"), "utf8")).toBe("ONE\ntwo\nTHREE\n");
     const staged = await service.diff("file.txt", filesystem);
+    expect(staged.modifiedContent).toBe("ONE\ntwo\nthree\n");
     const stagedHunk = staged.hunks.find((hunk) => hunk.source === "index")!;
     await service.unstage("file.txt", stagedHunk);
     expect((await execFileAsync("git", ["-C", root, "diff", "--cached"])).stdout).toBe("");

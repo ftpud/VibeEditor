@@ -62,9 +62,18 @@ export class GitService {
     } catch {
       // New files and repositories without HEAD have no original content.
     }
-    try { modifiedContent = (await filesystem.read(entry.path)).content; }
-    catch (error) {
-      if (!(error instanceof CoreError) || error.code !== "FILE_NOT_FOUND") throw error;
+    const hasIndexChange = entry.indexStatus !== " " && entry.indexStatus !== "?";
+    if (hasIndexChange) {
+      // The Git panel places mixed index/worktree entries in the Staged group.
+      // Show the index snapshot there, otherwise an index-only change appears
+      // unchanged because its working file is deliberately left untouched.
+      try { modifiedContent = await this.git(["show", `:${entry.path}`]); }
+      catch { /* A staged deletion has no index blob. */ }
+    } else {
+      try { modifiedContent = (await filesystem.read(entry.path)).content; }
+      catch (error) {
+        if (!(error instanceof CoreError) || error.code !== "FILE_NOT_FOUND") throw error;
+      }
     }
     let hunks: GitDiffHunk[] = [];
     if (isUntracked(entry)) {
