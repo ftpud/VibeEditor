@@ -1,6 +1,6 @@
 import { useEffect, useId, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { Play, Plus, Save, Square, Trash2, X } from "lucide-react";
-import type { AgentFile, AiModel, AiProvider, AiProviderDescriptor, HarnessBlock, HarnessDefinition, HarnessRun } from "@remote-ide/protocol";
+import type { AgentFile, AiModel, AiProvider, AiProviderDescriptor, HarnessBlock, HarnessDefinition, HarnessRun, HarnessLogEntry } from "@remote-ide/protocol";
 import { ModelPicker } from "./ModelPicker";
 
 type Props = {
@@ -122,6 +122,7 @@ function BlockRunDetails({ block, state, onClose }: { block: HarnessBlock; state
     <header><div><strong>{block.label}</strong><span className={`harness-run-state ${state?.status ?? "idle"}`}>{state?.status ?? "not run"}</span></div><button title="Close run details" onClick={onClose}>×</button></header>
     {!state ? <p className="harness-detail-empty">This block has not run yet.</p> : <>
       <div className="harness-detail-meta"><span>Provider: {state.provider ?? block.provider ?? "default"}</span>{state.workspace && <span>Persistent session: active</span>}{state.selectedRoute && <span>Route: {state.selectedRoute}</span>}{state.startedAt && <span>Started: {new Date(state.startedAt).toLocaleString()}</span>}</div>
+      {state.log?.length ? <section className="harness-execution-log"><strong>Execution log ({state.log.length})</strong>{state.log.map((entry, index) => <LogEntry key={`${entry.timestamp}-${index}`} entry={entry} />)}</section> : null}
       {state.iterations?.length ? <div className="harness-iteration-list"><strong>Stack items ({state.iterations.length}/{state.plannedRuns ?? state.iterations.length})</strong>{state.iterations.map((iteration) => <details key={iteration.index} open={iteration.index === state.iterations!.length}><summary><span>Item {iteration.index}</span><span className={`harness-run-state ${iteration.status}`}>{iteration.status}</span></summary>{iteration.prompt && <LogSection title="Prompt" value={iteration.prompt} />}{iteration.output && <LogSection title="Answer" value={iteration.output} />}{iteration.error && <LogSection title="Error" value={iteration.error} error />}</details>)}</div> : <>{state.prompt && <LogSection title="Prompt" value={state.prompt} />}{state.output && <LogSection title="Answer" value={state.output} />}{state.error && <LogSection title="Error" value={state.error} error />}</>}
     </>}
   </section>;
@@ -129,6 +130,10 @@ function BlockRunDetails({ block, state, onClose }: { block: HarnessBlock; state
 
 function LogSection({ title, value, error }: { title: string; value: string; error?: boolean }) {
   return <section className={`harness-log${error ? " error" : ""}`}><strong>{title}</strong><pre>{value}</pre></section>;
+}
+
+function LogEntry({ entry }: { entry: HarnessLogEntry }) {
+  return <details className={`harness-log-entry ${entry.kind}`} open={entry.kind === "error"}><summary><time>{new Date(entry.timestamp).toLocaleTimeString()}</time><span>{entry.kind}</span></summary><pre>{entry.message}</pre></details>;
 }
 
 const BLOCK_WIDTH = 176;

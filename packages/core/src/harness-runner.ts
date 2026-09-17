@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import type { HarnessBlock, HarnessBlockIteration, HarnessEdge, HarnessRun, AiSession } from "@remote-ide/protocol";
+import type { HarnessBlock, HarnessBlockIteration, HarnessEdge, HarnessRun, HarnessLogEntry, AiSession } from "@remote-ide/protocol";
 import { CoreError } from "./errors.js";
 import { validateHarness, renderHarnessPrompt } from "./harness-graph.js";
 import type { HarnessStore } from "./harnesses.js";
@@ -95,7 +95,7 @@ export class HarnessRunner {
           const state = run.blocks.find((item) => item.blockId === blockId)!;
           if (!["queued", "waiting"].includes(state.status)) continue;
           const readiness = blockReadiness(blockId, blocks, edges, run.blocks);
-          if (readiness === "wait") { if (state.status !== "waiting") { state.status = "waiting"; changed = true; } continue; }
+          if (readiness === "wait") { if (state.status !== "waiting") { state.status = "waiting"; this.log(state, "lifecycle", "Waiting for upstream blocks"); changed = true; } continue; }
           if (readiness === "skip") { state.status = "skipped"; state.completedAt = new Date().toISOString(); changed = true; continue; }
           const block = blocks.find((item) => item.id === blockId)!; state.status = "running"; changed = true;
           const task = this.executeBlock(run, block, blocks, edges, outputs, dispatch, defaultProvider).then(() => blockId);
@@ -119,7 +119,7 @@ export class HarnessRunner {
   private async executeBlock(run: HarnessRun, block: HarnessBlock, blocks: HarnessBlock[], edges: HarnessEdge[], outputs: Map<string, string>, dispatch: Dispatch, defaultProvider: string, stack?: string[]): Promise<void> {
     const state = run.blocks.find((item) => item.blockId === block.id)!; const outgoing = edges.filter((edge) => edge.from === block.id);
     const blockInput = connectedInput(block.id, run.input, blocks, edges, outputs); const count = stack?.length ?? 1; const collected: string[] = [];
-    state.startedAt = new Date().toISOString(); state.provider = block.provider ?? defaultProvider; state.plannedRuns = count; state.iterations = count > 1 ? [] : undefined;
+    state.startedAt = new Date().toISOString(); state.provider = block.provider ?? defaultProvider; state.plannedRuns = count; state.iterations = count > 1 ? [] : undefined; state.log = state.log ?? []; this.log(state, "lifecycle", `Started ${count > 1 ? `${count} planned iterations` : "block"}`);
     const providers = this.activeProviders.get(run.id) ?? new Set<string>(); providers.add(state.provider); this.activeProviders.set(run.id, providers); await this.update(run);
     try {
       for (let index = 0; index < count; index += 1) {
@@ -129,6 +129,7 @@ export class HarnessRunner {
         if (block.routing === "ai" && outgoing.length) prompt += `\nChoose a named path when calling workflow_run_stack. Available paths: ${outgoing.map((edge) => edge.label).join(", ")}.`;
         if (block.type === "task") prompt += `\n\nThis is a visible task-orchestration block. Create implementation workspaces with task_create_and_start, inspect them with task_list and task_ai_response_tail, append instructions with task_append_prompt, and merge completed work with task_merge.`;
         state.prompt = prompt;
+        this.log(state, "prompt", prompt);
         const iteration: HarnessBlockIteration | undefined = state.iterations ? { index: index + 1, status: "running", startedAt: new Date().toISOString(), prompt } : undefined; if (iteration) state.iterations!.push(iteration); await this.update(run);
         try {
           const started = async (workspace: string) => { state.workspace = workspace; if (iteration) iteration.workspace = workspace; await this.update(run); };
@@ -137,18 +138,25 @@ export class HarnessRunner {
             ? await execution.append(block, prompt, { runId: run.id, blockId: block.id, workspace: state.workspace })
             : await dispatch(block, prompt, { runId: run.id, blockId: block.id, iteration: index + 1, started });
           state.sessionId = settled.id; if (iteration) iteration.sessionId = settled.id;
+          this.log(state, "response", settled.messages.filter((message) => message.role === "assistant").at(-1)?.text ?? "Provider turn completed without an assistant response");
           if (this.cancelled.has(run.id)) throw new Cancelled();
           if (settled.status === "user_prompt") throw new CoreError("INVALID_REQUEST", `${block.label} requires user input; resume support is not implemented yet`);
           if (settled.status === "error") throw new Error(settled.messages.filter((message) => message.role === "error").at(-1)?.text ?? `${block.label} failed`);
           let output = settled.messages.filter((message) => message.role === "assistant").at(-1)?.text ?? "";
           collected.push(output); if (iteration) { iteration.output = output.slice(-200_000); iteration.status = "succeeded"; iteration.completedAt = new Date().toISOString(); } await this.update(run);
         } catch (error) {
+          this.log(state, "error", error instanceof Error ? error.message : String(error));
           if (iteration) { iteration.status = error instanceof Cancelled ? "cancelled" : "failed"; iteration.error = error instanceof Error ? error.message : String(error); iteration.completedAt = new Date().toISOString(); } throw error;
         }
       }
       const output = count === 1 ? collected[0] ?? "" : collected.map((value, index) => `## Stack item ${index + 1}\n${value}`).join("\n\n");
-      outputs.set(block.id, output); state.output = output.slice(-200_000); state.status = "succeeded"; state.completedAt = new Date().toISOString(); await this.update(run);
+      outputs.set(block.id, output); state.output = output.slice(-200_000); state.status = "succeeded"; state.completedAt = new Date().toISOString(); this.log(state, "lifecycle", "Completed successfully"); await this.update(run);
     } finally { const active = this.activeProviders.get(run.id); active?.delete(state.provider); }
+  }
+
+  private log(state: HarnessRun["blocks"][number], kind: HarnessLogEntry["kind"], message: string): void {
+    const entry: HarnessLogEntry = { timestamp: new Date().toISOString(), kind, message: message.slice(-200_000) };
+    state.log = [...(state.log ?? []), entry].slice(-500);
   }
 
   private async update(run: HarnessRun): Promise<void> {
