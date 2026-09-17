@@ -309,7 +309,44 @@ export class GitService {
 
   async commitPatch(hash: string): Promise<GitCommitPatch> {
     const data = await this.commitPatchData(hash);
-    return { hash: data.hash, indexVersion: await this.indexVersion(), files: data.files.map(({ header: _header, ...file }) => file) };
+    const indexVersion = await this.indexVersion();
+    const files = await Promise.all(data.files.map(async ({ header: _header, ...file }) => {
+      const entries = await this.git(["ls-files", "--stage", "-z", "--", `:(literal)${file.path}`]);
+      const unsafe = entries && !/^(100644|100755) [0-9a-f]+ 0\t/.test(entries);
+      const indexContent = unsafe ? undefined : entries ? await this.git(["show", `:${file.path}`]) : "";
+      const reason = file.reason ?? (unsafe ? "Resolve conflicts or non-text index entries before editing." : indexContent?.includes("\0") ? "The index contains binary content." : undefined);
+      return { ...file, reason, indexContent: reason ? undefined : indexContent };
+    }));
+    if (indexVersion !== await this.indexVersion()) throw new CoreError("GIT_FAILED", "The index changed while loading. Refresh the patch.");
+    return { hash: data.hash, indexVersion, files };
+  }
+
+  async saveCommitResults(hash: string, indexVersion: string, files: { path: string; content: string | null }[]): Promise<{ applied: number }> {
+    if (!Array.isArray(files) || !files.length || files.length > 10000 || files.some((file) => !file || typeof file.path !== "string") || new Set(files.map((file) => file.path)).size !== files.length) throw new CoreError("INVALID_REQUEST", "Choose unique result files to save.");
+    const preview = await this.commitPatch(hash);
+    if (preview.indexVersion !== indexVersion) throw new CoreError("GIT_FAILED", "The index changed after preview. Reopen the dialog and review your changes again.");
+    let patch = "";
+    const lines = (content: string, prefix: string) => content ? content.split("\n").map((line, i, all) => i === all.length - 1 ? line ? `${prefix}${line}\n\\ No newline at end of file\n` : "" : `${prefix}${line}\n`).join("") : "";
+    const count = (content: string) => content ? content.split("\n").length - (content.endsWith("\n") ? 1 : 0) : 0;
+    for (const result of files) {
+      const file = preview.files.find((item) => item.path === result.path);
+      if (!file || file.reason || file.indexContent === undefined || (result.content !== null && (typeof result.content !== "string" || result.content.includes("\0") || result.content.length > 4 * 1024 * 1024))) throw new CoreError("INVALID_REQUEST", "Invalid text result file.");
+      const entry = await this.git(["ls-files", "--stage", "-z", "--", `:(literal)${file.path}`]);
+      const old = file.indexContent; const next = result.content ?? "";
+      if (old === next && (result.content !== null || !entry)) continue;
+      const a = JSON.stringify(`a/${file.path}`); const b = JSON.stringify(`b/${file.path}`);
+      patch += `diff --git ${a} ${b}\n`;
+      if (!entry) {
+        const sourceEntry = await this.git(["ls-tree", hash, "--", `:(literal)${file.path}`]);
+        patch += `new file mode ${sourceEntry.startsWith("100755 ") ? "100755" : "100644"}\n`;
+      }
+      else if (result.content === null) patch += `deleted file mode ${entry.slice(0, 6)}\n`;
+      patch += `--- ${entry ? a : "/dev/null"}\n+++ ${result.content === null ? "/dev/null" : b}\n`;
+      if (old || next) patch += `@@ -${old ? 1 : 0},${count(old)} +${next ? 1 : 0},${count(next)} @@\n${lines(old, "-")}${lines(next, "+")}`;
+    }
+    if (indexVersion !== await this.indexVersion()) throw new CoreError("GIT_FAILED", "The index changed after preview. Reopen the dialog.");
+    if (patch) await applyGitPatch(this.workspace, patch, false);
+    return { applied: files.length };
   }
 
   async applyCommitHunks(hash: string, indexVersion: string, hunkIds: string[]): Promise<{ applied: number }> {
