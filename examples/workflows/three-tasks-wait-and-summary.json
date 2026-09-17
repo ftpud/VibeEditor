@@ -1,61 +1,61 @@
 {
   "id": "7bc7c839-d765-4f5a-a075-46f56356adf7",
-  "name": "3 Concurrent Tasks + 30s Wait + Summary",
-  "version": 2,
+  "name": "3 Truly Concurrent Tasks + 30s Wait + Summary",
+  "version": 3,
   "createdAt": "2026-09-17T00:00:00.000Z",
   "updatedAt": "2026-09-17T00:00:00.000Z",
   "blocks": [
     {
-      "id": "dispatcher",
-      "type": "prompt",
-      "label": "Dispatch 3 concurrent tasks",
-      "prompt": "You are a short-lived dispatcher. The user request is:\n\n{{input}}\n\nImmediately call workflow_run_stack exactly once on the connected Start task block. Pass exactly three distinct, self-contained prompts. Every prompt must include the complete user request above and identify itself as task 1, 2, or 3. Split the work into useful parallel responsibilities when possible. The downstream block only starts each task and returns immediately, so the three task workspaces run concurrently. As soon as workflow_run_stack reports that all three tasks were started, return the tool result and end this block. Do not monitor, merge, or wait for the tasks here.",
+      "id": "task-1",
+      "type": "task",
+      "label": "Concurrent task 1",
+      "prompt": "You are concurrent task branch 1. The complete user request is:\n\n{{input}}\n\nImmediately call task_create_and_start exactly once with provider codex and model gpt-5.6-terra. Give the child task the complete request and identify it as parallel task 1. Save the returned task id. Poll only that task with task_ai_response_tail. If it is still working, call timer_set for a short delay and continue when revived; never create a duplicate. When it finishes, collect its final response, call task_merge once with strategy smart, and return the task id, response, and merge result.",
       "provider": "codex",
       "model": "gpt-5.6-terra",
-      "position": { "x": 30, "y": 40 }
+      "position": { "x": 40, "y": 20 }
     },
     {
-      "id": "task-starter",
+      "id": "task-2",
       "type": "task",
-      "label": "Start task",
-      "prompt": "This is stack item {{iteration}}. Input:\n\n{{input}}\n\nImmediately call task_create_and_start exactly once with provider codex and model gpt-5.6-terra to create an isolated implementation workspace for this input. As soon as the tool returns, report the created task id and return immediately. Never poll, wait, merge, or execute the implementation in this block. Do not wait for previously started tasks. This immediate return is required so all three created task workspaces keep working concurrently.",
+      "label": "Concurrent task 2",
+      "prompt": "You are concurrent task branch 2. The complete user request is:\n\n{{input}}\n\nImmediately call task_create_and_start exactly once with provider codex and model gpt-5.6-terra. Give the child task the complete request and identify it as parallel task 2. Save the returned task id. Poll only that task with task_ai_response_tail. If it is still working, call timer_set for a short delay and continue when revived; never create a duplicate. When it finishes, collect its final response, call task_merge once with strategy smart, and return the task id, response, and merge result.",
       "provider": "codex",
       "model": "gpt-5.6-terra",
-      "position": { "x": 300, "y": 40 }
+      "position": { "x": 40, "y": 180 }
     },
     {
-      "id": "task-watcher",
+      "id": "task-3",
       "type": "task",
-      "label": "Wait for all 3 tasks",
-      "prompt": "The three task starters have returned. Their outputs, including the three task ids, are below:\n\n{{input}}\n\nExtract all three task ids. Monitor all three concurrently using task_list and task_ai_response_tail. If any task is still running or waiting, call timer_set for a short polling delay and continue this same persistent session when revived. Do not create replacement or duplicate tasks. Once every task has completed, collect each final response. Merge each successful task with task_merge using strategy smart; merge calls may be issued together because the runtime serializes them safely. Return one complete report containing every task id, completion status, final response, and merge result. Do not call workflow_run_stack.",
+      "label": "Concurrent task 3",
+      "prompt": "You are concurrent task branch 3. The complete user request is:\n\n{{input}}\n\nImmediately call task_create_and_start exactly once with provider codex and model gpt-5.6-terra. Give the child task the complete request and identify it as parallel task 3. Save the returned task id. Poll only that task with task_ai_response_tail. If it is still working, call timer_set for a short delay and continue when revived; never create a duplicate. When it finishes, collect its final response, call task_merge once with strategy smart, and return the task id, response, and merge result.",
       "provider": "codex",
       "model": "gpt-5.6-terra",
-      "position": { "x": 570, "y": 40 }
+      "position": { "x": 40, "y": 340 }
     },
     {
       "id": "timed-worker",
       "type": "prompt",
       "label": "30-second worker",
-      "prompt": "The user request is:\n\n{{input}}\n\nOn the first turn, call timer_set once with exactly 30 seconds. Its continuation prompt must tell you that the timer elapsed and include the complete user request above. Do not execute the request before setting the timer and do not set another timer after revival. When the continuation arrives, execute or analyze the user request and return your result. Do not call workflow_run_stack; the graph will release the Summary block when both incoming paths finish.",
+      "prompt": "The complete user request is:\n\n{{input}}\n\nOn the first turn, call timer_set exactly once with 30 seconds. Include the complete user request in the continuation prompt. Do not execute the request before the timer and do not set another timer after revival. When revived, execute or analyze the request and return the result.",
       "provider": "codex",
       "model": "gpt-5.6-terra",
-      "position": { "x": 300, "y": 300 }
+      "position": { "x": 40, "y": 500 }
     },
     {
       "id": "summary",
       "type": "prompt",
-      "label": "Summarize all outputs",
-      "prompt": "All three concurrent implementation tasks and the independent 30-second branch are complete. Produce a concise but complete final response for the user from every output below. Clearly distinguish the three task results, their merge outcomes, and the 30-second result. Mention failures or missing outputs explicitly. Do not start more tasks and do not call workflow_run_stack.\n\n{{input}}",
+      "label": "Wait for all and summarize",
+      "prompt": "All four concurrent branches are complete. Give the user one concise, complete summary of every output below. Clearly distinguish task 1, task 2, task 3, their merge results, and the 30-second worker. Explicitly mention any failure or missing output. Do not start tasks or call workflow_run_stack.\n\n{{input}}",
       "join": "all",
       "provider": "codex",
       "model": "gpt-5.6-terra",
-      "position": { "x": 850, "y": 170 }
+      "position": { "x": 500, "y": 250 }
     }
   ],
   "edges": [
-    { "id": "dispatcher-to-starter", "from": "dispatcher", "to": "task-starter", "label": "three implementation prompts" },
-    { "id": "starter-to-watcher", "from": "task-starter", "to": "task-watcher", "label": "three task ids" },
-    { "id": "watcher-to-summary", "from": "task-watcher", "to": "summary", "label": "task results" },
+    { "id": "task-1-to-summary", "from": "task-1", "to": "summary", "label": "task 1 result" },
+    { "id": "task-2-to-summary", "from": "task-2", "to": "summary", "label": "task 2 result" },
+    { "id": "task-3-to-summary", "from": "task-3", "to": "summary", "label": "task 3 result" },
     { "id": "timer-to-summary", "from": "timed-worker", "to": "summary", "label": "timed result" }
   ]
 }
