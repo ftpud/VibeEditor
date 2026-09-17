@@ -9,7 +9,7 @@ function setup(local = "old\n", failSave = false) {
   const request = vi.fn(async (type: string, payload: { path?: string }) => {
     if (type === "git.commitPatch") return { hash: "abc", indexVersion: "version", files: [{ path: "one.ts", indexContent: "old\n", hunks: [] }, { path: "two.ts", indexContent: "second\n", hunks: [] }] };
     if (type === "git.commitDiff") return payload.path === "one.ts" ? { originalContent: "old\n", modifiedContent: "new\n" } : { originalContent: "second\n", modifiedContent: "updated\n" };
-    if (type === "filesystem.readFile") return { content: payload.path === "one.ts" ? local : "second\n" };
+    if (type === "filesystem.readFile") return { content: payload.path === "one.ts" ? local : "second\n", revision: { identity: payload.path!, version: `version-${payload.path}` } };
     if (failSave) throw new Error("The index changed after preview.");
     return { applied: 1 };
   });
@@ -27,16 +27,16 @@ it("previews all blocks, navigates, preserves edits and stages the result", asyn
   expect((await screen.findByRole("textbox", { name: "Result for two.ts" }) as HTMLTextAreaElement).value).toBe("updated\n");
   fireEvent.click(screen.getByRole("button", { name: "Previous block" }));
   expect((screen.getByRole("textbox", { name: "Result for one.ts" }) as HTMLTextAreaElement).value).toBe("manual\n");
-  fireEvent.click(screen.getByRole("button", { name: "Save results to index" }));
+  fireEvent.click(screen.getByRole("button", { name: "Apply changes to local files" }));
   await waitFor(() => expect(onApplied).toHaveBeenCalledOnce());
-  expect(request).toHaveBeenCalledWith("git.saveCommitResults", { hash: "abc", indexVersion: "version", files: [{ path: "one.ts", content: "manual\n" }, { path: "two.ts", content: "updated\n" }] });
+  expect(request).toHaveBeenCalledWith("git.saveCommitWorktreeResults", { hash: "abc", files: [{ path: "one.ts", content: "manual\n", expectedRevision: { identity: "one.ts", version: "version-one.ts" } }, { path: "two.ts", content: "updated\n", expectedRevision: { identity: "two.ts", version: "version-two.ts" } }] });
 });
 it("marks conflicts and blocks saving until resolved", async () => {
   setup("local edit\n");
   const result = await screen.findByRole("textbox", { name: "Result for one.ts" }) as HTMLTextAreaElement;
   expect(result.value).toContain("<<<<<<< LOCAL\nlocal edit\n=======\nnew\n");
   expect(screen.getByRole("button", { name: /Block 1 · Conflict/ }).className).toBe("conflict");
-  expect((screen.getByRole("button", { name: "Save results to index" }) as HTMLButtonElement).disabled).toBe(true);
+  expect((screen.getByRole("button", { name: "Apply changes to local files" }) as HTMLButtonElement).disabled).toBe(true);
   expect(screen.getByLabelText("Source change for block 1").textContent).toBe("old\nnew\n");
   fireEvent.click(screen.getByRole("button", { name: "Apply exact change to result" }));
   expect(result.value).toBe("new\n");
@@ -56,7 +56,7 @@ it("retains drafts on save failure", async () => {
   const { onClose } = setup("old\n", true);
   const result = await screen.findByRole("textbox", { name: "Result for one.ts" }) as HTMLTextAreaElement;
   fireEvent.change(result, { target: { value: "manual" } });
-  fireEvent.click(screen.getByRole("button", { name: "Save results to index" }));
+  fireEvent.click(screen.getByRole("button", { name: "Apply changes to local files" }));
   expect((await screen.findByRole("alert")).textContent).toContain("index changed");
   expect(result.value).toBe("manual"); expect(onClose).not.toHaveBeenCalled();
 });

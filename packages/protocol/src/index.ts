@@ -400,6 +400,7 @@ export type ProtocolOperations = {
   "git.commitDiff": { payload: { hash: string; path: string; originalPath?: string }; result: { originalContent: string; modifiedContent: string } };
   "git.cherryPick": { payload: { hash: string; commit: boolean }; result: { branch: string } };
   "git.saveCommitResults": { payload: { hash: string; indexVersion: string; files: { path: string; content: string | null }[] }; result: { applied: number } };
+  "git.saveCommitWorktreeResults": { payload: { hash: string; files: { path: string; content: string | null; expectedRevision?: FileRevision }[] }; result: { applied: number } };
   "git.commitPatch": { payload: { hash: string }; result: GitCommitPatch };
   "git.applyCommitHunks": { payload: { hash: string; indexVersion: string; hunkIds: string[] }; result: { applied: number } };
   "git.fileHistory": { payload: { path: string; startLine?: number; endLine?: number }; result: { commits: GitCommit[] } };
@@ -667,6 +668,7 @@ const requestTypeRegistry: Record<RequestType, true> = {
   "git.commitDiff": true,
   "git.cherryPick": true,
   "git.saveCommitResults": true,
+  "git.saveCommitWorktreeResults": true,
   "git.commitPatch": true,
   "git.applyCommitHunks": true,
   "git.fileHistory": true,

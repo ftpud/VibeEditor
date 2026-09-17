@@ -5,6 +5,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
 import { GitService } from "./git.js";
+import { WorkspaceFileSystem } from "./filesystem.js";
 
 const exec = promisify(execFile);
 async function fixture() {
@@ -65,6 +66,26 @@ describe("selected commit changes", () => {
 });
 
 describe("editable commit results", () => {
+  it("applies reviewed results to local files without changing the index", async () => {
+    const { root, git, original, hash, service } = await fixture();
+    await writeFile(path.join(root, "unrelated.txt"), "staged\n"); await git("add", "unrelated.txt");
+    const filesystem = new WorkspaceFileSystem(); await filesystem.open(root);
+    const current = await filesystem.read("file.txt");
+    await service.saveCommitWorktreeResults(hash, [{ path: "file.txt", content: "local applied result\n", expectedRevision: current.revision }], filesystem);
+    expect(await readFile(path.join(root, "file.txt"), "utf8")).toBe("local applied result\n");
+    expect(await git("show", ":file.txt")).toBe(original);
+    expect(await git("show", ":unrelated.txt")).toBe("staged\n");
+    expect(await git("diff", "--cached", "--", "file.txt")).toBe("");
+    expect(await git("diff", "--", "file.txt")).toContain("+local applied result");
+  });
+  it("rejects a local file changed after preview and leaves it untouched", async () => {
+    const { root, hash, service } = await fixture();
+    const filesystem = new WorkspaceFileSystem(); await filesystem.open(root);
+    const current = await filesystem.read("file.txt");
+    await writeFile(path.join(root, "file.txt"), "newer local edit\n");
+    await expect(service.saveCommitWorktreeResults(hash, [{ path: "file.txt", content: "stale result\n", expectedRevision: current.revision }], filesystem)).rejects.toThrow("changed after preview");
+    expect(await readFile(path.join(root, "file.txt"), "utf8")).toBe("newer local edit\n");
+  });
   it("saves manual results while preserving working files and unrelated staged changes", async () => {
     const { root, git, original, hash, service } = await fixture();
     await writeFile(path.join(root, "unrelated.txt"), "staged\n"); await git("add", "unrelated.txt");

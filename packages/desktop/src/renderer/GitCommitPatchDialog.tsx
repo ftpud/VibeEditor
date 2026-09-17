@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { editor } from "monaco-editor";
 import { X } from "lucide-react";
-import type { GitCommitPatch } from "@remote-ide/protocol";
+import type { FileRevision, GitCommitPatch } from "@remote-ide/protocol";
 import type { CoreClient } from "./client";
 import { applyBlock } from "./conflict-merge";
 import { buildCommitResultPreview, commitResultStates, hasConflictMarkers, type CommitResultPreview } from "./commit-result-preview";
@@ -9,7 +9,7 @@ import { CommitResultEditor } from "./CommitResultEditor";
 import { CommitBlockDiff } from "./CommitBlockDiff";
 
 type Props = { client: CoreClient; hash: string; label: string; onClose(): void; onApplied(): void };
-type FilePreview = { comparison?: CommitResultPreview; error?: string };
+type FilePreview = { comparison?: CommitResultPreview; expectedRevision?: FileRevision; error?: string };
 export function GitCommitPatchDialog({ client, hash, label, onClose, onApplied }: Props) {
   const [preview, setPreview] = useState<GitCommitPatch>();
   const [comparisons, setComparisons] = useState<Record<string, FilePreview>>({});
@@ -29,14 +29,14 @@ export function GitCommitPatchDialog({ client, hash, label, onClose, onApplied }
       const loaded = await Promise.all(next.files.map(async (file): Promise<[string, FilePreview]> => {
         if (file.reason || file.indexContent === undefined) return [file.path, { error: file.reason ?? "Result preview unavailable." }];
         try {
-          const [source, local] = await Promise.all([
+          const [source, localFile] = await Promise.all([
             client.request("git.commitDiff", { hash: next.hash, path: file.path }),
-            client.request("filesystem.readFile", { path: file.path }).then((value) => value.content).catch((reason: unknown) => {
-              if (reason instanceof Error && reason.message.startsWith("FILE_NOT_FOUND:")) return "";
+            client.request("filesystem.readFile", { path: file.path }).catch((reason: unknown) => {
+              if (reason instanceof Error && reason.message.startsWith("FILE_NOT_FOUND:")) return undefined;
               throw reason;
             })
           ]);
-          return [file.path, { comparison: buildCommitResultPreview(source.originalContent, local, source.modifiedContent) }];
+          return [file.path, { comparison: buildCommitResultPreview(source.originalContent, localFile?.content ?? "", source.modifiedContent), ...(localFile ? { expectedRevision: localFile.revision } : {}) }];
         } catch (reason) { return [file.path, { error: reason instanceof Error ? reason.message : String(reason) }]; }
       }));
       if (!cancelled) {
@@ -51,7 +51,7 @@ export function GitCommitPatchDialog({ client, hash, label, onClose, onApplied }
   const block = comparison?.blocks[blockIndex];
   const result = file ? drafts[file.path] : undefined;
   const states = comparison ? commitResultStates(comparison, result ?? "") : [];
-  const changed = preview?.files.filter((item) => Object.hasOwn(drafts, item.path) && drafts[item.path] !== item.indexContent) ?? [];
+  const changed = preview?.files.filter((item) => { const comparison = comparisons[item.path]?.comparison; return comparison && Object.hasOwn(drafts, item.path) && drafts[item.path] !== comparison.local; }) ?? [];
   const unresolved = Object.entries(drafts).some(([, value]) => value !== null && hasConflictMarkers(value));
   const blocks = preview?.files.flatMap((item, fi) => comparisons[item.path]?.comparison?.blocks.map((_, bi) => ({ fi, bi })) ?? []) ?? [];
   const position = blocks.findIndex(({ fi, bi }) => fi === fileIndex && bi === blockIndex);
@@ -78,7 +78,7 @@ export function GitCommitPatchDialog({ client, hash, label, onClose, onApplied }
     if (!preview || !changed.length || unresolved) return;
     setBusy(true); setError("");
     try {
-      await client.request("git.saveCommitResults", { hash: preview.hash, indexVersion: preview.indexVersion, files: changed.map((item) => ({ path: item.path, content: drafts[item.path]! })) });
+      await client.request("git.saveCommitWorktreeResults", { hash: preview.hash, files: changed.map((item) => ({ path: item.path, content: drafts[item.path]!, ...(comparisons[item.path]?.expectedRevision ? { expectedRevision: comparisons[item.path]!.expectedRevision } : {}) })) });
       onApplied(); onClose();
     } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
     finally { setBusy(false); }
@@ -86,13 +86,13 @@ export function GitCommitPatchDialog({ client, hash, label, onClose, onApplied }
   const close = () => { if (changed.length) setConfirmClose(true); else onClose(); };
   return <div className="dialog-overlay"><section className="commit-patch-dialog" role="dialog" aria-modal="true" aria-label="Apply selected commit changes" aria-busy={busy || loading}>
     <header><div><h2>Apply Selected Commit Changes</h2><small>{label}</small></div><button aria-label="Close patch picker" disabled={busy} onClick={close}><X size={16} /></button></header>
-    <p>All commit blocks are previewed against your local working file. Edit the result, then save to the index. Local edits in the result will also be staged; working files stay unchanged.</p>
+    <p>All commit blocks are previewed against your local working file. Edit the result, then apply it to your local files. The changes remain unstaged.</p>
     <div className="commit-patch-toolbar"><label>File <select aria-label="Result file" disabled={busy || loading} value={fileIndex} onChange={(event) => { setFileIndex(Number(event.target.value)); setBlockIndex(0); setError(""); }}>{preview?.files.map((item, index) => <option key={item.path} value={index}>{drafts[item.path] !== undefined && drafts[item.path] !== item.indexContent ? "● " : ""}{item.path}</option>)}</select></label><span>{position >= 0 ? `Block ${position + 1} of ${blocks.length}` : "No incoming blocks"}</span><button disabled={busy || position <= 0} onClick={() => navigate(-1)}>Previous block</button><button disabled={busy || position < 0 || position >= blocks.length - 1} onClick={() => navigate(1)}>Next block</button></div>
     {error && <div className="find-error" role="alert">{error}</div>}
     <main>{loading ? <p>Building local comparison…</p> : !file ? <p>No changes to select.</p> : <div className="commit-patch-split">
       <section className="commit-patch-source"><div className="commit-patch-pane-heading"><strong>Original branch → Commit</strong><small>{file.path}</small></div><div className="commit-patch-block-tabs" aria-label="Commit blocks">{comparison?.blocks.map((item, index) => <button key={index} className={states[index]?.conflict ? "conflict" : "clean"} disabled={busy} aria-pressed={index === blockIndex} onClick={() => setBlockIndex(index)}>Block {index + 1} · {states[index]?.conflict ? "Conflict / review" : "Clean"}<small>Original line {item.start + 1}</small></button>)}</div>{comparison && block && <CommitBlockDiff path={file.path} preview={comparison} selected={blockIndex} />}<div className="commit-patch-block-actions"><button disabled={busy || !block || typeof result !== "string"} onClick={() => useBlock("theirs")}>Apply exact change to result</button><button disabled={busy || !block || typeof result !== "string"} onClick={() => useBlock("ours")}>Keep target version</button><button disabled={busy || !block?.theirs || typeof result !== "string"} onClick={insertBlock}>Insert changed text at cursor</button><small>The diff shows the unchanged parent version against this commit. Apply replays that exact before-to-after change in the target result.</small></div></section>
       <section className="commit-patch-result"><div className="commit-patch-pane-heading"><strong>Local → Result · editable diff</strong><span className="commit-result-legend clean">Blue · clean</span><span className="commit-result-legend conflict">Red · conflict / review</span></div>{comparison ? <><div className="commit-patch-result-actions"><label><input type="checkbox" checked={result === null} disabled={busy} onChange={(event) => edit(event.target.checked ? null : comparison.initial)} /> Delete file from index</label><button disabled={busy} onClick={() => edit(comparison.initial)}>Reset preview</button></div>{result === null ? <p>This file will be removed from the index when you save.</p> : <CommitResultEditor key={file.path} path={file.path} preview={comparison} result={result ?? ""} selected={blockIndex} busy={busy} onChange={edit} onEditor={(instance) => { resultEditor.current = instance; }} />}</> : <p role="alert">{comparisons[file.path]?.error ?? file.reason ?? "Preview unavailable."}</p>}</section>
     </div>}</main>
-    <footer>{confirmClose ? <><small>Discard your unsaved result edits?</small><button disabled={busy} onClick={() => setConfirmClose(false)}>Keep editing</button><button disabled={busy} onClick={onClose}>Discard edits</button></> : <><small>{unresolved ? "Resolve the red conflict markers before saving." : `${changed.length} changed files · Review staged changes after saving.`}</small><button disabled={busy} onClick={close}>Cancel</button><button className="primary" disabled={busy || loading || !changed.length || unresolved} onClick={() => void save()}>{busy ? "Saving…" : "Save results to index"}</button></>}</footer>
+    <footer>{confirmClose ? <><small>Discard your unsaved result edits?</small><button disabled={busy} onClick={() => setConfirmClose(false)}>Keep editing</button><button disabled={busy} onClick={onClose}>Discard edits</button></> : <><small>{unresolved ? "Resolve the red conflict markers before applying." : `${changed.length} changed files · Changes will remain unstaged.`}</small><button disabled={busy} onClick={close}>Cancel</button><button className="primary" disabled={busy || loading || !changed.length || unresolved} onClick={() => void save()}>{busy ? "Applying…" : "Apply changes to local files"}</button></>}</footer>
   </section></div>;
 }

@@ -3,7 +3,7 @@ import { promisify } from "node:util";
 import path from "node:path";
 import { chmod, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
-import type { GitBranch, GitBranchDeletePreview, GitCommit, GitCommitFile, GitConflictOperationKind, GitConflictWorkspace, GitDiffHunk, GitHistoryRewritePreview, GitMergePreview, GitMergeRef, GitMergeResult, GitPullPreview, GitPullResult, GitPullStrategy, GitRebasePreview, GitRebaseResult, GitRebaseTodoItem, GitRollbackFailure, GitStash, GitStashInclusion, GitStashPreview, GitStatusEntry, GitTag, GitUpstreamStatus } from "@remote-ide/protocol";
+import type { FileRevision, GitBranch, GitBranchDeletePreview, GitCommit, GitCommitFile, GitConflictOperationKind, GitConflictWorkspace, GitDiffHunk, GitHistoryRewritePreview, GitMergePreview, GitMergeRef, GitMergeResult, GitPullPreview, GitPullResult, GitPullStrategy, GitRebasePreview, GitRebaseResult, GitRebaseTodoItem, GitRollbackFailure, GitStash, GitStashInclusion, GitStashPreview, GitStatusEntry, GitTag, GitUpstreamStatus } from "@remote-ide/protocol";
 import { CoreError } from "./errors.js";
 import { WorkspaceFileSystem } from "./filesystem.js";
 import type { GitCommitPatch } from "@remote-ide/protocol";
@@ -355,6 +355,29 @@ export class GitService {
     }
     if (indexVersion !== await this.indexVersion()) throw new CoreError("GIT_FAILED", "The index changed after preview. Reopen the dialog.");
     if (patch) await applyGitPatch(this.workspace, patch, false);
+    return { applied: files.length };
+  }
+
+  async saveCommitWorktreeResults(hash: string, files: { path: string; content: string | null; expectedRevision?: FileRevision }[], filesystem: WorkspaceFileSystem): Promise<{ applied: number }> {
+    if (!Array.isArray(files) || !files.length || files.length > 10000 || files.some((file) => !file || typeof file.path !== "string") || new Set(files.map((file) => file.path)).size !== files.length) throw new CoreError("INVALID_REQUEST", "Choose unique result files to apply.");
+    const data = await this.commitPatchData(hash);
+    const allowed = new Set(data.files.filter((file) => !file.reason).map((file) => file.path));
+    for (const file of files) {
+      if (!allowed.has(file.path) || file.content !== null && (typeof file.content !== "string" || file.content.includes("\0") || Buffer.byteLength(file.content, "utf8") > 2 * 1024 * 1024)) throw new CoreError("INVALID_REQUEST", "Invalid text result file.");
+      try {
+        const current = await filesystem.read(file.path);
+        if (!file.expectedRevision || current.revision.identity !== file.expectedRevision.identity || current.revision.version !== file.expectedRevision.version) throw new CoreError("FILE_CHANGED", `File changed after preview: ${file.path}`);
+      } catch (error) {
+        if (error instanceof CoreError && error.code === "FILE_NOT_FOUND" && !file.expectedRevision) continue;
+        throw error;
+      }
+    }
+    for (const file of files) {
+      if (file.content === null) {
+        if (file.expectedRevision) await filesystem.delete(file.path, true);
+      } else if (file.expectedRevision) await filesystem.write(file.path, file.content, file.expectedRevision);
+      else await filesystem.write(file.path, file.content, undefined, false, true);
+    }
     return { applied: files.length };
   }
 
