@@ -83,6 +83,13 @@ describe("Vibe Editor app tools", () => {
     expect(tasks.merge).toHaveBeenCalledWith("task-1", "smart"); expect(onTasksChanged).toHaveBeenCalled();
   });
 
+  it("serializes overlapping task merges against the root workspace", async () => {
+    const { service, tasks } = harness(); let active = 0; let maximum = 0;
+    tasks.merge.mockImplementation(async () => { active += 1; maximum = Math.max(maximum, active); await new Promise((resolve) => setTimeout(resolve, 10)); active -= 1; return { targetBranch: "main" }; });
+    await Promise.all([service.call("task_merge", { task_id: "task-1" }), service.call("task_merge", { task_id: "task-1" })]);
+    expect(maximum).toBe(1);
+  });
+
   it("queues a validated model and reasoning override for the next turn", async () => {
     const { tasks, provider, onTasksChanged, onCommitMessageChanged, agents } = harness();
     const service = new AppToolService(tasks as never, { get: vi.fn(() => provider), list: vi.fn(() => []) } as never, "/tasks/parent/workspace", onTasksChanged, onCommitMessageChanged, "codex", agents as never, "/workspace");

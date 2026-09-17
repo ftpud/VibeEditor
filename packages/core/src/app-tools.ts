@@ -11,6 +11,16 @@ import { agentFingerprint } from "./agent-profile.js";
 import type { AiTimerService } from "./ai-timers.js";
 
 type ToolResult = { content: { type: "text"; text: string }[]; isError?: boolean };
+const taskMergeQueues = new WeakMap<WorkspaceTaskStore, Promise<void>>();
+
+async function serializedTaskMerge(tasks: WorkspaceTaskStore, taskId: string, strategy: "smart" | "merge") {
+  const previous = taskMergeQueues.get(tasks) ?? Promise.resolve(); let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  taskMergeQueues.set(tasks, previous.catch(() => undefined).then(() => gate));
+  await previous.catch(() => undefined);
+  try { return await tasks.merge(taskId, strategy); }
+  finally { release(); }
+}
 
 function requiredTaskStatus(args: Record<string, unknown>): WorkspaceTask["status"] {
   const status = requiredString(args, "status");
@@ -298,7 +308,7 @@ export class AppToolService {
       const task = await this.task(requiredString(args, "task_id"));
       const strategy = optionalString(args, "strategy") ?? "smart";
       if (strategy !== "smart" && strategy !== "merge") throw new Error("strategy must be smart or merge");
-      const result = await this.tasks.merge(task.id, strategy);
+      const result = await serializedTaskMerge(this.tasks, task.id, strategy);
       const updated = await this.tasks.setStatus(task.id, "finished");
       await this.onTasksChanged();
       return { task: updated, ...result };
