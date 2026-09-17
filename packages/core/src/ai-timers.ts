@@ -11,6 +11,16 @@ type TimerFile = { timers: AiContinuationTimer[] };
 
 export class AiTimerStore {
   private readonly file: string;
+  private static readonly writes = new Map<string, Promise<unknown>>();
+
+  private mutate<T>(operation: () => Promise<T>): Promise<T> {
+    const previous = AiTimerStore.writes.get(this.file) ?? Promise.resolve();
+    const next = previous.catch(() => undefined).then(operation);
+    AiTimerStore.writes.set(this.file, next);
+    const cleanup = () => { if (AiTimerStore.writes.get(this.file) === next) AiTimerStore.writes.delete(this.file); };
+    void next.then(cleanup, cleanup);
+    return next;
+  }
 
   constructor(rootWorkspace: string, stateDirectory = process.env.REMOTE_IDE_STATE_DIR ?? path.join(os.homedir(), ".remote-ide", "workspaces")) {
     const key = crypto.createHash("sha256").update(rootWorkspace).digest("hex");
@@ -32,21 +42,25 @@ export class AiTimerStore {
   }
 
   async setAt(workspace: string, provider: AiProvider, prompt: string, dueAt: string, workflow?: { runId: string; blockId: string }): Promise<AiContinuationTimer> {
+    return this.mutate(async () => {
     const timers = await this.list();
     const now = new Date();
     const timer = { id: crypto.randomUUID(), workspace: path.resolve(workspace), provider, prompt, createdAt: now.toISOString(), dueAt, ...(workflow ? { workflowRunId: workflow.runId, workflowBlockId: workflow.blockId } : {}) };
     await this.save([...timers.filter((item) => item.workspace !== timer.workspace || item.provider !== provider), timer]);
     return timer;
+    });
   }
 
-  async remove(id: string): Promise<void> { await this.save((await this.list()).filter((timer) => timer.id !== id)); }
+  async remove(id: string): Promise<void> { await this.mutate(async () => this.save((await this.list()).filter((timer) => timer.id !== id))); }
 
   async removeWorkspace(workspace: string): Promise<AiContinuationTimer[]> {
+    return this.mutate(async () => {
     const resolved = path.resolve(workspace);
     const timers = await this.list();
     const removed = timers.filter((timer) => timer.workspace === resolved);
     await this.save(timers.filter((timer) => timer.workspace !== resolved));
     return removed;
+    });
   }
 
   async next(workspace: string, provider?: AiProvider): Promise<AiContinuationTimer | undefined> {
@@ -64,6 +78,8 @@ export class AiTimerStore {
 
 export class AiTimerService {
   private readonly handles = new Map<string, NodeJS.Timeout>();
+  private readonly delivering = new Set<string>();
+  private readonly cancellationEpochs = new Map<string, number>();
 
   constructor(private readonly store: AiTimerStore, private readonly acp: AcpRegistry, private readonly rootWorkspace: string, private readonly onChanged: (workspace: string) => void) {}
 
@@ -110,6 +126,8 @@ export class AiTimerService {
   }
 
   async cancelWorkspace(workspace: string): Promise<void> {
+    const key = path.resolve(workspace);
+    this.cancellationEpochs.set(key, (this.cancellationEpochs.get(key) ?? 0) + 1);
     for (const timer of await this.store.removeWorkspace(workspace)) {
       const handle = this.handles.get(timer.id);
       if (handle) clearTimeout(handle);
@@ -125,6 +143,11 @@ export class AiTimerService {
   }
 
   private async fire(timer: AiContinuationTimer, immediately = false): Promise<void> {
+    if (this.delivering.has(timer.id)) return;
+    this.delivering.add(timer.id);
+    const epoch = this.cancellationEpochs.get(timer.workspace) ?? 0;
+    const cancelled = () => (this.cancellationEpochs.get(timer.workspace) ?? 0) !== epoch;
+    try {
     const handle = this.handles.get(timer.id);
     if (immediately && handle) clearTimeout(handle);
     this.handles.delete(timer.id);
@@ -135,12 +158,13 @@ export class AiTimerService {
     this.onChanged(timer.workspace);
     const manager = this.acp.get(timer.provider);
     const session = await manager.get(timer.workspace);
-    try {
+      if (cancelled()) return;
       if (session.status === "in_progress" || session.status === "user_prompt") await manager.steer(timer.workspace, timer.prompt);
       else await manager.send(timer.workspace, { prompt: timer.prompt, configuration: session.configuration ?? { model: session.model, reasoning: session.reasoning }, mcpServers: [appToolServer(this.rootWorkspace, timer.workspace, timer.provider, this.rootWorkspace, timer.workflowRunId && timer.workflowBlockId ? { runId: timer.workflowRunId, blockId: timer.workflowBlockId } : undefined)] });
+      if (cancelled()) await manager.interrupt(timer.workspace);
     } catch (error) {
       console.error(`[core] continuation timer failed: ${error instanceof Error ? error.message : String(error)}`);
-    } finally { this.onChanged(timer.workspace); }
+    } finally { this.delivering.delete(timer.id); this.onChanged(timer.workspace); }
   }
 }
 

@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import type { HarnessBlock, HarnessBlockIteration, HarnessEdge, HarnessRun, HarnessLogEntry, AiSession } from "@remote-ide/protocol";
+import type { HarnessBlock, HarnessBlockIteration, HarnessEdge, HarnessRun, HarnessLogEntry, HarnessChildTask, AiSession } from "@remote-ide/protocol";
 import { CoreError } from "./errors.js";
 import { validateHarness, renderHarnessPrompt } from "./harness-graph.js";
 import type { HarnessStore } from "./harnesses.js";
@@ -20,7 +20,39 @@ export class HarnessRunner {
 
   isActive(runId: string): boolean { return this.activeRuns.has(runId) && !this.cancelled.has(runId); }
 
-  async watch(runId: string, blockId: string, usage: () => Promise<AiUsage>): Promise<AiSession> {
+  async registerChild(runId: string, child: Omit<HarnessChildTask, "recoveryAttempts">): Promise<void> {
+    const execution = this.executions.get(runId);
+    if (!execution || !this.isActive(runId)) throw new Error("Workflow is no longer active");
+    execution.run.children ??= [];
+    if (!execution.run.children.some((item) => item.taskId === child.taskId && item.provider === child.provider)) execution.run.children.push({ ...child, recoveryAttempts: 0 });
+    await this.update(execution.run);
+  }
+
+  async recoverChildren(runId: string, inspect: (child: HarnessChildTask) => Promise<AiSession | undefined>, resume: (child: HarnessChildTask, session: AiSession) => Promise<unknown>): Promise<void> {
+    const execution = this.executions.get(runId);
+    if (!execution || !this.isActive(runId)) return;
+    for (const child of execution.run.children ?? []) {
+      if (!this.isActive(runId)) return;
+      const state = execution.run.blocks.find((block) => block.blockId === child.blockId)!;
+      try {
+        const session = await inspect(child);
+        if (!session || session.status !== "error" || child.recoveryAttempts >= 3) continue;
+        const reason = session.messages.filter((message) => message.role === "error" || message.role === "assistant").slice(-2).map((message) => message.text).join("\n");
+        if (!isRecoverableWorkflowError(reason) || !this.isActive(runId)) continue;
+        child.recoveryAttempts += 1; child.recoveryError = undefined;
+        this.log(state, "lifecycle", `Resuming child ${child.taskId}, attempt ${child.recoveryAttempts}/3`);
+        await this.update(execution.run);
+        if (!this.isActive(runId)) return;
+        await resume(child, session);
+      } catch (error) {
+        child.recoveryError = error instanceof Error ? error.message : String(error);
+        this.log(state, "error", `Child ${child.taskId} recovery: ${child.recoveryError}`);
+      }
+      await this.update(execution.run);
+    }
+  }
+
+  async watch(runId: string, blockId: string, usage: () => Promise<AiUsage>, recoverChildren: () => Promise<void> = async () => undefined): Promise<AiSession> {
     const execution = this.executions.get(runId);
     const state = execution?.run.blocks.find((item) => item.blockId === blockId);
     if (!execution || !state) throw new Error("Workflow is no longer active");
@@ -32,6 +64,8 @@ export class HarnessRunner {
       this.log(state, "lifecycle", `Core watchdog sleeping until ${state.waitingUntil}`);
       await this.update(execution.run);
       while (this.isActive(runId) && Date.now() < Date.parse(state.waitingUntil)) await new Promise((resolve) => setTimeout(resolve, 250));
+      if (!this.isActive(runId)) break;
+      await recoverChildren();
       if (!this.isActive(runId)) break;
       const { resumed } = await this.resumeFailed(runId, blockId);
       this.log(state, "lifecycle", `Core watchdog woke; queued ${resumed.length} eligible failed stages`);
@@ -62,6 +96,7 @@ export class HarnessRunner {
     for (const block of run.blocks) if (["queued", "running", "waiting"].includes(block.status)) { block.status = "cancelled"; block.completedAt = completedAt; block.error = undefined; }
     await this.update(run);
     await Promise.all(active.map((block) => interrupt(block.provider!, { runId, blockId: block.blockId, workspace: block.workspace }).catch(() => undefined)));
+    await Promise.all((run.children ?? []).map((child) => interrupt(child.provider, { runId, blockId: child.blockId, workspace: child.workspace }).catch(() => undefined)));
     return run;
   }
 
