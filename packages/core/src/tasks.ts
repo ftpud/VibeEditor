@@ -65,6 +65,8 @@ export class WorkspaceTaskStore {
       } else if (existing) await execFileAsync("git", ["-C", destination, "switch", name], { encoding: "utf8" });
       else {
         await execFileAsync("git", ["-C", destination, "switch", "-C", name], { encoding: "utf8" });
+        const upstream = await this.taskUpstream(task.baseBranch);
+        if (upstream) await execFileAsync("git", ["-C", destination, "branch", "--set-upstream-to", upstream, name], { encoding: "utf8" });
         createdBranch = true;
       }
       await this.copyWorkspaceState(this.rootWorkspace, destination);
@@ -365,6 +367,15 @@ export class WorkspaceTaskStore {
       return (await execFileAsync("git", ["-C", this.rootWorkspace, "branch", "--show-current"], { encoding: "utf8" })).stdout.trim() || "HEAD";
     }
     catch (error) { throw new CoreError("GIT_FAILED", `Could not determine task base branch: ${gitError(error)}`); }
+  }
+
+  private async taskUpstream(baseBranch: string): Promise<string | undefined> {
+    if (baseBranch === "HEAD") return undefined;
+    try {
+      const inherited = (await execFileAsync("git", ["-C", this.rootWorkspace, "rev-parse", "--abbrev-ref", "--symbolic-full-name", `${baseBranch}@{upstream}`], { encoding: "utf8" })).stdout.trim();
+      if (inherited && inherited !== "HEAD") return inherited;
+    } catch { /* A local-only base branch has no configured upstream. */ }
+    return baseBranch;
   }
 
   private async save(registry: Registry): Promise<void> {
