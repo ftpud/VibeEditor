@@ -288,25 +288,36 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .useful-section > header button:hover, .useful-row > button:not(.useful-open):hover { background: #3a3c41; color: white; }
 .useful-empty { padding: 10px 12px; color: #777a80; font-size: 0.7692rem; }
 .harness-panel { min-height: 0; flex: 1; display: flex; flex-direction: column; background: #24262a; }
-.harness-picker, .harness-toolbar { padding: 6px; display: flex; gap: 5px; border-bottom: 1px solid #393b40; }
-.harness-picker select, .harness-toolbar input, .harness-inspector input, .harness-inspector select, .harness-inspector textarea, .harness-run textarea { min-width: 0; flex: 1; padding: 6px 7px; border: 1px solid #4b4d52; border-radius: 4px; outline: none; background: #2b2d31; color: #d7d9dc; font: inherit; }
-.harness-picker button, .harness-toolbar button, .harness-empty button, .harness-run button { padding: 5px 8px; display: flex; align-items: center; justify-content: center; gap: 5px; border: 0; border-radius: 4px; background: #35383d; color: #d6d8dc; font: inherit; cursor: pointer; }
-.harness-picker button:hover:not(:disabled), .harness-toolbar button:hover:not(:disabled), .harness-empty button:hover, .harness-run button:hover:not(:disabled) { background: #426db5; color: white; }
-.harness-picker button:disabled, .harness-toolbar button:disabled, .harness-run button:disabled { opacity: .4; cursor: default; }
+.harness-picker, .harness-create, .harness-toolbar { padding: 6px; display: flex; gap: 5px; border-bottom: 1px solid #393b40; }
+.harness-picker select, .harness-create input, .harness-toolbar input, .harness-inspector input, .harness-inspector select, .harness-inspector textarea, .harness-run textarea { min-width: 0; flex: 1; padding: 6px 7px; border: 1px solid #4b4d52; border-radius: 4px; outline: none; background: #2b2d31; color: #d7d9dc; font: inherit; }
+.harness-picker button, .harness-create button, .harness-toolbar button, .harness-empty button, .harness-run button { padding: 5px 8px; display: flex; align-items: center; justify-content: center; gap: 5px; border: 0; border-radius: 4px; background: #35383d; color: #d6d8dc; font: inherit; cursor: pointer; }
+.harness-picker button:hover:not(:disabled), .harness-create button:hover:not(:disabled), .harness-toolbar button:hover:not(:disabled), .harness-empty button:hover, .harness-run button:hover:not(:disabled) { background: #426db5; color: white; }
+.harness-picker button:disabled, .harness-create button:disabled, .harness-toolbar button:disabled, .harness-run button:disabled { opacity: .4; cursor: default; }
 .harness-empty { flex: 1; padding: 24px 16px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 9px; color: #8f9298; text-align: center; line-height: 1.45; }
 .harness-empty strong { color: #d6d8dc; font-size: 1rem; }
 .harness-toolbar input { font-weight: 600; }
 .harness-canvas { min-height: 260px; flex: 1; position: relative; overflow: auto; touch-action: none; background-color: #202226; background-image: radial-gradient(#3b3e43 1px, transparent 1px); background-size: 18px 18px; }
 .harness-canvas > svg { width: 1200px; height: 800px; position: absolute; inset: 0; pointer-events: none; }
-.harness-canvas line { stroke: #657a9e; stroke-width: 2; }
-.harness-block { width: 176px; height: 86px; position: absolute; z-index: 1; display: flex; flex-direction: column; border: 1px solid #4a4e55; border-radius: 6px; background: #2b2e33; box-shadow: 0 4px 12px rgba(0,0,0,.25); cursor: grab; user-select: none; }
+.harness-edge { fill: none; stroke: #78a8f5; stroke-width: 2; }
+.harness-canvas marker path { fill: #78a8f5; }
+.harness-connect-hint { padding: 5px 8px; display: flex; align-items: center; gap: 4px; border-bottom: 1px solid #4b3f62; background: #302a3c; color: #c9bddb; font-size: .7692rem; }
+.harness-connect-hint strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.harness-connect-hint button { margin-left: auto; border: 0; background: transparent; color: #a98be0; cursor: pointer; }
+.harness-block { width: 176px; height: 116px; position: absolute; z-index: 1; display: flex; flex-direction: column; border: 1px solid #4a4e55; border-radius: 6px; background: #2b2e33; box-shadow: 0 4px 12px rgba(0,0,0,.25); cursor: grab; user-select: none; }
 .harness-block.selected { border-color: #579dff; box-shadow: 0 0 0 1px #579dff; }
 .harness-block.connecting { border-color: #b99aec; }
 .harness-block > header { min-width: 0; padding: 8px; display: flex; align-items: center; gap: 7px; overflow: hidden; color: #e1e3e6; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
 .harness-block > small { padding: 0 8px; flex: 1; overflow: hidden; color: #858990; text-overflow: ellipsis; white-space: nowrap; }
+.harness-response-preview { height: 32px; margin: 0 7px 3px; padding: 4px 6px; overflow: hidden; border: 1px solid #3b3e44; border-radius: 3px; background: #24262a; color: #70747b; font-size: .6923rem; line-height: 1.25; overflow-wrap: anywhere; }
+.harness-response-preview.available { color: #b7c3d4; }
 .harness-block > footer { display: flex; justify-content: flex-end; }
 .harness-block > footer button, .harness-inspector header button { width: 25px; height: 22px; display: grid; place-items: center; border: 0; background: transparent; color: #92969d; cursor: pointer; }
 .harness-block > footer button:hover { color: white; }
+.harness-port { width: 12px; height: 12px; padding: 0; position: absolute; top: 50%; z-index: 2; transform: translateY(-50%); border: 2px solid #8daee2; border-radius: 50%; background: #28354a; cursor: crosshair; }
+.harness-port.input { left: -7px; }
+.harness-port.output { right: -7px; }
+.harness-port:hover:not(:disabled), .harness-block.connecting .harness-port.output { background: #8daee2; box-shadow: 0 0 0 3px rgba(141,174,226,.2); }
+.harness-port:disabled { opacity: .35; cursor: default; }
 .harness-status { width: 8px; height: 8px; flex: 0 0 8px; border-radius: 50%; background: #71757c; }
 .harness-status.running { background: #579dff; box-shadow: 0 0 0 3px rgba(87,157,255,.16); animation: task-progress-spin .8s linear infinite; }
 .harness-status.succeeded { background: #70b879; }
@@ -319,6 +330,12 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .harness-inspector label { display: grid; gap: 4px; color: #969aa1; font-size: .7692rem; }
 .harness-inspector textarea, .harness-run textarea { resize: vertical; line-height: 1.4; }
 .harness-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; }
+.harness-model-field { min-width: 0; display: flex; align-items: end; gap: 4px; }
+.harness-model-field .ai-model-picker { min-width: 0; flex: 1; }
+.harness-model-field .ai-model-trigger { width: 100%; }
+.harness-model-field > button { height: 29px; padding: 0 6px; border: 1px solid #4b4d52; border-radius: 4px; background: #35383d; color: #bfc2c7; cursor: pointer; }
+.harness-input-help { color: #858990; line-height: 1.4; }
+.harness-input-help code { color: #b9c9df; }
 .harness-run { padding: 7px; display: grid; grid-template-columns: 1fr auto; gap: 6px; border-top: 1px solid #393b40; }
 .harness-run small { grid-column: 1 / -1; color: #858990; }
 .harness-run small.error { color: #dc747c; }
