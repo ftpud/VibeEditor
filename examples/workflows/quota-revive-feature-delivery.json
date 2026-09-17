@@ -1,18 +1,19 @@
 {
   "id": "ec7d6241-0fa6-46d4-b3fa-8df92dff5cc2",
   "name": "Quota Revive → Feature Delivery Pipeline",
-  "version": 3,
+  "version": 4,
   "createdAt": "2026-09-17T00:00:00.000Z",
   "updatedAt": "2026-09-17T00:00:00.000Z",
   "blocks": [
     {
       "id": "reviver",
+      "watchdog": true,
       "type": "task",
       "label": "Reset watchdog",
-      "prompt": "Persistent reset watchdog for this request:\n\n{{input}}\n\nOn the first turn call ai_usage for codex, select the earliest future reset timestamp exposed by account_quota.primary.resets_at, account_quota.secondary.resets_at, or resets_at, then call timer_set_at with that exact ISO timestamp. If no reset is exposed, use timer_set for 300 seconds. Do not start work before the timer.\n\nWhen revived, call workflow_run_stack exactly once on the connected Feature planner with a self-contained prompt containing the complete original request and the words RESET_ELAPSED. Wait for the planner result, then call ai_usage again and schedule the next exact reset timer. Always schedule the next timer, including after completion or errors. Never create tasks directly in this block.",
+      "prompt": "You are an independent background watchdog. The main pipeline starts immediately and runs on its own. Request: {{input}}\n\nOn startup call ai_usage for codex and set timer_set_at to the earliest future reported account reset. If none is available use timer_set for 300 seconds. Include RESET_ELAPSED in the continuation prompt. On every revival call workflow_resume_failed once: this returns immediately and resumes only failed pipeline blocks in their existing sessions. Then read ai_usage again and arm the next reset timer. Repeat until the user stops the workflow, including after the main pipeline finishes. Never call workflow_run_stack, restart completed stages, or create implementation tasks. End each turn after scheduling your next timer.",
       "provider": "codex",
       "model": "gpt-6-astra",
-      "position": { "x": 20, "y": 260 }
+      "position": { "x": 280, "y": 30 }
     },
     {
       "id": "planner",
@@ -71,7 +72,6 @@
     }
   ],
   "edges": [
-    { "id": "reviver-planner", "from": "reviver", "to": "planner", "label": "RESET_ELAPSED request" },
     { "id": "planner-dispatcher", "from": "planner", "to": "dispatcher", "label": "feature plan" },
     { "id": "dispatcher-reviewer", "from": "dispatcher", "to": "reviewer", "label": "task IDs" },
     { "id": "reviewer-tester", "from": "reviewer", "to": "tester", "label": "review report" },

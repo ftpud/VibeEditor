@@ -260,7 +260,7 @@ export async function createServer(host: string, port: number, workspacePath: st
     void appEvents.consumeCommand(file, async (command) => {
       const currentWorkspace = command.currentWorkspace ?? rootWorkspace; const rootId = await ownerRootId(currentWorkspace) ?? roots.primary().id; const root = roots.get(rootId); const context = contextFor(rootId);
       const changed = async () => { const encoded = JSON.stringify({ type: "tasks.changed", payload: { rootId } } satisfies ServerEvent); for (const socket of activeSessions) sendWebSocketData(socket, encoded); };
-      const workflow = command.workflowRunId && command.workflowBlockId ? { runId: command.workflowRunId, blockId: command.workflowBlockId, runStack: (inputs: string[], path?: string) => harnessRunner(rootId).runStack(command.workflowRunId!, command.workflowBlockId!, inputs, path) } : undefined;
+      const workflow = command.workflowRunId && command.workflowBlockId ? { runId: command.workflowRunId, blockId: command.workflowBlockId, resumeFailed: () => harnessRunner(rootId).resumeFailed(command.workflowRunId!, command.workflowBlockId!), runStack: (inputs: string[], path?: string) => harnessRunner(rootId).runStack(command.workflowRunId!, command.workflowBlockId!, inputs, path) } : undefined;
       return new AppToolService(context.tasks, acp, currentWorkspace, changed, onCommitMessageChanged, command.currentProvider, context.agents, root.path, aiTimers, rootWorkspace, workflow).call(command.name, command.args);
     });
   });
@@ -692,14 +692,15 @@ async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStor
       const workflowAgent = appTools.agent ? { ...appTools.agent, mcpServers: [...new Set([...(appTools.agent.mcpServers ?? []), workflowTools.name])] } : undefined;
       const autopilot = findAutopilotOption(provider.descriptor.options);
       const configuration = { ...(block.model ? { model: block.model } : {}), ...(autopilot ? { [autopilot.option.id]: autopilot.on } : {}) };
-      await provider.startFreshSession(sessionWorkspace, { prompt, configuration, mcpServers, agent: workflowAgent, ...(block.agent ? { agentPreset: block.agent } : {}) });
-      return settleWorkflowSession(provider, sessionWorkspace, aiTimers);
+      try { await provider.startFreshSession(sessionWorkspace, { prompt, configuration, mcpServers, agent: workflowAgent, ...(block.agent ? { agentPreset: block.agent } : {}) }); }
+      catch (error) { if (!block.watchdog) throw error; console.error("[core] Watchdog startup failed; scheduling recovery", error); }
+      return settleWorkflowSession(provider, sessionWorkspace, aiTimers, block.watchdog ? runtime : undefined, () => harnessRunner.isActive(runtime.runId));
     }, request.payload.provider, async (block, prompt, runtime) => {
       const provider = acp.get(block.provider ?? request.payload.provider); const current = await provider.get(runtime.workspace);
       const workflowTools = appToolServer(rootWorkspace, runtime.workspace, provider.descriptor.id, bridgeWorkspace, { runId: runtime.runId, blockId: runtime.blockId });
       if (current.status === "in_progress" || current.status === "user_prompt") await provider.steer(runtime.workspace, prompt);
       else await provider.send(runtime.workspace, { prompt, configuration: current.configuration ?? { model: current.model, reasoning: current.reasoning }, mcpServers: [workflowTools] });
-      return settleWorkflowSession(provider, runtime.workspace, aiTimers);
+      return settleWorkflowSession(provider, runtime.workspace, aiTimers, block.watchdog ? runtime : undefined, () => harnessRunner.isActive(runtime.runId));
     }) };
     case "harnesses.append": return { run: await harnessRunner.appendInput(request.payload.runId, request.payload.input) };
     case "harnesses.cancel": return { run: await harnessRunner.cancel(request.payload.runId, async (provider, runtime) => { const target = runtime.workspace ?? await workflowSessionWorkspace(workspacePath, runtime.runId, runtime.blockId); await aiTimers.cancelWorkspace(target); await acp.get(provider).interrupt(target); }) };
@@ -906,13 +907,20 @@ async function workflowSessionWorkspace(workspace: string, runId: string, blockI
   return alias;
 }
 
-async function settleWorkflowSession(provider: ReturnType<AcpRegistry["get"]>, workspace: string, timers: Pick<AiTimerService, "next">) {
+export async function settleWorkflowSession(provider: ReturnType<AcpRegistry["get"]>, workspace: string, timers: Pick<AiTimerService, "next" | "scheduleAt">, watchdog?: { runId: string; blockId: string }, active: () => boolean = () => true) {
   let session = await provider.get(workspace);
   for (;;) {
-    while (session.status === "in_progress") { await delay(250); session = await provider.get(workspace); }
-    const timer = await timers.next(workspace, provider.descriptor.id);
+    while (session.status === "in_progress" && active()) { await delay(250); session = await provider.get(workspace); }
+    if (!active()) return session;
+    let timer = await timers.next(workspace, provider.descriptor.id);
+    if (!timer && watchdog) {
+      const usage = await provider.usage(workspace).catch(() => undefined);
+      if (!active()) return session;
+      const resets = [usage?.resetsAt, usage?.accountQuota?.primary?.resetsAt, usage?.accountQuota?.secondary?.resetsAt].filter((value): value is string => Boolean(value) && Date.parse(value!) > Date.now()).sort();
+      timer = await timers.scheduleAt(workspace, provider.descriptor.id, "RESET_ELAPSED: Call workflow_resume_failed, then recheck ai_usage and arm the next reset timer. Preserve the existing request and sessions.", resets[0] ?? new Date(Date.now() + 300_000).toISOString(), watchdog);
+    }
     if (!timer) return session;
-    while (await timers.next(workspace, provider.descriptor.id)) await delay(Math.min(250, Math.max(10, new Date(timer.dueAt).getTime() - Date.now())));
+    while (active() && await timers.next(workspace, provider.descriptor.id)) await delay(Math.min(250, Math.max(10, new Date(timer.dueAt).getTime() - Date.now())));
     await delay(250); session = await provider.get(workspace);
   }
 }

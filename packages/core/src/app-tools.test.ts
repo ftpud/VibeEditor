@@ -31,7 +31,7 @@ function harness() {
 
 describe("Vibe Editor app tools", () => {
   it("publishes task start agent and reasoning parameters", () => {
-    expect(appToolDefinitions.map((tool) => tool.name)).toEqual(["workflow_run_stack", "ai_usage", "timer_set", "timer_set_at", "model_switch_next", "session_new", "task_create", "task_create_and_start", "task_list", "task_merge", "task_delete", "task_set_status", "task_ai_response_tail", "task_append_prompt", "set_commit_message", "task_update_commit_message"]);
+    expect(appToolDefinitions.map((tool) => tool.name)).toEqual(["workflow_run_stack", "ai_usage", "timer_set", "timer_set_at", "model_switch_next", "session_new", "task_create", "task_create_and_start", "task_list", "task_merge", "task_delete", "task_set_status", "task_ai_response_tail", "task_append_prompt", "set_commit_message", "task_update_commit_message", "workflow_resume_failed"]);
     expect(appToolDefinitions[0]).toMatchObject({ name: "workflow_run_stack", inputSchema: { required: ["inputs"] } });
     expect(appToolDefinitions[2]).toMatchObject({ name: "timer_set", inputSchema: { required: ["seconds", "prompt"] } });
     expect(appToolDefinitions[3]).toMatchObject({ name: "timer_set_at", inputSchema: { required: ["due_at", "prompt"] } });

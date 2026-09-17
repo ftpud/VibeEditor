@@ -219,6 +219,11 @@ export const appToolDefinitions = [
       required: ["task_id", "message"]
     }
   }
+  ,{
+    name: "workflow_resume_failed",
+    description: "Watchdog recovery signal: queue failed blocks in this workflow for continuation in their existing sessions. Returns immediately; running and completed blocks are left alone.",
+    inputSchema: { type: "object", additionalProperties: false, properties: {} }
+  }
 ] as const;
 
 export class AppToolService {
@@ -233,10 +238,14 @@ export class AppToolService {
     private readonly rootWorkspace?: string,
     private readonly timers?: Pick<AiTimerService, "schedule" | "scheduleAt" | "next" | "cancelWorkspace">,
     private readonly bridgeWorkspace?: string,
-    private readonly workflow?: { runId: string; blockId: string; runStack(inputs: string[], path?: string): Promise<unknown> }
+    private readonly workflow?: { runId: string; blockId: string; runStack(inputs: string[], path?: string): Promise<unknown>; resumeFailed?(): Promise<unknown> }
   ) {}
 
   async call(name: string, args: Record<string, unknown>): Promise<unknown> {
+    if (name === "workflow_resume_failed") {
+      if (!this.workflow?.resumeFailed) throw new Error("Workflow recovery is unavailable");
+      return this.workflow.resumeFailed();
+    }
     if (name === "workflow_run_stack") {
       if (!this.workflow) throw new Error("workflow_run_stack is only available inside an active workflow block");
       return this.workflow.runStack(requiredStringArray(args, "inputs"), optionalString(args, "path"));

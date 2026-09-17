@@ -7,6 +7,34 @@ import { connectedInput, HarnessRunner } from "./harness-runner.js";
 import { HarnessStore } from "./harnesses.js";
 
 describe("HarnessRunner", () => {
+  it("runs the pipeline beside a sleeping watchdog and resumes failures without replaying completed stages", async () => {
+    const state = await mkdtemp(path.join(os.tmpdir(), "workflow-watchdog-"));
+    const store = new HarnessStore("/workspace", state); const definition = await store.create("Independent watchdog");
+    const blocks: HarnessBlock[] = ["watchdog", "plan", "implement", "report"].map((id) => ({ id, type: "prompt", label: id, prompt: "{{input}}", position: { x: 0, y: 0 }, ...(id === "watchdog" ? { watchdog: true } : {}) }));
+    await store.update({ ...definition, blocks, edges: [{ id: "a", from: "plan", to: "implement" }, { id: "b", from: "implement", to: "report" }] });
+    let release!: () => void; const sleeping = new Promise<void>((resolve) => { release = resolve; });
+    const runner = new HarnessRunner(store, () => undefined);
+    const dispatch = vi.fn(async (block: HarnessBlock, _prompt: string, context: { started(workspace: string): Promise<void> }) => {
+      await context.started(`/session/${block.id}`);
+      if (block.id === "watchdog") await sleeping;
+      if (block.id === "implement") throw new Error("Usage limit reached");
+      return session(block.id);
+    });
+    const append = vi.fn(async () => session("recovered"));
+    const run = await runner.start(definition.id, "request", dispatch, "test", append);
+    try {
+      await vi.waitFor(async () => expect((await store.runs())[0]?.blocks.find((b) => b.blockId === "implement")?.status).toBe("failed"));
+      expect((await store.runs())[0]?.status).toBe("running");
+      expect(await runner.resumeFailed(run.id, "watchdog")).toEqual({ resumed: ["implement"] });
+      expect(await runner.resumeFailed(run.id, "watchdog")).toEqual({ resumed: [] });
+      await vi.waitFor(async () => expect((await store.runs())[0]?.blocks.find((b) => b.blockId === "report")?.status).toBe("succeeded"));
+      expect(append).toHaveBeenCalledOnce();
+      expect(append.mock.calls[0]).toEqual(expect.arrayContaining([expect.objectContaining({ workspace: "/session/implement" })]));
+      expect(dispatch.mock.calls.filter(([b]) => b.id === "plan")).toHaveLength(1);
+      await runner.cancel(run.id, async () => release());
+      await expect(runner.resumeFailed(run.id, "watchdog")).rejects.toThrow("no longer active");
+    } finally { release(); }
+  });
   it("runs blocks in dependency order and passes connected output as input", async () => {
     const state = await mkdtemp(path.join(os.tmpdir(), "remote-ide-harness-runner-")); const store = new HarnessStore("/workspace", state); const definition = await store.create("Flow");
     await store.update({ ...definition, blocks: [{ id: "one", type: "prompt", label: "One", prompt: "Plan {{input}}", position: { x: 0, y: 0 } }, { id: "two", type: "prompt", label: "Two", prompt: "Build {{input}}", position: { x: 1, y: 1 } }], edges: [{ id: "edge", from: "one", to: "two" }] });
