@@ -957,10 +957,10 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .find-pane-header button:hover { background: #3b3d42; color: white; }
 .find-results { min-width: 0; min-height: 0; flex: 1; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }
 .find-result-group { min-width: 0; border-bottom: 1px solid #34363a; }
-.find-result-group-header { width: 100%; min-width: 0; height: 27px; padding: 0 10px; display: grid; grid-template-columns: 16px minmax(80px, max-content) minmax(0, 1fr) max-content; align-items: center; gap: 5px; overflow: hidden; border: 0; background: #292b2f; color: #b8bbc0; text-align: left; cursor: pointer; }
+.find-result-group-header { width: 100%; min-width: 0; height: 27px; padding: 0 10px; display: grid; grid-template-columns: 16px minmax(80px, max-content) max-content minmax(0, 1fr) max-content; align-items: center; gap: 5px; overflow: hidden; border: 0; background: #292b2f; color: #b8bbc0; text-align: left; cursor: pointer; }
 .find-result-group-header:hover { background: #343e50; }
 .find-result-group-header svg { color: #8f9298; }
-.find-group-count { min-width: 17px; padding: 1px 4px; border-radius: 9px; background: #41444a; color: #c7c9cc; font-size: 0.6923rem; text-align: center; }
+.find-group-count { grid-column: 5; min-width: 17px; padding: 1px 4px; border-radius: 9px; background: #41444a; color: #c7c9cc; font-size: 0.6923rem; line-height: 1.2; text-align: center; white-space: nowrap; }
 .find-result-group > button:not(.find-result-group-header) { width: 100%; min-width: 0; min-height: 32px; padding: 3px 10px 3px 31px; display: grid; grid-template-columns: minmax(0, 1fr) max-content; align-items: center; gap: 10px; overflow: hidden; border: 0; background: transparent; color: #c7c9cc; text-align: left; cursor: pointer; }
 .find-result-group > button:not(.find-result-group-header):hover { background: #343e50; }
 .find-result-group > button.selected { background: #2e436e; }

@@ -29,6 +29,14 @@ describe("WorkspaceSearch", () => {
     });
   });
 
+  it("returns no matches when a scoped directory is absent", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "remote-ide-search-"));
+    await writeFile(path.join(root, "a.txt"), "target\n");
+    const filesystem = new WorkspaceFileSystem(); await filesystem.open(root);
+
+    await expect(new WorkspaceSearch(filesystem).search("target", "src/missing", false)).resolves.toEqual({ matches: [], truncated: false });
+  });
+
   it("searches inside a directory Git reports as one embedded-repository entry", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "remote-ide-search-")); const nested = path.join(root, "nested");
     await execFileAsync("git", ["init", "-q", root]); await mkdir(nested); await execFileAsync("git", ["init", "-q", nested]); await writeFile(path.join(nested, "a.txt"), "target\n");

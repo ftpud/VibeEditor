@@ -15,6 +15,18 @@ export function filterProjectTree(nodes: FileTreeNode[], query: string): FileTre
   });
 }
 
+export function compactProjectTree(nodes: FileTreeNode[]): FileTreeNode[] {
+  return nodes.map((node) => {
+    if (node.type === "file") return node;
+    let compacted: FileTreeNode = { ...node, children: compactProjectTree(node.children ?? []) };
+    while (compacted.children?.length === 1 && compacted.children[0]?.type === "directory") {
+      const child = compacted.children[0];
+      compacted = { ...child, name: `${compacted.name}/${child.name}` };
+    }
+    return compacted;
+  });
+}
+
 function directoryPaths(nodes: FileTreeNode[]): string[] {
   return nodes.flatMap((node) => node.type === "directory" ? [node.path, ...directoryPaths(node.children ?? [])] : []);
 }
@@ -49,10 +61,11 @@ export function ProjectTree({ nodes, query, activePath, selectedPaths, fileColor
   onContextMenu(nodes: FileTreeNode[], x: number, y: number): void;
   onSelectionChange(paths: Set<string>): void;
 }) {
-  const filtered = useMemo(() => filterProjectTree(nodes, query), [nodes, query]);
-  const allDirectories = useMemo(() => directoryPaths(nodes), [nodes]);
+  const compacted = useMemo(() => compactProjectTree(nodes), [nodes]);
+  const filtered = useMemo(() => filterProjectTree(compacted, query), [compacted, query]);
+  const allDirectories = useMemo(() => directoryPaths(compacted), [compacted]);
   const filtering = Boolean(query.trim());
-  const [expanded, setExpanded] = useState<Set<string>>(() => new Set(nodes.length === 1 && nodes[0]?.type === "directory" ? [nodes[0].path] : []));
+  const [expanded, setExpanded] = useState<Set<string>>(() => new Set(compacted.length === 1 && compacted[0]?.type === "directory" ? [compacted[0].path] : []));
   const effectiveExpanded = useMemo(() => filtering ? new Set(directoryPaths(filtered)) : expanded, [expanded, filtered, filtering]);
   const visible = useMemo(() => visibleNodes(filtered, effectiveExpanded), [effectiveExpanded, filtered]);
   const [focusedPath, setFocusedPath] = useState<string>();
@@ -61,9 +74,9 @@ export function ProjectTree({ nodes, query, activePath, selectedPaths, fileColor
 
   useEffect(() => {
     if (!activePath) return;
-    const ancestors = ancestorPaths(nodes, activePath);
+    const ancestors = ancestorPaths(compacted, activePath);
     if (ancestors?.length) setExpanded((current) => new Set([...current, ...ancestors]));
-  }, [activePath, nodes]);
+  }, [activePath, compacted]);
 
   useEffect(() => {
     if (focusedPath && !visible.some(({ node }) => node.path === focusedPath)) setFocusedPath(visible[0]?.node.path);
@@ -77,7 +90,7 @@ export function ProjectTree({ nodes, query, activePath, selectedPaths, fileColor
 
   const revealActiveFile = () => {
     if (!activePath) return;
-    const ancestors = ancestorPaths(nodes, activePath);
+    const ancestors = ancestorPaths(compacted, activePath);
     if (!ancestors) return; // The active tab may not be represented by this loaded tree.
     setExpanded((current) => new Set([...current, ...ancestors]));
     setRevealTarget(activePath);
@@ -136,8 +149,8 @@ export function ProjectTree({ nodes, query, activePath, selectedPaths, fileColor
 
   return <>
     <div className="project-tree-actions">
-      <span>{filtering ? `${countFiles(filtered)} matching file${countFiles(filtered) === 1 ? "" : "s"}` : `${countFiles(nodes)} files`}</span>
-      <button title="Reveal active file" aria-label="Reveal active file" disabled={!activePath || !ancestorPaths(nodes, activePath)} onClick={revealActiveFile}><LocateFixed size={13} /></button>
+      <span>{filtering ? `${countFiles(filtered)} matching file${countFiles(filtered) === 1 ? "" : "s"}` : `${countFiles(compacted)} files`}</span>
+      <button title="Reveal active file" aria-label="Reveal active file" disabled={!activePath || !ancestorPaths(compacted, activePath)} onClick={revealActiveFile}><LocateFixed size={13} /></button>
       <button title="Expand all folders" aria-label="Expand all folders" disabled={filtering || allDirectories.every((path) => expanded.has(path))} onClick={() => setExpanded(new Set(allDirectories))}><ChevronsUpDown size={13} /></button>
       <button title="Collapse all folders" aria-label="Collapse all folders" disabled={filtering || expanded.size === 0} onClick={() => setExpanded(new Set())}><ChevronsDownUp size={13} /></button>
     </div>

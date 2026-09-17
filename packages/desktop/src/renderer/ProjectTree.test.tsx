@@ -2,7 +2,7 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { FileTreeNode } from "@remote-ide/protocol";
 import { useState } from "react";
-import { ProjectTree, filterProjectTree } from "./ProjectTree";
+import { ProjectTree, compactProjectTree, filterProjectTree } from "./ProjectTree";
 
 const nodes: FileTreeNode[] = [{
   name: "src", path: "src", type: "directory", children: [
@@ -20,6 +20,17 @@ function renderTree(options: { query?: string; activePath?: string } = {}) {
 }
 
 describe("ProjectTree", () => {
+  it("compacts directory-only chains into one explorer row", () => {
+    const compacted = compactProjectTree([{ name: "packages", path: "packages", type: "directory", children: [{ name: "app", path: "packages/app", type: "directory", children: [{ name: "src", path: "packages/app/src", type: "directory", children: [{ name: "main.ts", path: "packages/app/src/main.ts", type: "file" }] }] }] }]);
+    expect(compacted).toEqual([{ name: "packages/app/src", path: "packages/app/src", type: "directory", children: [{ name: "main.ts", path: "packages/app/src/main.ts", type: "file" }] }]);
+  });
+
+  it("stops compacting when a directory also contains a file", () => {
+    const compacted = compactProjectTree(nodes);
+    expect(compacted[0]).toMatchObject({ name: "src", path: "src" });
+    expect(compacted[0]?.children?.[0]).toMatchObject({ name: "components", path: "src/components" });
+  });
+
   it("keeps stable ctrl and shift multi-selection across visible rows", () => {
     const Harness = () => { const [selected, setSelected] = useState(new Set<string>()); return <ProjectTree nodes={nodes} query="" selectedPaths={selected} fileColors={{}} gitStatuses={{}} onAction={vi.fn()} onContextMenu={vi.fn()} onSelectionChange={setSelected} />; };
     render(<Harness />);
