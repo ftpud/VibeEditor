@@ -16,6 +16,9 @@ import { JdtLanguageService } from "./jdtls.js";
 import { WorkspaceTaskStore } from "./tasks.js";
 import { UsefulFilesStore } from "./useful-files.js";
 import { AgentsStore } from "./agents.js";
+import { HarnessStore } from "./harnesses.js";
+import { HarnessRunner } from "./harness-runner.js";
+import { validateHarness } from "./harness-graph.js";
 import { RunConfigService } from "./run-configs.js";
 import { executeHttpRequest } from "./http.js";
 import { summarizeAiSessions } from "./ai/summary.js";
@@ -29,6 +32,7 @@ import { WorkspaceRootRegistry } from "./workspace-roots.js";
 import type { AiProvider } from "@remote-ide/protocol";
 
 const execFileAsync = promisify(execFile);
+const delay = (milliseconds: number) => new Promise<void>((resolve) => setTimeout(resolve, milliseconds));
 
 type SessionServices = {
   workspacePath: string;
@@ -131,11 +135,12 @@ export async function createServer(host: string, port: number, workspacePath: st
   const tasks = new WorkspaceTaskStore(rootWorkspace);
   const usefulFiles = new UsefulFilesStore(rootWorkspace);
   const agents = new AgentsStore(rootWorkspace);
-  const rootContexts = new Map<string, { tasks: WorkspaceTaskStore; usefulFiles: UsefulFilesStore; agents: AgentsStore }>();
-  rootContexts.set(roots.primary().id, { tasks, usefulFiles, agents });
+  const harnesses = new HarnessStore(rootWorkspace);
+  const rootContexts = new Map<string, { tasks: WorkspaceTaskStore; usefulFiles: UsefulFilesStore; agents: AgentsStore; harnesses: HarnessStore }>();
+  rootContexts.set(roots.primary().id, { tasks, usefulFiles, agents, harnesses });
   const contextFor = (rootId: string) => {
     let context = rootContexts.get(rootId);
-    if (!context) { const root = roots.get(rootId); context = { tasks: new WorkspaceTaskStore(root.path), usefulFiles: new UsefulFilesStore(root.path), agents: new AgentsStore(root.path) }; rootContexts.set(rootId, context); }
+    if (!context) { const root = roots.get(rootId); context = { tasks: new WorkspaceTaskStore(root.path), usefulFiles: new UsefulFilesStore(root.path), agents: new AgentsStore(root.path), harnesses: new HarnessStore(root.path) }; rootContexts.set(rootId, context); }
     return context;
   };
   const savedTasks = await tasks.list();
@@ -223,6 +228,15 @@ export async function createServer(host: string, port: number, workspacePath: st
     begin: async (target, provider, prompt, sessionId, provenance) => { const id = await checkpointStore(target).begin(provider as AiProvider, prompt, sessionId, undefined, provenance); taskGitChanged(target); return id; },
     complete: async (target, ids, status, provenance) => { await Promise.all(ids.map((id) => checkpointStore(target).complete(id, status, provenance))); taskGitChanged(target); }
   });
+  const harnessRunners = new Map<string, HarnessRunner>();
+  const harnessRunner = (rootId: string) => {
+    let runner = harnessRunners.get(rootId);
+    if (!runner) {
+      runner = new HarnessRunner(contextFor(rootId).harnesses, (runId) => { const encoded = JSON.stringify({ type: "harness.changed", payload: { rootId, runId } } satisfies ServerEvent); for (const socket of activeSessions) sendWebSocketData(socket, encoded); });
+      harnessRunners.set(rootId, runner);
+    }
+    return runner;
+  };
   const aiTimers = new AiTimerService(new AiTimerStore(rootWorkspace), acp, rootWorkspace, aiChanged);
   await aiTimers.start();
   const onTasksChanged = async () => {
@@ -459,7 +473,7 @@ export async function createServer(host: string, port: number, workspacePath: st
         } finally { release?.(); }
         const result = parsed.type === "workspace.selectRoot"
           ? rootSelectionResult!
-          : await handleRequest(services, rootContext.tasks, acp, rootContext.usefulFiles, rootContext.agents, terminalHost, runConfigs, aiTimers, remoteTransfers, selectedRoot.path, parsed, rootWorkspace);
+          : await handleRequest(services, rootContext.tasks, acp, rootContext.usefulFiles, rootContext.agents, rootContext.harnesses, harnessRunner(selectedRoot.id), terminalHost, runConfigs, aiTimers, remoteTransfers, selectedRoot.path, parsed, rootWorkspace);
         if (["tasks.create", "tasks.createFromPrompt", "tasks.status", "tasks.rename", "tasks.archive", "tasks.delete"].includes(parsed.type)) { const encoded = JSON.stringify({ type: "tasks.changed", payload: { rootId: selectedRoot.id } } satisfies ServerEvent); for (const session of activeSessions) sendWebSocketData(session, encoded); }
         const terminalSubscription = terminalSubscriptions.get(socket);
         if (terminalSubscription && parsed.type === "terminal.create") { const terminalId = (result as { terminalId: string }).terminalId; terminalSubscription.terminalIds.add(terminalId); terminalOwners.set(terminalId, { socket, rootId: parsed.rootId, workspace: services.workspacePath }); }
@@ -523,7 +537,7 @@ export function rootRemovalBlocker(state: { tasks: number; openFiles: number; te
   return undefined;
 }
 
-async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStore, acp: AcpRegistry, usefulFiles: UsefulFilesStore, agents: AgentsStore, terminalHost: TerminalSessionHost, runConfigs: RunConfigService, aiTimers: AiTimerService, remoteTransfers: RemoteTransferService, rootWorkspace: string, request: Request, bridgeWorkspace = rootWorkspace): Promise<unknown> {
+async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStore, acp: AcpRegistry, usefulFiles: UsefulFilesStore, agents: AgentsStore, harnesses: HarnessStore, harnessRunner: HarnessRunner, terminalHost: TerminalSessionHost, runConfigs: RunConfigService, aiTimers: AiTimerService, remoteTransfers: RemoteTransferService, rootWorkspace: string, request: Request, bridgeWorkspace = rootWorkspace): Promise<unknown> {
   const { filesystem, search, git, java, jdt, workspaceState, workspacePath, checkpoints } = services;
   if (request.type !== "workspace.open") filesystem.getWorkspace();
   if (request.type === "filesystem.remoteTransferBegin") return remoteTransfers.begin(workspacePath, request.payload);
@@ -652,6 +666,22 @@ async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStor
     case "agents.write": await agents.write(request.payload.scope, request.payload.name, request.payload.content, workspacePath); return {};
     case "agents.rename": return { name: await agents.rename(request.payload.scope, request.payload.name, request.payload.newName, workspacePath) };
     case "agents.delete": await agents.delete(request.payload.scope, request.payload.name, workspacePath); return {};
+    case "harnesses.list": return { harnesses: await harnesses.list() };
+    case "harnesses.create": return { harness: await harnesses.create(request.payload.name) };
+    case "harnesses.update": return { harness: await harnesses.update(request.payload.harness) };
+    case "harnesses.delete": await harnesses.delete(request.payload.id); return {};
+    case "harnesses.validate": return validateHarness(request.payload.harness);
+    case "harnesses.runs": return { runs: await harnesses.runs(request.payload.harnessId) };
+    case "harnesses.run": return { run: await harnessRunner.start(request.payload.harnessId, request.payload.input, async (block, prompt) => {
+      const provider = acp.get(block.provider ?? request.payload.provider);
+      const agentFile = block.agent ? (await agents.list(workspacePath)).find((item) => item.scope === block.agent!.scope && item.name === block.agent!.name) : undefined;
+      if (block.agent && !agentFile) throw new CoreError("FILE_NOT_FOUND", `Agent preset '${block.agent.name}' does not exist`);
+      const appTools = withAppTools(rootWorkspace, workspacePath, undefined, agentFile?.agent, provider.descriptor.id, bridgeWorkspace);
+      let session = await provider.startFreshSession(workspacePath, { prompt, configuration: block.model ? { model: block.model } : {}, mcpServers: appTools.servers, agent: appTools.agent, ...(block.agent ? { agentPreset: block.agent } : {}) });
+      while (session.status === "in_progress") { await delay(250); session = await provider.get(workspacePath); }
+      return session;
+    }, request.payload.provider) };
+    case "harnesses.cancel": return { run: await harnessRunner.cancel(request.payload.runId, async (provider) => { await acp.get(provider).interrupt(workspacePath); }) };
     case "http.execute": return executeHttpRequest(request.payload.method, request.payload.url, request.payload.headers, request.payload.body);
     case "filesystem.listTree": return { tree: await filesystem.listTree(request.payload.includeIgnored === true) };
     case "filesystem.snapshot": return { entries: await filesystem.snapshot(request.payload.paths) };

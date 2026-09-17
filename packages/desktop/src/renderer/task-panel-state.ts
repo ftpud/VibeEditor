@@ -1,5 +1,5 @@
 export type TaskPanelLayout = "classic" | "ai-focused";
-export type ClassicTaskPanel = "project" | "git" | "taskGit" | "java" | "useful" | "agents";
+export type ClassicTaskPanel = "project" | "git" | "taskGit" | "java" | "useful" | "agents" | "harness";
 
 export function taskPanelPreferenceKey(layout: TaskPanelLayout, taskId: string): string {
   return `taskPanel.${layout}.${taskId}`;
@@ -21,5 +21,5 @@ export function switchedTaskPanel(taskId: string | undefined): { classic?: "task
 }
 
 function isClassicTaskPanel(value: string | null): value is ClassicTaskPanel {
-  return value !== null && ["project", "git", "taskGit", "java", "useful", "agents"].includes(value);
+  return value !== null && ["project", "git", "taskGit", "java", "useful", "agents", "harness"].includes(value);
 }

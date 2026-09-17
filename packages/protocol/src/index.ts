@@ -16,7 +16,7 @@ export type FileRevision = { identity: string; version: string };
  * Desktop can prove it is safe to talk to a newly deployed Core.
  */
 export type ProtocolCompatibility = { minimum: number; maximum: number };
-export const protocolCompatibility: ProtocolCompatibility = { minimum: 3, maximum: 3 };
+export const protocolCompatibility: ProtocolCompatibility = { minimum: 4, maximum: 4 };
 
 export function protocolRangeIsValid(range: ProtocolCompatibility): boolean {
   return Number.isInteger(range.minimum) && Number.isInteger(range.maximum) && range.minimum > 0 && range.minimum <= range.maximum;
@@ -163,6 +163,12 @@ export type RunConfig = { scope: RunConfigScope; name: string; commands: string;
 export type AgentFileScope = "global" | "local" | "workspace";
 export type AgentFileReference = { scope: AgentFileScope; name: string };
 export type AgentFile = { scope: AgentFileScope; name: string; agent: AiAgent };
+export type HarnessBlock = { id: string; type: "prompt"; label: string; prompt: string; provider?: AiProvider; model?: string; agent?: AgentFileReference; position: { x: number; y: number } };
+export type HarnessEdge = { id: string; from: string; to: string };
+export type HarnessDefinition = { id: string; name: string; version: number; createdAt: string; updatedAt: string; blocks: HarnessBlock[]; edges: HarnessEdge[] };
+export type HarnessValidationIssue = { code: "empty" | "duplicate-id" | "missing-endpoint" | "self-edge" | "duplicate-edge" | "cycle"; message: string; blockId?: string; edgeId?: string };
+export type HarnessBlockRun = { blockId: string; status: "queued" | "running" | "succeeded" | "failed" | "cancelled" | "waiting"; startedAt?: string; completedAt?: string; prompt?: string; output?: string; error?: string; provider?: AiProvider; sessionId?: string };
+export type HarnessRun = { id: string; harnessId: string; harnessVersion: number; input: string; status: "queued" | "running" | "succeeded" | "failed" | "cancelled" | "waiting"; createdAt: string; startedAt?: string; completedAt?: string; blocks: HarnessBlockRun[]; error?: string };
 export type HttpResponse = { status: number; statusText: string; headers: Record<string, string>; body: string; durationMs: number };
 
 export type JavaProjectOptions = {
@@ -273,6 +279,14 @@ export type ProtocolOperations = {
   "agents.write": { payload: { scope: AgentFileScope; name: string; content: string }; result: Record<string, never> };
   "agents.rename": { payload: { scope: Exclude<AgentFileScope, "workspace">; name: string; newName: string }; result: { name: string } };
   "agents.delete": { payload: { scope: Exclude<AgentFileScope, "workspace">; name: string }; result: Record<string, never> };
+  "harnesses.list": { payload: Record<string, never>; result: { harnesses: HarnessDefinition[] } };
+  "harnesses.create": { payload: { name: string }; result: { harness: HarnessDefinition } };
+  "harnesses.update": { payload: { harness: HarnessDefinition }; result: { harness: HarnessDefinition } };
+  "harnesses.delete": { payload: { id: string }; result: Record<string, never> };
+  "harnesses.validate": { payload: { harness: HarnessDefinition }; result: { valid: boolean; issues: HarnessValidationIssue[]; order: string[] } };
+  "harnesses.runs": { payload: { harnessId?: string }; result: { runs: HarnessRun[] } };
+  "harnesses.run": { payload: { harnessId: string; input: string; provider?: AiProvider }; result: { run: HarnessRun } };
+  "harnesses.cancel": { payload: { runId: string }; result: { run: HarnessRun } };
   "http.execute": { payload: { method: string; url: string; headers: Record<string, string>; body?: string }; result: HttpResponse };
   "filesystem.listTree": {
     payload: { includeIgnored?: boolean };
@@ -555,7 +569,8 @@ export type TasksChangedEvent = { type: "tasks.changed"; payload: { rootId: Work
 export type CommitMessageChangedEvent = { type: "commit-message.changed"; payload: { rootId: WorkspaceRootId; message: string } };
 export type RunConfigChangedEvent = { type: "runConfig.changed"; payload: { rootId: WorkspaceRootId; configs: RunConfig[] } };
 
-export type ServerEvent = FilesystemChangedEvent | TerminalOutputEvent | TerminalExitEvent | GitChangedEvent | TaskGitChangedEvent | JavaOutputEvent | JavaExitEvent | JavaDebugStateEvent | AiChangedEvent | TasksChangedEvent | CommitMessageChangedEvent | RunConfigChangedEvent;
+export type HarnessChangedEvent = { type: "harness.changed"; payload: { rootId: WorkspaceRootId; runId: string } };
+export type ServerEvent = FilesystemChangedEvent | TerminalOutputEvent | TerminalExitEvent | GitChangedEvent | TaskGitChangedEvent | JavaOutputEvent | JavaExitEvent | JavaDebugStateEvent | AiChangedEvent | TasksChangedEvent | CommitMessageChangedEvent | RunConfigChangedEvent | HarnessChangedEvent;
 
 /**
  * Every request the core accepts. Declaring it as a fully keyed record makes TypeScript
@@ -617,6 +632,14 @@ const requestTypeRegistry: Record<RequestType, true> = {
   "agents.write": true,
   "agents.rename": true,
   "agents.delete": true,
+  "harnesses.list": true,
+  "harnesses.create": true,
+  "harnesses.update": true,
+  "harnesses.delete": true,
+  "harnesses.validate": true,
+  "harnesses.runs": true,
+  "harnesses.run": true,
+  "harnesses.cancel": true,
   "http.execute": true,
   "filesystem.listTree": true,
   "filesystem.snapshot": true,
