@@ -238,7 +238,7 @@ export class AppToolService {
     private readonly rootWorkspace?: string,
     private readonly timers?: Pick<AiTimerService, "schedule" | "scheduleAt" | "next" | "cancelWorkspace">,
     private readonly bridgeWorkspace?: string,
-    private readonly workflow?: { runId: string; blockId: string; runStack(inputs: string[], path?: string): Promise<unknown>; resumeFailed?(): Promise<unknown> }
+    private readonly workflow?: { runId: string; blockId: string; runStack(inputs: string[], path?: string): Promise<unknown>; resumeFailed?(): Promise<unknown>; registerChild?(taskId: string, provider: AiProvider, workspace: string): Promise<void> }
   ) {}
 
   async call(name: string, args: Record<string, unknown>): Promise<unknown> {
@@ -321,12 +321,14 @@ export class AppToolService {
       const configuration: AiConfiguration = { ...inheritedAutopilot(parentManager.descriptor.options, parent, manager.descriptor.options), model, ...(reasoning !== undefined ? { reasoning } : {}) };
       const task = branch ? await this.tasks.create(branch, false, false, false) : await this.tasks.createRandom(false);
       await this.onTasksChanged();
+      await this.workflow?.registerChild?.(task.id, provider, this.tasks.taskPath(task.id));
       try {
         const workspace = this.tasks.taskPath(task.id);
         const appTools = this.rootWorkspace ? withAppTools(this.rootWorkspace, workspace, [], selectedAgent?.agent, provider, this.bridgeWorkspace) : { servers: [], agent: selectedAgent?.agent };
         const session = await manager.send(workspace, { prompt, configuration, ...(appTools.servers.length > 0 ? { mcpServers: appTools.servers } : {}), ...(appTools.agent ? { agent: appTools.agent, agentPreset: selectedAgent!.preset } : {}) });
         return { task, session: { status: session.status, model: session.model } };
       } catch (error) {
+        if (this.workflow) return { task, error: error instanceof Error ? error.message : String(error), recovery: "Task preserved. Inspect this task before retrying; do not create a replacement." };
         await this.tasks.delete(task.id).catch(() => undefined);
         await this.onTasksChanged().catch(() => undefined);
         throw error;

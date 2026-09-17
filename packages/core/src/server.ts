@@ -261,7 +261,8 @@ export async function createServer(host: string, port: number, workspacePath: st
       const currentWorkspace = command.currentWorkspace ?? rootWorkspace; const rootId = await ownerRootId(currentWorkspace) ?? roots.primary().id; const root = roots.get(rootId); const context = contextFor(rootId);
       const changed = async () => { const encoded = JSON.stringify({ type: "tasks.changed", payload: { rootId } } satisfies ServerEvent); for (const socket of activeSessions) sendWebSocketData(socket, encoded); };
       const workflow = command.workflowRunId && command.workflowBlockId ? { runId: command.workflowRunId, blockId: command.workflowBlockId, resumeFailed: () => harnessRunner(rootId).resumeFailed(command.workflowRunId!, command.workflowBlockId!), runStack: (inputs: string[], path?: string) => harnessRunner(rootId).runStack(command.workflowRunId!, command.workflowBlockId!, inputs, path) } : undefined;
-      return new AppToolService(context.tasks, acp, currentWorkspace, changed, onCommitMessageChanged, command.currentProvider, context.agents, root.path, aiTimers, rootWorkspace, workflow).call(command.name, command.args);
+      const ownedWorkflow = workflow ? { ...workflow, registerChild: (taskId: string, provider: AiProvider, workspace: string) => harnessRunner(rootId).registerChild(workflow.runId, { taskId, provider, workspace, blockId: workflow.blockId }) } : undefined;
+      return new AppToolService(context.tasks, acp, currentWorkspace, changed, onCommitMessageChanged, command.currentProvider, context.agents, root.path, aiTimers, rootWorkspace, ownedWorkflow).call(command.name, command.args);
     });
   });
   const gitIndexWatcher = chokidar.watch(await gitIndexPath(workspace), { ignoreInitial: true });
@@ -683,7 +684,19 @@ async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStor
     case "harnesses.runs": return { runs: await harnesses.runs(request.payload.harnessId) };
     case "harnesses.run": return { run: await harnessRunner.start(request.payload.harnessId, request.payload.input, async (block, prompt, runtime) => {
       const provider = acp.get(block.provider ?? request.payload.provider);
-      if (block.watchdog) return harnessRunner.watch(runtime.runId, runtime.blockId, () => provider.usage());
+      if (block.watchdog) return harnessRunner.watch(runtime.runId, runtime.blockId, () => provider.usage(), () => harnessRunner.recoverChildren(runtime.runId, async (child) => {
+        const task = (await tasks.list()).tasks.find((item) => item.id === child.taskId);
+        if (!task || task.status === "finished" || task.archived || await aiTimers.next(child.workspace, child.provider)) return undefined;
+        return acp.get(child.provider).get(child.workspace);
+      }, async (child, session) => {
+        const manager = acp.get(child.provider);
+        const current = await manager.get(child.workspace);
+        if (current.status !== "error" || current.id !== session.id || !harnessRunner.isActive(runtime.runId)) return;
+        const tools = withAppTools(rootWorkspace, child.workspace, undefined, undefined, child.provider, bridgeWorkspace);
+        const resumed = await manager.send(child.workspace, { prompt: "Continue your interrupted implementation from the existing session. Preserve completed work and recorded task IDs. Do not create replacement tasks.", configuration: current.configuration ?? { model: current.model, reasoning: current.reasoning }, mcpServers: tools.servers });
+        if (!harnessRunner.isActive(runtime.runId)) await manager.interrupt(child.workspace);
+        return resumed;
+      }));
       const sessionWorkspace = await workflowSessionWorkspace(workspacePath, runtime.runId, runtime.blockId); await runtime.started(sessionWorkspace);
       const agentFile = block.agent ? (await agents.list(workspacePath)).find((item) => item.scope === block.agent!.scope && item.name === block.agent!.name) : undefined;
       if (block.agent && !agentFile) throw new CoreError("FILE_NOT_FOUND", `Agent preset '${block.agent.name}' does not exist`);

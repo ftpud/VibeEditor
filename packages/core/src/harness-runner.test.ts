@@ -7,6 +7,32 @@ import { connectedInput, HarnessRunner, nextWatchdogReset, isRecoverableWorkflow
 import { HarnessStore } from "./harnesses.js";
 
 describe("HarnessRunner", () => {
+  it("recovers owned children with bounded retries and includes children in cancellation", async () => {
+    const state = await mkdtemp(path.join(os.tmpdir(), "workflow-children-")); const store = new HarnessStore("/workspace", state);
+    const definition = await store.create("Children");
+    await store.update({ ...definition, blocks: [{ id: "owner", type: "task", label: "Owner", prompt: "work", position: { x: 0, y: 0 } }], edges: [] });
+    let release!: () => void; const waiting = new Promise<void>((resolve) => { release = resolve; });
+    const runner = new HarnessRunner(store, () => undefined);
+    const run = await runner.start(definition.id, "work", async () => { await waiting; return session("done"); });
+    await vi.waitFor(() => expect(runner.isActive(run.id)).toBe(true));
+    const child = { taskId: "child", blockId: "owner", provider: "codex", workspace: "/child" };
+    try {
+      await runner.registerChild(run.id, child); await runner.registerChild(run.id, child);
+      expect((await store.runs())[0]?.children).toHaveLength(1);
+      const resume = vi.fn();
+      await runner.recoverChildren(run.id, async () => session("healthy"), resume);
+      expect(resume).not.toHaveBeenCalled();
+      const failed = { ...session("failed"), status: "error" as const, messages: [{ id: "error", role: "error" as const, text: "Usage limit reached", timestamp: "now" }] };
+      for (let i = 0; i < 5; i++) await runner.recoverChildren(run.id, async () => failed, resume);
+      expect(resume).toHaveBeenCalledTimes(3);
+      expect((await store.runs())[0]?.children?.[0]?.recoveryAttempts).toBe(3);
+      const interrupt = vi.fn(async () => { release(); });
+      await runner.cancel(run.id, interrupt);
+      expect(interrupt).toHaveBeenCalledWith("codex", expect.objectContaining({ workspace: "/child" }));
+      await runner.recoverChildren(run.id, async () => failed, resume);
+      expect(resume).toHaveBeenCalledTimes(3);
+    } finally { release(); }
+  });
   it("waits for all exhausted quota windows and tolerates missing reset information", () => {
     const now = Date.parse("2026-09-18T00:00:00Z");
     const primary = { usedPercent: 100, remainingPercent: 0, resetsAt: "2026-09-18T01:00:00Z" };

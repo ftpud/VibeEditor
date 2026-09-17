@@ -5,6 +5,33 @@ import { describe, expect, it, vi } from "vitest";
 import { AiTimerService, AiTimerStore } from "./ai-timers.js";
 
 describe("AI continuation timers", () => {
+  it("does not send a continuation if Stop races provider session lookup", async () => {
+    const state = await mkdtemp(path.join(os.tmpdir(), "vibe-timer-cancel-race-"));
+    const store = new AiTimerStore("/workspace", state);
+    let release!: () => void; const waiting = new Promise<void>((resolve) => { release = resolve; });
+    const provider = { get: vi.fn(async () => { await waiting; return { status: "done", model: "test", messages: [] }; }), send: vi.fn(), steer: vi.fn() };
+    const service = new AiTimerService(store, { get: () => provider } as never, "/workspace", vi.fn());
+    await service.schedule("/task", "codex", "continue", 60);
+    const firing = service.fireNext("/task");
+    try {
+      await vi.waitFor(() => expect(provider.get).toHaveBeenCalled());
+      await service.cancelWorkspace("/task");
+    } finally { release(); }
+    await firing;
+    expect(provider.send).not.toHaveBeenCalled();
+    expect(provider.steer).not.toHaveBeenCalled();
+  });
+  it("preserves concurrent timers and cancellation across store instances", async () => {
+    const state = await mkdtemp(path.join(os.tmpdir(), "vibe-concurrent-timers-"));
+    const first = new AiTimerStore("/workspace", state); const second = new AiTimerStore("/workspace", state);
+    await Promise.all(Array.from({ length: 12 }, (_, i) => (i % 2 ? first : second).set(`/task/${i}`, "codex", "continue", 60)));
+    expect(await first.list()).toHaveLength(12);
+    await Promise.all([first.removeWorkspace("/task/0"), second.set("/task/new", "codex", "new", 60)]);
+    const timers = await first.list();
+    expect(timers).toHaveLength(12);
+    expect(timers.some((timer) => timer.workspace === "/task/0")).toBe(false);
+    expect(timers.some((timer) => timer.workspace === "/task/new")).toBe(true);
+  });
   it("persists a replacement timer per workspace and provider", async () => {
     const state = await mkdtemp(path.join(os.tmpdir(), "vibe-ai-timers-"));
     const store = new AiTimerStore("/workspace", state);

@@ -170,7 +170,8 @@ export type HarnessValidationIssue = { code: "empty" | "duplicate-id" | "missing
 export type HarnessBlockIteration = { index: number; status: "running" | "succeeded" | "failed" | "cancelled"; startedAt: string; completedAt?: string; prompt?: string; output?: string; error?: string; sessionId?: string; workspace?: string };
 export type HarnessLogEntry = { timestamp: string; kind: "lifecycle" | "prompt" | "response" | "error"; message: string };
 export type HarnessBlockRun = { blockId: string; status: "queued" | "running" | "succeeded" | "failed" | "cancelled" | "waiting" | "skipped"; startedAt?: string; completedAt?: string; prompt?: string; output?: string; error?: string; provider?: AiProvider; sessionId?: string; workspace?: string; selectedRoute?: string; plannedRuns?: number; iterations?: HarnessBlockIteration[]; log?: HarnessLogEntry[]; waitingUntil?: string; recoveryAttempts?: number };
-export type HarnessRun = { id: string; harnessId: string; harnessVersion: number; definition?: HarnessDefinition; input: string; status: "queued" | "running" | "succeeded" | "failed" | "cancelled" | "waiting"; createdAt: string; startedAt?: string; completedAt?: string; blocks: HarnessBlockRun[]; error?: string };
+export type HarnessChildTask = { taskId: string; blockId: string; provider: AiProvider; workspace: string; recoveryAttempts: number; recoveryError?: string };
+export type HarnessRun = { id: string; harnessId: string; harnessVersion: number; definition?: HarnessDefinition; children?: HarnessChildTask[]; input: string; status: "queued" | "running" | "succeeded" | "failed" | "cancelled" | "waiting"; createdAt: string; startedAt?: string; completedAt?: string; blocks: HarnessBlockRun[]; error?: string };
 export type HttpResponse = { status: number; statusText: string; headers: Record<string, string>; body: string; durationMs: number };
 
 export type JavaProjectOptions = {
