@@ -1431,3 +1431,22 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .commit-patch-source > p, .commit-patch-result > p { padding: 12px; }
 :root[data-theme="light"] .commit-patch-result textarea { background: #fff; color: #30343b; }
 @media (max-width: 760px) { .commit-patch-split { grid-template-columns: 1fr; grid-template-rows: minmax(200px, 1fr) minmax(200px, 1fr); } .commit-patch-dialog > main { overflow: auto; } .commit-patch-dialog > footer { flex-wrap: wrap; } }
+
+.commit-patch-split { grid-template-columns: minmax(210px, .28fr) minmax(0, .72fr); }
+.commit-result-code { flex: 1; min-height: 0; overflow: hidden; }
+.commit-patch-source .commit-patch-block-tabs { display: grid; max-height: 40%; }
+.commit-patch-block-tabs button { text-align: left; padding: 8px 10px; border-left: 3px solid #569dff; }
+.commit-patch-block-tabs button.conflict { border-left-color: #ef6666; }
+.commit-patch-block-tabs button small { display: block; margin-top: 4px; }
+.commit-result-legend { font-size: 12px; margin-left: auto; }
+.commit-result-legend.clean { color: #70acff; }
+.commit-result-legend.conflict { color: #ff8989; }
+.monaco-editor .commit-result-clean { background: #3284ed30; }
+.monaco-editor .commit-result-conflict { background: #e64b4b40; }
+.monaco-editor .commit-result-selected { box-shadow: inset 0 1px #a0bce3, inset 0 -1px #a0bce3; }
+.monaco-editor .commit-result-gutter-clean { border-left: 3px solid #569dff; }
+.monaco-editor .commit-result-gutter-conflict { border-left: 3px solid #ef6666; }
+.commit-result-code .monaco-diff-editor .line-insert, .commit-result-code .monaco-diff-editor .char-insert { background-color: #3284ed25; }
+:root[data-theme="light"] .commit-result-legend.clean { color: #1d5db5; }
+:root[data-theme="light"] .commit-result-legend.conflict { color: #b42323; }
+@media (max-width: 760px) { .commit-patch-split { grid-template-columns: 1fr; grid-template-rows: minmax(180px, .3fr) minmax(300px, .7fr); } }

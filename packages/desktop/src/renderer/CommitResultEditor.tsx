@@ -24,7 +24,7 @@ export function CommitResultEditor({ path, preview, result, selected, busy, onCh
         const line = Math.min(lastLine, side === "original" ? block.oursLine : (state.range?.start ?? block.start) + 1);
         const length = side === "original" ? (block.ours.match(/\n/g)?.length ?? 0) : state.range ? state.range.end - state.range.start : 1;
         const status = state.conflict ? "conflict" : "clean";
-        return { range: { startLineNumber: line, startColumn: 1, endLineNumber: Math.min(lastLine, line + Math.max(0, length - 1)), endColumn: 1 }, options: { isWholeLine: true, className: `commit-result-${status}${selected === index ? " commit-result-selected" : ""}`, linesDecorationsClassName: `commit-result-gutter-${status}`, overviewRuler: { color: state.conflict ? "#ef6666" : "#569dff", position: 7 }, hoverMessage: { value: `Block ${index + 1}: ${state.conflict ? "conflict — resolve or choose a version" : "clean change"}` } };
+        return { range: { startLineNumber: line, startColumn: 1, endLineNumber: Math.min(lastLine, line + Math.max(0, length - 1)), endColumn: 1 }, options: { isWholeLine: true, className: `commit-result-${status}${selected === index ? " commit-result-selected" : ""}`, linesDecorationsClassName: `commit-result-gutter-${status}`, overviewRuler: { color: state.conflict ? "#ef6666" : "#569dff", position: 7 }, hoverMessage: { value: `Block ${index + 1}: ${state.conflict ? "conflict — resolve or choose a version" : "clean change"}` } } };
       }));
     });
     return () => collections.forEach((collection) => collection.clear());
