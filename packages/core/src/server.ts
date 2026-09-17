@@ -683,6 +683,7 @@ async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStor
     case "harnesses.runs": return { runs: await harnesses.runs(request.payload.harnessId) };
     case "harnesses.run": return { run: await harnessRunner.start(request.payload.harnessId, request.payload.input, async (block, prompt, runtime) => {
       const provider = acp.get(block.provider ?? request.payload.provider);
+      if (block.watchdog) return harnessRunner.watch(runtime.runId, runtime.blockId, () => provider.usage());
       const sessionWorkspace = await workflowSessionWorkspace(workspacePath, runtime.runId, runtime.blockId); await runtime.started(sessionWorkspace);
       const agentFile = block.agent ? (await agents.list(workspacePath)).find((item) => item.scope === block.agent!.scope && item.name === block.agent!.name) : undefined;
       if (block.agent && !agentFile) throw new CoreError("FILE_NOT_FOUND", `Agent preset '${block.agent.name}' does not exist`);

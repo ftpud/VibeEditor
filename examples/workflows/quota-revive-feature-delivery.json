@@ -1,7 +1,7 @@
 {
   "id": "ec7d6241-0fa6-46d4-b3fa-8df92dff5cc2",
   "name": "Quota Revive → Feature Delivery Pipeline",
-  "version": 4,
+  "version": 5,
   "createdAt": "2026-09-17T00:00:00.000Z",
   "updatedAt": "2026-09-17T00:00:00.000Z",
   "blocks": [
@@ -10,10 +10,12 @@
       "watchdog": true,
       "type": "task",
       "label": "Reset watchdog",
-      "prompt": "You are an independent background watchdog. The main pipeline starts immediately and runs on its own. Request: {{input}}\n\nOn startup call ai_usage for codex and set timer_set_at to the earliest future reported account reset. If none is available use timer_set for 300 seconds. Include RESET_ELAPSED in the continuation prompt. On every revival call workflow_resume_failed once: this returns immediately and resumes only failed pipeline blocks in their existing sessions. Then read ai_usage again and arm the next reset timer. Repeat until the user stops the workflow, including after the main pipeline finishes. Never call workflow_run_stack, restart completed stages, or create implementation tasks. End each turn after scheduling your next timer.",
+      "prompt": "Core-managed recovery service. The main pipeline starts independently. At quota reset Core resumes eligible failed stages in their existing sessions, up to three automatic recoveries per stage. This block uses no model session and continues until the user stops the run.",
       "provider": "codex",
-      "model": "gpt-6-astra",
-      "position": { "x": 280, "y": 30 }
+      "position": {
+        "x": 280,
+        "y": 30
+      }
     },
     {
       "id": "planner",
@@ -22,7 +24,10 @@
       "prompt": "You are the feature architect. Read the request and produce a precise implementation plan:\n\n{{input}}\n\nIdentify independently deliverable features, dependencies, acceptance criteria, API/data changes, risks, and targeted tests. Return valid JSON with original_request, features (each with id, title, scope, acceptance, tests, and dependencies), and integration_order. Do not create tasks or modify files.",
       "provider": "codex",
       "model": "gpt-6-astra",
-      "position": { "x": 280, "y": 260 }
+      "position": {
+        "x": 280,
+        "y": 260
+      }
     },
     {
       "id": "dispatcher",
@@ -31,7 +36,10 @@
       "prompt": "Read the planner JSON below. For every feature with satisfied dependencies, immediately call task_create_and_start using provider codex, model gpt-5.6-sol, and a self-contained prompt containing the original request, feature scope, acceptance criteria, required tests, and integration constraints. Issue independent start calls together so features work concurrently. Do not wait for implementation completion. Return valid JSON containing the original request and a tasks array mapping every feature id to its created task_id.\n\nPLANNER JSON:\n{{input}}",
       "provider": "codex",
       "model": "gpt-5.6-sol",
-      "position": { "x": 520, "y": 260 }
+      "position": {
+        "x": 520,
+        "y": 260
+      }
     },
     {
       "id": "reviewer",
@@ -40,7 +48,10 @@
       "prompt": "Read the dispatcher JSON and inspect every task with task_list and task_ai_response_tail. Wait using timer_set when any task is active, then continue this same session after revival. Never duplicate tasks. Review completed work against acceptance criteria, interfaces, security, error handling, and test evidence. For each defect call task_append_prompt with a precise correction. Return valid JSON with task statuses, review findings, corrections requested, and review_passed. Do not merge until review_passed is true.\n\nDISPATCHER JSON:\n{{input}}",
       "provider": "codex",
       "model": "gpt-6-astra",
-      "position": { "x": 760, "y": 160 }
+      "position": {
+        "x": 760,
+        "y": 160
+      }
     },
     {
       "id": "tester",
@@ -49,7 +60,10 @@
       "prompt": "Read the review report below. If review_passed is false or corrections are pending, return the unresolved issues without testing. Otherwise inspect task responses and require targeted tests for every feature plus integration coverage. Use task_append_prompt for missing tests, and task_list/task_ai_response_tail to collect exact commands and results. Wait with timer_set and resume this same session if work is still active. Return valid JSON with per-feature test commands, results, failures, and tests_passed.\n\nREVIEW REPORT:\n{{input}}",
       "provider": "codex",
       "model": "gpt-5.6-sol",
-      "position": { "x": 760, "y": 360 }
+      "position": {
+        "x": 760,
+        "y": 360
+      }
     },
     {
       "id": "merger",
@@ -58,7 +72,10 @@
       "prompt": "Read the validation report below. Merge nothing unless tests_passed is true and no review defects remain. Merge successful task IDs one at a time with task_merge strategy smart, respecting integration_order. If a merge fails, stop immediately and report the exact failure. After merging, verify the root diff and commit state. Return valid JSON with merge results, failures, and complete.\n\nVALIDATION REPORT:\n{{input}}",
       "provider": "codex",
       "model": "gpt-6-astra",
-      "position": { "x": 1020, "y": 260 }
+      "position": {
+        "x": 1020,
+        "y": 260
+      }
     },
     {
       "id": "reporter",
@@ -68,14 +85,42 @@
       "join": "all",
       "provider": "codex",
       "model": "gpt-6-astra",
-      "position": { "x": 1260, "y": 260 }
+      "position": {
+        "x": 1260,
+        "y": 260
+      }
     }
   ],
   "edges": [
-    { "id": "planner-dispatcher", "from": "planner", "to": "dispatcher", "label": "feature plan" },
-    { "id": "dispatcher-reviewer", "from": "dispatcher", "to": "reviewer", "label": "task IDs" },
-    { "id": "reviewer-tester", "from": "reviewer", "to": "tester", "label": "review report" },
-    { "id": "tester-merger", "from": "tester", "to": "merger", "label": "validation report" },
-    { "id": "merger-reporter", "from": "merger", "to": "reporter", "label": "merge report" }
+    {
+      "id": "planner-dispatcher",
+      "from": "planner",
+      "to": "dispatcher",
+      "label": "feature plan"
+    },
+    {
+      "id": "dispatcher-reviewer",
+      "from": "dispatcher",
+      "to": "reviewer",
+      "label": "task IDs"
+    },
+    {
+      "id": "reviewer-tester",
+      "from": "reviewer",
+      "to": "tester",
+      "label": "review report"
+    },
+    {
+      "id": "tester-merger",
+      "from": "tester",
+      "to": "merger",
+      "label": "validation report"
+    },
+    {
+      "id": "merger-reporter",
+      "from": "merger",
+      "to": "reporter",
+      "label": "merge report"
+    }
   ]
 }

@@ -3,6 +3,7 @@ import type { HarnessBlock, HarnessBlockIteration, HarnessEdge, HarnessRun, Harn
 import { CoreError } from "./errors.js";
 import { validateHarness, renderHarnessPrompt } from "./harness-graph.js";
 import type { HarnessStore } from "./harnesses.js";
+import type { AiUsage } from "@remote-ide/acp";
 
 type Dispatch = (block: HarnessBlock, prompt: string, context: { runId: string; blockId: string; iteration: number; started(workspace: string): Promise<void> }) => Promise<AiSession>;
 type Append = (block: HarnessBlock, prompt: string, context: { runId: string; blockId: string; workspace: string }) => Promise<AiSession>;
@@ -19,11 +20,33 @@ export class HarnessRunner {
 
   isActive(runId: string): boolean { return this.activeRuns.has(runId) && !this.cancelled.has(runId); }
 
+  async watch(runId: string, blockId: string, usage: () => Promise<AiUsage>): Promise<AiSession> {
+    const execution = this.executions.get(runId);
+    const state = execution?.run.blocks.find((item) => item.blockId === blockId);
+    if (!execution || !state) throw new Error("Workflow is no longer active");
+    this.log(state, "lifecycle", "Core watchdog started; no AI session or model tokens required");
+    while (this.isActive(runId)) {
+      const snapshot = await usage().catch(() => undefined);
+      if (!this.isActive(runId)) break;
+      state.waitingUntil = nextWatchdogReset(snapshot);
+      this.log(state, "lifecycle", `Core watchdog sleeping until ${state.waitingUntil}`);
+      await this.update(execution.run);
+      while (this.isActive(runId) && Date.now() < Date.parse(state.waitingUntil)) await new Promise((resolve) => setTimeout(resolve, 250));
+      if (!this.isActive(runId)) break;
+      const { resumed } = await this.resumeFailed(runId, blockId);
+      this.log(state, "lifecycle", `Core watchdog woke; queued ${resumed.length} eligible failed stages`);
+      state.waitingUntil = undefined;
+      await this.update(execution.run);
+    }
+    throw new Cancelled();
+  }
+
   async start(harnessId: string, input: string, dispatch: Dispatch, defaultProvider = "codex", append?: Append): Promise<HarnessRun> {
     if (!input.trim() || input.length > 100_000) throw new CoreError("INVALID_REQUEST", "Harness input must contain 1–100,000 characters");
     const harness = await this.store.read(harnessId); const validation = validateHarness(harness);
     if (!validation.valid) throw new CoreError("INVALID_REQUEST", validation.issues.map((issue) => issue.message).join("; "));
     const run: HarnessRun = { id: crypto.randomUUID(), harnessId, harnessVersion: harness.version, input: input.trim(), status: "queued", createdAt: new Date().toISOString(), blocks: validation.order.map((blockId) => ({ blockId, status: "queued" })) };
+    run.definition = structuredClone(harness);
     await this.store.saveRun(run); this.changed(run.id);
     this.activeRuns.add(run.id); void this.execute(run, harness.blocks, harness.edges, validation.order, dispatch, defaultProvider, append ?? (async () => { throw new Error("This workflow runtime cannot append to an active block session"); }));
     return run;
@@ -67,6 +90,8 @@ export class HarnessRunner {
     const resumed: string[] = [];
     for (const state of execution.run.blocks) {
       if (state.status !== "failed" || state.blockId === callerId) continue;
+      if (!isRecoverableWorkflowError(state.error ?? "") || (state.recoveryAttempts ?? 0) >= 3) continue;
+      state.recoveryAttempts = (state.recoveryAttempts ?? 0) + 1;
       state.status = "queued"; state.error = undefined; state.completedAt = undefined;
       this.log(state, "lifecycle", "Watchdog requested continuation in the existing session"); resumed.push(state.blockId);
     }
@@ -180,7 +205,7 @@ export class HarnessRunner {
           this.log(state, "response", settled.messages.filter((message) => message.role === "assistant").at(-1)?.text ?? "Provider turn completed without an assistant response");
           if (this.cancelled.has(run.id)) throw new Cancelled();
           if (settled.status === "user_prompt") throw new CoreError("INVALID_REQUEST", `${block.label} requires user input; resume support is not implemented yet`);
-          if (settled.status === "error") throw new Error(settled.messages.filter((message) => message.role === "error").at(-1)?.text ?? `${block.label} failed`);
+          if (settled.status === "error") throw new Error([settled.messages.filter((message) => message.role === "error").at(-1)?.text ?? `${block.label} failed`, settled.messages.filter((message) => message.role === "assistant").at(-1)?.text ?? ""].join("\n"));
           let output = settled.messages.filter((message) => message.role === "assistant").at(-1)?.text ?? "";
           collected.push(output); if (iteration) { iteration.output = output.slice(-200_000); iteration.status = "succeeded"; iteration.completedAt = new Date().toISOString(); } await this.update(run);
         } catch (error) {
@@ -228,3 +253,17 @@ export function connectedInput(blockId: string, harnessInput: string, blocks: Ha
 }
 
 class Cancelled extends Error {}
+
+export function isRecoverableWorkflowError(message: string): boolean {
+  return /usage limit|rate.?limit|quota|ECONNRESET|ETIMEDOUT|EAI_AGAIN|temporarily unavailable|HTTP 503|HTTP 429/i.test(message);
+}
+
+export function nextWatchdogReset(usage?: AiUsage, now = Date.now()): string {
+  const windows = [usage?.accountQuota?.primary, usage?.accountQuota?.secondary].filter((window) => window !== undefined);
+  const exhausted = windows.filter((window) => window.remainingPercent <= 0 || window.usedPercent >= 100);
+  const candidates = (exhausted.length ? exhausted : windows).map((window) => Date.parse(window.resetsAt ?? "")).filter((time) => Number.isFinite(time) && time > now);
+  if (exhausted.length && candidates.length !== exhausted.length) return new Date(now + 300_000).toISOString();
+  const topLevel = Date.parse(usage?.resetsAt ?? "");
+  if (!windows.length && topLevel > now) candidates.push(topLevel);
+  return new Date(candidates.length ? (exhausted.length ? Math.max(...candidates) : Math.min(...candidates)) : now + 300_000).toISOString();
+}
