@@ -17,6 +17,8 @@ export class HarnessRunner {
   private updateQueue = Promise.resolve();
   constructor(private readonly store: HarnessStore, private readonly changed: (runId: string) => void, private readonly concurrency = 4) {}
 
+  isActive(runId: string): boolean { return this.activeRuns.has(runId) && !this.cancelled.has(runId); }
+
   async start(harnessId: string, input: string, dispatch: Dispatch, defaultProvider = "codex", append?: Append): Promise<HarnessRun> {
     if (!input.trim() || input.length > 100_000) throw new CoreError("INVALID_REQUEST", "Harness input must contain 1–100,000 characters");
     const harness = await this.store.read(harnessId); const validation = validateHarness(harness);
@@ -56,6 +58,20 @@ export class HarnessRunner {
       await this.update(execution.run);
     })).catch(async (error) => { execution.run.status = "failed"; execution.run.error = error instanceof Error ? error.message : String(error); execution.run.completedAt = new Date().toISOString(); await this.update(execution.run); });
     return structuredClone(execution.run);
+  }
+
+  async resumeFailed(runId: string, callerId: string): Promise<{ resumed: string[] }> {
+    const execution = this.executions.get(runId);
+    if (!execution || this.cancelled.has(runId)) throw new Error("Workflow is no longer active");
+    if (!execution.blocks.find((block) => block.id === callerId)?.watchdog) throw new Error("Only a watchdog can request recovery");
+    const resumed: string[] = [];
+    for (const state of execution.run.blocks) {
+      if (state.status !== "failed" || state.blockId === callerId) continue;
+      state.status = "queued"; state.error = undefined; state.completedAt = undefined;
+      this.log(state, "lifecycle", "Watchdog requested continuation in the existing session"); resumed.push(state.blockId);
+    }
+    await this.update(execution.run);
+    return { resumed };
   }
 
   async runStack(runId: string, blockId: string, inputs: string[], path?: string): Promise<{ blocks: Array<{ blockId: string; output: string }> }> {
@@ -113,7 +129,11 @@ export class HarnessRunner {
           if (readiness === "wait") { if (state.status !== "waiting") { state.status = "waiting"; this.log(state, "lifecycle", "Waiting for upstream blocks"); changed = true; } continue; }
           if (readiness === "skip") { state.status = "skipped"; state.completedAt = new Date().toISOString(); changed = true; continue; }
           const block = blocks.find((item) => item.id === blockId)!; state.status = "running"; changed = true;
-          const task = this.executeBlock(run, block, blocks, edges, outputs, dispatch, defaultProvider).then(() => blockId);
+          const task = this.executeBlock(run, block, blocks, edges, outputs, dispatch, defaultProvider).catch(async (error) => {
+            if (this.cancelled.has(run.id) || !blocks.some((item) => item.watchdog)) throw error;
+            state.status = "failed"; state.error = error instanceof Error ? error.message : String(error);
+            this.log(state, "error", state.error); await this.update(run);
+          }).then(() => blockId);
           running.set(blockId, task);
         }
         if (changed) await this.update(run);
@@ -121,7 +141,10 @@ export class HarnessRunner {
           if (run.blocks.some((block) => ["queued", "waiting"].includes(block.status))) throw new Error("Harness could not resolve its remaining paths");
           break;
         }
-        const completedId = await Promise.race(running.values()); running.delete(completedId);
+        let tick: ReturnType<typeof setTimeout> | undefined;
+        const completedId = await Promise.race([...running.values(), new Promise<undefined>((resolve) => { tick = setTimeout(() => resolve(undefined), 250); })]);
+        if (tick) clearTimeout(tick);
+        if (completedId) running.delete(completedId);
       }
       run.status = "succeeded"; run.completedAt = new Date().toISOString(); await this.update(run);
     } catch (error) {
@@ -140,6 +163,7 @@ export class HarnessRunner {
       for (let index = 0; index < count; index += 1) {
         if (this.cancelled.has(run.id)) throw new Cancelled();
         let prompt = renderHarnessPrompt(block.prompt, stack?.[index] ?? blockInput, outputs).replace(/\{\{\s*iteration\s*\}\}/g, String(index + 1));
+        if (index === 0 && state.workspace) prompt = `Continue your interrupted work from this session. Inspect prior tool results and preserve recorded task IDs and completed merges; do not duplicate previously completed operations. Original stage instructions:\n\n${prompt}`;
         if (outgoing.length) prompt += `\n\nWorkflow runtime capability: Use workflow_run_stack to send prompts to directly connected blocks and wait for their replies. If a connected block already has a session, the prompt is appended to that same session. Use timer_set to pause yourself and resume this same session later.`;
         if (block.routing === "ai" && outgoing.length) prompt += `\nChoose a named path when calling workflow_run_stack. Available paths: ${outgoing.map((edge) => edge.label).join(", ")}.`;
         if (block.type === "task") prompt += `\n\nThis is a visible task-orchestration block. Create implementation workspaces with task_create_and_start, inspect them with task_list and task_ai_response_tail, append instructions with task_append_prompt, and merge completed work with task_merge.`;
@@ -149,7 +173,7 @@ export class HarnessRunner {
         try {
           const started = async (workspace: string) => { state.workspace = workspace; if (iteration) iteration.workspace = workspace; await this.update(run); };
           const execution = this.executions.get(run.id);
-          const settled = index > 0 && state.workspace && execution
+          const settled = state.workspace && execution
             ? await execution.append(block, prompt, { runId: run.id, blockId: block.id, workspace: state.workspace })
             : await dispatch(block, prompt, { runId: run.id, blockId: block.id, iteration: index + 1, started });
           state.sessionId = settled.id; if (iteration) iteration.sessionId = settled.id;

@@ -1,8 +1,18 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { settleWorkflowSession } from "./server.js";
 import { WebSocket } from "ws";
 import { assertRequestRoot, assertRootRemovalAllowed, assertSessionChangeAllowed, LiveRootSelections, permissionTargetWorkspace, protocolHandshake, renameWorkspacePaths, rootRemovalBlocker, selectRootWorkspace, sendWebSocketData, transactionalRootSelection, WorkspaceWatchBatcher } from "./server.js";
 
 describe("protocol handshake", () => {
+  it("arms watchdog recovery at the provider reset even when its AI turn has failed", async () => {
+    let active = true;
+    const dueAt = new Date(Date.now() + 60_000).toISOString();
+    const session = { status: "error", messages: [] };
+    const provider = { descriptor: { id: "codex" }, get: vi.fn(async () => session), usage: vi.fn(async () => ({ accountQuota: { primary: { resetsAt: dueAt } } })) };
+    const timers = { next: vi.fn(async () => undefined), scheduleAt: vi.fn(async () => { active = false; return { dueAt }; }) };
+    await settleWorkflowSession(provider as never, "/watchdog", timers as never, { runId: "run", blockId: "watchdog" }, () => active);
+    expect(timers.scheduleAt).toHaveBeenCalledWith("/watchdog", "codex", expect.stringContaining("workflow_resume_failed"), dueAt, { runId: "run", blockId: "watchdog" });
+  });
   it("accepts overlapping ranges and describes incompatible Desktops", () => {
     expect(protocolHandshake({ minimum: 4, maximum: 4 })).toMatchObject({ compatible: true, compatibility: { minimum: 4, maximum: 4 } });
     expect(protocolHandshake({ minimum: 3, maximum: 3 })).toEqual({ compatible: false, compatibility: { minimum: 4, maximum: 4 }, message: "Core supports protocol 4-4; this Desktop supports 3-3" });
