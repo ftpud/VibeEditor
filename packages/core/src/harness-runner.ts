@@ -79,8 +79,23 @@ export class HarnessRunner {
       const output = replies.length === 1 ? replies[0]! : replies.map((value, index) => `## Appended prompt ${index + 1}\n${value}`).join("\n\n"); state.output = output.slice(-200_000); state.status = "succeeded"; state.completedAt = new Date().toISOString(); execution.outputs.set(target.id, output);
     }
     await this.update(execution.run);
-    await Promise.all(fresh.map((target) => this.executeBlock(execution.run, target, execution.blocks, execution.edges, execution.outputs, execution.dispatch, execution.defaultProvider, inputs)));
+    await Promise.all(fresh.map(async (target) => {
+      await this.executeBlock(execution.run, target, execution.blocks, execution.edges, execution.outputs, execution.dispatch, execution.defaultProvider, inputs);
+      await this.executeRevivedDescendants(execution, target.id);
+    }));
     return { blocks: targets.map((target) => ({ blockId: target.id, output: execution.outputs.get(target.id) ?? "" })) };
+  }
+
+  private async executeRevivedDescendants(execution: ActiveExecution, sourceId: string): Promise<void> {
+    const targets = execution.edges.filter((edge) => edge.from === sourceId).map((edge) => execution.blocks.find((block) => block.id === edge.to)).filter((block): block is HarnessBlock => Boolean(block));
+    await Promise.all(targets.map(async (target) => {
+      const state = execution.run.blocks.find((item) => item.blockId === target.id)!;
+      if (state.status !== "queued" && state.status !== "waiting") return;
+      if (blockReadiness(target.id, execution.blocks, execution.edges, execution.run.blocks) !== "ready") return;
+      state.status = "running"; await this.update(execution.run);
+      await this.executeBlock(execution.run, target, execution.blocks, execution.edges, execution.outputs, execution.dispatch, execution.defaultProvider);
+      await this.executeRevivedDescendants(execution, target.id);
+    }));
   }
 
   private async execute(run: HarnessRun, blocks: HarnessBlock[], edges: HarnessEdge[], order: string[], dispatch: Dispatch, defaultProvider: string, append: Append): Promise<void> {
