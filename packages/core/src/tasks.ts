@@ -66,7 +66,6 @@ export class WorkspaceTaskStore {
       else {
         await execFileAsync("git", ["-C", destination, "switch", "-C", name], { encoding: "utf8" });
         createdBranch = true;
-        await this.configureNewBranchPush(name);
       }
       await this.copyWorkspaceState(this.rootWorkspace, destination);
       await this.save({ tasks: [...registry.tasks, task], ...(select ? { selectedTaskId: task.id } : registry.selectedTaskId ? { selectedTaskId: registry.selectedTaskId } : {}) });
@@ -366,19 +365,6 @@ export class WorkspaceTaskStore {
       return (await execFileAsync("git", ["-C", this.rootWorkspace, "branch", "--show-current"], { encoding: "utf8" })).stdout.trim() || "HEAD";
     }
     catch (error) { throw new CoreError("GIT_FAILED", `Could not determine task base branch: ${gitError(error)}`); }
-  }
-
-  private async configureNewBranchPush(branch: string): Promise<void> {
-    if (branch === "HEAD") return;
-    let remote: string;
-    try {
-      remote = (await execFileAsync("git", ["-C", this.rootWorkspace, "config", "--get", `branch.${await this.rootBranch()}.remote`], { encoding: "utf8" })).stdout.trim();
-    } catch {
-      return;
-    }
-    if (!remote || remote === ".") return;
-    await execFileAsync("git", ["-C", this.rootWorkspace, "config", `branch.${branch}.remote`, remote], { encoding: "utf8" });
-    await execFileAsync("git", ["-C", this.rootWorkspace, "config", `branch.${branch}.merge`, `refs/heads/${branch}`], { encoding: "utf8" });
   }
 
   private async save(registry: Registry): Promise<void> {
