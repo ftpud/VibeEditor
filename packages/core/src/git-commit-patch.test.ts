@@ -63,3 +63,40 @@ describe("selected commit changes", () => {
     expect(await git("show", ":file.txt")).toContain("line 1\n");
   });
 });
+
+describe("editable commit results", () => {
+  it("saves manual results while preserving working files and unrelated staged changes", async () => {
+    const { root, git, original, hash, service } = await fixture();
+    await writeFile(path.join(root, "unrelated.txt"), "staged\n"); await git("add", "unrelated.txt");
+    const preview = await service.commitPatch(hash);
+    expect(preview.files[0]!.indexContent).toBe(original);
+    await service.saveCommitResults(hash, preview.indexVersion, [{ path: "file.txt", content: "manual result without newline" }]);
+    expect(await git("show", ":file.txt")).toBe("manual result without newline");
+    expect(await git("show", ":unrelated.txt")).toBe("staged\n");
+    expect(await readFile(path.join(root, "file.txt"), "utf8")).toBe(original);
+    await expect(service.saveCommitResults(hash, preview.indexVersion, [{ path: "file.txt", content: "stale" }])).rejects.toThrow("index changed");
+  });
+  it("creates added files from an editable root-commit result", async () => {
+    const { git, base, service } = await fixture();
+    await git("switch", "--orphan", "result-empty");
+    const preview = await service.commitPatch(base);
+    expect(preview.files[0]!.indexContent).toBe("");
+    await service.saveCommitResults(base, preview.indexVersion, [{ path: "file.txt", content: "new draft\n" }]);
+    expect(await git("show", ":file.txt")).toBe("new draft\n");
+  });
+  it("rejects files outside the commit without changing the index", async () => {
+    const { git, original, hash, service } = await fixture();
+    const preview = await service.commitPatch(hash);
+    await expect(service.saveCommitResults(hash, preview.indexVersion, [{ path: "file.txt", content: "edit" }, { path: "other.txt", content: "no" }])).rejects.toThrow("Invalid text result");
+    expect(await git("show", ":file.txt")).toBe(original);
+  });
+  it("supports explicit deletion and keeps an empty edited file", async () => {
+    const { git, hash, service } = await fixture();
+    let preview = await service.commitPatch(hash);
+    await service.saveCommitResults(hash, preview.indexVersion, [{ path: "file.txt", content: "" }]);
+    expect(await git("show", ":file.txt")).toBe("");
+    preview = await service.commitPatch(hash);
+    await service.saveCommitResults(hash, preview.indexVersion, [{ path: "file.txt", content: null }]);
+    expect(await git("ls-files")).toBe("");
+  });
+});

@@ -1409,3 +1409,25 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
   .resize-handle, .right-resize-handle, .focused-panel-divider, .terminal-resize-handle { background: ButtonText; }
   .tree-git-status, .git-status, .task-ai-status { forced-color-adjust: none; color: CanvasText; background: Canvas; border: 1px solid CanvasText; }
 }
+
+/* Commit block picker and editable staging draft. */
+.commit-patch-dialog { width: min(1440px, calc(100vw - 40px)); height: min(920px, calc(100vh - 40px)); }
+.commit-patch-dialog > main { display: flex; overflow: hidden; }
+.commit-patch-toolbar select { max-width: min(480px, 40vw); padding: 6px; background: inherit; color: inherit; }
+.commit-patch-split { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; width: 100%; min-height: 0; }
+.commit-patch-source, .commit-patch-result { display: flex; flex-direction: column; min-width: 0; min-height: 0; border: 1px solid #505359; border-radius: 5px; overflow: hidden; }
+.commit-patch-pane-heading { display: flex; flex-wrap: wrap; gap: 8px; padding: 12px; background: #ffffff08; border-bottom: 1px solid #505359; }
+.commit-patch-pane-heading small { overflow-wrap: anywhere; }
+.commit-patch-block-tabs, .commit-patch-block-actions, .commit-patch-result-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 10px; }
+.commit-patch-block-tabs { max-height: 100px; overflow: auto; flex-shrink: 0; }
+.commit-patch-block-tabs button[aria-pressed="true"] { outline: 2px solid #689cf5; outline-offset: -2px; }
+.commit-patch-source .commit-patch-file { flex: 1; min-height: 0; display: flex; overflow: hidden; }
+.commit-patch-source pre { flex: 1; white-space: pre; tab-size: 4; }
+.commit-patch-block-actions { border-top: 1px solid #505359; }
+.commit-patch-block-actions small { width: 100%; line-height: 1.5; }
+.commit-patch-result-actions { justify-content: space-between; }
+.commit-patch-result textarea { flex: 1; min-height: 0; width: 100%; box-sizing: border-box; resize: none; border: 0; border-top: 1px solid #505359; border-radius: 0; padding: 12px; font: 13px/1.6 'JetBrains Mono Variable', monospace; tab-size: 4; background: #1f2023; color: #d5d7da; }
+.commit-patch-result textarea:focus { outline: 2px solid #689cf5; outline-offset: -2px; }
+.commit-patch-source > p, .commit-patch-result > p { padding: 12px; }
+:root[data-theme="light"] .commit-patch-result textarea { background: #fff; color: #30343b; }
+@media (max-width: 760px) { .commit-patch-split { grid-template-columns: 1fr; grid-template-rows: minmax(200px, 1fr) minmax(200px, 1fr); } .commit-patch-dialog > main { overflow: auto; } .commit-patch-dialog > footer { flex-wrap: wrap; } }
