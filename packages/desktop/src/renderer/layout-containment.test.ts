@@ -27,4 +27,12 @@ describe("horizontal editor layout containment", () => {
     expect(actions).toContain("height: 24px");
     expect(actions).toContain("flex: 0 0 24px");
   });
+
+  it("keeps editor tabs on one line without a visible native scrollbar", () => {
+    const tabs = declarations(".tabs");
+    expect(tabs).toContain("overflow-x: auto");
+    expect(tabs).toContain("scrollbar-width: none");
+    expect(styles).toContain(".tabs::-webkit-scrollbar { display: none; }");
+    expect(declarations(".tab-file-name")).toContain("white-space: nowrap");
+  });
 });
