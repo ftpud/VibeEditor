@@ -24,6 +24,7 @@ export function HarnessPanel({ harnesses, runs, providers, agents, defaultProvid
   const [selectedId, setSelectedId] = useState<string>();
   const [draft, setDraft] = useState<HarnessDefinition>();
   const [selectedBlockId, setSelectedBlockId] = useState<string>();
+  const [selectedEdgeId, setSelectedEdgeId] = useState<string>();
   const [connectFrom, setConnectFrom] = useState<string>();
   const [input, setInput] = useState("");
   const [saving, setSaving] = useState(false);
@@ -33,7 +34,7 @@ export function HarnessPanel({ harnesses, runs, providers, agents, defaultProvid
   const drag = useRef<{ id: string; grabX: number; grabY: number }>();
   const selected = harnesses.find((item) => item.id === selectedId);
   useEffect(() => { if (!selectedId && harnesses[0]) setSelectedId(harnesses[0].id); }, [harnesses, selectedId]);
-  useEffect(() => { setDraft(selected ? structuredClone(selected) : undefined); setSelectedBlockId(undefined); }, [selected?.id, selected?.version]);
+  useEffect(() => { setDraft(selected ? structuredClone(selected) : undefined); setSelectedBlockId(undefined); setSelectedEdgeId(undefined); }, [selected?.id, selected?.version]);
   const block = draft?.blocks.find((item) => item.id === selectedBlockId);
   const blockProvider = block?.provider ?? defaultProvider;
   const blockModels = blockProvider ? modelsByProvider[blockProvider] ?? [] : [];
@@ -48,6 +49,17 @@ export function HarnessPanel({ harnesses, runs, providers, agents, defaultProvid
   const activeRuns = runs.filter((item) => item.harnessId === selectedId && ["queued", "running", "waiting"].includes(item.status));
   const blockRun = run?.blocks.find((item) => item.blockId === selectedBlockId);
   const blockById = useMemo(() => new Map(draft?.blocks.map((item) => [item.id, item]) ?? []), [draft?.blocks]);
+  const selectedEdge = draft?.edges.find((edge) => edge.id === selectedEdgeId);
+  useEffect(() => {
+    if (mode !== "edit" || !selectedEdgeId) return;
+    const removeSelectedEdge = (event: KeyboardEvent) => {
+      if (event.key !== "Delete" && event.key !== "Backspace") return;
+      const target = event.target;
+      if (target && "matches" in target && typeof target.matches === "function" && target.matches("input, textarea, select, [contenteditable=true]")) return;
+      event.preventDefault(); setDraft((current) => current ? { ...current, edges: current.edges.filter((edge) => edge.id !== selectedEdgeId) } : current); setSelectedEdgeId(undefined);
+    };
+    window.addEventListener("keydown", removeSelectedEdge); return () => window.removeEventListener("keydown", removeSelectedEdge);
+  }, [mode, selectedEdgeId]);
 
   const create = async () => {
     const name = createName?.trim();
@@ -79,6 +91,7 @@ export function HarnessPanel({ harnesses, runs, providers, agents, defaultProvid
     setDraft({ ...draft, blocks: draft.blocks.filter((item) => item.id !== id), edges: draft.edges.filter((edge) => edge.from !== id && edge.to !== id) });
     setSelectedBlockId(undefined); setConnectFrom((current) => current === id ? undefined : current);
   };
+  const removeEdge = (id: string) => { if (!draft || mode !== "edit") return; setDraft({ ...draft, edges: draft.edges.filter((edge) => edge.id !== id) }); setSelectedEdgeId(undefined); };
   const connectTo = (id: string) => {
     if (!draft || mode !== "edit") return;
     if (!connectFrom || connectFrom === id) return;
@@ -104,8 +117,9 @@ export function HarnessPanel({ harnesses, runs, providers, agents, defaultProvid
     {!draft ? <div className="harness-empty"><strong>Build an AI workflow</strong><span>Create a workflow, add prompt blocks, then connect their execution order.</span><button onClick={() => setCreateName("New Workflow")}><Plus size={14} /> Create workflow</button></div> : <>
       {mode === "edit" ? <div className="harness-toolbar"><input aria-label="Workflow name" value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} /><button title="Add prompt block" onClick={addBlock}><Plus size={14} /> Block</button><button title="Save workflow" disabled={!dirty || saving} onClick={() => void save()}><Save size={14} /> {saving ? "Saving" : "Save"}</button></div> : <div className="harness-view-summary"><strong>{draft.name}</strong><span>{run ? `Last run: ${run.status}` : "No runs yet"}</span></div>}
       {mode === "edit" && connectFrom && <div className="harness-connect-hint">Select an input port to connect from <strong>{blockById.get(connectFrom)?.label}</strong>. <button onClick={() => setConnectFrom(undefined)}>Cancel</button></div>}
-      <div className={`harness-canvas ${mode}`} onPointerMove={pointerMove} onPointerUp={() => { drag.current = undefined; }} onPointerCancel={() => { drag.current = undefined; }}>
-        <svg aria-label="Workflow connections"><defs><marker id={arrowMarkerId} markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto" markerUnits="strokeWidth"><path d="M 0 0 L 8 4 L 0 8 z" /></marker></defs>{draft.edges.map((edge) => { const from = blockById.get(edge.from); const to = blockById.get(edge.to); if (!from || !to) return null; const labelX = (from.position.x + to.position.x) / 2 + BLOCK_WIDTH / 2; const labelY = (from.position.y + to.position.y) / 2 + BLOCK_HEIGHT / 2 - 7 + (edge.loop ? 45 : 0); return <g key={edge.id}><path className={`harness-edge${edge.loop ? " loop" : ""}`} d={edgePath(from, to, edge.loop)} markerEnd={`url(#${arrowMarkerId})`}><title>{edge.loop ? `${from.label} loops to ${to.label}` : `${from.label} then ${to.label}`}</title></path>{edge.label && <text className="harness-edge-label" x={labelX} y={labelY} textAnchor="middle">{edge.loop ? `↻ ${edge.label}` : edge.label}</text>}</g>; })}</svg>
+      {mode === "edit" && selectedEdge && <div className="harness-connect-hint harness-edge-controls">Selected connection: <strong>{blockById.get(selectedEdge.from)?.label} → {blockById.get(selectedEdge.to)?.label}</strong><label>Execution<select aria-label="Connection execution" value={selectedEdge.execution ?? "sync"} onChange={(event) => setDraft({ ...draft, edges: draft.edges.map((edge) => edge.id === selectedEdge.id ? { ...edge, execution: event.target.value === "async" ? "async" : undefined } : edge) })}><option value="sync">Sync · wait</option><option value="async">Async · continue</option></select></label><button onClick={() => removeEdge(selectedEdge.id)}>Remove connection</button></div>}
+      <div className={`harness-canvas ${mode}`} onClick={() => setSelectedEdgeId(undefined)} onPointerMove={pointerMove} onPointerUp={() => { drag.current = undefined; }} onPointerCancel={() => { drag.current = undefined; }}>
+        <svg aria-label="Workflow connections"><defs><marker id={arrowMarkerId} markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto" markerUnits="strokeWidth"><path d="M 0 0 L 8 4 L 0 8 z" /></marker></defs>{draft.edges.map((edge) => { const from = blockById.get(edge.from); const to = blockById.get(edge.to); if (!from || !to) return null; const labelX = (from.position.x + to.position.x) / 2 + BLOCK_WIDTH / 2; const labelY = (from.position.y + to.position.y) / 2 + BLOCK_HEIGHT / 2 - 7 + (edge.loop ? 45 : 0); const title = edge.loop ? `${from.label} loops to ${to.label}` : `${from.label} then ${to.label}`; return <g key={edge.id}><path className={`harness-edge${edge.loop ? " loop" : ""}${selectedEdgeId === edge.id ? " selected" : ""}`} d={edgePath(from, to, edge.loop)} markerEnd={`url(#${arrowMarkerId})`} role={mode === "edit" ? "button" : undefined} aria-label={mode === "edit" ? `Select connection: ${title}` : undefined} tabIndex={mode === "edit" ? 0 : undefined} onClick={mode === "edit" ? (event) => { event.stopPropagation(); setSelectedEdgeId(edge.id); setSelectedBlockId(undefined); } : undefined}><title>{title}</title></path>{edge.label && <text className="harness-edge-label" x={labelX} y={labelY} textAnchor="middle">{edge.loop ? `↻ ${edge.label}` : edge.label}</text>}</g>; })}</svg>
         {draft.blocks.map((item) => { const state = run?.blocks.find((block) => block.blockId === item.id); const preview = responsePreview(state?.output, state?.status); return <div key={item.id} className={`harness-block ${selectedBlockId === item.id ? "selected" : ""} ${connectFrom === item.id ? "connecting" : ""}`} style={{ left: item.position.x, top: item.position.y }} onPointerDown={(event) => pointerDown(event, item)} onClick={() => setSelectedBlockId(item.id)}><button className="harness-port input" aria-label={`Connect into ${item.label}`} title="Input: connect selected block here" disabled={!connectFrom || connectFrom === item.id} onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); connectTo(item.id); }} /><button className="harness-port output" aria-label={`Connect from ${item.label}`} title={connectFrom === item.id ? "Cancel connection" : "Output: start connection"} onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); setConnectFrom((current) => current === item.id ? undefined : item.id); }} /><header><span className={`harness-status ${state?.status ?? "idle"}`} />{item.label}</header><small>{state?.status === "running" && state.iterations?.length ? `Stack item ${state.iterations.length} of ${state.plannedRuns ?? state.iterations.length}` : state?.status === "running" ? "Running…" : state?.error ?? item.model ?? item.provider ?? "Default model"}</small><div className={`harness-response-preview ${state?.output ? "available" : ""}`} title={state?.output} aria-label={`${item.label} response preview`}>{preview}</div><footer><button title="Delete block" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); removeBlock(item.id); }}><Trash2 size={12} /></button></footer></div>; })}
         {!draft.blocks.length && <button className="harness-canvas-empty" onClick={addBlock}><Plus size={16} /> Add the first prompt block</button>}
       </div>

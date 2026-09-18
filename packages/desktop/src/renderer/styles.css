@@ -308,11 +308,16 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .harness-canvas > svg { width: 1200px; height: 800px; position: absolute; inset: 0; pointer-events: none; }
 .harness-edge { fill: none; stroke: #78a8f5; stroke-width: 2; }
 .harness-edge.loop { stroke: #b99aec; stroke-dasharray: 6 4; }
+.harness-canvas.edit .harness-edge { pointer-events: stroke; cursor: pointer; }
+.harness-edge.selected { stroke: #ffd166; stroke-width: 4; }
 .harness-edge-label { fill: #b9c9df; stroke: #202226; stroke-width: 3px; paint-order: stroke; font-size: 10px; }
 .harness-canvas marker path { fill: #78a8f5; }
 .harness-connect-hint { padding: 5px 8px; display: flex; align-items: center; gap: 4px; border-bottom: 1px solid #4b3f62; background: #302a3c; color: #c9bddb; font-size: .7692rem; }
 .harness-connect-hint strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .harness-connect-hint button { margin-left: auto; border: 0; background: transparent; color: #a98be0; cursor: pointer; }
+.harness-edge-controls label { margin-left: auto; display: flex; align-items: center; gap: 5px; white-space: nowrap; }
+.harness-edge-controls select { padding: 3px 5px; border: 1px solid #55476b; border-radius: 3px; background: #272230; color: #d4c9e5; font: inherit; }
+.harness-edge-controls button { margin-left: 0; }
 .harness-block { width: 176px; height: 116px; position: absolute; z-index: 1; display: flex; flex-direction: column; border: 1px solid #4a4e55; border-radius: 6px; background: #2b2e33; box-shadow: 0 4px 12px rgba(0,0,0,.25); cursor: grab; user-select: none; }
 .harness-block.selected { border-color: #579dff; box-shadow: 0 0 0 1px #579dff; }
 .harness-block.connecting { border-color: #b99aec; }
