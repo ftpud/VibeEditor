@@ -39,6 +39,22 @@ describe("HarnessPanel", () => {
     expect(edge?.textContent).toContain("Plan then Build");
   });
 
+  it("turns a backward connection into a visible loop edge", async () => {
+    const harness: HarnessDefinition = { id: "harness-1", name: "Cycle", version: 1, createdAt: "now", updatedAt: "now", blocks: [
+      { id: "a", type: "task", label: "Build", prompt: "", position: { x: 20, y: 20 } },
+      { id: "b", type: "prompt", label: "Review", prompt: "", position: { x: 260, y: 20 } },
+    ], edges: [{ id: "forward", from: "a", to: "b", label: "review" }] };
+    const onSave = vi.fn().mockImplementation(async (value) => value);
+    render(<HarnessPanel harnesses={[harness]} runs={[]} providers={[]} agents={[]} onCreate={vi.fn()} onSave={onSave} onDelete={vi.fn()} onRun={vi.fn()} onCancelRun={vi.fn()} onError={vi.fn()} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Connect from Review" }));
+    fireEvent.click(screen.getByRole("button", { name: "Connect into Build" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() => expect(onSave.mock.calls.at(0)?.[0].edges[1]).toMatchObject({ from: "b", to: "a", loop: true }));
+    expect(screen.getByLabelText("Workflow connections").querySelector(".harness-edge.loop")?.textContent).toContain("Review loops to Build");
+  });
+
   it("routes vertical connections from the block edges", () => {
     const block = (id: string, x: number, y: number) => ({ id, type: "prompt" as const, label: id, prompt: "", position: { x, y } });
     expect(edgePath(block("a", 20, 20), block("b", 30, 220))).toMatch(/^M 108 136 C /);
@@ -80,8 +96,22 @@ describe("HarnessPanel", () => {
     fireEvent.click(await screen.findByText("Review"));
 
     const details = await screen.findByLabelText("Review run details");
+    expect(details.querySelector(".harness-run-details-body")).not.toBeNull();
     expect(details.textContent).toContain("Stack items (2/2)");
     expect(details.textContent).toContain("Review task 2");
     expect(details.textContent).toContain("answer two");
+  });
+
+  it("keeps the execution log collapsed until requested", async () => {
+    const harness: HarnessDefinition = { id: "harness-1", name: "Flow", version: 1, createdAt: "now", updatedAt: "now", blocks: [{ id: "a", type: "prompt", label: "Review", prompt: "{{input}}", position: { x: 20, y: 20 } }], edges: [] };
+    const runs = [{ id: "run-1", harnessId: harness.id, harnessVersion: 1, input: "task", status: "succeeded" as const, createdAt: "now", blocks: [{ blockId: "a", status: "succeeded" as const, output: "answer", log: [{ timestamp: "2026-09-18T00:00:00Z", kind: "lifecycle" as const, message: "Started" }] }] }];
+    render(<HarnessPanel harnesses={[harness]} runs={runs} providers={[]} agents={[]} onCreate={vi.fn()} onSave={vi.fn()} onDelete={vi.fn()} onRun={vi.fn()} onCancelRun={vi.fn()} onError={vi.fn()} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "View" }));
+    fireEvent.click(await screen.findByText("Review"));
+    const log = (await screen.findByText("Execution log (1)")).closest("details");
+    expect(log?.open).toBe(false);
+    fireEvent.click(screen.getByText("Execution log (1)"));
+    expect(log?.open).toBe(true);
   });
 });

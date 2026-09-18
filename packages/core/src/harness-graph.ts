@@ -10,7 +10,7 @@ export function validateHarness(harness: HarnessDefinition): { valid: boolean; i
     if (!ids.has(edge.from) || !ids.has(edge.to)) { issues.push({ code: "missing-endpoint", edgeId: edge.id, message: "Connection refers to a block that no longer exists" }); continue; }
     if (edge.from === edge.to) issues.push({ code: "self-edge", edgeId: edge.id, blockId: edge.from, message: "A block cannot connect to itself" });
     const key = `${edge.from}\0${edge.to}`; if (edgeKeys.has(key)) issues.push({ code: "duplicate-edge", edgeId: edge.id, message: "This connection already exists" }); edgeKeys.add(key);
-    outgoing.set(edge.from, [...outgoing.get(edge.from) ?? [], edge.to]); indegree.set(edge.to, (indegree.get(edge.to) ?? 0) + 1);
+    if (!edge.loop) { outgoing.set(edge.from, [...outgoing.get(edge.from) ?? [], edge.to]); indegree.set(edge.to, (indegree.get(edge.to) ?? 0) + 1); }
   }
   for (const block of harness.blocks.filter((item) => item.routing === "ai")) {
     const outgoingEdges = harness.edges.filter((edge) => edge.from === block.id); const labels = new Set<string>();

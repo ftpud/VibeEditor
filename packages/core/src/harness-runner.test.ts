@@ -101,6 +101,22 @@ describe("HarnessRunner", () => {
     expect(completed.status).toBe("succeeded"); expect(dispatch.mock.calls.map((call) => call[1].split("\n\nWorkflow runtime")[0])).toEqual(["Plan feature", "Build the plan"]); expect(completed.id).toBe(started.id);
   });
 
+  it("cycles through an explicit loop edge without rescheduling the initial graph", async () => {
+    const state = await mkdtemp(path.join(os.tmpdir(), "workflow-cycle-")); const store = new HarnessStore("/workspace", state); const definition = await store.create("Cycle");
+    const blocks: HarnessBlock[] = [{ id: "draft", type: "task", label: "Draft", prompt: "Draft {{input}}", position: { x: 0, y: 0 } }, { id: "review", type: "prompt", label: "Review", prompt: "Review {{input}}", position: { x: 200, y: 0 } }];
+    await store.update({ ...definition, blocks, edges: [{ id: "forward", from: "draft", to: "review" }, { id: "loop", from: "review", to: "draft", label: "revise", loop: true }] });
+    const runner = new HarnessRunner(store, () => undefined); const append = vi.fn(async (_block: HarnessBlock, prompt: string) => session(`revised:${prompt}`));
+    const dispatch = vi.fn(async (block: HarnessBlock, prompt: string, runtime: { runId: string; blockId: string; started(workspace: string): Promise<void> }) => {
+      await runtime.started(`/sessions/${block.id}`);
+      if (block.id === "review") await runner.runStack(runtime.runId, runtime.blockId, ["Address the review"], "revise");
+      return session(prompt);
+    });
+    await runner.start(definition.id, "feature", dispatch, "test", append);
+    await vi.waitFor(async () => expect((await store.runs())[0]?.status).toBe("succeeded"));
+    expect(dispatch.mock.calls.map((call) => call[0].id)).toEqual(["draft", "review"]);
+    expect(append).toHaveBeenCalledWith(expect.objectContaining({ id: "draft" }), "Address the review", expect.objectContaining({ workspace: "/sessions/draft" }));
+  });
+
   it("combines direct predecessor outputs for a join block", () => {
     const blocks = [{ id: "a", type: "prompt" as const, label: "Research", prompt: "", position: { x: 0, y: 0 } }, { id: "b", type: "prompt" as const, label: "Review", prompt: "", position: { x: 0, y: 0 } }, { id: "c", type: "prompt" as const, label: "Write", prompt: "", position: { x: 0, y: 0 } }];
     expect(connectedInput("c", "original", blocks, [{ id: "ac", from: "a", to: "c" }, { id: "bc", from: "b", to: "c" }], new Map([["a", "facts"], ["b", "notes"]]))).toBe("## Research\nfacts\n\n## Review\nnotes");

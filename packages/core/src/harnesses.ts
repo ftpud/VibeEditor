@@ -90,7 +90,7 @@ function isHarness(value: unknown): value is HarnessDefinition {
   const item = value as Partial<HarnessDefinition>;
   return typeof item.id === "string" && typeof item.name === "string" && typeof item.version === "number" && typeof item.createdAt === "string" && typeof item.updatedAt === "string" && Array.isArray(item.blocks) && Array.isArray(item.edges)
     && item.blocks.every((block) => block && typeof block.id === "string" && ["prompt", "task"].includes(block.type) && typeof block.label === "string" && typeof block.prompt === "string" && (!block.join || block.join === "all" || block.join === "any") && (!block.routing || block.routing === "all" || block.routing === "ai") && typeof block.position?.x === "number" && typeof block.position?.y === "number")
-    && item.edges.every((edge) => edge && typeof edge.id === "string" && typeof edge.from === "string" && typeof edge.to === "string" && (edge.label === undefined || typeof edge.label === "string"));
+    && item.edges.every((edge) => edge && typeof edge.id === "string" && typeof edge.from === "string" && typeof edge.to === "string" && (edge.label === undefined || typeof edge.label === "string") && (edge.loop === undefined || typeof edge.loop === "boolean"));
 }
 
 function message(error: unknown): string { return error instanceof Error ? error.message : String(error); }
