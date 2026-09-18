@@ -8,7 +8,7 @@ import type { AiUsage } from "@remote-ide/acp";
 type Dispatch = (block: HarnessBlock, prompt: string, context: { runId: string; blockId: string; iteration: number; started(workspace: string): Promise<void> }) => Promise<AiSession>;
 type Append = (block: HarnessBlock, prompt: string, context: { runId: string; blockId: string; workspace: string }) => Promise<AiSession>;
 type Interrupt = (provider: string, context: { runId: string; blockId: string; workspace?: string }) => Promise<void>;
-type ActiveExecution = { run: HarnessRun; blocks: HarnessBlock[]; edges: HarnessEdge[]; outputs: Map<string, string>; dispatch: Dispatch; append: Append; defaultProvider: string };
+type ActiveExecution = { run: HarnessRun; blocks: HarnessBlock[]; edges: HarnessEdge[]; outputs: Map<string, string>; dispatch: Dispatch; append: Append; defaultProvider: string; background: Set<Promise<void>> };
 
 export class HarnessRunner {
   private readonly cancelled = new Set<string>();
@@ -144,22 +144,30 @@ export class HarnessRunner {
     if (!outgoing.length) throw new Error(path === undefined ? "This block has no downstream path" : `No downstream path named '${path}'`);
     if (caller.routing === "ai" && path === undefined) throw new Error("path is required because this block uses AI-selected routing");
     if (path !== undefined) callerState.selectedRoute = path;
-    const targets = outgoing.map((edge) => execution.blocks.find((block) => block.id === edge.to)!).filter(Boolean);
-    const fresh: HarnessBlock[] = [];
-    for (const target of targets) {
+    const targets = outgoing.map((edge) => ({ edge, block: execution.blocks.find((block) => block.id === edge.to)! })).filter((target) => Boolean(target.block));
+    const launch = async (target: HarnessBlock): Promise<void> => {
       const state = execution.run.blocks.find((item) => item.blockId === target.id)!;
-      if (["queued", "waiting"].includes(state.status) && !state.workspace) { state.status = "running"; fresh.push(target); continue; }
+      if (["queued", "waiting"].includes(state.status) && !state.workspace) {
+        state.status = "running"; await this.update(execution.run);
+        await this.executeBlock(execution.run, target, execution.blocks, execution.edges, execution.outputs, execution.dispatch, execution.defaultProvider, inputs);
+        await this.executeRevivedDescendants(execution, target.id); return;
+      }
       if (!state.workspace || !["running", "succeeded"].includes(state.status)) throw new Error(`Downstream block '${target.label}' cannot accept another prompt`);
+      state.status = "running"; state.completedAt = undefined; await this.update(execution.run);
       const replies: string[] = [];
       for (const input of inputs) { const session = await execution.append(target, input, { runId, blockId: target.id, workspace: state.workspace }); replies.push(session.messages.filter((message) => message.role === "assistant").at(-1)?.text ?? ""); state.sessionId = session.id; }
-      const output = replies.length === 1 ? replies[0]! : replies.map((value, index) => `## Appended prompt ${index + 1}\n${value}`).join("\n\n"); state.output = output.slice(-200_000); state.status = "succeeded"; state.completedAt = new Date().toISOString(); execution.outputs.set(target.id, output);
+      const output = replies.length === 1 ? replies[0]! : replies.map((value, index) => `## Appended prompt ${index + 1}\n${value}`).join("\n\n"); state.output = output.slice(-200_000); state.status = "succeeded"; state.completedAt = new Date().toISOString(); execution.outputs.set(target.id, output); await this.update(execution.run);
+    };
+    for (const target of targets) {
+      if ((target.edge.execution ?? "sync") === "sync") { await launch(target.block); continue; }
+      let task!: Promise<void>;
+      task = launch(target.block).catch(async (error) => {
+        const state = execution.run.blocks.find((item) => item.blockId === target.block.id)!;
+        state.status = this.cancelled.has(runId) ? "cancelled" : "failed"; state.error = error instanceof Error ? error.message : String(error); state.completedAt = new Date().toISOString(); this.log(state, "error", state.error); await this.update(execution.run);
+      }).finally(() => execution.background.delete(task));
+      execution.background.add(task);
     }
-    await this.update(execution.run);
-    await Promise.all(fresh.map(async (target) => {
-      await this.executeBlock(execution.run, target, execution.blocks, execution.edges, execution.outputs, execution.dispatch, execution.defaultProvider, inputs);
-      await this.executeRevivedDescendants(execution, target.id);
-    }));
-    return { blocks: targets.map((target) => ({ blockId: target.id, output: execution.outputs.get(target.id) ?? "" })) };
+    return { blocks: targets.map((target) => ({ blockId: target.block.id, output: execution.outputs.get(target.block.id) ?? "" })) };
   }
 
   private async executeRevivedDescendants(execution: ActiveExecution, sourceId: string): Promise<void> {
@@ -175,7 +183,7 @@ export class HarnessRunner {
   }
 
   private async execute(run: HarnessRun, blocks: HarnessBlock[], edges: HarnessEdge[], order: string[], dispatch: Dispatch, defaultProvider: string, append: Append): Promise<void> {
-    const outputs = new Map<string, string>(); run.status = "running"; run.startedAt = new Date().toISOString(); this.executions.set(run.id, { run, blocks, edges, outputs, dispatch, append, defaultProvider }); await this.update(run);
+    const outputs = new Map<string, string>(); run.status = "running"; run.startedAt = new Date().toISOString(); const background = new Set<Promise<void>>(); this.executions.set(run.id, { run, blocks, edges, outputs, dispatch, append, defaultProvider, background }); await this.update(run);
     const running = new Map<string, Promise<string>>();
     try {
       while (run.blocks.some((block) => ["queued", "waiting", "running"].includes(block.status))) {
@@ -198,6 +206,7 @@ export class HarnessRunner {
         }
         if (changed) await this.update(run);
         if (!running.size) {
+          if (background.size) { await Promise.race(background); continue; }
           if (run.blocks.some((block) => ["queued", "waiting"].includes(block.status))) throw new Error("Harness could not resolve its remaining paths");
           break;
         }
@@ -206,6 +215,7 @@ export class HarnessRunner {
         if (tick) clearTimeout(tick);
         if (completedId) running.delete(completedId);
       }
+      const failed = run.blocks.find((block) => block.status === "failed"); if (failed) throw new Error(failed.error ?? "Asynchronous workflow block failed");
       run.status = "succeeded"; run.completedAt = new Date().toISOString(); await this.update(run);
     } catch (error) {
       const cancelled = error instanceof Cancelled || this.cancelled.has(run.id); run.status = cancelled ? "cancelled" : "failed"; run.error = cancelled ? undefined : error instanceof Error ? error.message : String(error); run.completedAt = new Date().toISOString();

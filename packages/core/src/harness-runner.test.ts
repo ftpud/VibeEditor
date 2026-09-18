@@ -117,6 +117,24 @@ describe("HarnessRunner", () => {
     expect(append).toHaveBeenCalledWith(expect.objectContaining({ id: "draft" }), "Address the review", expect.objectContaining({ workspace: "/sessions/draft" }));
   });
 
+  it("returns immediately across an async connection but keeps the workflow active", async () => {
+    const state = await mkdtemp(path.join(os.tmpdir(), "workflow-async-")); const store = new HarnessStore("/workspace", state); const definition = await store.create("Async");
+    const blocks: HarnessBlock[] = [{ id: "planner", type: "prompt", label: "Planner", prompt: "Plan", position: { x: 0, y: 0 } }, { id: "worker", type: "task", label: "Worker", prompt: "{{input}}", position: { x: 200, y: 0 } }];
+    await store.update({ ...definition, blocks, edges: [{ id: "async", from: "planner", to: "worker", execution: "async" }] });
+    let release!: () => void; const waiting = new Promise<void>((resolve) => { release = resolve; }); let toolResult: unknown;
+    const runner = new HarnessRunner(store, () => undefined); const dispatch = vi.fn(async (block: HarnessBlock, _prompt: string, runtime: { runId: string; blockId: string }) => {
+      if (block.id === "planner") toolResult = await runner.runStack(runtime.runId, runtime.blockId, ["build"]);
+      if (block.id === "worker") await waiting;
+      return session(block.id);
+    });
+    const run = await runner.start(definition.id, "feature", dispatch, "test");
+    await vi.waitFor(async () => expect((await store.runs())[0]?.blocks.find((block) => block.blockId === "planner")?.status).toBe("succeeded"));
+    expect(toolResult).toEqual({ blocks: [{ blockId: "worker", output: "" }] });
+    expect((await store.runs())[0]?.status).toBe("running");
+    release(); await vi.waitFor(async () => expect((await store.runs())[0]?.status).toBe("succeeded"));
+    expect(dispatch.mock.calls.map((call) => call[0].id)).toEqual(["planner", "worker"]); expect(runner.isActive(run.id)).toBe(false);
+  });
+
   it("combines direct predecessor outputs for a join block", () => {
     const blocks = [{ id: "a", type: "prompt" as const, label: "Research", prompt: "", position: { x: 0, y: 0 } }, { id: "b", type: "prompt" as const, label: "Review", prompt: "", position: { x: 0, y: 0 } }, { id: "c", type: "prompt" as const, label: "Write", prompt: "", position: { x: 0, y: 0 } }];
     expect(connectedInput("c", "original", blocks, [{ id: "ac", from: "a", to: "c" }, { id: "bc", from: "b", to: "c" }], new Map([["a", "facts"], ["b", "notes"]]))).toBe("## Research\nfacts\n\n## Review\nnotes");

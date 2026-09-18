@@ -55,6 +55,37 @@ describe("HarnessPanel", () => {
     expect(screen.getByLabelText("Workflow connections").querySelector(".harness-edge.loop")?.textContent).toContain("Review loops to Build");
   });
 
+  it("selects and deletes an individual connection", async () => {
+    const harness: HarnessDefinition = { id: "harness-1", name: "Flow", version: 1, createdAt: "now", updatedAt: "now", blocks: [
+      { id: "a", type: "prompt", label: "Plan", prompt: "", position: { x: 20, y: 20 } },
+      { id: "b", type: "prompt", label: "Build", prompt: "", position: { x: 260, y: 20 } },
+    ], edges: [{ id: "edge", from: "a", to: "b" }] };
+    const onSave = vi.fn().mockImplementation(async (value) => value);
+    render(<HarnessPanel harnesses={[harness]} runs={[]} providers={[]} agents={[]} onCreate={vi.fn()} onSave={onSave} onDelete={vi.fn()} onRun={vi.fn()} onCancelRun={vi.fn()} onError={vi.fn()} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Select connection: Plan then Build" }));
+    expect(screen.getByText(/Selected connection:/).textContent).toContain("Plan → Build");
+    fireEvent.keyDown(window, { key: "Delete" });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() => expect(onSave.mock.calls.at(0)?.[0].edges).toEqual([]));
+  });
+
+  it("changes a selected connection from sync to async", async () => {
+    const harness: HarnessDefinition = { id: "harness-1", name: "Flow", version: 1, createdAt: "now", updatedAt: "now", blocks: [
+      { id: "a", type: "prompt", label: "Plan", prompt: "", position: { x: 20, y: 20 } },
+      { id: "b", type: "task", label: "Build", prompt: "", position: { x: 260, y: 20 } },
+    ], edges: [{ id: "edge", from: "a", to: "b" }] };
+    const onSave = vi.fn().mockImplementation(async (value) => value);
+    render(<HarnessPanel harnesses={[harness]} runs={[]} providers={[]} agents={[]} onCreate={vi.fn()} onSave={onSave} onDelete={vi.fn()} onRun={vi.fn()} onCancelRun={vi.fn()} onError={vi.fn()} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Select connection: Plan then Build" }));
+    fireEvent.change(screen.getByRole("combobox", { name: "Connection execution" }), { target: { value: "async" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() => expect(onSave.mock.calls.at(0)?.[0].edges[0].execution).toBe("async"));
+  });
+
   it("routes vertical connections from the block edges", () => {
     const block = (id: string, x: number, y: number) => ({ id, type: "prompt" as const, label: id, prompt: "", position: { x, y } });
     expect(edgePath(block("a", 20, 20), block("b", 30, 220))).toMatch(/^M 108 136 C /);
