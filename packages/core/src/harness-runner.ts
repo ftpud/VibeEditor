@@ -103,7 +103,7 @@ export class HarnessRunner {
   async appendInput(runId: string, input: string): Promise<HarnessRun> {
     const value = input.trim(); if (!value || value.length > 100_000) throw new CoreError("INVALID_REQUEST", "Workflow input must contain 1–100,000 characters");
     const execution = this.executions.get(runId); if (!execution) throw new CoreError("INVALID_REQUEST", "Workflow run is no longer active");
-    const targets = execution.blocks.filter((block) => !execution.edges.some((edge) => edge.to === block.id));
+    const targets = execution.blocks.filter((block) => !execution.edges.some((edge) => edge.to === block.id && !edge.loop));
     const available = targets.filter((block) => { const state = execution.run.blocks.find((item) => item.blockId === block.id); return state?.workspace && state.status === "running"; });
     if (!available.length) throw new CoreError("INVALID_REQUEST", "The workflow dispatcher session is not ready for another prompt");
     for (const block of available) { const state = execution.run.blocks.find((item) => item.blockId === block.id)!; state.status = "running"; state.completedAt = undefined; state.prompt = value; }
@@ -216,6 +216,7 @@ export class HarnessRunner {
 
   private async executeBlock(run: HarnessRun, block: HarnessBlock, blocks: HarnessBlock[], edges: HarnessEdge[], outputs: Map<string, string>, dispatch: Dispatch, defaultProvider: string, stack?: string[]): Promise<void> {
     const state = run.blocks.find((item) => item.blockId === block.id)!; const outgoing = edges.filter((edge) => edge.from === block.id);
+    const loopOutgoing = outgoing.filter((edge) => edge.loop);
     const blockInput = connectedInput(block.id, run.input, blocks, edges, outputs); const count = stack?.length ?? 1; const collected: string[] = [];
     state.startedAt = new Date().toISOString(); state.provider = block.provider ?? defaultProvider; state.plannedRuns = count; state.iterations = count > 1 ? [] : undefined; state.log = state.log ?? []; this.log(state, "lifecycle", `Started ${count > 1 ? `${count} planned iterations` : "block"}`);
     const providers = this.activeProviders.get(run.id) ?? new Set<string>(); providers.add(state.provider); this.activeProviders.set(run.id, providers); await this.update(run);
@@ -225,6 +226,7 @@ export class HarnessRunner {
         let prompt = renderHarnessPrompt(block.prompt, stack?.[index] ?? blockInput, outputs).replace(/\{\{\s*iteration\s*\}\}/g, String(index + 1));
         if (index === 0 && state.workspace) prompt = `Continue your interrupted work from this session. Inspect prior tool results and preserve recorded task IDs and completed merges; do not duplicate previously completed operations. Original stage instructions:\n\n${prompt}`;
         if (outgoing.length) prompt += `\n\nWorkflow runtime capability: Use workflow_run_stack to send prompts to directly connected blocks and wait for their replies. If a connected block already has a session, the prompt is appended to that same session. Use timer_set to pause yourself and resume this same session later.`;
+        if (loopOutgoing.length) prompt += `\nLoop paths return to earlier workflow blocks for another cycle. Use one only when another pass is needed: ${loopOutgoing.map((edge) => edge.label ?? blocks.find((item) => item.id === edge.to)?.label ?? edge.to).join(", ")}.`;
         if (block.routing === "ai" && outgoing.length) prompt += `\nChoose a named path when calling workflow_run_stack. Available paths: ${outgoing.map((edge) => edge.label).join(", ")}.`;
         if (block.type === "task") prompt += `\n\nThis is a visible task-orchestration block. Create implementation workspaces with task_create_and_start, inspect them with task_list and task_ai_response_tail, append instructions with task_append_prompt, and merge completed work with task_merge.`;
         state.prompt = prompt;
@@ -265,7 +267,7 @@ export class HarnessRunner {
 }
 
 function blockReadiness(blockId: string, blocks: HarnessBlock[], edges: HarnessEdge[], states: HarnessRun["blocks"]): "ready" | "wait" | "skip" {
-  const incoming = edges.filter((edge) => edge.to === blockId); if (!incoming.length) return "ready";
+  const incoming = edges.filter((edge) => edge.to === blockId && !edge.loop); if (!incoming.length) return "ready";
   const resolved = incoming.map((edge) => {
     const source = blocks.find((block) => block.id === edge.from)!; const state = states.find((item) => item.blockId === edge.from)!;
     if (state.status === "skipped") return "inactive";
@@ -280,7 +282,7 @@ function blockReadiness(blockId: string, blocks: HarnessBlock[], edges: HarnessE
 }
 
 export function connectedInput(blockId: string, harnessInput: string, blocks: HarnessBlock[], edges: HarnessEdge[], outputs: ReadonlyMap<string, string>): string {
-  const predecessors = edges.filter((edge) => edge.to === blockId).map((edge) => edge.from);
+  const predecessors = edges.filter((edge) => edge.to === blockId && !edge.loop).map((edge) => edge.from);
   if (!predecessors.length) return harnessInput;
   const available = predecessors.map((id) => ({ id, output: outputs.get(id) })).filter((item): item is { id: string; output: string } => item.output !== undefined);
   if (available.length === 1) return available[0]!.output;

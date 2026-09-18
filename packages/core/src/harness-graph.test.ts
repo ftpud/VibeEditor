@@ -13,6 +13,10 @@ describe("harness graph", () => {
     expect(validateHarness(harness([{ id: "a", from: "plan", to: "build" }, { id: "b", from: "build", to: "plan" }])).issues.some((issue) => issue.code === "cycle")).toBe(true);
     expect(validateHarness(harness([{ id: "a", from: "missing", to: "build" }])).issues.some((issue) => issue.code === "missing-endpoint")).toBe(true);
   });
+  it("allows an explicit loop edge without adding it to dependency order", () => {
+    const looped = harness([{ id: "forward", from: "plan", to: "build" }, { id: "loop", from: "build", to: "plan", loop: true }]);
+    expect(validateHarness(looped)).toMatchObject({ valid: true, order: ["plan", "build"] });
+  });
   it("only resolves supported template variables", () => expect(renderHarnessPrompt("Input={{input}} output={{blocks.plan.output}} {{unknown}}", "task", new Map([["plan", "result"]]))).toBe("Input=task output=result {{unknown}}"));
   it("requires unique path labels for AI routing", () => {
     const routed = harness([{ id: "a", from: "plan", to: "build" }]); routed.blocks[0]!.routing = "ai";

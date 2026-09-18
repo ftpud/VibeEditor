@@ -302,10 +302,12 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .harness-empty strong { color: #d6d8dc; font-size: 1rem; }
 .harness-toolbar input { font-weight: 600; }
 .harness-canvas { min-height: 260px; flex: 1; position: relative; overflow: auto; touch-action: none; background-color: #202226; background-image: radial-gradient(#3b3e43 1px, transparent 1px); background-size: 18px 18px; }
+.harness-panel.view .harness-canvas { min-height: 120px; }
 .harness-canvas.view .harness-block { cursor: pointer; }
 .harness-canvas.view .harness-port, .harness-canvas.view .harness-block > footer, .harness-canvas.view .harness-canvas-empty { display: none; }
 .harness-canvas > svg { width: 1200px; height: 800px; position: absolute; inset: 0; pointer-events: none; }
 .harness-edge { fill: none; stroke: #78a8f5; stroke-width: 2; }
+.harness-edge.loop { stroke: #b99aec; stroke-dasharray: 6 4; }
 .harness-edge-label { fill: #b9c9df; stroke: #202226; stroke-width: 3px; paint-order: stroke; font-size: 10px; }
 .harness-canvas marker path { fill: #78a8f5; }
 .harness-connect-hint { padding: 5px 8px; display: flex; align-items: center; gap: 4px; border-bottom: 1px solid #4b3f62; background: #302a3c; color: #c9bddb; font-size: .7692rem; }
@@ -349,11 +351,15 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .harness-routes { padding: 6px; display: grid; gap: 5px; border: 1px solid #3d4045; border-radius: 4px; }
 .harness-routes > strong { color: #b9bdc3; font-size: .7692rem; }
 .harness-routes label { grid-template-columns: minmax(70px, auto) 1fr; align-items: center; }
-.harness-run-details { max-height: min(480px, 55%); padding: 9px; display: grid; gap: 8px; overflow: auto; border-top: 1px solid #393b40; background: #282a2e; }
-.harness-run-details > header { display: flex; align-items: center; justify-content: space-between; }
+.harness-run-details { height: min(480px, 55%); min-height: 120px; flex: 0 1 auto; display: flex; flex-direction: column; overflow: hidden; border-top: 1px solid #393b40; background: #282a2e; }
+.harness-run-details > header { min-height: 34px; padding: 6px 9px; flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid #393b40; }
 .harness-run-details > header > div { display: flex; align-items: center; gap: 7px; }
 .harness-run-details > header button { border: 0; background: transparent; color: #92969d; cursor: pointer; }
+.harness-run-details-body { min-height: 0; padding: 9px; flex: 1; display: grid; align-content: start; gap: 8px; overflow: auto; overscroll-behavior: contain; }
 .harness-execution-log { display: grid; gap: 4px; }
+.harness-execution-log > summary { padding: 5px 7px; border: 1px solid #3d4045; border-radius: 4px; background: #24262a; color: #b9bdc3; font-size: .7692rem; font-weight: 600; cursor: pointer; user-select: none; }
+.harness-execution-log[open] > summary { margin-bottom: 4px; }
+.harness-execution-log-entries { display: grid; gap: 4px; }
 .harness-log-entry { border: 1px solid #393b40; border-radius: 4px; background: #202225; }
 .harness-log-entry summary { display: flex; gap: 8px; padding: 5px 7px; cursor: pointer; color: #aeb2b8; font-size: .72rem; }
 .harness-log-entry summary time { color: #777c85; font-variant-numeric: tabular-nums; }
