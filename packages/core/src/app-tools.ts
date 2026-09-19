@@ -238,10 +238,16 @@ export class AppToolService {
     private readonly rootWorkspace?: string,
     private readonly timers?: Pick<AiTimerService, "schedule" | "scheduleAt" | "next" | "cancelWorkspace">,
     private readonly bridgeWorkspace?: string,
-    private readonly workflow?: { runId: string; blockId: string; runStack(inputs: string[], path?: string): Promise<unknown>; resumeFailed?(): Promise<unknown>; registerChild?(taskId: string, provider: AiProvider, workspace: string): Promise<void> }
+    private readonly workflow?: { runId: string; blockId: string; runStack(inputs: string[], path?: string): Promise<unknown>; resumeFailed?(): Promise<unknown>; registerChild?(taskId: string, provider: AiProvider, workspace: string): Promise<void>; assertActive?(): void }
   ) {}
 
   async call(name: string, args: Record<string, unknown>): Promise<unknown> {
+    this.workflow?.assertActive?.();
+    try { return await this.callActive(name, args); }
+    finally { this.workflow?.assertActive?.(); }
+  }
+
+  private async callActive(name: string, args: Record<string, unknown>): Promise<unknown> {
     if (name === "workflow_resume_failed") {
       if (!this.workflow?.resumeFailed) throw new Error("Workflow recovery is unavailable");
       return this.workflow.resumeFailed();

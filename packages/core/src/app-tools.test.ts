@@ -38,6 +38,18 @@ describe("Vibe Editor app tools", () => {
     await expect(service.call("task_create_and_start", { prompt: "Implement feature", provider: "codex", model: "gpt-5" })).resolves.toMatchObject({ task: { id: "task-1" }, error: "Usage limit reached" });
     expect(tasks.delete).not.toHaveBeenCalled();
   });
+  it("checks workflow cancellation before and after a tool side effect", async () => {
+    const { tasks, provider, agents, onTasksChanged, onCommitMessageChanged } = harness(); let active = true;
+    const service = new AppToolService(tasks as never, { get: () => provider, list: () => [] } as never, "/parent", onTasksChanged, onCommitMessageChanged, "codex", agents as never, "/workspace", undefined, undefined, {
+      runId: "run", blockId: "dispatcher", runStack: vi.fn(), assertActive: () => { if (!active) throw new Error("Workflow is no longer active"); }
+    });
+    tasks.create.mockImplementation(async () => { active = false; return { id: "task-1", name: "feature/one", branch: "feature/one", baseBranch: "main" }; });
+
+    await expect(service.call("task_create", { branch: "feature/one" })).rejects.toThrow("Workflow is no longer active");
+    expect(tasks.create).toHaveBeenCalledOnce();
+    await expect(service.call("task_create", { branch: "feature/two" })).rejects.toThrow("Workflow is no longer active");
+    expect(tasks.create).toHaveBeenCalledOnce();
+  });
   it("publishes task start agent and reasoning parameters", () => {
     expect(appToolDefinitions.map((tool) => tool.name)).toEqual(["workflow_run_stack", "ai_usage", "timer_set", "timer_set_at", "model_switch_next", "session_new", "task_create", "task_create_and_start", "task_list", "task_merge", "task_delete", "task_set_status", "task_ai_response_tail", "task_append_prompt", "set_commit_message", "task_update_commit_message", "workflow_resume_failed"]);
     expect(appToolDefinitions[0]).toMatchObject({ name: "workflow_run_stack", inputSchema: { required: ["inputs"] } });

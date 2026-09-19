@@ -202,6 +202,22 @@ describe("HarnessRunner", () => {
     expect((await store.runs())[0]?.cleanupErrors).toEqual(cancelled.cleanupErrors);
   });
 
+  it("keeps cancellation terminal when a provider completes during cleanup", async () => {
+    const state = await mkdtemp(path.join(os.tmpdir(), "remote-ide-harness-cancel-race-")); const store = new HarnessStore("/workspace", state);
+    const definition = await store.create("Cancellation race");
+    await store.update({ ...definition, blocks: [{ id: "worker", type: "prompt", label: "Worker", prompt: "work", position: { x: 0, y: 0 } }], edges: [] });
+    let release!: () => void; const waiting = new Promise<void>((resolve) => { release = resolve; });
+    const runner = new HarnessRunner(store, () => undefined); const run = await runner.start(definition.id, "work", async () => { await waiting; return session("late-success"); });
+    await vi.waitFor(async () => expect((await store.runs())[0]?.blocks[0]?.status).toBe("running"));
+
+    await runner.cancel(run.id, async () => release());
+    await vi.waitFor(() => expect(runner.isActive(run.id)).toBe(false));
+
+    const cancelled = (await store.runs())[0]!;
+    expect(cancelled).toMatchObject({ status: "cancelled", blocks: [{ status: "cancelled" }] });
+    expect(cancelled.blocks[0]?.output).toBeUndefined();
+  });
+
   it("fans out ready blocks concurrently and waits for all before joining", async () => {
     const state = await mkdtemp(path.join(os.tmpdir(), "remote-ide-harness-fanout-")); const store = new HarnessStore("/workspace", state); const definition = await store.create("Fan out");
     const blocks = ["root", "left", "right", "join"].map((id) => ({ id, type: "prompt" as const, label: id, prompt: "{{input}}", position: { x: 0, y: 0 } }));

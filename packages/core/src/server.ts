@@ -262,7 +262,7 @@ export async function createServer(host: string, port: number, workspacePath: st
       const currentWorkspace = command.currentWorkspace ?? rootWorkspace; const rootId = await ownerRootId(currentWorkspace) ?? roots.primary().id; const root = roots.get(rootId); const context = contextFor(rootId);
       const changed = async () => { const encoded = JSON.stringify({ type: "tasks.changed", payload: { rootId } } satisfies ServerEvent); for (const socket of activeSessions) sendWebSocketData(socket, encoded); };
       const workflow = command.workflowRunId && command.workflowBlockId ? { runId: command.workflowRunId, blockId: command.workflowBlockId, resumeFailed: () => harnessRunner(rootId).resumeFailed(command.workflowRunId!, command.workflowBlockId!), runStack: (inputs: string[], path?: string) => harnessRunner(rootId).runStack(command.workflowRunId!, command.workflowBlockId!, inputs, path) } : undefined;
-      const ownedWorkflow = workflow ? { ...workflow, registerChild: (taskId: string, provider: AiProvider, workspace: string) => harnessRunner(rootId).registerChild(workflow.runId, { taskId, provider, workspace, blockId: workflow.blockId }) } : undefined;
+      const ownedWorkflow = workflow ? { ...workflow, assertActive: () => { if (!harnessRunner(rootId).isActive(workflow.runId)) throw new Error("Workflow is no longer active"); }, registerChild: (taskId: string, provider: AiProvider, workspace: string) => harnessRunner(rootId).registerChild(workflow.runId, { taskId, provider, workspace, blockId: workflow.blockId }) } : undefined;
       return new AppToolService(context.tasks, acp, currentWorkspace, changed, onCommitMessageChanged, command.currentProvider, context.agents, root.path, aiTimers, rootWorkspace, ownedWorkflow).call(command.name, command.args);
     });
   });
@@ -711,14 +711,17 @@ async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStor
       const workflowAgent = appTools.agent ? { ...appTools.agent, mcpServers: [...new Set([...(appTools.agent.mcpServers ?? []), workflowTools.name])] } : undefined;
       const autopilot = findAutopilotOption(provider.descriptor.options);
       const configuration = { ...(block.model ? { model: block.model } : {}), ...(autopilot ? { [autopilot.option.id]: autopilot.on } : {}) };
-      try { await provider.startFreshSession(sessionWorkspace, { prompt, configuration, mcpServers, agent: workflowAgent, ...(block.agent ? { agentPreset: block.agent } : {}) }); }
-      catch (error) { if (!block.watchdog) throw error; console.error("[core] Watchdog startup failed; scheduling recovery", error); }
+      runtime.assertActive();
+      try { await provider.startFreshSession(sessionWorkspace, { prompt, configuration, mcpServers, agent: workflowAgent, ...(block.agent ? { agentPreset: block.agent } : {}) }); runtime.assertActive(); }
+      catch (error) { runtime.assertActive(); if (!block.watchdog) throw error; console.error("[core] Watchdog startup failed; scheduling recovery", error); }
       return settleWorkflowSession(provider, sessionWorkspace, aiTimers, block.watchdog ? runtime : undefined, () => harnessRunner.isActive(runtime.runId));
     }, request.payload.provider, async (block, prompt, runtime) => {
-      const provider = acp.get(block.provider ?? request.payload.provider); const current = await provider.get(runtime.workspace);
+      const provider = acp.get(block.provider ?? request.payload.provider); if (!harnessRunner.isActive(runtime.runId)) throw new Error("Workflow is no longer active"); const current = await provider.get(runtime.workspace);
+      if (!harnessRunner.isActive(runtime.runId)) throw new Error("Workflow is no longer active");
       const workflowTools = appToolServer(rootWorkspace, runtime.workspace, provider.descriptor.id, bridgeWorkspace, { runId: runtime.runId, blockId: runtime.blockId });
       if (current.status === "in_progress" || current.status === "user_prompt") await provider.steer(runtime.workspace, prompt);
       else await provider.send(runtime.workspace, { prompt, configuration: current.configuration ?? { model: current.model, reasoning: current.reasoning }, mcpServers: [workflowTools] });
+      if (!harnessRunner.isActive(runtime.runId)) throw new Error("Workflow is no longer active");
       return settleWorkflowSession(provider, runtime.workspace, aiTimers, block.watchdog ? runtime : undefined, () => harnessRunner.isActive(runtime.runId));
     }) };
     case "harnesses.append": return { run: await harnessRunner.appendInput(request.payload.runId, request.payload.input) };
