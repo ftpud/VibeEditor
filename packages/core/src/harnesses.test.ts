@@ -1,6 +1,7 @@
 import os from "node:os";
 import path from "node:path";
-import { mkdtemp } from "node:fs/promises";
+import crypto from "node:crypto";
+import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import { HarnessStore } from "./harnesses.js";
 
@@ -29,5 +30,31 @@ describe("HarnessStore", () => {
     const store = new HarnessStore("/workspace", state);
     await expect(store.create("   ")).rejects.toThrow("1–120");
     await expect(store.delete("missing")).rejects.toThrow("does not exist");
+  });
+
+  it("serializes concurrent creates without losing definitions", async () => {
+    const state = await mkdtemp(path.join(os.tmpdir(), "remote-ide-harness-state-"));
+    const store = new HarnessStore("/workspace", state); const secondInstance = new HarnessStore("/workspace", state);
+    await Promise.all(Array.from({ length: 20 }, (_, index) => (index % 2 ? store : secondInstance).create(`Flow ${index}`)));
+    expect(await store.list()).toHaveLength(20);
+  });
+
+  it("rejects a stale definition update", async () => {
+    const state = await mkdtemp(path.join(os.tmpdir(), "remote-ide-harness-state-"));
+    const store = new HarnessStore("/workspace", state); const created = await store.create("Flow");
+    await store.update({ ...created, name: "First save" });
+    await expect(store.update({ ...created, name: "Stale save" })).rejects.toMatchObject({ code: "INVALID_REQUEST", message: expect.stringContaining("changed since") });
+    expect((await store.read(created.id)).name).toBe("First save");
+  });
+
+  it("reads the atomic backup when the current definition file is corrupt", async () => {
+    const state = await mkdtemp(path.join(os.tmpdir(), "remote-ide-harness-state-"));
+    const store = new HarnessStore("/workspace", state); const created = await store.create("Flow");
+    await store.update({ ...created, name: "Updated" });
+    const key = crypto.createHash("sha256").update("/workspace").digest("hex");
+    const directory = path.join(state, "harnesses", key); const target = path.join(directory, "index.json");
+    expect(JSON.parse(await readFile(`${target}.bak`, "utf8"))).toMatchObject({ schemaVersion: 1 });
+    await writeFile(target, "not json", "utf8");
+    expect((await store.list())[0]?.name).toBe("Flow");
   });
 });
