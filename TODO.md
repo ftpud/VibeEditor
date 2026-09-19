@@ -7,10 +7,10 @@ The current vertical slice is useful: definitions and run snapshots are Core-own
 ## P0 — make execution correct and recoverable
 
 - [ ] Replace the JSON read/modify/write store with a serialized, transactional repository.
-  - Prevent concurrent definition updates and run updates from overwriting each other.
-  - Use optimistic concurrency (`expectedVersion`) for definition saves and return a conflict that Desktop can resolve.
+  - [x] Prevent concurrent definition updates and run updates from overwriting each other.
+  - [x] Use optimistic concurrency (the submitted definition `version`) for definition saves and return a conflict that Desktop can resolve.
   - Persist definitions and runs separately, validate a schema version on read, quarantine corrupt records, and retain an atomic backup.
-  - Make retention explicit per workspace and per workflow instead of silently keeping the newest 100 runs globally.
+  - [x] Make retention explicit per workspace and per workflow instead of silently keeping the newest 100 runs globally.
 - [ ] Persist a versioned execution plan and operation journal for each run.
   - Record block attempts, dependency decisions, selected routes, session/workspace IDs, timers, child tasks, tool commands, and terminal outcomes.
   - Give task creation, prompt delivery, timer creation/firing, child registration, and merge operations stable idempotency keys.
@@ -25,9 +25,9 @@ The current vertical slice is useful: definitions and run snapshots are Core-own
   - Make block claiming atomic and use attempt IDs to ignore stale completions.
   - Define async-edge completion precisely and ensure background work cannot outlive a terminal run unnoticed.
 - [ ] Make cancellation authoritative and race-safe.
-  - Persist cancellation intent first, invalidate scheduled attempts/timers, interrupt sessions and child tasks, then record cleanup results.
+  - [x] Persist cancellation intent first, invalidate scheduled attempts/timers, interrupt sessions and child tasks, then record cleanup results.
   - Check cancellation immediately before and after every provider/tool side effect.
-  - Report partial cancellation failures instead of swallowing all interrupt errors.
+  - [x] Report partial cancellation failures instead of swallowing all interrupt errors.
   - Add a distinct state for a completed main flow with a still-running watchdog, or stop the watchdog automatically when delivery is terminal.
 - [ ] Model pauses instead of converting them into generic failure.
   - Add block/run states for `awaiting_permission`, `awaiting_user_input`, `waiting_timer`, and `retry_scheduled`.
@@ -69,7 +69,7 @@ The current vertical slice is useful: definitions and run snapshots are Core-own
 ## P1 — make workflow authoring understandable
 
 - [ ] Validate continuously in the editor and before Save/Run.
-  - Show issues on the affected block/edge and provide a summary with focus actions.
+  - [x] Show issues on the affected block/edge and provide a summary with focus actions.
   - Validate empty labels/prompts, duplicate block and edge IDs, route labels, loop targets, unreachable blocks, unsupported template variables, provider/model/agent availability, and invalid watchdog layouts.
   - Preview rendered inputs and explain `all`, `any`, sync, async, loop, and AI-route behavior in plain language.
 - [ ] Protect editing work.
@@ -88,6 +88,7 @@ The current vertical slice is useful: definitions and run snapshots are Core-own
 ## P1 — make runs observable and controllable
 
 - [ ] Add a real run-history selector instead of implicitly displaying the first matching run.
+  - [x] Provide a run-history selector, pin active runs first, and make multiple active runs explicit.
   - Show run ID/version, input summary, start/end/duration, status, definition revision, and resource usage.
   - Pin active runs above completed runs and make multiple simultaneous runs explicit.
   - Support compare, duplicate/rerun, delete/export, and rerun from a selected block using a frozen definition snapshot.
@@ -108,7 +109,7 @@ The current vertical slice is useful: definitions and run snapshots are Core-own
 - [ ] Enforce limits on active runs, block attempts, dynamic stack size, loop count, child tasks, wall-clock duration, prompt/output bytes, logs, and total tokens/cost.
 - [ ] Keep full provider responses out of in-memory aggregation when only a bounded handoff is allowed; store large outputs as artifacts with size/type metadata.
 - [ ] Redact secrets and sensitive tool content before persisting prompts, outputs, logs, handoffs, and exports; document retention and deletion behavior.
-- [ ] Validate all persisted nested fields at the protocol boundary instead of accepting structurally incomplete blocks, edges, runs, or agent references.
+- [x] Validate all persisted nested fields instead of accepting structurally incomplete blocks, edges, runs, or agent references.
 - [ ] Add audit fields for actor/source (`user`, scheduler, timer, model tool call), request ID, attempt ID, and definition version to every state transition.
 
 ## P2 — harden the product surface

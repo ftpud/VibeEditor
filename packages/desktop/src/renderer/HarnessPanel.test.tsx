@@ -154,4 +154,18 @@ describe("HarnessPanel", () => {
     expect((await screen.findByRole("alert")).textContent).toContain("Plan needs a prompt");
     expect((screen.getByRole("button", { name: "Save" }) as HTMLButtonElement).disabled).toBe(true);
   });
+
+  it("selects historical runs and pins active runs first", async () => {
+    const harness: HarnessDefinition = { id: "harness-1", name: "Flow", version: 1, createdAt: "now", updatedAt: "now", blocks: [{ id: "a", type: "prompt", label: "Plan", prompt: "{{input}}", position: { x: 20, y: 20 } }], edges: [] };
+    const runs = [
+      { id: "old", harnessId: harness.id, harnessVersion: 1, input: "old input", status: "succeeded" as const, createdAt: "2026-01-01T00:00:00Z", blocks: [{ blockId: "a", status: "succeeded" as const, output: "old answer" }] },
+      { id: "active", harnessId: harness.id, harnessVersion: 1, input: "new input", status: "running" as const, createdAt: "2026-01-02T00:00:00Z", blocks: [{ blockId: "a", status: "running" as const, output: "new answer" }] }
+    ];
+    render(<HarnessPanel harnesses={[harness]} runs={runs} providers={[]} agents={[]} onCreate={vi.fn()} onSave={vi.fn()} onDelete={vi.fn()} onRun={vi.fn()} onCancelRun={vi.fn()} onError={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: "View" }));
+    const selector = await screen.findByRole("combobox", { name: "Selected workflow run" });
+    expect((selector.querySelector("option") as HTMLOptionElement).value).toBe("active");
+    fireEvent.change(selector, { target: { value: "old" } }); fireEvent.click(await screen.findByText("Plan"));
+    expect((await screen.findByLabelText("Plan run details")).textContent).toContain("old answer");
+  });
 });
