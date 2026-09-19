@@ -714,7 +714,7 @@ async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStor
       runtime.assertActive();
       try { await provider.startFreshSession(sessionWorkspace, { prompt, configuration, mcpServers, agent: workflowAgent, ...(block.agent ? { agentPreset: block.agent } : {}) }); runtime.assertActive(); }
       catch (error) { runtime.assertActive(); if (!block.watchdog) throw error; console.error("[core] Watchdog startup failed; scheduling recovery", error); }
-      return settleWorkflowSession(provider, sessionWorkspace, aiTimers, block.watchdog ? runtime : undefined, () => harnessRunner.isActive(runtime.runId));
+      return settleWorkflowSession(provider, sessionWorkspace, aiTimers, block.watchdog ? runtime : undefined, () => harnessRunner.isActive(runtime.runId), runtime.activity);
     }, request.payload.provider, async (block, prompt, runtime) => {
       const provider = acp.get(block.provider ?? request.payload.provider); if (!harnessRunner.isActive(runtime.runId)) throw new Error("Workflow is no longer active"); const current = await provider.get(runtime.workspace);
       if (!harnessRunner.isActive(runtime.runId)) throw new Error("Workflow is no longer active");
@@ -929,10 +929,10 @@ async function workflowSessionWorkspace(workspace: string, runId: string, blockI
   return alias;
 }
 
-export async function settleWorkflowSession(provider: ReturnType<AcpRegistry["get"]>, workspace: string, timers: Pick<AiTimerService, "next" | "scheduleAt">, watchdog?: { runId: string; blockId: string }, active: () => boolean = () => true) {
+export async function settleWorkflowSession(provider: ReturnType<AcpRegistry["get"]>, workspace: string, timers: Pick<AiTimerService, "next" | "scheduleAt">, watchdog?: { runId: string; blockId: string }, active: () => boolean = () => true, activity?: (session: AiSession, waitingUntil?: string) => Promise<void>) {
   let session = await provider.get(workspace);
   for (;;) {
-    while (session.status === "in_progress" && active()) { await delay(250); session = await provider.get(workspace); }
+    while ((session.status === "in_progress" || session.pendingPermission) && active()) { await activity?.(session); await delay(250); session = await provider.get(workspace); }
     if (!active()) return session;
     let timer = await timers.next(workspace, provider.descriptor.id);
     if (!timer && watchdog) {
@@ -941,6 +941,8 @@ export async function settleWorkflowSession(provider: ReturnType<AcpRegistry["ge
       const resets = [usage?.resetsAt, usage?.accountQuota?.primary?.resetsAt, usage?.accountQuota?.secondary?.resetsAt].filter((value): value is string => Boolean(value) && Date.parse(value!) > Date.now()).sort();
       timer = await timers.scheduleAt(workspace, provider.descriptor.id, "RESET_ELAPSED: Call workflow_resume_failed, then recheck ai_usage and arm the next reset timer. Preserve the existing request and sessions.", resets[0] ?? new Date(Date.now() + 300_000).toISOString(), watchdog);
     }
+    await activity?.(session, timer?.dueAt);
+    if (session.status === "user_prompt" && !timer && activity) { await delay(250); session = await provider.get(workspace); continue; }
     if (!timer) return session;
     while (active() && await timers.next(workspace, provider.descriptor.id)) await delay(Math.min(250, Math.max(10, new Date(timer.dueAt).getTime() - Date.now())));
     await delay(250); session = await provider.get(workspace);
