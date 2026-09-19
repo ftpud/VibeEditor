@@ -3,7 +3,7 @@ import path from "node:path";
 import { mkdtemp } from "node:fs/promises";
 import { describe, expect, it, vi } from "vitest";
 import type { HarnessBlock } from "@remote-ide/protocol";
-import { connectedInput, HarnessRunner, nextWatchdogReset, isRecoverableWorkflowError } from "./harness-runner.js";
+import { classifyWorkflowFailure, connectedInput, HarnessRunner, nextWatchdogReset, isRecoverableWorkflowError } from "./harness-runner.js";
 import { HarnessStore } from "./harnesses.js";
 
 describe("HarnessRunner", () => {
@@ -43,6 +43,36 @@ describe("HarnessRunner", () => {
     expect(isRecoverableWorkflowError("Internal error: You've hit your usage limit")).toBe(true);
     expect(isRecoverableWorkflowError("Merge conflict in main.ts")).toBe(false);
     expect(isRecoverableWorkflowError("Permission denied")).toBe(false);
+    expect(classifyWorkflowFailure("HTTP 429: rate limit")).toBe("quota_exhausted");
+    expect(classifyWorkflowFailure("socket hang up")).toBe("transient_transport");
+    expect(classifyWorkflowFailure("Approval required for tool call")).toBe("permission_required");
+    expect(classifyWorkflowFailure("requires user input")).toBe("user_input_required");
+    expect(classifyWorkflowFailure("Invalid request")).toBe("permanent");
+  });
+
+  it("backs off transport failures and never retries permanent or paused failures", async () => {
+    const state = await mkdtemp(path.join(os.tmpdir(), "workflow-retry-policy-")); const store = new HarnessStore("/workspace", state);
+    const definition = await store.create("Retry policy");
+    const blocks: HarnessBlock[] = ["watchdog", "transport", "permission"].map((id) => ({ id, type: "prompt", label: id, prompt: "work", watchdog: id === "watchdog", position: { x: 0, y: 0 } }));
+    await store.update({ ...definition, blocks, edges: [] });
+    let release!: () => void; const sleeping = new Promise<void>((resolve) => { release = resolve; });
+    const runner = new HarnessRunner(store, () => undefined, 4, { maxAttempts: 2, transportBackoffMs: 200 });
+    const run = await runner.start(definition.id, "work", async (block) => {
+      if (block.id === "watchdog") await sleeping;
+      if (block.id === "transport") throw new Error("ETIMEDOUT");
+      if (block.id === "permission") throw new Error("Approval required");
+      return session("done");
+    });
+    try {
+      await vi.waitFor(async () => expect((await store.runs())[0]?.blocks.filter((block) => block.status === "failed")).toHaveLength(2));
+      const current = (await store.runs())[0]!;
+      expect(current.blocks.find((block) => block.blockId === "transport")?.failureReason).toBe("transient_transport");
+      expect(current.blocks.find((block) => block.blockId === "transport")?.retryAt).toBeTruthy();
+      expect(current.blocks.find((block) => block.blockId === "permission")?.failureReason).toBe("permission_required");
+      expect(await runner.resumeFailed(run.id, "watchdog")).toEqual({ resumed: [] });
+      await new Promise((resolve) => setTimeout(resolve, 220));
+      expect(await runner.resumeFailed(run.id, "watchdog")).toEqual({ resumed: ["transport"] });
+    } finally { await runner.cancel(run.id, async () => release()); release(); }
   });
 
   it("runs a Core watchdog independently without an AI session and cancels its sleep", async () => {
