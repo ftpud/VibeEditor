@@ -1,100 +1,135 @@
-# AI Workflows implementation plan
+# Workflows reliability and usability TODO
 
-AI Workflows provide a visual, observable alternative to a single AI chat. Definitions and run state belong to Core; Desktop edits and displays them through the typed protocol. Execution must reuse the existing provider-neutral ACP registry, provider adapters, agent files/presets, MCP assembly (`withAppTools`), permission flow, and provider descriptor metadata used by the AI tab. The internal harness implementation may add isolated session ownership and orchestration around that path, but must not fork or replace it.
+This plan is based on the current workflow implementation in `packages/core/src/harnesses.ts`, `packages/core/src/harness-graph.ts`, `packages/core/src/harness-runner.ts`, `packages/core/src/server.ts`, `packages/core/src/app-tools.ts`, `packages/protocol/src/index.ts`, and `packages/desktop/src/renderer/HarnessPanel.tsx`.
 
-## Phase 1 — durable definitions and visual editor (in progress)
+The current vertical slice is useful: definitions and run snapshots are Core-owned, graphs support fan-out, joins, AI-selected routes, loops, persistent block sessions, timers, watchdog recovery, and task orchestration, while Desktop provides a visual editor and basic run inspection. It is not yet safe to describe as unattended delivery: process restart loses the live scheduler, several side effects are not idempotent, AI text is trusted as a gate, and important pause/recovery states have no user workflow.
 
-- [x] Define provider-neutral harness, block, edge, and run snapshot types in the protocol.
-- [x] Add Core-owned, workspace-scoped persistence with list/create/update/delete operations.
-- [x] Add a Workflows tool-window tab in both Classic and AI-focused layouts.
-- [x] Add create, select, rename, and delete controls.
-- [x] Add a visual block canvas with draggable prompt blocks and dependency connectors.
-- [x] Add block editing for label, provider, model, agent preset, and prompt template.
-- [x] Add an initial prompt entry point and explicit save/run controls.
-- [x] Add Core-store tests for persistence, workspace isolation, versioning, and basic CRUD conflicts.
-- [ ] Add focused component tests and graph-validation tests once execution validation lands.
+## P0 — make execution correct and recoverable
 
-## Phase 2 — execution engine
+- [ ] Replace the JSON read/modify/write store with a serialized, transactional repository.
+  - Prevent concurrent definition updates and run updates from overwriting each other.
+  - Use optimistic concurrency (`expectedVersion`) for definition saves and return a conflict that Desktop can resolve.
+  - Persist definitions and runs separately, validate a schema version on read, quarantine corrupt records, and retain an atomic backup.
+  - Make retention explicit per workspace and per workflow instead of silently keeping the newest 100 runs globally.
+- [ ] Persist a versioned execution plan and operation journal for each run.
+  - Record block attempts, dependency decisions, selected routes, session/workspace IDs, timers, child tasks, tool commands, and terminal outcomes.
+  - Give task creation, prompt delivery, timer creation/firing, child registration, and merge operations stable idempotency keys.
+  - Commit intent before an external side effect and reconcile its result afterward so a lost reply cannot duplicate work.
+- [ ] Reconcile incomplete runs when Core starts.
+  - Load `queued`, `running`, and `waiting` runs; inspect provider sessions, timers, task worktrees, and recorded operations before deciding to resume, pause, fail, or complete them.
+  - Never recreate a task, resend a completed prompt, rerun a successful block, or repeat a merge during recovery.
+  - Mark unrecoverable orphaned state with a specific reason and offer Resume or Cancel; do not leave a persisted run that only looks active.
+- [ ] Use one scheduler for graph blocks, `workflow_run_stack`, appended input, retries, and timer continuations.
+  - Enforce the concurrency limit across every launch path, not only the initial graph loop.
+  - Serialize writes to a persistent block session so two upstream blocks cannot steer/send concurrently.
+  - Make block claiming atomic and use attempt IDs to ignore stale completions.
+  - Define async-edge completion precisely and ensure background work cannot outlive a terminal run unnoticed.
+- [ ] Make cancellation authoritative and race-safe.
+  - Persist cancellation intent first, invalidate scheduled attempts/timers, interrupt sessions and child tasks, then record cleanup results.
+  - Check cancellation immediately before and after every provider/tool side effect.
+  - Report partial cancellation failures instead of swallowing all interrupt errors.
+  - Add a distinct state for a completed main flow with a still-running watchdog, or stop the watchdog automatically when delivery is terminal.
+- [ ] Model pauses instead of converting them into generic failure.
+  - Add block/run states for `awaiting_permission`, `awaiting_user_input`, `waiting_timer`, and `retry_scheduled`.
+  - Route permission requests and provider questions to Desktop with run/block/session ownership.
+  - Allow the user to answer, approve, reject, resume, retry, or cancel the exact paused attempt.
+- [ ] Replace regex-only error recovery with typed provider/runtime failures.
+  - Normalize quota, transport, permission, user-input, cancellation, and permanent failures at the provider boundary.
+  - Persist attempt count and backoff deadline before sleeping; add jitter and a maximum elapsed retry budget.
+  - Retry only the failed attempt in its existing session and surface retry exhaustion as an actionable terminal state.
 
-- [x] Validate graphs before a run: unique IDs, existing edge endpoints, duplicate/self edges, acyclic dependencies, and at least one entry block.
-- [x] Compile the graph into a dependency-aware execution plan; run independent ready blocks concurrently with a configurable limit.
-- [x] Resolve `{{input}}` and `{{blocks.<id>.output}}` variables without executing arbitrary templates.
-- [x] Start each workflow block in an isolated, persistent provider session that can receive later upstream prompts.
-- [ ] Resolve each block's provider, model, reasoning level, agent preset, MCP set, timeout, and retry policy from descriptor metadata.
-- [ ] Route block dispatch through the same ACP `send` request shape and `withAppTools` agent/MCP setup as the AI tab; cover compatibility with shared fake-provider integration tests.
-- [x] Persist bounded run snapshots separately from editable definitions and stream block/run changes to Desktop.
-- [ ] Extend the implemented start/cancel operations with retry-block, resume, and rerun-from-block.
-- [x] Stream run/block state events for queued, running, succeeded, failed, and cancelled states with bounded persisted history.
-- [ ] Handle permission and user-input pauses with ownership tied to harness run and block IDs.
+### P0 acceptance tests
 
-## Phase 3 — richer orchestration
+- [ ] Inject a crash before and after task creation, prompt send, timer fire, block snapshot, and merge; restarting Core produces exactly one side effect and the correct terminal state.
+- [ ] Race Stop against provider completion, timer delivery, retry wake-up, and `workflow_run_stack`; no new work starts after cancellation intent is durable.
+- [ ] Run parallel fan-out plus hot input at the configured concurrency limit; assert no duplicate dispatch and no concurrent writes to one session.
+- [ ] Corrupt or truncate the state file and prove valid definitions/runs remain recoverable with a visible diagnostic.
 
-- [x] Add fan-out and AI-selected conditional paths. Transform, human-approval, and reusable sub-harness blocks remain.
-- [x] Define `all` and `any` join semantics. Failure tolerance and richer typed ports remain.
-- [x] Allow an agent block to launch one or more child paths and wait for their result through downstream joins.
-- [x] Allow an upstream AI block to create a dynamic stack of distinct downstream inputs and release later paths only after every stack item completes.
-- [x] Expose `workflow_run_stack` through MCP so a running block can launch and await any dynamically sized downstream stack, inspect its results, and continue the same response.
-- [x] Add visible task-orchestrator blocks backed by the same persistent AI runtime; task creation and merging remain explicit MCP operations.
-- [x] Allow hot-added prompts to steer or append to the active dispatcher session while existing downstream work continues.
-- [x] Preserve workflow identity through MCP continuation timers so an agent can wait, resume its existing session, trigger downstream blocks, and continue.
-- [ ] Add per-block input/output inspection, token/cost/timing metrics, and an execution timeline.
-- [ ] Add run history, comparison, export/import, duplication, and version migration.
-- [ ] Add canvas pan/zoom, keyboard navigation, multi-select, copy/paste, auto-layout, and accessible non-canvas editing.
+## P0 — enforce trustworthy delivery gates
 
-## Phase 4 — reliability and safety
+- [ ] Add typed, schema-validated block outputs and inputs.
+  - Let a block declare an output schema and validate it before releasing downstream dependencies.
+  - Preserve the original request, feature/task IDs, dependency IDs, commit SHAs, findings, and test evidence as structured data rather than prompt-only JSON conventions.
+  - Treat missing or malformed required fields as a visible blocked state with a repair/retry action.
+- [ ] Move review and verification gates into Core.
+  - Review the actual diff for an exact commit SHA, not only the assistant response tail.
+  - Run verification through Core and retain command, working directory, revision, exit code, duration, and bounded output/artifact references.
+  - Invalidate approval and test evidence whenever the reviewed revision changes.
+  - A model saying `review_passed` or `tests_passed` must not release a gated edge without recorded evidence.
+- [ ] Make feature dependencies executable state.
+  - Store the planned feature registry and prerequisites, dispatch every newly ready feature, and block completion while a planned feature is missing or undispatched.
+  - Ensure dependent workspaces contain prerequisite commits before work begins.
+- [ ] Add an explicit correction loop.
+  - Bind each finding to an owning task/revision, request a correction, wait for a new revision, and rerun review and tests.
+  - Cap correction cycles and finish as Blocked with remaining findings when the cap is reached.
+- [ ] Integrate safely.
+  - Assemble approved commits in an isolated integration worktree, run the combined suite, and update the root only if the tested revision still matches expectations.
+  - Serialize root-mutating operations across UI and MCP callers and durably record conflict/stash recovery information.
 
-- [ ] Add restart recovery and reconciliation for interrupted Core processes.
-- [ ] Bound concurrency, output size, run duration, retries, and recursive sub-harness depth.
-- [ ] Redact secrets from persisted prompts, outputs, logs, and exports.
-- [ ] Add graph/executor unit tests, fake-provider integration tests, protocol compatibility tests, and Desktop interaction/accessibility tests.
-- [ ] Document the file format, execution semantics, failure behavior, and extension points.
+## P1 — make workflow authoring understandable
 
-### Current vertical-slice boundary
+- [ ] Validate continuously in the editor and before Save/Run.
+  - Show issues on the affected block/edge and provide a summary with focus actions.
+  - Validate empty labels/prompts, duplicate block and edge IDs, route labels, loop targets, unreachable blocks, unsupported template variables, provider/model/agent availability, and invalid watchdog layouts.
+  - Preview rendered inputs and explain `all`, `any`, sync, async, loop, and AI-route behavior in plain language.
+- [ ] Protect editing work.
+  - Warn before switching workflow, mode, root, or closing with unsaved changes.
+  - Resolve optimistic-save conflicts with Reload, Compare, and Save as copy.
+  - Add undo/redo, duplicate workflow/block, copy/paste, and import/export with schema migration and secret redaction.
+- [ ] Improve canvas navigation and accessibility.
+  - Add pan/zoom, fit-to-content, auto-layout, minimap for large graphs, multi-select, alignment, and keyboard connection editing.
+  - Provide an equivalent ordered/list editor so the feature is usable without pointer drag or SVG interaction.
+  - Keep focus visible and announce validation and run-state changes to assistive technology.
+- [ ] Make configuration explicit.
+  - Expose reasoning, timeout, retry policy, concurrency, run duration, token/cost budget, and output/log limits.
+  - Resolve defaults from provider descriptor metadata and verify model availability at run time.
+  - Warn when a workflow depends on an unavailable provider, agent preset, MCP server, or model.
 
-AI Workflows execute dependency-aware graphs with fan-out, joins, persistent block sessions, and MCP-created task worktrees. The example delivery pipeline is experimental: its review/test gates and correction loop are prompt instructions, not enforced execution guarantees. Independent watchdog startup and failed-block continuation have focused test coverage; complete delivery, child-task recovery, and Core restart recovery are not yet established. Checked items above describe available primitives, not end-to-end reliability.
+## P1 — make runs observable and controllable
 
-## Reliability backlog — required before unattended delivery
+- [ ] Add a real run-history selector instead of implicitly displaying the first matching run.
+  - Show run ID/version, input summary, start/end/duration, status, definition revision, and resource usage.
+  - Pin active runs above completed runs and make multiple simultaneous runs explicit.
+  - Support compare, duplicate/rerun, delete/export, and rerun from a selected block using a frozen definition snapshot.
+- [ ] Add a chronological execution timeline.
+  - Stream block attempts, dependency decisions, prompts/responses, provider/tool activity, timers, retries, permission/input pauses, child-task links, and cancellation.
+  - Paginate large logs; store bounded artifact references rather than up to 500 entries of 200 KB each.
+  - Show why a block is waiting, what it is waiting on, and its next scheduled action.
+- [ ] Add safe manual controls.
+  - Retry failed block, resume paused block, cancel block/subtree/run, answer a question, resolve permission, and open the owned task/session.
+  - Disable actions that are stale or unsafe and explain why.
+  - Confirm destructive actions with the affected active runs and retained history clearly listed.
+- [ ] Make appended input deterministic.
+  - Persist an inbox entry before acknowledging it, show which dispatcher(s) will receive it, and retain delivery status.
+  - Do not silently send to every active root block; require a configured intake block when the choice is ambiguous.
 
-Preserve the visible multi-block workflow. AI performs planning, implementation, and review; Core owns durable state, scheduling, retries, dependency tracking, and verification gates. Implement P0 before treating the example as an unattended development workflow.
+## P1 — resource and data safety
 
-### P0 — correct execution and recovery
+- [ ] Enforce limits on active runs, block attempts, dynamic stack size, loop count, child tasks, wall-clock duration, prompt/output bytes, logs, and total tokens/cost.
+- [ ] Keep full provider responses out of in-memory aggregation when only a bounded handoff is allowed; store large outputs as artifacts with size/type metadata.
+- [ ] Redact secrets and sensitive tool content before persisting prompts, outputs, logs, handoffs, and exports; document retention and deletion behavior.
+- [ ] Validate all persisted nested fields at the protocol boundary instead of accepting structurally incomplete blocks, edges, runs, or agent references.
+- [ ] Add audit fields for actor/source (`user`, scheduler, timer, model tool call), request ID, attempt ID, and definition version to every state transition.
 
-- [x] Replace model-dependent watchdog recovery with a Core-managed scheduler, exposed as a visible watchdog block. Start the main flow independently; reset signals must never block it or replay completed work. Schedule recovery even when the watchdog's provider cannot execute any AI turn. Core now polls provider usage without starting a model session, persists the next check time, and signals eligible failed stages directly. Restart reconciliation remains below.
-- [ ] Classify quota exhaustion, transient transport failures, permission/input pauses, cancelled work, and permanent errors. Retry only eligible failures with bounded attempts/backoff; surface exhausted retries and actionable blockers. Use the reset of the actually exhausted quota window, accounting for multiple windows, stale timestamps, and unavailable usage data.
-  - Implemented: typed persisted failure classification, quota/transport recognition, bounded configurable recoveries, transport backoff, pause/permanent-error exclusion, exhausted-window reset selection, missing-data fallback, and visible retry state. Remaining: native typed failure reasons from every provider adapter and interactive pause resolution.
-- [ ] Persist a versioned execution plan, feature/task registry, stage attempts, session IDs, timer ownership, checkpoints, and pending commands. On Core restart, reconcile running providers and existing worktrees before resuming; do not recreate completed tasks or merges.
-  - Implemented: immutable definition snapshot on each new run, persistent session references, watchdog deadlines, and recovery attempt counts. Remaining: feature/operation registry and restart reconciliation.
-- [ ] Add idempotency keys and durable operation records for task creation, prompt delivery, timers, and merges. Recover safely when a tool succeeds but its reply or the next checkpoint is lost. Session memory and instructions to avoid duplicates are insufficient.
-- [ ] Implement dependency scheduling for feature tasks, not just graph blocks. Revisit deferred features as prerequisites complete, launch every newly ready feature, and prevent completion while any planned feature remains undispatched. Give dependent workspaces the required prerequisite commits.
-- [ ] Implement an explicit review/test correction loop. Findings route back to the responsible task; await corrections and rerun review/tests against the updated commit before releasing later stages. A stage returning a BLOCKED report must not count as successful delivery.
-- [ ] Validate typed handoffs in Core. Preserve original request, acceptance criteria, feature IDs, task/worktree IDs, dependencies, integration order, commit SHAs, findings, and test evidence across every stage. Reject malformed or incomplete outputs instead of silently forwarding them.
-- [ ] Recover child-task sessions as well as workflow blocks. Track ownership and distinguish actively working, waiting on a timer, quota-blocked, awaiting user input, failed, and unresponsive sessions. Detect stalls with explicit deadlines/liveness evidence; never steer a healthy task repeatedly on reset signals.
-  - Implemented: persist directly created child ownership before starting its session; recover recognized quota/transport errors in the same child session with a three-attempt budget; skip finished, archived, healthy, permission-paused, and timer-waiting children. Preserve worktrees on workflow startup failures and include registered children in Stop. Remaining: nested task ownership, liveness/deadline detection, and startup failures before a provider session exists.
-- [ ] Use one scheduler for automatic graph execution, MCP-started descendants, retries, and appended prompts. Enforce concurrency limits consistently and prevent duplicate dispatch, competing session writers, and downstream execution before joins are satisfied.
-- [ ] Make cancellation authoritative across blocks, child tasks, in-flight tool commands, and timers. A timer firing concurrently with Stop must not resurrect work. Separate main-flow completion from watchdog-service lifetime so a completed delivery is visible while monitoring remains active.
-  - Implemented: cancellation includes registered child workspaces; recovery checks cancellation before sending and interrupts a recovery send if cancellation raced it. Timer-store mutations are serialized across instances in the same Core process to prevent parallel writes losing timers. Workspace cancellation invalidates in-flight timer lookups and interrupts racing deliveries; duplicate timer delivery is suppressed in-process. General tool races, crash-safe delivery, and separate delivery/service status remain open.
+## P2 — harden the product surface
 
-### P0 — verified changes and safe integration
+- [ ] Add reusable sub-workflows with version pinning and bounded nesting after restart/idempotency guarantees are complete.
+- [ ] Add deterministic transform and approval blocks so formatting and human gates do not consume model calls.
+- [ ] Add workflow templates and a guided first-run example that avoids hard-coded provider/model IDs.
+- [ ] Add metrics for completion rate, intervention count, retries, duplicate-prevention events, elapsed time, token/cost use, and failures by category.
+- [ ] Document the file format, scheduler and join semantics, async/loop behavior, recovery guarantees, limits, security model, and extension points in `docs/`.
+- [ ] Rename internal `Harness*` concepts to `Workflow*` at protocol/UI boundaries, with a compatibility migration, so product and code terminology do not diverge.
 
-- [ ] Make review inspect actual task diffs and repository context, not only assistant response tails. Bind findings and approval to exact commit SHAs; invalidate approval after any correction.
-- [ ] Run verification commands through Core-owned execution and retain command, working directory, commit SHA, exit code, and output references. Enforce pass/fail gates from recorded results rather than a model-generated tests_passed flag. Report unavailable tests as unverified.
-- [ ] Assemble approved feature commits in an isolated integration worktree and run the combined build/test suite there. Route integration failures back through correction and re-review. Update the root only after the integrated revision passes; detect root changes since validation.
-- [ ] Serialize every root-mutating integration operation across UI and MCP callers. Track conflicts, stash ownership, and partially completed merges durably; preserve unrelated user edits and expose recovery steps without automatic destructive cleanup.
+## Test plan required for completion
 
-### P1 — usable and economical operation
+- [ ] Expand graph tests into table-driven coverage for validation, routing, all/any joins, loops, unreachable paths, async edges, malformed templates, and stable ordering.
+- [ ] Add store tests for concurrent writers, stale versions, partial writes, backups, migrations, retention, corruption, and large-state limits.
+- [ ] Add scheduler property/state-machine tests asserting legal transitions, dependency safety, exactly-once claims, bounded concurrency, and terminal-state invariants.
+- [ ] Add fake-provider integration tests for permission and user-input pauses, quota reset, transient retry, timer continuation, append/steer, child-task recovery, and cancellation races.
+- [ ] Add protocol compatibility tests for old definitions/runs and migration failures.
+- [ ] Add Desktop tests for validation, dirty-state protection, save conflicts, run selection, multiple active runs, pause resolution, keyboard-only editing, and screen-reader status announcements.
+- [ ] Run a disposable-repository end-to-end scenario covering plan, parallel implementation, rejected review, correction, failed then passing tests, integration conflict, successful merge, restart, and cancellation.
 
-- [ ] Provide a complete execution timeline with streamed provider/tool activity, inputs/results, timer deadlines and revivals, retry reasons, handoffs, and child-task links. Current prompt/final-answer logs are not a full transcript. Persist paginated history with explicit retention/redaction and export support.
-- [ ] Show why each block is waiting and its next scheduled action. Expose retry, resume, permission resolution, cancellation, and recovery failures in View mode.
-  - Implemented: watchdog deadline, stage retry count, owned child-task IDs, child retry counts/errors, and recovery log entries in the block inspector.
-- [ ] Make hot-added requests durable and route them to main-flow intake rather than the watchdog. Update the feature plan without resetting active sessions, losing task ownership, or silently dropping new work after intake completes.
-- [ ] Validate model availability against the live ACP provider before execution. Select role-specific models and reasoning through provider metadata; a local model cache is not proof of availability. Avoid using AI calls for deterministic scheduling or formatting.
-- [ ] Add run budgets for model usage, active tasks, retries, polling, and elapsed time. Keep the watchdog inexpensive and make its post-delivery lifetime configurable.
+## Definition of done
 
-### Acceptance scenarios and effectiveness checks
-
-- [ ] Prove with deterministic fake-provider tests that main work starts immediately while the watchdog sleeps, repeated reset signals do not duplicate work, and failed child sessions resume without rerunning successful stages.
-- [ ] Inject crashes before and after task creation, tool replies, checkpoint writes, timer firing, and merge completion; verify restart reconciliation and cancellation races.
-- [ ] Exercise a dependent multi-feature plan through review rejection, fixes, failing tests, re-review, integration conflicts, and successful delivery. Assert no missing features and no merge of an unverified revision.
-- [ ] Exercise unavailable models, exhausted primary/secondary quota windows, malformed handoffs, blocked permissions, and unresponsive agents. Verify useful UI state and bounded recovery.
-- [ ] Run a small real-provider end-to-end delivery in a disposable repository after deterministic checks. Existing isolated unit tests do not establish full pipeline reliability.
-- [ ] Compare representative small fixes and independent multi-feature work against a single implementation agent plus reviewer. Record elapsed time, model usage, intervention count, defects, and merge failures; use the larger workflow only where measured benefits justify its overhead.
+A workflow is reliable enough for unattended use only when Core can restart at any persisted transition without duplicating an external side effect; every active or paused run has an honest, actionable UI state; cancellation prevents resurrection; concurrency and budgets are enforced across all launch paths; and review/test/merge gates are based on recorded repository evidence rather than model assertions. Until then, the examples in `examples/workflows/` should remain labeled experimental.
