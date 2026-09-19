@@ -26,7 +26,7 @@ The current vertical slice is useful: definitions and run snapshots are Core-own
   - Define async-edge completion precisely and ensure background work cannot outlive a terminal run unnoticed.
 - [ ] Make cancellation authoritative and race-safe.
   - [x] Persist cancellation intent first, invalidate scheduled attempts/timers, interrupt sessions and child tasks, then record cleanup results.
-  - Check cancellation immediately before and after every provider/tool side effect.
+  - [x] Check cancellation immediately before and after every provider/tool side effect.
   - [x] Report partial cancellation failures instead of swallowing all interrupt errors.
   - Add a distinct state for a completed main flow with a still-running watchdog, or stop the watchdog automatically when delivery is terminal.
 - [ ] Model pauses instead of converting them into generic failure.
