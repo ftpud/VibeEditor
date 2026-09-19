@@ -75,24 +75,44 @@ describe("HarnessRunner", () => {
     } finally { await runner.cancel(run.id, async () => release()); release(); }
   });
 
-  it("runs a Core watchdog independently without an AI session and cancels its sleep", async () => {
+  it("stops a sleeping Core watchdog when delivery succeeds", async () => {
     const state = await mkdtemp(path.join(os.tmpdir(), "core-watchdog-"));
     const store = new HarnessStore("/workspace", state); const definition = await store.create("Core watchdog");
     await store.update({ ...definition, blocks: ["watchdog", "main"].map((id) => ({ id, label: id, prompt: "work", type: "prompt" as const, watchdog: id === "watchdog", position: { x: 0, y: 0 } })), edges: [] });
     const runner = new HarnessRunner(store, () => undefined);
     const usage = vi.fn(async () => ({ supported: false }));
     const run = await runner.start(definition.id, "work", async (block, _prompt, runtime) => block.watchdog ? runner.watch(runtime.runId, block.id, usage) : session("complete"));
-    try {
-      await vi.waitFor(async () => {
-        const current = (await store.runs())[0]!;
-        expect(current.blocks.find((b) => b.blockId === "main")?.status).toBe("succeeded");
-        expect(current.blocks.find((b) => b.blockId === "watchdog")?.waitingUntil).toBeTruthy();
-        expect(current.blocks.find((b) => b.blockId === "watchdog")?.sessionId).toBeUndefined();
-      });
-    } finally { await runner.cancel(run.id, async () => undefined); }
+    await vi.waitFor(async () => expect((await store.runs())[0]?.status).toBe("succeeded"));
+    const completed = (await store.runs())[0]!;
+    expect(completed.blocks.find((b) => b.blockId === "main")?.status).toBe("succeeded");
+    const watchdog = completed.blocks.find((b) => b.blockId === "watchdog")!;
+    expect(watchdog.status).toBe("succeeded");
+    expect(watchdog.waitingUntil).toBeUndefined();
+    expect(watchdog.sessionId).toBeUndefined();
+    expect(watchdog.log?.some((entry) => entry.message === "Core watchdog stopped because delivery reached a terminal state")).toBe(true);
     await vi.waitFor(() => expect(runner.isActive(run.id)).toBe(false));
     expect(usage).toHaveBeenCalledOnce();
   });
+
+  it("stops the Core watchdog when delivery fails permanently", async () => {
+    const state = await mkdtemp(path.join(os.tmpdir(), "terminal-workflow-watchdog-"));
+    const store = new HarnessStore("/workspace", state); const definition = await store.create("Terminal watchdog");
+    await store.update({ ...definition, blocks: [
+      { id: "watchdog", label: "watchdog", prompt: "", type: "prompt", watchdog: true, position: { x: 0, y: 0 } },
+      { id: "main", label: "main", prompt: "work", type: "prompt", position: { x: 0, y: 0 } }
+    ], edges: [] });
+    const runner = new HarnessRunner(store, () => undefined);
+    const run = await runner.start(definition.id, "work", async (block, _prompt, runtime) => {
+      if (block.watchdog) return runner.watch(runtime.runId, block.id, async () => ({ supported: false }));
+      throw new Error("Invalid delivery request");
+    });
+    await vi.waitFor(async () => expect((await store.runs())[0]?.status).toBe("failed"));
+    const completed = (await store.runs())[0]!;
+    expect(completed.blocks.find((block) => block.blockId === "watchdog")?.status).toBe("succeeded");
+    expect(completed.blocks.find((block) => block.blockId === "main")?.failureReason).toBe("permanent");
+    await vi.waitFor(() => expect(runner.isActive(run.id)).toBe(false));
+  });
+
   it("runs the pipeline beside a sleeping watchdog and resumes failures without replaying completed stages", async () => {
     const state = await mkdtemp(path.join(os.tmpdir(), "workflow-watchdog-"));
     const store = new HarnessStore("/workspace", state); const definition = await store.create("Independent watchdog");

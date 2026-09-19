@@ -63,20 +63,28 @@ export class HarnessRunner {
     const state = execution?.run.blocks.find((item) => item.blockId === blockId);
     if (!execution || !state) throw new Error("Workflow is no longer active");
     this.log(state, "lifecycle", "Core watchdog started; no AI session or model tokens required");
-    while (this.isActive(runId)) {
+    while (this.isActive(runId) && !this.deliveryIsTerminal(execution)) {
       const snapshot = await usage().catch(() => undefined);
       if (!this.isActive(runId)) break;
+      if (this.deliveryIsTerminal(execution)) break;
       state.waitingUntil = nextWatchdogReset(snapshot);
       this.log(state, "lifecycle", `Core watchdog sleeping until ${state.waitingUntil}`);
       await this.update(execution.run);
-      while (this.isActive(runId) && Date.now() < Date.parse(state.waitingUntil)) await new Promise((resolve) => setTimeout(resolve, 250));
+      while (this.isActive(runId) && !this.deliveryIsTerminal(execution) && Date.now() < Date.parse(state.waitingUntil)) await new Promise((resolve) => setTimeout(resolve, 250));
       if (!this.isActive(runId)) break;
+      if (this.deliveryIsTerminal(execution)) break;
       await recoverChildren();
       if (!this.isActive(runId)) break;
       const { resumed } = await this.resumeFailed(runId, blockId);
       this.log(state, "lifecycle", `Core watchdog woke; queued ${resumed.length} eligible failed stages`);
       state.waitingUntil = undefined;
       await this.update(execution.run);
+    }
+    if (this.isActive(runId) && this.deliveryIsTerminal(execution)) {
+      state.waitingUntil = undefined;
+      this.log(state, "lifecycle", "Core watchdog stopped because delivery reached a terminal state");
+      await this.update(execution.run);
+      return { model: "core", reasoning: "none", status: "done", messages: [] };
     }
     throw new Cancelled();
   }
@@ -312,6 +320,17 @@ export class HarnessRunner {
   private async update(run: HarnessRun): Promise<void> {
     const snapshot = structuredClone(run); const next = this.updateQueue.then(async () => { await this.store.saveRun(snapshot); this.changed(run.id); });
     this.updateQueue = next.catch(() => undefined); await next;
+  }
+
+  private deliveryIsTerminal(execution: ActiveExecution): boolean {
+    return execution.blocks.filter((block) => !block.watchdog).every((block) => {
+      const state = execution.run.blocks.find((item) => item.blockId === block.id);
+      if (!state) return false;
+      if (["succeeded", "skipped", "cancelled"].includes(state.status)) return true;
+      if (state.status !== "failed") return false;
+      const reason = state.failureReason ?? classifyWorkflowFailure(state.error ?? "");
+      return !isRetryableFailure(reason) || (state.recoveryAttempts ?? 0) >= this.recovery.maxAttempts;
+    });
   }
 
   private assertActive(runId: string): void { if (!this.isActive(runId)) throw new Cancelled(); }
