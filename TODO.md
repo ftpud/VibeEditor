@@ -24,11 +24,11 @@ The current vertical slice is useful: definitions and run snapshots are Core-own
   - Serialize writes to a persistent block session so two upstream blocks cannot steer/send concurrently.
   - Make block claiming atomic and use attempt IDs to ignore stale completions.
   - Define async-edge completion precisely and ensure background work cannot outlive a terminal run unnoticed.
-- [ ] Make cancellation authoritative and race-safe.
+- [x] Make cancellation authoritative and race-safe.
   - [x] Persist cancellation intent first, invalidate scheduled attempts/timers, interrupt sessions and child tasks, then record cleanup results.
   - [x] Check cancellation immediately before and after every provider/tool side effect.
   - [x] Report partial cancellation failures instead of swallowing all interrupt errors.
-  - Add a distinct state for a completed main flow with a still-running watchdog, or stop the watchdog automatically when delivery is terminal.
+  - [x] Add a distinct state for a completed main flow with a still-running watchdog, or stop the watchdog automatically when delivery is terminal.
 - [ ] Model pauses instead of converting them into generic failure.
   - Add block/run states for `awaiting_permission`, `awaiting_user_input`, `waiting_timer`, and `retry_scheduled`.
   - Route permission requests and provider questions to Desktop with run/block/session ownership.
