@@ -147,6 +147,36 @@ describe("HarnessRunner", () => {
     expect(append).toHaveBeenCalledWith(expect.objectContaining({ id: "draft" }), "Address the review", expect.objectContaining({ workspace: "/sessions/draft" }));
   });
 
+  it("keeps an asynchronous AI-routed loop active across repeated session appends", async () => {
+    const state = await mkdtemp(path.join(os.tmpdir(), "workflow-async-cycle-")); const store = new HarnessStore("/workspace", state); const definition = await store.create("Cycle");
+    const blocks: HarnessBlock[] = [
+      { id: "start", type: "prompt", label: "START", prompt: "Start", position: { x: 0, y: 0 } },
+      { id: "check", type: "prompt", label: "CHECK", prompt: "Check", routing: "ai", position: { x: 200, y: 0 } },
+      { id: "exit", type: "prompt", label: "EXIT", prompt: "Exit", position: { x: 400, y: 0 } }
+    ];
+    await store.update({ ...definition, blocks, edges: [
+      { id: "check", from: "start", to: "check", label: "CHECK", execution: "async" },
+      { id: "continue", from: "check", to: "start", label: "CONTINUE", loop: true, execution: "async" },
+      { id: "exit", from: "check", to: "exit", label: "EXIT", execution: "async" }
+    ] });
+    const runner = new HarnessRunner(store, () => undefined); let starts = 0; let checks = 0;
+    const append = vi.fn(async (block: HarnessBlock, _prompt: string, runtime: { runId: string; blockId: string; workspace: string }) => {
+      if (block.id === "start") { starts += 1; await runner.runStack(runtime.runId, runtime.blockId, [`check ${starts}`], "CHECK"); }
+      if (block.id === "check") { checks += 1; await runner.runStack(runtime.runId, runtime.blockId, [checks < 3 ? `continue ${checks}` : "done"], checks < 3 ? "CONTINUE" : "EXIT"); }
+      return session(`${block.id} complete`);
+    });
+    const dispatch = vi.fn(async (block: HarnessBlock, _prompt: string, runtime: { runId: string; blockId: string; started(workspace: string): Promise<void> }) => {
+      await runtime.started(`/sessions/${block.id}`);
+      if (block.id === "check") { checks += 1; await runner.runStack(runtime.runId, runtime.blockId, ["continue initial"], "CONTINUE"); }
+      return session(`${block.id} complete`);
+    });
+    await runner.start(definition.id, "go", dispatch, "test", append);
+    await vi.waitFor(async () => { const current = (await store.runs())[0]; if (current?.status === "failed") throw new Error(current.error); expect(current?.status).toBe("succeeded"); });
+    expect({ starts, checks }).toEqual({ starts: 2, checks: 3 });
+    expect(append.mock.calls.map((call) => call[0].id)).toEqual(["start", "check", "start", "check"]);
+    expect(dispatch.mock.calls.map((call) => call[0].id)).toEqual(["start", "check", "exit"]);
+  });
+
   it("returns immediately across an async connection but keeps the workflow active", async () => {
     const state = await mkdtemp(path.join(os.tmpdir(), "workflow-async-")); const store = new HarnessStore("/workspace", state); const definition = await store.create("Async");
     const blocks: HarnessBlock[] = [{ id: "planner", type: "prompt", label: "Planner", prompt: "Plan", position: { x: 0, y: 0 } }, { id: "worker", type: "task", label: "Worker", prompt: "{{input}}", position: { x: 200, y: 0 } }];
