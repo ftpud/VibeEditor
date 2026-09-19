@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import type { HarnessBlock, HarnessBlockIteration, HarnessEdge, HarnessRun, HarnessLogEntry, HarnessChildTask, AiSession } from "@remote-ide/protocol";
+import type { HarnessBlock, HarnessBlockIteration, HarnessEdge, HarnessRun, HarnessLogEntry, HarnessChildTask, HarnessFailureReason, AiSession } from "@remote-ide/protocol";
 import { CoreError } from "./errors.js";
 import { validateHarness, renderHarnessPrompt } from "./harness-graph.js";
 import type { HarnessStore } from "./harnesses.js";
@@ -9,6 +9,7 @@ type Dispatch = (block: HarnessBlock, prompt: string, context: { runId: string; 
 type Append = (block: HarnessBlock, prompt: string, context: { runId: string; blockId: string; workspace: string }) => Promise<AiSession>;
 type Interrupt = (provider: string, context: { runId: string; blockId: string; workspace?: string }) => Promise<void>;
 type ActiveExecution = { run: HarnessRun; blocks: HarnessBlock[]; edges: HarnessEdge[]; outputs: Map<string, string>; dispatch: Dispatch; append: Append; defaultProvider: string; background: Set<Promise<void>> };
+type RecoveryPolicy = { maxAttempts: number; transportBackoffMs: number };
 
 export class HarnessRunner {
   private readonly cancelled = new Set<string>();
@@ -16,7 +17,7 @@ export class HarnessRunner {
   private readonly activeProviders = new Map<string, Set<string>>();
   private readonly executions = new Map<string, ActiveExecution>();
   private updateQueue = Promise.resolve();
-  constructor(private readonly store: HarnessStore, private readonly changed: (runId: string) => void, private readonly concurrency = 4) {}
+  constructor(private readonly store: HarnessStore, private readonly changed: (runId: string) => void, private readonly concurrency = 4, private readonly recovery: RecoveryPolicy = { maxAttempts: 3, transportBackoffMs: 5_000 }) {}
 
   isActive(runId: string): boolean { return this.activeRuns.has(runId) && !this.cancelled.has(runId); }
 
@@ -36,11 +37,12 @@ export class HarnessRunner {
       const state = execution.run.blocks.find((block) => block.blockId === child.blockId)!;
       try {
         const session = await inspect(child);
-        if (!session || session.status !== "error" || child.recoveryAttempts >= 3) continue;
+        if (!session || session.status !== "error" || child.recoveryAttempts >= this.recovery.maxAttempts) continue;
         const reason = session.messages.filter((message) => message.role === "error" || message.role === "assistant").slice(-2).map((message) => message.text).join("\n");
-        if (!isRecoverableWorkflowError(reason) || !this.isActive(runId)) continue;
-        child.recoveryAttempts += 1; child.recoveryError = undefined;
-        this.log(state, "lifecycle", `Resuming child ${child.taskId}, attempt ${child.recoveryAttempts}/3`);
+        child.failureReason = classifyWorkflowFailure(reason);
+        if (!isRetryableFailure(child.failureReason) || !retryDue(child.retryAt) || !this.isActive(runId)) continue;
+        child.recoveryAttempts += 1; child.recoveryError = undefined; child.retryAt = nextRetryAt(child.failureReason, child.recoveryAttempts, this.recovery);
+        this.log(state, "lifecycle", `Resuming child ${child.taskId} after ${child.failureReason}, attempt ${child.recoveryAttempts}/${this.recovery.maxAttempts}`);
         await this.update(execution.run);
         if (!this.isActive(runId)) return;
         await resume(child, session);
@@ -125,10 +127,11 @@ export class HarnessRunner {
     const resumed: string[] = [];
     for (const state of execution.run.blocks) {
       if (state.status !== "failed" || state.blockId === callerId) continue;
-      if (!isRecoverableWorkflowError(state.error ?? "") || (state.recoveryAttempts ?? 0) >= 3) continue;
+      state.failureReason ??= classifyWorkflowFailure(state.error ?? "");
+      if (!isRetryableFailure(state.failureReason) || !retryDue(state.retryAt) || (state.recoveryAttempts ?? 0) >= this.recovery.maxAttempts) continue;
       state.recoveryAttempts = (state.recoveryAttempts ?? 0) + 1;
-      state.status = "queued"; state.error = undefined; state.completedAt = undefined;
-      this.log(state, "lifecycle", "Watchdog requested continuation in the existing session"); resumed.push(state.blockId);
+      state.status = "queued"; state.error = undefined; state.completedAt = undefined; state.retryAt = undefined;
+      this.log(state, "lifecycle", `Watchdog requested continuation after ${state.failureReason} (${state.recoveryAttempts}/${this.recovery.maxAttempts})`); resumed.push(state.blockId);
     }
     await this.update(execution.run);
     return { resumed };
@@ -199,7 +202,8 @@ export class HarnessRunner {
           const block = blocks.find((item) => item.id === blockId)!; state.status = "running"; changed = true;
           const task = this.executeBlock(run, block, blocks, edges, outputs, dispatch, defaultProvider).catch(async (error) => {
             if (this.cancelled.has(run.id) || !blocks.some((item) => item.watchdog)) throw error;
-            state.status = "failed"; state.error = error instanceof Error ? error.message : String(error);
+            state.status = "failed"; state.error = error instanceof Error ? error.message : String(error); state.failureReason = classifyWorkflowFailure(error);
+            state.retryAt = nextRetryAt(state.failureReason, state.recoveryAttempts ?? 0, this.recovery);
             this.log(state, "error", state.error); await this.update(run);
           }).then(() => blockId);
           running.set(blockId, task);
@@ -219,7 +223,7 @@ export class HarnessRunner {
       run.status = "succeeded"; run.completedAt = new Date().toISOString(); await this.update(run);
     } catch (error) {
       const cancelled = error instanceof Cancelled || this.cancelled.has(run.id); run.status = cancelled ? "cancelled" : "failed"; run.error = cancelled ? undefined : error instanceof Error ? error.message : String(error); run.completedAt = new Date().toISOString();
-      for (const block of run.blocks) if (["running", "queued", "waiting"].includes(block.status)) { block.status = cancelled ? "cancelled" : block.status === "running" ? "failed" : "cancelled"; if (block.status === "failed") block.error = run.error; }
+      for (const block of run.blocks) if (["running", "queued", "waiting"].includes(block.status)) { block.status = cancelled ? "cancelled" : block.status === "running" ? "failed" : "cancelled"; if (block.status === "failed") { block.error = run.error; block.failureReason = classifyWorkflowFailure(error); } }
       await this.update(run);
     } finally { this.cancelled.delete(run.id); this.activeRuns.delete(run.id); this.activeProviders.delete(run.id); this.executions.delete(run.id); }
   }
@@ -261,7 +265,7 @@ export class HarnessRunner {
         }
       }
       const output = count === 1 ? collected[0] ?? "" : collected.map((value, index) => `## Stack item ${index + 1}\n${value}`).join("\n\n");
-      outputs.set(block.id, output); state.output = output.slice(-200_000); state.status = "succeeded"; state.completedAt = new Date().toISOString(); this.log(state, "lifecycle", "Completed successfully"); await this.update(run);
+      outputs.set(block.id, output); state.output = output.slice(-200_000); state.status = "succeeded"; state.completedAt = new Date().toISOString(); state.failureReason = undefined; state.retryAt = undefined; this.log(state, "lifecycle", "Completed successfully"); await this.update(run);
     } finally { const active = this.activeProviders.get(run.id); active?.delete(state.provider); }
   }
 
@@ -302,7 +306,24 @@ export function connectedInput(blockId: string, harnessInput: string, blocks: Ha
 class Cancelled extends Error {}
 
 export function isRecoverableWorkflowError(message: string): boolean {
-  return /usage limit|rate.?limit|quota|ECONNRESET|ETIMEDOUT|EAI_AGAIN|temporarily unavailable|HTTP 503|HTTP 429/i.test(message);
+  return isRetryableFailure(classifyWorkflowFailure(message));
+}
+
+export function classifyWorkflowFailure(error: unknown): HarnessFailureReason {
+  if (error instanceof Cancelled) return "cancelled";
+  const message = error instanceof Error ? error.message : String(error);
+  if (/usage limit|rate.?limit|quota|HTTP 429/i.test(message)) return "quota_exhausted";
+  if (/ECONNRESET|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN|socket hang up|temporarily unavailable|HTTP 50[234]/i.test(message)) return "transient_transport";
+  if (/permission|approval required|request_permission/i.test(message)) return "permission_required";
+  if (/requires user input|user_prompt|awaiting user input/i.test(message)) return "user_input_required";
+  if (/cancelled|canceled|aborted/i.test(message)) return "cancelled";
+  return "permanent";
+}
+
+function isRetryableFailure(reason: HarnessFailureReason): boolean { return reason === "quota_exhausted" || reason === "transient_transport"; }
+function retryDue(value?: string): boolean { return value === undefined || Date.parse(value) <= Date.now(); }
+function nextRetryAt(reason: HarnessFailureReason, attempts: number, policy: RecoveryPolicy): string | undefined {
+  return reason === "transient_transport" ? new Date(Date.now() + policy.transportBackoffMs * 2 ** attempts).toISOString() : undefined;
 }
 
 export function nextWatchdogReset(usage?: AiUsage, now = Date.now()): string {
