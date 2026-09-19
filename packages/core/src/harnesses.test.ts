@@ -57,4 +57,13 @@ describe("HarnessStore", () => {
     await writeFile(target, "not json", "utf8");
     expect((await store.list())[0]?.name).toBe("Flow");
   });
+
+  it("turns orphaned active runs into honest terminal state after restart", async () => {
+    const state = await mkdtemp(path.join(os.tmpdir(), "remote-ide-harness-state-")); const store = new HarnessStore("/workspace", state);
+    await store.saveRun({ id: "run", harnessId: "flow", harnessVersion: 1, input: "work", status: "running", createdAt: "now", blocks: [{ blockId: "done", status: "succeeded" }, { blockId: "active", status: "running" }, { blockId: "later", status: "waiting" }] });
+    const recovered = await new HarnessStore("/workspace", state).recoverInterruptedRuns();
+    expect(recovered).toHaveLength(1); expect(recovered[0]).toMatchObject({ status: "failed", error: expect.stringContaining("Core restarted") });
+    expect(recovered[0]?.blocks.map((block) => block.status)).toEqual(["succeeded", "failed", "cancelled"]);
+    expect(await new HarnessStore("/workspace", state).recoverInterruptedRuns()).toEqual([]);
+  });
 });
