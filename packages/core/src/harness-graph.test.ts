@@ -22,4 +22,13 @@ describe("harness graph", () => {
     const routed = harness([{ id: "a", from: "plan", to: "build" }]); routed.blocks[0]!.routing = "ai";
     expect(validateHarness(routed).issues).toMatchObject([{ code: "route-label", blockId: "plan", edgeId: "a" }]);
   });
+  it("rejects incomplete blocks, bad templates, duplicate edge IDs, and invalid loops", () => {
+    const invalid = harness([
+      { id: "same", from: "plan", to: "build" },
+      { id: "same", from: "plan", to: "build" },
+      { id: "loop", from: "plan", to: "build", loop: true }
+    ]);
+    invalid.blocks[0] = { ...invalid.blocks[0]!, label: " ", prompt: "{{unknown}} {{blocks.missing.output}}" };
+    expect(validateHarness(invalid).issues.map((issue) => issue.code)).toEqual(expect.arrayContaining(["empty-label", "unknown-template", "missing-template-block", "duplicate-edge-id", "duplicate-edge", "invalid-loop"]));
+  });
 });

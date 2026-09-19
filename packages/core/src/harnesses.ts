@@ -67,6 +67,24 @@ export class HarnessStore {
     });
   }
 
+  async recoverInterruptedRuns(): Promise<HarnessRun[]> {
+    return this.mutate(async () => {
+      const runs = await this.runs(); const recovered: HarnessRun[] = []; const now = new Date().toISOString();
+      for (const run of runs) {
+        if (!["queued", "running", "waiting"].includes(run.status)) continue;
+        run.status = "failed"; run.completedAt = now; run.error = "Core restarted before this workflow completed. Inspect existing sessions and tasks, then start a new run or clean up the preserved work.";
+        for (const block of run.blocks) {
+          if (!["queued", "running", "waiting"].includes(block.status)) continue;
+          block.status = block.status === "running" ? "failed" : "cancelled"; block.completedAt = now;
+          if (block.status === "failed") { block.error = run.error; block.failureReason = "permanent"; }
+        }
+        recovered.push(structuredClone(run));
+      }
+      if (recovered.length) await this.writeJson("runs.json", { schemaVersion: SCHEMA_VERSION, runs } satisfies RunFile);
+      return recovered;
+    });
+  }
+
   private async persist(harnesses: HarnessDefinition[]): Promise<void> { await this.writeJson("index.json", { schemaVersion: SCHEMA_VERSION, definitions: harnesses } satisfies DefinitionFile); }
 
   private async readJson<T>(name: string, fallback: T): Promise<T> {

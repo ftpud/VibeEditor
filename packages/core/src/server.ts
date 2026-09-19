@@ -140,6 +140,7 @@ export async function createServer(host: string, port: number, workspacePath: st
   const usefulFiles = new UsefulFilesStore(rootWorkspace);
   const agents = new AgentsStore(rootWorkspace);
   const harnesses = new HarnessStore(rootWorkspace);
+  await harnesses.recoverInterruptedRuns();
   const rootContexts = new Map<string, { tasks: WorkspaceTaskStore; usefulFiles: UsefulFilesStore; agents: AgentsStore; harnesses: HarnessStore }>();
   rootContexts.set(roots.primary().id, { tasks, usefulFiles, agents, harnesses });
   const contextFor = (rootId: string) => {
@@ -678,7 +679,11 @@ async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStor
     case "agents.delete": await agents.delete(request.payload.scope, request.payload.name, workspacePath); return {};
     case "harnesses.list": return { harnesses: await harnesses.list() };
     case "harnesses.create": return { harness: await harnesses.create(request.payload.name) };
-    case "harnesses.update": return { harness: await harnesses.update(request.payload.harness) };
+    case "harnesses.update": {
+      const validation = validateHarness(request.payload.harness);
+      if (!validation.valid && request.payload.harness.blocks.length) throw new CoreError("INVALID_REQUEST", validation.issues.map((issue) => issue.message).join("; "));
+      return { harness: await harnesses.update(request.payload.harness) };
+    }
     case "harnesses.delete": await harnesses.delete(request.payload.id); return {};
     case "harnesses.validate": return validateHarness(request.payload.harness);
     case "harnesses.runs": return { runs: await harnesses.runs(request.payload.harnessId) };

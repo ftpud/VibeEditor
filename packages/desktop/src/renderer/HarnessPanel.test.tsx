@@ -145,4 +145,13 @@ describe("HarnessPanel", () => {
     fireEvent.click(screen.getByText("Execution log (1)"));
     expect(log?.open).toBe(true);
   });
+
+  it("shows validation issues and blocks an invalid save", async () => {
+    const harness: HarnessDefinition = { id: "harness-1", name: "Flow", version: 1, createdAt: "now", updatedAt: "now", blocks: [{ id: "a", type: "prompt", label: "Plan", prompt: "", position: { x: 20, y: 20 } }], edges: [] };
+    const onValidate = vi.fn().mockResolvedValue({ valid: false, issues: [{ code: "empty-prompt", blockId: "a", message: "Plan needs a prompt" }] });
+    render(<HarnessPanel harnesses={[harness]} runs={[]} providers={[]} agents={[]} onValidate={onValidate} onCreate={vi.fn()} onSave={vi.fn()} onDelete={vi.fn()} onRun={vi.fn()} onCancelRun={vi.fn()} onError={vi.fn()} />);
+    fireEvent.change(await screen.findByLabelText("Workflow name"), { target: { value: "Changed" } });
+    expect((await screen.findByRole("alert")).textContent).toContain("Plan needs a prompt");
+    expect((screen.getByRole("button", { name: "Save" }) as HTMLButtonElement).disabled).toBe(true);
+  });
 });
