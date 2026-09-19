@@ -9,7 +9,7 @@ The current vertical slice is useful: definitions and run snapshots are Core-own
 - [ ] Replace the JSON read/modify/write store with a serialized, transactional repository.
   - [x] Prevent concurrent definition updates and run updates from overwriting each other.
   - [x] Use optimistic concurrency (the submitted definition `version`) for definition saves and return a conflict that Desktop can resolve.
-  - Persist definitions and runs separately, validate a schema version on read, quarantine corrupt records, and retain an atomic backup.
+  - [x] Persist definitions and runs separately, validate a schema version on read, quarantine corrupt records, and retain an atomic backup.
   - [x] Make retention explicit per workspace and per workflow instead of silently keeping the newest 100 runs globally.
 - [ ] Persist a versioned execution plan and operation journal for each run.
   - Record block attempts, dependency decisions, selected routes, session/workspace IDs, timers, child tasks, tool commands, and terminal outcomes.
