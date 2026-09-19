@@ -161,10 +161,17 @@ export class HarnessRunner {
     if (caller.routing === "ai" && path === undefined) throw new Error("path is required because this block uses AI-selected routing");
     if (path !== undefined) callerState.selectedRoute = path;
     const targets = outgoing.map((edge) => ({ edge, block: execution.blocks.find((block) => block.id === edge.to)! })).filter((target) => Boolean(target.block));
-    const launch = async (target: HarnessBlock): Promise<void> => {
+    const launch = async (target: HarnessBlock, waitForCurrentTurn = false): Promise<void> => {
       this.assertActive(runId);
       const state = execution.run.blocks.find((item) => item.blockId === target.id)!;
-      if (["queued", "waiting"].includes(state.status) && !state.workspace) {
+      // An async loop may reach a block while its previous invocation is still
+      // returning from the tool call that launched the loop. Let that invocation
+      // settle first so it cannot overwrite this turn's `running` state.
+      while (waitForCurrentTurn && state.status === "running") {
+        this.assertActive(runId);
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+      if (["queued", "waiting", "skipped"].includes(state.status) && !state.workspace) {
         state.status = "running"; await this.update(execution.run);
         await this.executeBlock(execution.run, target, execution.blocks, execution.edges, execution.outputs, execution.dispatch, execution.defaultProvider, inputs);
         await this.executeRevivedDescendants(execution, target.id); return;
@@ -178,7 +185,7 @@ export class HarnessRunner {
     for (const target of targets) {
       if ((target.edge.execution ?? "sync") === "sync") { await launch(target.block); continue; }
       let task!: Promise<void>;
-      task = launch(target.block).catch(async (error) => {
+      task = launch(target.block, true).catch(async (error) => {
         if (error instanceof Cancelled || this.cancelled.has(runId)) return;
         const state = execution.run.blocks.find((item) => item.blockId === target.block.id)!;
         state.status = "failed"; state.error = error instanceof Error ? error.message : String(error); state.completedAt = new Date().toISOString(); this.log(state, "error", state.error); await this.update(execution.run);
