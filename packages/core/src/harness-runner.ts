@@ -1,11 +1,11 @@
 import crypto from "node:crypto";
-import type { HarnessBlock, HarnessBlockIteration, HarnessEdge, HarnessRun, HarnessLogEntry, HarnessChildTask, HarnessFailureReason, AiSession } from "@remote-ide/protocol";
+import type { HarnessBlock, HarnessBlockIteration, HarnessEdge, HarnessRun, HarnessLogEntry, HarnessChildTask, HarnessFailureReason, HarnessPauseStatus, AiSession } from "@remote-ide/protocol";
 import { CoreError } from "./errors.js";
 import { validateHarness, renderHarnessPrompt } from "./harness-graph.js";
 import type { HarnessStore } from "./harnesses.js";
 import type { AiUsage } from "@remote-ide/acp";
 
-type Dispatch = (block: HarnessBlock, prompt: string, context: { runId: string; blockId: string; iteration: number; started(workspace: string): Promise<void>; assertActive(): void }) => Promise<AiSession>;
+type Dispatch = (block: HarnessBlock, prompt: string, context: { runId: string; blockId: string; iteration: number; started(workspace: string): Promise<void>; activity(session: AiSession, waitingUntil?: string): Promise<void>; assertActive(): void }) => Promise<AiSession>;
 type Append = (block: HarnessBlock, prompt: string, context: { runId: string; blockId: string; workspace: string }) => Promise<AiSession>;
 type Interrupt = (provider: string, context: { runId: string; blockId: string; workspace?: string }) => Promise<void>;
 type ActiveExecution = { run: HarnessRun; blocks: HarnessBlock[]; edges: HarnessEdge[]; outputs: Map<string, string>; dispatch: Dispatch; append: Append; defaultProvider: string; background: Set<Promise<void>> };
@@ -104,11 +104,11 @@ export class HarnessRunner {
     const persisted = (await this.store.runs()).find((item) => item.id === runId);
     const execution = this.executions.get(runId); const run = execution?.run ?? persisted;
     if (!run) throw new CoreError("FILE_NOT_FOUND", "Harness run does not exist");
-    if (!["queued", "running", "waiting"].includes(run.status)) return run;
+    if (!isActiveStatus(run.status)) return run;
     if (this.activeRuns.has(runId)) this.cancelled.add(runId);
     const active = run.blocks.filter((block) => block.status === "running" && block.provider);
     const completedAt = new Date().toISOString(); run.status = "cancelled"; run.completedAt = completedAt; run.error = undefined;
-    for (const block of run.blocks) if (["queued", "running", "waiting"].includes(block.status)) { block.status = "cancelled"; block.completedAt = completedAt; block.error = undefined; }
+    for (const block of run.blocks) if (isActiveStatus(block.status)) { block.status = "cancelled"; block.completedAt = completedAt; block.error = undefined; }
     run.cleanupErrors = undefined; await this.update(run);
     const targets = [
       ...active.map((block) => ({ label: `block ${block.blockId}`, provider: block.provider!, context: { runId, blockId: block.blockId, workspace: block.workspace } })),
@@ -147,11 +147,11 @@ export class HarnessRunner {
     if (!execution.blocks.find((block) => block.id === callerId)?.watchdog) throw new Error("Only a watchdog can request recovery");
     const resumed: string[] = [];
     for (const state of execution.run.blocks) {
-      if (state.status !== "failed" || state.blockId === callerId) continue;
+      if (!["failed", "retry_scheduled"].includes(state.status) || state.blockId === callerId) continue;
       state.failureReason ??= classifyWorkflowFailure(state.error ?? "");
       if (!isRetryableFailure(state.failureReason) || !retryDue(state.retryAt) || (state.recoveryAttempts ?? 0) >= this.recovery.maxAttempts) continue;
       state.recoveryAttempts = (state.recoveryAttempts ?? 0) + 1;
-      state.status = "queued"; state.error = undefined; state.completedAt = undefined; state.retryAt = undefined;
+      state.status = "queued"; state.error = undefined; state.completedAt = undefined; state.retryAt = undefined; execution.run.status = "running";
       this.log(state, "lifecycle", `Watchdog requested continuation after ${state.failureReason} (${state.recoveryAttempts}/${this.recovery.maxAttempts})`); resumed.push(state.blockId);
     }
     await this.update(execution.run);
@@ -220,7 +220,7 @@ export class HarnessRunner {
     const outputs = new Map<string, string>(); run.status = "running"; run.startedAt = new Date().toISOString(); const background = new Set<Promise<void>>(); this.executions.set(run.id, { run, blocks, edges, outputs, dispatch, append, defaultProvider, background }); await this.update(run);
     const running = new Map<string, Promise<{ blockId: string; error?: unknown }>>();
     try {
-      while (run.blocks.some((block) => ["queued", "waiting", "running"].includes(block.status))) {
+      while (running.size || run.blocks.some((block) => isActiveStatus(block.status))) {
         if (this.cancelled.has(run.id)) throw new Cancelled();
         let changed = false;
         for (const blockId of order) {
@@ -233,8 +233,10 @@ export class HarnessRunner {
           const block = blocks.find((item) => item.id === blockId)!; state.status = "running"; changed = true;
           const task = this.executeBlock(run, block, blocks, edges, outputs, dispatch, defaultProvider).then(() => ({ blockId }), async (error) => {
             if (this.cancelled.has(run.id) || !blocks.some((item) => item.watchdog)) return { blockId, error };
-            state.status = "failed"; state.error = error instanceof Error ? error.message : String(error); state.failureReason = classifyWorkflowFailure(error);
+            state.error = error instanceof Error ? error.message : String(error); state.failureReason = classifyWorkflowFailure(error);
             state.retryAt = nextRetryAt(state.failureReason, state.recoveryAttempts ?? 0, this.recovery);
+            state.status = isRetryableFailure(state.failureReason) ? "retry_scheduled" : "failed";
+            run.status = this.runActivityStatus(run);
             this.log(state, "error", state.error); await this.update(run);
             return { blockId };
           });
@@ -256,13 +258,13 @@ export class HarnessRunner {
       run.status = "succeeded"; run.completedAt = new Date().toISOString(); await this.update(run);
     } catch (error) {
       const cancelled = error instanceof Cancelled || this.cancelled.has(run.id); run.status = cancelled ? "cancelled" : "failed"; run.error = cancelled ? undefined : error instanceof Error ? error.message : String(error); run.completedAt = new Date().toISOString();
-      for (const block of run.blocks) if (["running", "queued", "waiting"].includes(block.status)) { block.status = cancelled ? "cancelled" : block.status === "running" ? "failed" : "cancelled"; if (block.status === "failed") { block.error = run.error; block.failureReason = classifyWorkflowFailure(error); } }
+      for (const block of run.blocks) if (isActiveStatus(block.status)) { block.status = cancelled ? "cancelled" : block.status === "running" ? "failed" : "cancelled"; if (block.status === "failed") { block.error = run.error; block.failureReason = classifyWorkflowFailure(error); } }
       await this.update(run);
     } finally {
       await Promise.allSettled([...running.values(), ...background]);
       if (this.cancelled.has(run.id)) {
         const completedAt = run.completedAt ?? new Date().toISOString(); run.status = "cancelled"; run.completedAt = completedAt; run.error = undefined;
-        for (const block of run.blocks) if (["running", "queued", "waiting"].includes(block.status)) { block.status = "cancelled"; block.completedAt = completedAt; block.error = undefined; }
+        for (const block of run.blocks) if (isActiveStatus(block.status)) { block.status = "cancelled"; block.completedAt = completedAt; block.error = undefined; }
         await this.update(run);
       }
       this.cancelled.delete(run.id); this.activeRuns.delete(run.id); this.activeProviders.delete(run.id); this.executions.delete(run.id);
@@ -289,11 +291,12 @@ export class HarnessRunner {
         const iteration: HarnessBlockIteration | undefined = state.iterations ? { index: index + 1, status: "running", startedAt: new Date().toISOString(), prompt } : undefined; if (iteration) state.iterations!.push(iteration); await this.update(run);
         try {
           const started = async (workspace: string) => { this.assertActive(run.id); state.workspace = workspace; if (iteration) iteration.workspace = workspace; await this.update(run); this.assertActive(run.id); };
+          const activity = async (session: AiSession, waitingUntil?: string) => this.recordActivity(run, state, session, waitingUntil);
           const execution = this.executions.get(run.id);
           this.assertActive(run.id);
           const settled = state.workspace && execution
             ? await execution.append(block, prompt, { runId: run.id, blockId: block.id, workspace: state.workspace })
-            : await dispatch(block, prompt, { runId: run.id, blockId: block.id, iteration: index + 1, started, assertActive: () => this.assertActive(run.id) });
+            : await dispatch(block, prompt, { runId: run.id, blockId: block.id, iteration: index + 1, started, activity, assertActive: () => this.assertActive(run.id) });
           this.assertActive(run.id);
           state.sessionId = settled.id; if (iteration) iteration.sessionId = settled.id;
           this.log(state, "response", settled.messages.filter((message) => message.role === "assistant").at(-1)?.text ?? "Provider turn completed without an assistant response");
@@ -308,7 +311,7 @@ export class HarnessRunner {
       }
       const output = count === 1 ? collected[0] ?? "" : collected.map((value, index) => `## Stack item ${index + 1}\n${value}`).join("\n\n");
       this.assertActive(run.id);
-      outputs.set(block.id, output); state.output = output.slice(-200_000); state.status = "succeeded"; state.completedAt = new Date().toISOString(); state.failureReason = undefined; state.retryAt = undefined; this.log(state, "lifecycle", "Completed successfully"); await this.update(run);
+      outputs.set(block.id, output); state.output = output.slice(-200_000); state.status = "succeeded"; state.completedAt = new Date().toISOString(); state.failureReason = undefined; state.retryAt = undefined; state.waitingUntil = undefined; state.pendingPermission = undefined; state.question = undefined; this.log(state, "lifecycle", "Completed successfully"); await this.update(run);
     } finally { const active = this.activeProviders.get(run.id); active?.delete(state.provider); }
   }
 
@@ -320,6 +323,23 @@ export class HarnessRunner {
   private async update(run: HarnessRun): Promise<void> {
     const snapshot = structuredClone(run); const next = this.updateQueue.then(async () => { await this.store.saveRun(snapshot); this.changed(run.id); });
     this.updateQueue = next.catch(() => undefined); await next;
+  }
+
+  private async recordActivity(run: HarnessRun, state: HarnessRun["blocks"][number], session: AiSession, waitingUntil?: string): Promise<void> {
+    this.assertActive(run.id);
+    const status: "running" | HarnessPauseStatus = session.pendingPermission ? "awaiting_permission" : waitingUntil ? "waiting_timer" : session.status === "user_prompt" ? "awaiting_user_input" : "running";
+    const question = status === "awaiting_user_input" ? session.messages.filter((message) => message.role === "assistant").at(-1)?.text : undefined;
+    const permission = status === "awaiting_permission" ? session.pendingPermission : undefined;
+    if (state.status === status && state.waitingUntil === waitingUntil && state.question === question && JSON.stringify(state.pendingPermission) === JSON.stringify(permission) && state.sessionId === session.id) return;
+    const previous = state.status; state.status = status; state.sessionId = session.id; state.waitingUntil = waitingUntil; state.question = question; state.pendingPermission = permission;
+    run.status = this.runActivityStatus(run);
+    if (previous !== status) this.log(state, "lifecycle", status === "running" ? "Provider resumed work" : `Paused: ${status.replaceAll("_", " ")}`);
+    await this.update(run);
+  }
+
+  private runActivityStatus(run: HarnessRun): HarnessRun["status"] {
+    for (const status of ["awaiting_permission", "awaiting_user_input", "waiting_timer", "retry_scheduled"] as const) if (run.blocks.some((block) => block.status === status)) return status;
+    return "running";
   }
 
   private deliveryIsTerminal(execution: ActiveExecution): boolean {
@@ -360,6 +380,9 @@ export function connectedInput(blockId: string, harnessInput: string, blocks: Ha
 }
 
 class Cancelled extends Error {}
+
+const activeStatuses = new Set(["queued", "running", "waiting", "awaiting_permission", "awaiting_user_input", "waiting_timer", "retry_scheduled"]);
+function isActiveStatus(status: string): boolean { return activeStatuses.has(status); }
 
 export function isRecoverableWorkflowError(message: string): boolean {
   return isRetryableFailure(classifyWorkflowFailure(message));
