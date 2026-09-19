@@ -194,6 +194,14 @@ describe("HarnessRunner", () => {
     expect(interrupt.mock.calls).toEqual([["codex", { runId: "active", blockId: "left" }], ["claude", { runId: "active", blockId: "right" }]]);
   });
 
+  it("persists partial cancellation failures for the user", async () => {
+    const state = await mkdtemp(path.join(os.tmpdir(), "remote-ide-harness-cancel-error-")); const store = new HarnessStore("/workspace", state);
+    await store.saveRun({ id: "active", harnessId: "flow", harnessVersion: 1, input: "task", status: "running", createdAt: "now", blocks: [{ blockId: "left", status: "running", provider: "codex" }, { blockId: "right", status: "running", provider: "claude" }] });
+    const cancelled = await new HarnessRunner(store, () => undefined).cancel("active", async (provider) => { if (provider === "claude") throw new Error("provider offline"); });
+    expect(cancelled.cleanupErrors).toEqual(["Could not stop block right: provider offline"]);
+    expect((await store.runs())[0]?.cleanupErrors).toEqual(cancelled.cleanupErrors);
+  });
+
   it("fans out ready blocks concurrently and waits for all before joining", async () => {
     const state = await mkdtemp(path.join(os.tmpdir(), "remote-ide-harness-fanout-")); const store = new HarnessStore("/workspace", state); const definition = await store.create("Fan out");
     const blocks = ["root", "left", "right", "join"].map((id) => ({ id, type: "prompt" as const, label: id, prompt: "{{input}}", position: { x: 0, y: 0 } }));

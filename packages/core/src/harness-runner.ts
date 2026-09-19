@@ -96,9 +96,15 @@ export class HarnessRunner {
     const active = run.blocks.filter((block) => block.status === "running" && block.provider);
     const completedAt = new Date().toISOString(); run.status = "cancelled"; run.completedAt = completedAt; run.error = undefined;
     for (const block of run.blocks) if (["queued", "running", "waiting"].includes(block.status)) { block.status = "cancelled"; block.completedAt = completedAt; block.error = undefined; }
-    await this.update(run);
-    await Promise.all(active.map((block) => interrupt(block.provider!, { runId, blockId: block.blockId, workspace: block.workspace }).catch(() => undefined)));
-    await Promise.all((run.children ?? []).map((child) => interrupt(child.provider, { runId, blockId: child.blockId, workspace: child.workspace }).catch(() => undefined)));
+    run.cleanupErrors = undefined; await this.update(run);
+    const targets = [
+      ...active.map((block) => ({ label: `block ${block.blockId}`, provider: block.provider!, context: { runId, blockId: block.blockId, workspace: block.workspace } })),
+      ...(run.children ?? []).map((child) => ({ label: `child task ${child.taskId}`, provider: child.provider, context: { runId, blockId: child.blockId, workspace: child.workspace } }))
+    ];
+    const cleanup = await Promise.allSettled(targets.map((target) => interrupt(target.provider, target.context)));
+    run.cleanupErrors = cleanup.flatMap((result, index) => result.status === "rejected" ? [`Could not stop ${targets[index]!.label}: ${result.reason instanceof Error ? result.reason.message : String(result.reason)}`] : []);
+    if (!run.cleanupErrors.length) run.cleanupErrors = undefined;
+    else await this.update(run);
     return run;
   }
 
