@@ -20,10 +20,7 @@ export class HarnessStore {
   }
 
   async list(): Promise<HarnessDefinition[]> {
-    const value = await this.readJson<unknown>("index.json", { schemaVersion: SCHEMA_VERSION, definitions: [] });
-    const definitions = Array.isArray(value) ? value : isRecord(value) && value.schemaVersion === SCHEMA_VERSION && Array.isArray(value.definitions) ? value.definitions : undefined;
-    if (!definitions) throw new CoreError("READ_FAILED", "Could not list harnesses: unsupported or malformed state schema");
-    return definitions.filter(isHarness).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+    return (await this.readRecords("index.json", "definitions", isHarness)).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   }
 
   async create(name: string): Promise<HarnessDefinition> {
@@ -53,10 +50,7 @@ export class HarnessStore {
   async read(id: string): Promise<HarnessDefinition> { const harness = (await this.list()).find((item) => item.id === id); if (!harness) throw new CoreError("FILE_NOT_FOUND", "Harness does not exist"); return harness; }
 
   async runs(harnessId?: string): Promise<HarnessRun[]> {
-    const value = await this.readJson<unknown>("runs.json", { schemaVersion: SCHEMA_VERSION, runs: [] });
-    const runs = Array.isArray(value) ? value : isRecord(value) && value.schemaVersion === SCHEMA_VERSION && Array.isArray(value.runs) ? value.runs : undefined;
-    if (!runs) throw new CoreError("READ_FAILED", "Could not list harness runs: unsupported or malformed state schema");
-    return runs.filter(isRun).filter((run) => !harnessId || run.harnessId === harnessId).slice(0, RUNS_PER_WORKFLOW);
+    return (await this.readRecords("runs.json", "runs", isRun)).filter((run) => !harnessId || run.harnessId === harnessId).slice(0, RUNS_PER_WORKFLOW);
   }
 
   async saveRun(run: HarnessRun): Promise<void> {
@@ -87,14 +81,39 @@ export class HarnessStore {
 
   private async persist(harnesses: HarnessDefinition[]): Promise<void> { await this.writeJson("index.json", { schemaVersion: SCHEMA_VERSION, definitions: harnesses } satisfies DefinitionFile); }
 
-  private async readJson<T>(name: string, fallback: T): Promise<T> {
+  private async readRecords<T>(name: string, field: "definitions" | "runs", valid: (value: unknown) => value is T): Promise<T[]> {
     const target = path.join(this.directory, name);
-    try { return JSON.parse(await readFile(target, "utf8")) as T; }
-    catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return fallback;
-      try { return JSON.parse(await readFile(`${target}.bak`, "utf8")) as T; }
-      catch { throw new CoreError("READ_FAILED", `Could not read workflow state ${name}: ${message(error)}`); }
+    let currentError: unknown;
+    for (const candidate of [target, `${target}.bak`]) {
+      let raw: string;
+      try { raw = await readFile(candidate, "utf8"); }
+      catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+        currentError ??= error; continue;
+      }
+      try {
+        const parsed: unknown = JSON.parse(raw);
+        const records = Array.isArray(parsed) ? parsed : isRecord(parsed) && parsed.schemaVersion === SCHEMA_VERSION && Array.isArray(parsed[field]) ? parsed[field] : undefined;
+        if (!records) throw new Error("unsupported or malformed state schema");
+        const accepted = records.filter(valid); const rejected = records.filter((record) => !valid(record));
+        if (rejected.length) await this.quarantine(name, "Records failed schema validation", rejected);
+        return accepted;
+      } catch (error) {
+        currentError ??= error;
+        await this.quarantine(name, message(error), raw);
+      }
     }
+    if (!currentError) return [];
+    throw new CoreError("READ_FAILED", `Could not read workflow state ${name}: ${message(currentError)}`);
+  }
+
+  private async quarantine(source: string, reason: string, value: unknown): Promise<void> {
+    const serialized = typeof value === "string" ? value : JSON.stringify(value);
+    const fingerprint = crypto.createHash("sha256").update(`${source}\0${serialized}`).digest("hex").slice(0, 16);
+    const directory = path.join(this.directory, "quarantine");
+    await mkdir(directory, { recursive: true });
+    await writeFile(path.join(directory, `${source}.${fingerprint}.json`), `${JSON.stringify({ schemaVersion: SCHEMA_VERSION, source, reason, quarantinedAt: new Date().toISOString(), value }, null, 2)}\n`, { encoding: "utf8", flag: "wx" })
+      .catch((error) => { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; });
   }
 
   private async writeJson(name: string, value: unknown): Promise<void> {
