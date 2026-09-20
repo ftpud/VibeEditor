@@ -19,7 +19,7 @@ The current vertical slice is useful: definitions and run snapshots are Core-own
   - Load `queued`, `running`, and `waiting` runs; inspect provider sessions, timers, task worktrees, and recorded operations before deciding to resume, pause, fail, or complete them.
   - Never recreate a task, resend a completed prompt, rerun a successful block, or repeat a merge during recovery.
   - Mark unrecoverable orphaned state with a specific reason and offer Resume or Cancel; do not leave a persisted run that only looks active.
-- [ ] Use one scheduler for graph blocks, `workflow_run_stack`, appended input, retries, and timer continuations.
+- [x] Use one scheduler for graph blocks, `workflow_run_stack`, appended input, retries, and timer continuations.
   - Enforce the concurrency limit across every launch path, not only the initial graph loop.
   - Serialize writes to a persistent block session so two upstream blocks cannot steer/send concurrently.
   - Make block claiming atomic and use attempt IDs to ignore stale completions.

@@ -247,7 +247,7 @@ export async function createServer(host: string, port: number, workspacePath: st
   };
   const aiTimers = new AiTimerService(new AiTimerStore(rootWorkspace), acp, rootWorkspace, aiChanged, (timer, effect) => {
     if (!timer.workflowRunId || !timer.workflowBlockId) return effect();
-    return harnessRunner(roots.primary().id).runOperation(timer.workflowRunId, timer.workflowBlockId, "timer_fire", `timer-fire:${timer.workflowOperationKey ?? timer.id}`, { timerId: timer.id, dueAt: timer.dueAt }, effect);
+    return harnessRunner(roots.primary().id).runTimerOperation(timer.workflowRunId, timer.workflowBlockId, `timer-fire:${timer.workflowOperationKey ?? timer.id}`, { timerId: timer.id, dueAt: timer.dueAt }, effect);
   });
   const recoveryRunner = harnessRunner(roots.primary().id);
   const recoveryDispatch = async (block: HarnessBlock, prompt: string, runtime: Parameters<Parameters<HarnessRunner["start"]>[2]>[2]) => providerOperation(async () => {
