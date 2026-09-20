@@ -16,7 +16,7 @@ export type FileRevision = { identity: string; version: string };
  * Desktop can prove it is safe to talk to a newly deployed Core.
  */
 export type ProtocolCompatibility = { minimum: number; maximum: number };
-export const protocolCompatibility: ProtocolCompatibility = { minimum: 7, maximum: 7 };
+export const protocolCompatibility: ProtocolCompatibility = { minimum: 8, maximum: 8 };
 
 export function protocolRangeIsValid(range: ProtocolCompatibility): boolean {
   return Number.isInteger(range.minimum) && Number.isInteger(range.maximum) && range.minimum > 0 && range.minimum <= range.maximum;
@@ -153,7 +153,7 @@ export type TerminalSessionSnapshot = { terminalId: string; status: "running" | 
 /** Resolution is always against the currently selected workspace. A stale ID means Core no longer owns that process. */
 export type TerminalAttachResult = { state: "available"; session: TerminalSessionSnapshot } | { state: "stale"; reason: "session-unavailable" };
 export type WorkspaceTask = { id: string; name: string; branch: string; baseBranch: string; status: "active" | "finished"; archived: boolean };
-export type { AiAgent, AiAgentPreset, AiCommand, AiConfiguration, AiContentBlock, AiMessage, AiModel, AiMcpServer, AiOption, AiPermissionRequest, AiProvider, AiProviderCapabilities, AiProviderDescriptor, AiSession, AiSettingsLayout, AiSettingsSection, AiStatus, AiTaskSummary, AiUsage } from "@remote-ide/acp";
+export type { AiAgent, AiAgentPreset, AiCommand, AiConfiguration, AiContentBlock, AiFailure, AiFailureKind, AiMessage, AiModel, AiMcpServer, AiOption, AiPermissionRequest, AiProvider, AiProviderCapabilities, AiProviderDescriptor, AiSession, AiSettingsLayout, AiSettingsSection, AiStatus, AiTaskSummary, AiUsage } from "@remote-ide/acp";
 import type { AiAgent, AiAgentPreset, AiConfiguration, AiContentBlock, AiMcpServer, AiModel, AiPermissionRequest, AiProvider, AiProviderDescriptor, AiSession, AiTaskSummary, AiUsage } from "@remote-ide/acp";
 export type UsefulFileScope = "global" | "local";
 export type UsefulFile = { scope: UsefulFileScope; name: string };
@@ -173,8 +173,8 @@ export type HarnessFailureReason = "quota_exhausted" | "transient_transport" | "
 export type HarnessPauseStatus = "awaiting_permission" | "awaiting_user_input" | "waiting_timer" | "retry_scheduled";
 export type HarnessBlockStatus = "queued" | "running" | "succeeded" | "failed" | "cancelled" | "waiting" | "skipped" | HarnessPauseStatus;
 export type HarnessRunStatus = "queued" | "running" | "succeeded" | "failed" | "cancelled" | "waiting" | HarnessPauseStatus;
-export type HarnessBlockRun = { blockId: string; status: HarnessBlockStatus; startedAt?: string; completedAt?: string; prompt?: string; output?: string; error?: string; failureReason?: HarnessFailureReason; retryAt?: string; provider?: AiProvider; sessionId?: string; workspace?: string; selectedRoute?: string; plannedRuns?: number; iterations?: HarnessBlockIteration[]; log?: HarnessLogEntry[]; waitingUntil?: string; recoveryAttempts?: number; pendingPermission?: AiPermissionRequest; question?: string; pauseId?: string };
-export type HarnessChildTask = { taskId: string; blockId: string; provider: AiProvider; workspace: string; recoveryAttempts: number; recoveryError?: string; failureReason?: HarnessFailureReason; retryAt?: string };
+export type HarnessBlockRun = { blockId: string; status: HarnessBlockStatus; startedAt?: string; completedAt?: string; prompt?: string; output?: string; error?: string; failureReason?: HarnessFailureReason; retryAt?: string; retryStartedAt?: string; provider?: AiProvider; sessionId?: string; workspace?: string; selectedRoute?: string; plannedRuns?: number; iterations?: HarnessBlockIteration[]; log?: HarnessLogEntry[]; waitingUntil?: string; recoveryAttempts?: number; pendingPermission?: AiPermissionRequest; question?: string; pauseId?: string };
+export type HarnessChildTask = { taskId: string; blockId: string; provider: AiProvider; workspace: string; recoveryAttempts: number; recoveryError?: string; failureReason?: HarnessFailureReason; retryAt?: string; retryStartedAt?: string };
 export type HarnessRun = { id: string; harnessId: string; harnessVersion: number; definition?: HarnessDefinition; children?: HarnessChildTask[]; input: string; status: HarnessRunStatus; createdAt: string; startedAt?: string; completedAt?: string; blocks: HarnessBlockRun[]; error?: string; cleanupErrors?: string[] };
 export type HttpResponse = { status: number; statusText: string; headers: Record<string, string>; body: string; durationMs: number };
 
