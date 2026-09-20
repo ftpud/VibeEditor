@@ -55,6 +55,7 @@ export class HarnessRunner {
     const work = (async () => {
       if (existing?.status === "intent") {
         const recovered = await reconcile?.();
+        this.assertActive(runId);
         if (recovered === undefined) throw new CoreError("INVALID_REQUEST", `Operation '${idempotencyKey}' has an unresolved outcome; recovery must reconcile it before retrying`);
         // null means reconciliation proved that the external effect never began,
         // so replay is safe. undefined deliberately preserves the blocked intent.
@@ -63,7 +64,7 @@ export class HarnessRunner {
       const operation = existing ?? await this.beginOperation(execution.run, kind, key, blockId, input);
       if (existing) { operation.status = "intent"; operation.error = undefined; operation.result = undefined; operation.input = journalValue(input); operation.updatedAt = new Date().toISOString(); await this.update(execution.run); }
       let result: T;
-      try { result = await effect(); }
+      try { this.assertActive(runId); result = await effect(); this.assertActive(runId); }
       catch (error) { operation.error = (error instanceof Error ? error.message : String(error)).slice(-20_000); operation.updatedAt = new Date().toISOString(); await this.update(execution.run); throw error; }
       await this.finishOperation(execution.run, operation, "succeeded", result); return result;
     })();
