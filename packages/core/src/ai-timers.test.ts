@@ -49,6 +49,22 @@ describe("AI continuation timers", () => {
     expect(replay).toEqual(first); expect(await store.list()).toEqual([first]);
   });
 
+  it("reconciles a crash after workflow timer delivery without sending twice", async () => {
+    const state = await mkdtemp(path.join(os.tmpdir(), "vibe-timer-crash-recovery-")); const store = new AiTimerStore("/workspace", state);
+    const session = { status: "done", model: "gpt-5", reasoning: "low", messages: [] as Array<{ id: string; role: "user"; text: string; timestamp: string }> };
+    const provider = { get: vi.fn(async () => session), send: vi.fn(async (_workspace: string, request: { prompt: string }) => { session.messages.push({ id: "continued", role: "user", text: request.prompt, timestamp: "now" }); return session; }), steer: vi.fn() };
+    let crash = true;
+    const operation = async <T>(_timer: unknown, effect: () => Promise<T>, reconcile: () => Promise<T | null | undefined>): Promise<T> => {
+      if (crash) { crash = false; await effect(); throw new Error("Core crashed before committing timer outcome"); }
+      const recovered = await reconcile(); if (recovered === null) return effect(); if (recovered === undefined) throw new Error("ambiguous timer outcome"); return recovered;
+    };
+    const first = new AiTimerService(store, { get: vi.fn(() => provider) } as never, "/workspace", vi.fn(), operation);
+    await first.schedule("/workspace/task", "codex", "Continue once", 60, { runId: "run", blockId: "worker", operationKey: "timer-once" });
+    await expect(first.fireNext("/workspace/task")).rejects.toThrow("Core crashed"); expect(provider.send).toHaveBeenCalledOnce(); expect(await store.list()).toHaveLength(1);
+    const restarted = new AiTimerService(store, { get: vi.fn(() => provider) } as never, "/workspace", vi.fn(), operation);
+    await expect(restarted.fireNext("/workspace/task")).resolves.toBe(true); expect(provider.send).toHaveBeenCalledOnce(); expect(await store.list()).toEqual([]);
+  });
+
   it("sends the continuation prompt when the timer expires", async () => {
     vi.useFakeTimers();
     try {

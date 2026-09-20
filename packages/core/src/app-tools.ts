@@ -245,7 +245,7 @@ export class AppToolService {
     private readonly rootWorkspace?: string,
     private readonly timers?: Pick<AiTimerService, "schedule" | "scheduleAt" | "next" | "cancelWorkspace">,
     private readonly bridgeWorkspace?: string,
-    private readonly workflow?: { runId: string; blockId: string; runStack(inputs: string[], path?: string): Promise<unknown>; resumeFailed?(): Promise<unknown>; registerChild?(taskId: string, provider: AiProvider, workspace: string): Promise<void>; operation?<T>(kind: "timer_create" | "task_create" | "prompt_delivery" | "merge", key: string, input: unknown, effect: () => Promise<T>, reconcile?: () => Promise<T | undefined>): Promise<T>; recordTool?(name: string, args: Record<string, unknown>, result?: unknown, error?: unknown): Promise<void>; assertActive?(): void }
+    private readonly workflow?: { runId: string; blockId: string; runStack(inputs: string[], path?: string): Promise<unknown>; resumeFailed?(): Promise<unknown>; registerChild?(taskId: string, provider: AiProvider, workspace: string): Promise<void>; operation?<T>(kind: "timer_create" | "task_create" | "prompt_delivery" | "merge", key: string, input: unknown, effect: () => Promise<T>, reconcile?: () => Promise<T | null | undefined>): Promise<T>; recordTool?(name: string, args: Record<string, unknown>, result?: unknown, error?: unknown): Promise<void>; assertActive?(): void }
   ) {}
 
   async call(name: string, args: Record<string, unknown>): Promise<unknown> {
@@ -419,15 +419,15 @@ export class AppToolService {
     throw new Error(`Unknown tool '${name}'`);
   }
 
-  private async reconcileOperation(name: string, args: Record<string, unknown>, key: string): Promise<unknown | undefined> {
+  private async reconcileOperation(name: string, args: Record<string, unknown>, key: string): Promise<unknown | null | undefined> {
     if ((name === "timer_set" || name === "timer_set_at") && this.timers && this.currentProvider) {
       const timer = await this.timers.next(this.currentWorkspace, this.currentProvider);
       if (timer?.workflowOperationKey === key) return { timer_id: timer.id, status: "waiting", due_at: timer.dueAt, continuation_prompt: timer.prompt };
-      return undefined;
+      return null;
     }
     if (name === "task_create" || name === "task_create_and_start") {
       const requested = optionalString(args, "branch") ?? `task/workflow-${crypto.createHash("sha256").update(key).digest("hex").slice(0, 12)}`;
-      const task = (await this.tasks.list()).tasks.find((item) => item.branch === requested); if (!task) return undefined;
+      const task = (await this.tasks.list()).tasks.find((item) => item.branch === requested); if (!task) return null;
       if (name === "task_create") return { task };
       const provider = requiredString(args, "provider") as AiProvider; const session = await this.acp.get(provider).get(this.tasks.taskPath(task.id));
       await this.workflow?.registerChild?.(task.id, provider, this.tasks.taskPath(task.id));
@@ -435,12 +435,12 @@ export class AppToolService {
     }
     if (name === "task_merge") {
       const task = (await this.tasks.list()).tasks.find((item) => item.id === requiredString(args, "task_id"));
-      return task?.status === "finished" ? { task, targetBranch: task.baseBranch } : undefined;
+      return task?.status === "finished" ? { task, targetBranch: task.baseBranch } : task ? null : undefined;
     }
     if (name === "task_append_prompt") {
       const task = (await this.tasks.list()).tasks.find((item) => item.id === requiredString(args, "task_id")); if (!task) return undefined;
       const provider = requiredString(args, "provider") as AiProvider; const prompt = requiredString(args, "prompt"); const session = await this.acp.get(provider).get(this.tasks.taskPath(task.id));
-      if (!session.messages.some((message) => message.role === "user" && message.text === prompt)) return undefined;
+      if (!session.messages.some((message) => message.role === "user" && message.text === prompt)) return null;
       return { task_id: task.id, provider, session: { status: session.status, model: session.model } };
     }
     return undefined;

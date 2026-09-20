@@ -40,7 +40,7 @@ The current vertical slice is useful: definitions and run snapshots are Core-own
 
 ### P0 acceptance tests
 
-- [ ] Inject a crash before and after task creation, prompt send, timer fire, block snapshot, and merge; restarting Core produces exactly one side effect and the correct terminal state.
+- [x] Inject a crash before and after task creation, prompt send, timer fire, block snapshot, and merge; restarting Core produces exactly one side effect and the correct terminal state.
 - [ ] Race Stop against provider completion, timer delivery, retry wake-up, and `workflow_run_stack`; no new work starts after cancellation intent is durable.
 - [ ] Run parallel fan-out plus hot input at the configured concurrency limit; assert no duplicate dispatch and no concurrent writes to one session.
 - [ ] Corrupt or truncate the state file and prove valid definitions/runs remain recoverable with a visible diagnostic.

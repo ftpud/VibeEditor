@@ -83,7 +83,7 @@ export class AiTimerService {
   private readonly delivering = new Set<string>();
   private readonly cancellationEpochs = new Map<string, number>();
 
-  constructor(private readonly store: AiTimerStore, private readonly acp: AcpRegistry, private readonly rootWorkspace: string, private readonly onChanged: (workspace: string) => void, private readonly workflowOperation?: <T>(timer: AiContinuationTimer, effect: () => Promise<T>) => Promise<T>) {}
+  constructor(private readonly store: AiTimerStore, private readonly acp: AcpRegistry, private readonly rootWorkspace: string, private readonly onChanged: (workspace: string) => void, private readonly workflowOperation?: <T>(timer: AiContinuationTimer, effect: () => Promise<T>, reconcile: () => Promise<T | null | undefined>) => Promise<T>) {}
 
   async start(): Promise<void> { for (const timer of await this.store.list()) this.arm(timer); }
 
@@ -145,12 +145,16 @@ export class AiTimerService {
   }
 
   private async fire(timer: AiContinuationTimer, immediately = false): Promise<void> {
-    if (timer.workflowRunId && timer.workflowBlockId && this.workflowOperation) { await this.workflowOperation(timer, () => this.deliver(timer, immediately)); return; }
-    await this.deliver(timer, immediately);
+    const result = timer.workflowRunId && timer.workflowBlockId && this.workflowOperation
+      ? await this.workflowOperation(timer, () => this.deliver(timer, immediately), () => this.reconcileDelivery(timer))
+      : await this.deliver(timer, immediately);
+    if (!result.delivered) return;
+    await this.store.remove(timer.id);
+    this.onChanged(timer.workspace);
   }
 
-  private async deliver(timer: AiContinuationTimer, immediately = false): Promise<void> {
-    if (this.delivering.has(timer.id)) return;
+  private async deliver(timer: AiContinuationTimer, immediately = false): Promise<{ delivered: boolean }> {
+    if (this.delivering.has(timer.id)) return { delivered: false };
     this.delivering.add(timer.id);
     const epoch = this.cancellationEpochs.get(timer.workspace) ?? 0;
     const cancelled = () => (this.cancellationEpochs.get(timer.workspace) ?? 0) !== epoch;
@@ -158,20 +162,26 @@ export class AiTimerService {
     const handle = this.handles.get(timer.id);
     if (immediately && handle) clearTimeout(handle);
     this.handles.delete(timer.id);
-    if (!immediately && new Date(timer.dueAt).getTime() > Date.now()) { this.arm(timer); return; }
+    if (!immediately && new Date(timer.dueAt).getTime() > Date.now()) { this.arm(timer); return { delivered: true }; }
     const current = (await this.store.list()).find((item) => item.id === timer.id);
-    if (!current) return;
-    await this.store.remove(timer.id);
-    this.onChanged(timer.workspace);
+    if (!current) return { delivered: true };
     const manager = this.acp.get(timer.provider);
     const session = await manager.get(timer.workspace);
-      if (cancelled()) return;
+      if (cancelled()) return { delivered: true };
       if (session.status === "in_progress" || session.status === "user_prompt") await manager.steer(timer.workspace, timer.prompt);
       else await manager.send(timer.workspace, { prompt: timer.prompt, configuration: session.configuration ?? { model: session.model, reasoning: session.reasoning }, mcpServers: [appToolServer(this.rootWorkspace, timer.workspace, timer.provider, this.rootWorkspace, timer.workflowRunId && timer.workflowBlockId ? { runId: timer.workflowRunId, blockId: timer.workflowBlockId } : undefined)] });
-      if (cancelled()) await manager.interrupt(timer.workspace);
-    } catch (error) {
-      console.error(`[core] continuation timer failed: ${error instanceof Error ? error.message : String(error)}`);
+      if (cancelled()) { await manager.interrupt(timer.workspace); return { delivered: true }; }
+      return { delivered: true };
     } finally { this.delivering.delete(timer.id); this.onChanged(timer.workspace); }
+  }
+
+  private async reconcileDelivery(timer: AiContinuationTimer): Promise<{ delivered: boolean } | null | undefined> {
+    const current = (await this.store.list()).find((item) => item.id === timer.id);
+    const session = await this.acp.get(timer.provider).get(timer.workspace).catch(() => undefined);
+    if (session?.messages.some((message) => message.role === "user" && message.text === timer.prompt)) {
+      return { delivered: true };
+    }
+    return current ? null : undefined;
   }
 }
 
