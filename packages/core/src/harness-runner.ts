@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import type { HarnessBlock, HarnessBlockAttempt, HarnessBlockIteration, HarnessEdge, HarnessRun, HarnessLogEntry, HarnessChildTask, HarnessFailureReason, HarnessPauseStatus, HarnessOperation, HarnessOperationKind, AiSession } from "@remote-ide/protocol";
 import { AiProviderError, normalizeAiFailure, type AiFailure } from "@remote-ide/acp";
 import { CoreError } from "./errors.js";
-import { validateHarness, renderHarnessPrompt } from "./harness-graph.js";
+import { HarnessSchemaError, parseHarnessData, validateHarness, renderHarnessPrompt } from "./harness-graph.js";
 import type { HarnessStore } from "./harnesses.js";
 import type { AiUsage } from "@remote-ide/acp";
 
@@ -419,14 +419,15 @@ export class HarnessRunner {
           await this.recordCompletedOperation(run, "dependency_decision", `dependency:${blockId}:ready:${state.attempts?.length ?? 0}`, blockId, { decision: "ready" });
           const block = blocks.find((item) => item.id === blockId)!; state.status = "running"; changed = true;
           const task = this.executeBlock(run, block, blocks, edges, outputs, dispatch, defaultProvider).then(() => ({ blockId }), async (error) => {
-            if (this.cancelled.has(run.id) || !blocks.some((item) => item.watchdog)) return { blockId, error };
-            const failure = workflowFailure(error); const reason = failure.kind; let message = failure.message;
+            const failure = workflowFailure(error); const reason = classifyWorkflowFailure(error);
+            if (this.cancelled.has(run.id) || (!blocks.some((item) => item.watchdog) && reason !== "schema_validation")) return { blockId, error };
+            let message = failure.message;
             state.error = message; state.failureReason = reason;
             if (isRetryableFailure(reason)) state.retryStartedAt ??= new Date().toISOString();
             state.retryAt = nextRetryAt(reason, state.recoveryAttempts ?? 0, this.recovery, state.retryStartedAt, failure.retryAfter);
             const cannotSchedule = reason === "transient_transport" && state.retryAt === undefined;
             const exhausted = cannotSchedule || retryBudgetExhausted(state.retryStartedAt, this.recovery) || (state.recoveryAttempts ?? 0) >= this.recovery.maxAttempts;
-            state.status = isRetryableFailure(reason) && !exhausted ? "retry_scheduled" : "failed";
+            state.status = (isRetryableFailure(reason) && !exhausted) || reason === "schema_validation" ? "retry_scheduled" : "failed";
             if (exhausted && isRetryableFailure(reason)) { message += " Automatic retry budget exhausted; retry this block manually after resolving the provider issue."; state.error = message; }
             state.pauseId = state.status === "retry_scheduled" ? crypto.randomUUID() : undefined;
             run.status = this.runActivityStatus(run);
@@ -474,7 +475,10 @@ export class HarnessRunner {
     try {
       for (let index = 0; index < count; index += 1) {
         this.assertActive(run.id);
-        let prompt = renderHarnessPrompt(block.prompt, stack?.[index] ?? blockInput, outputs).replace(/\{\{\s*iteration\s*\}\}/g, String(index + 1));
+        const input = stack?.[index] ?? blockInput;
+        const structuredInput = parseHarnessData(input, block.inputSchema, `${block.label} input`);
+        if (structuredInput !== undefined) state.structuredInput = structuredInput;
+        let prompt = renderHarnessPrompt(block.prompt, input, outputs).replace(/\{\{\s*iteration\s*\}\}/g, String(index + 1));
         if (index === 0 && state.workspace) prompt = `Continue your interrupted work from this session. Inspect prior tool results and preserve recorded task IDs and completed merges; do not duplicate previously completed operations. Original stage instructions:\n\n${prompt}`;
         if (outgoing.length) prompt += `\n\nWorkflow runtime capability: Use workflow_run_stack to send prompts to directly connected blocks and wait for their replies. If a connected block already has a session, the prompt is appended to that same session. Use timer_set to pause yourself and resume this same session later.`;
         if (loopOutgoing.length) prompt += `\nLoop paths return to earlier workflow blocks for another cycle. Use one only when another pass is needed: ${loopOutgoing.map((edge) => edge.label ?? blocks.find((item) => item.id === edge.to)?.label ?? edge.to).join(", ")}.`;
@@ -512,6 +516,8 @@ export class HarnessRunner {
             throw new AiProviderError(settled.failure ?? normalizeAiFailure(message));
           }
           let output = settled.messages.filter((message) => message.role === "assistant").at(-1)?.text ?? "";
+          const structuredOutput = parseHarnessData(output, block.outputSchema, `${block.label} output`);
+          if (structuredOutput !== undefined) state.structuredOutput = structuredOutput;
           collected.push(output); attempt.status = "succeeded"; attempt.completedAt = new Date().toISOString(); await this.finishOperation(run, attemptOperation, "succeeded", { sessionId: settled.id, workspace: state.workspace, output: output.slice(-20_000) }); if (iteration) { iteration.output = output.slice(-200_000); iteration.status = "succeeded"; iteration.completedAt = new Date().toISOString(); } await this.update(run);
         } catch (error) {
           this.log(state, "error", error instanceof Error ? error.message : String(error));
@@ -610,6 +616,15 @@ export class HarnessRunner {
       }
       if (session && (!state.sessionId || state.sessionId === session.id) && session.status === "done") {
         const output = session.messages.filter((message) => message.role === "assistant").at(-1)?.text ?? state.output ?? "";
+        const block = run.definition?.blocks.find((item) => item.id === state.blockId);
+        try {
+          const structuredOutput = parseHarnessData(output, block?.outputSchema, `${block?.label ?? state.blockId} output`);
+          if (structuredOutput !== undefined) state.structuredOutput = structuredOutput;
+        } catch (error) {
+          if (!(error instanceof HarnessSchemaError)) throw error;
+          state.status = "retry_scheduled"; state.error = error.message; state.failureReason = "schema_validation"; state.pauseId = crypto.randomUUID(); state.waitingUntil = undefined;
+          this.log(state, "error", error.message); continue;
+        }
         state.sessionId = session.id; state.output = output.slice(-200_000); state.status = "succeeded"; state.completedAt = now; state.error = undefined; state.failureReason = undefined; state.pauseId = undefined; state.pendingPermission = undefined; state.question = undefined; state.waitingUntil = undefined;
         const attempt = [...(state.attempts ?? [])].reverse().find((item) => item.status === "running");
         if (attempt) { attempt.status = "succeeded"; attempt.completedAt = now; attempt.sessionId = session.id; attempt.workspace ??= state.workspace; const operation = run.operations?.find((item) => item.id === attempt.operationId); if (operation) { operation.status = "succeeded"; operation.updatedAt = now; operation.error = undefined; operation.result = journalValue({ sessionId: session.id, workspace: state.workspace, output: output.slice(-20_000) }); } }
@@ -770,11 +785,13 @@ export function isRecoverableWorkflowError(message: string): boolean {
 
 export function classifyWorkflowFailure(error: unknown): HarnessFailureReason {
   if (error instanceof Cancelled) return "cancelled";
+  if (error instanceof HarnessSchemaError) return "schema_validation";
   return workflowFailure(error).kind;
 }
 
 function workflowFailure(error: unknown): AiFailure {
   if (error instanceof Cancelled) return { kind: "cancelled", message: error.message || "Workflow cancelled" };
+  if (error instanceof HarnessSchemaError) return { kind: "permanent", message: error.message };
   if (error instanceof AiProviderError) return (error as AiProviderError).failure;
   if (isAiFailure(error)) return error;
   return normalizeAiFailure(error);

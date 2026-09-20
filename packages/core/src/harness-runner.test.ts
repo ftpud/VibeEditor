@@ -165,6 +165,20 @@ describe("HarnessRunner", () => {
     expect(worker.error).toContain("Automatic retry budget exhausted");
   });
 
+  it("blocks malformed structured output until the user retries the exact attempt", async () => {
+    const state = await mkdtemp(path.join(os.tmpdir(), "workflow-schema-output-")); const store = new HarnessStore("/workspace", state); const definition = await store.create("Typed output");
+    await store.update({ ...definition, blocks: [{ id: "worker", type: "prompt", label: "Worker", prompt: "work", outputSchema: { type: "object", required: ["summary"], properties: { summary: { type: "string" } } }, position: { x: 0, y: 0 } }], edges: [] });
+    let calls = 0; const runner = new HarnessRunner(store, () => undefined);
+    const run = await runner.start(definition.id, "work", async () => session(++calls === 1 ? "not JSON" : '{"summary":"fixed"}'));
+    await vi.waitFor(async () => expect((await store.runs())[0]?.status).toBe("retry_scheduled"));
+    const blocked = (await store.runs())[0]!; const worker = blocked.blocks[0]!;
+    expect(worker).toMatchObject({ status: "retry_scheduled", failureReason: "schema_validation" });
+    expect(worker.structuredOutput).toBeUndefined();
+    await runner.retryPause(run.id, "worker", worker.pauseId!);
+    await vi.waitFor(async () => expect((await store.runs())[0]?.status).toBe("succeeded"));
+    expect((await store.runs())[0]?.blocks[0]?.structuredOutput).toEqual({ summary: "fixed" });
+  });
+
   it("stops a sleeping Core watchdog when delivery succeeds", async () => {
     const state = await mkdtemp(path.join(os.tmpdir(), "core-watchdog-"));
     const store = new HarnessStore("/workspace", state); const definition = await store.create("Core watchdog");

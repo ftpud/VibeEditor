@@ -1,4 +1,4 @@
-import type { HarnessDefinition, HarnessValidationIssue } from "@remote-ide/protocol";
+import type { HarnessDataSchema, HarnessDefinition, HarnessValidationIssue } from "@remote-ide/protocol";
 
 export function validateHarness(harness: HarnessDefinition): { valid: boolean; issues: HarnessValidationIssue[]; order: string[] } {
   const issues: HarnessValidationIssue[] = [];
@@ -8,6 +8,7 @@ export function validateHarness(harness: HarnessDefinition): { valid: boolean; i
     if (ids.has(block.id)) issues.push({ code: "duplicate-id", blockId: block.id, message: `Block ID '${block.id}' is duplicated` }); ids.add(block.id);
     if (!block.label.trim()) issues.push({ code: "empty-label", blockId: block.id, message: "Every block needs a name" });
     if (!block.watchdog && !block.prompt.trim()) issues.push({ code: "empty-prompt", blockId: block.id, message: `Block '${block.label || block.id}' needs a prompt` });
+    for (const [name, schema] of [["input", block.inputSchema], ["output", block.outputSchema]] as const) if (schema && !validDataSchema(schema)) issues.push({ code: "invalid-schema", blockId: block.id, message: `Block '${block.label || block.id}' has an invalid ${name} schema` });
     for (const match of block.prompt.matchAll(/\{\{\s*([^}]+?)\s*\}\}/g)) {
       const variable = match[1]!; const reference = /^blocks\.([A-Za-z0-9_-]+)\.output$/.exec(variable);
       if (variable === "input" || variable === "iteration") continue;
@@ -43,3 +44,41 @@ function hasNonLoopPath(harness: HarnessDefinition, from: string, to: string): b
 export function renderHarnessPrompt(template: string, input: string, outputs: ReadonlyMap<string, string>): string {
   return template.replace(/\{\{\s*(input|blocks\.([A-Za-z0-9_-]+)\.output)\s*\}\}/g, (_match, key: string, blockId?: string) => key === "input" ? input : outputs.get(blockId!) ?? "");
 }
+
+export function parseHarnessData(value: string, schema: HarnessDataSchema | undefined, label: string): unknown {
+  if (!schema) return undefined;
+  let parsed: unknown;
+  try { parsed = JSON.parse(value); }
+  catch { throw new HarnessSchemaError(`${label} must be valid JSON matching its declared schema`); }
+  const issue = validateHarnessData(parsed, schema);
+  if (issue) throw new HarnessSchemaError(`${label} ${issue}`);
+  return parsed;
+}
+
+export class HarnessSchemaError extends Error {}
+
+export function validateHarnessData(value: unknown, schema: HarnessDataSchema): string | undefined {
+  if (schema.type === "string" && typeof value !== "string") return "must be a string";
+  if (schema.type === "number" && (typeof value !== "number" || !Number.isFinite(value))) return "must be a finite number";
+  if (schema.type === "boolean" && typeof value !== "boolean") return "must be a boolean";
+  if (schema.type === "array") {
+    if (!Array.isArray(value)) return "must be an array";
+    for (const [index, item] of value.entries()) { const issue = schema.items && validateHarnessData(item, schema.items); if (issue) return `item ${index + 1} ${issue}`; }
+  }
+  if (schema.type === "object") {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return "must be an object";
+    const record = value as Record<string, unknown>;
+    for (const key of schema.required ?? []) if (!(key in record)) return `is missing required field '${key}'`;
+    for (const [key, property] of Object.entries(schema.properties ?? {})) if (key in record) { const issue = validateHarnessData(record[key], property); if (issue) return `field '${key}' ${issue}`; }
+  }
+  return undefined;
+}
+
+export function validDataSchema(schema: HarnessDataSchema, depth = 0): boolean {
+  if (depth > 10 || !['string', 'number', 'boolean', 'object', 'array'].includes(schema.type)) return false;
+  if (schema.required && (!Array.isArray(schema.required) || !schema.required.every((key) => typeof key === "string" && key.length > 0))) return false;
+  if (schema.properties && (!isPlainObject(schema.properties) || !Object.values(schema.properties).every((property) => validDataSchema(property, depth + 1)))) return false;
+  return schema.items === undefined || validDataSchema(schema.items, depth + 1);
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> { return Boolean(value) && typeof value === "object" && !Array.isArray(value); }
