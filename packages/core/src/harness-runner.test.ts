@@ -450,6 +450,37 @@ describe("HarnessRunner", () => {
     const completed = (await store.runs())[0]!; expect(maxActive).toBe(1); expect(completed.blocks[0]?.output).toBe("appended");
   });
 
+  it("bounds parallel fan-out and hot input without duplicate dispatches or concurrent session writes", async () => {
+    const state = await mkdtemp(path.join(os.tmpdir(), "workflow-fanout-hot-input-")); const store = new HarnessStore("/workspace", state); const definition = await store.create("Fan out with input");
+    const blocks: HarnessBlock[] = ["root", "left", "right"].map((id) => ({ id, type: "prompt", label: id, prompt: "{{input}}", position: { x: 0, y: 0 } }));
+    await store.update({ ...definition, blocks, edges: [{ id: "root-left", from: "root", to: "left" }, { id: "root-right", from: "root", to: "right" }] });
+    let releaseRoot!: () => void; const rootWaiting = new Promise<void>((resolve) => { releaseRoot = resolve; }); let rootStarted!: () => void; const rootReady = new Promise<void>((resolve) => { rootStarted = resolve; });
+    let active = 0; let maxActive = 0; let rootWrites = 0; let maxRootWrites = 0; const dispatches = new Map<string, number>(); const runner = new HarnessRunner(store, () => undefined, 2);
+    const enter = (blockId: string, initial = false) => { active += 1; maxActive = Math.max(maxActive, active); if (initial) dispatches.set(blockId, (dispatches.get(blockId) ?? 0) + 1); if (blockId === "root") { rootWrites += 1; maxRootWrites = Math.max(maxRootWrites, rootWrites); } };
+    const leave = (blockId: string) => { if (blockId === "root") rootWrites -= 1; active -= 1; };
+    const append = vi.fn(async (block: HarnessBlock, _prompt: string, runtime: { workspace: string }) => {
+      expect(runtime.workspace).toBe("/sessions/root"); enter(block.id);
+      try { await new Promise((resolve) => setTimeout(resolve, 15)); return session(`${block.id}-appended`); }
+      finally { leave(block.id); }
+    });
+    const run = await runner.start(definition.id, "initial", async (block, _prompt, runtime) => {
+      enter(block.id, true);
+      try {
+        if (block.id === "root") { await runtime.started("/sessions/root"); rootStarted(); await rootWaiting; }
+        else await new Promise((resolve) => setTimeout(resolve, 15));
+        return session(`${block.id}-initial`);
+      } finally { leave(block.id); }
+    }, "test", append);
+    await rootReady;
+    await runner.appendInput(run.id, "follow-up");
+    releaseRoot();
+    await vi.waitFor(async () => expect((await store.runs())[0]?.status).toBe("succeeded"));
+    expect(maxActive).toBeLessThanOrEqual(2);
+    expect(maxRootWrites).toBe(1);
+    expect(Object.fromEntries(dispatches)).toEqual({ root: 1, left: 1, right: 1 });
+    expect(append).toHaveBeenCalledOnce();
+  });
+
   it("lets AI select one named path and skips the other paths", async () => {
     const state = await mkdtemp(path.join(os.tmpdir(), "remote-ide-harness-routing-")); const store = new HarnessStore("/workspace", state); const definition = await store.create("Route");
     const blocks = [{ id: "router", type: "prompt" as const, label: "Router", prompt: "Choose", routing: "ai" as const, position: { x: 0, y: 0 } }, { id: "left", type: "prompt" as const, label: "Left", prompt: "{{input}}", position: { x: 0, y: 0 } }, { id: "right", type: "prompt" as const, label: "Right", prompt: "{{input}}", position: { x: 0, y: 0 } }];
