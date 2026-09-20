@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import type { HarnessBlock, HarnessBlockIteration, HarnessEdge, HarnessRun, HarnessLogEntry, HarnessChildTask, HarnessFailureReason, HarnessPauseStatus, AiSession } from "@remote-ide/protocol";
+import type { HarnessBlock, HarnessBlockAttempt, HarnessBlockIteration, HarnessEdge, HarnessRun, HarnessLogEntry, HarnessChildTask, HarnessFailureReason, HarnessPauseStatus, HarnessOperation, HarnessOperationKind, AiSession } from "@remote-ide/protocol";
 import { AiProviderError, normalizeAiFailure, type AiFailure } from "@remote-ide/acp";
 import { CoreError } from "./errors.js";
 import { validateHarness, renderHarnessPrompt } from "./harness-graph.js";
@@ -22,6 +22,7 @@ export class HarnessRunner {
   private readonly activeProviders = new Map<string, Set<string>>();
   private readonly executions = new Map<string, ActiveExecution>();
   private readonly resolvingPauses = new Set<string>();
+  private readonly operationsInFlight = new Map<string, Promise<unknown>>();
   private updateQueue = Promise.resolve();
   private readonly recovery: ResolvedRecoveryPolicy;
   constructor(private readonly store: HarnessStore, private readonly changed: (runId: string) => void, private readonly concurrency = 4, recovery: RecoveryPolicy = { maxAttempts: 3, transportBackoffMs: 5_000 }) {
@@ -35,7 +36,38 @@ export class HarnessRunner {
     if (!execution || !this.isActive(runId)) throw new Error("Workflow is no longer active");
     execution.run.children ??= [];
     if (!execution.run.children.some((item) => item.taskId === child.taskId && item.provider === child.provider)) execution.run.children.push({ ...child, recoveryAttempts: 0 });
+    await this.recordCompletedOperation(execution.run, "child_registration", `child:${child.taskId}:${child.provider}`, child.blockId, { taskId: child.taskId, provider: child.provider, workspace: child.workspace });
     await this.update(execution.run);
+  }
+
+  async runOperation<T>(runId: string, blockId: string, kind: HarnessOperationKind, idempotencyKey: string, input: unknown, effect: () => Promise<T>, reconcile?: () => Promise<T | undefined>): Promise<T> {
+    const execution = this.executions.get(runId);
+    if (!execution || !this.isActive(runId)) throw new Error("Workflow is no longer active");
+    const key = `${blockId}:${idempotencyKey}`; const localKey = `${runId}:${key}`;
+    const existing = execution.run.operations?.find((operation) => operation.idempotencyKey === key);
+    if (existing?.status === "succeeded") return structuredClone(existing.result) as T;
+    const inFlight = this.operationsInFlight.get(localKey); if (inFlight) return await inFlight as T;
+    const work = (async () => {
+      if (existing?.status === "intent") {
+        const recovered = await reconcile?.();
+        if (recovered === undefined) throw new CoreError("INVALID_REQUEST", `Operation '${idempotencyKey}' has an unresolved outcome; recovery must reconcile it before retrying`);
+        await this.finishOperation(execution.run, existing, "succeeded", recovered); return recovered;
+      }
+      const operation = existing ?? await this.beginOperation(execution.run, kind, key, blockId, input);
+      if (existing) { operation.status = "intent"; operation.error = undefined; operation.result = undefined; operation.input = journalValue(input); operation.updatedAt = new Date().toISOString(); await this.update(execution.run); }
+      let result: T;
+      try { result = await effect(); }
+      catch (error) { operation.error = (error instanceof Error ? error.message : String(error)).slice(-20_000); operation.updatedAt = new Date().toISOString(); await this.update(execution.run); throw error; }
+      await this.finishOperation(execution.run, operation, "succeeded", result); return result;
+    })();
+    this.operationsInFlight.set(localKey, work);
+    try { return await work; } finally { if (this.operationsInFlight.get(localKey) === work) this.operationsInFlight.delete(localKey); }
+  }
+
+  async recordTool(runId: string, blockId: string, name: string, args: Record<string, unknown>, result?: unknown, error?: unknown): Promise<void> {
+    const execution = this.executions.get(runId); if (!execution) return;
+    const key = `tool:${name}:${crypto.randomUUID()}`; const operation = await this.beginOperation(execution.run, "tool_command", key, blockId, { name, args });
+    await this.finishOperation(execution.run, operation, error === undefined ? "succeeded" : "failed", result, error);
   }
 
   async recoverChildren(runId: string, inspect: (child: HarnessChildTask) => Promise<AiSession | undefined>, resume: (child: HarnessChildTask, session: AiSession) => Promise<unknown>): Promise<void> {
@@ -105,8 +137,10 @@ export class HarnessRunner {
     if (!input.trim() || input.length > 100_000) throw new CoreError("INVALID_REQUEST", "Harness input must contain 1–100,000 characters");
     const harness = await this.store.read(harnessId); const validation = validateHarness(harness);
     if (!validation.valid) throw new CoreError("INVALID_REQUEST", validation.issues.map((issue) => issue.message).join("; "));
-    const run: HarnessRun = { id: crypto.randomUUID(), harnessId, harnessVersion: harness.version, input: input.trim(), status: "queued", createdAt: new Date().toISOString(), blocks: validation.order.map((blockId) => ({ blockId, status: "queued" })) };
+    const createdAt = new Date().toISOString();
+    const run: HarnessRun = { id: crypto.randomUUID(), harnessId, harnessVersion: harness.version, input: input.trim(), status: "queued", createdAt, blocks: validation.order.map((blockId) => ({ blockId, status: "queued" })), operations: [] };
     run.definition = structuredClone(harness);
+    run.executionPlan = { version: 1, createdAt, definitionVersion: harness.version, order: [...validation.order], blocks: validation.order.map((blockId) => ({ blockId, incoming: harness.edges.filter((edge) => edge.to === blockId).map((edge) => edge.id), outgoing: harness.edges.filter((edge) => edge.from === blockId).map((edge) => edge.id) })) };
     await this.store.saveRun(run); this.changed(run.id);
     this.activeRuns.add(run.id); void this.execute(run, harness.blocks, harness.edges, validation.order, dispatch, defaultProvider, append ?? (async () => { throw new Error("This workflow runtime cannot append to an active block session"); }));
     return run;
@@ -121,7 +155,7 @@ export class HarnessRunner {
     const active = run.blocks.filter((block) => providerActiveStatuses.has(block.status) && block.provider);
     const completedAt = new Date().toISOString(); run.status = "cancelled"; run.completedAt = completedAt; run.error = undefined;
     for (const block of run.blocks) if (isActiveStatus(block.status)) { block.status = "cancelled"; block.completedAt = completedAt; block.error = undefined; }
-    run.cleanupErrors = undefined; await this.update(run);
+    run.cleanupErrors = undefined; await this.recordCompletedOperation(run, "terminal_outcome", "terminal:cancelled", undefined, { status: "cancelled", completedAt }); await this.update(run);
     const targets = [
       ...active.map((block) => ({ label: `block ${block.blockId}`, provider: block.provider!, context: { runId, blockId: block.blockId, workspace: block.workspace } })),
       ...(run.children ?? []).map((child) => ({ label: `child task ${child.taskId}`, provider: child.provider, context: { runId, blockId: child.blockId, workspace: child.workspace } }))
@@ -193,7 +227,8 @@ export class HarnessRunner {
     this.resolvingPauses.add(key);
     try {
       this.assertActive(runId);
-      if (!await fire(provider, workspace)) throw new CoreError("INVALID_REQUEST", "Workflow timer is no longer pending");
+      const fired = await this.runOperation(runId, blockId, "timer_fire", `timer-fire:${pauseId}`, { workspace, provider, pauseId }, () => fire(provider, workspace));
+      if (!fired) throw new CoreError("INVALID_REQUEST", "Workflow timer is no longer pending");
       this.assertActive(runId);
       if (state.status === "waiting_timer" && state.pauseId === pauseId) {
         state.status = "running"; state.waitingUntil = undefined; state.pauseId = undefined; execution.run.status = this.runActivityStatus(execution.run);
@@ -249,7 +284,7 @@ export class HarnessRunner {
     if (path !== undefined) outgoing = outgoing.filter((edge) => edge.label === path);
     if (!outgoing.length) throw new Error(path === undefined ? "This block has no downstream path" : `No downstream path named '${path}'`);
     if (caller.routing === "ai" && path === undefined) throw new Error("path is required because this block uses AI-selected routing");
-    if (path !== undefined) callerState.selectedRoute = path;
+    if (path !== undefined) { callerState.selectedRoute = path; await this.recordCompletedOperation(execution.run, "route_selection", `route:${blockId}:${callerState.attempts?.at(-1)?.id ?? "initial"}`, blockId, { path }); }
     const targets = outgoing.map((edge) => ({ edge, block: execution.blocks.find((block) => block.id === edge.to)! })).filter((target) => Boolean(target.block));
     const launch = async (target: HarnessBlock, waitForCurrentTurn = false): Promise<void> => {
       this.assertActive(runId);
@@ -310,8 +345,9 @@ export class HarnessRunner {
           const state = run.blocks.find((item) => item.blockId === blockId)!;
           if (!["queued", "waiting"].includes(state.status)) continue;
           const readiness = blockReadiness(blockId, blocks, edges, run.blocks);
-          if (readiness === "wait") { if (state.status !== "waiting") { state.status = "waiting"; this.log(state, "lifecycle", "Waiting for upstream blocks"); changed = true; } continue; }
-          if (readiness === "skip") { state.status = "skipped"; state.completedAt = new Date().toISOString(); changed = true; continue; }
+          if (readiness === "wait") { if (state.status !== "waiting") { state.status = "waiting"; this.log(state, "lifecycle", "Waiting for upstream blocks"); await this.recordCompletedOperation(run, "dependency_decision", `dependency:${blockId}:wait:${state.attempts?.length ?? 0}`, blockId, { decision: "wait" }); changed = true; } continue; }
+          if (readiness === "skip") { state.status = "skipped"; state.completedAt = new Date().toISOString(); await this.recordCompletedOperation(run, "dependency_decision", `dependency:${blockId}:skip:${state.attempts?.length ?? 0}`, blockId, { decision: "skip" }); changed = true; continue; }
+          await this.recordCompletedOperation(run, "dependency_decision", `dependency:${blockId}:ready:${state.attempts?.length ?? 0}`, blockId, { decision: "ready" });
           const block = blocks.find((item) => item.id === blockId)!; state.status = "running"; changed = true;
           const task = this.executeBlock(run, block, blocks, edges, outputs, dispatch, defaultProvider).then(() => ({ blockId }), async (error) => {
             if (this.cancelled.has(run.id) || !blocks.some((item) => item.watchdog)) return { blockId, error };
@@ -343,11 +379,11 @@ export class HarnessRunner {
       }
       if (this.cancelled.has(run.id)) throw new Cancelled();
       const failed = run.blocks.find((block) => block.status === "failed"); if (failed) throw new Error(failed.error ?? "Asynchronous workflow block failed");
-      run.status = "succeeded"; run.completedAt = new Date().toISOString(); await this.update(run);
+      run.status = "succeeded"; run.completedAt = new Date().toISOString(); await this.recordCompletedOperation(run, "terminal_outcome", `terminal:${run.status}`, undefined, { status: run.status, completedAt: run.completedAt }); await this.update(run);
     } catch (error) {
       const cancelled = error instanceof Cancelled || this.cancelled.has(run.id); run.status = cancelled ? "cancelled" : "failed"; run.error = cancelled ? undefined : error instanceof Error ? error.message : String(error); run.completedAt = new Date().toISOString();
       for (const block of run.blocks) if (isActiveStatus(block.status)) { block.status = cancelled ? "cancelled" : block.status === "running" ? "failed" : "cancelled"; if (block.status === "failed") { block.error = run.error; block.failureReason = classifyWorkflowFailure(error); } }
-      await this.update(run);
+      await this.recordCompletedOperation(run, "terminal_outcome", `terminal:${run.status}`, undefined, { status: run.status, error: run.error, completedAt: run.completedAt }); await this.update(run);
     } finally {
       await Promise.allSettled([...running.values(), ...background]);
       if (this.cancelled.has(run.id)) {
@@ -376,9 +412,14 @@ export class HarnessRunner {
         if (block.type === "task") prompt += `\n\nThis is a visible task-orchestration block. Create implementation workspaces with task_create_and_start, inspect them with task_list and task_ai_response_tail, append instructions with task_append_prompt, and merge completed work with task_merge.`;
         state.prompt = prompt;
         this.log(state, "prompt", prompt);
+        const attemptIndex = (state.attempts?.length ?? 0) + 1; const attemptId = crypto.randomUUID();
+        const attemptOperation = await this.beginOperation(run, "block_attempt", `block-attempt:${block.id}:${attemptIndex}`, block.id, { attemptIndex, iteration: index + 1, provider: state.provider }, attemptId);
+        const attempt: HarnessBlockAttempt = { id: attemptId, index: attemptIndex, status: "running", startedAt: new Date().toISOString(), operationId: attemptOperation.id };
+        state.attempts = [...(state.attempts ?? []), attempt];
+        const promptOperation = await this.beginOperation(run, "prompt_delivery", `prompt:${block.id}:${attemptId}`, block.id, { provider: state.provider, prompt }, attemptId);
         const iteration: HarnessBlockIteration | undefined = state.iterations ? { index: index + 1, status: "running", startedAt: new Date().toISOString(), prompt } : undefined; if (iteration) state.iterations!.push(iteration); await this.update(run);
         try {
-          const started = async (workspace: string) => { this.assertActive(run.id); state.workspace = workspace; if (iteration) iteration.workspace = workspace; await this.update(run); this.assertActive(run.id); };
+          const started = async (workspace: string) => { this.assertActive(run.id); state.workspace = workspace; attempt.workspace = workspace; if (iteration) iteration.workspace = workspace; await this.recordCompletedOperation(run, "session_binding", `session-workspace:${attemptId}`, block.id, { workspace }, attemptId); await this.update(run); this.assertActive(run.id); };
           const activity = async (session: AiSession, waitingUntil?: string) => this.recordActivity(run, state, session, waitingUntil);
           const execution = this.executions.get(run.id);
           this.assertActive(run.id);
@@ -386,7 +427,9 @@ export class HarnessRunner {
             ? await execution.append(block, prompt, { runId: run.id, blockId: block.id, workspace: state.workspace })
             : await dispatch(block, prompt, { runId: run.id, blockId: block.id, iteration: index + 1, started, activity, assertActive: () => this.assertActive(run.id) });
           this.assertActive(run.id);
-          state.sessionId = settled.id; if (iteration) iteration.sessionId = settled.id;
+          state.sessionId = settled.id; attempt.sessionId = settled.id; if (iteration) iteration.sessionId = settled.id;
+          await this.finishOperation(run, promptOperation, "succeeded", { sessionId: settled.id, workspace: state.workspace, status: settled.status });
+          await this.recordCompletedOperation(run, "session_binding", `session:${attemptId}`, block.id, { sessionId: settled.id, workspace: state.workspace }, attemptId);
           this.log(state, "response", settled.messages.filter((message) => message.role === "assistant").at(-1)?.text ?? "Provider turn completed without an assistant response");
           if (settled.status === "user_prompt") throw new CoreError("INVALID_REQUEST", `${block.label} requires user input; resume support is not implemented yet`);
           if (settled.status === "error") {
@@ -394,10 +437,13 @@ export class HarnessRunner {
             throw new AiProviderError(settled.failure ?? normalizeAiFailure(message));
           }
           let output = settled.messages.filter((message) => message.role === "assistant").at(-1)?.text ?? "";
-          collected.push(output); if (iteration) { iteration.output = output.slice(-200_000); iteration.status = "succeeded"; iteration.completedAt = new Date().toISOString(); } await this.update(run);
+          collected.push(output); attempt.status = "succeeded"; attempt.completedAt = new Date().toISOString(); await this.finishOperation(run, attemptOperation, "succeeded", { sessionId: settled.id, workspace: state.workspace, output: output.slice(-20_000) }); if (iteration) { iteration.output = output.slice(-200_000); iteration.status = "succeeded"; iteration.completedAt = new Date().toISOString(); } await this.update(run);
         } catch (error) {
           this.log(state, "error", error instanceof Error ? error.message : String(error));
-          if (iteration) { iteration.status = error instanceof Cancelled ? "cancelled" : "failed"; iteration.error = error instanceof Error ? error.message : String(error); iteration.completedAt = new Date().toISOString(); } throw error;
+          const message = error instanceof Error ? error.message : String(error); attempt.status = error instanceof Cancelled ? "cancelled" : "failed"; attempt.error = message; attempt.completedAt = new Date().toISOString();
+          if (promptOperation.status === "intent") await this.finishOperation(run, promptOperation, "failed", undefined, error);
+          if (attemptOperation.status === "intent") await this.finishOperation(run, attemptOperation, "failed", undefined, error);
+          if (iteration) { iteration.status = error instanceof Cancelled ? "cancelled" : "failed"; iteration.error = message; iteration.completedAt = new Date().toISOString(); } throw error;
         }
       }
       const output = count === 1 ? collected[0] ?? "" : collected.map((value, index) => `## Stack item ${index + 1}\n${value}`).join("\n\n");
@@ -416,6 +462,24 @@ export class HarnessRunner {
     this.updateQueue = next.catch(() => undefined); await next;
   }
 
+  private async beginOperation(run: HarnessRun, kind: HarnessOperationKind, idempotencyKey: string, blockId?: string, input?: unknown, attemptId?: string): Promise<HarnessOperation> {
+    const existing = run.operations?.find((operation) => operation.idempotencyKey === idempotencyKey); if (existing) return existing;
+    const now = new Date().toISOString(); const operation: HarnessOperation = { id: operationId(run.id, idempotencyKey), idempotencyKey, kind, status: "intent", createdAt: now, updatedAt: now, ...(blockId ? { blockId } : {}), ...(attemptId ? { attemptId } : {}), ...(input === undefined ? {} : { input: journalValue(input) }) };
+    run.operations = [...(run.operations ?? []), operation]; await this.update(run); return operation;
+  }
+
+  private async finishOperation(run: HarnessRun, operation: HarnessOperation, status: "succeeded" | "failed", result?: unknown, error?: unknown): Promise<void> {
+    operation.status = status; operation.updatedAt = new Date().toISOString(); operation.result = result === undefined ? undefined : journalValue(result); operation.error = status === "failed" ? (error instanceof Error ? error.message : String(error)).slice(-20_000) : undefined; await this.update(run);
+  }
+
+  private async recordCompletedOperation(run: HarnessRun, kind: HarnessOperationKind, idempotencyKey: string, blockId: string | undefined, result: unknown, attemptId?: string): Promise<void> {
+    const existing = run.operations?.find((operation) => operation.idempotencyKey === idempotencyKey);
+    if (existing?.status === "succeeded") return;
+    if (existing) { await this.finishOperation(run, existing, "succeeded", result); return; }
+    const now = new Date().toISOString(); const operation: HarnessOperation = { id: operationId(run.id, idempotencyKey), idempotencyKey, kind, status: "succeeded", createdAt: now, updatedAt: now, result: journalValue(result), ...(blockId ? { blockId } : {}), ...(attemptId ? { attemptId } : {}) };
+    run.operations = [...(run.operations ?? []), operation]; await this.update(run);
+  }
+
   private async recordActivity(run: HarnessRun, state: HarnessRun["blocks"][number], session: AiSession, waitingUntil?: string): Promise<void> {
     this.assertActive(run.id);
     const status: "running" | HarnessPauseStatus = session.pendingPermission ? "awaiting_permission" : waitingUntil ? "waiting_timer" : session.status === "user_prompt" ? "awaiting_user_input" : "running";
@@ -424,6 +488,7 @@ export class HarnessRunner {
     const pauseId = status === "running" ? undefined : state.status === status ? state.pauseId ?? crypto.randomUUID() : crypto.randomUUID();
     if (state.status === status && state.waitingUntil === waitingUntil && state.question === question && JSON.stringify(state.pendingPermission) === JSON.stringify(permission) && state.sessionId === session.id && state.pauseId === pauseId) return;
     const previous = state.status; state.status = status; state.sessionId = session.id; state.waitingUntil = waitingUntil; state.question = question; state.pendingPermission = permission;
+    const attempt = state.attempts?.at(-1); if (attempt && session.id) { attempt.sessionId = session.id; await this.recordCompletedOperation(run, "session_binding", `session:${attempt.id}`, state.blockId, { sessionId: session.id, workspace: state.workspace }, attempt.id); }
     state.pauseId = pauseId;
     run.status = this.runActivityStatus(run);
     if (previous !== status) this.log(state, "lifecycle", status === "running" ? "Provider resumed work" : `Paused: ${status.replaceAll("_", " ")}`);
@@ -530,6 +595,15 @@ function retryBudgetExhausted(startedAt: string | undefined, policy: ResolvedRec
 
 function withinRetryBudget(value: string, startedAt: string | undefined, policy: ResolvedRecoveryPolicy): boolean {
   return startedAt === undefined || Date.parse(value) - Date.parse(startedAt) <= policy.maxElapsedMs;
+}
+
+function operationId(runId: string, idempotencyKey: string): string { return crypto.createHash("sha256").update(`${runId}\0${idempotencyKey}`).digest("hex").slice(0, 32); }
+
+function journalValue(value: unknown): unknown {
+  const serialized = JSON.stringify(value);
+  if (serialized === undefined) return undefined;
+  if (serialized.length <= 50_000) return JSON.parse(serialized) as unknown;
+  return { truncated: true, bytes: Buffer.byteLength(serialized), preview: serialized.slice(0, 49_000) };
 }
 
 export function nextWatchdogReset(usage?: AiUsage, now = Date.now()): string {

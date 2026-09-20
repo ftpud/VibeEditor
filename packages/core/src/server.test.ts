@@ -14,8 +14,8 @@ describe("protocol handshake", () => {
     expect(timers.scheduleAt).toHaveBeenCalledWith("/watchdog", "codex", expect.stringContaining("workflow_resume_failed"), dueAt, { runId: "run", blockId: "watchdog" });
   });
   it("accepts overlapping ranges and describes incompatible Desktops", () => {
-    expect(protocolHandshake({ minimum: 8, maximum: 8 })).toMatchObject({ compatible: true, compatibility: { minimum: 8, maximum: 8 } });
-    expect(protocolHandshake({ minimum: 7, maximum: 7 })).toEqual({ compatible: false, compatibility: { minimum: 8, maximum: 8 }, message: "Core supports protocol 8-8; this Desktop supports 7-7" });
+    expect(protocolHandshake({ minimum: 9, maximum: 9 })).toMatchObject({ compatible: true, compatibility: { minimum: 9, maximum: 9 } });
+    expect(protocolHandshake({ minimum: 8, maximum: 8 })).toEqual({ compatible: false, compatibility: { minimum: 9, maximum: 9 }, message: "Core supports protocol 9-9; this Desktop supports 8-8" });
     expect(protocolHandshake({ minimum: 4, maximum: 1 }).compatible).toBe(false);
   });
 });

@@ -8,6 +8,38 @@ import { classifyWorkflowFailure, connectedInput, HarnessRunner, nextWatchdogRes
 import { HarnessStore } from "./harnesses.js";
 
 describe("HarnessRunner", () => {
+  it("persists a versioned execution plan, attempts, and terminal operation journal", async () => {
+    const state = await mkdtemp(path.join(os.tmpdir(), "workflow-journal-")); const store = new HarnessStore("/workspace", state); const definition = await store.create("Journal");
+    await store.update({ ...definition, blocks: [{ id: "worker", type: "prompt", label: "Worker", prompt: "{{input}}", position: { x: 0, y: 0 } }], edges: [] });
+    const runner = new HarnessRunner(store, () => undefined); await runner.start(definition.id, "work", async (_block, _prompt, runtime) => { await runtime.started("/workflow/worker"); return session("session-1"); });
+    await vi.waitFor(async () => expect((await store.runs())[0]?.status).toBe("succeeded"));
+    const run = (await store.runs())[0]!; const attempt = run.blocks[0]!.attempts?.[0]!;
+    expect(run.executionPlan).toMatchObject({ version: 1, definitionVersion: 2, order: ["worker"], blocks: [{ blockId: "worker", incoming: [], outgoing: [] }] });
+    expect(attempt).toMatchObject({ index: 1, status: "succeeded", sessionId: "session-1", workspace: "/workflow/worker" });
+    expect(run.operations?.map((operation) => operation.kind)).toEqual(expect.arrayContaining(["dependency_decision", "block_attempt", "prompt_delivery", "session_binding", "terminal_outcome"]));
+    expect(run.operations?.every((operation) => operation.status === "succeeded")).toBe(true);
+    expect(run.operations?.find((operation) => operation.id === attempt.operationId)?.attemptId).toBe(attempt.id);
+  });
+
+  it("deduplicates a concurrent external operation by its stable key", async () => {
+    const state = await mkdtemp(path.join(os.tmpdir(), "workflow-operation-")); const store = new HarnessStore("/workspace", state); const definition = await store.create("Operation");
+    await store.update({ ...definition, blocks: [{ id: "worker", type: "prompt", label: "Worker", prompt: "work", position: { x: 0, y: 0 } }], edges: [] });
+    let releaseBlock!: () => void; const blockWaiting = new Promise<void>((resolve) => { releaseBlock = resolve; }); const runner = new HarnessRunner(store, () => undefined);
+    const run = await runner.start(definition.id, "work", async () => { await blockWaiting; return session("done"); });
+    await vi.waitFor(async () => expect((await store.runs())[0]?.status).toBe("running"));
+    let releaseEffect!: () => void; const effectWaiting = new Promise<void>((resolve) => { releaseEffect = resolve; }); const effect = vi.fn(async () => { await effectWaiting; return { taskId: "task-1" }; });
+    const first = runner.runOperation(run.id, "worker", "task_create", "create-task", { branch: "feature" }, effect); const replay = runner.runOperation(run.id, "worker", "task_create", "create-task", { branch: "feature" }, effect);
+    releaseEffect(); expect(await Promise.all([first, replay])).toEqual([{ taskId: "task-1" }, { taskId: "task-1" }]); expect(effect).toHaveBeenCalledOnce();
+    expect((await store.runs())[0]?.operations?.find((operation) => operation.idempotencyKey === "worker:create-task")).toMatchObject({ kind: "task_create", status: "succeeded", result: { taskId: "task-1" } });
+    const uncertain = vi.fn(async () => { throw new Error("reply lost after task creation"); });
+    await expect(runner.runOperation(run.id, "worker", "task_create", "uncertain-task", { branch: "uncertain" }, uncertain)).rejects.toThrow("reply lost");
+    expect((await store.runs())[0]?.operations?.find((operation) => operation.idempotencyKey === "worker:uncertain-task")).toMatchObject({ status: "intent", error: "reply lost after task creation" });
+    const reconcile = vi.fn(async () => ({ taskId: "task-existing" }));
+    await expect(runner.runOperation(run.id, "worker", "task_create", "uncertain-task", { branch: "uncertain" }, uncertain, reconcile)).resolves.toEqual({ taskId: "task-existing" });
+    expect(uncertain).toHaveBeenCalledOnce(); expect(reconcile).toHaveBeenCalledOnce();
+    releaseBlock(); await vi.waitFor(async () => expect((await store.runs())[0]?.status).toBe("succeeded"));
+  });
+
   it("recovers owned children with bounded retries and includes children in cancellation", async () => {
     const state = await mkdtemp(path.join(os.tmpdir(), "workflow-children-")); const store = new HarnessStore("/workspace", state);
     const definition = await store.create("Children");
@@ -315,7 +347,7 @@ describe("HarnessRunner", () => {
     const state = await mkdtemp(path.join(os.tmpdir(), "remote-ide-harness-any-")); const store = new HarnessStore("/workspace", state); const definition = await store.create("Any join");
     const blocks: HarnessBlock[] = [{ id: "root", type: "prompt", label: "Root", prompt: "{{input}}", position: { x: 0, y: 0 } }, { id: "slow", type: "prompt", label: "Slow", prompt: "{{input}}", position: { x: 0, y: 0 } }, { id: "fast", type: "prompt", label: "Fast", prompt: "{{input}}", position: { x: 0, y: 0 } }, { id: "join", type: "prompt", label: "Join", prompt: "Join {{input}}", join: "any", position: { x: 0, y: 0 } }];
     await store.update({ ...definition, blocks, edges: [{ id: "rs", from: "root", to: "slow" }, { id: "rf", from: "root", to: "fast" }, { id: "sj", from: "slow", to: "join" }, { id: "fj", from: "fast", to: "join" }] });
-    const events: string[] = []; const dispatch = vi.fn(async (block: HarnessBlock, prompt: string) => { events.push(`${block.id}-start`); if (block.id === "slow") await new Promise((resolve) => setTimeout(resolve, 30)); if (block.id === "fast") await new Promise((resolve) => setTimeout(resolve, 5)); events.push(`${block.id}-done`); return { id: block.id, model: "test", reasoning: "low", status: "done" as const, messages: [{ id: block.id, role: "assistant" as const, text: block.id, timestamp: "now" }] }; });
+    const events: string[] = []; const dispatch = vi.fn(async (block: HarnessBlock, prompt: string) => { events.push(`${block.id}-start`); if (block.id === "slow") await new Promise((resolve) => setTimeout(resolve, 150)); if (block.id === "fast") await new Promise((resolve) => setTimeout(resolve, 5)); events.push(`${block.id}-done`); return { id: block.id, model: "test", reasoning: "low", status: "done" as const, messages: [{ id: block.id, role: "assistant" as const, text: block.id, timestamp: "now" }] }; });
     await new HarnessRunner(store, () => undefined).start(definition.id, "go", dispatch, "test");
     for (let tries = 0; tries < 50 && (await store.runs())[0]?.status !== "succeeded"; tries += 1) await new Promise((resolve) => setTimeout(resolve, 10));
     expect(events.indexOf("join-start")).toBeLessThan(events.indexOf("slow-done"));
