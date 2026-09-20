@@ -339,6 +339,8 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .harness-status.failed { background: #dc747c; }
 .harness-status.cancelled { background: #858990; }
 .harness-status.waiting { background: #e3b762; }
+.harness-status.awaiting_permission, .harness-status.awaiting_user_input { background: #e3b762; box-shadow: 0 0 0 3px rgba(227,183,98,.16); }
+.harness-status.waiting_timer, .harness-status.retry_scheduled { background: #b99aec; }
 .harness-status.skipped { background: #555960; }
 .harness-canvas-empty { position: absolute; inset: 30% auto auto 50%; transform: translateX(-50%); padding: 9px 12px; display: flex; gap: 6px; border: 1px dashed #555a62; border-radius: 5px; background: #292c31; color: #aeb2b8; }
 .harness-inspector { max-height: min(420px, 50%); padding: 8px; display: grid; gap: 7px; overflow: auto; border-top: 1px solid #393b40; background: #282a2e; }
@@ -374,6 +376,8 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .harness-run-state.succeeded { background: #294a32; color: #9bd5a4; }
 .harness-run-state.running { background: #28456c; color: #a9cdfd; }
 .harness-run-state.waiting { background: #5a4825; color: #f0cf8a; }
+.harness-run-state.awaiting_permission, .harness-run-state.awaiting_user_input { background: #5a4825; color: #f0cf8a; }
+.harness-run-state.waiting_timer, .harness-run-state.retry_scheduled { background: #493b62; color: #d8c3fa; }
 .harness-run-state.failed { background: #5c3034; color: #f3aab0; }
 .harness-detail-empty { margin: 0; color: #858990; }
 .harness-detail-meta { display: flex; flex-wrap: wrap; gap: 5px 12px; color: #858990; font-size: .7692rem; }
@@ -386,6 +390,15 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .harness-iteration-list summary { padding: 6px 8px; display: flex; justify-content: space-between; cursor: pointer; }
 .harness-iteration-list details > .harness-log { padding: 0 8px 8px; }
 .harness-run { padding: 7px; display: grid; grid-template-columns: 1fr auto; gap: 6px; border-top: 1px solid #393b40; }
+.harness-pause { margin: 7px; padding: 9px; display: grid; gap: 7px; border: 1px solid #d49b36; border-radius: 5px; background: #30291d; color: #ecd9b4; }
+.harness-pause p, .harness-pause pre { margin: 0; white-space: pre-wrap; }
+.harness-pause pre { max-height: 120px; overflow: auto; }
+.harness-pause > div { display: flex; flex-wrap: wrap; gap: 6px; }
+.harness-pause textarea { resize: vertical; padding: 6px 7px; border: 1px solid #5d5547; border-radius: 4px; background: #24211c; color: inherit; font: inherit; }
+.harness-pause button { justify-self: start; padding: 5px 8px; border: 1px solid #60636a; border-radius: 3px; cursor: pointer; }
+.harness-pause button.allow { background: #315d3b; color: white; }
+.harness-pause button.reject { background: #5e3434; color: white; }
+.harness-pause button:disabled { opacity: .55; cursor: wait; }
 .harness-run small { grid-column: 1 / -1; color: #858990; }
 .harness-run small.error { color: #dc747c; }
 .harness-run button.danger { background: #71383d; color: #ffdadd; }

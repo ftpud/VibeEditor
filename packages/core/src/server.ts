@@ -32,7 +32,7 @@ import { AppToolService, appToolServer, withAppTools } from "./app-tools.js";
 import { TaskCheckpointStore } from "./task-checkpoints.js";
 import { RemoteTransferService } from "./remote-transfer.js";
 import { WorkspaceRootRegistry } from "./workspace-roots.js";
-import type { AiProvider } from "@remote-ide/protocol";
+import type { AiProvider, AiSession } from "@remote-ide/protocol";
 import { findAutopilotOption } from "@remote-ide/acp";
 
 const execFileAsync = promisify(execFile);
@@ -725,6 +725,8 @@ async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStor
       return settleWorkflowSession(provider, runtime.workspace, aiTimers, block.watchdog ? runtime : undefined, () => harnessRunner.isActive(runtime.runId));
     }) };
     case "harnesses.append": return { run: await harnessRunner.appendInput(request.payload.runId, request.payload.input) };
+    case "harnesses.permission.resolve": return { run: await harnessRunner.resolvePermission(request.payload.runId, request.payload.blockId, request.payload.sessionId, request.payload.requestId, request.payload.optionId, async (provider, target, requestId, optionId) => acp.get(provider).resolvePermission(target, requestId, optionId)) };
+    case "harnesses.answer": return { run: await harnessRunner.answerQuestion(request.payload.runId, request.payload.blockId, request.payload.sessionId, request.payload.input, async (provider, target, input) => acp.get(provider).steer(target, input)) };
     case "harnesses.cancel": return { run: await harnessRunner.cancel(request.payload.runId, async (provider, runtime) => { const target = runtime.workspace ?? await workflowSessionWorkspace(workspacePath, runtime.runId, runtime.blockId); await aiTimers.cancelWorkspace(target); await acp.get(provider).interrupt(target); }) };
     case "http.execute": return executeHttpRequest(request.payload.method, request.payload.url, request.payload.headers, request.payload.body);
     case "filesystem.listTree": return { tree: await filesystem.listTree(request.payload.includeIgnored === true) };
