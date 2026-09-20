@@ -361,6 +361,57 @@ describe("HarnessRunner", () => {
     expect(cancelled.blocks[0]?.output).toBeUndefined();
   });
 
+  it("does not fire a reconciled timer operation after cancellation is durable", async () => {
+    const state = await mkdtemp(path.join(os.tmpdir(), "workflow-cancel-timer-reconcile-")); const store = new HarnessStore("/workspace", state); const definition = await store.create("Timer cancellation race");
+    await store.update({ ...definition, blocks: [{ id: "worker", type: "prompt", label: "Worker", prompt: "work", position: { x: 0, y: 0 } }], edges: [] });
+    let releaseTurn!: () => void; const turnWaiting = new Promise<void>((resolve) => { releaseTurn = resolve; }); let started!: () => void; const turnStarted = new Promise<void>((resolve) => { started = resolve; });
+    const runner = new HarnessRunner(store, () => undefined); const run = await runner.start(definition.id, "work", async (_block, _prompt, runtime) => { await runtime.started("/workflow/worker"); started(); await turnWaiting; return session("late"); });
+    await turnStarted;
+    await expect(runner.runTimerOperation(run.id, "worker", "timer-fire:once", { timerId: "once" }, async () => { throw new Error("timer reply lost"); })).rejects.toThrow("timer reply lost");
+    let releaseReconcile!: () => void; const reconciling = new Promise<void>((resolve) => { releaseReconcile = resolve; }); const fire = vi.fn(async () => true);
+    const resumed = runner.runTimerOperation(run.id, "worker", "timer-fire:once", { timerId: "once" }, fire, async () => { await reconciling; return null; });
+    await vi.waitFor(async () => expect((await store.runs())[0]?.operations?.find((operation) => operation.idempotencyKey === "worker:timer-fire:once")?.status).toBe("intent"));
+    await runner.cancel(run.id, async () => releaseTurn());
+    releaseReconcile();
+    await expect(resumed).rejects.toThrow();
+    expect(fire).not.toHaveBeenCalled();
+    await vi.waitFor(() => expect(runner.isActive(run.id)).toBe(false));
+  });
+
+  it("does not dispatch a stack target after cancellation races its launch", async () => {
+    const state = await mkdtemp(path.join(os.tmpdir(), "workflow-cancel-stack-")); const store = new HarnessStore("/workspace", state); const definition = await store.create("Stack cancellation race");
+    await store.update({ ...definition, blocks: ["root", "worker"].map((id) => ({ id, type: "prompt" as const, label: id, prompt: "work", position: { x: 0, y: 0 } })), edges: [{ id: "root-worker", from: "root", to: "worker" }] });
+    let workerClaimed!: () => void; const workerClaim = new Promise<void>((resolve) => { workerClaimed = resolve; }); let releaseRoot!: () => void; const rootWaiting = new Promise<void>((resolve) => { releaseRoot = resolve; });
+    const runner = new HarnessRunner(store, (runId) => { void store.runs().then((runs) => { if (runs.find((run) => run.id === runId)?.blocks.find((block) => block.blockId === "worker")?.status === "running") workerClaimed(); }); });
+    const dispatch = vi.fn(async (block: HarnessBlock, _prompt: string, runtime: { runId: string; blockId: string }) => {
+      if (block.id === "root") { await runner.runStack(runtime.runId, runtime.blockId, ["downstream"]); await rootWaiting; }
+      return session(block.id);
+    });
+    const run = await runner.start(definition.id, "work", dispatch, "test");
+    await workerClaim;
+    await runner.cancel(run.id, async () => releaseRoot());
+    await vi.waitFor(() => expect(runner.isActive(run.id)).toBe(false));
+    expect(dispatch.mock.calls.filter((call) => call[0].id === "worker")).toHaveLength(0);
+  });
+
+  it("does not restart a retry after cancellation races its wake-up", async () => {
+    const state = await mkdtemp(path.join(os.tmpdir(), "workflow-cancel-retry-")); const store = new HarnessStore("/workspace", state); const definition = await store.create("Retry cancellation race");
+    await store.update({ ...definition, blocks: [{ id: "watchdog", type: "prompt", label: "watchdog", prompt: "watch", watchdog: true, position: { x: 0, y: 0 } }, { id: "worker", type: "prompt", label: "worker", prompt: "work", position: { x: 0, y: 0 } }], edges: [] });
+    let releaseWatchdog!: () => void; const watchdogWaiting = new Promise<void>((resolve) => { releaseWatchdog = resolve; }); let attempts = 0;
+    const runner = new HarnessRunner(store, () => undefined, 2, { maxAttempts: 2, transportBackoffMs: 0, jitterRatio: 0 });
+    const run = await runner.start(definition.id, "work", async (block) => {
+      if (block.id === "watchdog") await watchdogWaiting;
+      if (block.id === "worker") { attempts += 1; throw new AiProviderError({ kind: "transient_transport", message: "offline" }); }
+      return session("watchdog");
+    });
+    await vi.waitFor(async () => expect((await store.runs())[0]?.blocks.find((block) => block.blockId === "worker")?.status).toBe("retry_scheduled"));
+    const wake = runner.resumeFailed(run.id, "watchdog");
+    await runner.cancel(run.id, async () => releaseWatchdog());
+    await wake;
+    await vi.waitFor(() => expect(runner.isActive(run.id)).toBe(false));
+    expect(attempts).toBe(1);
+  });
+
   it("fans out ready blocks concurrently and waits for all before joining", async () => {
     const state = await mkdtemp(path.join(os.tmpdir(), "remote-ide-harness-fanout-")); const store = new HarnessStore("/workspace", state); const definition = await store.create("Fan out");
     const blocks = ["root", "left", "right", "join"].map((id) => ({ id, type: "prompt" as const, label: id, prompt: "{{input}}", position: { x: 0, y: 0 } }));
