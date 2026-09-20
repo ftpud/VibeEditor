@@ -172,20 +172,40 @@ describe("HarnessPanel", () => {
   it("shows and resolves a workflow-owned permission request", async () => {
     const harness: HarnessDefinition = { id: "harness-1", name: "Flow", version: 1, createdAt: "now", updatedAt: "now", blocks: [{ id: "a", type: "prompt", label: "Deploy", prompt: "{{input}}", position: { x: 20, y: 20 } }], edges: [] };
     const permission = { id: "permission-1", title: "Run deployment", toolCallId: "tool-1", options: [{ optionId: "yes", name: "Allow once", kind: "allow_once" as const }] };
-    const runs = [{ id: "run-1", harnessId: harness.id, harnessVersion: 1, input: "deploy", status: "awaiting_permission" as const, createdAt: "now", blocks: [{ blockId: "a", status: "awaiting_permission" as const, provider: "codex", workspace: "/workflow/a", sessionId: "session-1", pendingPermission: permission }] }];
+    const runs = [{ id: "run-1", harnessId: harness.id, harnessVersion: 1, input: "deploy", status: "awaiting_permission" as const, createdAt: "now", blocks: [{ blockId: "a", status: "awaiting_permission" as const, provider: "codex", workspace: "/workflow/a", sessionId: "session-1", pauseId: "pause-1", pendingPermission: permission }] }];
     const onResolvePermission = vi.fn().mockResolvedValue(runs[0]);
     render(<HarnessPanel harnesses={[harness]} runs={runs} providers={[]} agents={[]} onCreate={vi.fn()} onSave={vi.fn()} onDelete={vi.fn()} onRun={vi.fn()} onResolvePermission={onResolvePermission} onCancelRun={vi.fn()} onError={vi.fn()} />);
     fireEvent.click(await screen.findByRole("button", { name: "Allow once" }));
-    await waitFor(() => expect(onResolvePermission).toHaveBeenCalledWith("run-1", "a", "session-1", "permission-1", "yes"));
+    await waitFor(() => expect(onResolvePermission).toHaveBeenCalledWith("run-1", "a", "session-1", "pause-1", "permission-1", "yes"));
   });
 
   it("shows a provider question and submits the answer to its owning attempt", async () => {
     const harness: HarnessDefinition = { id: "harness-1", name: "Flow", version: 1, createdAt: "now", updatedAt: "now", blocks: [{ id: "a", type: "prompt", label: "Planner", prompt: "{{input}}", position: { x: 20, y: 20 } }], edges: [] };
-    const runs = [{ id: "run-1", harnessId: harness.id, harnessVersion: 1, input: "plan", status: "awaiting_user_input" as const, createdAt: "now", blocks: [{ blockId: "a", status: "awaiting_user_input" as const, provider: "codex", workspace: "/workflow/a", sessionId: "session-2", question: "Which branch?" }] }];
+    const runs = [{ id: "run-1", harnessId: harness.id, harnessVersion: 1, input: "plan", status: "awaiting_user_input" as const, createdAt: "now", blocks: [{ blockId: "a", status: "awaiting_user_input" as const, provider: "codex", workspace: "/workflow/a", sessionId: "session-2", pauseId: "pause-2", question: "Which branch?" }] }];
     const onAnswerQuestion = vi.fn().mockResolvedValue(runs[0]);
     render(<HarnessPanel harnesses={[harness]} runs={runs} providers={[]} agents={[]} onCreate={vi.fn()} onSave={vi.fn()} onDelete={vi.fn()} onRun={vi.fn()} onAnswerQuestion={onAnswerQuestion} onCancelRun={vi.fn()} onError={vi.fn()} />);
     fireEvent.change(await screen.findByRole("textbox", { name: "Answer Planner" }), { target: { value: "feature/auth" } });
     fireEvent.click(screen.getByRole("button", { name: "Answer and resume" }));
-    await waitFor(() => expect(onAnswerQuestion).toHaveBeenCalledWith("run-1", "a", "session-2", "feature/auth"));
+    await waitFor(() => expect(onAnswerQuestion).toHaveBeenCalledWith("run-1", "a", "session-2", "pause-2", "feature/auth"));
+  });
+
+  it("resumes a timer pause and can cancel its exact attempt", async () => {
+    const harness: HarnessDefinition = { id: "harness-1", name: "Flow", version: 1, createdAt: "now", updatedAt: "now", blocks: [{ id: "a", type: "prompt", label: "Worker", prompt: "{{input}}", position: { x: 20, y: 20 } }], edges: [] };
+    const runs = [{ id: "run-1", harnessId: harness.id, harnessVersion: 1, input: "work", status: "waiting_timer" as const, createdAt: "now", blocks: [{ blockId: "a", status: "waiting_timer" as const, provider: "codex", workspace: "/workflow/a", sessionId: "session-3", pauseId: "pause-3", waitingUntil: "2099-01-01T00:00:00.000Z" }] }];
+    const onResumePause = vi.fn().mockResolvedValue(runs[0]); const onCancelPause = vi.fn().mockResolvedValue(runs[0]);
+    render(<HarnessPanel harnesses={[harness]} runs={runs} providers={[]} agents={[]} onCreate={vi.fn()} onSave={vi.fn()} onDelete={vi.fn()} onRun={vi.fn()} onResumePause={onResumePause} onCancelPause={onCancelPause} onCancelRun={vi.fn()} onError={vi.fn()} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Resume now" }));
+    await waitFor(() => expect(onResumePause).toHaveBeenCalledWith("run-1", "a", "pause-3"));
+    fireEvent.click(screen.getByRole("button", { name: "Cancel run" }));
+    await waitFor(() => expect(onCancelPause).toHaveBeenCalledWith("run-1", "a", "pause-3"));
+  });
+
+  it("retries a scheduled attempt immediately", async () => {
+    const harness: HarnessDefinition = { id: "harness-1", name: "Flow", version: 1, createdAt: "now", updatedAt: "now", blocks: [{ id: "a", type: "prompt", label: "Worker", prompt: "{{input}}", position: { x: 20, y: 20 } }], edges: [] };
+    const runs = [{ id: "run-1", harnessId: harness.id, harnessVersion: 1, input: "work", status: "retry_scheduled" as const, createdAt: "now", blocks: [{ blockId: "a", status: "retry_scheduled" as const, provider: "codex", pauseId: "pause-4", error: "Transport failed", retryAt: "2099-01-01T00:00:00.000Z" }] }];
+    const onRetryPause = vi.fn().mockResolvedValue(runs[0]);
+    render(<HarnessPanel harnesses={[harness]} runs={runs} providers={[]} agents={[]} onCreate={vi.fn()} onSave={vi.fn()} onDelete={vi.fn()} onRun={vi.fn()} onRetryPause={onRetryPause} onCancelRun={vi.fn()} onError={vi.fn()} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Retry now" }));
+    await waitFor(() => expect(onRetryPause).toHaveBeenCalledWith("run-1", "a", "pause-4"));
   });
 });

@@ -29,10 +29,10 @@ The current vertical slice is useful: definitions and run snapshots are Core-own
   - [x] Check cancellation immediately before and after every provider/tool side effect.
   - [x] Report partial cancellation failures instead of swallowing all interrupt errors.
   - [x] Add a distinct state for a completed main flow with a still-running watchdog, or stop the watchdog automatically when delivery is terminal.
-- [ ] Model pauses instead of converting them into generic failure.
+- [x] Model pauses instead of converting them into generic failure.
   - [x] Add block/run states for `awaiting_permission`, `awaiting_user_input`, `waiting_timer`, and `retry_scheduled`.
   - [x] Route permission requests and provider questions to Desktop with run/block/session ownership.
-  - Allow the user to answer, approve, reject, resume, retry, or cancel the exact paused attempt.
+  - [x] Allow the user to answer, approve, reject, resume, retry, or cancel the exact paused attempt.
 - [ ] Replace regex-only error recovery with typed provider/runtime failures.
   - Normalize quota, transport, permission, user-input, cancellation, and permanent failures at the provider boundary.
   - Persist attempt count and backoff deadline before sleeping; add jitter and a maximum elapsed retry budget.

@@ -16,7 +16,7 @@ export type FileRevision = { identity: string; version: string };
  * Desktop can prove it is safe to talk to a newly deployed Core.
  */
 export type ProtocolCompatibility = { minimum: number; maximum: number };
-export const protocolCompatibility: ProtocolCompatibility = { minimum: 6, maximum: 6 };
+export const protocolCompatibility: ProtocolCompatibility = { minimum: 7, maximum: 7 };
 
 export function protocolRangeIsValid(range: ProtocolCompatibility): boolean {
   return Number.isInteger(range.minimum) && Number.isInteger(range.maximum) && range.minimum > 0 && range.minimum <= range.maximum;
@@ -173,7 +173,7 @@ export type HarnessFailureReason = "quota_exhausted" | "transient_transport" | "
 export type HarnessPauseStatus = "awaiting_permission" | "awaiting_user_input" | "waiting_timer" | "retry_scheduled";
 export type HarnessBlockStatus = "queued" | "running" | "succeeded" | "failed" | "cancelled" | "waiting" | "skipped" | HarnessPauseStatus;
 export type HarnessRunStatus = "queued" | "running" | "succeeded" | "failed" | "cancelled" | "waiting" | HarnessPauseStatus;
-export type HarnessBlockRun = { blockId: string; status: HarnessBlockStatus; startedAt?: string; completedAt?: string; prompt?: string; output?: string; error?: string; failureReason?: HarnessFailureReason; retryAt?: string; provider?: AiProvider; sessionId?: string; workspace?: string; selectedRoute?: string; plannedRuns?: number; iterations?: HarnessBlockIteration[]; log?: HarnessLogEntry[]; waitingUntil?: string; recoveryAttempts?: number; pendingPermission?: AiPermissionRequest; question?: string };
+export type HarnessBlockRun = { blockId: string; status: HarnessBlockStatus; startedAt?: string; completedAt?: string; prompt?: string; output?: string; error?: string; failureReason?: HarnessFailureReason; retryAt?: string; provider?: AiProvider; sessionId?: string; workspace?: string; selectedRoute?: string; plannedRuns?: number; iterations?: HarnessBlockIteration[]; log?: HarnessLogEntry[]; waitingUntil?: string; recoveryAttempts?: number; pendingPermission?: AiPermissionRequest; question?: string; pauseId?: string };
 export type HarnessChildTask = { taskId: string; blockId: string; provider: AiProvider; workspace: string; recoveryAttempts: number; recoveryError?: string; failureReason?: HarnessFailureReason; retryAt?: string };
 export type HarnessRun = { id: string; harnessId: string; harnessVersion: number; definition?: HarnessDefinition; children?: HarnessChildTask[]; input: string; status: HarnessRunStatus; createdAt: string; startedAt?: string; completedAt?: string; blocks: HarnessBlockRun[]; error?: string; cleanupErrors?: string[] };
 export type HttpResponse = { status: number; statusText: string; headers: Record<string, string>; body: string; durationMs: number };
@@ -294,8 +294,11 @@ export type ProtocolOperations = {
   "harnesses.runs": { payload: { harnessId?: string }; result: { runs: HarnessRun[] } };
   "harnesses.run": { payload: { harnessId: string; input: string; provider?: AiProvider }; result: { run: HarnessRun } };
   "harnesses.append": { payload: { runId: string; input: string }; result: { run: HarnessRun } };
-  "harnesses.permission.resolve": { payload: { runId: string; blockId: string; sessionId: string; requestId: string; optionId?: string }; result: { run: HarnessRun } };
-  "harnesses.answer": { payload: { runId: string; blockId: string; sessionId: string; input: string }; result: { run: HarnessRun } };
+  "harnesses.permission.resolve": { payload: { runId: string; blockId: string; sessionId: string; pauseId: string; requestId: string; optionId?: string }; result: { run: HarnessRun } };
+  "harnesses.answer": { payload: { runId: string; blockId: string; sessionId: string; pauseId: string; input: string }; result: { run: HarnessRun } };
+  "harnesses.pause.resume": { payload: { runId: string; blockId: string; pauseId: string }; result: { run: HarnessRun } };
+  "harnesses.pause.retry": { payload: { runId: string; blockId: string; pauseId: string }; result: { run: HarnessRun } };
+  "harnesses.pause.cancel": { payload: { runId: string; blockId: string; pauseId: string }; result: { run: HarnessRun } };
   "harnesses.cancel": { payload: { runId: string }; result: { run: HarnessRun } };
   "http.execute": { payload: { method: string; url: string; headers: Record<string, string>; body?: string }; result: HttpResponse };
   "filesystem.listTree": {
@@ -652,6 +655,9 @@ const requestTypeRegistry: Record<RequestType, true> = {
   "harnesses.append": true,
   "harnesses.permission.resolve": true,
   "harnesses.answer": true,
+  "harnesses.pause.resume": true,
+  "harnesses.pause.retry": true,
+  "harnesses.pause.cancel": true,
   "harnesses.cancel": true,
   "http.execute": true,
   "filesystem.listTree": true,

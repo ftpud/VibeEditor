@@ -10,6 +10,7 @@ type Append = (block: HarnessBlock, prompt: string, context: { runId: string; bl
 type Interrupt = (provider: string, context: { runId: string; blockId: string; workspace?: string }) => Promise<void>;
 type ResolvePermission = (provider: string, workspace: string, requestId: string, optionId?: string) => Promise<AiSession>;
 type AnswerQuestion = (provider: string, workspace: string, input: string) => Promise<AiSession>;
+type FireTimer = (provider: string, workspace: string) => Promise<boolean>;
 type ActiveExecution = { run: HarnessRun; blocks: HarnessBlock[]; edges: HarnessEdge[]; outputs: Map<string, string>; dispatch: Dispatch; append: Append; defaultProvider: string; background: Set<Promise<void>> };
 type RecoveryPolicy = { maxAttempts: number; transportBackoffMs: number };
 
@@ -109,7 +110,7 @@ export class HarnessRunner {
     if (!run) throw new CoreError("FILE_NOT_FOUND", "Harness run does not exist");
     if (!isActiveStatus(run.status)) return run;
     if (this.activeRuns.has(runId)) this.cancelled.add(runId);
-    const active = run.blocks.filter((block) => block.status === "running" && block.provider);
+    const active = run.blocks.filter((block) => providerActiveStatuses.has(block.status) && block.provider);
     const completedAt = new Date().toISOString(); run.status = "cancelled"; run.completedAt = completedAt; run.error = undefined;
     for (const block of run.blocks) if (isActiveStatus(block.status)) { block.status = "cancelled"; block.completedAt = completedAt; block.error = undefined; }
     run.cleanupErrors = undefined; await this.update(run);
@@ -144,8 +145,8 @@ export class HarnessRunner {
     return structuredClone(execution.run);
   }
 
-  async resolvePermission(runId: string, blockId: string, sessionId: string, requestId: string, optionId: string | undefined, resolve: ResolvePermission): Promise<HarnessRun> {
-    const { execution, state, provider, workspace } = this.pausedAttempt(runId, blockId, sessionId, "awaiting_permission");
+  async resolvePermission(runId: string, blockId: string, sessionId: string, pauseId: string, requestId: string, optionId: string | undefined, resolve: ResolvePermission): Promise<HarnessRun> {
+    const { execution, state, provider, workspace } = this.pausedAttempt(runId, blockId, pauseId, "awaiting_permission", sessionId);
     if (state.pendingPermission?.id !== requestId) throw new CoreError("INVALID_REQUEST", "Permission request is no longer pending");
     if (optionId && !state.pendingPermission.options.some((option) => option.optionId === optionId)) throw new CoreError("INVALID_REQUEST", "Unknown permission option");
     const key = `${runId}:${blockId}:${sessionId}:${requestId}`;
@@ -160,10 +161,10 @@ export class HarnessRunner {
     } finally { this.resolvingPauses.delete(key); }
   }
 
-  async answerQuestion(runId: string, blockId: string, sessionId: string, input: string, answer: AnswerQuestion): Promise<HarnessRun> {
+  async answerQuestion(runId: string, blockId: string, sessionId: string, pauseId: string, input: string, answer: AnswerQuestion): Promise<HarnessRun> {
     const value = input.trim();
     if (!value || value.length > 100_000) throw new CoreError("INVALID_REQUEST", "Workflow answer must contain 1–100,000 characters");
-    const { execution, state, provider, workspace } = this.pausedAttempt(runId, blockId, sessionId, "awaiting_user_input");
+    const { execution, state, provider, workspace } = this.pausedAttempt(runId, blockId, pauseId, "awaiting_user_input", sessionId);
     const key = `${runId}:${blockId}:${sessionId}:answer`;
     if (this.resolvingPauses.has(key)) throw new CoreError("INVALID_REQUEST", "An answer is already being delivered");
     this.resolvingPauses.add(key);
@@ -177,6 +178,35 @@ export class HarnessRunner {
     } finally { this.resolvingPauses.delete(key); }
   }
 
+  async resumeTimer(runId: string, blockId: string, pauseId: string, fire: FireTimer): Promise<HarnessRun> {
+    const { execution, state, provider, workspace } = this.pausedAttempt(runId, blockId, pauseId, "waiting_timer");
+    const key = `${runId}:${blockId}:${pauseId}:resume`;
+    if (this.resolvingPauses.has(key)) throw new CoreError("INVALID_REQUEST", "Timer is already being resumed");
+    this.resolvingPauses.add(key);
+    try {
+      this.assertActive(runId);
+      if (!await fire(provider, workspace)) throw new CoreError("INVALID_REQUEST", "Workflow timer is no longer pending");
+      this.assertActive(runId);
+      if (state.status === "waiting_timer" && state.pauseId === pauseId) {
+        state.status = "running"; state.waitingUntil = undefined; state.pauseId = undefined; execution.run.status = this.runActivityStatus(execution.run);
+        this.log(state, "lifecycle", "Timer fired early by user"); await this.update(execution.run);
+      }
+      return structuredClone(execution.run);
+    } finally { this.resolvingPauses.delete(key); }
+  }
+
+  async retryPause(runId: string, blockId: string, pauseId: string): Promise<HarnessRun> {
+    const { execution, state } = this.pausedAttempt(runId, blockId, pauseId, "retry_scheduled", undefined, false);
+    state.status = "queued"; state.error = undefined; state.completedAt = undefined; state.retryAt = undefined; state.pauseId = undefined; execution.run.status = "running";
+    this.log(state, "lifecycle", "Retry requested by user"); await this.update(execution.run);
+    return structuredClone(execution.run);
+  }
+
+  async cancelPause(runId: string, blockId: string, pauseId: string, interrupt: Interrupt): Promise<HarnessRun> {
+    this.pausedAttempt(runId, blockId, pauseId, ["awaiting_permission", "awaiting_user_input", "waiting_timer", "retry_scheduled"], undefined, false);
+    return this.cancel(runId, interrupt);
+  }
+
   async resumeFailed(runId: string, callerId: string): Promise<{ resumed: string[] }> {
     const execution = this.executions.get(runId);
     if (!execution || this.cancelled.has(runId)) throw new Error("Workflow is no longer active");
@@ -187,7 +217,7 @@ export class HarnessRunner {
       state.failureReason ??= classifyWorkflowFailure(state.error ?? "");
       if (!isRetryableFailure(state.failureReason) || !retryDue(state.retryAt) || (state.recoveryAttempts ?? 0) >= this.recovery.maxAttempts) continue;
       state.recoveryAttempts = (state.recoveryAttempts ?? 0) + 1;
-      state.status = "queued"; state.error = undefined; state.completedAt = undefined; state.retryAt = undefined; execution.run.status = "running";
+      state.status = "queued"; state.error = undefined; state.completedAt = undefined; state.retryAt = undefined; state.pauseId = undefined; execution.run.status = "running";
       this.log(state, "lifecycle", `Watchdog requested continuation after ${state.failureReason} (${state.recoveryAttempts}/${this.recovery.maxAttempts})`); resumed.push(state.blockId);
     }
     await this.update(execution.run);
@@ -272,6 +302,7 @@ export class HarnessRunner {
             state.error = error instanceof Error ? error.message : String(error); state.failureReason = classifyWorkflowFailure(error);
             state.retryAt = nextRetryAt(state.failureReason, state.recoveryAttempts ?? 0, this.recovery);
             state.status = isRetryableFailure(state.failureReason) ? "retry_scheduled" : "failed";
+            state.pauseId = state.status === "retry_scheduled" ? crypto.randomUUID() : undefined;
             run.status = this.runActivityStatus(run);
             this.log(state, "error", state.error); await this.update(run);
             return { blockId };
@@ -347,7 +378,7 @@ export class HarnessRunner {
       }
       const output = count === 1 ? collected[0] ?? "" : collected.map((value, index) => `## Stack item ${index + 1}\n${value}`).join("\n\n");
       this.assertActive(run.id);
-      outputs.set(block.id, output); state.output = output.slice(-200_000); state.status = "succeeded"; state.completedAt = new Date().toISOString(); state.failureReason = undefined; state.retryAt = undefined; state.waitingUntil = undefined; state.pendingPermission = undefined; state.question = undefined; this.log(state, "lifecycle", "Completed successfully"); await this.update(run);
+      outputs.set(block.id, output); state.output = output.slice(-200_000); state.status = "succeeded"; state.completedAt = new Date().toISOString(); state.failureReason = undefined; state.retryAt = undefined; state.waitingUntil = undefined; state.pendingPermission = undefined; state.question = undefined; state.pauseId = undefined; this.log(state, "lifecycle", "Completed successfully"); await this.update(run);
     } finally { const active = this.activeProviders.get(run.id); active?.delete(state.provider); }
   }
 
@@ -366,21 +397,25 @@ export class HarnessRunner {
     const status: "running" | HarnessPauseStatus = session.pendingPermission ? "awaiting_permission" : waitingUntil ? "waiting_timer" : session.status === "user_prompt" ? "awaiting_user_input" : "running";
     const question = status === "awaiting_user_input" ? session.messages.filter((message) => message.role === "assistant").at(-1)?.text : undefined;
     const permission = status === "awaiting_permission" ? session.pendingPermission : undefined;
-    if (state.status === status && state.waitingUntil === waitingUntil && state.question === question && JSON.stringify(state.pendingPermission) === JSON.stringify(permission) && state.sessionId === session.id) return;
+    const pauseId = status === "running" ? undefined : state.status === status ? state.pauseId ?? crypto.randomUUID() : crypto.randomUUID();
+    if (state.status === status && state.waitingUntil === waitingUntil && state.question === question && JSON.stringify(state.pendingPermission) === JSON.stringify(permission) && state.sessionId === session.id && state.pauseId === pauseId) return;
     const previous = state.status; state.status = status; state.sessionId = session.id; state.waitingUntil = waitingUntil; state.question = question; state.pendingPermission = permission;
+    state.pauseId = pauseId;
     run.status = this.runActivityStatus(run);
     if (previous !== status) this.log(state, "lifecycle", status === "running" ? "Provider resumed work" : `Paused: ${status.replaceAll("_", " ")}`);
     await this.update(run);
   }
 
-  private pausedAttempt(runId: string, blockId: string, sessionId: string, expected: HarnessPauseStatus): { execution: ActiveExecution; state: HarnessRun["blocks"][number]; provider: string; workspace: string } {
+  private pausedAttempt(runId: string, blockId: string, pauseId: string, expected: HarnessPauseStatus | HarnessPauseStatus[], sessionId?: string, requireOwnership = true): { execution: ActiveExecution; state: HarnessRun["blocks"][number]; provider: string; workspace: string } {
     const execution = this.executions.get(runId);
     if (!execution || !this.isActive(runId)) throw new CoreError("INVALID_REQUEST", "Workflow run is no longer active");
     const state = execution.run.blocks.find((item) => item.blockId === blockId);
-    if (!state || state.status !== expected) throw new CoreError("INVALID_REQUEST", "Workflow block is no longer waiting for this response");
-    if (state.sessionId !== sessionId) throw new CoreError("INVALID_REQUEST", "Response belongs to a different workflow session");
-    if (!state.provider || !state.workspace) throw new CoreError("INVALID_REQUEST", "Workflow session ownership is incomplete");
-    return { execution, state, provider: state.provider, workspace: state.workspace };
+    const statuses = Array.isArray(expected) ? expected : [expected];
+    if (!state || !statuses.includes(state.status as HarnessPauseStatus)) throw new CoreError("INVALID_REQUEST", "Workflow block is no longer waiting for this response");
+    if (state.pauseId !== pauseId) throw new CoreError("INVALID_REQUEST", "Response belongs to a different paused attempt");
+    if (sessionId !== undefined && state.sessionId !== sessionId) throw new CoreError("INVALID_REQUEST", "Response belongs to a different workflow session");
+    if (requireOwnership && (!state.provider || !state.workspace)) throw new CoreError("INVALID_REQUEST", "Workflow session ownership is incomplete");
+    return { execution, state, provider: state.provider ?? "", workspace: state.workspace ?? "" };
   }
 
   private runActivityStatus(run: HarnessRun): HarnessRun["status"] {
@@ -428,6 +463,7 @@ export function connectedInput(blockId: string, harnessInput: string, blocks: Ha
 class Cancelled extends Error {}
 
 const activeStatuses = new Set(["queued", "running", "waiting", "awaiting_permission", "awaiting_user_input", "waiting_timer", "retry_scheduled"]);
+const providerActiveStatuses = new Set(["running", "awaiting_permission", "awaiting_user_input", "waiting_timer"]);
 function isActiveStatus(status: string): boolean { return activeStatuses.has(status); }
 
 export function isRecoverableWorkflowError(message: string): boolean {
