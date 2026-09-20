@@ -6,7 +6,7 @@ The current vertical slice is useful: definitions and run snapshots are Core-own
 
 ## P0 — make execution correct and recoverable
 
-- [ ] Replace the JSON read/modify/write store with a serialized, transactional repository.
+- [x] Replace the JSON read/modify/write store with a serialized, transactional repository.
   - [x] Prevent concurrent definition updates and run updates from overwriting each other.
   - [x] Use optimistic concurrency (the submitted definition `version`) for definition saves and return a conflict that Desktop can resolve.
   - [x] Persist definitions and runs separately, validate a schema version on read, quarantine corrupt records, and retain an atomic backup.
@@ -30,8 +30,8 @@ The current vertical slice is useful: definitions and run snapshots are Core-own
   - [x] Report partial cancellation failures instead of swallowing all interrupt errors.
   - [x] Add a distinct state for a completed main flow with a still-running watchdog, or stop the watchdog automatically when delivery is terminal.
 - [ ] Model pauses instead of converting them into generic failure.
-  - Add block/run states for `awaiting_permission`, `awaiting_user_input`, `waiting_timer`, and `retry_scheduled`.
-  - Route permission requests and provider questions to Desktop with run/block/session ownership.
+  - [x] Add block/run states for `awaiting_permission`, `awaiting_user_input`, `waiting_timer`, and `retry_scheduled`.
+  - [x] Route permission requests and provider questions to Desktop with run/block/session ownership.
   - Allow the user to answer, approve, reject, resume, retry, or cancel the exact paused attempt.
 - [ ] Replace regex-only error recovery with typed provider/runtime failures.
   - Normalize quota, transport, permission, user-input, cancellation, and permanent failures at the provider boundary.

@@ -64,7 +64,7 @@ describe("HarnessRunner", () => {
       return session("done");
     });
     try {
-      await vi.waitFor(async () => expect((await store.runs())[0]?.blocks.filter((block) => block.status === "failed")).toHaveLength(2));
+      await vi.waitFor(async () => expect((await store.runs())[0]?.blocks.filter((block) => block.status === "failed" || block.status === "retry_scheduled")).toHaveLength(2));
       const current = (await store.runs())[0]!;
       expect(current.blocks.find((block) => block.blockId === "transport")?.failureReason).toBe("transient_transport");
       expect(current.blocks.find((block) => block.blockId === "transport")?.retryAt).toBeTruthy();
@@ -129,8 +129,8 @@ describe("HarnessRunner", () => {
     const append = vi.fn(async () => session("recovered"));
     const run = await runner.start(definition.id, "request", dispatch, "test", append);
     try {
-      await vi.waitFor(async () => expect((await store.runs())[0]?.blocks.find((b) => b.blockId === "implement")?.status).toBe("failed"));
-      expect((await store.runs())[0]?.status).toBe("running");
+      await vi.waitFor(async () => expect((await store.runs())[0]?.blocks.find((b) => b.blockId === "implement")?.status).toBe("retry_scheduled"));
+      expect((await store.runs())[0]?.status).toBe("retry_scheduled");
       expect(await runner.resumeFailed(run.id, "watchdog")).toEqual({ resumed: ["implement"] });
       expect(await runner.resumeFailed(run.id, "watchdog")).toEqual({ resumed: [] });
       await vi.waitFor(async () => expect((await store.runs())[0]?.blocks.find((b) => b.blockId === "report")?.status).toBe("succeeded"));
@@ -331,6 +331,44 @@ describe("HarnessRunner", () => {
     await runner.start(definition.id, "build", dispatch, "test", append);
     for (let tries = 0; tries < 150 && (await store.runs())[0]?.status !== "succeeded"; tries += 1) await new Promise((resolve) => setTimeout(resolve, 10));
     expect(append).toHaveBeenCalledWith(expect.objectContaining({ id: "worker" }), "follow-up", expect.objectContaining({ workspace: "/sessions/worker" }));
+  });
+
+  it("resolves a permission only for its exact paused workflow attempt", async () => {
+    const state = await mkdtemp(path.join(os.tmpdir(), "workflow-permission-")); const store = new HarnessStore("/workspace", state); const definition = await store.create("Permission");
+    await store.update({ ...definition, blocks: [{ id: "worker", type: "prompt", label: "Worker", prompt: "work", position: { x: 0, y: 0 } }], edges: [] });
+    let release!: () => void; const waiting = new Promise<void>((resolve) => { release = resolve; });
+    const runner = new HarnessRunner(store, () => undefined);
+    const run = await runner.start(definition.id, "work", async (_block, _prompt, runtime) => {
+      await runtime.started("/workflow/worker");
+      await runtime.activity({ id: "session-1", model: "test", reasoning: "low", status: "in_progress", pendingPermission: { id: "permission-1", title: "Run command", toolCallId: "tool-1", options: [{ optionId: "allow", name: "Allow", kind: "allow_once" }] }, messages: [] });
+      await waiting; return session("session-1");
+    });
+    await vi.waitFor(async () => expect((await store.runs())[0]?.status).toBe("awaiting_permission"));
+    await expect(runner.resolvePermission(run.id, "worker", "wrong-session", "permission-1", "allow", vi.fn())).rejects.toThrow("different workflow session");
+    const resolve = vi.fn(async () => ({ id: "session-1", model: "test", reasoning: "low", status: "in_progress" as const, messages: [] }));
+    const resumed = await runner.resolvePermission(run.id, "worker", "session-1", "permission-1", "allow", resolve);
+    expect(resolve).toHaveBeenCalledWith("codex", "/workflow/worker", "permission-1", "allow");
+    expect(resumed.status).toBe("running"); expect(resumed.blocks[0]).toMatchObject({ status: "running", sessionId: "session-1" }); expect(resumed.blocks[0]?.pendingPermission).toBeUndefined();
+    release(); await vi.waitFor(async () => expect((await store.runs())[0]?.status).toBe("succeeded"));
+  });
+
+  it("delivers an answer to the exact workflow session and records it", async () => {
+    const state = await mkdtemp(path.join(os.tmpdir(), "workflow-question-")); const store = new HarnessStore("/workspace", state); const definition = await store.create("Question");
+    await store.update({ ...definition, blocks: [{ id: "worker", type: "prompt", label: "Worker", prompt: "work", position: { x: 0, y: 0 } }], edges: [] });
+    let release!: () => void; const waiting = new Promise<void>((resolve) => { release = resolve; });
+    const runner = new HarnessRunner(store, () => undefined);
+    const run = await runner.start(definition.id, "work", async (_block, _prompt, runtime) => {
+      await runtime.started("/workflow/worker");
+      await runtime.activity({ id: "session-2", model: "test", reasoning: "low", status: "user_prompt", messages: [{ id: "question", role: "assistant", text: "Which branch?", timestamp: "now" }] });
+      await waiting; return session("session-2");
+    });
+    await vi.waitFor(async () => expect((await store.runs())[0]?.status).toBe("awaiting_user_input"));
+    const answer = vi.fn(async () => ({ id: "session-2", model: "test", reasoning: "low", status: "in_progress" as const, messages: [] }));
+    const resumed = await runner.answerQuestion(run.id, "worker", "session-2", " feature/auth ", answer);
+    expect(answer).toHaveBeenCalledWith("codex", "/workflow/worker", "feature/auth");
+    expect(resumed.blocks[0]?.log?.at(-1)?.message).toBe("Provider resumed work");
+    expect(resumed.blocks[0]?.log?.some((entry) => entry.message === "User answer: feature/auth")).toBe(true);
+    release(); await vi.waitFor(async () => expect((await store.runs())[0]?.status).toBe("succeeded"));
   });
 });
 

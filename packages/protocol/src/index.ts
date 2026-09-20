@@ -16,7 +16,7 @@ export type FileRevision = { identity: string; version: string };
  * Desktop can prove it is safe to talk to a newly deployed Core.
  */
 export type ProtocolCompatibility = { minimum: number; maximum: number };
-export const protocolCompatibility: ProtocolCompatibility = { minimum: 5, maximum: 5 };
+export const protocolCompatibility: ProtocolCompatibility = { minimum: 6, maximum: 6 };
 
 export function protocolRangeIsValid(range: ProtocolCompatibility): boolean {
   return Number.isInteger(range.minimum) && Number.isInteger(range.maximum) && range.minimum > 0 && range.minimum <= range.maximum;
@@ -294,6 +294,8 @@ export type ProtocolOperations = {
   "harnesses.runs": { payload: { harnessId?: string }; result: { runs: HarnessRun[] } };
   "harnesses.run": { payload: { harnessId: string; input: string; provider?: AiProvider }; result: { run: HarnessRun } };
   "harnesses.append": { payload: { runId: string; input: string }; result: { run: HarnessRun } };
+  "harnesses.permission.resolve": { payload: { runId: string; blockId: string; sessionId: string; requestId: string; optionId?: string }; result: { run: HarnessRun } };
+  "harnesses.answer": { payload: { runId: string; blockId: string; sessionId: string; input: string }; result: { run: HarnessRun } };
   "harnesses.cancel": { payload: { runId: string }; result: { run: HarnessRun } };
   "http.execute": { payload: { method: string; url: string; headers: Record<string, string>; body?: string }; result: HttpResponse };
   "filesystem.listTree": {
@@ -648,6 +650,8 @@ const requestTypeRegistry: Record<RequestType, true> = {
   "harnesses.runs": true,
   "harnesses.run": true,
   "harnesses.append": true,
+  "harnesses.permission.resolve": true,
+  "harnesses.answer": true,
   "harnesses.cancel": true,
   "http.execute": true,
   "filesystem.listTree": true,

@@ -8,6 +8,8 @@ import type { AiUsage } from "@remote-ide/acp";
 type Dispatch = (block: HarnessBlock, prompt: string, context: { runId: string; blockId: string; iteration: number; started(workspace: string): Promise<void>; activity(session: AiSession, waitingUntil?: string): Promise<void>; assertActive(): void }) => Promise<AiSession>;
 type Append = (block: HarnessBlock, prompt: string, context: { runId: string; blockId: string; workspace: string }) => Promise<AiSession>;
 type Interrupt = (provider: string, context: { runId: string; blockId: string; workspace?: string }) => Promise<void>;
+type ResolvePermission = (provider: string, workspace: string, requestId: string, optionId?: string) => Promise<AiSession>;
+type AnswerQuestion = (provider: string, workspace: string, input: string) => Promise<AiSession>;
 type ActiveExecution = { run: HarnessRun; blocks: HarnessBlock[]; edges: HarnessEdge[]; outputs: Map<string, string>; dispatch: Dispatch; append: Append; defaultProvider: string; background: Set<Promise<void>> };
 type RecoveryPolicy = { maxAttempts: number; transportBackoffMs: number };
 
@@ -16,6 +18,7 @@ export class HarnessRunner {
   private readonly activeRuns = new Set<string>();
   private readonly activeProviders = new Map<string, Set<string>>();
   private readonly executions = new Map<string, ActiveExecution>();
+  private readonly resolvingPauses = new Set<string>();
   private updateQueue = Promise.resolve();
   constructor(private readonly store: HarnessStore, private readonly changed: (runId: string) => void, private readonly concurrency = 4, private readonly recovery: RecoveryPolicy = { maxAttempts: 3, transportBackoffMs: 5_000 }) {}
 
@@ -139,6 +142,39 @@ export class HarnessRunner {
       await this.update(execution.run);
     })).catch(async (error) => { if (error instanceof Cancelled || this.cancelled.has(runId)) return; execution.run.status = "failed"; execution.run.error = error instanceof Error ? error.message : String(error); execution.run.completedAt = new Date().toISOString(); await this.update(execution.run); });
     return structuredClone(execution.run);
+  }
+
+  async resolvePermission(runId: string, blockId: string, sessionId: string, requestId: string, optionId: string | undefined, resolve: ResolvePermission): Promise<HarnessRun> {
+    const { execution, state, provider, workspace } = this.pausedAttempt(runId, blockId, sessionId, "awaiting_permission");
+    if (state.pendingPermission?.id !== requestId) throw new CoreError("INVALID_REQUEST", "Permission request is no longer pending");
+    if (optionId && !state.pendingPermission.options.some((option) => option.optionId === optionId)) throw new CoreError("INVALID_REQUEST", "Unknown permission option");
+    const key = `${runId}:${blockId}:${sessionId}:${requestId}`;
+    if (this.resolvingPauses.has(key)) throw new CoreError("INVALID_REQUEST", "Permission request is already being resolved");
+    this.resolvingPauses.add(key);
+    try {
+      this.assertActive(runId);
+      const session = await resolve(provider, workspace, requestId, optionId);
+      this.assertActive(runId);
+      await this.recordActivity(execution.run, state, session);
+      return structuredClone(execution.run);
+    } finally { this.resolvingPauses.delete(key); }
+  }
+
+  async answerQuestion(runId: string, blockId: string, sessionId: string, input: string, answer: AnswerQuestion): Promise<HarnessRun> {
+    const value = input.trim();
+    if (!value || value.length > 100_000) throw new CoreError("INVALID_REQUEST", "Workflow answer must contain 1–100,000 characters");
+    const { execution, state, provider, workspace } = this.pausedAttempt(runId, blockId, sessionId, "awaiting_user_input");
+    const key = `${runId}:${blockId}:${sessionId}:answer`;
+    if (this.resolvingPauses.has(key)) throw new CoreError("INVALID_REQUEST", "An answer is already being delivered");
+    this.resolvingPauses.add(key);
+    try {
+      this.assertActive(runId);
+      const session = await answer(provider, workspace, value);
+      this.assertActive(runId);
+      this.log(state, "prompt", `User answer: ${value}`);
+      await this.recordActivity(execution.run, state, session);
+      return structuredClone(execution.run);
+    } finally { this.resolvingPauses.delete(key); }
   }
 
   async resumeFailed(runId: string, callerId: string): Promise<{ resumed: string[] }> {
@@ -335,6 +371,16 @@ export class HarnessRunner {
     run.status = this.runActivityStatus(run);
     if (previous !== status) this.log(state, "lifecycle", status === "running" ? "Provider resumed work" : `Paused: ${status.replaceAll("_", " ")}`);
     await this.update(run);
+  }
+
+  private pausedAttempt(runId: string, blockId: string, sessionId: string, expected: HarnessPauseStatus): { execution: ActiveExecution; state: HarnessRun["blocks"][number]; provider: string; workspace: string } {
+    const execution = this.executions.get(runId);
+    if (!execution || !this.isActive(runId)) throw new CoreError("INVALID_REQUEST", "Workflow run is no longer active");
+    const state = execution.run.blocks.find((item) => item.blockId === blockId);
+    if (!state || state.status !== expected) throw new CoreError("INVALID_REQUEST", "Workflow block is no longer waiting for this response");
+    if (state.sessionId !== sessionId) throw new CoreError("INVALID_REQUEST", "Response belongs to a different workflow session");
+    if (!state.provider || !state.workspace) throw new CoreError("INVALID_REQUEST", "Workflow session ownership is incomplete");
+    return { execution, state, provider: state.provider, workspace: state.workspace };
   }
 
   private runActivityStatus(run: HarnessRun): HarnessRun["status"] {

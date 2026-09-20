@@ -65,12 +65,12 @@ export class HarnessStore {
     return this.mutate(async () => {
       const runs = await this.runs(); const recovered: HarnessRun[] = []; const now = new Date().toISOString();
       for (const run of runs) {
-        if (!["queued", "running", "waiting"].includes(run.status)) continue;
+        if (!activeRunStatuses.has(run.status)) continue;
         run.status = "failed"; run.completedAt = now; run.error = "Core restarted before this workflow completed. Inspect existing sessions and tasks, then start a new run or clean up the preserved work.";
         for (const block of run.blocks) {
-          if (!["queued", "running", "waiting"].includes(block.status)) continue;
-          block.status = block.status === "running" ? "failed" : "cancelled"; block.completedAt = now;
-          if (block.status === "failed") { block.error = run.error; block.failureReason = "permanent"; }
+          if (!activeBlockStatuses.has(block.status)) continue;
+          const previous = block.status; block.status = ["running", "awaiting_permission", "awaiting_user_input", "waiting_timer", "retry_scheduled"].includes(previous) ? "failed" : "cancelled"; block.completedAt = now;
+          if (block.status === "failed") { block.error = run.error; block.failureReason = previous === "awaiting_permission" ? "permission_required" : previous === "awaiting_user_input" ? "user_input_required" : "permanent"; }
         }
         recovered.push(structuredClone(run));
       }
@@ -131,13 +131,18 @@ export class HarnessStore {
 }
 
 function validName(name: string): string { const value = name.trim(); if (!value || value.length > 120) throw new CoreError("INVALID_REQUEST", "Harness name must contain 1–120 characters"); return value; }
+const activeRunStatuses = new Set<HarnessRun["status"]>(["queued", "running", "waiting", "awaiting_permission", "awaiting_user_input", "waiting_timer", "retry_scheduled"]);
+const activeBlockStatuses = new Set<HarnessRun["blocks"][number]["status"]>(["queued", "running", "waiting", "awaiting_permission", "awaiting_user_input", "waiting_timer", "retry_scheduled"]);
 function isRecord(value: unknown): value is Record<string, unknown> { return Boolean(value) && typeof value === "object"; }
 function isRun(value: unknown): value is HarnessRun {
-  if (!isRecord(value) || typeof value.id !== "string" || typeof value.harnessId !== "string" || typeof value.harnessVersion !== "number" || typeof value.input !== "string" || !["queued", "running", "succeeded", "failed", "cancelled", "waiting"].includes(String(value.status)) || typeof value.createdAt !== "string" || !Array.isArray(value.blocks)) return false;
+  const statuses = ["queued", "running", "succeeded", "failed", "cancelled", "waiting", "awaiting_permission", "awaiting_user_input", "waiting_timer", "retry_scheduled"];
+  if (!isRecord(value) || typeof value.id !== "string" || typeof value.harnessId !== "string" || typeof value.harnessVersion !== "number" || typeof value.input !== "string" || !statuses.includes(String(value.status)) || typeof value.createdAt !== "string" || !Array.isArray(value.blocks)) return false;
   if (value.definition !== undefined && !isHarness(value.definition)) return false;
   if (value.cleanupErrors !== undefined && (!Array.isArray(value.cleanupErrors) || !value.cleanupErrors.every((item) => typeof item === "string"))) return false;
   if (value.children !== undefined && (!Array.isArray(value.children) || !value.children.every((child) => isRecord(child) && typeof child.taskId === "string" && typeof child.blockId === "string" && typeof child.provider === "string" && typeof child.workspace === "string" && Number.isInteger(child.recoveryAttempts)))) return false;
-  return value.blocks.every((block) => isRecord(block) && typeof block.blockId === "string" && ["queued", "running", "succeeded", "failed", "cancelled", "waiting", "skipped"].includes(String(block.status))
+  return value.blocks.every((block) => isRecord(block) && typeof block.blockId === "string" && [...statuses, "skipped"].includes(String(block.status))
+    && (block.question === undefined || typeof block.question === "string")
+    && (block.pendingPermission === undefined || isRecord(block.pendingPermission) && typeof block.pendingPermission.id === "string" && typeof block.pendingPermission.title === "string" && typeof block.pendingPermission.toolCallId === "string" && Array.isArray(block.pendingPermission.options) && block.pendingPermission.options.every((option) => isRecord(option) && typeof option.optionId === "string" && typeof option.name === "string" && ["allow_once", "allow_always", "reject_once", "reject_always"].includes(String(option.kind))))
     && (block.log === undefined || Array.isArray(block.log) && block.log.every((entry) => isRecord(entry) && typeof entry.timestamp === "string" && ["lifecycle", "prompt", "response", "error"].includes(String(entry.kind)) && typeof entry.message === "string"))
     && (block.iterations === undefined || Array.isArray(block.iterations) && block.iterations.every((iteration) => isRecord(iteration) && Number.isInteger(iteration.index) && ["running", "succeeded", "failed", "cancelled"].includes(String(iteration.status)) && typeof iteration.startedAt === "string")));
 }

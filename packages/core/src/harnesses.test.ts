@@ -94,4 +94,11 @@ describe("HarnessStore", () => {
     expect(recovered[0]?.blocks.map((block) => block.status)).toEqual(["succeeded", "failed", "cancelled"]);
     expect(await new HarnessStore("/workspace", state).recoverInterruptedRuns()).toEqual([]);
   });
+
+  it("recovers persisted pause states instead of leaving runs looking active", async () => {
+    const state = await mkdtemp(path.join(os.tmpdir(), "remote-ide-harness-paused-")); const store = new HarnessStore("/workspace", state);
+    await store.saveRun({ id: "run", harnessId: "flow", harnessVersion: 1, input: "work", status: "awaiting_permission", createdAt: "now", blocks: [{ blockId: "approval", status: "awaiting_permission", provider: "codex", sessionId: "session", workspace: "/workflow", pendingPermission: { id: "request", title: "Run command", toolCallId: "tool", options: [] } }] });
+    const recovered = await new HarnessStore("/workspace", state).recoverInterruptedRuns();
+    expect(recovered[0]).toMatchObject({ status: "failed", blocks: [{ status: "failed", failureReason: "permission_required" }] });
+  });
 });
