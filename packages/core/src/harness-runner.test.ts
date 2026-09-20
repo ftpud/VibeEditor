@@ -8,6 +8,28 @@ import { classifyWorkflowFailure, connectedInput, HarnessRunner, nextWatchdogRes
 import { HarnessStore } from "./harnesses.js";
 
 describe("HarnessRunner", () => {
+  it("reconciles a completed provider turn after restart without sending its prompt again", async () => {
+    const state = await mkdtemp(path.join(os.tmpdir(), "workflow-restart-complete-")); const store = new HarnessStore("/workspace", state); const created = await store.create("Recovery");
+    const definition = await store.update({ ...created, blocks: [{ id: "first", type: "prompt", label: "First", prompt: "{{input}}", position: { x: 0, y: 0 } }, { id: "second", type: "prompt", label: "Second", prompt: "Use {{input}}", position: { x: 0, y: 0 } }], edges: [{ id: "next", from: "first", to: "second" }] });
+    await store.saveRun({ id: "recover-complete", harnessId: definition.id, harnessVersion: definition.version, definition, executionPlan: { version: 1, createdAt: "now", definitionVersion: definition.version, order: ["first", "second"], blocks: [{ blockId: "first", incoming: [], outgoing: ["next"] }, { blockId: "second", incoming: ["next"], outgoing: [] }] }, input: "request", status: "running", createdAt: "now", startedAt: "now", blocks: [{ blockId: "first", status: "running", provider: "codex", workspace: "/workflow/first", sessionId: "session-first", attempts: [{ id: "attempt-first", index: 1, status: "running", startedAt: "now", operationId: "attempt-operation" }] }, { blockId: "second", status: "waiting" }], operations: [{ id: "attempt-operation", idempotencyKey: "block-attempt:first:1", kind: "block_attempt", status: "intent", blockId: "first", attemptId: "attempt-first", createdAt: "now", updatedAt: "now" }, { id: "prompt-operation", idempotencyKey: "prompt:first:attempt-first", kind: "prompt_delivery", status: "intent", blockId: "first", attemptId: "attempt-first", createdAt: "now", updatedAt: "now" }] });
+    const dispatch = vi.fn(async (block: HarnessBlock, prompt: string) => session(`${block.id}:${prompt}`)); const append = vi.fn();
+    const runner = new HarnessRunner(store, () => undefined); await runner.recover(dispatch, "codex", append, { session: async () => ({ ...session("session-first"), messages: [{ id: "answer", role: "assistant", text: "recovered output", timestamp: "now" }] }), timer: async () => false });
+    await vi.waitFor(async () => expect((await store.runs())[0]?.status).toBe("succeeded"));
+    const run = (await store.runs())[0]!; expect(dispatch).toHaveBeenCalledTimes(1); expect(dispatch.mock.calls[0]?.[0].id).toBe("second"); expect(dispatch.mock.calls[0]?.[1]).toContain("recovered output"); expect(append).not.toHaveBeenCalled();
+    expect(run.blocks[0]).toMatchObject({ status: "succeeded", output: "recovered output" }); expect(run.operations?.filter((operation) => operation.blockId === "first").every((operation) => operation.status === "succeeded")).toBe(true);
+  });
+
+  it("pauses an orphaned provider turn until the user explicitly resumes it", async () => {
+    const state = await mkdtemp(path.join(os.tmpdir(), "workflow-restart-orphan-")); const store = new HarnessStore("/workspace", state); const created = await store.create("Recovery");
+    const definition = await store.update({ ...created, blocks: [{ id: "worker", type: "prompt", label: "Worker", prompt: "{{input}}", position: { x: 0, y: 0 } }], edges: [] });
+    await store.saveRun({ id: "recover-orphan", harnessId: definition.id, harnessVersion: definition.version, definition, executionPlan: { version: 1, createdAt: "now", definitionVersion: definition.version, order: ["worker"], blocks: [{ blockId: "worker", incoming: [], outgoing: [] }] }, input: "request", status: "running", createdAt: "now", startedAt: "now", blocks: [{ blockId: "worker", status: "running", provider: "codex", workspace: "/workflow/worker", sessionId: "missing" }] });
+    const dispatch = vi.fn(); const append = vi.fn(async (_block: HarnessBlock, _prompt: string) => session("continued")); const runner = new HarnessRunner(store, () => undefined);
+    const recovered = await runner.recover(dispatch, "codex", append, { session: async () => undefined, timer: async () => false });
+    expect(recovered[0]).toMatchObject({ status: "retry_scheduled", blocks: [{ status: "retry_scheduled", failureReason: "recovery_orphaned", error: expect.stringContaining("no longer exists") }] }); expect(dispatch).not.toHaveBeenCalled(); expect(append).not.toHaveBeenCalled();
+    const pauseId = recovered[0]!.blocks[0]!.pauseId!; await runner.retryPause("recover-orphan", "worker", pauseId);
+    await vi.waitFor(async () => expect((await store.runs())[0]?.status).toBe("succeeded")); expect(append).toHaveBeenCalledOnce(); expect(append.mock.calls[0]?.[1]).toContain("Continue your interrupted work");
+  });
+
   it("persists a versioned execution plan, attempts, and terminal operation journal", async () => {
     const state = await mkdtemp(path.join(os.tmpdir(), "workflow-journal-")); const store = new HarnessStore("/workspace", state); const definition = await store.create("Journal");
     await store.update({ ...definition, blocks: [{ id: "worker", type: "prompt", label: "Worker", prompt: "{{input}}", position: { x: 0, y: 0 } }], edges: [] });

@@ -15,6 +15,11 @@ type FireTimer = (provider: string, workspace: string) => Promise<boolean>;
 type ActiveExecution = { run: HarnessRun; blocks: HarnessBlock[]; edges: HarnessEdge[]; outputs: Map<string, string>; dispatch: Dispatch; append: Append; defaultProvider: string; background: Set<Promise<void>>; stackInvocations: Map<string, number> };
 type RecoveryPolicy = { maxAttempts: number; transportBackoffMs: number; maxElapsedMs?: number; jitterRatio?: number; random?: () => number };
 type ResolvedRecoveryPolicy = Required<RecoveryPolicy>;
+export type HarnessRecoveryInspector = {
+  session(provider: string, workspace: string): Promise<AiSession | undefined>;
+  timer(runId: string, blockId: string, provider: string, workspace: string): Promise<boolean>;
+  child?(child: HarnessChildTask): Promise<boolean>;
+};
 
 export class HarnessRunner {
   private readonly cancelled = new Set<string>();
@@ -144,6 +149,35 @@ export class HarnessRunner {
     await this.store.saveRun(run); this.changed(run.id);
     this.activeRuns.add(run.id); void this.execute(run, harness.blocks, harness.edges, validation.order, dispatch, defaultProvider, append ?? (async () => { throw new Error("This workflow runtime cannot append to an active block session"); }));
     return run;
+  }
+
+  async recover(dispatch: Dispatch, defaultProvider = "codex", append?: Append, inspector?: HarnessRecoveryInspector): Promise<HarnessRun[]> {
+    const recovered: HarnessRun[] = [];
+    for (const run of await this.store.runs()) {
+      if (!isActiveStatus(run.status)) continue;
+      const definition = run.definition;
+      const validation = definition ? validateHarness(definition) : undefined;
+      if (!definition || !run.executionPlan || !validation?.valid || run.executionPlan.definitionVersion !== run.harnessVersion) {
+        await this.failRecovery(run, "The persisted workflow has no valid frozen execution plan. Start a new run; completed sessions and task workspaces were preserved.");
+        recovered.push(structuredClone(run)); continue;
+      }
+      const order = run.executionPlan.order;
+      if (order.length !== definition.blocks.length || order.some((id) => !definition.blocks.some((block) => block.id === id))) {
+        await this.failRecovery(run, "The persisted workflow execution plan does not match its frozen definition. Start a new run; completed sessions and task workspaces were preserved.");
+        recovered.push(structuredClone(run)); continue;
+      }
+      this.activeRuns.add(run.id);
+      try {
+        await this.reconcilePersistedRun(run, inspector);
+        recovered.push(structuredClone(run));
+        void this.execute(run, definition.blocks, definition.edges, order, dispatch, defaultProvider, append ?? (async () => { throw new Error("This workflow runtime cannot append to an active block session"); }), true);
+      } catch (error) {
+        this.activeRuns.delete(run.id);
+        await this.failRecovery(run, `Workflow recovery could not inspect its persisted resources: ${error instanceof Error ? error.message : String(error)}`);
+        recovered.push(structuredClone(run));
+      }
+    }
+    return recovered;
   }
 
   async cancel(runId: string, interrupt: Interrupt): Promise<HarnessRun> {
@@ -345,8 +379,11 @@ export class HarnessRunner {
     }));
   }
 
-  private async execute(run: HarnessRun, blocks: HarnessBlock[], edges: HarnessEdge[], order: string[], dispatch: Dispatch, defaultProvider: string, append: Append): Promise<void> {
-    const outputs = new Map<string, string>(); run.status = "running"; run.startedAt = new Date().toISOString(); const background = new Set<Promise<void>>(); this.executions.set(run.id, { run, blocks, edges, outputs, dispatch, append, defaultProvider, background, stackInvocations: new Map() }); await this.update(run);
+  private async execute(run: HarnessRun, blocks: HarnessBlock[], edges: HarnessEdge[], order: string[], dispatch: Dispatch, defaultProvider: string, append: Append, recovering = false): Promise<void> {
+    const outputs = new Map(run.blocks.flatMap((state) => state.status === "succeeded" && state.output !== undefined ? [[state.blockId, state.output] as const] : []));
+    run.status = this.runActivityStatus(run); run.startedAt ??= new Date().toISOString(); const background = new Set<Promise<void>>(); this.executions.set(run.id, { run, blocks, edges, outputs, dispatch, append, defaultProvider, background, stackInvocations: new Map() });
+    if (recovering) for (const state of run.blocks) if (isActiveStatus(state.status)) this.log(state, "lifecycle", "Core restarted and reconciled this workflow stage");
+    await this.update(run);
     const running = new Map<string, Promise<{ blockId: string; error?: unknown }>>();
     try {
       while (running.size || background.size || run.blocks.some((block) => isActiveStatus(block.status))) {
@@ -381,6 +418,7 @@ export class HarnessRunner {
         if (changed) await this.update(run);
         if (!running.size) {
           if (background.size) { await Promise.race(background); continue; }
+          if (run.blocks.some((block) => pauseStatuses.has(block.status))) { await new Promise((resolve) => setTimeout(resolve, 250)); continue; }
           if (run.blocks.some((block) => ["queued", "waiting"].includes(block.status))) throw new Error("Harness could not resolve its remaining paths");
           break;
         }
@@ -524,6 +562,57 @@ export class HarnessRunner {
     return "running";
   }
 
+  private async reconcilePersistedRun(run: HarnessRun, inspector?: HarnessRecoveryInspector): Promise<void> {
+    const now = new Date().toISOString();
+    for (const child of run.children ?? []) {
+      if (!inspector?.child) continue;
+      const exists = await inspector.child(child);
+      if (!exists) child.recoveryError = `Owned task '${child.taskId}' is missing after Core restart`;
+    }
+    for (const state of run.blocks) {
+      if (!isActiveStatus(state.status) || state.status === "queued" || state.status === "waiting" || state.status === "retry_scheduled") continue;
+      const unresolved = run.operations?.filter((operation) => operation.blockId === state.blockId && operation.status === "intent") ?? [];
+      if (!state.provider || !state.workspace || !inspector) {
+        this.pauseOrphan(state, unresolved.length ? `Core restarted with unresolved ${unresolved.map((operation) => operation.kind).join(", ")} intent; inspect the existing session and choose Resume or Cancel.` : "Core restarted before session ownership was durably recorded; inspect preserved work and choose Resume or Cancel.");
+        continue;
+      }
+      if (state.status === "waiting_timer" && await inspector.timer(run.id, state.blockId, state.provider, state.workspace)) continue;
+      const session = await inspector.session(state.provider, state.workspace);
+      const ambiguousOperations = unresolved.filter((item) => !["block_attempt", "prompt_delivery", "session_binding"].includes(item.kind));
+      if (ambiguousOperations.length) {
+        this.pauseOrphan(state, `Core restarted with unresolved ${ambiguousOperations.map((operation) => operation.kind).join(", ")} intent. Inspect the recorded operation and choose Resume or Cancel; recovery will not repeat it automatically.`); continue;
+      }
+      if (session && (!state.sessionId || state.sessionId === session.id) && session.status === "done") {
+        const output = session.messages.filter((message) => message.role === "assistant").at(-1)?.text ?? state.output ?? "";
+        state.sessionId = session.id; state.output = output.slice(-200_000); state.status = "succeeded"; state.completedAt = now; state.error = undefined; state.failureReason = undefined; state.pauseId = undefined; state.pendingPermission = undefined; state.question = undefined; state.waitingUntil = undefined;
+        const attempt = [...(state.attempts ?? [])].reverse().find((item) => item.status === "running");
+        if (attempt) { attempt.status = "succeeded"; attempt.completedAt = now; attempt.sessionId = session.id; attempt.workspace ??= state.workspace; const operation = run.operations?.find((item) => item.id === attempt.operationId); if (operation) { operation.status = "succeeded"; operation.updatedAt = now; operation.error = undefined; operation.result = journalValue({ sessionId: session.id, workspace: state.workspace, output: output.slice(-20_000) }); } }
+        for (const operation of unresolved.filter((item) => item.kind === "prompt_delivery" || item.kind === "session_binding")) { operation.status = "succeeded"; operation.updatedAt = now; operation.error = undefined; operation.result = journalValue({ sessionId: session.id, workspace: state.workspace, status: session.status }); }
+        this.log(state, "lifecycle", "Recovered a provider turn that completed before Core restarted");
+        continue;
+      }
+      if (session && (!state.sessionId || state.sessionId === session.id) && session.pendingPermission) {
+        state.status = "awaiting_permission"; state.sessionId = session.id; state.pendingPermission = session.pendingPermission; state.pauseId ??= crypto.randomUUID(); state.failureReason = "permission_required"; continue;
+      }
+      if (session && (!state.sessionId || state.sessionId === session.id) && session.status === "user_prompt") {
+        state.status = "awaiting_user_input"; state.sessionId = session.id; state.question = session.messages.filter((message) => message.role === "assistant").at(-1)?.text; state.pauseId ??= crypto.randomUUID(); state.failureReason = "user_input_required"; continue;
+      }
+      const detail = !session ? "the recorded provider session no longer exists" : state.sessionId && state.sessionId !== session.id ? "the workspace now belongs to a different provider session" : session.status === "error" ? "the provider session stopped while Core was offline" : "the provider session outcome is still ambiguous";
+      this.pauseOrphan(state, `Core restart recovery found that ${detail}. Existing work was preserved; choose Resume to continue in the recorded workspace or Cancel.`);
+    }
+    run.status = this.runActivityStatus(run); run.completedAt = undefined; run.error = undefined; await this.update(run);
+  }
+
+  private pauseOrphan(state: HarnessRun["blocks"][number], message: string): void {
+    state.status = "retry_scheduled"; state.error = message; state.failureReason = "recovery_orphaned"; state.retryAt = undefined; state.pauseId = crypto.randomUUID(); state.pendingPermission = undefined; state.question = undefined; state.waitingUntil = undefined; this.log(state, "error", message);
+  }
+
+  private async failRecovery(run: HarnessRun, message: string): Promise<void> {
+    const now = new Date().toISOString(); run.status = "failed"; run.error = message; run.completedAt = now;
+    for (const state of run.blocks) if (isActiveStatus(state.status)) { state.status = state.status === "running" ? "failed" : "cancelled"; state.completedAt = now; if (state.status === "failed") { state.error = message; state.failureReason = "recovery_orphaned"; } }
+    await this.recordCompletedOperation(run, "terminal_outcome", "terminal:recovery-orphaned", undefined, { status: run.status, error: message, completedAt: now }); await this.update(run);
+  }
+
   private deliveryIsTerminal(execution: ActiveExecution): boolean {
     return execution.blocks.filter((block) => !block.watchdog).every((block) => {
       const state = execution.run.blocks.find((item) => item.blockId === block.id);
@@ -567,6 +656,7 @@ export function connectedInput(blockId: string, harnessInput: string, blocks: Ha
 class Cancelled extends Error {}
 
 const activeStatuses = new Set(["queued", "running", "waiting", "awaiting_permission", "awaiting_user_input", "waiting_timer", "retry_scheduled"]);
+const pauseStatuses = new Set(["awaiting_permission", "awaiting_user_input", "waiting_timer", "retry_scheduled"]);
 const providerActiveStatuses = new Set(["running", "awaiting_permission", "awaiting_user_input", "waiting_timer"]);
 function isActiveStatus(status: string): boolean { return activeStatuses.has(status); }
 

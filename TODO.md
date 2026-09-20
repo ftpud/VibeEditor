@@ -15,7 +15,7 @@ The current vertical slice is useful: definitions and run snapshots are Core-own
   - Record block attempts, dependency decisions, selected routes, session/workspace IDs, timers, child tasks, tool commands, and terminal outcomes.
   - Give task creation, prompt delivery, timer creation/firing, child registration, and merge operations stable idempotency keys.
   - Commit intent before an external side effect and reconcile its result afterward so a lost reply cannot duplicate work.
-- [ ] Reconcile incomplete runs when Core starts.
+- [x] Reconcile incomplete runs when Core starts.
   - Load `queued`, `running`, and `waiting` runs; inspect provider sessions, timers, task worktrees, and recorded operations before deciding to resume, pause, fail, or complete them.
   - Never recreate a task, resend a completed prompt, rerun a successful block, or repeat a merge during recovery.
   - Mark unrecoverable orphaned state with a specific reason and offer Resume or Cancel; do not leave a persisted run that only looks active.

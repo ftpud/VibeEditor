@@ -32,7 +32,7 @@ import { AppToolService, appToolServer, withAppTools } from "./app-tools.js";
 import { TaskCheckpointStore } from "./task-checkpoints.js";
 import { RemoteTransferService } from "./remote-transfer.js";
 import { WorkspaceRootRegistry } from "./workspace-roots.js";
-import type { AiProvider, AiSession } from "@remote-ide/protocol";
+import type { AiProvider, AiSession, HarnessBlock } from "@remote-ide/protocol";
 import { AiProviderError, findAutopilotOption, normalizeAiFailure } from "@remote-ide/acp";
 
 const execFileAsync = promisify(execFile);
@@ -140,7 +140,6 @@ export async function createServer(host: string, port: number, workspacePath: st
   const usefulFiles = new UsefulFilesStore(rootWorkspace);
   const agents = new AgentsStore(rootWorkspace);
   const harnesses = new HarnessStore(rootWorkspace);
-  await harnesses.recoverInterruptedRuns();
   const rootContexts = new Map<string, { tasks: WorkspaceTaskStore; usefulFiles: UsefulFilesStore; agents: AgentsStore; harnesses: HarnessStore }>();
   rootContexts.set(roots.primary().id, { tasks, usefulFiles, agents, harnesses });
   const contextFor = (rootId: string) => {
@@ -249,6 +248,34 @@ export async function createServer(host: string, port: number, workspacePath: st
   const aiTimers = new AiTimerService(new AiTimerStore(rootWorkspace), acp, rootWorkspace, aiChanged, (timer, effect) => {
     if (!timer.workflowRunId || !timer.workflowBlockId) return effect();
     return harnessRunner(roots.primary().id).runOperation(timer.workflowRunId, timer.workflowBlockId, "timer_fire", `timer-fire:${timer.workflowOperationKey ?? timer.id}`, { timerId: timer.id, dueAt: timer.dueAt }, effect);
+  });
+  const recoveryRunner = harnessRunner(roots.primary().id);
+  const recoveryDispatch = async (block: HarnessBlock, prompt: string, runtime: Parameters<Parameters<HarnessRunner["start"]>[2]>[2]) => providerOperation(async () => {
+    const provider = acp.get(block.provider ?? "codex");
+    if (block.watchdog) return recoveryRunner.watch(runtime.runId, runtime.blockId, () => provider.usage());
+    const sessionWorkspace = await workflowSessionWorkspace(rootWorkspace, runtime.runId, runtime.blockId); await runtime.started(sessionWorkspace);
+    const agentFile = block.agent ? (await agents.list(rootWorkspace)).find((item) => item.scope === block.agent!.scope && item.name === block.agent!.name) : undefined;
+    if (block.agent && !agentFile) throw new CoreError("FILE_NOT_FOUND", `Agent preset '${block.agent.name}' does not exist`);
+    const appTools = withAppTools(rootWorkspace, sessionWorkspace, undefined, agentFile?.agent, provider.descriptor.id, rootWorkspace);
+    const workflowTools = appToolServer(rootWorkspace, sessionWorkspace, provider.descriptor.id, rootWorkspace, runtime);
+    const mcpServers = [...appTools.servers.filter((server) => server.name !== workflowTools.name), workflowTools];
+    const workflowAgent = appTools.agent ? { ...appTools.agent, mcpServers: [...new Set([...(appTools.agent.mcpServers ?? []), workflowTools.name])] } : undefined;
+    const autopilot = findAutopilotOption(provider.descriptor.options); const configuration = { ...(block.model ? { model: block.model } : {}), ...(autopilot ? { [autopilot.option.id]: autopilot.on } : {}) };
+    runtime.assertActive(); await provider.startFreshSession(sessionWorkspace, { prompt, configuration, mcpServers, agent: workflowAgent, ...(block.agent ? { agentPreset: block.agent } : {}) }); runtime.assertActive();
+    return settleWorkflowSession(provider, sessionWorkspace, aiTimers, undefined, () => recoveryRunner.isActive(runtime.runId), runtime.activity);
+  });
+  const recoveryAppend = async (block: HarnessBlock, prompt: string, runtime: { runId: string; blockId: string; workspace: string }) => providerOperation(async () => {
+    const provider = acp.get(block.provider ?? "codex"); if (!recoveryRunner.isActive(runtime.runId)) throw new Error("Workflow is no longer active"); const current = await provider.get(runtime.workspace);
+    const workflowTools = appToolServer(rootWorkspace, runtime.workspace, provider.descriptor.id, rootWorkspace, { runId: runtime.runId, blockId: runtime.blockId });
+    if (current.status === "in_progress" || current.status === "user_prompt") await provider.steer(runtime.workspace, prompt);
+    else await provider.send(runtime.workspace, { prompt, configuration: current.configuration ?? { model: current.model, reasoning: current.reasoning }, mcpServers: [workflowTools] });
+    if (!recoveryRunner.isActive(runtime.runId)) throw new Error("Workflow is no longer active");
+    return settleWorkflowSession(provider, runtime.workspace, aiTimers, undefined, () => recoveryRunner.isActive(runtime.runId));
+  });
+  await recoveryRunner.recover(recoveryDispatch, "codex", recoveryAppend, {
+    session: async (provider, target) => acp.get(provider).get(target).catch(() => undefined),
+    timer: async (runId, blockId, provider, target) => { const timer = await aiTimers.next(target, provider); return timer?.workflowRunId === runId && timer.workflowBlockId === blockId; },
+    child: async (child) => (await tasks.list()).tasks.some((task) => task.id === child.taskId && path.resolve(tasks.taskPath(task.id)) === path.resolve(child.workspace))
   });
   await aiTimers.start();
   const onTasksChanged = async () => {
