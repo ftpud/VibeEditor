@@ -1,4 +1,5 @@
 import { fileURLToPath, pathToFileURL } from "node:url";
+import crypto from "node:crypto";
 import { createInterface } from "node:readline";
 import { findAutopilotOption, type AiAgent, type AiConfiguration, type AiMcpServer, type AiModel, type AiOption, type AiProvider, type AiQuotaWindow, type AiSession, type AiUsage } from "@remote-ide/acp";
 import type { AgentFileReference } from "@remote-ide/protocol";
@@ -36,7 +37,8 @@ export const appToolDefinitions = [
       type: "object", additionalProperties: false,
       properties: {
         inputs: { type: "array", minItems: 1, items: { type: "string", minLength: 1 }, description: "Distinct prompts for the downstream agent stack. There is no configured item-count limit." },
-        path: { type: "string", minLength: 1, description: "Named outgoing path. Required for AI-selected routing; omit to run every directly connected path." }
+        path: { type: "string", minLength: 1, description: "Named outgoing path. Required for AI-selected routing; omit to run every directly connected path." },
+        idempotency_key: { type: "string", minLength: 1, maxLength: 200, description: "Stable unique key for this downstream dispatch. Reuse it only when retrying the same stack." }
       },
       required: ["inputs"]
     }
@@ -56,7 +58,8 @@ export const appToolDefinitions = [
       type: "object", additionalProperties: false,
       properties: {
         seconds: { type: "integer", minimum: 1, maximum: 604800, description: "Delay in whole seconds, from 1 second to 7 days." },
-        prompt: { type: "string", minLength: 1, maxLength: 10000, description: "Continuation prompt to send when the timer expires." }
+        prompt: { type: "string", minLength: 1, maxLength: 10000, description: "Continuation prompt to send when the timer expires." },
+        idempotency_key: { type: "string", minLength: 1, maxLength: 200, description: "Stable unique key for this intended timer. Reuse it only when retrying the same operation." }
       },
       required: ["seconds", "prompt"]
     }
@@ -68,7 +71,8 @@ export const appToolDefinitions = [
       type: "object", additionalProperties: false,
       properties: {
         due_at: { type: "string", minLength: 1, description: "Exact future ISO-8601 timestamp, up to 7 days ahead." },
-        prompt: { type: "string", minLength: 1, maxLength: 10000, description: "Continuation prompt to send when the timer expires." }
+        prompt: { type: "string", minLength: 1, maxLength: 10000, description: "Continuation prompt to send when the timer expires." },
+        idempotency_key: { type: "string", minLength: 1, maxLength: 200, description: "Stable unique key for this intended timer. Reuse it only when retrying the same operation." }
       },
       required: ["due_at", "prompt"]
     }
@@ -99,7 +103,7 @@ export const appToolDefinitions = [
     description: "Create an isolated Vibe Editor task worktree without starting an agent.",
     inputSchema: {
       type: "object", additionalProperties: false,
-      properties: { branch: { type: "string", description: "Git branch name for the task." } },
+      properties: { branch: { type: "string", description: "Git branch name for the task." }, idempotency_key: { type: "string", minLength: 1, maxLength: 200, description: "Stable unique key for this intended task. Reuse it only when retrying the same creation." } },
       required: ["branch"]
     }
   },
@@ -127,7 +131,8 @@ export const appToolDefinitions = [
           ],
           description: "Configured agent preset to apply. Omit to inherit the invoking session's preset; pass null to start with no agent preset. This does not select the AI provider."
         },
-        reasoning: { type: "string", minLength: 1, description: "Reasoning effort advertised for the selected model, for example low, medium, or high. Omit to use the provider/model default." }
+        reasoning: { type: "string", minLength: 1, description: "Reasoning effort advertised for the selected model, for example low, medium, or high. Omit to use the provider/model default." },
+        idempotency_key: { type: "string", minLength: 1, maxLength: 200, description: "Stable unique key for this intended task. Reuse it only when retrying the same creation." }
       },
       required: ["prompt", "provider", "model"]
     }
@@ -144,7 +149,8 @@ export const appToolDefinitions = [
       type: "object", additionalProperties: false,
       properties: {
         task_id: { type: "string", description: "Task id returned by task_create_and_start or task_list." },
-        strategy: { type: "string", enum: ["smart", "merge"], description: "Use smart unless the root workspace is known to be clean." }
+        strategy: { type: "string", enum: ["smart", "merge"], description: "Use smart unless the root workspace is known to be clean." },
+        idempotency_key: { type: "string", minLength: 1, maxLength: 200, description: "Stable unique key for this intended merge. Reuse it only when retrying the same merge." }
       },
       required: ["task_id"]
     }
@@ -191,7 +197,8 @@ export const appToolDefinitions = [
       properties: {
         task_id: { type: "string", description: "Task id returned by task_create or task_list." },
         provider: { type: "string", description: "AI provider that owns the task conversation." },
-        prompt: { type: "string", description: "Follow-up instructions for the task's agent." }
+        prompt: { type: "string", description: "Follow-up instructions for the task's agent." },
+        idempotency_key: { type: "string", minLength: 1, maxLength: 200, description: "Stable unique key for this prompt delivery. Reuse it only when retrying the same prompt." }
       },
       required: ["task_id", "provider", "prompt"]
     }
@@ -238,12 +245,16 @@ export class AppToolService {
     private readonly rootWorkspace?: string,
     private readonly timers?: Pick<AiTimerService, "schedule" | "scheduleAt" | "next" | "cancelWorkspace">,
     private readonly bridgeWorkspace?: string,
-    private readonly workflow?: { runId: string; blockId: string; runStack(inputs: string[], path?: string): Promise<unknown>; resumeFailed?(): Promise<unknown>; registerChild?(taskId: string, provider: AiProvider, workspace: string): Promise<void>; assertActive?(): void }
+    private readonly workflow?: { runId: string; blockId: string; runStack(inputs: string[], path?: string): Promise<unknown>; resumeFailed?(): Promise<unknown>; registerChild?(taskId: string, provider: AiProvider, workspace: string): Promise<void>; operation?<T>(kind: "timer_create" | "task_create" | "prompt_delivery" | "merge", key: string, input: unknown, effect: () => Promise<T>, reconcile?: () => Promise<T | undefined>): Promise<T>; recordTool?(name: string, args: Record<string, unknown>, result?: unknown, error?: unknown): Promise<void>; assertActive?(): void }
   ) {}
 
   async call(name: string, args: Record<string, unknown>): Promise<unknown> {
     this.workflow?.assertActive?.();
-    try { return await this.callActive(name, args); }
+    try {
+      const kind = workflowOperationKind(name); const invoke = () => this.callActive(name, args); const key = operationKey(name, args);
+      const result = kind && this.workflow?.operation ? await this.workflow.operation(kind, key, { tool: name, args: operationInput(args) }, invoke, () => this.reconcileOperation(name, args, key)) : await invoke();
+      if (!kind) await this.workflow?.recordTool?.(name, args, result); return result;
+    } catch (error) { await this.workflow?.recordTool?.(name, args, undefined, error); throw error; }
     finally { this.workflow?.assertActive?.(); }
   }
 
@@ -268,7 +279,7 @@ export class AppToolService {
       if (prompt.length > 10_000) throw new Error("prompt must be at most 10000 characters");
       const seconds = requiredInteger(args, "seconds", 1, 604_800);
       const timer = this.workflow
-        ? await this.timers.schedule(this.currentWorkspace, this.currentProvider, prompt, seconds, { runId: this.workflow.runId, blockId: this.workflow.blockId })
+        ? await this.timers.schedule(this.currentWorkspace, this.currentProvider, prompt, seconds, { runId: this.workflow.runId, blockId: this.workflow.blockId, operationKey: operationKey(name, args) })
         : await this.timers.schedule(this.currentWorkspace, this.currentProvider, prompt, seconds);
       return { timer_id: timer.id, status: "waiting", due_at: timer.dueAt, continuation_prompt: timer.prompt };
     }
@@ -281,7 +292,7 @@ export class AppToolService {
       if (!Number.isFinite(due) || due <= now) throw new Error("due_at must be a valid future ISO-8601 timestamp");
       if (due - now > 604_800_000) throw new Error("due_at must be no more than 7 days ahead");
       const timer = this.workflow
-        ? await this.timers.scheduleAt(this.currentWorkspace, this.currentProvider, prompt, new Date(due).toISOString(), { runId: this.workflow.runId, blockId: this.workflow.blockId })
+        ? await this.timers.scheduleAt(this.currentWorkspace, this.currentProvider, prompt, new Date(due).toISOString(), { runId: this.workflow.runId, blockId: this.workflow.blockId, operationKey: operationKey(name, args) })
         : await this.timers.scheduleAt(this.currentWorkspace, this.currentProvider, prompt, new Date(due).toISOString());
       return { timer_id: timer.id, status: "waiting", due_at: timer.dueAt, continuation_prompt: timer.prompt };
     }
@@ -316,7 +327,7 @@ export class AppToolService {
       const prompt = requiredString(args, "prompt");
       const provider = requiredString(args, "provider") as AiProvider;
       const model = requiredString(args, "model");
-      const branch = optionalString(args, "branch");
+      const branch = optionalString(args, "branch") ?? (this.workflow ? `task/workflow-${crypto.createHash("sha256").update(operationKey(name, args)).digest("hex").slice(0, 12)}` : undefined);
       const requestedAgent = agentReference(args);
       const reasoning = optionalString(args, "reasoning");
       const manager = this.acp.get(provider);
@@ -406,6 +417,33 @@ export class AppToolService {
       };
     }
     throw new Error(`Unknown tool '${name}'`);
+  }
+
+  private async reconcileOperation(name: string, args: Record<string, unknown>, key: string): Promise<unknown | undefined> {
+    if ((name === "timer_set" || name === "timer_set_at") && this.timers && this.currentProvider) {
+      const timer = await this.timers.next(this.currentWorkspace, this.currentProvider);
+      if (timer?.workflowOperationKey === key) return { timer_id: timer.id, status: "waiting", due_at: timer.dueAt, continuation_prompt: timer.prompt };
+      return undefined;
+    }
+    if (name === "task_create" || name === "task_create_and_start") {
+      const requested = optionalString(args, "branch") ?? `task/workflow-${crypto.createHash("sha256").update(key).digest("hex").slice(0, 12)}`;
+      const task = (await this.tasks.list()).tasks.find((item) => item.branch === requested); if (!task) return undefined;
+      if (name === "task_create") return { task };
+      const provider = requiredString(args, "provider") as AiProvider; const session = await this.acp.get(provider).get(this.tasks.taskPath(task.id));
+      await this.workflow?.registerChild?.(task.id, provider, this.tasks.taskPath(task.id));
+      return { task, session: { status: session.status, model: session.model } };
+    }
+    if (name === "task_merge") {
+      const task = (await this.tasks.list()).tasks.find((item) => item.id === requiredString(args, "task_id"));
+      return task?.status === "finished" ? { task, targetBranch: task.baseBranch } : undefined;
+    }
+    if (name === "task_append_prompt") {
+      const task = (await this.tasks.list()).tasks.find((item) => item.id === requiredString(args, "task_id")); if (!task) return undefined;
+      const provider = requiredString(args, "provider") as AiProvider; const prompt = requiredString(args, "prompt"); const session = await this.acp.get(provider).get(this.tasks.taskPath(task.id));
+      if (!session.messages.some((message) => message.role === "user" && message.text === prompt)) return undefined;
+      return { task_id: task.id, provider, session: { status: session.status, model: session.model } };
+    }
+    return undefined;
   }
 
   private async task(id: string): Promise<WorkspaceTask> {
@@ -591,6 +629,26 @@ export function appToolServer(rootWorkspace: string, currentWorkspace: string, c
   return runningFromSource
     ? { transport: "stdio", name: "vibe-editor", command: process.execPath, args: ["--import", "tsx", source], env: { VIBE_EDITOR_ROOT_WORKSPACE: rootWorkspace, VIBE_EDITOR_CURRENT_WORKSPACE: currentWorkspace, VIBE_EDITOR_BRIDGE_WORKSPACE: bridgeWorkspace, ...(currentProvider ? { VIBE_EDITOR_CURRENT_PROVIDER: currentProvider } : {}), ...(workflow ? { VIBE_EDITOR_WORKFLOW_RUN_ID: workflow.runId, VIBE_EDITOR_WORKFLOW_BLOCK_ID: workflow.blockId } : {}) } }
     : { transport: "stdio", name: "vibe-editor", command: process.execPath, args: [compiled], env: { VIBE_EDITOR_ROOT_WORKSPACE: rootWorkspace, VIBE_EDITOR_CURRENT_WORKSPACE: currentWorkspace, VIBE_EDITOR_BRIDGE_WORKSPACE: bridgeWorkspace, ...(currentProvider ? { VIBE_EDITOR_CURRENT_PROVIDER: currentProvider } : {}), ...(workflow ? { VIBE_EDITOR_WORKFLOW_RUN_ID: workflow.runId, VIBE_EDITOR_WORKFLOW_BLOCK_ID: workflow.blockId } : {}) } };
+}
+
+function workflowOperationKind(name: string): "timer_create" | "task_create" | "prompt_delivery" | "merge" | undefined {
+  if (name === "timer_set" || name === "timer_set_at") return "timer_create";
+  if (name === "task_create" || name === "task_create_and_start") return "task_create";
+  if (name === "task_append_prompt") return "prompt_delivery";
+  if (name === "task_merge") return "merge";
+  return undefined;
+}
+
+function operationInput(args: Record<string, unknown>): Record<string, unknown> { const { idempotency_key: _key, ...input } = args; return input; }
+function operationKey(name: string, args: Record<string, unknown>): string {
+  const supplied = optionalString(args, "idempotency_key");
+  if (supplied && supplied.length > 200) throw new Error("idempotency_key must be at most 200 characters");
+  return supplied ?? `${name}:${crypto.createHash("sha256").update(stableJson(operationInput(args))).digest("hex").slice(0, 24)}`;
+}
+function stableJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
+  if (value && typeof value === "object") return `{${Object.entries(value as Record<string, unknown>).sort(([left], [right]) => left.localeCompare(right)).map(([key, item]) => `${JSON.stringify(key)}:${stableJson(item)}`).join(",")}}`;
+  return JSON.stringify(value);
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) void main();

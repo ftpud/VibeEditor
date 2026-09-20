@@ -11,7 +11,7 @@ The current vertical slice is useful: definitions and run snapshots are Core-own
   - [x] Use optimistic concurrency (the submitted definition `version`) for definition saves and return a conflict that Desktop can resolve.
   - [x] Persist definitions and runs separately, validate a schema version on read, quarantine corrupt records, and retain an atomic backup.
   - [x] Make retention explicit per workspace and per workflow instead of silently keeping the newest 100 runs globally.
-- [ ] Persist a versioned execution plan and operation journal for each run.
+- [x] Persist a versioned execution plan and operation journal for each run.
   - Record block attempts, dependency decisions, selected routes, session/workspace IDs, timers, child tasks, tool commands, and terminal outcomes.
   - Give task creation, prompt delivery, timer creation/firing, child registration, and merge operations stable idempotency keys.
   - Commit intent before an external side effect and reconcile its result afterward so a lost reply cannot duplicate work.

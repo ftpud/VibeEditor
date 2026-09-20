@@ -41,6 +41,14 @@ describe("AI continuation timers", () => {
     await expect(store.next("/workspace/task")).resolves.toEqual(replacement);
   });
 
+  it("returns the existing workflow timer for the same operation key", async () => {
+    const state = await mkdtemp(path.join(os.tmpdir(), "vibe-idempotent-timer-")); const store = new AiTimerStore("/workspace", state);
+    const workflow = { runId: "run", blockId: "worker", operationKey: "timer-once" };
+    const first = await store.set("/workspace/task", "codex", "First", 60, workflow);
+    const replay = await store.set("/workspace/task", "codex", "First", 60, workflow);
+    expect(replay).toEqual(first); expect(await store.list()).toEqual([first]);
+  });
+
   it("sends the continuation prompt when the timer expires", async () => {
     vi.useFakeTimers();
     try {

@@ -246,7 +246,10 @@ export async function createServer(host: string, port: number, workspacePath: st
     }
     return runner;
   };
-  const aiTimers = new AiTimerService(new AiTimerStore(rootWorkspace), acp, rootWorkspace, aiChanged);
+  const aiTimers = new AiTimerService(new AiTimerStore(rootWorkspace), acp, rootWorkspace, aiChanged, (timer, effect) => {
+    if (!timer.workflowRunId || !timer.workflowBlockId) return effect();
+    return harnessRunner(roots.primary().id).runOperation(timer.workflowRunId, timer.workflowBlockId, "timer_fire", `timer-fire:${timer.workflowOperationKey ?? timer.id}`, { timerId: timer.id, dueAt: timer.dueAt }, effect);
+  });
   await aiTimers.start();
   const onTasksChanged = async () => {
     const encoded = JSON.stringify({ type: "tasks.changed", payload: { rootId: roots.primary().id } } satisfies ServerEvent);
@@ -262,7 +265,13 @@ export async function createServer(host: string, port: number, workspacePath: st
       const currentWorkspace = command.currentWorkspace ?? rootWorkspace; const rootId = await ownerRootId(currentWorkspace) ?? roots.primary().id; const root = roots.get(rootId); const context = contextFor(rootId);
       const changed = async () => { const encoded = JSON.stringify({ type: "tasks.changed", payload: { rootId } } satisfies ServerEvent); for (const socket of activeSessions) sendWebSocketData(socket, encoded); };
       const workflow = command.workflowRunId && command.workflowBlockId ? { runId: command.workflowRunId, blockId: command.workflowBlockId, resumeFailed: () => harnessRunner(rootId).resumeFailed(command.workflowRunId!, command.workflowBlockId!), runStack: (inputs: string[], path?: string) => harnessRunner(rootId).runStack(command.workflowRunId!, command.workflowBlockId!, inputs, path) } : undefined;
-      const ownedWorkflow = workflow ? { ...workflow, assertActive: () => { if (!harnessRunner(rootId).isActive(workflow.runId)) throw new Error("Workflow is no longer active"); }, registerChild: (taskId: string, provider: AiProvider, workspace: string) => harnessRunner(rootId).registerChild(workflow.runId, { taskId, provider, workspace, blockId: workflow.blockId }) } : undefined;
+      const ownedWorkflow = workflow ? {
+        ...workflow,
+        assertActive: () => { if (!harnessRunner(rootId).isActive(workflow.runId)) throw new Error("Workflow is no longer active"); },
+        registerChild: (taskId: string, provider: AiProvider, workspace: string) => harnessRunner(rootId).registerChild(workflow.runId, { taskId, provider, workspace, blockId: workflow.blockId }),
+        operation: <T>(kind: "timer_create" | "task_create" | "prompt_delivery" | "merge", key: string, input: unknown, effect: () => Promise<T>, reconcile?: () => Promise<T | undefined>) => harnessRunner(rootId).runOperation(workflow.runId, workflow.blockId, kind, key, input, effect, reconcile),
+        recordTool: (name: string, args: Record<string, unknown>, result?: unknown, error?: unknown) => harnessRunner(rootId).recordTool(workflow.runId, workflow.blockId, name, args, result, error)
+      } : undefined;
       return new AppToolService(context.tasks, acp, currentWorkspace, changed, onCommitMessageChanged, command.currentProvider, context.agents, root.path, aiTimers, rootWorkspace, ownedWorkflow).call(command.name, command.args);
     });
   });

@@ -95,7 +95,7 @@ describe("Vibe Editor app tools", () => {
     const { tasks, provider, onTasksChanged, onCommitMessageChanged, agents } = harness(); const timers = { schedule: vi.fn(async () => ({ id: "timer", dueAt: "later", prompt: "continue" })) };
     const service = new AppToolService(tasks as never, { get: vi.fn(() => provider), list: vi.fn(() => []) } as never, "/workflow/session", onTasksChanged, onCommitMessageChanged, "codex", agents as never, "/workspace", timers as never, undefined, { runId: "run", blockId: "block", runStack: vi.fn() });
     await service.call("timer_set", { seconds: 60, prompt: "continue" });
-    expect(timers.schedule).toHaveBeenCalledWith("/workflow/session", "codex", "continue", 60, { runId: "run", blockId: "block" });
+    expect(timers.schedule).toHaveBeenCalledWith("/workflow/session", "codex", "continue", 60, expect.objectContaining({ runId: "run", blockId: "block", operationKey: expect.any(String) }));
   });
 
   it("merges and finishes a task through MCP", async () => {
@@ -164,7 +164,7 @@ describe("Vibe Editor app tools", () => {
     const timer = { id: "timer-exact", dueAt, prompt: "Resume at reset" }; const timers = { scheduleAt: vi.fn(async () => timer) };
     const service = new AppToolService(tasks as never, { get: vi.fn(() => provider), list: vi.fn(() => []) } as never, "/workflow/session", onTasksChanged, onCommitMessageChanged, "codex", agents as never, "/workspace", timers as never, undefined, { runId: "run", blockId: "reviver", runStack: vi.fn() });
     await expect(service.call("timer_set_at", { due_at: dueAt, prompt: "Resume at reset" })).resolves.toMatchObject({ timer_id: "timer-exact", due_at: dueAt });
-    expect(timers.scheduleAt).toHaveBeenCalledWith("/workflow/session", "codex", "Resume at reset", dueAt, { runId: "run", blockId: "reviver" });
+    expect(timers.scheduleAt).toHaveBeenCalledWith("/workflow/session", "codex", "Resume at reset", dueAt, expect.objectContaining({ runId: "run", blockId: "reviver", operationKey: expect.any(String) }));
   });
 
   it("reports usage and computes remaining capacity for the invoking provider", async () => {

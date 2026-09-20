@@ -16,7 +16,7 @@ export type FileRevision = { identity: string; version: string };
  * Desktop can prove it is safe to talk to a newly deployed Core.
  */
 export type ProtocolCompatibility = { minimum: number; maximum: number };
-export const protocolCompatibility: ProtocolCompatibility = { minimum: 8, maximum: 8 };
+export const protocolCompatibility: ProtocolCompatibility = { minimum: 9, maximum: 9 };
 
 export function protocolRangeIsValid(range: ProtocolCompatibility): boolean {
   return Number.isInteger(range.minimum) && Number.isInteger(range.maximum) && range.minimum > 0 && range.minimum <= range.maximum;
@@ -170,12 +170,17 @@ export type HarnessValidationIssue = { code: "empty" | "duplicate-id" | "duplica
 export type HarnessBlockIteration = { index: number; status: "running" | "succeeded" | "failed" | "cancelled"; startedAt: string; completedAt?: string; prompt?: string; output?: string; error?: string; sessionId?: string; workspace?: string };
 export type HarnessLogEntry = { timestamp: string; kind: "lifecycle" | "prompt" | "response" | "error"; message: string };
 export type HarnessFailureReason = "quota_exhausted" | "transient_transport" | "permission_required" | "user_input_required" | "cancelled" | "permanent";
+export type HarnessExecutionPlan = { version: 1; createdAt: string; definitionVersion: number; order: string[]; blocks: { blockId: string; incoming: string[]; outgoing: string[] }[] };
+export type HarnessOperationKind = "block_attempt" | "dependency_decision" | "route_selection" | "prompt_delivery" | "session_binding" | "timer_create" | "timer_fire" | "child_registration" | "task_create" | "tool_command" | "merge" | "terminal_outcome";
+export type HarnessOperationStatus = "intent" | "succeeded" | "failed";
+export type HarnessOperation = { id: string; idempotencyKey: string; kind: HarnessOperationKind; status: HarnessOperationStatus; blockId?: string; attemptId?: string; createdAt: string; updatedAt: string; input?: unknown; result?: unknown; error?: string };
+export type HarnessBlockAttempt = { id: string; index: number; status: "running" | "succeeded" | "failed" | "cancelled"; startedAt: string; completedAt?: string; operationId: string; sessionId?: string; workspace?: string; error?: string };
 export type HarnessPauseStatus = "awaiting_permission" | "awaiting_user_input" | "waiting_timer" | "retry_scheduled";
 export type HarnessBlockStatus = "queued" | "running" | "succeeded" | "failed" | "cancelled" | "waiting" | "skipped" | HarnessPauseStatus;
 export type HarnessRunStatus = "queued" | "running" | "succeeded" | "failed" | "cancelled" | "waiting" | HarnessPauseStatus;
-export type HarnessBlockRun = { blockId: string; status: HarnessBlockStatus; startedAt?: string; completedAt?: string; prompt?: string; output?: string; error?: string; failureReason?: HarnessFailureReason; retryAt?: string; retryStartedAt?: string; provider?: AiProvider; sessionId?: string; workspace?: string; selectedRoute?: string; plannedRuns?: number; iterations?: HarnessBlockIteration[]; log?: HarnessLogEntry[]; waitingUntil?: string; recoveryAttempts?: number; pendingPermission?: AiPermissionRequest; question?: string; pauseId?: string };
+export type HarnessBlockRun = { blockId: string; status: HarnessBlockStatus; startedAt?: string; completedAt?: string; prompt?: string; output?: string; error?: string; failureReason?: HarnessFailureReason; retryAt?: string; retryStartedAt?: string; provider?: AiProvider; sessionId?: string; workspace?: string; selectedRoute?: string; plannedRuns?: number; iterations?: HarnessBlockIteration[]; attempts?: HarnessBlockAttempt[]; log?: HarnessLogEntry[]; waitingUntil?: string; recoveryAttempts?: number; pendingPermission?: AiPermissionRequest; question?: string; pauseId?: string };
 export type HarnessChildTask = { taskId: string; blockId: string; provider: AiProvider; workspace: string; recoveryAttempts: number; recoveryError?: string; failureReason?: HarnessFailureReason; retryAt?: string; retryStartedAt?: string };
-export type HarnessRun = { id: string; harnessId: string; harnessVersion: number; definition?: HarnessDefinition; children?: HarnessChildTask[]; input: string; status: HarnessRunStatus; createdAt: string; startedAt?: string; completedAt?: string; blocks: HarnessBlockRun[]; error?: string; cleanupErrors?: string[] };
+export type HarnessRun = { id: string; harnessId: string; harnessVersion: number; definition?: HarnessDefinition; executionPlan?: HarnessExecutionPlan; operations?: HarnessOperation[]; children?: HarnessChildTask[]; input: string; status: HarnessRunStatus; createdAt: string; startedAt?: string; completedAt?: string; blocks: HarnessBlockRun[]; error?: string; cleanupErrors?: string[] };
 export type HttpResponse = { status: number; statusText: string; headers: Record<string, string>; body: string; durationMs: number };
 
 export type JavaProjectOptions = {
