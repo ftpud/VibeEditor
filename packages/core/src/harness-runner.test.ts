@@ -232,7 +232,9 @@ describe("HarnessRunner", () => {
     ] });
     const runner = new HarnessRunner(store, () => undefined); let starts = 0; let checks = 0;
     const append = vi.fn(async (block: HarnessBlock, _prompt: string, runtime: { runId: string; blockId: string; workspace: string }) => {
-      if (block.id === "start") { starts += 1; await runner.runStack(runtime.runId, runtime.blockId, [`check ${starts}`], "CHECK"); }
+      // START uses routing=all, so its ordinary CHECK edge must advance without
+      // relying on the provider to repeat the workflow_run_stack tool call.
+      if (block.id === "start") starts += 1;
       if (block.id === "check") { checks += 1; await runner.runStack(runtime.runId, runtime.blockId, [checks < 3 ? `continue ${checks}` : "done"], checks < 3 ? "CONTINUE" : "EXIT"); }
       return session(`${block.id} complete`);
     });
@@ -243,6 +245,7 @@ describe("HarnessRunner", () => {
     });
     await runner.start(definition.id, "go", dispatch, "test", append);
     await vi.waitFor(async () => { const current = (await store.runs())[0]; if (current?.status === "failed") throw new Error(current.error); expect(current?.status).toBe("succeeded"); });
+    await vi.waitFor(() => expect(dispatch.mock.calls.map((call) => call[0].id)).toContain("exit"));
     expect({ starts, checks }).toEqual({ starts: 2, checks: 3 });
     expect(append.mock.calls.map((call) => call[0].id)).toEqual(["start", "check", "start", "check"]);
     expect(dispatch.mock.calls.map((call) => call[0].id)).toEqual(["start", "check", "exit"]);

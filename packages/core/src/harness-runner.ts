@@ -12,7 +12,7 @@ type Interrupt = (provider: string, context: { runId: string; blockId: string; w
 type ResolvePermission = (provider: string, workspace: string, requestId: string, optionId?: string) => Promise<AiSession>;
 type AnswerQuestion = (provider: string, workspace: string, input: string) => Promise<AiSession>;
 type FireTimer = (provider: string, workspace: string) => Promise<boolean>;
-type ActiveExecution = { run: HarnessRun; blocks: HarnessBlock[]; edges: HarnessEdge[]; outputs: Map<string, string>; dispatch: Dispatch; append: Append; defaultProvider: string; background: Set<Promise<void>> };
+type ActiveExecution = { run: HarnessRun; blocks: HarnessBlock[]; edges: HarnessEdge[]; outputs: Map<string, string>; dispatch: Dispatch; append: Append; defaultProvider: string; background: Set<Promise<void>>; stackInvocations: Map<string, number> };
 type RecoveryPolicy = { maxAttempts: number; transportBackoffMs: number; maxElapsedMs?: number; jitterRatio?: number; random?: () => number };
 type ResolvedRecoveryPolicy = Required<RecoveryPolicy>;
 
@@ -280,6 +280,7 @@ export class HarnessRunner {
     if (!inputs.length || !inputs.every((input) => typeof input === "string" && input.trim())) throw new Error("inputs must be a non-empty array of strings");
     const caller = execution.blocks.find((block) => block.id === blockId); const callerState = execution.run.blocks.find((block) => block.blockId === blockId);
     if (!caller || callerState?.status !== "running") throw new Error("Only a currently running workflow block can launch a stack");
+    execution.stackInvocations.set(blockId, (execution.stackInvocations.get(blockId) ?? 0) + 1);
     let outgoing = execution.edges.filter((edge) => edge.from === blockId);
     if (path !== undefined) outgoing = outgoing.filter((edge) => edge.label === path);
     if (!outgoing.length) throw new Error(path === undefined ? "This block has no downstream path" : `No downstream path named '${path}'`);
@@ -303,9 +304,20 @@ export class HarnessRunner {
       }
       if (!state.workspace || !["running", "succeeded"].includes(state.status)) throw new Error(`Downstream block '${target.label}' cannot accept another prompt`);
       state.status = "running"; state.completedAt = undefined; await this.update(execution.run);
+      const invocationCount = execution.stackInvocations.get(target.id) ?? 0;
       const replies: string[] = [];
       for (const input of inputs) { this.assertActive(runId); const session = await execution.append(target, input, { runId, blockId: target.id, workspace: state.workspace }); this.assertActive(runId); replies.push(session.messages.filter((message) => message.role === "assistant").at(-1)?.text ?? ""); state.sessionId = session.id; }
       const output = replies.length === 1 ? replies[0]! : replies.map((value, index) => `## Appended prompt ${index + 1}\n${value}`).join("\n\n"); state.output = output.slice(-200_000); state.status = "succeeded"; state.completedAt = new Date().toISOString(); execution.outputs.set(target.id, output); await this.update(execution.run);
+      const forward = execution.edges.filter((edge) => edge.from === target.id && !edge.loop);
+      if (target.routing !== "ai" && forward.length && (execution.stackInvocations.get(target.id) ?? 0) === invocationCount) {
+        // Forward graph edges run automatically on the initial pass. Preserve the
+        // same contract when a loop appends to an existing session; otherwise a
+        // successful repeated block silently terminates unless the model happens
+        // to call workflow_run_stack itself.
+        state.status = "running"; state.completedAt = undefined; await this.update(execution.run);
+        await this.runStack(runId, target.id, [output]);
+        state.status = "succeeded"; state.completedAt = new Date().toISOString(); await this.update(execution.run);
+      }
     };
     for (const target of targets) {
       if ((target.edge.execution ?? "sync") === "sync") { await launch(target.block); continue; }
@@ -334,10 +346,10 @@ export class HarnessRunner {
   }
 
   private async execute(run: HarnessRun, blocks: HarnessBlock[], edges: HarnessEdge[], order: string[], dispatch: Dispatch, defaultProvider: string, append: Append): Promise<void> {
-    const outputs = new Map<string, string>(); run.status = "running"; run.startedAt = new Date().toISOString(); const background = new Set<Promise<void>>(); this.executions.set(run.id, { run, blocks, edges, outputs, dispatch, append, defaultProvider, background }); await this.update(run);
+    const outputs = new Map<string, string>(); run.status = "running"; run.startedAt = new Date().toISOString(); const background = new Set<Promise<void>>(); this.executions.set(run.id, { run, blocks, edges, outputs, dispatch, append, defaultProvider, background, stackInvocations: new Map() }); await this.update(run);
     const running = new Map<string, Promise<{ blockId: string; error?: unknown }>>();
     try {
-      while (running.size || run.blocks.some((block) => isActiveStatus(block.status))) {
+      while (running.size || background.size || run.blocks.some((block) => isActiveStatus(block.status))) {
         if (this.cancelled.has(run.id)) throw new Cancelled();
         let changed = false;
         for (const blockId of order) {
