@@ -355,6 +355,33 @@ describe("HarnessRunner", () => {
     expect(maxActive).toBe(2); expect(completed.at(-1)).toBe("join");
   });
 
+  it("shares one concurrency limit between graph dispatch and asynchronous stack launches", async () => {
+    const state = await mkdtemp(path.join(os.tmpdir(), "workflow-shared-scheduler-")); const store = new HarnessStore("/workspace", state); const definition = await store.create("Shared scheduler");
+    const blocks: HarnessBlock[] = ["root", "left", "right"].map((id) => ({ id, type: "prompt", label: id, prompt: "{{input}}", position: { x: 0, y: 0 } }));
+    await store.update({ ...definition, blocks, edges: [{ id: "left", from: "root", to: "left", execution: "async" }, { id: "right", from: "root", to: "right", execution: "async" }] });
+    const runner = new HarnessRunner(store, () => undefined, 1); let active = 0; let maxActive = 0;
+    const dispatch = vi.fn(async (block: HarnessBlock, _prompt: string, runtime: { runId: string; blockId: string }) => {
+      active += 1; maxActive = Math.max(maxActive, active);
+      if (block.id === "root") await runner.runStack(runtime.runId, runtime.blockId, ["downstream"]);
+      else await new Promise((resolve) => setTimeout(resolve, 15));
+      active -= 1; return session(block.id);
+    });
+    await runner.start(definition.id, "go", dispatch, "test");
+    await vi.waitFor(async () => expect((await store.runs())[0]?.status).toBe("succeeded"));
+    expect(maxActive).toBe(1); expect(dispatch.mock.calls.map((call) => call[0].id).sort()).toEqual(["left", "right", "root"]);
+  });
+
+  it("serializes hot input with the active block session and tracks it through completion", async () => {
+    const state = await mkdtemp(path.join(os.tmpdir(), "workflow-hot-input-")); const store = new HarnessStore("/workspace", state); const definition = await store.create("Hot input");
+    await store.update({ ...definition, blocks: [{ id: "root", type: "prompt", label: "root", prompt: "{{input}}", position: { x: 0, y: 0 } }], edges: [] });
+    let release!: () => void; const waiting = new Promise<void>((resolve) => { release = resolve; }); let started!: () => void; const ready = new Promise<void>((resolve) => { started = resolve; });
+    let active = 0; let maxActive = 0; const runner = new HarnessRunner(store, () => undefined, 1);
+    const run = await runner.start(definition.id, "initial", async (_block, _prompt, runtime) => { active += 1; maxActive = Math.max(maxActive, active); await runtime.started("/session/root"); started(); await waiting; active -= 1; return session("initial"); }, "test", async () => { active += 1; maxActive = Math.max(maxActive, active); await new Promise((resolve) => setTimeout(resolve, 15)); active -= 1; return session("appended"); });
+    await ready; await runner.appendInput(run.id, "follow-up"); release();
+    await vi.waitFor(async () => expect((await store.runs())[0]?.status).toBe("succeeded"));
+    const completed = (await store.runs())[0]!; expect(maxActive).toBe(1); expect(completed.blocks[0]?.output).toBe("appended");
+  });
+
   it("lets AI select one named path and skips the other paths", async () => {
     const state = await mkdtemp(path.join(os.tmpdir(), "remote-ide-harness-routing-")); const store = new HarnessStore("/workspace", state); const definition = await store.create("Route");
     const blocks = [{ id: "router", type: "prompt" as const, label: "Router", prompt: "Choose", routing: "ai" as const, position: { x: 0, y: 0 } }, { id: "left", type: "prompt" as const, label: "Left", prompt: "{{input}}", position: { x: 0, y: 0 } }, { id: "right", type: "prompt" as const, label: "Right", prompt: "{{input}}", position: { x: 0, y: 0 } }];
