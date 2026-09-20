@@ -61,6 +61,24 @@ describe("HarnessStore", () => {
     expect(JSON.parse(await readFile(path.join(directory, "quarantine", quarantined[0]!), "utf8"))).toMatchObject({ source: "index.json", value: "not json" });
   });
 
+  it("recovers valid definitions and runs from backups after truncated state files and reports diagnostics", async () => {
+    const state = await mkdtemp(path.join(os.tmpdir(), "remote-ide-harness-state-")); const store = new HarnessStore("/workspace", state); const created = await store.create("Flow");
+    await store.update({ ...created, name: "Newer flow" });
+    await store.saveRun({ id: "run-1", harnessId: created.id, harnessVersion: 1, input: "first", status: "succeeded", createdAt: "now", blocks: [] });
+    await store.saveRun({ id: "run-2", harnessId: created.id, harnessVersion: 1, input: "second", status: "succeeded", createdAt: "later", blocks: [] });
+    const key = crypto.createHash("sha256").update("/workspace").digest("hex"); const directory = path.join(state, "harnesses", key);
+    await writeFile(path.join(directory, "index.json"), "{\"schemaVersion\":1,\"definitions\":[", "utf8");
+    await writeFile(path.join(directory, "runs.json"), "{\"schemaVersion\":1,\"runs\":[", "utf8");
+
+    const recovered = new HarnessStore("/workspace", state);
+    expect((await recovered.list()).map((definition) => definition.name)).toEqual(["Flow"]);
+    expect((await recovered.runs()).map((run) => run.id)).toEqual(["run-1"]);
+    expect(await recovered.diagnostics()).toEqual(expect.arrayContaining([
+      expect.objectContaining({ source: "index.json", reason: expect.stringContaining("Unexpected end") }),
+      expect.objectContaining({ source: "runs.json", reason: expect.stringContaining("Unexpected end") })
+    ]));
+  });
+
   it("quarantines malformed records while retaining valid definitions and runs", async () => {
     const state = await mkdtemp(path.join(os.tmpdir(), "remote-ide-harness-state-"));
     const store = new HarnessStore("/workspace", state); const created = await store.create("Flow");

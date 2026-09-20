@@ -19,6 +19,12 @@ describe("HarnessPanel", () => {
     await waitFor(() => expect(screen.queryByRole("textbox", { name: "Workflow name" })).toBeNull());
   });
 
+  it("shows persisted workflow-state recovery diagnostics", () => {
+    render(<HarnessPanel harnesses={[]} runs={[]} diagnostics={[{ source: "runs.json", reason: "Unexpected end of JSON input", detectedAt: "now" }]} providers={[]} agents={[]} onCreate={vi.fn()} onSave={vi.fn()} onDelete={vi.fn()} onRun={vi.fn()} onCancelRun={vi.fn()} onError={vi.fn()} />);
+    expect(screen.getByRole("alert").textContent).toContain("Workflow state recovered from backup");
+    expect(screen.getByRole("alert").textContent).toContain("runs.json: Unexpected end of JSON input");
+  });
+
   it("connects output to input and renders a directional edge", async () => {
     const harness: HarnessDefinition = { id: "harness-1", name: "Flow", version: 1, createdAt: "now", updatedAt: "now", blocks: [
       { id: "a", type: "prompt", label: "Plan", prompt: "", position: { x: 20, y: 20 } },

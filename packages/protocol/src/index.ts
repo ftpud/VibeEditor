@@ -166,6 +166,7 @@ export type AgentFile = { scope: AgentFileScope; name: string; agent: AiAgent };
 export type HarnessBlock = { id: string; type: "prompt" | "task"; label: string; prompt: string; provider?: AiProvider; model?: string; agent?: AgentFileReference; watchdog?: boolean; join?: "all" | "any"; routing?: "all" | "ai"; position: { x: number; y: number } };
 export type HarnessEdge = { id: string; from: string; to: string; label?: string; loop?: boolean; execution?: "sync" | "async" };
 export type HarnessDefinition = { id: string; name: string; version: number; createdAt: string; updatedAt: string; blocks: HarnessBlock[]; edges: HarnessEdge[] };
+export type HarnessStateDiagnostic = { source: "index.json" | "runs.json"; reason: string; detectedAt: string };
 export type HarnessValidationIssue = { code: "empty" | "duplicate-id" | "duplicate-edge-id" | "missing-endpoint" | "self-edge" | "duplicate-edge" | "cycle" | "route-label" | "empty-label" | "empty-prompt" | "unknown-template" | "missing-template-block" | "invalid-loop"; message: string; blockId?: string; edgeId?: string };
 export type HarnessBlockIteration = { index: number; status: "running" | "succeeded" | "failed" | "cancelled"; startedAt: string; completedAt?: string; prompt?: string; output?: string; error?: string; sessionId?: string; workspace?: string };
 export type HarnessLogEntry = { timestamp: string; kind: "lifecycle" | "prompt" | "response" | "error"; message: string };
@@ -291,7 +292,7 @@ export type ProtocolOperations = {
   "agents.write": { payload: { scope: AgentFileScope; name: string; content: string }; result: Record<string, never> };
   "agents.rename": { payload: { scope: Exclude<AgentFileScope, "workspace">; name: string; newName: string }; result: { name: string } };
   "agents.delete": { payload: { scope: Exclude<AgentFileScope, "workspace">; name: string }; result: Record<string, never> };
-  "harnesses.list": { payload: Record<string, never>; result: { harnesses: HarnessDefinition[] } };
+  "harnesses.list": { payload: Record<string, never>; result: { harnesses: HarnessDefinition[]; diagnostics: HarnessStateDiagnostic[] } };
   "harnesses.create": { payload: { name: string }; result: { harness: HarnessDefinition } };
   "harnesses.update": { payload: { harness: HarnessDefinition }; result: { harness: HarnessDefinition } };
   "harnesses.delete": { payload: { id: string }; result: Record<string, never> };

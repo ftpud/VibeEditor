@@ -713,7 +713,7 @@ async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStor
     case "agents.write": await agents.write(request.payload.scope, request.payload.name, request.payload.content, workspacePath); return {};
     case "agents.rename": return { name: await agents.rename(request.payload.scope, request.payload.name, request.payload.newName, workspacePath) };
     case "agents.delete": await agents.delete(request.payload.scope, request.payload.name, workspacePath); return {};
-    case "harnesses.list": return { harnesses: await harnesses.list() };
+    case "harnesses.list": return { harnesses: await harnesses.list(), diagnostics: await harnesses.diagnostics() };
     case "harnesses.create": return { harness: await harnesses.create(request.payload.name) };
     case "harnesses.update": {
       const validation = validateHarness(request.payload.harness);
