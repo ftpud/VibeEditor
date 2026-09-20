@@ -2,7 +2,7 @@ import os from "node:os";
 import path from "node:path";
 import { mkdtemp } from "node:fs/promises";
 import { describe, expect, it, vi } from "vitest";
-import type { HarnessBlock } from "@remote-ide/protocol";
+import type { HarnessBlock, HarnessOperationKind } from "@remote-ide/protocol";
 import { AiProviderError } from "@remote-ide/acp";
 import { classifyWorkflowFailure, connectedInput, HarnessRunner, nextWatchdogReset, isRecoverableWorkflowError } from "./harness-runner.js";
 import { HarnessStore } from "./harnesses.js";
@@ -60,6 +60,23 @@ describe("HarnessRunner", () => {
     await expect(runner.runOperation(run.id, "worker", "task_create", "uncertain-task", { branch: "uncertain" }, uncertain, reconcile)).resolves.toEqual({ taskId: "task-existing" });
     expect(uncertain).toHaveBeenCalledOnce(); expect(reconcile).toHaveBeenCalledOnce();
     releaseBlock(); await vi.waitFor(async () => expect((await store.runs())[0]?.status).toBe("succeeded"));
+  });
+
+  it.each(["task_create", "prompt_delivery", "timer_fire", "merge"] satisfies HarnessOperationKind[])("recovers a %s crash before or after its side effect exactly once", async (kind) => {
+    for (const crash of ["before", "after"] as const) {
+      const stateDirectory = await mkdtemp(path.join(os.tmpdir(), `workflow-${kind}-${crash}-`)); const store = new HarnessStore("/workspace", stateDirectory); const created = await store.create("Crash recovery");
+      const definition = await store.update({ ...created, blocks: [{ id: "worker", type: "prompt", label: "Worker", prompt: "finish", position: { x: 0, y: 0 } }], edges: [] });
+      const pauseId = `${kind}-${crash}-pause`; const operationKey = `worker:${kind}-operation`; const now = new Date().toISOString();
+      await store.saveRun({ id: `${kind}-${crash}`, harnessId: definition.id, harnessVersion: definition.version, definition, executionPlan: { version: 1, createdAt: now, definitionVersion: definition.version, order: ["worker"], blocks: [{ blockId: "worker", incoming: [], outgoing: [] }] }, input: "request", status: "retry_scheduled", createdAt: now, startedAt: now, blocks: [{ blockId: "worker", status: "retry_scheduled", pauseId, error: "Core stopped at the fault point", failureReason: "recovery_orphaned" }], operations: [{ id: `${kind}-${crash}-operation-id`, idempotencyKey: operationKey, kind, status: "intent", blockId: "worker", createdAt: now, updatedAt: now }] });
+      const runner = new HarnessRunner(store, () => undefined); const dispatch = vi.fn(async () => session("completed"));
+      await runner.recover(dispatch, "test");
+      let external = crash === "after" ? { id: `${kind}-existing` } : undefined; const effect = vi.fn(async () => { external = { id: `${kind}-created` }; return external; }); const reconcile = vi.fn(async () => external ?? null);
+      const result = await runner.runOperation(`${kind}-${crash}`, "worker", kind, `${kind}-operation`, { fault: crash }, effect, reconcile);
+      expect(result).toEqual(crash === "after" ? { id: `${kind}-existing` } : { id: `${kind}-created` }); expect(effect).toHaveBeenCalledTimes(crash === "after" ? 0 : 1); expect(reconcile).toHaveBeenCalledOnce();
+      await runner.retryPause(`${kind}-${crash}`, "worker", pauseId);
+      await vi.waitFor(async () => expect((await store.runs())[0]?.status).toBe("succeeded"));
+      const operation = (await store.runs())[0]!.operations?.find((item) => item.idempotencyKey === operationKey); expect(operation).toMatchObject({ status: "succeeded", result }); expect(dispatch).toHaveBeenCalledOnce();
+    }
   });
 
   it("recovers owned children with bounded retries and includes children in cancellation", async () => {

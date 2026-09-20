@@ -45,7 +45,7 @@ export class HarnessRunner {
     await this.update(execution.run);
   }
 
-  async runOperation<T>(runId: string, blockId: string, kind: HarnessOperationKind, idempotencyKey: string, input: unknown, effect: () => Promise<T>, reconcile?: () => Promise<T | undefined>): Promise<T> {
+  async runOperation<T>(runId: string, blockId: string, kind: HarnessOperationKind, idempotencyKey: string, input: unknown, effect: () => Promise<T>, reconcile?: () => Promise<T | null | undefined>): Promise<T> {
     const execution = this.executions.get(runId);
     if (!execution || !this.isActive(runId)) throw new Error("Workflow is no longer active");
     const key = `${blockId}:${idempotencyKey}`; const localKey = `${runId}:${key}`;
@@ -56,7 +56,9 @@ export class HarnessRunner {
       if (existing?.status === "intent") {
         const recovered = await reconcile?.();
         if (recovered === undefined) throw new CoreError("INVALID_REQUEST", `Operation '${idempotencyKey}' has an unresolved outcome; recovery must reconcile it before retrying`);
-        await this.finishOperation(execution.run, existing, "succeeded", recovered); return recovered;
+        // null means reconciliation proved that the external effect never began,
+        // so replay is safe. undefined deliberately preserves the blocked intent.
+        if (recovered !== null) { await this.finishOperation(execution.run, existing, "succeeded", recovered); return recovered; }
       }
       const operation = existing ?? await this.beginOperation(execution.run, kind, key, blockId, input);
       if (existing) { operation.status = "intent"; operation.error = undefined; operation.result = undefined; operation.input = journalValue(input); operation.updatedAt = new Date().toISOString(); await this.update(execution.run); }
@@ -69,10 +71,10 @@ export class HarnessRunner {
     try { return await work; } finally { if (this.operationsInFlight.get(localKey) === work) this.operationsInFlight.delete(localKey); }
   }
 
-  async runTimerOperation<T>(runId: string, blockId: string, idempotencyKey: string, input: unknown, effect: () => Promise<T>): Promise<T> {
+  async runTimerOperation<T>(runId: string, blockId: string, idempotencyKey: string, input: unknown, effect: () => Promise<T>, reconcile?: () => Promise<T | null | undefined>): Promise<T> {
     const execution = this.executions.get(runId);
     if (!execution || !this.isActive(runId)) throw new Error("Workflow is no longer active");
-    return execution.scheduler.control(blockId, () => this.runOperation(runId, blockId, "timer_fire", idempotencyKey, input, effect));
+    return execution.scheduler.control(blockId, () => this.runOperation(runId, blockId, "timer_fire", idempotencyKey, input, effect, reconcile));
   }
 
   async recordTool(runId: string, blockId: string, name: string, args: Record<string, unknown>, result?: unknown, error?: unknown): Promise<void> {
