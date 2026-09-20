@@ -1,8 +1,8 @@
 import crypto from "node:crypto";
 import os from "node:os";
 import path from "node:path";
-import { copyFile, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
-import type { HarnessDefinition, HarnessRun } from "@remote-ide/protocol";
+import { copyFile, mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
+import type { HarnessDefinition, HarnessRun, HarnessStateDiagnostic } from "@remote-ide/protocol";
 import { CoreError } from "./errors.js";
 
 const SCHEMA_VERSION = 1;
@@ -21,6 +21,22 @@ export class HarnessStore {
 
   async list(): Promise<HarnessDefinition[]> {
     return (await this.readRecords("index.json", "definitions", isHarness)).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  }
+
+  async diagnostics(): Promise<HarnessStateDiagnostic[]> {
+    const directory = path.join(this.directory, "quarantine");
+    const names = await readdir(directory).catch((error) => {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return [] as string[];
+      throw error;
+    });
+    const diagnostics = await Promise.all(names.filter((name) => /^(index|runs)\.json\.[a-f0-9]{16}\.json$/.test(name)).map(async (name) => {
+      try {
+        const value: unknown = JSON.parse(await readFile(path.join(directory, name), "utf8"));
+        if (!isRecord(value) || (value.source !== "index.json" && value.source !== "runs.json") || typeof value.reason !== "string" || typeof value.quarantinedAt !== "string") return undefined;
+        return { source: value.source, reason: value.reason.slice(0, 500), detectedAt: value.quarantinedAt } satisfies HarnessStateDiagnostic;
+      } catch { return undefined; }
+    }));
+    return diagnostics.filter((item): item is HarnessStateDiagnostic => Boolean(item)).sort((a, b) => b.detectedAt.localeCompare(a.detectedAt));
   }
 
   async create(name: string): Promise<HarnessDefinition> {

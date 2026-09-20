@@ -1,11 +1,12 @@
 import { useEffect, useId, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { Play, Plus, Save, Square, Trash2, X } from "lucide-react";
-import type { AgentFile, AiModel, AiProvider, AiProviderDescriptor, HarnessBlock, HarnessDefinition, HarnessRun, HarnessLogEntry, HarnessValidationIssue } from "@remote-ide/protocol";
+import type { AgentFile, AiModel, AiProvider, AiProviderDescriptor, HarnessBlock, HarnessDefinition, HarnessRun, HarnessLogEntry, HarnessStateDiagnostic, HarnessValidationIssue } from "@remote-ide/protocol";
 import { ModelPicker } from "./ModelPicker";
 
 type Props = {
   harnesses: HarnessDefinition[];
   runs: HarnessRun[];
+  diagnostics?: HarnessStateDiagnostic[];
   providers: AiProviderDescriptor[];
   agents: AgentFile[];
   defaultProvider?: AiProvider;
@@ -25,7 +26,7 @@ type Props = {
   onError(message: string): void;
 };
 
-export function HarnessPanel({ harnesses, runs, providers, agents, defaultProvider, onLoadModels, onValidate, onCreate, onSave, onDelete, onRun, onAppendRun, onResolvePermission, onAnswerQuestion, onResumePause, onRetryPause, onCancelPause, onCancelRun, onError }: Props) {
+export function HarnessPanel({ harnesses, runs, diagnostics = [], providers, agents, defaultProvider, onLoadModels, onValidate, onCreate, onSave, onDelete, onRun, onAppendRun, onResolvePermission, onAnswerQuestion, onResumePause, onRetryPause, onCancelPause, onCancelRun, onError }: Props) {
   const arrowMarkerId = `harness-arrow-${useId().replace(/:/g, "")}`;
   const [selectedId, setSelectedId] = useState<string>();
   const [draft, setDraft] = useState<HarnessDefinition>();
@@ -130,6 +131,7 @@ export function HarnessPanel({ harnesses, runs, providers, agents, defaultProvid
   };
 
   return <div className={`harness-panel ${mode}`}>
+    {diagnostics.length > 0 && <div className="harness-connect-hint" role="alert"><strong>Workflow state recovered from backup</strong><ul>{diagnostics.map((diagnostic, index) => <li key={`${diagnostic.source}:${diagnostic.detectedAt}:${index}`}>{diagnostic.source}: {diagnostic.reason}</li>)}</ul></div>}
     {createName !== undefined ? <form className="harness-create" onSubmit={(event) => { event.preventDefault(); void create(); }}><input autoFocus aria-label="Workflow name" value={createName} onChange={(event) => setCreateName(event.target.value)} placeholder="New Workflow" /><button type="submit" disabled={!createName.trim()}>Create</button><button type="button" title="Cancel workflow creation" onClick={() => setCreateName(undefined)}><X size={14} /></button></form> : <div className="harness-picker"><select aria-label="Selected workflow" value={selectedId ?? ""} onChange={(event) => setSelectedId(event.target.value || undefined)}><option value="">Select a workflow</option>{harnesses.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select>{mode === "edit" && <><button title="Create workflow" onClick={() => setCreateName("New Workflow")}><Plus size={14} /></button><button title="Delete workflow" disabled={!draft} onClick={() => void remove()}><Trash2 size={14} /></button></>}<div className="harness-mode" role="group" aria-label="Workflow mode"><button className={mode === "view" ? "active" : ""} onClick={() => { setMode("view"); setConnectFrom(undefined); }}>View</button><button className={mode === "edit" ? "active" : ""} onClick={() => setMode("edit")}>Edit</button></div></div>}
     {!draft ? <div className="harness-empty"><strong>Build an AI workflow</strong><span>Create a workflow, add prompt blocks, then connect their execution order.</span><button onClick={() => setCreateName("New Workflow")}><Plus size={14} /> Create workflow</button></div> : <>
       {mode === "edit" ? <div className="harness-toolbar"><input aria-label="Workflow name" value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} /><button title="Add prompt block" onClick={addBlock}><Plus size={14} /> Block</button><button title="Save workflow" disabled={!dirty || saving || validationIssues.length > 0} onClick={() => void save()}><Save size={14} /> {saving ? "Saving" : "Save"}</button></div> : <div className="harness-view-summary"><strong>{draft.name}</strong>{workflowRuns.length ? <select aria-label="Selected workflow run" value={run?.id ?? ""} onChange={(event) => setSelectedRunId(event.target.value)}>{workflowRuns.map((item) => <option key={item.id} value={item.id}>{activeRunStatuses.has(item.status) ? "● " : ""}{item.status} · {new Date(item.createdAt).toLocaleString()} · {item.input.slice(0, 50)}</option>)}</select> : <span>No runs yet</span>}{activeRuns.length > 1 && <small>{activeRuns.length} active runs</small>}</div>}
