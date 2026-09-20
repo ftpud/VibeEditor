@@ -160,6 +160,8 @@ function isRun(value: unknown): value is HarnessRun {
   if (value.cleanupErrors !== undefined && (!Array.isArray(value.cleanupErrors) || !value.cleanupErrors.every((item) => typeof item === "string"))) return false;
   if (value.children !== undefined && (!Array.isArray(value.children) || !value.children.every((child) => isRecord(child) && typeof child.taskId === "string" && typeof child.blockId === "string" && typeof child.provider === "string" && typeof child.workspace === "string" && Number.isInteger(child.recoveryAttempts) && (child.retryStartedAt === undefined || typeof child.retryStartedAt === "string")))) return false;
   return value.blocks.every((block) => isRecord(block) && typeof block.blockId === "string" && [...statuses, "skipped"].includes(String(block.status))
+    && (block.structuredInput === undefined || isJsonValue(block.structuredInput))
+    && (block.structuredOutput === undefined || isJsonValue(block.structuredOutput))
     && (block.question === undefined || typeof block.question === "string")
     && (block.pauseId === undefined || typeof block.pauseId === "string")
     && (block.retryStartedAt === undefined || typeof block.retryStartedAt === "string")
@@ -171,7 +173,7 @@ function isRun(value: unknown): value is HarnessRun {
 function isHarness(value: unknown): value is HarnessDefinition {
   if (!value || typeof value !== "object") return false; const item = value as Partial<HarnessDefinition>;
   return typeof item.id === "string" && typeof item.name === "string" && typeof item.version === "number" && typeof item.createdAt === "string" && typeof item.updatedAt === "string" && Array.isArray(item.blocks) && Array.isArray(item.edges)
-    && item.blocks.every((block) => block && typeof block.id === "string" && ["prompt", "task"].includes(block.type) && typeof block.label === "string" && typeof block.prompt === "string" && (block.provider === undefined || typeof block.provider === "string") && (block.model === undefined || typeof block.model === "string") && (block.watchdog === undefined || typeof block.watchdog === "boolean") && (block.agent === undefined || typeof block.agent.name === "string" && ["global", "local", "workspace"].includes(block.agent.scope)) && (!block.join || block.join === "all" || block.join === "any") && (!block.routing || block.routing === "all" || block.routing === "ai") && typeof block.position?.x === "number" && typeof block.position?.y === "number")
+    && item.blocks.every((block) => block && typeof block.id === "string" && ["prompt", "task"].includes(block.type) && typeof block.label === "string" && typeof block.prompt === "string" && (block.inputSchema === undefined || isDataSchema(block.inputSchema)) && (block.outputSchema === undefined || isDataSchema(block.outputSchema)) && (block.provider === undefined || typeof block.provider === "string") && (block.model === undefined || typeof block.model === "string") && (block.watchdog === undefined || typeof block.watchdog === "boolean") && (block.agent === undefined || typeof block.agent.name === "string" && ["global", "local", "workspace"].includes(block.agent.scope)) && (!block.join || block.join === "all" || block.join === "any") && (!block.routing || block.routing === "all" || block.routing === "ai") && typeof block.position?.x === "number" && typeof block.position?.y === "number")
     && item.edges.every((edge) => edge && typeof edge.id === "string" && typeof edge.from === "string" && typeof edge.to === "string" && (edge.label === undefined || typeof edge.label === "string") && (edge.loop === undefined || typeof edge.loop === "boolean") && (edge.execution === undefined || edge.execution === "sync" || edge.execution === "async"));
 }
 function isJsonValue(value: unknown, depth = 0): boolean {
@@ -179,5 +181,11 @@ function isJsonValue(value: unknown, depth = 0): boolean {
   if (depth >= 20) return false;
   if (Array.isArray(value)) return value.every((item) => isJsonValue(item, depth + 1));
   return isRecord(value) && Object.values(value).every((item) => isJsonValue(item, depth + 1));
+}
+function isDataSchema(value: unknown, depth = 0): boolean {
+  if (!isRecord(value) || depth > 10 || !["string", "number", "boolean", "object", "array"].includes(String(value.type))) return false;
+  if (value.required !== undefined && (!Array.isArray(value.required) || !value.required.every((key) => typeof key === "string" && key.length > 0))) return false;
+  if (value.properties !== undefined && (!isRecord(value.properties) || !Object.values(value.properties).every((property) => isDataSchema(property, depth + 1)))) return false;
+  return value.items === undefined || isDataSchema(value.items, depth + 1);
 }
 function message(error: unknown): string { return error instanceof Error ? error.message : String(error); }

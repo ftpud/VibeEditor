@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { HarnessDefinition } from "@remote-ide/protocol";
-import { renderHarnessPrompt, validateHarness } from "./harness-graph.js";
+import { parseHarnessData, renderHarnessPrompt, validateHarness } from "./harness-graph.js";
 
 const harness = (edges: HarnessDefinition["edges"]): HarnessDefinition => ({ id: "h", name: "Flow", version: 1, createdAt: "now", updatedAt: "now", blocks: [
   { id: "plan", type: "prompt", label: "Plan", prompt: "{{input}}", position: { x: 0, y: 0 } },
@@ -30,5 +30,11 @@ describe("harness graph", () => {
     ]);
     invalid.blocks[0] = { ...invalid.blocks[0]!, label: " ", prompt: "{{unknown}} {{blocks.missing.output}}" };
     expect(validateHarness(invalid).issues.map((issue) => issue.code)).toEqual(expect.arrayContaining(["empty-label", "unknown-template", "missing-template-block", "duplicate-edge-id", "duplicate-edge", "invalid-loop"]));
+  });
+  it("validates bounded structured input and output schemas", () => {
+    const typed = harness([]); typed.blocks[0]!.outputSchema = { type: "object", required: ["summary"], properties: { summary: { type: "string" }, checks: { type: "array", items: { type: "boolean" } } } };
+    expect(validateHarness(typed).valid).toBe(true);
+    expect(parseHarnessData('{"summary":"done","checks":[true,false]}', typed.blocks[0]!.outputSchema, "Plan output")).toEqual({ summary: "done", checks: [true, false] });
+    expect(() => parseHarnessData('{"checks":[true]}', typed.blocks[0]!.outputSchema, "Plan output")).toThrow("missing required field 'summary'");
   });
 });
