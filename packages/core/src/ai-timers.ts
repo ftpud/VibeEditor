@@ -118,8 +118,8 @@ export class AiTimerService {
     return true;
   }
 
-  async fireNext(workspace: string): Promise<boolean> {
-    const timer = await this.store.next(workspace);
+  async fireNext(workspace: string, provider?: AiProvider): Promise<boolean> {
+    const timer = await this.store.next(workspace, provider);
     if (!timer) return false;
     await this.fire(timer, true);
     return true;
