@@ -3,6 +3,7 @@ import path from "node:path";
 import { mkdtemp } from "node:fs/promises";
 import { describe, expect, it, vi } from "vitest";
 import type { HarnessBlock } from "@remote-ide/protocol";
+import { AiProviderError } from "@remote-ide/acp";
 import { classifyWorkflowFailure, connectedInput, HarnessRunner, nextWatchdogReset, isRecoverableWorkflowError } from "./harness-runner.js";
 import { HarnessStore } from "./harnesses.js";
 
@@ -48,6 +49,7 @@ describe("HarnessRunner", () => {
     expect(classifyWorkflowFailure("Approval required for tool call")).toBe("permission_required");
     expect(classifyWorkflowFailure("requires user input")).toBe("user_input_required");
     expect(classifyWorkflowFailure("Invalid request")).toBe("permanent");
+    expect(classifyWorkflowFailure(new AiProviderError({ kind: "transient_transport", message: "opaque provider failure" }))).toBe("transient_transport");
   });
 
   it("backs off transport failures and never retries permanent or paused failures", async () => {
@@ -56,7 +58,7 @@ describe("HarnessRunner", () => {
     const blocks: HarnessBlock[] = ["watchdog", "transport", "permission"].map((id) => ({ id, type: "prompt", label: id, prompt: "work", watchdog: id === "watchdog", position: { x: 0, y: 0 } }));
     await store.update({ ...definition, blocks, edges: [] });
     let release!: () => void; const sleeping = new Promise<void>((resolve) => { release = resolve; });
-    const runner = new HarnessRunner(store, () => undefined, 4, { maxAttempts: 2, transportBackoffMs: 200 });
+    const runner = new HarnessRunner(store, () => undefined, 4, { maxAttempts: 2, transportBackoffMs: 200, jitterRatio: 0 });
     const run = await runner.start(definition.id, "work", async (block) => {
       if (block.id === "watchdog") await sleeping;
       if (block.id === "transport") throw new Error("ETIMEDOUT");
@@ -73,6 +75,23 @@ describe("HarnessRunner", () => {
       await new Promise((resolve) => setTimeout(resolve, 220));
       expect(await runner.resumeFailed(run.id, "watchdog")).toEqual({ resumed: ["transport"] });
     } finally { await runner.cancel(run.id, async () => release()); release(); }
+  });
+
+  it("stops retries whose next backoff exceeds the elapsed retry budget", async () => {
+    const state = await mkdtemp(path.join(os.tmpdir(), "workflow-retry-budget-")); const store = new HarnessStore("/workspace", state);
+    const definition = await store.create("Retry budget");
+    await store.update({ ...definition, blocks: [
+      { id: "watchdog", type: "prompt", label: "watchdog", prompt: "watch", watchdog: true, position: { x: 0, y: 0 } },
+      { id: "worker", type: "prompt", label: "worker", prompt: "work", position: { x: 0, y: 0 } }
+    ], edges: [] });
+    const runner = new HarnessRunner(store, () => undefined, 4, { maxAttempts: 5, transportBackoffMs: 1_000, maxElapsedMs: 500, jitterRatio: 0 });
+    await runner.start(definition.id, "work", async (block, _prompt, runtime) => block.watchdog ? runner.watch(runtime.runId, block.id, async () => ({ supported: false })) : Promise.reject(new AiProviderError({ kind: "transient_transport", message: "provider unavailable" })));
+    await vi.waitFor(async () => expect((await store.runs())[0]?.status).toBe("failed"));
+    const worker = (await store.runs())[0]!.blocks.find((block) => block.blockId === "worker")!;
+    expect(worker).toMatchObject({ status: "failed", failureReason: "transient_transport" });
+    expect(worker.recoveryAttempts).toBeUndefined(); expect(worker.retryAt).toBeUndefined();
+    expect(worker.retryStartedAt).toBeTruthy();
+    expect(worker.error).toContain("Automatic retry budget exhausted");
   });
 
   it("stops a sleeping Core watchdog when delivery succeeds", async () => {

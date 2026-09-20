@@ -33,7 +33,7 @@ The current vertical slice is useful: definitions and run snapshots are Core-own
   - [x] Add block/run states for `awaiting_permission`, `awaiting_user_input`, `waiting_timer`, and `retry_scheduled`.
   - [x] Route permission requests and provider questions to Desktop with run/block/session ownership.
   - [x] Allow the user to answer, approve, reject, resume, retry, or cancel the exact paused attempt.
-- [ ] Replace regex-only error recovery with typed provider/runtime failures.
+- [x] Replace regex-only error recovery with typed provider/runtime failures.
   - Normalize quota, transport, permission, user-input, cancellation, and permanent failures at the provider boundary.
   - Persist attempt count and backoff deadline before sleeping; add jitter and a maximum elapsed retry budget.
   - Retry only the failed attempt in its existing session and surface retry exhaustion as an actionable terminal state.

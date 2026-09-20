@@ -33,7 +33,7 @@ import { TaskCheckpointStore } from "./task-checkpoints.js";
 import { RemoteTransferService } from "./remote-transfer.js";
 import { WorkspaceRootRegistry } from "./workspace-roots.js";
 import type { AiProvider, AiSession } from "@remote-ide/protocol";
-import { findAutopilotOption } from "@remote-ide/acp";
+import { AiProviderError, findAutopilotOption, normalizeAiFailure } from "@remote-ide/acp";
 
 const execFileAsync = promisify(execFile);
 const delay = (milliseconds: number) => new Promise<void>((resolve) => setTimeout(resolve, milliseconds));
@@ -687,7 +687,7 @@ async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStor
     case "harnesses.delete": await harnesses.delete(request.payload.id); return {};
     case "harnesses.validate": return validateHarness(request.payload.harness);
     case "harnesses.runs": return { runs: await harnesses.runs(request.payload.harnessId) };
-    case "harnesses.run": return { run: await harnessRunner.start(request.payload.harnessId, request.payload.input, async (block, prompt, runtime) => {
+    case "harnesses.run": return { run: await harnessRunner.start(request.payload.harnessId, request.payload.input, async (block, prompt, runtime) => providerOperation(async () => {
       const provider = acp.get(block.provider ?? request.payload.provider);
       if (block.watchdog) return harnessRunner.watch(runtime.runId, runtime.blockId, () => provider.usage(), () => harnessRunner.recoverChildren(runtime.runId, async (child) => {
         const task = (await tasks.list()).tasks.find((item) => item.id === child.taskId);
@@ -715,7 +715,7 @@ async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStor
       try { await provider.startFreshSession(sessionWorkspace, { prompt, configuration, mcpServers, agent: workflowAgent, ...(block.agent ? { agentPreset: block.agent } : {}) }); runtime.assertActive(); }
       catch (error) { runtime.assertActive(); if (!block.watchdog) throw error; console.error("[core] Watchdog startup failed; scheduling recovery", error); }
       return settleWorkflowSession(provider, sessionWorkspace, aiTimers, block.watchdog ? runtime : undefined, () => harnessRunner.isActive(runtime.runId), runtime.activity);
-    }, request.payload.provider, async (block, prompt, runtime) => {
+    }), request.payload.provider, async (block, prompt, runtime) => providerOperation(async () => {
       const provider = acp.get(block.provider ?? request.payload.provider); if (!harnessRunner.isActive(runtime.runId)) throw new Error("Workflow is no longer active"); const current = await provider.get(runtime.workspace);
       if (!harnessRunner.isActive(runtime.runId)) throw new Error("Workflow is no longer active");
       const workflowTools = appToolServer(rootWorkspace, runtime.workspace, provider.descriptor.id, bridgeWorkspace, { runId: runtime.runId, blockId: runtime.blockId });
@@ -723,7 +723,7 @@ async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStor
       else await provider.send(runtime.workspace, { prompt, configuration: current.configuration ?? { model: current.model, reasoning: current.reasoning }, mcpServers: [workflowTools] });
       if (!harnessRunner.isActive(runtime.runId)) throw new Error("Workflow is no longer active");
       return settleWorkflowSession(provider, runtime.workspace, aiTimers, block.watchdog ? runtime : undefined, () => harnessRunner.isActive(runtime.runId));
-    }) };
+    })) };
     case "harnesses.append": return { run: await harnessRunner.appendInput(request.payload.runId, request.payload.input) };
     case "harnesses.permission.resolve": return { run: await harnessRunner.resolvePermission(request.payload.runId, request.payload.blockId, request.payload.sessionId, request.payload.pauseId, request.payload.requestId, request.payload.optionId, async (provider, target, requestId, optionId) => acp.get(provider).resolvePermission(target, requestId, optionId)) };
     case "harnesses.answer": return { run: await harnessRunner.answerQuestion(request.payload.runId, request.payload.blockId, request.payload.sessionId, request.payload.pauseId, request.payload.input, async (provider, target, input) => acp.get(provider).steer(target, input)) };
@@ -952,6 +952,11 @@ export async function settleWorkflowSession(provider: ReturnType<AcpRegistry["ge
     while (active() && await timers.next(workspace, provider.descriptor.id)) await delay(Math.min(250, Math.max(10, new Date(timer.dueAt).getTime() - Date.now())));
     await delay(250); session = await provider.get(workspace);
   }
+}
+
+async function providerOperation<T>(operation: () => Promise<T>): Promise<T> {
+  try { return await operation(); }
+  catch (error) { if (error instanceof AiProviderError) throw error; throw new AiProviderError(normalizeAiFailure(error)); }
 }
 
 export function renameWorkspacePaths(options: WorkspaceOptions, oldPath: string, newPath: string): WorkspaceOptions {

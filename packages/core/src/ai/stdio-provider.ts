@@ -6,7 +6,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { mkdir, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { Readable, Writable } from "node:stream";
 import { ClientSideConnection, PROTOCOL_VERSION, ndJsonStream, type Client, type ContentBlock, type McpServer, type RequestPermissionRequest, type RequestPermissionResponse, type SessionConfigOption, type SessionNotification } from "@agentclientprotocol/sdk";
-import { AcpProvider, applyConfiguration, type AcpSendRequest, type AiConfiguration, type AiContentBlock, type AiMessage, type AiModel, type AiModelDetails, type AiOption, type AiProviderDescriptor, type AiSession, type AiUsage } from "@remote-ide/acp";
+import { AcpProvider, applyConfiguration, normalizeAiFailure, type AcpSendRequest, type AiConfiguration, type AiContentBlock, type AiMessage, type AiModel, type AiModelDetails, type AiOption, type AiProviderDescriptor, type AiSession, type AiUsage } from "@remote-ide/acp";
 import type { TaskCheckpointProvenance } from "@remote-ide/protocol";
 import { CoreError } from "../errors.js";
 import { agentFingerprint } from "../agent-profile.js";
@@ -223,6 +223,7 @@ export abstract class StdioAcpProvider extends AcpProvider {
     runtime.running = true;
     runtime.anchors = {};
     runtime.session.status = "in_progress";
+    runtime.session.failure = undefined;
     // The completion handlers go through the same queue as `session/update` so a
     // final status never overtakes text the agent streamed just before it.
     void runtime.connection.prompt({ sessionId: runtime.sessionId, prompt }).then((result) => this.queue(workspace, async () => {
@@ -245,6 +246,7 @@ export abstract class StdioAcpProvider extends AcpProvider {
       }
       else {
         runtime.session.status = result.stopReason === "cancelled" ? "idle" : result.stopReason === "end_turn" ? "done" : result.stopReason === "refusal" ? "error" : "user_prompt";
+        runtime.session.failure = result.stopReason === "refusal" ? { kind: "permanent", message: "The agent refused to continue this turn." } : undefined;
         if (result.stopReason === "max_tokens" || result.stopReason === "max_turn_requests") runtime.session.messages.push(this.message("activity", `Turn stopped early: ${result.stopReason}`));
         if (result.stopReason === "refusal") runtime.session.messages.push(this.message("error", "The agent refused to continue this turn."));
       }
@@ -255,7 +257,8 @@ export abstract class StdioAcpProvider extends AcpProvider {
       if (runtime.generation !== generation) return;
       runtime.running = false; runtime.anchors = {}; runtime.pending = [];
       this.freshSessions.delete(workspace);
-      runtime.session.status = "error"; runtime.session.messages.push(this.message("error", this.describe(error, runtime)));
+      const message = this.describe(error, runtime);
+      runtime.session.status = "error"; runtime.session.failure = normalizeAiFailure(error); runtime.session.failure.message = message; runtime.session.messages.push(this.message("error", message));
       await this.completeCheckpoints(workspace, runtime, "error");
       await this.save(workspace, runtime.session); this.onChanged(workspace);
     }));
@@ -815,7 +818,7 @@ export abstract class StdioAcpProvider extends AcpProvider {
     runtime.child.stdin.end(); runtime.child.kill("SIGTERM");
   }
   private cancelPermissionWaiters(workspace: string): void { for (const [id, waiter] of this.permissionWaiters) if (waiter.workspace === workspace) { this.permissionWaiters.delete(id); waiter.resolve({ outcome: { outcome: "cancelled" } }); } }
-  private async runtimeFailed(workspace: string, message: string): Promise<void> { const session = await this.get(workspace); session.pendingPermission = undefined; if (session.status === "in_progress") { session.status = "error"; session.messages.push(this.message("error", message)); await this.save(workspace, session); this.onChanged(workspace); } }
+  private async runtimeFailed(workspace: string, message: string): Promise<void> { const session = await this.get(workspace); session.pendingPermission = undefined; if (session.status === "in_progress") { session.status = "error"; session.failure = normalizeAiFailure(message); session.messages.push(this.message("error", message)); await this.save(workspace, session); this.onChanged(workspace); } }
 }
 
 function processExists(pid?: number): boolean {

@@ -1,4 +1,7 @@
 export type AiStatus = "idle" | "in_progress" | "user_prompt" | "waiting" | "done" | "error";
+export type AiFailureKind = "quota_exhausted" | "transient_transport" | "permission_required" | "user_input_required" | "cancelled" | "permanent";
+/** Provider-normalized failure metadata. Consumers should branch on `kind`, never transcript text. */
+export type AiFailure = { kind: AiFailureKind; message: string; retryAfter?: string };
 export type AiProvider = string;
 export type AiConfiguration = Record<string, string | number | boolean>;
 export type AiContentBlock =
@@ -11,7 +14,7 @@ export type AiMessage = { id: string; role: "user" | "assistant" | "activity" | 
 export type AiCommand = { name: string; description: string; inputHint?: string };
 export type AiPermissionOption = { optionId: string; name: string; kind: "allow_once" | "allow_always" | "reject_once" | "reject_always" };
 export type AiPermissionRequest = { id: string; title: string; toolCallId: string; details?: string; options: AiPermissionOption[] };
-export type AiSession = { id?: string; createdAt?: string; updatedAt?: string; threadId?: string; model: string; reasoning: string; configuration?: AiConfiguration; /** One-shot model/reasoning override consumed by the next new turn. */ nextConfiguration?: AiConfiguration; availableOptions?: AiOption[]; availableCommands?: AiCommand[]; pendingPermission?: AiPermissionRequest; status: AiStatus; messages: AiMessage[]; contextUsed?: number; contextLimit?: number; tokens?: AiTokenUsage; steering?: boolean; agent?: { name: string; fingerprint: string }; agentPreset?: AiAgentPreset };
+export type AiSession = { id?: string; createdAt?: string; updatedAt?: string; threadId?: string; model: string; reasoning: string; configuration?: AiConfiguration; /** One-shot model/reasoning override consumed by the next new turn. */ nextConfiguration?: AiConfiguration; availableOptions?: AiOption[]; availableCommands?: AiCommand[]; pendingPermission?: AiPermissionRequest; status: AiStatus; failure?: AiFailure; messages: AiMessage[]; contextUsed?: number; contextLimit?: number; tokens?: AiTokenUsage; steering?: boolean; agent?: { name: string; fingerprint: string }; agentPreset?: AiAgentPreset };
 export type AiTokenUsage = { total: number; input: number; output: number; thought?: number; cachedRead?: number; cachedWrite?: number };
 /**
  * Optional catalogue metadata. Everything here is advertised by the agent (ACP
@@ -90,6 +93,29 @@ export abstract class AcpProvider {
   /** Forgets a recorded session. Removing the active one starts a fresh session. */
   abstract remove(workspace: string, sessionId: string): Promise<AiSession>;
   async usage(_workspace?: string): Promise<AiUsage> { return { supported: false, label: "Usage is not exposed by this provider" }; }
+}
+
+/** An operation-level provider failure carrying the same normalized metadata as a failed session. */
+export class AiProviderError extends Error {
+  constructor(public readonly failure: AiFailure) {
+    super(failure.message);
+    this.name = "AiProviderError";
+  }
+}
+
+/** Normalizes untyped process/transport errors once at the provider boundary. */
+export function normalizeAiFailure(error: unknown): AiFailure {
+  if (error instanceof AiProviderError) return error.failure;
+  const candidate = error as { code?: unknown; status?: unknown; statusCode?: unknown; name?: unknown } | undefined;
+  const message = error instanceof Error ? error.message : String(error);
+  const code = typeof candidate?.code === "string" ? candidate.code : "";
+  const status = typeof candidate?.status === "number" ? candidate.status : typeof candidate?.statusCode === "number" ? candidate.statusCode : undefined;
+  if (status === 429 || /usage limit|rate.?limit|quota|HTTP 429/i.test(message)) return { kind: "quota_exhausted", message };
+  if (["ECONNRESET", "ECONNREFUSED", "ETIMEDOUT", "EAI_AGAIN", "EPIPE"].includes(code) || (status !== undefined && [502, 503, 504].includes(status)) || /ECONNRESET|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN|EPIPE|socket hang up|temporarily unavailable|HTTP 50[234]/i.test(message)) return { kind: "transient_transport", message };
+  if (/permission|approval required|request_permission/i.test(message)) return { kind: "permission_required", message };
+  if (/requires user input|user_prompt|awaiting user input/i.test(message)) return { kind: "user_input_required", message };
+  if (candidate?.name === "AbortError" || code === "ABORT_ERR" || /cancelled|canceled|aborted/i.test(message)) return { kind: "cancelled", message };
+  return { kind: "permanent", message };
 }
 
 export function mergeConfiguration(session: AiSession, configuration: AiConfiguration): AiConfiguration { return { model: session.model, reasoning: session.reasoning, ...session.configuration, ...configuration }; }
