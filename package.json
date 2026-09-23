@@ -6,6 +6,11 @@
   "allowScripts": {
     "node-pty@1.1.0": true
   },
+  "overrides": {
+    "@agentclientprotocol/codex-acp": {
+      "@openai/codex": "0.156.1"
+    }
+  },
   "workspaces": ["packages/*"],
   "scripts": {
     "core": "npm run start -w @remote-ide/core --",
