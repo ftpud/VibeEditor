@@ -35,6 +35,18 @@ async function settle(provider: FakeProvider, workspace: string): Promise<AiSess
 }
 
 describe("ACP integration", () => {
+  it("offers GPT-6 Sol even when an older Codex catalogue omits it and launches it explicitly", async () => {
+    class InspectCodex extends CodexSessionManager {
+      describeCatalogue(models: AiModel[]) { return this.describeModels(models); }
+      launch(configuration: AiConfiguration) { return this.command(configuration); }
+    }
+    const provider = new InspectCodex(() => undefined);
+    const models = await provider.describeCatalogue([{ id: "gpt-5.6-sol", name: "GPT-5.6-Sol", defaultReasoning: "low", reasoningLevels: ["low"] }]);
+    expect(models.find((model) => model.id === "gpt-6-sol")).toMatchObject({ defaultReasoning: "medium", reasoningLevels: ["none", "low", "medium", "high", "xhigh", "max"] });
+    expect(models.filter((model) => model.id === "gpt-6-sol")).toHaveLength(1);
+    expect(JSON.parse(provider.launch({ model: "gpt-6-sol", reasoning: "high" }).env.CODEX_CONFIG!)).toMatchObject({ model: "gpt-6-sol", model_reasoning_effort: "high" });
+  });
+
   it("falls back without crashing when an optional provider executable is missing", async () => {
     const provider = new MissingProvider(() => undefined);
     await expect(provider.models()).resolves.toEqual([{ id: "fallback", name: "Fallback", defaultReasoning: "", reasoningLevels: [] }]);

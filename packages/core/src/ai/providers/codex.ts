@@ -8,6 +8,7 @@ import { readCodexAccountQuota } from "./codex-usage.js";
 
 const require = createRequire(import.meta.url);
 const WEB_SEARCH_MODES = ["live", "indexed", "cached", "disabled"];
+const GPT_6_SOL: AiModel = { id: "gpt-6-sol", name: "GPT-6 Sol", defaultReasoning: "medium", reasoningLevels: ["none", "low", "medium", "high", "xhigh", "max"], note: "When Codex does not advertise this model, selecting it starts a new Codex thread. Access depends on your account." };
 
 type CodexCatalogueEntry = { slug?: unknown; display_name?: unknown; description?: unknown; context_window?: unknown; max_context_window?: unknown; input_modalities?: unknown; visibility?: unknown; default_reasoning_level?: unknown; supported_reasoning_levels?: unknown; upgrade?: { model?: unknown; retirement_at?: unknown } | null };
 
@@ -26,9 +27,11 @@ export class CodexSessionManager extends StdioAcpProvider {
     // `features.web_search` is deprecated and makes Codex emit an error item on
     // every turn; the supported form is a top-level `web_search` source mode.
     const webSearch = String(configuration.webSearch ?? "default");
-    const config = WEB_SEARCH_MODES.includes(webSearch) ? { web_search: webSearch } : {};
+    const config = { ...(WEB_SEARCH_MODES.includes(webSearch) ? { web_search: webSearch } : {}), ...(configuration.model === GPT_6_SOL.id ? { model: GPT_6_SOL.id, ...(typeof configuration.reasoning === "string" && configuration.reasoning ? { model_reasoning_effort: configuration.reasoning } : {}) } : {}) };
     return { command: process.execPath, args: [require.resolve("@agentclientprotocol/codex-acp")], env: { INITIAL_AGENT_MODE: String(configuration.mode ?? "agent"), CODEX_CONFIG: JSON.stringify(config) } };
   }
+
+  protected supportsUnlistedModel(model: string): boolean { return model === GPT_6_SOL.id; }
 
   async usage(workspace?: string): Promise<AiUsage> {
     const usage = await super.usage(workspace);
@@ -39,8 +42,9 @@ export class CodexSessionManager extends StdioAcpProvider {
   /** Codex publishes context windows and retirement notices only in its own cache. */
   protected async describeModels(models: AiModel[]): Promise<AiModel[]> {
     const catalogue = await this.catalogue();
-    if (catalogue.size === 0) return models;
-    return models.map((model) => {
+    const offered = models.some((model) => model.id === GPT_6_SOL.id) ? models : [...models, GPT_6_SOL];
+    if (catalogue.size === 0) return offered;
+    return offered.map((model) => {
       const entry = catalogue.get(model.id);
       if (!entry) return model;
       const contextWindow = typeof entry.context_window === "number" ? entry.context_window : undefined;
@@ -70,6 +74,6 @@ export class CodexSessionManager extends StdioAcpProvider {
     // Codex marks catalogue entries as "list" or "hide"; anything not explicitly listed is internal.
     const models = [...catalogue.values()].filter((item) => item.visibility === "list").map((item) => ({ id: item.slug as string, name: typeof item.display_name === "string" ? item.display_name : item.slug as string, defaultReasoning: typeof item.default_reasoning_level === "string" ? item.default_reasoning_level : "medium", reasoningLevels: Array.isArray(item.supported_reasoning_levels) ? item.supported_reasoning_levels.map((level) => (level as { effort?: unknown }).effort).filter((effort): effort is string => typeof effort === "string") : ["medium"], reasoningDescriptions: Object.fromEntries((Array.isArray(item.supported_reasoning_levels) ? item.supported_reasoning_levels : []).map((level) => [(level as { effort?: unknown }).effort, (level as { description?: unknown }).description]).filter((pair): pair is [string, string] => typeof pair[0] === "string" && typeof pair[1] === "string")) }));
     if (models.length > 0) return models;
-    return [{ id: "gpt-5.6-sol", name: "GPT-5.6-Sol", defaultReasoning: "medium", reasoningLevels: ["low", "medium", "high", "xhigh", "max"] }];
+    return [GPT_6_SOL];
   }
 }
