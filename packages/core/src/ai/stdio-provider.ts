@@ -76,6 +76,7 @@ export abstract class StdioAcpProvider extends AcpProvider {
   abstract readonly descriptor: AiProviderDescriptor;
   protected abstract command(configuration: AiConfiguration): { command: string; args: string[]; env?: NodeJS.ProcessEnv };
   protected abstract fallbackModels(): Promise<AiModel[]>;
+  protected supportsUnlistedModel(_model: string): boolean { return false; }
   private readonly runtimes = new Map<string, Runtime>();
   private readonly queues = new Map<string, Promise<void>>();
   private readonly freshSessions = new Map<string, AcpSendRequest>();
@@ -132,10 +133,14 @@ export abstract class StdioAcpProvider extends AcpProvider {
     if (this.runtimes.get(workspace)?.running) throw new CoreError("INVALID_REQUEST", `${this.descriptor.name} is currently working`);
     const runtime = this.runtimes.get(workspace);
     const session = runtime?.session ?? await this.get(workspace);
+    const previousModel = session.model;
     const desired = typeof configuration === "string" ? { model: configuration, reasoning: legacyReasoning ?? session.reasoning } : configuration;
     applyConfiguration(session, desired);
     if (typeof desired.model === "string" || typeof desired.reasoning === "string") session.nextConfiguration = undefined;
-    if (runtime) {
+    const restartForModel = runtime && this.needsUnlistedModelLaunch(runtime, session.model);
+    if (restartForModel) { await this.closeRuntime(workspace); session.threadId = undefined; }
+    else if (!runtime && previousModel !== session.model && this.supportsUnlistedModel(session.model)) session.threadId = undefined;
+    if (runtime && !restartForModel) {
       const warnings = await this.applyAcpConfiguration(runtime, runtime.configOptions, runtime.modes);
       if (warnings.length > 0) session.messages.push(this.message("activity", `Session configuration\n${warnings.join("\n")}`));
       const dynamic = new Set(["model", "reasoning", "mode", ...runtime.configOptions.map((option) => option.id)]);
@@ -158,7 +163,9 @@ export abstract class StdioAcpProvider extends AcpProvider {
     if (this.runtimes.get(workspace)?.running) throw new CoreError("INVALID_REQUEST", `${this.descriptor.name} is already working`);
     const session = await this.get(workspace);
     const nextConfiguration = session.nextConfiguration;
+    const previousModel = session.model;
     applyConfiguration(session, { ...request.configuration, ...nextConfiguration });
+    if (!this.runtimes.has(workspace) && previousModel !== session.model && this.supportsUnlistedModel(session.model)) session.threadId = undefined;
     // The override belongs to exactly one newly started turn. Steering an active
     // turn never consumes it; a failed runtime/prompt start leaves it queued.
     const allowedServers = request.agent?.mcpServers ? request.mcpServers?.filter((server) => request.agent!.mcpServers!.includes(server.name)) : request.mcpServers;
@@ -462,6 +469,13 @@ export abstract class StdioAcpProvider extends AcpProvider {
     if (existing && servers !== undefined && existing.mcpKey !== mcpKey) { await this.closeRuntime(workspace); existing = undefined; }
     if (existing) {
       applyConfiguration(existing.session, session.configuration ?? {});
+      if (this.needsUnlistedModelLaunch(existing, existing.session.model)) {
+        await this.closeRuntime(workspace);
+        session.threadId = undefined;
+        existing = undefined;
+      }
+    }
+    if (existing) {
       const warnings = await this.applyAcpConfiguration(existing, existing.configOptions, existing.modes);
       if (warnings.length > 0) existing.session.messages.push(this.message("activity", `Session configuration\n${warnings.join("\n")}`));
       return existing;
@@ -482,6 +496,12 @@ export abstract class StdioAcpProvider extends AcpProvider {
     if (warnings.length > 0) session.messages.push(this.message("activity", `Session configuration\n${warnings.join("\n")}`));
     await this.save(workspace, session);
     return runtime;
+  }
+
+  private needsUnlistedModelLaunch(runtime: Runtime, model: string): boolean {
+    if (!this.supportsUnlistedModel(model)) return false;
+    const option = runtime.configOptions.find((item) => item.category === "model");
+    return !!option && option.currentValue !== model && !selectValues(option).includes(model);
   }
 
   /** Spawns the agent, performs the ACP handshake and opens a session. */
@@ -600,7 +620,7 @@ export abstract class StdioAcpProvider extends AcpProvider {
 
     const thoughtOption = current.find((option) => option.category === "thought_level");
     if (thoughtOption) await attempt(thoughtOption, session.reasoning);
-    else session.reasoning = "";
+    else if (!this.supportsUnlistedModel(session.model)) session.reasoning = "";
 
     for (const option of current) {
       if (option.category === "mode" || option.category === "model" || option.category === "thought_level") continue;
@@ -691,7 +711,7 @@ export abstract class StdioAcpProvider extends AcpProvider {
     const model = options.find((option) => option.category === "model");
     if (model) session.model = String(model.currentValue);
     const thought = options.find((option) => option.category === "thought_level");
-    session.reasoning = thought ? String(thought.currentValue) : "";
+    session.reasoning = thought ? String(thought.currentValue) : this.supportsUnlistedModel(session.model) ? session.reasoning : "";
     const mode = options.find((option) => option.category === "mode");
     session.configuration = { ...session.configuration, model: session.model, reasoning: session.reasoning, ...(mode ? { mode: String(mode.currentValue) } : {}) };
     this.rememberModels(options);
