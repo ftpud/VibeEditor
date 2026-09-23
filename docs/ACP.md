@@ -16,6 +16,8 @@ To add a provider, subclass `AcpProvider`, implement the six operations under `a
 
 Codex discovers model and reasoning metadata from its local model cache, which also supplies context window sizes, input modalities, and retirement notices for the models advertised over ACP. Its ACP options expose sandbox and web search. Saved session ids are loaded when the agent advertises `loadSession`; loaded history replaces the local transcript. MCP definitions are supplied during session setup and selected custom-agent presets can restrict the enabled MCP set.
 
+Codex ACP may lag the Codex CLI release. The root npm override keeps ACP's bundled CLI on a version that can run GPT-6 Sol even when ACP's model catalogue has not advertised it yet.
+
 Copilot discovers models from ACP configuration metadata, including the premium-request multiplier, cost tier, and availability published in the model option's `_meta`. Stored model and reasoning choices are passed at server launch and are also applied when their dynamic ACP options arrive. A per-session AI-credit ceiling remains available. Copilot documents quota details in interactive `/usage`; the shared usage view displays the context and latest-turn token data ACP reports.
 
 ## Model catalogue metadata
