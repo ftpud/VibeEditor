@@ -124,6 +124,25 @@ describe("HarnessPanel", () => {
     await waitFor(() => expect(onSave.mock.calls.at(0)?.[0].blocks[0].model).toBe("gpt-test"));
   });
 
+  it("saves declared JSON schemas and shows the validated run data", async () => {
+    const harness: HarnessDefinition = { id: "harness-1", name: "Flow", version: 1, createdAt: "now", updatedAt: "now", blocks: [{ id: "a", type: "prompt", label: "Plan", prompt: "{{input}}", position: { x: 20, y: 20 } }], edges: [] };
+    const onSave = vi.fn().mockImplementation(async (value) => value);
+    const runs = [{ id: "run-1", harnessId: harness.id, harnessVersion: 1, input: '{"featureId":"F-1"}', status: "succeeded" as const, createdAt: "now", blocks: [{ blockId: "a", status: "succeeded" as const, structuredInput: { featureId: "F-1" }, structuredOutput: { commitSha: "abc123" } }] }];
+    render(<HarnessPanel harnesses={[harness]} runs={runs} providers={[]} agents={[]} onCreate={vi.fn()} onSave={onSave} onDelete={vi.fn()} onRun={vi.fn()} onCancelRun={vi.fn()} onError={vi.fn()} />);
+
+    fireEvent.click(await screen.findByText("Plan"));
+    fireEvent.change(screen.getByRole("textbox", { name: "Input schema" }), { target: { value: '{"type":"object","required":["featureId"],"properties":{"featureId":{"type":"string"}}}' } });
+    fireEvent.change(screen.getByRole("textbox", { name: "Output schema" }), { target: { value: '{"type":"object","required":["commitSha"],"properties":{"commitSha":{"type":"string"}}}' } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(onSave.mock.calls.at(0)?.[0].blocks[0]).toMatchObject({ inputSchema: { required: ["featureId"] }, outputSchema: { required: ["commitSha"] } }));
+
+    fireEvent.click(screen.getByRole("button", { name: "View" }));
+    const details = await screen.findByLabelText("Plan run details");
+    expect(details.textContent).toContain("Validated input");
+    expect(details.textContent).toContain("featureId");
+    expect(details.textContent).toContain("commitSha");
+  });
+
   it("shows prompts, answers, and stack runs when a block is selected in view mode", async () => {
     const harness: HarnessDefinition = { id: "harness-1", name: "Flow", version: 1, createdAt: "now", updatedAt: "now", blocks: [{ id: "a", type: "prompt", label: "Review", prompt: "{{input}}", position: { x: 20, y: 20 } }], edges: [] };
     const runs = [{ id: "run-1", harnessId: harness.id, harnessVersion: 1, input: "task", status: "succeeded" as const, createdAt: "now", blocks: [{ blockId: "a", status: "succeeded" as const, prompt: "Review task", output: "combined", plannedRuns: 2, iterations: [{ index: 1, status: "succeeded" as const, startedAt: "now", prompt: "Review task 1", output: "answer one" }, { index: 2, status: "succeeded" as const, startedAt: "now", prompt: "Review task 2", output: "answer two" }] }] }];

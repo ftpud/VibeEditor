@@ -47,7 +47,7 @@ The current vertical slice is useful: definitions and run snapshots are Core-own
 
 ## P0 — enforce trustworthy delivery gates
 
-- [ ] Add typed, schema-validated block outputs and inputs.
+- [x] Add typed, schema-validated block outputs and inputs.
   - Let a block declare an output schema and validate it before releasing downstream dependencies.
   - Preserve the original request, feature/task IDs, dependency IDs, commit SHAs, findings, and test evidence as structured data rather than prompt-only JSON conventions.
   - Treat missing or malformed required fields as a visible blocked state with a repair/retry action.
