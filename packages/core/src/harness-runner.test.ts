@@ -62,6 +62,24 @@ describe("HarnessRunner", () => {
     releaseBlock(); await vi.waitFor(async () => expect((await store.runs())[0]?.status).toBe("succeeded"));
   });
 
+  it("persists feature prerequisites, refuses premature dispatch, and releases newly ready work after merge", async () => {
+    const state = await mkdtemp(path.join(os.tmpdir(), "workflow-features-")); const store = new HarnessStore("/workspace", state); const definition = await store.create("Features");
+    await store.update({ ...definition, blocks: [{ id: "planner", type: "task", label: "Planner", prompt: "plan", position: { x: 0, y: 0 } }], edges: [] });
+    let release!: () => void; const pending = new Promise<void>((resolve) => { release = resolve; }); const runner = new HarnessRunner(store, () => undefined);
+    const run = await runner.start(definition.id, "work", async () => { await pending; return session("planned"); });
+    await vi.waitFor(() => expect(runner.isActive(run.id)).toBe(true));
+    const planned = await runner.planFeatures(run.id, [{ id: "foundation", prompt: "Build foundation" }, { id: "ui", prompt: "Build UI", prerequisites: ["foundation"] }]);
+    expect(planned.map((feature) => feature.status)).toEqual(["planned", "planned"]);
+    await expect(runner.dispatchFeature(run.id, "ui", "task-ui")).rejects.toThrow("foundation");
+    await runner.dispatchFeature(run.id, "foundation", "task-foundation");
+    const completed = await runner.completeFeature(run.id, "task-foundation", "a".repeat(40));
+    expect(completed.ready).toMatchObject([{ id: "ui", status: "planned" }]);
+    await runner.dispatchFeature(run.id, "ui", "task-ui");
+    await runner.completeFeature(run.id, "task-ui", "b".repeat(40));
+    release(); await vi.waitFor(async () => expect((await store.runs())[0]?.status).toBe("succeeded"));
+    expect((await store.runs())[0]?.features).toMatchObject([{ id: "foundation", status: "completed", commit: "a".repeat(40) }, { id: "ui", status: "completed", commit: "b".repeat(40) }]);
+  });
+
   it.each(["task_create", "prompt_delivery", "timer_fire", "merge"] satisfies HarnessOperationKind[])("recovers a %s crash before or after its side effect exactly once", async (kind) => {
     for (const crash of ["before", "after"] as const) {
       const stateDirectory = await mkdtemp(path.join(os.tmpdir(), `workflow-${kind}-${crash}-`)); const store = new HarnessStore("/workspace", stateDirectory); const created = await store.create("Crash recovery");

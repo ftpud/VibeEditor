@@ -56,7 +56,7 @@ The current vertical slice is useful: definitions and run snapshots are Core-own
   - Run verification through Core and retain command, working directory, revision, exit code, duration, and bounded output/artifact references.
   - Invalidate approval and test evidence whenever the reviewed revision changes.
   - A model saying `review_passed` or `tests_passed` must not release a gated edge without recorded evidence.
-- [ ] Make feature dependencies executable state.
+- [x] Make feature dependencies executable state.
   - Store the planned feature registry and prerequisites, dispatch every newly ready feature, and block completion while a planned feature is missing or undispatched.
   - Ensure dependent workspaces contain prerequisite commits before work begins.
 - [ ] Add an explicit correction loop.

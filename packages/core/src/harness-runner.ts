@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import type { HarnessBlock, HarnessBlockAttempt, HarnessBlockIteration, HarnessEdge, HarnessRun, HarnessLogEntry, HarnessChildTask, HarnessFailureReason, HarnessPauseStatus, HarnessOperation, HarnessOperationKind, AiSession } from "@remote-ide/protocol";
+import type { HarnessBlock, HarnessBlockAttempt, HarnessBlockIteration, HarnessEdge, HarnessRun, HarnessLogEntry, HarnessChildTask, HarnessFailureReason, HarnessPauseStatus, HarnessOperation, HarnessOperationKind, HarnessFeature, AiSession } from "@remote-ide/protocol";
 import { AiProviderError, normalizeAiFailure, type AiFailure } from "@remote-ide/acp";
 import { CoreError } from "./errors.js";
 import { HarnessSchemaError, parseHarnessData, validateHarness, renderHarnessPrompt } from "./harness-graph.js";
@@ -43,6 +43,43 @@ export class HarnessRunner {
     if (!execution.run.children.some((item) => item.taskId === child.taskId && item.provider === child.provider)) execution.run.children.push({ ...child, recoveryAttempts: 0 });
     await this.recordCompletedOperation(execution.run, "child_registration", `child:${child.taskId}:${child.provider}`, child.blockId, { taskId: child.taskId, provider: child.provider, workspace: child.workspace });
     await this.update(execution.run);
+  }
+
+  async planFeatures(runId: string, planned: Array<{ id: string; prompt: string; prerequisites?: string[] }>): Promise<HarnessFeature[]> {
+    const execution = this.activeExecution(runId);
+    if (!planned.length || planned.some((feature) => !validFeature(feature))) throw new CoreError("INVALID_REQUEST", "Each planned feature needs a unique ID, prompt, and valid prerequisite IDs");
+    const ids = new Set(planned.map((feature) => feature.id));
+    if (ids.size !== planned.length || planned.some((feature) => (feature.prerequisites ?? []).some((dependency) => dependency === feature.id || !ids.has(dependency)))) throw new CoreError("INVALID_REQUEST", "Feature prerequisites must refer to another planned feature and cannot include themselves");
+    if (hasFeatureCycle(planned)) throw new CoreError("INVALID_REQUEST", "Feature prerequisites contain a cycle");
+    if (execution.run.features?.length) {
+      const current = JSON.stringify(execution.run.features.map(({ id, prompt, prerequisites }) => ({ id, prompt, prerequisites })));
+      const requested = JSON.stringify(planned.map(({ id, prompt, prerequisites = [] }) => ({ id, prompt, prerequisites })));
+      if (current !== requested) throw new CoreError("INVALID_REQUEST", "The workflow feature plan is already durable and cannot be replaced mid-run");
+      return structuredClone(execution.run.features);
+    }
+    execution.run.features = planned.map((feature) => ({ id: feature.id, prompt: feature.prompt, prerequisites: [...feature.prerequisites ?? []], status: "planned" }));
+    await this.recordCompletedOperation(execution.run, "tool_command", "feature-plan", undefined, { features: execution.run.features });
+    await this.update(execution.run);
+    return structuredClone(execution.run.features);
+  }
+
+  async dispatchFeature(runId: string, featureId: string, taskId: string): Promise<HarnessFeature> {
+    const execution = this.activeExecution(runId); const existing = execution.run.features?.find((item) => item.id === featureId);
+    if (existing?.status === "dispatched" && existing.taskId === taskId) return structuredClone(existing);
+    const feature = this.readyFeature(execution, featureId);
+    feature.status = "dispatched"; feature.taskId = taskId;
+    await this.recordCompletedOperation(execution.run, "tool_command", `feature-dispatch:${featureId}`, undefined, { featureId, taskId });
+    await this.update(execution.run); return structuredClone(feature);
+  }
+
+  async completeFeature(runId: string, taskId: string, commit: string): Promise<{ completed: HarnessFeature; ready: HarnessFeature[] }> {
+    const execution = this.activeExecution(runId); const feature = execution.run.features?.find((item) => item.taskId === taskId);
+    if (!feature) throw new CoreError("INVALID_REQUEST", `Task '${taskId}' is not assigned to a planned feature`);
+    if (feature.status === "completed") return { completed: structuredClone(feature), ready: readyFeatures(execution.run.features ?? []) };
+    if (feature.status !== "dispatched" || !/^[0-9a-f]{7,64}$/i.test(commit)) throw new CoreError("INVALID_REQUEST", "Only a dispatched feature with a merged commit can complete");
+    feature.status = "completed"; feature.commit = commit;
+    await this.recordCompletedOperation(execution.run, "tool_command", `feature-complete:${feature.id}`, undefined, { featureId: feature.id, taskId, commit });
+    await this.update(execution.run); return { completed: structuredClone(feature), ready: readyFeatures(execution.run.features ?? []) };
   }
 
   async runOperation<T>(runId: string, blockId: string, kind: HarnessOperationKind, idempotencyKey: string, input: unknown, effect: () => Promise<T>, reconcile?: () => Promise<T | null | undefined>): Promise<T> {
@@ -450,6 +487,8 @@ export class HarnessRunner {
       }
       if (this.cancelled.has(run.id)) throw new Cancelled();
       const failed = run.blocks.find((block) => block.status === "failed"); if (failed) throw new Error(failed.error ?? "Asynchronous workflow block failed");
+      const incompleteFeatures = run.features?.filter((feature) => feature.status !== "completed") ?? [];
+      if (incompleteFeatures.length) throw new Error(`Workflow delivery is blocked: planned features were not completed: ${incompleteFeatures.map((feature) => `${feature.id} (${feature.status})`).join(", ")}`);
       run.status = "succeeded"; run.completedAt = new Date().toISOString(); await this.recordCompletedOperation(run, "terminal_outcome", `terminal:${run.status}`, undefined, { status: run.status, completedAt: run.completedAt }); await this.update(run);
     } catch (error) {
       const cancelled = error instanceof Cancelled || this.cancelled.has(run.id); run.status = cancelled ? "cancelled" : "failed"; run.error = cancelled ? undefined : error instanceof Error ? error.message : String(error); run.completedAt = new Date().toISOString();
@@ -542,6 +581,21 @@ export class HarnessRunner {
   private async update(run: HarnessRun): Promise<void> {
     const snapshot = structuredClone(run); const next = this.updateQueue.then(async () => { await this.store.saveRun(snapshot); this.changed(run.id); });
     this.updateQueue = next.catch(() => undefined); await next;
+  }
+
+  private activeExecution(runId: string): ActiveExecution {
+    const execution = this.executions.get(runId); if (!execution || !this.isActive(runId)) throw new CoreError("INVALID_REQUEST", "Workflow execution is no longer active"); return execution;
+  }
+
+  async assertFeatureReady(runId: string, featureId: string): Promise<void> { this.readyFeature(this.activeExecution(runId), featureId); }
+
+  private readyFeature(execution: ActiveExecution, featureId: string): HarnessFeature {
+    const feature = execution.run.features?.find((item) => item.id === featureId);
+    if (!feature) throw new CoreError("INVALID_REQUEST", `Feature '${featureId}' is not in the durable feature plan`);
+    if (feature.status !== "planned") throw new CoreError("INVALID_REQUEST", `Feature '${featureId}' is already ${feature.status}`);
+    const waiting = feature.prerequisites.filter((dependency) => execution.run.features!.find((item) => item.id === dependency)?.status !== "completed");
+    if (waiting.length) throw new CoreError("INVALID_REQUEST", `Feature '${featureId}' cannot start until ${waiting.join(", ")} is merged into the root workspace`);
+    return feature;
   }
 
   private async beginOperation(run: HarnessRun, kind: HarnessOperationKind, idempotencyKey: string, blockId?: string, input?: unknown, attemptId?: string): Promise<HarnessOperation> {
@@ -773,6 +827,20 @@ class ExecutionScheduler {
 }
 
 class Cancelled extends Error {}
+
+function validFeature(feature: { id: string; prompt: string; prerequisites?: string[] }): boolean {
+  return typeof feature.id === "string" && /^[A-Za-z0-9_-]{1,120}$/.test(feature.id) && typeof feature.prompt === "string" && Boolean(feature.prompt.trim()) && Array.isArray(feature.prerequisites ?? []) && (feature.prerequisites ?? []).every((dependency) => typeof dependency === "string" && /^[A-Za-z0-9_-]{1,120}$/.test(dependency));
+}
+
+function hasFeatureCycle(features: Array<{ id: string; prerequisites?: string[] }>): boolean {
+  const byId = new Map(features.map((feature) => [feature.id, feature])); const visiting = new Set<string>(); const visited = new Set<string>();
+  const visit = (id: string): boolean => { if (visiting.has(id)) return true; if (visited.has(id)) return false; visiting.add(id); const cycle = (byId.get(id)?.prerequisites ?? []).some(visit); visiting.delete(id); visited.add(id); return cycle; };
+  return features.some((feature) => visit(feature.id));
+}
+
+function readyFeatures(features: HarnessFeature[]): HarnessFeature[] {
+  return features.filter((feature) => feature.status === "planned" && feature.prerequisites.every((dependency) => features.find((item) => item.id === dependency)?.status === "completed")).map((feature) => structuredClone(feature));
+}
 
 const activeStatuses = new Set(["queued", "running", "waiting", "awaiting_permission", "awaiting_user_input", "waiting_timer", "retry_scheduled"]);
 const pauseStatuses = new Set(["awaiting_permission", "awaiting_user_input", "waiting_timer", "retry_scheduled"]);
