@@ -59,7 +59,7 @@ The current vertical slice is useful: definitions and run snapshots are Core-own
 - [x] Make feature dependencies executable state.
   - Store the planned feature registry and prerequisites, dispatch every newly ready feature, and block completion while a planned feature is missing or undispatched.
   - Ensure dependent workspaces contain prerequisite commits before work begins.
-- [ ] Add an explicit correction loop.
+- [x] Add an explicit correction loop.
   - Bind each finding to an owning task/revision, request a correction, wait for a new revision, and rerun review and tests.
   - Cap correction cycles and finish as Blocked with remaining findings when the cap is reached.
 - [ ] Integrate safely.

@@ -649,6 +649,27 @@ describe("HarnessRunner", () => {
     const cancelled = await runner.cancelPause(run.id, "worker", pauseId, interrupt);
     expect(cancelled.status).toBe("cancelled"); expect(interrupt).toHaveBeenCalledWith("codex", { runId: run.id, blockId: "worker", workspace: "/workflow/worker" });
   });
+
+  it("persists findings, corrects their owning session, and reruns the review on the new revision", async () => {
+    const state = await mkdtemp(path.join(os.tmpdir(), "workflow-correction-")); const store = new HarnessStore("/workspace", state); const created = await store.create("Correction");
+    const oldRevision = "a".repeat(40); const newRevision = "b".repeat(40);
+    const definition = await store.update({ ...created, blocks: [
+      { id: "implement", type: "task", label: "Implement", prompt: "implement", position: { x: 0, y: 0 } },
+      { id: "review", type: "review", label: "Review", prompt: "review", review: { revision: oldRevision, correction: { ownerBlockId: "implement", maxCycles: 2 } }, position: { x: 100, y: 0 } }
+    ], edges: [{ id: "to-review", from: "implement", to: "review" }] });
+    let reviewCalls = 0; const append = vi.fn(async () => ({ ...session("corrected"), messages: [{ id: "corrected", role: "assistant" as const, text: JSON.stringify({ revision: newRevision }), timestamp: "now" }] }));
+    const runner = new HarnessRunner(store, () => undefined);
+    await runner.start(definition.id, "work", async (block, _prompt, runtime) => {
+      if (block.id === "implement") { await runtime.started("/workflow/implement"); return session("implemented"); }
+      reviewCalls += 1;
+      const revision = block.review!.revision;
+      return { ...session(`review-${reviewCalls}`), messages: [{ id: `review-${reviewCalls}`, role: "assistant" as const, text: JSON.stringify({ revision, findings: reviewCalls === 1 ? [{ id: "missing-test", message: "Add a regression test", ownerBlockId: "implement" }] : [] }), timestamp: "now" }] };
+    }, "test", append);
+    await vi.waitFor(async () => expect((await store.runs())[0]?.status).toBe("succeeded"));
+    const run = (await store.runs())[0]!;
+    expect(reviewCalls).toBe(2); expect(append).toHaveBeenCalledWith(expect.objectContaining({ id: "implement" }), expect.stringContaining("missing-test"), expect.anything());
+    expect(run.corrections).toMatchObject([{ status: "corrected", revision: oldRevision, correctedRevision: newRevision, findings: [{ ownerBlockId: "implement", revision: oldRevision }] }]);
+  });
 });
 
 function session(id: string) { return { id, model: "test", reasoning: "low", status: "done" as const, messages: [{ id, role: "assistant" as const, text: id, timestamp: "now" }] }; }
