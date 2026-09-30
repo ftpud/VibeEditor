@@ -18,6 +18,8 @@ Codex discovers model and reasoning metadata from its local model cache, which a
 
 Codex ACP may lag the Codex CLI release. The root npm override keeps ACP's bundled CLI on a version that can run GPT-6 Sol even when ACP's model catalogue has not advertised it yet.
 
+At Core process startup, Vibe checks npm's `latest` versions of `@agentclientprotocol/codex-acp` and `@openai/codex` before accepting connections. Changed versions are installed into a new directory under `~/.remote-ide/codex-runtime`; a completed installation is selected atomically without changing the project's dependencies or lockfile. Both ACP sessions and quota reads use this runtime. Registry requests have a 15-second fetch timeout and each npm command has a 60-second limit. An offline or failed update logs a warning and retains the previous cached runtime, or the bundled dependency on first startup. Set `REMOTE_IDE_CODEX_AUTO_UPDATE=0` to skip updates, or `REMOTE_IDE_CODEX_RUNTIME_DIR` to relocate the cache. An explicit `CODEX_PATH` still overrides the Codex binary for ACP sessions. Updating removes a source of stale model catalogues; model access still depends on the account and what the agent advertises.
+
 Copilot discovers models from ACP configuration metadata, including the premium-request multiplier, cost tier, and availability published in the model option's `_meta`. Stored model and reasoning choices are passed at server launch and are also applied when their dynamic ACP options arrive. A per-session AI-credit ceiling remains available. Copilot documents quota details in interactive `/usage`; the shared usage view displays the context and latest-turn token data ACP reports.
 
 ## Model catalogue metadata

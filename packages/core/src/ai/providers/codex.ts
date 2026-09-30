@@ -1,12 +1,11 @@
 import os from "node:os";
 import path from "node:path";
 import { readFile } from "node:fs/promises";
-import { createRequire } from "node:module";
 import type { AiConfiguration, AiModel, AiProviderDescriptor, AiUsage } from "@remote-ide/acp";
 import { StdioAcpProvider } from "../stdio-provider.js";
 import { readCodexAccountQuota } from "./codex-usage.js";
+import { resolveCodexRuntime } from "./codex-runtime.js";
 
-const require = createRequire(import.meta.url);
 const WEB_SEARCH_MODES = ["live", "indexed", "cached", "disabled"];
 const GPT_6_SOL: AiModel = { id: "gpt-6-sol", name: "GPT-6 Sol", defaultReasoning: "medium", reasoningLevels: ["none", "low", "medium", "high", "xhigh", "max"], note: "When Codex does not advertise this model, selecting it starts a new Codex thread. Access depends on your account." };
 
@@ -28,14 +27,14 @@ export class CodexSessionManager extends StdioAcpProvider {
     // every turn; the supported form is a top-level `web_search` source mode.
     const webSearch = String(configuration.webSearch ?? "default");
     const config = { ...(WEB_SEARCH_MODES.includes(webSearch) ? { web_search: webSearch } : {}), ...(configuration.model === GPT_6_SOL.id ? { model: GPT_6_SOL.id, ...(typeof configuration.reasoning === "string" && configuration.reasoning ? { model_reasoning_effort: configuration.reasoning } : {}) } : {}) };
-    return { command: process.execPath, args: [require.resolve("@agentclientprotocol/codex-acp")], env: { INITIAL_AGENT_MODE: String(configuration.mode ?? "agent"), CODEX_CONFIG: JSON.stringify(config) } };
+    return { command: process.execPath, args: [resolveCodexRuntime("@agentclientprotocol/codex-acp")], env: { CODEX_PATH: process.env.CODEX_PATH ?? resolveCodexRuntime("@openai/codex/bin/codex.js"), INITIAL_AGENT_MODE: String(configuration.mode ?? "agent"), CODEX_CONFIG: JSON.stringify(config) } };
   }
 
   protected supportsUnlistedModel(model: string): boolean { return model === GPT_6_SOL.id; }
 
   async usage(workspace?: string): Promise<AiUsage> {
     const usage = await super.usage(workspace);
-    const accountQuota = await readCodexAccountQuota(process.execPath, [require.resolve("@openai/codex/bin/codex.js"), "app-server", "--stdio"]).catch(() => undefined);
+    const accountQuota = await readCodexAccountQuota(process.execPath, [resolveCodexRuntime("@openai/codex/bin/codex.js"), "app-server", "--stdio"]).catch(() => undefined);
     return accountQuota ? { ...usage, accountQuota } : usage;
   }
 
