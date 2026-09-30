@@ -724,6 +724,11 @@ async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStor
     case "harnesses.validate": return validateHarness(request.payload.harness);
     case "harnesses.runs": return { runs: await harnesses.runs(request.payload.harnessId) };
     case "harnesses.run": return { run: await harnessRunner.start(request.payload.harnessId, request.payload.input, async (block, prompt, runtime) => providerOperation(async () => {
+      if (block.type === "verification") return runWorkflowVerification(block, workspacePath, harnessRunner, runtime);
+      if (block.type === "review") {
+        const evidence = await collectWorkflowReviewEvidence(block, workspacePath, harnessRunner, runtime);
+        prompt = `${prompt}\n\nCore-recorded review evidence (review this exact revision; do not infer it from another session):\nCommit: ${evidence.revision}\nBase: ${evidence.baseRevision}\nChanged files: ${evidence.files.join(", ") || "none"}\n\nDiff:\n${evidence.diff}`;
+      }
       const provider = acp.get(block.provider ?? request.payload.provider);
       if (block.watchdog) return harnessRunner.watch(runtime.runId, runtime.blockId, () => provider.usage(), () => harnessRunner.recoverChildren(runtime.runId, async (child) => {
         const task = (await tasks.list()).tasks.find((item) => item.id === child.taskId);
@@ -958,6 +963,56 @@ async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStor
     case "java.semanticTokens": return { tokens: await jdt.semanticTokens(request.payload.path, request.payload.content) };
   }
 }
+
+type WorkflowGateRuntime = { runId: string; blockId: string; attemptId: string; assertActive(): void };
+type WorkflowReviewEvidence = { revision: string; baseRevision: string; files: string[]; diff: string };
+
+async function collectWorkflowReviewEvidence(block: HarnessBlock, workspace: string, runner: HarnessRunner, runtime: WorkflowGateRuntime): Promise<WorkflowReviewEvidence> {
+  const review = block.review;
+  if (!review) throw new CoreError("INVALID_REQUEST", "Review blocks require a review configuration");
+  return runner.runOperation(runtime.runId, runtime.blockId, "review", `review:${runtime.attemptId}`, { revision: review.revision, baseRevision: review.baseRevision }, async () => {
+    runtime.assertActive();
+    const revision = await resolveWorkflowCommit(workspace, review.revision);
+    const baseRevision = review.baseRevision ? await resolveWorkflowCommit(workspace, review.baseRevision) : (await execFileAsync("git", ["-C", workspace, "rev-parse", `${revision}^`], { encoding: "utf8" })).stdout.trim();
+    const [diffResult, filesResult] = await Promise.all([
+      execFileAsync("git", ["-C", workspace, "diff", "--no-ext-diff", "--unified=3", baseRevision, revision], { encoding: "utf8", maxBuffer: 2_000_000 }),
+      execFileAsync("git", ["-C", workspace, "diff", "--name-only", baseRevision, revision], { encoding: "utf8" })
+    ]);
+    runtime.assertActive();
+    return { revision, baseRevision, files: filesResult.stdout.split("\n").filter(Boolean).slice(0, 500), diff: boundedWorkflowOutput(diffResult.stdout, 500_000) };
+  });
+}
+
+async function runWorkflowVerification(block: HarnessBlock, workspace: string, runner: HarnessRunner, runtime: WorkflowGateRuntime): Promise<AiSession> {
+  const verification = block.verification;
+  if (!verification) throw new CoreError("INVALID_REQUEST", "Verification blocks require a verification configuration");
+  const workingDirectory = path.resolve(workspace, verification.workingDirectory ?? ".");
+  if (workingDirectory !== workspace && !workingDirectory.startsWith(`${workspace}${path.sep}`)) throw new CoreError("INVALID_REQUEST", "Verification working directory must be inside the workspace");
+  const result = await runner.runOperation(runtime.runId, runtime.blockId, "verification", `verification:${runtime.attemptId}`, { command: verification.command, workingDirectory: verification.workingDirectory ?? ".", revision: verification.revision }, async () => {
+    runtime.assertActive();
+    const revision = await resolveWorkflowCommit(workingDirectory, verification.revision ?? "HEAD");
+    if (verification.revision && revision.toLowerCase() !== verification.revision.toLowerCase()) throw new CoreError("INVALID_REQUEST", `Verification revision '${verification.revision}' resolved to '${revision}', so Core refused to test a different revision`);
+    const startedAt = Date.now();
+    try {
+      const completed = await execFileAsync("sh", ["-lc", verification.command], { cwd: workingDirectory, encoding: "utf8", timeout: verification.timeoutMs ?? 10 * 60_000, maxBuffer: 2_000_000 });
+      runtime.assertActive();
+      return { revision, workingDirectory, command: verification.command, exitCode: 0, durationMs: Date.now() - startedAt, output: boundedWorkflowOutput(`${completed.stdout}${completed.stderr}`) };
+    } catch (error) {
+      const failed = error as { code?: number | string; stdout?: string; stderr?: string; killed?: boolean };
+      const result = { revision, workingDirectory, command: verification.command, exitCode: typeof failed.code === "number" ? failed.code : null, durationMs: Date.now() - startedAt, output: boundedWorkflowOutput(`${failed.stdout ?? ""}${failed.stderr ?? ""}`), timedOut: Boolean(failed.killed) };
+      throw new CoreError("INVALID_REQUEST", `Verification failed for ${revision} (exit ${result.exitCode ?? "unknown"}) after ${result.durationMs}ms: ${result.output || "no output"}`);
+    }
+  });
+  return { id: `core-verification-${runtime.attemptId}`, model: "core", reasoning: "none", status: "done", messages: [{ id: `verification-${runtime.attemptId}`, role: "assistant", text: JSON.stringify(result), timestamp: new Date().toISOString() }] };
+}
+
+async function resolveWorkflowCommit(workspace: string, reference: string): Promise<string> {
+  if (reference !== "HEAD" && !/^[0-9a-f]{7,64}$/i.test(reference)) throw new CoreError("INVALID_REQUEST", "Workflow gates require a commit SHA");
+  try { return (await execFileAsync("git", ["-C", workspace, "rev-parse", "--verify", `${reference}^{commit}`], { encoding: "utf8" })).stdout.trim(); }
+  catch { throw new CoreError("INVALID_REQUEST", `Workflow gate commit '${reference}' does not exist in this workspace`); }
+}
+
+function boundedWorkflowOutput(value: string, limit = 200_000): string { return value.length <= limit ? value : `${value.slice(0, limit)}\n… output truncated by Core`; }
 
 async function workflowSessionWorkspace(workspace: string, runId: string, blockId: string): Promise<string> {
   const stateDirectory = process.env.REMOTE_IDE_STATE_DIR ?? path.join(os.homedir(), ".remote-ide", "workspaces");

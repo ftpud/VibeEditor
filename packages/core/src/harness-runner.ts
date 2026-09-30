@@ -6,7 +6,7 @@ import { HarnessSchemaError, parseHarnessData, validateHarness, renderHarnessPro
 import type { HarnessStore } from "./harnesses.js";
 import type { AiUsage } from "@remote-ide/acp";
 
-type Dispatch = (block: HarnessBlock, prompt: string, context: { runId: string; blockId: string; iteration: number; started(workspace: string): Promise<void>; activity(session: AiSession, waitingUntil?: string): Promise<void>; assertActive(): void }) => Promise<AiSession>;
+type Dispatch = (block: HarnessBlock, prompt: string, context: { runId: string; blockId: string; attemptId: string; iteration: number; started(workspace: string): Promise<void>; activity(session: AiSession, waitingUntil?: string): Promise<void>; assertActive(): void }) => Promise<AiSession>;
 type Append = (block: HarnessBlock, prompt: string, context: { runId: string; blockId: string; workspace: string }) => Promise<AiSession>;
 type Interrupt = (provider: string, context: { runId: string; blockId: string; workspace?: string }) => Promise<void>;
 type ResolvePermission = (provider: string, workspace: string, requestId: string, optionId?: string) => Promise<AiSession>;
@@ -470,8 +470,8 @@ export class HarnessRunner {
     const state = run.blocks.find((item) => item.blockId === block.id)!; const outgoing = edges.filter((edge) => edge.from === block.id);
     const loopOutgoing = outgoing.filter((edge) => edge.loop);
     const blockInput = connectedInput(block.id, run.input, blocks, edges, outputs); const count = stack?.length ?? 1; const collected: string[] = []; let latestAttemptId: string | undefined;
-    state.startedAt = new Date().toISOString(); state.provider = block.provider ?? defaultProvider; state.plannedRuns = count; state.iterations = count > 1 ? [] : undefined; state.log = state.log ?? []; this.log(state, "lifecycle", `Started ${count > 1 ? `${count} planned iterations` : "block"}`);
-    const providers = this.activeProviders.get(run.id) ?? new Set<string>(); providers.add(state.provider); this.activeProviders.set(run.id, providers); await this.update(run);
+    state.startedAt = new Date().toISOString(); state.provider = block.type === "verification" ? undefined : block.provider ?? defaultProvider; state.plannedRuns = count; state.iterations = count > 1 ? [] : undefined; state.log = state.log ?? []; this.log(state, "lifecycle", `Started ${count > 1 ? `${count} planned iterations` : "block"}`);
+    const providers = this.activeProviders.get(run.id) ?? new Set<string>(); if (state.provider) providers.add(state.provider); this.activeProviders.set(run.id, providers); await this.update(run);
     try {
       for (let index = 0; index < count; index += 1) {
         this.assertActive(run.id);
@@ -501,9 +501,9 @@ export class HarnessRunner {
           if (!execution) throw new Error("Workflow execution is no longer active");
           const settled = await execution.scheduler.turn(block.id, () => {
             execution.turnClaims.set(block.id, attemptId);
-            return state.workspace
+            return state.workspace && block.type !== "review"
               ? execution.append(block, prompt, { runId: run.id, blockId: block.id, workspace: state.workspace! })
-              : dispatch(block, prompt, { runId: run.id, blockId: block.id, iteration: index + 1, started, activity, assertActive: () => this.assertActive(run.id) });
+              : dispatch(block, prompt, { runId: run.id, blockId: block.id, attemptId, iteration: index + 1, started, activity, assertActive: () => this.assertActive(run.id) });
           });
           this.assertActive(run.id);
           state.sessionId = settled.id; attempt.sessionId = settled.id; if (iteration) iteration.sessionId = settled.id;
@@ -531,7 +531,7 @@ export class HarnessRunner {
       this.assertActive(run.id);
       const execution = this.executions.get(run.id); if (!execution || execution.turnClaims.get(block.id) !== latestAttemptId) return;
       outputs.set(block.id, output); state.output = output.slice(-200_000); state.status = "succeeded"; state.completedAt = new Date().toISOString(); state.failureReason = undefined; state.retryAt = undefined; state.retryStartedAt = undefined; state.waitingUntil = undefined; state.pendingPermission = undefined; state.question = undefined; state.pauseId = undefined; this.log(state, "lifecycle", "Completed successfully"); await this.update(run);
-    } finally { const active = this.activeProviders.get(run.id); active?.delete(state.provider); }
+    } finally { const active = this.activeProviders.get(run.id); if (state.provider) active?.delete(state.provider); }
   }
 
   private log(state: HarnessRun["blocks"][number], kind: HarnessLogEntry["kind"], message: string): void {
