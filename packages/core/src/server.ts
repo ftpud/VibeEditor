@@ -732,6 +732,7 @@ async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStor
       if (block.type === "review") {
         const evidence = await collectWorkflowReviewEvidence(block, workspacePath, harnessRunner, runtime);
         prompt = `${prompt}\n\nCore-recorded review evidence (review this exact revision; do not infer it from another session):\nCommit: ${evidence.revision}\nBase: ${evidence.baseRevision}\nChanged files: ${evidence.files.join(", ") || "none"}\n\nDiff:\n${evidence.diff}`;
+        if (block.review?.correction) prompt += `\n\nThis review drives a Core correction loop. Reply with JSON only: {"revision":"${evidence.revision}","findings":[{"id":"stable-finding-id","message":"actionable finding","ownerBlockId":"${block.review.correction.ownerBlockId}"}]}. Use an empty findings array when the revision is approved.`;
       }
       const provider = acp.get(block.provider ?? request.payload.provider);
       if (block.watchdog) return harnessRunner.watch(runtime.runId, runtime.blockId, () => provider.usage(), () => harnessRunner.recoverChildren(runtime.runId, async (child) => {

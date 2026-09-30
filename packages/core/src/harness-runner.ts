@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import type { HarnessBlock, HarnessBlockAttempt, HarnessBlockIteration, HarnessEdge, HarnessRun, HarnessLogEntry, HarnessChildTask, HarnessFailureReason, HarnessPauseStatus, HarnessOperation, HarnessOperationKind, HarnessFeature, AiSession } from "@remote-ide/protocol";
+import type { HarnessBlock, HarnessBlockAttempt, HarnessBlockIteration, HarnessEdge, HarnessRun, HarnessLogEntry, HarnessChildTask, HarnessFailureReason, HarnessPauseStatus, HarnessOperation, HarnessOperationKind, HarnessFeature, HarnessReviewFinding, HarnessCorrectionCycle, AiSession } from "@remote-ide/protocol";
 import { AiProviderError, normalizeAiFailure, type AiFailure } from "@remote-ide/acp";
 import { CoreError } from "./errors.js";
 import { HarnessSchemaError, parseHarnessData, validateHarness, renderHarnessPrompt } from "./harness-graph.js";
@@ -486,12 +486,13 @@ export class HarnessRunner {
         if (completed) { running.delete(completed.blockId); if (completed.error) throw completed.error; }
       }
       if (this.cancelled.has(run.id)) throw new Cancelled();
+      const blocked = run.blocks.find((block) => block.status === "blocked"); if (blocked) throw new BlockedCorrection(blocked.error ?? "Workflow correction cycle is blocked");
       const failed = run.blocks.find((block) => block.status === "failed"); if (failed) throw new Error(failed.error ?? "Asynchronous workflow block failed");
       const incompleteFeatures = run.features?.filter((feature) => feature.status !== "completed") ?? [];
       if (incompleteFeatures.length) throw new Error(`Workflow delivery is blocked: planned features were not completed: ${incompleteFeatures.map((feature) => `${feature.id} (${feature.status})`).join(", ")}`);
       run.status = "succeeded"; run.completedAt = new Date().toISOString(); await this.recordCompletedOperation(run, "terminal_outcome", `terminal:${run.status}`, undefined, { status: run.status, completedAt: run.completedAt }); await this.update(run);
     } catch (error) {
-      const cancelled = error instanceof Cancelled || this.cancelled.has(run.id); run.status = cancelled ? "cancelled" : "failed"; run.error = cancelled ? undefined : error instanceof Error ? error.message : String(error); run.completedAt = new Date().toISOString();
+      const cancelled = error instanceof Cancelled || this.cancelled.has(run.id); run.status = cancelled ? "cancelled" : error instanceof BlockedCorrection ? "blocked" : "failed"; run.error = cancelled ? undefined : error instanceof Error ? error.message : String(error); run.completedAt = new Date().toISOString();
       for (const block of run.blocks) if (isActiveStatus(block.status)) { block.status = cancelled ? "cancelled" : block.status === "running" ? "failed" : "cancelled"; if (block.status === "failed") { block.error = run.error; block.failureReason = classifyWorkflowFailure(error); } }
       await this.recordCompletedOperation(run, "terminal_outcome", `terminal:${run.status}`, undefined, { status: run.status, error: run.error, completedAt: run.completedAt }); await this.update(run);
     } finally {
@@ -542,7 +543,7 @@ export class HarnessRunner {
             execution.turnClaims.set(block.id, attemptId);
             return state.workspace && block.type !== "review"
               ? execution.append(block, prompt, { runId: run.id, blockId: block.id, workspace: state.workspace! })
-              : dispatch(block, prompt, { runId: run.id, blockId: block.id, attemptId, iteration: index + 1, started, activity, assertActive: () => this.assertActive(run.id) });
+              : dispatch(this.effectiveBlock(run, block), prompt, { runId: run.id, blockId: block.id, attemptId, iteration: index + 1, started, activity, assertActive: () => this.assertActive(run.id) });
           });
           this.assertActive(run.id);
           state.sessionId = settled.id; attempt.sessionId = settled.id; if (iteration) iteration.sessionId = settled.id;
@@ -567,10 +568,55 @@ export class HarnessRunner {
         }
       }
       const output = count === 1 ? collected[0] ?? "" : collected.map((value, index) => `## Stack item ${index + 1}\n${value}`).join("\n\n");
+      if (block.type === "review" && block.review?.correction) {
+        const corrected = await this.requestReviewCorrection(run, block, output);
+        if (corrected === "blocked") return;
+        if (corrected === "corrected") return this.executeBlock(run, block, blocks, edges, outputs, dispatch, defaultProvider, stack);
+      }
       this.assertActive(run.id);
       const execution = this.executions.get(run.id); if (!execution || execution.turnClaims.get(block.id) !== latestAttemptId) return;
       outputs.set(block.id, output); state.output = output.slice(-200_000); state.status = "succeeded"; state.completedAt = new Date().toISOString(); state.failureReason = undefined; state.retryAt = undefined; state.retryStartedAt = undefined; state.waitingUntil = undefined; state.pendingPermission = undefined; state.question = undefined; state.pauseId = undefined; this.log(state, "lifecycle", "Completed successfully"); await this.update(run);
     } finally { const active = this.activeProviders.get(run.id); if (state.provider) active?.delete(state.provider); }
+  }
+
+  /** Persist review findings before asking the owning session to correct them. A restart can therefore never lose ownership or repeat a completed correction. */
+  private async requestReviewCorrection(run: HarnessRun, block: HarnessBlock, output: string): Promise<"none" | "corrected" | "blocked"> {
+    const correction = block.review?.correction;
+    if (!correction) return "none";
+    const previous = [...(run.corrections ?? [])].reverse().find((cycle) => cycle.reviewBlockId === block.id && cycle.status === "corrected");
+    const report = parseReviewReport(output, block.id, previous?.correctedRevision ?? block.review!.revision, correction.ownerBlockId);
+    await this.recordCompletedOperation(run, "review", `review-findings:${block.id}:${report.revision}:${report.findings.map((finding) => finding.id).join(",")}`, block.id, report);
+    if (!report.findings.length) return "none";
+    const cycles = (run.corrections ?? []).filter((cycle) => cycle.reviewBlockId === block.id);
+    const maximum = correction.maxCycles ?? 3;
+    const state = run.blocks.find((item) => item.blockId === block.id)!;
+    if (cycles.length >= maximum) {
+      const message = `Review found ${report.findings.length} remaining finding(s) after ${maximum} correction cycle(s): ${report.findings.map((finding) => finding.message).join("; ")}`;
+      run.corrections = [...(run.corrections ?? []), { reviewBlockId: block.id, ownerBlockId: correction.ownerBlockId, verificationBlockId: correction.verificationBlockId, cycle: cycles.length + 1, revision: report.revision, findings: report.findings, status: "blocked", requestedAt: new Date().toISOString(), completedAt: new Date().toISOString(), error: message }];
+      state.status = "blocked"; state.error = message; this.log(state, "error", message); await this.update(run); return "blocked";
+    }
+    const owner = run.blocks.find((item) => item.blockId === correction.ownerBlockId);
+    const execution = this.executions.get(run.id);
+    if (!owner?.workspace || !execution) throw new CoreError("INVALID_REQUEST", `Review '${block.label}' cannot request a correction because owner block '${correction.ownerBlockId}' has no persistent session`);
+    const cycle: HarnessCorrectionCycle = { reviewBlockId: block.id, ownerBlockId: correction.ownerBlockId, verificationBlockId: correction.verificationBlockId, cycle: cycles.length + 1, revision: report.revision, findings: report.findings, status: "requested", requestedAt: new Date().toISOString() };
+    run.corrections = [...(run.corrections ?? []), cycle]; await this.recordCompletedOperation(run, "review", `correction-request:${block.id}:${cycle.cycle}`, block.id, cycle); await this.update(run);
+    const prompt = `Correct the following review findings for revision ${report.revision}. Keep working in this owned session. When finished, reply with JSON only: {"revision":"<new exact commit SHA>"}.\n\n${report.findings.map((finding) => `- [${finding.id}] ${finding.message}`).join("\n")}`;
+    const session = await execution.scheduler.turn(correction.ownerBlockId, () => execution.append(blocksById(execution.blocks, correction.ownerBlockId), prompt, { runId: run.id, blockId: correction.ownerBlockId, workspace: owner.workspace! }));
+    this.assertActive(run.id);
+    if (session.status !== "done") throw new CoreError("INVALID_REQUEST", `Correction owner '${correction.ownerBlockId}' did not complete its correction turn`);
+    const revision = parseCorrectionRevision(session.messages.filter((message) => message.role === "assistant").at(-1)?.text ?? "");
+    cycle.status = "corrected"; cycle.correctedRevision = revision; cycle.completedAt = new Date().toISOString();
+    owner.sessionId = session.id; owner.output = session.messages.filter((message) => message.role === "assistant").at(-1)?.text?.slice(-200_000) ?? owner.output;
+    await this.recordCompletedOperation(run, "review", `correction-result:${block.id}:${cycle.cycle}`, block.id, { revision, ownerBlockId: correction.ownerBlockId }); await this.update(run);
+    return "corrected";
+  }
+
+  private effectiveBlock(run: HarnessRun, block: HarnessBlock): HarnessBlock {
+    const corrected = [...(run.corrections ?? [])].reverse().find((cycle) => cycle.reviewBlockId === block.id && cycle.status === "corrected" && cycle.correctedRevision);
+    if (block.type === "review" && corrected?.correctedRevision && block.review) return { ...block, review: { ...block.review, revision: corrected.correctedRevision } };
+    const verificationCorrection = [...(run.corrections ?? [])].reverse().find((cycle) => cycle.verificationBlockId === block.id && cycle.status === "corrected" && cycle.correctedRevision);
+    if (block.type === "verification" && verificationCorrection?.correctedRevision && block.verification) return { ...block, verification: { ...block.verification, revision: verificationCorrection.correctedRevision } };
+    return block;
   }
 
   private log(state: HarnessRun["blocks"][number], kind: HarnessLogEntry["kind"], message: string): void {
@@ -827,6 +873,40 @@ class ExecutionScheduler {
 }
 
 class Cancelled extends Error {}
+class BlockedCorrection extends Error {}
+
+function blocksById(blocks: HarnessBlock[], id: string): HarnessBlock {
+  const block = blocks.find((item) => item.id === id);
+  if (!block) throw new CoreError("INVALID_REQUEST", `Correction owner block '${id}' no longer exists`);
+  return block;
+}
+
+function parseReviewReport(output: string, reviewBlockId: string, expectedRevision: string, defaultOwner: string): { revision: string; findings: HarnessReviewFinding[] } {
+  let value: unknown;
+  try { value = JSON.parse(output); }
+  catch { throw new HarnessSchemaError(`Review '${reviewBlockId}' must return JSON: {"revision":"${expectedRevision}","findings":[{"id":"...","message":"..."}]}`); }
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new HarnessSchemaError(`Review '${reviewBlockId}' must return an object with revision and findings`);
+  const report = value as Record<string, unknown>;
+  if (report.revision !== expectedRevision) throw new HarnessSchemaError(`Review '${reviewBlockId}' findings must be bound to the exact reviewed revision '${expectedRevision}'`);
+  if (!Array.isArray(report.findings)) throw new HarnessSchemaError(`Review '${reviewBlockId}' must return a findings array`);
+  const ids = new Set<string>(); const findings: HarnessReviewFinding[] = report.findings.map((item, index) => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) throw new HarnessSchemaError(`Review finding ${index + 1} must be an object`);
+    const finding = item as Record<string, unknown>; const id = finding.id; const message = finding.message; const ownerBlockId = finding.ownerBlockId ?? defaultOwner;
+    if (typeof id !== "string" || !id.trim() || ids.has(id) || typeof message !== "string" || !message.trim() || typeof ownerBlockId !== "string" || !ownerBlockId.trim()) throw new HarnessSchemaError(`Review finding ${index + 1} needs a unique id, message, and owner block ID`);
+    ids.add(id); return { id, message, ownerBlockId, revision: expectedRevision };
+  });
+  if (findings.some((finding) => finding.ownerBlockId !== defaultOwner)) throw new HarnessSchemaError(`Review '${reviewBlockId}' returned a finding for an owner outside its configured correction block`);
+  return { revision: expectedRevision, findings };
+}
+
+function parseCorrectionRevision(output: string): string {
+  let value: unknown;
+  try { value = JSON.parse(output); }
+  catch { throw new HarnessSchemaError("Correction response must be JSON: {\"revision\":\"<new exact commit SHA>\"}"); }
+  const revision = value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>).revision : undefined;
+  if (typeof revision !== "string" || !/^[0-9a-f]{7,64}$/i.test(revision)) throw new HarnessSchemaError("Correction response must name a new exact commit SHA");
+  return revision;
+}
 
 function validFeature(feature: { id: string; prompt: string; prerequisites?: string[] }): boolean {
   return typeof feature.id === "string" && /^[A-Za-z0-9_-]{1,120}$/.test(feature.id) && typeof feature.prompt === "string" && Boolean(feature.prompt.trim()) && Array.isArray(feature.prerequisites ?? []) && (feature.prerequisites ?? []).every((dependency) => typeof dependency === "string" && /^[A-Za-z0-9_-]{1,120}$/.test(dependency));
