@@ -6,12 +6,18 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { CoreError } from "./errors.js";
 import { WorkspaceStateStore } from "./workspace-state.js";
+import { serializedRootMutation } from "./root-mutation.js";
 
 const execFileAsync = promisify(execFile);
 export type WorkspaceTask = { id: string; name: string; branch: string; baseBranch: string; status: "active" | "finished"; archived: boolean };
 export type TaskCommitMessageUpdate = { task: WorkspaceTask; message: string; overwritten: boolean };
 export type TaskGitCommitMessageUpdate = { task: WorkspaceTask; previousCommit: string; commit: string; previousMessage: string; message: string };
-type Registry = { selectedTaskId?: string; tasks: WorkspaceTask[] };
+export type TaskIntegrationRecord = {
+  id: string; taskId: string; branch: string; targetBranch: string; expectedHead: string; candidateRevision?: string;
+  status: "preparing" | "testing" | "conflicts" | "stashed" | "applying" | "completed" | "failed";
+  createdAt: string; updatedAt: string; integrationWorkspace?: string; stashReference?: string; test?: { command: string; exitCode: number; output: string }; error?: string; recovery?: string;
+};
+type Registry = { selectedTaskId?: string; tasks: WorkspaceTask[]; integrations?: TaskIntegrationRecord[] };
 
 export class WorkspaceTaskStore {
   private readonly directory: string;
@@ -34,7 +40,8 @@ export class WorkspaceTaskStore {
         await this.migrateLegacyCopy(task);
         await this.removeSharedNodeModules(this.taskPath(task.id));
       }
-      const registry = { tasks, ...(value.selectedTaskId && tasks.some((task) => task.id === value.selectedTaskId) ? { selectedTaskId: value.selectedTaskId } : {}) };
+      const integrations = Array.isArray(value.integrations) ? value.integrations.filter(isIntegrationRecord) : [];
+      const registry = { tasks, ...(integrations.length ? { integrations } : {}), ...(value.selectedTaskId && tasks.some((task) => task.id === value.selectedTaskId) ? { selectedTaskId: value.selectedTaskId } : {}) };
       if (validTasks.some((task) => !task.baseBranch || task.status === undefined || task.archived === undefined)) await this.save(registry);
       return registry;
     } catch (error) {
@@ -196,12 +203,20 @@ export class WorkspaceTaskStore {
   }
 
   async merge(taskId: string, strategy: "merge" | "smart" = "smart"): Promise<{ targetBranch: string }> {
+    return serializedRootMutation(this.rootWorkspace, () => this.mergeIsolated(taskId, strategy));
+  }
+
+  /** Durable integration diagnostics survive a Core restart and point at any retained conflict worktree or stash. */
+  async integrations(): Promise<TaskIntegrationRecord[]> { return structuredClone((await this.list()).integrations ?? []); }
+
+  private async mergeIsolated(taskId: string, strategy: "merge" | "smart"): Promise<{ targetBranch: string }> {
     const registry = await this.list();
     const task = registry.tasks.find((item) => item.id === taskId);
     if (!task) throw new CoreError("INVALID_REQUEST", "Task does not exist");
     const taskWorkspace = this.taskPath(taskId);
     let stashedRootChanges = false;
     let merged = false;
+    let integration: TaskIntegrationRecord | undefined;
     try {
       const [rootStatus, targetBranch] = await Promise.all([
         execFileAsync("git", ["-C", this.rootWorkspace, "status", "--porcelain"], { encoding: "utf8" }),
@@ -214,27 +229,41 @@ export class WorkspaceTaskStore {
       const staged = (await execFileAsync("git", ["-C", taskWorkspace, "diff", "--cached", "--name-only"], { encoding: "utf8" })).stdout.trim();
       if (staged) await execFileAsync("git", ["-C", taskWorkspace, "commit", "-m", `Complete task: ${task.name}`], { encoding: "utf8" });
 
-      if (strategy === "merge") {
-        if (rootStatus.stdout.trim()) throw new CoreError("GIT_FAILED", "Main workspace has uncommitted changes. Use Smart merge to preserve them automatically.");
-        try { await execFileAsync("git", ["-C", this.rootWorkspace, "merge", "--no-edit", task.branch], { encoding: "utf8" }); }
-        catch (mergeError) {
-          await execFileAsync("git", ["-C", this.rootWorkspace, "merge", "--abort"], { encoding: "utf8" }).catch(() => undefined);
-          throw mergeError;
-        }
-        return { targetBranch: branch };
-      }
+      if (strategy === "merge" && rootStatus.stdout.trim()) throw new CoreError("GIT_FAILED", "Main workspace has uncommitted changes. Use Smart merge to preserve them automatically.");
+      const expectedHead = (await execFileAsync("git", ["-C", this.rootWorkspace, "rev-parse", "HEAD"], { encoding: "utf8" })).stdout.trim();
+      integration = { id: crypto.randomUUID(), taskId, branch: task.branch, targetBranch: branch, expectedHead, status: "preparing", createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+      await this.saveIntegration(registry, integration);
 
-      if (rootStatus.stdout.trim()) {
-        await execFileAsync("git", ["-C", this.rootWorkspace, "stash", "push", "--include-untracked", "--message", `remote-ide: merge ${task.name}`], { encoding: "utf8" });
-        stashedRootChanges = true;
-      }
-
-      try { await execFileAsync("git", ["-C", taskWorkspace, "rebase", branch], { encoding: "utf8" }); }
+      try { await execFileAsync("git", ["-C", taskWorkspace, "rebase", expectedHead], { encoding: "utf8" }); }
       catch (rebaseError) {
         await execFileAsync("git", ["-C", taskWorkspace, "rebase", "--abort"], { encoding: "utf8" }).catch(() => undefined);
         throw rebaseError;
       }
-      await execFileAsync("git", ["-C", this.rootWorkspace, "merge", "--ff-only", task.branch], { encoding: "utf8" });
+
+      const integrationWorkspace = path.join(this.directory, "integrations", integration.id, "workspace");
+      integration.integrationWorkspace = integrationWorkspace;
+      await mkdir(path.dirname(integrationWorkspace), { recursive: true });
+      await execFileAsync("git", ["-C", this.rootWorkspace, "worktree", "add", "--detach", integrationWorkspace, expectedHead], { encoding: "utf8" });
+      try {
+        await execFileAsync("git", ["-C", integrationWorkspace, "merge", "--no-edit", task.branch], { encoding: "utf8" });
+      } catch (error) {
+        integration.status = "conflicts"; integration.updatedAt = new Date().toISOString(); integration.error = gitError(error); integration.recovery = `Resolve conflicts in ${integrationWorkspace}, or remove that integration worktree after inspection.`;
+        await this.saveIntegration(registry, integration); throw new CoreError("GIT_FAILED", `Integration conflict for task ${task.name}. ${integration.recovery}`);
+      }
+      integration.candidateRevision = (await execFileAsync("git", ["-C", integrationWorkspace, "rev-parse", "HEAD"], { encoding: "utf8" })).stdout.trim();
+      integration.status = "testing"; integration.updatedAt = new Date().toISOString(); await this.saveIntegration(registry, integration);
+      await this.runIntegrationSuite(integrationWorkspace, integration);
+
+      if (rootStatus.stdout.trim()) {
+        await execFileAsync("git", ["-C", this.rootWorkspace, "stash", "push", "--include-untracked", "--message", `remote-ide: integration ${integration.id}`], { encoding: "utf8" });
+        stashedRootChanges = true;
+        integration.stashReference = (await execFileAsync("git", ["-C", this.rootWorkspace, "rev-parse", "--verify", "stash@{0}"], { encoding: "utf8" })).stdout.trim();
+        integration.status = "stashed"; integration.updatedAt = new Date().toISOString(); integration.recovery = `Root changes are saved in ${integration.stashReference}; restore them after integration.`; await this.saveIntegration(registry, integration);
+      }
+      const currentHead = (await execFileAsync("git", ["-C", this.rootWorkspace, "rev-parse", "HEAD"], { encoding: "utf8" })).stdout.trim();
+      if (currentHead !== expectedHead) throw new CoreError("GIT_FAILED", "Root revision changed while the isolated integration suite ran. No candidate was applied; retry from the new root revision.");
+      integration.status = "applying"; integration.updatedAt = new Date().toISOString(); await this.saveIntegration(registry, integration);
+      await execFileAsync("git", ["-C", this.rootWorkspace, "merge", "--ff-only", integration.candidateRevision], { encoding: "utf8" });
       merged = true;
       if (stashedRootChanges) {
         stashedRootChanges = false;
@@ -243,6 +272,8 @@ export class WorkspaceTaskStore {
           throw new CoreError("GIT_FAILED", `The task was merged, but the main workspace changes could not be restored cleanly. Resolve the working tree conflicts; the backup remains in Git stash. ${gitError(restoreError)}`);
         }
       }
+      integration.status = "completed"; integration.updatedAt = new Date().toISOString(); integration.recovery = undefined; await this.saveIntegration(registry, integration);
+      await this.removeIntegrationWorktree(integrationWorkspace);
       return { targetBranch: branch };
     } catch (error) {
       if (stashedRootChanges) {
@@ -251,12 +282,46 @@ export class WorkspaceTaskStore {
           await execFileAsync("git", ["-C", this.rootWorkspace, "stash", "pop", "--index"], { encoding: "utf8" });
         } catch (restoreError) {
           const action = merged ? "The task was merged, but" : "The merge was stopped and";
-          throw new CoreError("GIT_FAILED", `${action} the main workspace changes could not be restored cleanly. Resolve the working tree conflicts; the backup remains in Git stash. ${gitError(restoreError)}`);
+          const message = `${action} the main workspace changes could not be restored cleanly. Resolve the working tree conflicts; the backup remains in Git stash. ${gitError(restoreError)}`;
+          if (integration) { integration.status = "failed"; integration.updatedAt = new Date().toISOString(); integration.error = message; integration.recovery = integration.stashReference ? `Recover root changes from ${integration.stashReference}.` : undefined; await this.saveIntegration(registry, integration); }
+          throw new CoreError("GIT_FAILED", message);
         }
       }
+      if (integration && integration.status !== "conflicts") { integration.status = "failed"; integration.updatedAt = new Date().toISOString(); integration.error = error instanceof Error ? error.message : String(error); integration.recovery ??= integration.integrationWorkspace ? `The candidate remains at ${integration.integrationWorkspace} for inspection.` : undefined; await this.saveIntegration(registry, integration); }
       if (error instanceof CoreError) throw error;
       throw new CoreError("GIT_FAILED", `Could not merge task ${task.name}: ${gitError(error)}`);
     }
+  }
+
+  private async runIntegrationSuite(workspace: string, integration: TaskIntegrationRecord): Promise<void> {
+    const command = "npm test --workspaces --if-present";
+    try { await lstat(path.join(workspace, "package.json")); }
+    catch {
+      integration.test = { command, exitCode: 0, output: "No package.json in this repository; no combined npm suite is configured." };
+      integration.updatedAt = new Date().toISOString(); const registry = await this.list(); await this.saveIntegration(registry, integration);
+      return;
+    }
+    try {
+      const result = await execFileAsync("npm", ["test", "--workspaces", "--if-present"], { cwd: workspace, encoding: "utf8", maxBuffer: 2 * 1024 * 1024 });
+      integration.test = { command, exitCode: 0, output: `${result.stdout}\n${result.stderr}`.slice(-200_000) };
+    } catch (error) {
+      const detail = error as { stdout?: string; stderr?: string; code?: number };
+      integration.test = { command, exitCode: typeof detail.code === "number" ? detail.code : 1, output: `${detail.stdout ?? ""}\n${detail.stderr ?? ""}`.slice(-200_000) };
+      integration.status = "failed"; integration.updatedAt = new Date().toISOString(); integration.error = "The isolated integration suite failed."; integration.recovery = `Inspect test output and candidate worktree at ${workspace}; the root was not changed.`;
+      const registry = await this.list(); await this.saveIntegration(registry, integration);
+      throw new CoreError("GIT_FAILED", `${integration.error} ${integration.recovery}`);
+    }
+    integration.updatedAt = new Date().toISOString(); const registry = await this.list(); await this.saveIntegration(registry, integration);
+  }
+
+  private async saveIntegration(registry: Registry, integration: TaskIntegrationRecord): Promise<void> {
+    const integrations = [...(registry.integrations ?? []).filter((item) => item.id !== integration.id), structuredClone(integration)].slice(-100);
+    await this.save({ ...registry, integrations });
+  }
+
+  private async removeIntegrationWorktree(workspace: string): Promise<void> {
+    await execFileAsync("git", ["-C", this.rootWorkspace, "worktree", "remove", "--force", workspace], { encoding: "utf8" }).catch(() => undefined);
+    await rm(path.dirname(workspace), { recursive: true, force: true }).catch(() => undefined);
   }
 
   async head(): Promise<string> {
@@ -419,4 +484,12 @@ function isTask(value: unknown): value is Omit<WorkspaceTask, "status" | "archiv
   if (!value || typeof value !== "object") return false;
   const task = value as Record<string, unknown>;
   return typeof task.id === "string" && typeof task.name === "string" && typeof task.branch === "string" && (task.baseBranch === undefined || typeof task.baseBranch === "string") && (task.status === undefined || task.status === "active" || task.status === "finished") && (task.archived === undefined || typeof task.archived === "boolean");
+}
+
+function isIntegrationRecord(value: unknown): value is TaskIntegrationRecord {
+  if (!value || typeof value !== "object") return false;
+  const record = value as Record<string, unknown>;
+  return typeof record.id === "string" && typeof record.taskId === "string" && typeof record.branch === "string" && typeof record.targetBranch === "string"
+    && typeof record.expectedHead === "string" && typeof record.createdAt === "string" && typeof record.updatedAt === "string"
+    && ["preparing", "testing", "conflicts", "stashed", "applying", "completed", "failed"].includes(String(record.status));
 }

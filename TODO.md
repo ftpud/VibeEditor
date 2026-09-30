@@ -62,7 +62,7 @@ The current vertical slice is useful: definitions and run snapshots are Core-own
 - [x] Add an explicit correction loop.
   - Bind each finding to an owning task/revision, request a correction, wait for a new revision, and rerun review and tests.
   - Cap correction cycles and finish as Blocked with remaining findings when the cap is reached.
-- [ ] Integrate safely.
+- [x] Integrate safely.
   - Assemble approved commits in an isolated integration worktree, run the combined suite, and update the root only if the tested revision still matches expectations.
   - Serialize root-mutating operations across UI and MCP callers and durably record conflict/stash recovery information.
 
