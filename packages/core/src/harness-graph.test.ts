@@ -8,6 +8,18 @@ const harness = (edges: HarnessDefinition["edges"]): HarnessDefinition => ({ id:
 ], edges });
 
 describe("harness graph", () => {
+  it("requires explicit, valid Core gate configuration", () => {
+    const invalid: HarnessDefinition = { ...harness([]), blocks: [
+      { id: "review", type: "review", label: "Review", prompt: "Review", position: { x: 0, y: 0 } },
+      { id: "verify", type: "verification", label: "Verify", prompt: "Verify", verification: { command: "", timeoutMs: 0 }, position: { x: 0, y: 0 } }
+    ] };
+    expect(validateHarness(invalid).issues.filter((issue) => issue.code === "invalid-gate")).toHaveLength(2);
+    const valid: HarnessDefinition = { ...invalid, blocks: [
+      { id: "review", type: "review", label: "Review", prompt: "Review", review: { revision: "abc1234" }, position: { x: 0, y: 0 } },
+      { id: "verify", type: "verification", label: "Verify", prompt: "Verify", verification: { command: "npm test", revision: "abc1234", workingDirectory: ".", timeoutMs: 60_000 }, position: { x: 0, y: 0 } }
+    ] };
+    expect(validateHarness(valid).issues).toEqual([]);
+  });
   it("returns a stable dependency order", () => expect(validateHarness(harness([{ id: "e", from: "plan", to: "build" }]))).toMatchObject({ valid: true, order: ["plan", "build"] }));
   it("rejects cycles and missing endpoints", () => {
     expect(validateHarness(harness([{ id: "a", from: "plan", to: "build" }, { id: "b", from: "build", to: "plan" }])).issues.some((issue) => issue.code === "cycle")).toBe(true);

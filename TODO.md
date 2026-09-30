@@ -51,7 +51,7 @@ The current vertical slice is useful: definitions and run snapshots are Core-own
   - Let a block declare an output schema and validate it before releasing downstream dependencies.
   - Preserve the original request, feature/task IDs, dependency IDs, commit SHAs, findings, and test evidence as structured data rather than prompt-only JSON conventions.
   - Treat missing or malformed required fields as a visible blocked state with a repair/retry action.
-- [ ] Move review and verification gates into Core.
+- [x] Move review and verification gates into Core.
   - Review the actual diff for an exact commit SHA, not only the assistant response tail.
   - Run verification through Core and retain command, working directory, revision, exit code, duration, and bounded output/artifact references.
   - Invalidate approval and test evidence whenever the reviewed revision changes.

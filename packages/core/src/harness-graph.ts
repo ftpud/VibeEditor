@@ -8,6 +8,8 @@ export function validateHarness(harness: HarnessDefinition): { valid: boolean; i
     if (ids.has(block.id)) issues.push({ code: "duplicate-id", blockId: block.id, message: `Block ID '${block.id}' is duplicated` }); ids.add(block.id);
     if (!block.label.trim()) issues.push({ code: "empty-label", blockId: block.id, message: "Every block needs a name" });
     if (!block.watchdog && !block.prompt.trim()) issues.push({ code: "empty-prompt", blockId: block.id, message: `Block '${block.label || block.id}' needs a prompt` });
+    if (block.type === "review" && (!block.review || !isCommit(block.review.revision) || (block.review.baseRevision !== undefined && !isCommit(block.review.baseRevision)))) issues.push({ code: "invalid-gate", blockId: block.id, message: `Review block '${block.label || block.id}' needs an exact commit SHA and optional base SHA` });
+    if (block.type === "verification" && (!block.verification || !block.verification.command.trim() || (block.verification.revision !== undefined && !isCommit(block.verification.revision)) || (block.verification.timeoutMs !== undefined && (!Number.isInteger(block.verification.timeoutMs) || block.verification.timeoutMs < 1 || block.verification.timeoutMs > 30 * 60_000)) || (block.verification.workingDirectory !== undefined && (!block.verification.workingDirectory.trim() || block.verification.workingDirectory.includes("\\0"))))) issues.push({ code: "invalid-gate", blockId: block.id, message: `Verification block '${block.label || block.id}' needs a command, valid optional revision, working directory, and timeout` });
     for (const [name, schema] of [["input", block.inputSchema], ["output", block.outputSchema]] as const) if (schema && !validDataSchema(schema)) issues.push({ code: "invalid-schema", blockId: block.id, message: `Block '${block.label || block.id}' has an invalid ${name} schema` });
     for (const match of block.prompt.matchAll(/\{\{\s*([^}]+?)\s*\}\}/g)) {
       const variable = match[1]!; const reference = /^blocks\.([A-Za-z0-9_-]+)\.output$/.exec(variable);
@@ -34,6 +36,8 @@ export function validateHarness(harness: HarnessDefinition): { valid: boolean; i
   if (order.length !== harness.blocks.length && harness.blocks.length) issues.push({ code: "cycle", message: "Harness connections contain a cycle" });
   return { valid: issues.length === 0, issues, order: issues.some((issue) => issue.code === "cycle") ? [] : order };
 }
+
+function isCommit(value: string): boolean { return /^[0-9a-f]{7,64}$/i.test(value); }
 
 function hasNonLoopPath(harness: HarnessDefinition, from: string, to: string): boolean {
   const pending = [from]; const visited = new Set<string>();
