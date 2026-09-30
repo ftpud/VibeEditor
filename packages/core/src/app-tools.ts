@@ -117,6 +117,7 @@ export const appToolDefinitions = [
         prompt: { type: "string", description: "Work to give the new task's AI session." },
         provider: { type: "string", description: "AI provider id, for example codex or copilot." },
         model: { type: "string", description: "Model id supported by the selected provider." },
+        feature_id: { type: "string", minLength: 1, maxLength: 120, description: "Durable workflow feature ID from workflow_plan_features. Core refuses to start it until prerequisites are merged." },
         agent: {
           oneOf: [
             {
@@ -231,6 +232,11 @@ export const appToolDefinitions = [
     description: "Watchdog recovery signal: queue failed blocks in this workflow for continuation in their existing sessions. Returns immediately; running and completed blocks are left alone.",
     inputSchema: { type: "object", additionalProperties: false, properties: {} }
   }
+  ,{
+    name: "workflow_plan_features",
+    description: "Persist the complete feature plan before creating implementation tasks. Each feature has a stable ID, implementation prompt, and prerequisite IDs.",
+    inputSchema: { type: "object", additionalProperties: false, properties: { features: { type: "array", minItems: 1, items: { type: "object", additionalProperties: false, properties: { id: { type: "string", minLength: 1, maxLength: 120 }, prompt: { type: "string", minLength: 1, maxLength: 10000 }, prerequisites: { type: "array", items: { type: "string", minLength: 1, maxLength: 120 } } }, required: ["id", "prompt"] } } }, required: ["features"] }
+  }
 ] as const;
 
 export class AppToolService {
@@ -245,7 +251,7 @@ export class AppToolService {
     private readonly rootWorkspace?: string,
     private readonly timers?: Pick<AiTimerService, "schedule" | "scheduleAt" | "next" | "cancelWorkspace">,
     private readonly bridgeWorkspace?: string,
-    private readonly workflow?: { runId: string; blockId: string; runStack(inputs: string[], path?: string): Promise<unknown>; resumeFailed?(): Promise<unknown>; registerChild?(taskId: string, provider: AiProvider, workspace: string): Promise<void>; operation?<T>(kind: "timer_create" | "task_create" | "prompt_delivery" | "merge", key: string, input: unknown, effect: () => Promise<T>, reconcile?: () => Promise<T | null | undefined>): Promise<T>; recordTool?(name: string, args: Record<string, unknown>, result?: unknown, error?: unknown): Promise<void>; assertActive?(): void }
+    private readonly workflow?: { runId: string; blockId: string; runStack(inputs: string[], path?: string): Promise<unknown>; resumeFailed?(): Promise<unknown>; planFeatures?(features: Array<{ id: string; prompt: string; prerequisites?: string[] }>): Promise<unknown>; assertFeatureReady?(featureId: string): Promise<void>; dispatchFeature?(featureId: string, taskId: string): Promise<unknown>; completeFeature?(taskId: string, commit: string): Promise<unknown>; registerChild?(taskId: string, provider: AiProvider, workspace: string): Promise<void>; operation?<T>(kind: "timer_create" | "task_create" | "prompt_delivery" | "merge", key: string, input: unknown, effect: () => Promise<T>, reconcile?: () => Promise<T | null | undefined>): Promise<T>; recordTool?(name: string, args: Record<string, unknown>, result?: unknown, error?: unknown): Promise<void>; assertActive?(): void }
   ) {}
 
   async call(name: string, args: Record<string, unknown>): Promise<unknown> {
@@ -262,6 +268,16 @@ export class AppToolService {
     if (name === "workflow_resume_failed") {
       if (!this.workflow?.resumeFailed) throw new Error("Workflow recovery is unavailable");
       return this.workflow.resumeFailed();
+    }
+    if (name === "workflow_plan_features") {
+      if (!this.workflow?.planFeatures) throw new Error("Feature planning is only available inside an active workflow block");
+      if (!Array.isArray(args.features)) throw new Error("features must be an array");
+      const features = args.features.map((feature) => {
+        if (!feature || typeof feature !== "object" || Array.isArray(feature)) throw new Error("Each feature must be an object");
+        const item = feature as Record<string, unknown>;
+        return { id: requiredString(item, "id"), prompt: requiredString(item, "prompt"), ...(item.prerequisites === undefined ? {} : { prerequisites: requiredStringArray(item, "prerequisites") }) };
+      });
+      return { features: await this.workflow.planFeatures(features) };
     }
     if (name === "workflow_run_stack") {
       if (!this.workflow) throw new Error("workflow_run_stack is only available inside an active workflow block");
@@ -336,7 +352,10 @@ export class AppToolService {
       const selectedAgent = await this.resolveAgent(requestedAgent, parent);
       if (reasoning !== undefined) await validateReasoning(await manager.models(), model, reasoning);
       const configuration: AiConfiguration = { ...inheritedAutopilot(parentManager.descriptor.options, parent, manager.descriptor.options), model, ...(reasoning !== undefined ? { reasoning } : {}) };
+      const featureId = optionalString(args, "feature_id");
+      if (featureId) await this.workflow?.assertFeatureReady?.(featureId);
       const task = branch ? await this.tasks.create(branch, false, false, false) : await this.tasks.createRandom(false);
+      if (featureId) await this.workflow?.dispatchFeature?.(featureId, task.id);
       await this.onTasksChanged();
       await this.workflow?.registerChild?.(task.id, provider, this.tasks.taskPath(task.id));
       try {
@@ -363,8 +382,10 @@ export class AppToolService {
       if (strategy !== "smart" && strategy !== "merge") throw new Error("strategy must be smart or merge");
       const result = await serializedTaskMerge(this.tasks, task.id, strategy);
       const updated = await this.tasks.setStatus(task.id, "finished");
+      const commit = await this.tasks.head();
+      const feature = this.workflow?.completeFeature ? await this.workflow.completeFeature(task.id, commit) : undefined;
       await this.onTasksChanged();
-      return { task: updated, ...result };
+      return { task: updated, ...result, commit, ...(feature ? { feature } : {}) };
     }
     if (name === "task_delete") {
       const task = await this.task(requiredString(args, "task_id"));

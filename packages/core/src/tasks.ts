@@ -259,6 +259,11 @@ export class WorkspaceTaskStore {
     }
   }
 
+  async head(): Promise<string> {
+    try { return (await execFileAsync("git", ["-C", this.rootWorkspace, "rev-parse", "--verify", "HEAD"], { encoding: "utf8" })).stdout.trim(); }
+    catch (error) { throw new CoreError("GIT_FAILED", `Could not resolve merged root revision: ${gitError(error)}`); }
+  }
+
   async delete(taskId: string): Promise<Registry> {
     const registry = await this.list();
     const task = registry.tasks.find((item) => item.id === taskId);

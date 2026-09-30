@@ -10,7 +10,7 @@ function harness() {
     create: vi.fn(async () => task), createRandom: vi.fn(async () => task), delete: vi.fn(async () => ({ tasks: [] })),
     taskPath: vi.fn(() => "/tasks/task-1/workspace"), list: vi.fn(async () => ({ tasks: [task] })),
     setCommitMessage: vi.fn(async (_workspace: string, message: string) => ({ task, message, overwritten: false })),
-    setStatus: vi.fn(async (_taskId: string, status: "active" | "finished") => ({ ...task, status })), merge: vi.fn(async () => ({ targetBranch: "main" })),
+    setStatus: vi.fn(async (_taskId: string, status: "active" | "finished") => ({ ...task, status })), merge: vi.fn(async () => ({ targetBranch: "main" })), head: vi.fn(async () => "a".repeat(40)),
     updateGitCommitMessage: vi.fn(async (_taskId: string, message: string) => ({
       task, previousCommit: "old-sha", commit: "new-sha", previousMessage: "Old message", message
     }))
@@ -51,7 +51,7 @@ describe("Vibe Editor app tools", () => {
     expect(tasks.create).toHaveBeenCalledOnce();
   });
   it("publishes task start agent and reasoning parameters", () => {
-    expect(appToolDefinitions.map((tool) => tool.name)).toEqual(["workflow_run_stack", "ai_usage", "timer_set", "timer_set_at", "model_switch_next", "session_new", "task_create", "task_create_and_start", "task_list", "task_merge", "task_delete", "task_set_status", "task_ai_response_tail", "task_append_prompt", "set_commit_message", "task_update_commit_message", "workflow_resume_failed"]);
+    expect(appToolDefinitions.map((tool) => tool.name)).toEqual(["workflow_run_stack", "ai_usage", "timer_set", "timer_set_at", "model_switch_next", "session_new", "task_create", "task_create_and_start", "task_list", "task_merge", "task_delete", "task_set_status", "task_ai_response_tail", "task_append_prompt", "set_commit_message", "task_update_commit_message", "workflow_resume_failed", "workflow_plan_features"]);
     expect(appToolDefinitions[0]).toMatchObject({ name: "workflow_run_stack", inputSchema: { required: ["inputs"] } });
     expect(appToolDefinitions[2]).toMatchObject({ name: "timer_set", inputSchema: { required: ["seconds", "prompt"] } });
     expect(appToolDefinitions[3]).toMatchObject({ name: "timer_set_at", inputSchema: { required: ["due_at", "prompt"] } });
@@ -89,6 +89,15 @@ describe("Vibe Editor app tools", () => {
     const service = new AppToolService(tasks as never, { get: vi.fn(() => provider), list: vi.fn(() => []) } as never, "/tasks/parent/workspace", onTasksChanged, onCommitMessageChanged, "codex", agents as never, "/workspace", undefined, undefined, { runId: "run", blockId: "parent", runStack });
     await expect(service.call("workflow_run_stack", { inputs: ["one", "two"], path: "review" })).resolves.toEqual({ blocks: [{ blockId: "worker", output: "done" }] });
     expect(runStack).toHaveBeenCalledWith(["one", "two"], "review");
+  });
+
+  it("persists a feature plan and checks prerequisites before creating its task", async () => {
+    const { tasks, provider, onTasksChanged, onCommitMessageChanged, agents } = harness();
+    const planFeatures = vi.fn(async (features) => features); const assertFeatureReady = vi.fn(async () => undefined); const dispatchFeature = vi.fn(async () => undefined);
+    const service = new AppToolService(tasks as never, { get: vi.fn(() => provider), list: vi.fn(() => []) } as never, "/workflow/session", onTasksChanged, onCommitMessageChanged, "codex", agents as never, "/workspace", undefined, undefined, { runId: "run", blockId: "planner", runStack: vi.fn(), planFeatures, assertFeatureReady, dispatchFeature });
+    await expect(service.call("workflow_plan_features", { features: [{ id: "base", prompt: "Build base" }, { id: "ui", prompt: "Build UI", prerequisites: ["base"] }] })).resolves.toMatchObject({ features: [{ id: "base" }, { id: "ui" }] });
+    await service.call("task_create_and_start", { feature_id: "base", branch: "feature/base", prompt: "Build base", provider: "codex", model: "gpt-5" });
+    expect(assertFeatureReady).toHaveBeenCalledWith("base"); expect(dispatchFeature).toHaveBeenCalledWith("base", "task-1");
   });
 
   it("keeps workflow identity on self-resume timers", async () => {

@@ -295,6 +295,10 @@ export async function createServer(host: string, port: number, workspacePath: st
       const ownedWorkflow = workflow ? {
         ...workflow,
         assertActive: () => { if (!harnessRunner(rootId).isActive(workflow.runId)) throw new Error("Workflow is no longer active"); },
+        planFeatures: (features: Array<{ id: string; prompt: string; prerequisites?: string[] }>) => harnessRunner(rootId).planFeatures(workflow.runId, features),
+        assertFeatureReady: (featureId: string) => harnessRunner(rootId).assertFeatureReady(workflow.runId, featureId),
+        dispatchFeature: (featureId: string, taskId: string) => harnessRunner(rootId).dispatchFeature(workflow.runId, featureId, taskId),
+        completeFeature: (taskId: string, commit: string) => harnessRunner(rootId).completeFeature(workflow.runId, taskId, commit),
         registerChild: (taskId: string, provider: AiProvider, workspace: string) => harnessRunner(rootId).registerChild(workflow.runId, { taskId, provider, workspace, blockId: workflow.blockId }),
         operation: <T>(kind: "timer_create" | "task_create" | "prompt_delivery" | "merge", key: string, input: unknown, effect: () => Promise<T>, reconcile?: () => Promise<T | null | undefined>) => harnessRunner(rootId).runOperation(workflow.runId, workflow.blockId, kind, key, input, effect, reconcile),
         recordTool: (name: string, args: Record<string, unknown>, result?: unknown, error?: unknown) => harnessRunner(rootId).recordTool(workflow.runId, workflow.blockId, name, args, result, error)
