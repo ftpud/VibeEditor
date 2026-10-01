@@ -86,10 +86,19 @@ export function HarnessPanel({ harnesses, runs, diagnostics = [], providers, age
     try { const harness = await onCreate(name); setSelectedId(harness.id); setCreateName(undefined); }
     catch (error) { onError(error instanceof Error ? error.message : "Could not create workflow"); }
   };
+  const validateCurrentDraft = async () => {
+    if (!draft || !onValidate) return true;
+    const result = await onValidate(draft);
+    setRemoteValidationIssues(result.issues);
+    return result.valid;
+  };
   const save = async () => {
     if (!draft) return;
     setSaving(true);
-    try { const harness = await onSave(draft); setSelectedId(harness.id); setDraft(structuredClone(harness)); }
+    try {
+      if (!await validateCurrentDraft()) return;
+      const harness = await onSave(draft); setSelectedId(harness.id); setDraft(structuredClone(harness));
+    }
     catch (error) { onError(error instanceof Error ? error.message : "Could not save workflow"); }
     finally { setSaving(false); }
   };
@@ -98,7 +107,14 @@ export function HarnessPanel({ harnesses, runs, diagnostics = [], providers, age
     try { await onDelete(draft.id); setSelectedId(undefined); setDraft(undefined); }
     catch (error) { onError(error instanceof Error ? error.message : "Could not delete workflow"); }
   };
-  const start = async () => { if (!draft || dirty || !input.trim()) return; try { if (activeRuns[0] && onAppendRun) await onAppendRun(activeRuns[0].id, input); else await onRun(draft.id, input); setInput(""); } catch (error) { onError(error instanceof Error ? error.message : "Could not send workflow input"); } };
+  const start = async () => {
+    if (!draft || dirty || !input.trim()) return;
+    try {
+      if (!await validateCurrentDraft()) return;
+      if (activeRuns[0] && onAppendRun) await onAppendRun(activeRuns[0].id, input); else await onRun(draft.id, input);
+      setInput("");
+    } catch (error) { onError(error instanceof Error ? error.message : "Could not send workflow input"); }
+  };
   const addBlock = () => {
     if (!draft) return;
     const id = crypto.randomUUID();
