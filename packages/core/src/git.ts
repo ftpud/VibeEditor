@@ -422,6 +422,21 @@ export class GitService {
     return { originalContent, modifiedContent };
   }
 
+  async rollbackCompared(ref: string, filePath: string): Promise<void> {
+    validateRef(ref); validatePath(filePath);
+    await serializedRootMutation(this.workspace, async () => {
+      const source = (await this.git(["rev-parse", "--verify", "--end-of-options", `${ref}^{commit}`])).trim();
+      const entry = (await this.compareFiles(source)).find((file) => file.path === filePath);
+      if (!entry) throw new CoreError("GIT_FAILED", `Path no longer differs from ${ref}: ${filePath}`);
+      if (entry.status === "?") {
+        await this.git(["--literal-pathspecs", "clean", "-f", "--", filePath]);
+        return;
+      }
+      const paths = entry.originalPath && entry.status.startsWith("R") ? [entry.originalPath, entry.path] : [entry.path];
+      await this.git(["--literal-pathspecs", "restore", `--source=${source}`, "--staged", "--worktree", "--", ...paths]);
+    });
+  }
+
   async rollback(filePath: string): Promise<void> {
     validatePath(filePath);
     const entry = (await this.status()).entries.find((item) => item.path === filePath);
