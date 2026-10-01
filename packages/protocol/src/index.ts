@@ -449,6 +449,7 @@ export type ProtocolOperations = {
   "git.compareFiles": { payload: { ref: string; path?: string }; result: { files: GitCommitFile[] } };
   "git.compareDiff": { payload: { ref: string; path: string; originalPath?: string }; result: { originalContent: string; modifiedContent: string } };
   "git.rollback": { payload: { path: string }; result: Record<string, never> };
+  "git.rollbackCompared": { payload: { ref: string; path: string }; result: Record<string, never> };
   "git.rollbackSelected": { payload: { paths: string[]; deleteUntracked: boolean }; result: { rolledBack: string[]; failures: GitRollbackFailure[] } };
   "git.commit": { payload: { paths: string[]; message: string }; result: { hash: string } };
   "git.historyRewritePreview": { payload: Record<string, never>; result: GitHistoryRewritePreview };
@@ -732,6 +733,7 @@ const requestTypeRegistry: Record<RequestType, true> = {
   "git.compareFiles": true,
   "git.compareDiff": true,
   "git.rollback": true,
+  "git.rollbackCompared": true,
   "git.rollbackSelected": true,
   "git.commit": true,
   "git.historyRewritePreview": true,
