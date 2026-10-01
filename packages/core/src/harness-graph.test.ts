@@ -29,6 +29,12 @@ describe("harness graph", () => {
     const looped = harness([{ id: "forward", from: "plan", to: "build" }, { id: "loop", from: "build", to: "plan", loop: true }]);
     expect(validateHarness(looped)).toMatchObject({ valid: true, order: ["plan", "build"] });
   });
+  it("requires watchdogs to be independent and supervise delivery work", () => {
+    const onlyWatchdog = harness([]); onlyWatchdog.blocks = [{ id: "watch", type: "prompt", label: "Watch", prompt: "", watchdog: true, position: { x: 0, y: 0 } }];
+    expect(validateHarness(onlyWatchdog).issues.map((issue) => issue.code)).toContain("invalid-watchdog");
+    const connectedWatchdog = harness([{ id: "watch-edge", from: "plan", to: "build" }]); connectedWatchdog.blocks[0]!.watchdog = true;
+    expect(validateHarness(connectedWatchdog).issues).toMatchObject([{ code: "invalid-watchdog", edgeId: "watch-edge" }]);
+  });
   it("only resolves supported template variables", () => expect(renderHarnessPrompt("Input={{input}} output={{blocks.plan.output}} {{unknown}}", "task", new Map([["plan", "result"]]))).toBe("Input=task output=result {{unknown}}"));
   it("requires unique path labels for AI routing", () => {
     const routed = harness([{ id: "a", from: "plan", to: "build" }]); routed.blocks[0]!.routing = "ai";
