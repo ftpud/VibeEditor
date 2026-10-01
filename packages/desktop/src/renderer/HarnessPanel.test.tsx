@@ -180,6 +180,19 @@ describe("HarnessPanel", () => {
     expect((screen.getByRole("button", { name: "Save" }) as HTMLButtonElement).disabled).toBe(true);
   });
 
+  it("validates again immediately before saving", async () => {
+    const harness: HarnessDefinition = { id: "harness-1", name: "Flow", version: 1, createdAt: "now", updatedAt: "now", blocks: [{ id: "a", type: "prompt", label: "Plan", prompt: "{{input}}", position: { x: 20, y: 20 } }], edges: [] };
+    const invalid = { valid: false, issues: [{ code: "empty-prompt" as const, blockId: "a", message: "Plan needs a prompt" }] };
+    const onValidate = vi.fn().mockResolvedValue(invalid);
+    const onSave = vi.fn();
+    render(<HarnessPanel harnesses={[harness]} runs={[]} providers={[]} agents={[]} onValidate={onValidate} onCreate={vi.fn()} onSave={onSave} onDelete={vi.fn()} onRun={vi.fn()} onCancelRun={vi.fn()} onError={vi.fn()} />);
+
+    fireEvent.change(await screen.findByLabelText("Workflow name"), { target: { value: "Changed" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(onValidate).toHaveBeenCalled());
+    expect(onSave).not.toHaveBeenCalled();
+  });
+
   it("blocks unavailable provider settings and previews execution inputs", async () => {
     const harness: HarnessDefinition = { id: "harness-1", name: "Flow", version: 1, createdAt: "now", updatedAt: "now", blocks: [{ id: "a", type: "prompt", label: "Plan", prompt: "Plan {{input}} then use {{blocks.build.output}}", provider: "missing", position: { x: 20, y: 20 } }], edges: [] };
     const provider = { id: "codex", name: "Codex", description: "", settings: { title: "", description: "", sections: [] }, options: [], capabilities: { models: true, usage: true, mcp: true, agents: true, contextWindow: true } };
