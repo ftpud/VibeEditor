@@ -180,6 +180,17 @@ describe("HarnessPanel", () => {
     expect((screen.getByRole("button", { name: "Save" }) as HTMLButtonElement).disabled).toBe(true);
   });
 
+  it("blocks unavailable provider settings and previews execution inputs", async () => {
+    const harness: HarnessDefinition = { id: "harness-1", name: "Flow", version: 1, createdAt: "now", updatedAt: "now", blocks: [{ id: "a", type: "prompt", label: "Plan", prompt: "Plan {{input}} then use {{blocks.build.output}}", provider: "missing", position: { x: 20, y: 20 } }], edges: [] };
+    const provider = { id: "codex", name: "Codex", description: "", settings: { title: "", description: "", sections: [] }, options: [], capabilities: { models: true, usage: true, mcp: true, agents: true, contextWindow: true } };
+    render(<HarnessPanel harnesses={[harness]} runs={[]} providers={[provider]} agents={[]} onCreate={vi.fn()} onSave={vi.fn()} onDelete={vi.fn()} onRun={vi.fn()} onCancelRun={vi.fn()} onError={vi.fn()} />);
+    expect((await screen.findByRole("alert")).textContent).toContain("unavailable provider 'missing'");
+    fireEvent.click(screen.getByText("Plan"));
+    expect(screen.getByLabelText("Rendered prompt preview").textContent).toBe("Plan [workflow input] then use [output from build]");
+    fireEvent.change(screen.getByLabelText("Workflow name"), { target: { value: "Changed" } });
+    expect((screen.getByRole("button", { name: "Save" }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
   it("selects historical runs and pins active runs first", async () => {
     const harness: HarnessDefinition = { id: "harness-1", name: "Flow", version: 1, createdAt: "now", updatedAt: "now", blocks: [{ id: "a", type: "prompt", label: "Plan", prompt: "{{input}}", position: { x: 20, y: 20 } }], edges: [] };
     const runs = [

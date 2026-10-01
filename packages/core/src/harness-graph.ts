@@ -4,6 +4,7 @@ export function validateHarness(harness: HarnessDefinition): { valid: boolean; i
   const issues: HarnessValidationIssue[] = [];
   if (!harness.blocks.length) issues.push({ code: "empty", message: "Add at least one block before running this harness" });
   const ids = new Set<string>();
+  const watchdogs = harness.blocks.filter((block) => block.watchdog);
   for (const block of harness.blocks) {
     if (ids.has(block.id)) issues.push({ code: "duplicate-id", blockId: block.id, message: `Block ID '${block.id}' is duplicated` }); ids.add(block.id);
     if (!block.label.trim()) issues.push({ code: "empty-label", blockId: block.id, message: "Every block needs a name" });
@@ -19,10 +20,13 @@ export function validateHarness(harness: HarnessDefinition): { valid: boolean; i
       else if (!harness.blocks.some((item) => item.id === reference[1])) issues.push({ code: "missing-template-block", blockId: block.id, message: `Template refers to missing block '${reference[1]}'` });
     }
   }
+  if (watchdogs.length > 1) for (const block of watchdogs.slice(1)) issues.push({ code: "invalid-watchdog", blockId: block.id, message: "A workflow can have only one Core watchdog" });
+  if (watchdogs.length && watchdogs.length === harness.blocks.length) for (const block of watchdogs) issues.push({ code: "invalid-watchdog", blockId: block.id, message: "A Core watchdog needs at least one delivery block to supervise" });
   const edgeIds = new Set<string>(); const edgeKeys = new Set<string>(); const outgoing = new Map<string, string[]>(); const indegree = new Map(harness.blocks.map((block) => [block.id, 0]));
   for (const edge of harness.edges) {
     if (edgeIds.has(edge.id)) issues.push({ code: "duplicate-edge-id", edgeId: edge.id, message: `Connection ID '${edge.id}' is duplicated` }); edgeIds.add(edge.id);
     if (!ids.has(edge.from) || !ids.has(edge.to)) { issues.push({ code: "missing-endpoint", edgeId: edge.id, message: "Connection refers to a block that no longer exists" }); continue; }
+    if (harness.blocks.find((block) => block.id === edge.from)?.watchdog || harness.blocks.find((block) => block.id === edge.to)?.watchdog) issues.push({ code: "invalid-watchdog", edgeId: edge.id, message: "A Core watchdog runs independently and cannot have workflow connections" });
     if (edge.from === edge.to) issues.push({ code: "self-edge", edgeId: edge.id, blockId: edge.from, message: "A block cannot connect to itself" });
     const key = `${edge.from}\0${edge.to}`; if (edgeKeys.has(key)) issues.push({ code: "duplicate-edge", edgeId: edge.id, message: "This connection already exists" }); edgeKeys.add(key);
     if (edge.loop && !hasNonLoopPath(harness, edge.to, edge.from)) issues.push({ code: "invalid-loop", edgeId: edge.id, message: "A loop must return to an earlier block on an existing forward path" });
