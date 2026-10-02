@@ -210,6 +210,28 @@ describe("HarnessPanel", () => {
     confirm.mockRestore();
   });
 
+  it("offers reload, comparison, and save-as-copy when a concurrent save conflicts", async () => {
+    const harness: HarnessDefinition = { id: "harness-1", name: "Flow", version: 1, createdAt: "now", updatedAt: "now", blocks: [], edges: [] };
+    const remote = { ...harness, name: "Remote change", version: 2 };
+    const onCreate = vi.fn().mockResolvedValue({ ...harness, id: "copy", name: "Local change copy" });
+    const onSave = vi.fn().mockRejectedValueOnce(new Error("CONFLICT: Workflow changed since it was opened")).mockRejectedValueOnce(new Error("CONFLICT: Workflow changed since it was opened")).mockImplementation(async (value) => value);
+    render(<HarnessPanel harnesses={[harness]} runs={[]} providers={[]} agents={[]} onCreate={onCreate} onRead={vi.fn().mockResolvedValue(remote)} onSave={onSave} onDelete={vi.fn()} onRun={vi.fn()} onCancelRun={vi.fn()} onError={vi.fn()} />);
+
+    fireEvent.change(await screen.findByLabelText("Workflow name"), { target: { value: "Local change" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect((await screen.findByRole("alert")).textContent).toContain("changed elsewhere");
+    fireEvent.click(screen.getByRole("button", { name: "Compare" }));
+    expect(screen.getByText("Your draft")).toBeTruthy();
+    expect(screen.getByText("Saved workflow")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Reload" }));
+    expect((screen.getByLabelText("Workflow name") as HTMLInputElement).value).toBe("Remote change");
+    fireEvent.change(screen.getByLabelText("Workflow name"), { target: { value: "Local change" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await screen.findByRole("alert");
+    fireEvent.click(screen.getByRole("button", { name: "Save as copy" }));
+    await waitFor(() => expect(onCreate).toHaveBeenCalledWith("Local change copy"));
+  });
+
   it("blocks unavailable provider settings and previews execution inputs", async () => {
     const harness: HarnessDefinition = { id: "harness-1", name: "Flow", version: 1, createdAt: "now", updatedAt: "now", blocks: [{ id: "a", type: "prompt", label: "Plan", prompt: "Plan {{input}} then use {{blocks.build.output}}", provider: "missing", position: { x: 20, y: 20 } }], edges: [] };
     const provider = { id: "codex", name: "Codex", description: "", settings: { title: "", description: "", sections: [] }, options: [], capabilities: { models: true, usage: true, mcp: true, agents: true, contextWindow: true } };

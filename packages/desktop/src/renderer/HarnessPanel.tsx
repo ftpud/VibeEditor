@@ -13,6 +13,7 @@ type Props = {
   onLoadModels?(provider: AiProvider): Promise<AiModel[]>;
   onValidate?(harness: HarnessDefinition): Promise<{ valid: boolean; issues: HarnessValidationIssue[] }>;
   onCreate(name: string): Promise<HarnessDefinition>;
+  onRead?(id: string): Promise<HarnessDefinition>;
   onSave(harness: HarnessDefinition): Promise<HarnessDefinition>;
   onDelete(id: string): Promise<void>;
   onRun(harnessId: string, input: string): Promise<HarnessRun>;
@@ -26,10 +27,11 @@ type Props = {
   onError(message: string): void;
 };
 
-export function HarnessPanel({ harnesses, runs, diagnostics = [], providers, agents, defaultProvider, onLoadModels, onValidate, onCreate, onSave, onDelete, onRun, onAppendRun, onResolvePermission, onAnswerQuestion, onResumePause, onRetryPause, onCancelPause, onCancelRun, onError }: Props) {
+export function HarnessPanel({ harnesses, runs, diagnostics = [], providers, agents, defaultProvider, onLoadModels, onValidate, onCreate, onRead, onSave, onDelete, onRun, onAppendRun, onResolvePermission, onAnswerQuestion, onResumePause, onRetryPause, onCancelPause, onCancelRun, onError }: Props) {
   const arrowMarkerId = `harness-arrow-${useId().replace(/:/g, "")}`;
   const [selectedId, setSelectedId] = useState<string>();
   const [draft, setDraft] = useState<HarnessDefinition>();
+  const [baseline, setBaseline] = useState<HarnessDefinition>();
   const [selectedBlockId, setSelectedBlockId] = useState<string>();
   const [selectedEdgeId, setSelectedEdgeId] = useState<string>();
   const [connectFrom, setConnectFrom] = useState<string>();
@@ -40,10 +42,11 @@ export function HarnessPanel({ harnesses, runs, diagnostics = [], providers, age
   const [selectedRunId, setSelectedRunId] = useState<string>();
   const [modelsByProvider, setModelsByProvider] = useState<Record<string, AiModel[]>>({});
   const [remoteValidationIssues, setRemoteValidationIssues] = useState<HarnessValidationIssue[]>([]);
+  const [saveConflict, setSaveConflict] = useState<{ local: HarnessDefinition; remote: HarnessDefinition; comparing: boolean }>();
   const drag = useRef<{ id: string; grabX: number; grabY: number }>();
   const selected = harnesses.find((item) => item.id === selectedId);
   useEffect(() => { if (!selectedId && harnesses[0]) setSelectedId(harnesses[0].id); }, [harnesses, selectedId]);
-  useEffect(() => { setDraft(selected ? structuredClone(selected) : undefined); setSelectedBlockId(undefined); setSelectedEdgeId(undefined); }, [selected?.id, selected?.version]);
+  useEffect(() => { const next = selected ? structuredClone(selected) : undefined; setDraft(next); setBaseline(next); setSelectedBlockId(undefined); setSelectedEdgeId(undefined); setSaveConflict(undefined); }, [selected?.id, selected?.version]);
   const block = draft?.blocks.find((item) => item.id === selectedBlockId);
   const blockProvider = block?.provider ?? defaultProvider;
   const blockModels = blockProvider ? modelsByProvider[blockProvider] ?? [] : [];
@@ -53,7 +56,7 @@ export function HarnessPanel({ harnesses, runs, diagnostics = [], providers, age
     void onLoadModels(blockProvider).then((models) => { if (active) setModelsByProvider((current) => ({ ...current, [blockProvider]: models })); }).catch((error) => { if (active) onError(error instanceof Error ? error.message : "Could not load models"); });
     return () => { active = false; };
   }, [blockProvider, modelsByProvider, onError, onLoadModels]);
-  const dirty = Boolean(draft && selected && JSON.stringify(draft) !== JSON.stringify(selected));
+  const dirty = Boolean(draft && baseline && JSON.stringify(draft) !== JSON.stringify(baseline));
   const activeRuns = runs.filter((item) => item.harnessId === selectedId && activeRunStatuses.has(item.status));
   const workflowRuns = runs.filter((item) => item.harnessId === selectedId).sort((left, right) => Number(activeRunStatuses.has(right.status)) - Number(activeRunStatuses.has(left.status)) || right.createdAt.localeCompare(left.createdAt));
   const run = workflowRuns.find((item) => item.id === selectedRunId) ?? workflowRuns[0];
@@ -107,9 +110,24 @@ export function HarnessPanel({ harnesses, runs, diagnostics = [], providers, age
     setSaving(true);
     try {
       if (!await validateCurrentDraft()) return;
-      const harness = await onSave(draft); setSelectedId(harness.id); setDraft(structuredClone(harness));
+      const harness = await onSave(draft); const next = structuredClone(harness); setSelectedId(harness.id); setDraft(next); setBaseline(next);
     }
-    catch (error) { onError(error instanceof Error ? error.message : "Could not save workflow"); }
+    catch (error) {
+      if (draft && error instanceof Error && error.message.startsWith("CONFLICT:") && onRead) {
+        try { setSaveConflict({ local: structuredClone(draft), remote: await onRead(draft.id), comparing: false }); }
+        catch (readError) { onError(readError instanceof Error ? readError.message : "Could not load the changed workflow"); }
+      } else onError(error instanceof Error ? error.message : "Could not save workflow");
+    }
+    finally { setSaving(false); }
+  };
+  const saveAsCopy = async () => {
+    if (!saveConflict) return;
+    setSaving(true);
+    try {
+      const copy = await onCreate(`${saveConflict.local.name} copy`);
+      const saved = await onSave({ ...saveConflict.local, id: copy.id, name: copy.name, version: copy.version, createdAt: copy.createdAt, updatedAt: copy.updatedAt });
+      const next = structuredClone(saved); setSelectedId(saved.id); setDraft(next); setBaseline(next); setSaveConflict(undefined);
+    } catch (error) { onError(error instanceof Error ? error.message : "Could not save workflow copy"); }
     finally { setSaving(false); }
   };
   const remove = async () => {
@@ -163,6 +181,7 @@ export function HarnessPanel({ harnesses, runs, diagnostics = [], providers, age
     {!draft ? <div className="harness-empty"><strong>Build an AI workflow</strong><span>Create a workflow, add prompt blocks, then connect their execution order.</span><button onClick={() => setCreateName("New Workflow")}><Plus size={14} /> Create workflow</button></div> : <>
       {mode === "edit" ? <div className="harness-toolbar"><input aria-label="Workflow name" value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} /><button title="Add prompt block" onClick={addBlock}><Plus size={14} /> Block</button><button title="Save workflow" disabled={!dirty || saving || validationIssues.length > 0} onClick={() => void save()}><Save size={14} /> {saving ? "Saving" : "Save"}</button></div> : <div className="harness-view-summary"><strong>{draft.name}</strong>{workflowRuns.length ? <select aria-label="Selected workflow run" value={run?.id ?? ""} onChange={(event) => setSelectedRunId(event.target.value)}>{workflowRuns.map((item) => <option key={item.id} value={item.id}>{activeRunStatuses.has(item.status) ? "● " : ""}{item.status} · {new Date(item.createdAt).toLocaleString()} · {item.input.slice(0, 50)}</option>)}</select> : <span>No runs yet</span>}{activeRuns.length > 1 && <small>{activeRuns.length} active runs</small>}</div>}
       {validationIssues.length > 0 && <div className="harness-connect-hint" role="alert"><strong>{validationIssues.length} workflow issue{validationIssues.length === 1 ? "" : "s"}</strong><ul>{validationIssues.map((issue, index) => <li key={`${issue.code}:${issue.blockId ?? issue.edgeId ?? index}`}><button onClick={() => { if (issue.blockId) { setSelectedBlockId(issue.blockId); setSelectedEdgeId(undefined); } else if (issue.edgeId) { setSelectedEdgeId(issue.edgeId); setSelectedBlockId(undefined); } }}>{issue.message}</button></li>)}</ul></div>}
+      {saveConflict && <div className="harness-conflict" role="alert"><strong>This workflow was changed elsewhere.</strong><span>The saved version is {saveConflict.remote.version}; your draft is version {saveConflict.local.version}.</span><div><button onClick={() => { const next = structuredClone(saveConflict.remote); setDraft(next); setBaseline(next); setSaveConflict(undefined); }}>Reload</button><button onClick={() => setSaveConflict((current) => current ? { ...current, comparing: !current.comparing } : current)}>{saveConflict.comparing ? "Hide comparison" : "Compare"}</button><button onClick={() => void saveAsCopy()} disabled={saving}>Save as copy</button></div>{saveConflict.comparing && <div className="harness-conflict-comparison"><section><strong>Your draft</strong><pre>{JSON.stringify(saveConflict.local, null, 2)}</pre></section><section><strong>Saved workflow</strong><pre>{JSON.stringify(saveConflict.remote, null, 2)}</pre></section></div>}</div>}
       {mode === "edit" && connectFrom && <div className="harness-connect-hint">Select an input port to connect from <strong>{blockById.get(connectFrom)?.label}</strong>. <button onClick={() => setConnectFrom(undefined)}>Cancel</button></div>}
       {mode === "edit" && selectedEdge && <div className="harness-connect-hint harness-edge-controls">Selected connection: <strong>{blockById.get(selectedEdge.from)?.label} → {blockById.get(selectedEdge.to)?.label}</strong><label>Execution<select aria-label="Connection execution" value={selectedEdge.execution ?? "sync"} onChange={(event) => setDraft({ ...draft, edges: draft.edges.map((edge) => edge.id === selectedEdge.id ? { ...edge, execution: event.target.value === "async" ? "async" : undefined } : edge) })}><option value="sync">Sync · wait</option><option value="async">Async · continue</option></select></label><button onClick={() => removeEdge(selectedEdge.id)}>Remove connection</button></div>}
       <div className={`harness-canvas ${mode}`} onClick={() => setSelectedEdgeId(undefined)} onPointerMove={pointerMove} onPointerUp={() => { drag.current = undefined; }} onPointerCancel={() => { drag.current = undefined; }}>

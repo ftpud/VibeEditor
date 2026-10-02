@@ -302,6 +302,7 @@ export type ProtocolOperations = {
   "agents.rename": { payload: { scope: Exclude<AgentFileScope, "workspace">; name: string; newName: string }; result: { name: string } };
   "agents.delete": { payload: { scope: Exclude<AgentFileScope, "workspace">; name: string }; result: Record<string, never> };
   "harnesses.list": { payload: Record<string, never>; result: { harnesses: HarnessDefinition[]; diagnostics: HarnessStateDiagnostic[] } };
+  "harnesses.read": { payload: { id: string }; result: { harness: HarnessDefinition } };
   "harnesses.create": { payload: { name: string }; result: { harness: HarnessDefinition } };
   "harnesses.update": { payload: { harness: HarnessDefinition }; result: { harness: HarnessDefinition } };
   "harnesses.delete": { payload: { id: string }; result: Record<string, never> };
@@ -555,6 +556,7 @@ export type ErrorCode =
   | "BINARY_FILE"
   | "READ_FAILED"
   | "WRITE_FAILED"
+  | "CONFLICT"
   | "FILE_CHANGED"
   | "TERMINAL_FAILED"
   | "RUN_CONFIG_NOT_FOUND"
@@ -662,6 +664,7 @@ const requestTypeRegistry: Record<RequestType, true> = {
   "agents.rename": true,
   "agents.delete": true,
   "harnesses.list": true,
+  "harnesses.read": true,
   "harnesses.create": true,
   "harnesses.update": true,
   "harnesses.delete": true,
