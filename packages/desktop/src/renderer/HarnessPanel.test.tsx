@@ -193,6 +193,23 @@ describe("HarnessPanel", () => {
     expect(onSave).not.toHaveBeenCalled();
   });
 
+  it("keeps an unsaved draft when switching workflows or modes is declined", async () => {
+    const harnesses: HarnessDefinition[] = [
+      { id: "harness-1", name: "First", version: 1, createdAt: "now", updatedAt: "now", blocks: [{ id: "a", type: "prompt", label: "Plan", prompt: "{{input}}", position: { x: 20, y: 20 } }], edges: [] },
+      { id: "harness-2", name: "Second", version: 1, createdAt: "now", updatedAt: "now", blocks: [], edges: [] },
+    ];
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    render(<HarnessPanel harnesses={harnesses} runs={[]} providers={[]} agents={[]} onCreate={vi.fn()} onSave={vi.fn()} onDelete={vi.fn()} onRun={vi.fn()} onCancelRun={vi.fn()} onError={vi.fn()} />);
+
+    fireEvent.change(await screen.findByLabelText("Workflow name"), { target: { value: "Changed" } });
+    fireEvent.change(screen.getByRole("combobox", { name: "Selected workflow" }), { target: { value: "harness-2" } });
+    expect((screen.getByLabelText("Workflow name") as HTMLInputElement).value).toBe("Changed");
+    fireEvent.click(screen.getByRole("button", { name: "View" }));
+    expect(screen.getByRole("button", { name: "Edit" }).className).toContain("active");
+    expect(confirm).toHaveBeenCalledTimes(2);
+    confirm.mockRestore();
+  });
+
   it("blocks unavailable provider settings and previews execution inputs", async () => {
     const harness: HarnessDefinition = { id: "harness-1", name: "Flow", version: 1, createdAt: "now", updatedAt: "now", blocks: [{ id: "a", type: "prompt", label: "Plan", prompt: "Plan {{input}} then use {{blocks.build.output}}", provider: "missing", position: { x: 20, y: 20 } }], edges: [] };
     const provider = { id: "codex", name: "Codex", description: "", settings: { title: "", description: "", sections: [] }, options: [], capabilities: { models: true, usage: true, mcp: true, agents: true, contextWindow: true } };
