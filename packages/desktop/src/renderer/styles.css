@@ -315,6 +315,13 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .harness-connect-hint { padding: 5px 8px; display: flex; align-items: center; gap: 4px; border-bottom: 1px solid #4b3f62; background: #302a3c; color: #c9bddb; font-size: .7692rem; }
 .harness-connect-hint strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .harness-connect-hint button { margin-left: auto; border: 0; background: transparent; color: #a98be0; cursor: pointer; }
+.harness-conflict { padding: 8px; display: flex; flex-wrap: wrap; gap: 6px 10px; border-bottom: 1px solid #70562d; background: #3a3121; color: #f0d59a; font-size: .7692rem; }
+.harness-conflict > strong, .harness-conflict > span { width: 100%; }
+.harness-conflict > div { display: flex; gap: 6px; }
+.harness-conflict button { border: 1px solid #806838; border-radius: 3px; background: #4b3d26; color: #f0d59a; cursor: pointer; }
+.harness-conflict-comparison { width: 100%; max-height: 280px; display: grid !important; grid-template-columns: repeat(2, minmax(0, 1fr)); overflow: auto; border-top: 1px solid #70562d; }
+.harness-conflict-comparison section { min-width: 0; padding: 6px; }
+.harness-conflict-comparison pre { margin: 4px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; color: #ddd4c3; }
 .harness-edge-controls label { margin-left: auto; display: flex; align-items: center; gap: 5px; white-space: nowrap; }
 .harness-edge-controls select { padding: 3px 5px; border: 1px solid #55476b; border-radius: 3px; background: #272230; color: #d4c9e5; font: inherit; }
 .harness-edge-controls button { margin-left: 0; }

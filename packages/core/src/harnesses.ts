@@ -53,7 +53,7 @@ export class HarnessStore {
     return this.mutate(async () => {
       const current = await this.list(); const previous = current.find((item) => item.id === candidate.id);
       if (!previous) throw new CoreError("FILE_NOT_FOUND", "Harness does not exist");
-      if (candidate.version !== previous.version) throw new CoreError("INVALID_REQUEST", `Workflow changed since it was opened (expected version ${candidate.version}, current version ${previous.version}). Reload it before saving.`);
+      if (candidate.version !== previous.version) throw new CoreError("CONFLICT", `Workflow changed since it was opened (expected version ${candidate.version}, current version ${previous.version}). Reload it before saving.`);
       const updated = { ...candidate, name: validName(candidate.name), createdAt: previous.createdAt, updatedAt: new Date().toISOString(), version: previous.version + 1 };
       await this.persist(current.map((item) => item.id === updated.id ? updated : item)); return updated;
     });

@@ -43,7 +43,7 @@ describe("HarnessStore", () => {
     const state = await mkdtemp(path.join(os.tmpdir(), "remote-ide-harness-state-"));
     const store = new HarnessStore("/workspace", state); const created = await store.create("Flow");
     await store.update({ ...created, name: "First save" });
-    await expect(store.update({ ...created, name: "Stale save" })).rejects.toMatchObject({ code: "INVALID_REQUEST", message: expect.stringContaining("changed since") });
+    await expect(store.update({ ...created, name: "Stale save" })).rejects.toMatchObject({ code: "CONFLICT", message: expect.stringContaining("changed since") });
     expect((await store.read(created.id)).name).toBe("First save");
   });
 

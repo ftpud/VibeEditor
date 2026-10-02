@@ -74,7 +74,7 @@ The current vertical slice is useful: definitions and run snapshots are Core-own
   - Preview rendered inputs and explain `all`, `any`, sync, async, loop, and AI-route behavior in plain language.
 - [ ] Protect editing work.
   - Warn before switching workflow, mode, root, or closing with unsaved changes.
-  - Resolve optimistic-save conflicts with Reload, Compare, and Save as copy.
+  - [x] Resolve optimistic-save conflicts with Reload, Compare, and Save as copy.
   - Add undo/redo, duplicate workflow/block, copy/paste, and import/export with schema migration and secret redaction.
 - [ ] Improve canvas navigation and accessibility.
   - Add pan/zoom, fit-to-content, auto-layout, minimap for large graphs, multi-select, alignment, and keyboard connection editing.
