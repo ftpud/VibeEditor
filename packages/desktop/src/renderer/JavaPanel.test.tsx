@@ -73,3 +73,17 @@ it("disables Apply while running and ignores responses from a stopped session", 
   resolve({ appliedClasses: ["App"], deferredClasses: [], failedClasses: [], restartRequired: false });
   await waitFor(() => expect(screen.queryByText(/Applied 1 class/)).toBeNull());
 });
+
+
+it("resizes debugger width and height with the keyboard", () => {
+  const onHeightChange = vi.fn();
+  render(<JavaPanel {...applyProps(vi.fn())} onHeightChange={onHeightChange} />);
+  const width = screen.getByRole("separator", { name: "Resize debugger width" });
+  const initial = Number(width.getAttribute("aria-valuenow"));
+  fireEvent.keyDown(width, { key: "ArrowLeft" });
+  expect(Number(width.getAttribute("aria-valuenow"))).toBe(initial + 10);
+  fireEvent.keyDown(width, { key: "ArrowRight", shiftKey: true });
+  expect(Number(width.getAttribute("aria-valuenow"))).toBe(initial - 20);
+  fireEvent.keyDown(screen.getByRole("separator", { name: "Resize debugger height" }), { key: "ArrowUp" });
+  expect(onHeightChange).toHaveBeenCalledWith(260);
+});

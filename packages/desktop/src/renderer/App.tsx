@@ -13,6 +13,7 @@ import { readAiPromptDraft, writeAiPromptDraft } from "./ai-prompt-drafts";
 import { editorTabLabel, initialLayout, type EditorTab, type LayoutModel, type Panel } from "./model";
 import { TerminalPanel } from "./TerminalPanel";
 import { JavaConfigurationDialog } from "./JavaConfigurationDialog";
+import { attachDebugEditor } from "./debug-editor";
 import { JavaPanel } from "./JavaPanel";
 import { ProblemsPanel } from "./ProblemsPanel";
 import { GitLogPanel } from "./GitLogPanel";
@@ -257,6 +258,9 @@ export function App() {
   const [javaRunning, setJavaRunning] = useState(false);
   const [javaDebugState, setJavaDebugState] = useState<JavaDebugState>({ status: "stopped", variables: [] });
   const [javaBreakpoints, setJavaBreakpoints] = useState<JavaBreakpoint[]>([]);
+  const debugEditorRef = useRef<ReturnType<typeof attachDebugEditor>>();
+  const javaDebugStateRef = useRef(javaDebugState);
+  javaDebugStateRef.current = javaDebugState;
   const [javaPanelHeight, setJavaPanelHeight] = useState(240);
   const [problemsHeight, setProblemsHeight] = useState(220);
   const [gitLogHeight, setGitLogHeight] = useState(360);
@@ -783,7 +787,7 @@ export function App() {
         const savedSplit = Number(setting("classic.split")); if (savedSplit >= 10 && savedSplit <= 90) setClassicSplit(savedSplit);
         const savedSideView = setting("classic.sideView"); if (["project", "git", "taskGit", "java", "useful", "agents", "harness"].includes(savedSideView ?? "")) setClassicSideView(savedSideView as typeof classicSideView);
         const savedTerminalHeight = Number(setting("bottom.terminalHeight")); if (savedTerminalHeight >= 130 && savedTerminalHeight <= 520) setTerminalHeight(savedTerminalHeight);
-        const savedJavaHeight = Number(setting("bottom.javaHeight")); if (savedJavaHeight >= 140 && savedJavaHeight <= 520) setJavaPanelHeight(savedJavaHeight);
+        const savedJavaHeight = Number(setting("bottom.javaHeight")); if (savedJavaHeight >= 140 && savedJavaHeight <= 1200) setJavaPanelHeight(savedJavaHeight);
         const savedProblemsHeight = Number(setting("bottom.problemsHeight")); if (savedProblemsHeight >= 120 && savedProblemsHeight <= 520) setProblemsHeight(savedProblemsHeight);
         const savedGitLogHeight = Number(setting("bottom.gitLogHeight")); if (savedGitLogHeight >= 180 && savedGitLogHeight <= 650) setGitLogHeight(savedGitLogHeight);
         const providerResult = await client.request("ai.providers", {});
@@ -1844,7 +1848,7 @@ export function App() {
     event.currentTarget.setPointerCapture(event.pointerId);
     const startY = event.clientY;
     const startHeight = terminalHeight;
-    const move = (moveEvent: PointerEvent) => setTerminalHeight(Math.max(130, Math.min(520, startHeight + startY - moveEvent.clientY)));
+    const move = (moveEvent: PointerEvent) => setTerminalHeight(Math.max(130, Math.min(window.innerHeight - 150, startHeight + startY - moveEvent.clientY)));
     const end = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", end); };
     window.addEventListener("pointermove", move); window.addEventListener("pointerup", end);
   };
@@ -1955,10 +1959,20 @@ export function App() {
     setLayout((current) => ({ ...current, panels: visible ? current.panels.filter((panel) => panel.type !== "gitlog") : [...current.panels.filter((panel) => !["terminal", "java", "problems", "gitlog"].includes(panel.type)), { id: "gitlog", type: "gitlog" }] }));
   };
 
+  const saveJavaLaunchFiles = async () => {
+    const client = clientRef.current!;
+    const rootId = client.getRoot();
+    for (const tab of layoutRef.current.editorGroups.flatMap((group) => group.tabs)) {
+      if (tab.type === "file" && (!tab.rootId || tab.rootId === rootId) && tab.dirty && !await saveFileTab(tab)) throw new Error(`Could not save ${tab.path} before launching Java`);
+    }
+    if (clientRef.current !== client || client.getRoot() !== rootId) throw new Error("Workspace changed while saving edits");
+    return client;
+  };
+
   const runJavaAction = async (action: "java.build" | "java.run") => {
     setLayout((current) => ({ ...current, panels: [...current.panels.filter((panel) => !["terminal", "java", "problems", "gitlog"].includes(panel.type)), { id: "java", type: "java" }] }));
     setJavaRunning(true);
-    try { await clientRef.current!.request(action, {}, { timeoutMs: 10 * 60_000 }); }
+    try { const client = await saveJavaLaunchFiles(); await client.request(action, {}, { timeoutMs: 10 * 60_000 }); }
     catch (error) { setJavaRunning(false); setJavaLog((current) => `${current}${error instanceof Error ? error.message : "Java process failed"}\n`); if (error instanceof Error && error.message.includes("Java configuration")) setShowRunConfigurationDialog(true); }
   };
 
@@ -1970,12 +1984,7 @@ export function App() {
     setLayout((current) => ({ ...current, panels: [...current.panels.filter((panel) => !["terminal", "java", "problems", "gitlog"].includes(panel.type)), { id: "java", type: "java" }] }));
     setJavaRunning(true);
     try {
-      const client = clientRef.current!;
-      const rootId = client.getRoot();
-      for (const tab of layoutRef.current.editorGroups.flatMap((group) => group.tabs)) {
-        if (tab.type === "file" && tab.rootId === rootId && tab.dirty && !await saveFileTab(tab)) throw new Error(`Could not save ${tab.path} before debugging`);
-      }
-      if (clientRef.current !== client || client.getRoot() !== rootId) throw new Error("Workspace changed while saving edits");
+      const client = await saveJavaLaunchFiles();
       await client.request("java.debug.start", { breakpoints: javaBreakpoints }, { timeoutMs: 10 * 60_000 });
     }
     catch (error) { setJavaRunning(false); setJavaDebugState({ status: "stopped", variables: [] }); setJavaLog((current) => `${current}${error instanceof Error ? error.message : "Debugger failed"}\n`); if (error instanceof Error && error.message.includes("Java configuration")) setShowRunConfigurationDialog(true); }
@@ -2056,6 +2065,14 @@ export function App() {
       setJavaOptions(result.options); javaOptionsRef.current = result.options;
     } catch (error) { setStatusMessage(error instanceof Error ? error.message : "Could not select run configuration"); }
   };
+
+  useEffect(() => {
+    debugEditorRef.current?.update(javaDebugState);
+    if (javaDebugState.status === "paused" && javaDebugState.path && activeTab?.path !== javaDebugState.path) {
+      void openFile({ name: javaDebugState.path.split("/").pop()!, path: javaDebugState.path, type: "file" });
+    }
+  }, [javaDebugState]);
+  useEffect(() => () => debugEditorRef.current?.dispose(), []);
 
   const beginJavaResize = (event: React.PointerEvent) => {
     event.currentTarget.setPointerCapture(event.pointerId);
@@ -2153,6 +2170,8 @@ export function App() {
   };
 
   const mountEditor = (instance: editor.IStandaloneCodeEditor, api: Monaco) => {
+    debugEditorRef.current?.dispose();
+    debugEditorRef.current = undefined;
     monacoEditorRef.current = instance;
     const restoredViewState = activeTab ? editorViewStates.mount(activeTab.id, instance) : false;
     editorStatusBarRef.current?.attach(instance);
@@ -2166,6 +2185,15 @@ export function App() {
     if (savedCursor && !restoredViewState) instance.setPosition(savedCursor);
     javaLanguageDisposables.current.push(instance.onDidChangeCursorPosition((event) => cursorPositions.update(activeTab, event.position)));
     const filePath = activeTab.path;
+    if (activeTab.type === "file" && /\.java$/i.test(filePath)) {
+      const client = clientRef.current!;
+      const rootId = client.getRoot();
+      debugEditorRef.current = attachDebugEditor(instance, api, filePath, (reference, start) => {
+        if (clientRef.current !== client || client.getRoot() !== rootId) return Promise.reject(new Error("Workspace changed"));
+        return client.request("java.debug.variables", { reference, start });
+      });
+      debugEditorRef.current.update(javaDebugStateRef.current);
+    }
     breakpointDecorationsRef.current = [];
     if (activeTab.type === "file") decorateBreakpoints(instance, filePath, api);
     if (activeTab.type === "file") javaLanguageDisposables.current.push(instance.onContextMenu((event) => {
@@ -2658,7 +2686,7 @@ export function App() {
       </>}
     </div>
     {layout.panels.some((panel) => panel.type === "terminal") && <TerminalPanel theme={theme} fontFamily={editorFontFamily} fontSize={uiFontSize} lineHeight={uiLineHeight} client={clientRef.current!} group={layout.terminalGroup} height={terminalHeight} highlightedTerminalIds={new Set(runConfigs.filter((config) => ["starting", "running", "stopping"].includes(config.status)).flatMap((config) => config.terminalId ? [config.terminalId] : []))} onActivate={activateTerminalTab} onCreate={() => void createTerminal()} onClose={closeTerminal} onRename={renameTerminal} onDuplicate={(tab) => void duplicateTerminal(tab)} onMove={moveTerminal} onRecoveryShown={(tabId) => updateTerminalGroup((group) => ({ ...group, tabs: group.tabs.map((tab) => tab.id === tabId ? { ...tab, recovery: undefined } : tab) }))} onResizeStart={beginTerminalResize} registerWriter={registerTerminalWriter} />}
-    {layout.panels.some((panel) => panel.type === "java") && javaOptions && <JavaPanel key={`java-panel:${selectedRootId}`} height={javaPanelHeight} log={javaLog} running={javaRunning} options={javaOptions} debugState={javaDebugState} onConfigure={() => setShowRunConfigurationDialog(true)} onApplyChanges={applyJavaChanges} onInspect={(reference, start) => clientRef.current!.request("java.debug.variables", { reference, start })} onBuild={() => void runJavaAction("java.build")} onRun={() => void runJavaAction("java.run")} onDebug={() => void debugJava()} onStop={() => void stopJava()} onDebugCommand={(command) => void commandJavaDebugger(command)} onClear={() => setJavaLog("")} onResizeStart={beginJavaResize} />}
+    {layout.panels.some((panel) => panel.type === "java") && javaOptions && <JavaPanel key={`java-panel:${selectedRootId}`} height={javaPanelHeight} log={javaLog} running={javaRunning} options={javaOptions} debugState={javaDebugState} onConfigure={() => setShowRunConfigurationDialog(true)} onApplyChanges={applyJavaChanges} onInspect={(reference, start) => clientRef.current!.request("java.debug.variables", { reference, start })} onBuild={() => void runJavaAction("java.build")} onRun={() => void runJavaAction("java.run")} onDebug={() => void debugJava()} onStop={() => void stopJava()} onDebugCommand={(command) => void commandJavaDebugger(command)} onClear={() => setJavaLog("")} onResizeStart={beginJavaResize} onHeightChange={setJavaPanelHeight} />}
     {layout.panels.some((panel) => panel.type === "problems") && javaOptions && <ProblemsPanel height={problemsHeight} diagnostics={javaDiagnostics} checking={javaChecking} onRefresh={() => void checkJava()} onOpen={(diagnostic) => void openDiagnostic(diagnostic)} onResizeStart={beginProblemsResize} />}
     {layout.panels.some((panel) => panel.type === "gitlog") && <GitLogPanel client={clientRef.current!} height={gitLogHeight} onResizeStart={beginGitLogResize} onRepositoryChanged={() => { void Promise.all([refreshGit(), refreshTree()]); }} onMergeConflict={() => { void clientRef.current?.request("git.conflicts", {}).then((conflicts) => setGitConflictPath(conflicts.files[0]?.path ?? "")); }} />}
     <footer className="bottom-tool-bar">

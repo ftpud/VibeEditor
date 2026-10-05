@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { XMLParser } from "fast-xml-parser";
 import type { FileRevision, JavaToolCheck, JavaRunConfiguration, JavaApplyChangesResult, JavaBreakpoint, JavaDebugVariable, JavaDebugState, JavaDiagnostic, JavaMainClass, JavaProjectNode, JavaProjectOptions, JavaTypeSuggestion } from "@remote-ide/protocol";
+import { javaBuildKey, javaBuildFingerprint, javaOutputFingerprint } from "./java-launch-cache.js";
 import { CoreError } from "./errors.js";
 import { WorkspaceFileSystem } from "./filesystem.js";
 import { javaConfigurationPath } from "@remote-ide/protocol";
@@ -30,7 +31,7 @@ export class JavaProjectService {
   private debugClassFiles = new Map<string, { file: string; hash: string }>();
   private debugBreakpoints: JavaBreakpoint[] = [];
   private debugBuffer = "";
-  private debugLocation?: { className: string; method: string; line: number };
+  private debugLocation?: { className: string; method: string; line: number; path?: string };
   private awaitingDebugLocals = false;
   private awaitingDebugStopPrompt = false;
   private debugReferences = new Map<string, { expression: string; length?: number }>();
@@ -38,6 +39,7 @@ export class JavaProjectService {
   private inspectionQueue: Promise<unknown> = Promise.resolve();
   private pendingInspection?: { quiet?: boolean; resolve: (output: string) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> };
   private dependencyTypes?: JavaTypeSuggestion[];
+  private launchBuild?: { key: string; inputs: string; outputs: string; classpath: string };
 
   constructor(
     private readonly filesystem: WorkspaceFileSystem,
@@ -254,9 +256,8 @@ export class JavaProjectService {
       const configuration = options.runConfigurations.find((item) => item.id === options.selectedRunConfigurationId);
       if (!configuration) throw new CoreError("JAVA_PROCESS_FAILED", "Choose a launch profile in Java configuration first");
       if (launch !== this.debugLaunchGeneration) throw new CoreError("JAVA_PROCESS_FAILED", "Java run was cancelled");
-      await this.runAndWait(options.mavenExecutable, ["-f", options.pomPath, ...(options.buildGoals ?? ["package", "-DskipTests"])], "Run build", options);
+      const classpath = await this.prepareLaunch(options, "Run build", launch);
       if (launch !== this.debugLaunchGeneration) throw new CoreError("JAVA_PROCESS_FAILED", "Java run was cancelled");
-      const classpath = await this.buildDebugClasspath(options);
       const environment = await javaLaunchEnvironment(this.filesystem, configuration);
       const cwd = await this.launchDirectory(configuration);
       if (launch !== this.debugLaunchGeneration) throw new CoreError("JAVA_PROCESS_FAILED", "Java run was cancelled");
@@ -271,12 +272,44 @@ export class JavaProjectService {
     } finally { this.debugStarting = false; }
   }
 
-  private async launchDebugTarget(options: JavaProjectOptions, configuration: JavaRunConfiguration, launch: number): Promise<string> {
+  private async prepareLaunch(options: JavaProjectOptions, label: string, launch: number): Promise<string> {
+    const workspace = this.filesystem.getWorkspace();
+    const ensureLaunching = () => {
+      if (launch !== this.debugLaunchGeneration) throw new CoreError("JAVA_PROCESS_FAILED", "Java launch was cancelled");
+    };
+    const key = javaBuildKey(workspace, options);
+    const inputs = await javaBuildFingerprint(workspace, options);
+    ensureLaunching();
+    const cached = this.launchBuild;
+    if (cached?.key === key && cached.inputs === inputs && cached.outputs === await javaOutputFingerprint(workspace, options)) {
+      const entries = cached.classpath.split(path.delimiter);
+      // Optional test output need not exist, but missing dependency jars must be resolved again.
+      const dependenciesExist = (await Promise.all(entries.slice(2).map((entry) => stat(entry).then(() => true, () => false)))).every(Boolean);
+      ensureLaunching();
+      if (dependenciesExist) {
+        this.onProcessEvent({ type: "output", data: "> Reusing unchanged Java build and dependency classpath\n" });
+        return cached.classpath;
+      }
+    }
+    this.launchBuild = undefined;
+    // Both launch modes use debug information so switching to Debug can reuse the same classes.
+    await this.runAndWait(options.mavenExecutable, ["-f", options.pomPath, ...(options.buildGoals ?? ["package", "-DskipTests"]), "-Dmaven.compiler.debug=true", "-Dmaven.compiler.debuglevel=lines,vars,source"], label, options);
+    ensureLaunching();
+    const classpath = await this.buildDebugClasspath(options);
+    ensureLaunching();
+    const after = await javaBuildFingerprint(workspace, options);
+    const outputs = await javaOutputFingerprint(workspace, options);
+    ensureLaunching();
+    // Edits during compilation need another build on the next launch.
+    if (inputs === after) this.launchBuild = { key, inputs, outputs, classpath };
+    return classpath;
+  }
+
+  private async launchDebugTarget(options: JavaProjectOptions, configuration: JavaRunConfiguration, launch: number, classpath: string): Promise<string> {
     const workspace = this.filesystem.getWorkspace();
     const environment = await javaLaunchEnvironment(this.filesystem, configuration);
     const cwd = await this.launchDirectory(configuration);
     const executable = javaToolExecutable(options, "java", workspace);
-    const classpath = await this.buildDebugClasspath(options);
     if (launch !== this.debugLaunchGeneration) throw new CoreError("JAVA_PROCESS_FAILED", "Debugger start was cancelled");
     return new Promise((resolve, reject) => {
       const child = spawn(executable, [...(configuration.vmArguments ?? []), "-agentlib:jdwp=transport=dt_socket,server=y,suspend=y,address=127.0.0.1:0", "-classpath", classpath, configuration.mainClass, ...(configuration.programArguments ?? [])], { cwd, env: javaToolEnvironment(options, workspace, environment), stdio: "pipe" });
@@ -318,12 +351,12 @@ export class JavaProjectService {
       this.debugBreakpoints = validateJavaBreakpoints(breakpoints);
       ensureLaunching();
       this.emitDebugState({ status: "starting", variables: [] });
-      await this.runAndWait(options.mavenExecutable, ["-f", options.pomPath, ...(options.buildGoals ?? ["package", "-DskipTests"]), "-Dmaven.compiler.debug=true", "-Dmaven.compiler.debuglevel=lines,vars,source"], "Debug build", options);
+      const classpath = await this.prepareLaunch(options, "Debug build", launch);
       ensureLaunching();
       this.activeDebugOptions = options;
       this.debugClassFiles = await this.snapshotDebugClasses(options);
       ensureLaunching();
-      const address = await this.launchDebugTarget(options, configuration, launch);
+      const address = await this.launchDebugTarget(options, configuration, launch, classpath);
       ensureLaunching();
       const executable = javaToolExecutable(options, "jdb", this.filesystem.getWorkspace());
       const child = spawn(executable, ["-attach", address], { cwd: this.filesystem.getWorkspace(), env: javaToolEnvironment(options, this.filesystem.getWorkspace()), stdio: "pipe" });
@@ -502,6 +535,19 @@ export class JavaProjectService {
           state = { ...state, variables: [{ name: "this", value: state.className ?? "Current instance", reference, type: state.className }, ...state.variables] };
         }
       } catch { /* Static methods have no current instance; locals remain inspectable. */ }
+    }
+    if (state.className && this.activeDebugOptions) {
+      const sourceName = state.className.split("$")[0]!.replaceAll(".", "/") + ".java";
+      for (const sourceRoot of this.activeDebugOptions.sourceRoots) {
+        const sourcePath = path.posix.join(sourceRoot, sourceName);
+        try {
+          await this.filesystem.resolveExisting(sourcePath);
+          if (generation !== this.debugGeneration) return;
+          state = { ...state, path: sourcePath };
+          if (this.debugLocation) this.debugLocation.path = sourcePath;
+          break;
+        } catch { /* Try another source root. */ }
+      }
     }
     if (generation === this.debugGeneration && this.debugPaused) this.emitDebugState(state);
   }

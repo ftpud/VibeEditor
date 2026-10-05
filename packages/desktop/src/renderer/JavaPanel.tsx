@@ -1,6 +1,8 @@
-import { Settings, RefreshCw, ChevronRight, ChevronDown, ArrowDownToLine, ArrowRight, ArrowUpFromLine, Bug, CornerDownRight, Hammer, Play, Square, Trash2 } from "lucide-react";
+import { DebugVariable } from "./DebugVariable";
+import { readSettingNumber, writeSetting } from "./settings";
+import { Settings, RefreshCw, ArrowDownToLine, ArrowRight, ArrowUpFromLine, Bug, CornerDownRight, Hammer, Play, Square, Trash2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import type { JavaApplyChangesResult, JavaDebugVariable, JavaDebugState, JavaProjectOptions, ProtocolOperations } from "@remote-ide/protocol";
+import type { JavaApplyChangesResult, JavaDebugState, JavaProjectOptions, ProtocolOperations } from "@remote-ide/protocol";
 
 type Props = {
   height: number;
@@ -18,9 +20,25 @@ type Props = {
   onInspect(reference: string, start?: number): Promise<ProtocolOperations["java.debug.variables"]["result"]>;
   onClear(): void;
   onResizeStart(event: React.PointerEvent): void;
+  onHeightChange?(height: number): void;
 };
 
-export function JavaPanel({ height, log, running, options, debugState, onConfigure, onBuild, onRun, onDebug, onStop, onDebugCommand, onApplyChanges, onInspect, onClear, onResizeStart }: Props) {
+export function JavaPanel({ height, log, running, options, debugState, onConfigure, onBuild, onRun, onDebug, onStop, onDebugCommand, onApplyChanges, onInspect, onClear, onResizeStart, onHeightChange }: Props) {
+  const panelRef = useRef<HTMLElement>(null);
+  const [debugWidth, setDebugWidth] = useState(() => readSettingNumber("debugger.width", 380, 180, 1200));
+  useEffect(() => writeSetting("debugger.width", String(debugWidth)), [debugWidth]);
+  const resizeCleanup = useRef<(() => void) | undefined>();
+  useEffect(() => () => resizeCleanup.current?.(), []);
+  const resizeDebugger = (event: React.PointerEvent) => {
+    event.preventDefault();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    resizeCleanup.current?.();
+    const startX = event.clientX; const startWidth = debugWidth;
+    const move = (event: PointerEvent) => setDebugWidth(Math.max(180, Math.min((panelRef.current?.clientWidth ?? 1000) - 140, startWidth + startX - event.clientX)));
+    const end = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", end); window.removeEventListener("pointercancel", end); };
+    resizeCleanup.current = end;
+    window.addEventListener("pointermove", move); window.addEventListener("pointerup", end); window.addEventListener("pointercancel", end);
+  };
   const [applying, setApplying] = useState(false);
   const [applyResult, setApplyResult] = useState<JavaApplyChangesResult>();
   const [applyError, setApplyError] = useState<string>();
@@ -46,8 +64,12 @@ export function JavaPanel({ height, log, running, options, debugState, onConfigu
   };
   const logRef = useRef<HTMLPreElement>(null);
   useEffect(() => { if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight; }, [log]);
-  return <section className="java-panel" style={{ height }}>
-    <div className="terminal-resize-handle" onPointerDown={onResizeStart} />
+  return <section ref={panelRef} className="java-panel" style={{ height }}>
+    <div className="terminal-resize-handle" role="separator" aria-label="Resize debugger height" aria-orientation="horizontal" aria-valuenow={height} tabIndex={0} onPointerDown={onResizeStart} onKeyDown={(event) => {
+      if (!["ArrowUp", "ArrowDown"].includes(event.key)) return;
+      event.preventDefault();
+      onHeightChange?.(Math.max(140, Math.min(window.innerHeight - 150, height + (event.key === "ArrowUp" ? 1 : -1) * (event.shiftKey ? 30 : 10))));
+    }} />
     <aside className="java-actions">
       <button title="Build Maven project" disabled={running} onClick={onBuild}><Hammer size={16} /></button>
       <button title="Run selected configuration" disabled={running || !options.selectedRunConfigurationId} onClick={onRun}><Play size={16} /></button>
@@ -61,7 +83,12 @@ export function JavaPanel({ height, log, running, options, debugState, onConfigu
       <header><span>Build Output</span><span className={running ? "running" : ""}>{running ? "Running" : "Idle"}</span></header>
       <pre ref={logRef}>{log || "Java build output will appear here."}</pre>
     </div>
-    {debugState.status !== "stopped" && <aside className="debug-view">
+    {debugState.status !== "stopped" && <aside className="debug-view" style={{ width: debugWidth }}>
+      <div className="debug-resize-handle" role="separator" aria-label="Resize debugger width" aria-orientation="vertical" aria-valuenow={debugWidth} tabIndex={0} onPointerDown={resizeDebugger} onKeyDown={(event) => {
+        if (!["ArrowLeft", "ArrowRight"].includes(event.key)) return;
+        event.preventDefault();
+        setDebugWidth(Math.max(180, Math.min((panelRef.current?.clientWidth || 1000) - 140, debugWidth + (event.key === "ArrowLeft" ? 1 : -1) * (event.shiftKey ? 30 : 10))));
+      }} />
       <header><span>Debugger</span><span>{debugState.status}</span></header>
       <div className="debug-controls">
         <button title="Continue" disabled={debugState.status !== "paused" || busy} onClick={() => onDebugCommand("continue")}><ArrowRight size={14} /></button>
@@ -89,43 +116,4 @@ export function JavaPanel({ height, log, running, options, debugState, onConfigu
       </> : <div className="debug-empty">Waiting for a breakpoint</div>}
     </aside>}
   </section>;
-}
-
-function DebugVariable({ variable, onInspect, depth = 0, disabled = false }: { variable: JavaDebugVariable; onInspect: Props["onInspect"]; depth?: number; disabled?: boolean }) {
-  const [expanded, setExpanded] = useState(false);
-  const [children, setChildren] = useState<JavaDebugVariable[] | undefined>();
-  const [nextStart, setNextStart] = useState<number>();
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string>();
-  const mounted = useRef(true);
-  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
-  const load = async (start?: number) => {
-    if (!variable.reference || loading) return;
-    setLoading(true); setError(undefined);
-    try {
-      const result = await onInspect(variable.reference, start);
-      if (!mounted.current) return;
-      setChildren((current) => start === undefined ? result.variables : [...(current ?? []), ...result.variables]);
-      setNextStart(result.nextStart);
-    } catch (cause) {
-      if (mounted.current) setError(cause instanceof Error ? cause.message : String(cause));
-    } finally { if (mounted.current) setLoading(false); }
-  };
-  const toggle = () => { setExpanded(!expanded); if (!expanded && children === undefined) void load(); };
-  return <div>
-    <div className="debug-variable" style={{ paddingLeft: 9 + depth * 14 }}>
-      <span className="debug-variable-name">
-        {variable.reference ? <button aria-label={`${expanded ? "Collapse" : "Expand"} ${variable.name}`} aria-expanded={expanded} disabled={disabled} onClick={toggle}>{expanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />}</button> : <span className="debug-variable-spacer" />}
-        <span title={variable.name}>{variable.name}</span>
-      </span>
-      <code title={variable.value}>{variable.value}</code>
-    </div>
-    {expanded && <>
-      {children?.map((child) => <DebugVariable key={child.reference ?? child.name} variable={child} onInspect={onInspect} disabled={disabled} depth={depth + 1} />)}
-      {loading && <div className="debug-empty">Loading values…</div>}
-      {error && <div className="debug-inspect-message" role="alert">{error} <button disabled={disabled} onClick={() => void load(nextStart)}>Retry</button></div>}
-      {!loading && !error && children?.length === 0 && <div className="debug-empty">No fields or elements</div>}
-      {!loading && nextStart !== undefined && <button className="debug-load-more" disabled={disabled} onClick={() => void load(nextStart)}>Load more elements</button>}
-    </>}
-  </div>;
 }

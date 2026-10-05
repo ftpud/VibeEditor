@@ -132,3 +132,60 @@ it("detects a pause when application output interrupts a breakpoint message", as
   debuggerService.consumeDebugOutput("Local variables:\nvalue = 17\nmain[1] ");
   expect(onEvent).toHaveBeenLastCalledWith({ type: "debug", state: expect.objectContaining({ status: "paused", className: "Probe", line: 8, variables: [{ name: "value", value: "17" }] }) });
 });
+
+
+describe("Java launch build reuse", () => {
+  it("skips Maven for unchanged launches and profile changes, but rebuilds changed inputs or outputs", async () => {
+    const { root, service } = await createMavenWorkspace();
+    const { options } = await service.loadMavenProject("pom.xml");
+    const launch = service as unknown as {
+      prepareLaunch(config: typeof options, label: string, generation: number): Promise<string>;
+      runAndWait(): Promise<void>;
+      buildDebugClasspath(): Promise<string>;
+    };
+    const output = path.join(root, options.outputPath, "App.class");
+    const build = vi.spyOn(launch, "runAndWait").mockImplementation(async () => {
+      await mkdir(path.dirname(output), { recursive: true });
+      await writeFile(output, "compiled classes");
+    });
+    const classpath = vi.spyOn(launch, "buildDebugClasspath").mockResolvedValue(`${path.dirname(output)}${path.delimiter}${path.join(root, options.testOutputPath)}`);
+    await launch.prepareLaunch(options, "Run build", 0);
+    await launch.prepareLaunch(options, "Debug build", 0);
+    await launch.prepareLaunch({ ...options, runConfigurations: [{ id: "other", name: "Other", mainClass: "Other" }], selectedRunConfigurationId: "other" }, "Run build", 0);
+    expect(build).toHaveBeenCalledTimes(1);
+    expect(classpath).toHaveBeenCalledTimes(1);
+    const source = path.join(root, "src/main/java/com/example/App.java");
+    await writeFile(source, "package com.example; class App { int changed; }\n");
+    await launch.prepareLaunch(options, "Run build", 0);
+    expect(build).toHaveBeenCalledTimes(2);
+    await mkdir(path.join(root, "src/main/resources"), { recursive: true });
+    await writeFile(path.join(root, "src/main/resources/application.properties"), "setting=changed");
+    await launch.prepareLaunch(options, "Run build", 0);
+    expect(build).toHaveBeenCalledTimes(3);
+    await writeFile(path.join(root, "pom.xml"), "<project><version>2</version></project>");
+    await launch.prepareLaunch(options, "Run build", 0);
+    expect(build).toHaveBeenCalledTimes(4);
+    await writeFile(output, "external rebuild");
+    await launch.prepareLaunch(options, "Run build", 0);
+    expect(build).toHaveBeenCalledTimes(5);
+    await launch.prepareLaunch({ ...options, mavenArguments: ["-Pother"] }, "Run build", 0);
+    expect(build).toHaveBeenCalledTimes(6);
+  });
+
+  it("does not reuse failed or cancelled builds", async () => {
+    const { service } = await createMavenWorkspace();
+    const { options } = await service.loadMavenProject("pom.xml");
+    const launch = service as unknown as {
+      prepareLaunch(config: typeof options, label: string, generation: number): Promise<string>;
+      runAndWait(): Promise<void>;
+      buildDebugClasspath(): Promise<string>;
+    };
+    const build = vi.spyOn(launch, "runAndWait").mockRejectedValueOnce(new Error("Build failed")).mockResolvedValue(undefined);
+    vi.spyOn(launch, "buildDebugClasspath").mockResolvedValue("classes");
+    await expect(launch.prepareLaunch(options, "Run build", 0)).rejects.toThrow("Build failed");
+    await launch.prepareLaunch(options, "Run build", 0);
+    expect(build).toHaveBeenCalledTimes(2);
+    service.stop();
+    await expect(launch.prepareLaunch(options, "Run build", 0)).rejects.toThrow("cancelled");
+  });
+});
