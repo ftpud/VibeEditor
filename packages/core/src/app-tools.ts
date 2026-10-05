@@ -1,4 +1,5 @@
 import { fileURLToPath, pathToFileURL } from "node:url";
+import crypto from "node:crypto";
 import { createInterface } from "node:readline";
 import { findAutopilotOption, type AiAgent, type AiConfiguration, type AiMcpServer, type AiModel, type AiOption, type AiProvider, type AiQuotaWindow, type AiSession, type AiUsage } from "@remote-ide/acp";
 import type { AgentFileReference } from "@remote-ide/protocol";
@@ -11,6 +12,16 @@ import { agentFingerprint } from "./agent-profile.js";
 import type { AiTimerService } from "./ai-timers.js";
 
 type ToolResult = { content: { type: "text"; text: string }[]; isError?: boolean };
+const taskMergeQueues = new WeakMap<WorkspaceTaskStore, Promise<void>>();
+
+async function serializedTaskMerge(tasks: WorkspaceTaskStore, taskId: string, strategy: "smart" | "merge") {
+  const previous = taskMergeQueues.get(tasks) ?? Promise.resolve(); let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  taskMergeQueues.set(tasks, previous.catch(() => undefined).then(() => gate));
+  await previous.catch(() => undefined);
+  try { return await tasks.merge(taskId, strategy); }
+  finally { release(); }
+}
 
 function requiredTaskStatus(args: Record<string, unknown>): WorkspaceTask["status"] {
   const status = requiredString(args, "status");
@@ -19,6 +30,19 @@ function requiredTaskStatus(args: Record<string, unknown>): WorkspaceTask["statu
 }
 
 export const appToolDefinitions = [
+  {
+    name: "workflow_run_stack",
+    description: "Run directly connected downstream workflow agents now, wait for every result, then return those results to this still-running agent so it can continue its response.",
+    inputSchema: {
+      type: "object", additionalProperties: false,
+      properties: {
+        inputs: { type: "array", minItems: 1, items: { type: "string", minLength: 1 }, description: "Distinct prompts for the downstream agent stack. There is no configured item-count limit." },
+        path: { type: "string", minLength: 1, description: "Named outgoing path. Required for AI-selected routing; omit to run every directly connected path." },
+        idempotency_key: { type: "string", minLength: 1, maxLength: 200, description: "Stable unique key for this downstream dispatch. Reuse it only when retrying the same stack." }
+      },
+      required: ["inputs"]
+    }
+  },
   {
     name: "ai_usage",
     description: "Report the current AI session's token usage, remaining reported capacity, and reset time when the provider exposes one. Context-window capacity and account quota are identified separately.",
@@ -34,9 +58,23 @@ export const appToolDefinitions = [
       type: "object", additionalProperties: false,
       properties: {
         seconds: { type: "integer", minimum: 1, maximum: 604800, description: "Delay in whole seconds, from 1 second to 7 days." },
-        prompt: { type: "string", minLength: 1, maxLength: 10000, description: "Continuation prompt to send when the timer expires." }
+        prompt: { type: "string", minLength: 1, maxLength: 10000, description: "Continuation prompt to send when the timer expires." },
+        idempotency_key: { type: "string", minLength: 1, maxLength: 200, description: "Stable unique key for this intended timer. Reuse it only when retrying the same operation." }
       },
       required: ["seconds", "prompt"]
+    }
+  },
+  {
+    name: "timer_set_at",
+    description: "Set or replace a timer for this agent at an exact ISO-8601 timestamp. Use this with reset timestamps returned by ai_usage. After that instant, Vibe Editor sends the continuation prompt back to this same AI session.",
+    inputSchema: {
+      type: "object", additionalProperties: false,
+      properties: {
+        due_at: { type: "string", minLength: 1, description: "Exact future ISO-8601 timestamp, up to 7 days ahead." },
+        prompt: { type: "string", minLength: 1, maxLength: 10000, description: "Continuation prompt to send when the timer expires." },
+        idempotency_key: { type: "string", minLength: 1, maxLength: 200, description: "Stable unique key for this intended timer. Reuse it only when retrying the same operation." }
+      },
+      required: ["due_at", "prompt"]
     }
   },
   {
@@ -65,7 +103,7 @@ export const appToolDefinitions = [
     description: "Create an isolated Vibe Editor task worktree without starting an agent.",
     inputSchema: {
       type: "object", additionalProperties: false,
-      properties: { branch: { type: "string", description: "Git branch name for the task." } },
+      properties: { branch: { type: "string", description: "Git branch name for the task." }, idempotency_key: { type: "string", minLength: 1, maxLength: 200, description: "Stable unique key for this intended task. Reuse it only when retrying the same creation." } },
       required: ["branch"]
     }
   },
@@ -79,6 +117,7 @@ export const appToolDefinitions = [
         prompt: { type: "string", description: "Work to give the new task's AI session." },
         provider: { type: "string", description: "AI provider id, for example codex or copilot." },
         model: { type: "string", description: "Model id supported by the selected provider." },
+        feature_id: { type: "string", minLength: 1, maxLength: 120, description: "Durable workflow feature ID from workflow_plan_features. Core refuses to start it until prerequisites are merged." },
         agent: {
           oneOf: [
             {
@@ -93,7 +132,8 @@ export const appToolDefinitions = [
           ],
           description: "Configured agent preset to apply. Omit to inherit the invoking session's preset; pass null to start with no agent preset. This does not select the AI provider."
         },
-        reasoning: { type: "string", minLength: 1, description: "Reasoning effort advertised for the selected model, for example low, medium, or high. Omit to use the provider/model default." }
+        reasoning: { type: "string", minLength: 1, description: "Reasoning effort advertised for the selected model, for example low, medium, or high. Omit to use the provider/model default." },
+        idempotency_key: { type: "string", minLength: 1, maxLength: 200, description: "Stable unique key for this intended task. Reuse it only when retrying the same creation." }
       },
       required: ["prompt", "provider", "model"]
     }
@@ -102,6 +142,19 @@ export const appToolDefinitions = [
     name: "task_list",
     description: "List Vibe Editor tasks and their current aggregate and per-provider AI status.",
     inputSchema: { type: "object", additionalProperties: false, properties: {} }
+  },
+  {
+    name: "task_merge",
+    description: "Commit outstanding changes in a Vibe Editor task and merge its branch into the root workspace. Smart merge preserves root workspace changes.",
+    inputSchema: {
+      type: "object", additionalProperties: false,
+      properties: {
+        task_id: { type: "string", description: "Task id returned by task_create_and_start or task_list." },
+        strategy: { type: "string", enum: ["smart", "merge"], description: "Use smart unless the root workspace is known to be clean." },
+        idempotency_key: { type: "string", minLength: 1, maxLength: 200, description: "Stable unique key for this intended merge. Reuse it only when retrying the same merge." }
+      },
+      required: ["task_id"]
+    }
   },
   {
     name: "task_delete",
@@ -145,7 +198,8 @@ export const appToolDefinitions = [
       properties: {
         task_id: { type: "string", description: "Task id returned by task_create or task_list." },
         provider: { type: "string", description: "AI provider that owns the task conversation." },
-        prompt: { type: "string", description: "Follow-up instructions for the task's agent." }
+        prompt: { type: "string", description: "Follow-up instructions for the task's agent." },
+        idempotency_key: { type: "string", minLength: 1, maxLength: 200, description: "Stable unique key for this prompt delivery. Reuse it only when retrying the same prompt." }
       },
       required: ["task_id", "provider", "prompt"]
     }
@@ -173,6 +227,16 @@ export const appToolDefinitions = [
       required: ["task_id", "message"]
     }
   }
+  ,{
+    name: "workflow_resume_failed",
+    description: "Watchdog recovery signal: queue failed blocks in this workflow for continuation in their existing sessions. Returns immediately; running and completed blocks are left alone.",
+    inputSchema: { type: "object", additionalProperties: false, properties: {} }
+  }
+  ,{
+    name: "workflow_plan_features",
+    description: "Persist the complete feature plan before creating implementation tasks. Each feature has a stable ID, implementation prompt, and prerequisite IDs.",
+    inputSchema: { type: "object", additionalProperties: false, properties: { features: { type: "array", minItems: 1, items: { type: "object", additionalProperties: false, properties: { id: { type: "string", minLength: 1, maxLength: 120 }, prompt: { type: "string", minLength: 1, maxLength: 10000 }, prerequisites: { type: "array", items: { type: "string", minLength: 1, maxLength: 120 } } }, required: ["id", "prompt"] } } }, required: ["features"] }
+  }
 ] as const;
 
 export class AppToolService {
@@ -185,11 +249,40 @@ export class AppToolService {
     private readonly currentProvider?: AiProvider,
     private readonly agents?: Pick<AgentsStore, "list">,
     private readonly rootWorkspace?: string,
-    private readonly timers?: Pick<AiTimerService, "schedule" | "next" | "cancelWorkspace">,
-    private readonly bridgeWorkspace?: string
+    private readonly timers?: Pick<AiTimerService, "schedule" | "scheduleAt" | "next" | "cancelWorkspace">,
+    private readonly bridgeWorkspace?: string,
+    private readonly workflow?: { runId: string; blockId: string; flow?: boolean; runStack(inputs: string[], path?: string): Promise<unknown>; resumeFailed?(): Promise<unknown>; planFeatures?(features: Array<{ id: string; prompt: string; prerequisites?: string[] }>): Promise<unknown>; assertFeatureReady?(featureId: string): Promise<void>; dispatchFeature?(featureId: string, taskId: string): Promise<unknown>; completeFeature?(taskId: string, commit: string): Promise<unknown>; registerChild?(taskId: string, provider: AiProvider, workspace: string): Promise<void>; operation?<T>(kind: "timer_create" | "task_create" | "prompt_delivery" | "merge", key: string, input: unknown, effect: () => Promise<T>, reconcile?: () => Promise<T | null | undefined>): Promise<T>; recordTool?(name: string, args: Record<string, unknown>, result?: unknown, error?: unknown): Promise<void>; assertActive?(): void }
   ) {}
 
   async call(name: string, args: Record<string, unknown>): Promise<unknown> {
+    this.workflow?.assertActive?.();
+    try {
+      const kind = workflowOperationKind(name); const invoke = () => this.callActive(name, args); const key = operationKey(name, args);
+      const result = kind && this.workflow?.operation ? await this.workflow.operation(kind, key, { tool: name, args: operationInput(args) }, invoke, () => this.reconcileOperation(name, args, key)) : await invoke();
+      if (!kind) await this.workflow?.recordTool?.(name, args, result); return result;
+    } catch (error) { await this.workflow?.recordTool?.(name, args, undefined, error); throw error; }
+    finally { this.workflow?.assertActive?.(); }
+  }
+
+  private async callActive(name: string, args: Record<string, unknown>): Promise<unknown> {
+    if (name === "workflow_resume_failed") {
+      if (!this.workflow?.resumeFailed) throw new Error("Workflow recovery is unavailable");
+      return this.workflow.resumeFailed();
+    }
+    if (name === "workflow_plan_features") {
+      if (!this.workflow?.planFeatures) throw new Error("Feature planning is only available inside an active workflow block");
+      if (!Array.isArray(args.features)) throw new Error("features must be an array");
+      const features = args.features.map((feature) => {
+        if (!feature || typeof feature !== "object" || Array.isArray(feature)) throw new Error("Each feature must be an object");
+        const item = feature as Record<string, unknown>;
+        return { id: requiredString(item, "id"), prompt: requiredString(item, "prompt"), ...(item.prerequisites === undefined ? {} : { prerequisites: requiredStringArray(item, "prerequisites") }) };
+      });
+      return { features: await this.workflow.planFeatures(features) };
+    }
+    if (name === "workflow_run_stack") {
+      if (!this.workflow) throw new Error("workflow_run_stack is only available inside an active workflow block");
+      return this.workflow.runStack(requiredStringArray(args, "inputs"), optionalString(args, "path"));
+    }
     if (name === "ai_usage") {
       const provider = optionalString(args, "provider") ?? this.currentProvider;
       if (!provider) throw new Error("provider is required when the invoking AI provider is not known");
@@ -200,7 +293,23 @@ export class AppToolService {
       if (!this.currentProvider) throw new Error("provider is required when the invoking AI provider is not known");
       const prompt = requiredString(args, "prompt");
       if (prompt.length > 10_000) throw new Error("prompt must be at most 10000 characters");
-      const timer = await this.timers.schedule(this.currentWorkspace, this.currentProvider, prompt, requiredInteger(args, "seconds", 1, 604_800));
+      const seconds = requiredInteger(args, "seconds", 1, 604_800);
+      const timer = this.workflow
+        ? await this.timers.schedule(this.currentWorkspace, this.currentProvider, prompt, seconds, { runId: this.workflow.runId, blockId: this.workflow.blockId, flow: this.workflow.flow, operationKey: operationKey(name, args) })
+        : await this.timers.schedule(this.currentWorkspace, this.currentProvider, prompt, seconds);
+      return { timer_id: timer.id, status: "waiting", due_at: timer.dueAt, continuation_prompt: timer.prompt };
+    }
+    if (name === "timer_set_at") {
+      if (!this.timers) throw new Error("Continuation timers are not available");
+      if (!this.currentProvider) throw new Error("provider is required when the invoking AI provider is not known");
+      const prompt = requiredString(args, "prompt");
+      if (prompt.length > 10_000) throw new Error("prompt must be at most 10000 characters");
+      const dueAt = requiredString(args, "due_at"); const due = new Date(dueAt).getTime(); const now = Date.now();
+      if (!Number.isFinite(due) || due <= now) throw new Error("due_at must be a valid future ISO-8601 timestamp");
+      if (due - now > 604_800_000) throw new Error("due_at must be no more than 7 days ahead");
+      const timer = this.workflow
+        ? await this.timers.scheduleAt(this.currentWorkspace, this.currentProvider, prompt, new Date(due).toISOString(), { runId: this.workflow.runId, blockId: this.workflow.blockId, flow: this.workflow.flow, operationKey: operationKey(name, args) })
+        : await this.timers.scheduleAt(this.currentWorkspace, this.currentProvider, prompt, new Date(due).toISOString());
       return { timer_id: timer.id, status: "waiting", due_at: timer.dueAt, continuation_prompt: timer.prompt };
     }
     if (name === "model_switch_next") {
@@ -234,7 +343,7 @@ export class AppToolService {
       const prompt = requiredString(args, "prompt");
       const provider = requiredString(args, "provider") as AiProvider;
       const model = requiredString(args, "model");
-      const branch = optionalString(args, "branch");
+      const branch = optionalString(args, "branch") ?? (this.workflow ? `task/workflow-${crypto.createHash("sha256").update(operationKey(name, args)).digest("hex").slice(0, 12)}` : undefined);
       const requestedAgent = agentReference(args);
       const reasoning = optionalString(args, "reasoning");
       const manager = this.acp.get(provider);
@@ -243,14 +352,19 @@ export class AppToolService {
       const selectedAgent = await this.resolveAgent(requestedAgent, parent);
       if (reasoning !== undefined) await validateReasoning(await manager.models(), model, reasoning);
       const configuration: AiConfiguration = { ...inheritedAutopilot(parentManager.descriptor.options, parent, manager.descriptor.options), model, ...(reasoning !== undefined ? { reasoning } : {}) };
+      const featureId = optionalString(args, "feature_id");
+      if (featureId) await this.workflow?.assertFeatureReady?.(featureId);
       const task = branch ? await this.tasks.create(branch, false, false, false) : await this.tasks.createRandom(false);
+      if (featureId) await this.workflow?.dispatchFeature?.(featureId, task.id);
       await this.onTasksChanged();
+      await this.workflow?.registerChild?.(task.id, provider, this.tasks.taskPath(task.id));
       try {
         const workspace = this.tasks.taskPath(task.id);
         const appTools = this.rootWorkspace ? withAppTools(this.rootWorkspace, workspace, [], selectedAgent?.agent, provider, this.bridgeWorkspace) : { servers: [], agent: selectedAgent?.agent };
         const session = await manager.send(workspace, { prompt, configuration, ...(appTools.servers.length > 0 ? { mcpServers: appTools.servers } : {}), ...(appTools.agent ? { agent: appTools.agent, agentPreset: selectedAgent!.preset } : {}) });
         return { task, session: { status: session.status, model: session.model } };
       } catch (error) {
+        if (this.workflow) return { task, error: error instanceof Error ? error.message : String(error), recovery: "Task preserved. Inspect this task before retrying; do not create a replacement." };
         await this.tasks.delete(task.id).catch(() => undefined);
         await this.onTasksChanged().catch(() => undefined);
         throw error;
@@ -261,6 +375,17 @@ export class AppToolService {
       const providers = this.acp.list();
       const tasks = await Promise.all(registry.tasks.map(async (task) => ({ ...task, ...await this.status(task) })));
       return { tasks };
+    }
+    if (name === "task_merge") {
+      const task = await this.task(requiredString(args, "task_id"));
+      const strategy = optionalString(args, "strategy") ?? "smart";
+      if (strategy !== "smart" && strategy !== "merge") throw new Error("strategy must be smart or merge");
+      const result = await serializedTaskMerge(this.tasks, task.id, strategy);
+      const updated = await this.tasks.setStatus(task.id, "finished");
+      const commit = await this.tasks.head();
+      const feature = this.workflow?.completeFeature ? await this.workflow.completeFeature(task.id, commit) : undefined;
+      await this.onTasksChanged();
+      return { task: updated, ...result, commit, ...(feature ? { feature } : {}) };
     }
     if (name === "task_delete") {
       const task = await this.task(requiredString(args, "task_id"));
@@ -313,6 +438,33 @@ export class AppToolService {
       };
     }
     throw new Error(`Unknown tool '${name}'`);
+  }
+
+  private async reconcileOperation(name: string, args: Record<string, unknown>, key: string): Promise<unknown | null | undefined> {
+    if ((name === "timer_set" || name === "timer_set_at") && this.timers && this.currentProvider) {
+      const timer = await this.timers.next(this.currentWorkspace, this.currentProvider);
+      if (timer?.workflowOperationKey === key) return { timer_id: timer.id, status: "waiting", due_at: timer.dueAt, continuation_prompt: timer.prompt };
+      return null;
+    }
+    if (name === "task_create" || name === "task_create_and_start") {
+      const requested = optionalString(args, "branch") ?? `task/workflow-${crypto.createHash("sha256").update(key).digest("hex").slice(0, 12)}`;
+      const task = (await this.tasks.list()).tasks.find((item) => item.branch === requested); if (!task) return null;
+      if (name === "task_create") return { task };
+      const provider = requiredString(args, "provider") as AiProvider; const session = await this.acp.get(provider).get(this.tasks.taskPath(task.id));
+      await this.workflow?.registerChild?.(task.id, provider, this.tasks.taskPath(task.id));
+      return { task, session: { status: session.status, model: session.model } };
+    }
+    if (name === "task_merge") {
+      const task = (await this.tasks.list()).tasks.find((item) => item.id === requiredString(args, "task_id"));
+      return task?.status === "finished" ? { task, targetBranch: task.baseBranch } : task ? null : undefined;
+    }
+    if (name === "task_append_prompt") {
+      const task = (await this.tasks.list()).tasks.find((item) => item.id === requiredString(args, "task_id")); if (!task) return undefined;
+      const provider = requiredString(args, "provider") as AiProvider; const prompt = requiredString(args, "prompt"); const session = await this.acp.get(provider).get(this.tasks.taskPath(task.id));
+      if (!session.messages.some((message) => message.role === "user" && message.text === prompt)) return null;
+      return { task_id: task.id, provider, session: { status: session.status, model: session.model } };
+    }
+    return undefined;
   }
 
   private async task(id: string): Promise<WorkspaceTask> {
@@ -425,12 +577,24 @@ function requiredInteger(args: Record<string, unknown>, key: string, minimum: nu
   return value as number;
 }
 
+function requiredStringArray(args: Record<string, unknown>, key: string): string[] {
+  const value = args[key];
+  if (!Array.isArray(value) || !value.length || !value.every((item) => typeof item === "string" && item.trim())) throw new Error(`${key} must be a non-empty array of strings`);
+  return value.map((item) => item.trim());
+}
+
 function requiredCommitMessage(args: Record<string, unknown>, key: string): string {
   const value = args[key];
   if (typeof value !== "string" || !value.trim()) throw new Error(`${key} must contain at least one non-whitespace character`);
   if (value.length > 10_000) throw new Error(`${key} must be at most 10000 characters`);
   return value;
 }
+
+export const flowToolDefinitions = [
+  { name: "workflow_connections", description: "List blocks connected to this AI Agent and their use, follow, or path connection types.", inputSchema: { type: "object", properties: {} } },
+  { name: "workflow_use_block", description: "Use a connected block. Timer blocks arm their configured countdown and return immediately; when they fire, their follow connections receive the supplied input. Other blocks return their output when done. An AI block continues its own existing context.", inputSchema: { type: "object", properties: { block_id: { type: "string" }, input: { type: "string" } }, required: ["block_id", "input"] } },
+  { name: "workflow_choose_path", description: "Choose a connected path by label. The chosen block receives your final output after you finish. Follow connections also run.", inputSchema: { type: "object", properties: { path: { type: "string" } }, required: ["path"] } }
+];
 
 async function main() {
   const rootWorkspace = process.env.VIBE_EDITOR_ROOT_WORKSPACE;
@@ -448,10 +612,11 @@ async function main() {
       let result: unknown;
       if (request.method === "initialize") result = { protocolVersion: "2025-06-18", capabilities: { tools: {} }, serverInfo: { name: "vibe-editor", version: "0.1.0" } };
       else if (request.method === "ping") result = {};
-      else if (request.method === "tools/list") result = { tools: appToolDefinitions };
+      else if (request.method === "tools/list") result = { tools: process.env.VIBE_EDITOR_FLOW_TOOLS ? [...flowToolDefinitions, ...appToolDefinitions.filter((tool) => !["workflow_run_stack", "workflow_resume_failed", "workflow_plan_features"].includes(tool.name))] : appToolDefinitions };
       else if (request.method === "tools/call") {
         const params = request.params ?? {};
-        const value = await bridge.call({ name: requiredString(params, "name"), args: (params.arguments && typeof params.arguments === "object" ? params.arguments : {}) as Record<string, unknown>, currentWorkspace, ...(currentProvider ? { currentProvider } : {}) });
+        const workflowRunId = process.env.VIBE_EDITOR_WORKFLOW_RUN_ID; const workflowBlockId = process.env.VIBE_EDITOR_WORKFLOW_BLOCK_ID;
+        const value = await bridge.call({ name: requiredString(params, "name"), args: (params.arguments && typeof params.arguments === "object" ? params.arguments : {}) as Record<string, unknown>, currentWorkspace, ...(currentProvider ? { currentProvider } : {}), ...(workflowRunId ? { workflowRunId } : {}), ...(workflowBlockId ? { workflowBlockId } : {}) }, 3_600_000);
         result = toolResult(value);
       } else throw Object.assign(new Error(`Method not found: ${request.method}`), { code: -32601 });
       process.stdout.write(`${JSON.stringify({ jsonrpc: "2.0", id: request.id, result })}\n`);
@@ -484,13 +649,33 @@ export function withAppTools(rootWorkspace: string, currentWorkspace: string, se
   return { servers: [...filtered, appServer], agent };
 }
 
-export function appToolServer(rootWorkspace: string, currentWorkspace: string, currentProvider?: AiProvider, bridgeWorkspace = rootWorkspace): AiMcpServer {
+export function appToolServer(rootWorkspace: string, currentWorkspace: string, currentProvider?: AiProvider, bridgeWorkspace = rootWorkspace, workflow?: { runId: string; blockId: string; flow?: boolean }): AiMcpServer {
   const compiled = fileURLToPath(new URL("app-tools.js", import.meta.url));
   const source = fileURLToPath(new URL("app-tools.ts", import.meta.url));
   const runningFromSource = import.meta.url.endsWith("/src/app-tools.ts");
   return runningFromSource
-    ? { transport: "stdio", name: "vibe-editor", command: process.execPath, args: ["--import", "tsx", source], env: { VIBE_EDITOR_ROOT_WORKSPACE: rootWorkspace, VIBE_EDITOR_CURRENT_WORKSPACE: currentWorkspace, VIBE_EDITOR_BRIDGE_WORKSPACE: bridgeWorkspace, ...(currentProvider ? { VIBE_EDITOR_CURRENT_PROVIDER: currentProvider } : {}) } }
-    : { transport: "stdio", name: "vibe-editor", command: process.execPath, args: [compiled], env: { VIBE_EDITOR_ROOT_WORKSPACE: rootWorkspace, VIBE_EDITOR_CURRENT_WORKSPACE: currentWorkspace, VIBE_EDITOR_BRIDGE_WORKSPACE: bridgeWorkspace, ...(currentProvider ? { VIBE_EDITOR_CURRENT_PROVIDER: currentProvider } : {}) } };
+    ? { transport: "stdio", name: "vibe-editor", command: process.execPath, args: ["--import", "tsx", source], env: { VIBE_EDITOR_ROOT_WORKSPACE: rootWorkspace, VIBE_EDITOR_CURRENT_WORKSPACE: currentWorkspace, VIBE_EDITOR_BRIDGE_WORKSPACE: bridgeWorkspace, ...(currentProvider ? { VIBE_EDITOR_CURRENT_PROVIDER: currentProvider } : {}), ...(workflow ? { VIBE_EDITOR_WORKFLOW_RUN_ID: workflow.runId, VIBE_EDITOR_WORKFLOW_BLOCK_ID: workflow.blockId, ...(workflow.flow ? { VIBE_EDITOR_FLOW_TOOLS: "1" } : {}) } : {}) } }
+    : { transport: "stdio", name: "vibe-editor", command: process.execPath, args: [compiled], env: { VIBE_EDITOR_ROOT_WORKSPACE: rootWorkspace, VIBE_EDITOR_CURRENT_WORKSPACE: currentWorkspace, VIBE_EDITOR_BRIDGE_WORKSPACE: bridgeWorkspace, ...(currentProvider ? { VIBE_EDITOR_CURRENT_PROVIDER: currentProvider } : {}), ...(workflow ? { VIBE_EDITOR_WORKFLOW_RUN_ID: workflow.runId, VIBE_EDITOR_WORKFLOW_BLOCK_ID: workflow.blockId, ...(workflow.flow ? { VIBE_EDITOR_FLOW_TOOLS: "1" } : {}) } : {}) } };
+}
+
+function workflowOperationKind(name: string): "timer_create" | "task_create" | "prompt_delivery" | "merge" | undefined {
+  if (name === "timer_set" || name === "timer_set_at") return "timer_create";
+  if (name === "task_create" || name === "task_create_and_start") return "task_create";
+  if (name === "task_append_prompt") return "prompt_delivery";
+  if (name === "task_merge") return "merge";
+  return undefined;
+}
+
+function operationInput(args: Record<string, unknown>): Record<string, unknown> { const { idempotency_key: _key, ...input } = args; return input; }
+function operationKey(name: string, args: Record<string, unknown>): string {
+  const supplied = optionalString(args, "idempotency_key");
+  if (supplied && supplied.length > 200) throw new Error("idempotency_key must be at most 200 characters");
+  return supplied ?? `${name}:${crypto.createHash("sha256").update(stableJson(operationInput(args))).digest("hex").slice(0, 24)}`;
+}
+function stableJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
+  if (value && typeof value === "object") return `{${Object.entries(value as Record<string, unknown>).sort(([left], [right]) => left.localeCompare(right)).map(([key, item]) => `${JSON.stringify(key)}:${stableJson(item)}`).join(",")}}`;
+  return JSON.stringify(value);
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) void main();

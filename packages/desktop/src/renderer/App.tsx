@@ -1,7 +1,8 @@
+import { javaConfigurationPath } from "@remote-ide/protocol";
 import { DiffEditor, type Monaco } from "@monaco-editor/react";
-import { Archive, ArrowDown, ArrowUp, ArrowUpRight, Bot, Bug, Check, ChevronDown, ChevronRight, CircleAlert, ClipboardCopy, Coffee, Columns2, Eye, EyeOff, File, FileCode2, FileDiff, FileText, Folder, FolderOpen, GitBranch, GitCompareArrows, GitMerge, Library, ListTodo, ListTree, LoaderCircle, LogOut, MoreVertical, Package, Palette, Pencil, Pin, PinOff, Play, Plus, RefreshCw, Save, Search, Settings, ShieldAlert, Square, SquareTerminal, Trash2, X } from "lucide-react";
+import { Archive, ArrowDown, ArrowUp, ArrowUpRight, Bot, Bug, Check, ChevronDown, ChevronRight, CircleAlert, ClipboardCopy, Coffee, Columns2, Eye, EyeOff, File, FileCode2, FileDiff, FileText, Folder, FolderOpen, GitBranch, GitCompareArrows, GitMerge, Library, ListTodo, ListTree, LoaderCircle, LogOut, MoreVertical, Package, Palette, Pencil, Pin, PinOff, Play, Plus, RefreshCw, Save, Search, Settings, ShieldAlert, Square, SquareTerminal, Trash2, Workflow, X } from "lucide-react";
 import { Children, isValidElement, useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
-import type { AgentFile, AgentFileScope, AiConfiguration, AiModel, AiProvider, AiProviderDescriptor, AiSession, AiStatus, AiTaskSummary, AiUsage, FileColor, FileRevision, FileTreeNode, GitBranch as GitBranchInfo, GitDiffHunk, GitHistoryRewritePreview, GitStatusEntry, GitUpstreamStatus, HttpResponse, JavaBreakpoint, JavaDebugState, JavaMainClass, JavaProjectNode, JavaProjectOptions, JavaTypeSuggestion, RootedJavaDiagnostic, RootedJavaLspLocation, RootedWorkspaceSymbol, RunConfig, RunConfigScope, SearchResult, TaskCheckpoint, TaskCheckpointFile, UsefulFile, UsefulFileScope, WorkspaceOptions, WorkspaceRoot, WorkspaceSearchQueries, WorkspaceTask } from "@remote-ide/protocol";
+import type { AgentFile, AgentFileScope, AiConfiguration, AiModel, AiProvider, AiProviderDescriptor, AiSession, AiStatus, AiTaskSummary, AiUsage, FileColor, FileRevision, FileTreeNode, GitBranch as GitBranchInfo, GitDiffHunk, GitHistoryRewritePreview, GitStatusEntry, GitUpstreamStatus, HarnessDefinition, HarnessRun, HarnessStateDiagnostic, HttpResponse, JavaBreakpoint, JavaDebugState, JavaProjectNode, JavaProjectOptions, JavaTypeSuggestion, ProtocolOperations, RootedJavaDiagnostic, RootedJavaLspLocation, RootedWorkspaceSymbol, RunConfig, RunConfigScope, SearchResult, TaskCheckpoint, TaskCheckpointFile, UsefulFile, UsefulFileScope, WorkspaceOptions, WorkspaceRoot, WorkspaceSearchQueries, WorkspaceTask } from "@remote-ide/protocol";
 import type { editor } from "monaco-editor";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -12,6 +13,8 @@ import { SettingsMenu, type DesktopSettings } from "./SettingsMenu";
 import { readAiPromptDraft, writeAiPromptDraft } from "./ai-prompt-drafts";
 import { editorTabLabel, initialLayout, type EditorTab, type LayoutModel, type Panel } from "./model";
 import { TerminalPanel } from "./TerminalPanel";
+import { JavaConfigurationDialog } from "./JavaConfigurationDialog";
+import { attachDebugEditor } from "./debug-editor";
 import { JavaPanel } from "./JavaPanel";
 import { ProblemsPanel } from "./ProblemsPanel";
 import { GitLogPanel } from "./GitLogPanel";
@@ -26,14 +29,18 @@ import { GitRebaseDialog } from "./GitRebaseDialog";
 import { GitChangesView as KeyboardGitChangesView } from "./GitChangesView";
 import { GitConflictWorkspaceDialog } from "./GitConflictWorkspace";
 import { AiPanel, type AiAttachment } from "./AiPanel";
+import { HarnessPanel } from "./HarnessPanel";
 import type { PermissionRequestOwner } from "./PermissionRequestActions";
 import { openTaskFromSummary } from "./permission-navigation";
+import { functionStartDecorations, navigationFunctionStarts } from "./function-markers";
 import { configureMonacoThemes, monacoTheme, type HighlightTheme } from "./theme";
 import { CURSOR_POSITIONS_SETTING, CursorPositionStore, validateCursorPosition } from "./cursor-state";
 import { MarkdownPreview } from "./MarkdownPreview";
 import { FindInFilesDialog } from "./FindInFilesDialog";
 import { initialTaskPanel, switchedTaskPanel, taskPanelPreferenceKey, type ClassicTaskPanel } from "./task-panel-state";
 import { ProjectTree } from "./ProjectTree";
+import { JavaFileIcon } from "./JavaFileIcon";
+import { FileKindIcon } from "./FileKindIcon";
 import { menuPosition } from "./menu-position";
 import { projectTreeActions, type ProjectTreeAction } from "./project-tree-actions";
 import { copyProjectTreeActions } from "./project-context-menu";
@@ -111,6 +118,7 @@ export function App() {
   const [theme, setTheme] = useState<"dark" | "light">(() => readSetting("theme") === "light" ? "light" : "dark");
   const [highlightTheme, setHighlightTheme] = useState<HighlightTheme>(() => { const value = readSetting("highlightTheme"); return value === "ftpud" || value === "ftpud-dark" ? "ftpud" : "default"; });
   const [uiFontFamily, setUiFontFamily] = useState<"jetbrains" | "inter">(() => readSetting("uiFontFamily") === "inter" ? "inter" : "jetbrains");
+  const [uiFontWeight, setUiFontWeight] = useState(() => readSettingNumber("uiFontWeight", 450, 350, 600));
   const [uiFontSize, setUiFontSize] = useState(() => readSettingNumber("uiFontSize", 13, 10, 20));
   const [uiLineHeight, setUiLineHeight] = useState(() => readSettingNumber("uiLineHeight", 1.2, 1, 2));
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -122,6 +130,7 @@ export function App() {
   useEffect(() => { document.documentElement.dataset.theme = theme; document.documentElement.style.colorScheme = theme; wsSave("theme", theme); }, [theme]);
   useEffect(() => { wsSave("highlightTheme", highlightTheme); }, [highlightTheme]);
   useEffect(() => { const value = uiFontFamily === "jetbrains" ? '"JetBrains Mono Variable"' : '"Inter Variable"'; document.documentElement.style.setProperty("--ui-font-family", value); wsSave("uiFontFamily", uiFontFamily); }, [uiFontFamily]);
+  useEffect(() => { document.documentElement.style.setProperty("--ui-font-weight", String(uiFontWeight)); wsSave("uiFontWeight", String(uiFontWeight)); }, [uiFontWeight]);
   useEffect(() => { document.documentElement.style.setProperty("--ui-font-size", `${uiFontSize}px`); wsSave("uiFontSize", String(uiFontSize)); }, [uiFontSize]);
   useEffect(() => { document.documentElement.style.setProperty("--ui-line-height", String(uiLineHeight)); wsSave("uiLineHeight", String(uiLineHeight)); }, [uiLineHeight]);
   const saved = useMemo(() => {
@@ -150,7 +159,7 @@ export function App() {
   const [sideLayout, setSideLayout] = useState<"classic" | "ai-focused">(() => readSetting("sideLayout") === "classic" ? "classic" : "ai-focused");
   const [leftSidebarWidth, setLeftSidebarWidth] = useState(520);
   const [rightSidebarWidth, setRightSidebarWidth] = useState(360);
-  const [leftPanels, setLeftPanels] = useState({ tasks: true, ai: true });
+  const [leftPanels, setLeftPanels] = useState({ tasks: true, ai: true, harness: false });
   const [rightPanels, setRightPanels] = useState({ project: true, git: true, taskGit: false, promptHistory: false, java: false, useful: false, agents: false });
   const [classicSideView, setClassicSideView] = useState<ClassicTaskPanel>("project");
   const [classicLeftWidth, setClassicLeftWidth] = useState(260);
@@ -192,6 +201,9 @@ export function App() {
   useEffect(() => { window.dispatchEvent(new CustomEvent("vibe:run-configs", { detail: runConfigs })); }, [runConfigs]);
   useEffect(() => { const listener = () => window.dispatchEvent(new CustomEvent("vibe:run-configs", { detail: runConfigs })); window.addEventListener("vibe:request-run-configs", listener); return () => window.removeEventListener("vibe:request-run-configs", listener); }, [runConfigs]);
   const [agents, setAgents] = useState<AgentFile[]>([]);
+  const [harnesses, setHarnesses] = useState<HarnessDefinition[]>([]);
+  const [harnessRuns, setHarnessRuns] = useState<HarnessRun[]>([]);
+  const [harnessDiagnostics, setHarnessDiagnostics] = useState<HarnessStateDiagnostic[]>([]);
   const [selectedAgentKey, setSelectedAgentKey] = useState("");
   const [fileColors, setFileColors] = useState<Record<string, FileColor>>({});
   const [usefulDialog, setUsefulDialog] = useState<{ mode: "create" | "rename"; scope: UsefulFileScope; file?: UsefulFile }>();
@@ -249,6 +261,9 @@ export function App() {
   const [javaRunning, setJavaRunning] = useState(false);
   const [javaDebugState, setJavaDebugState] = useState<JavaDebugState>({ status: "stopped", variables: [] });
   const [javaBreakpoints, setJavaBreakpoints] = useState<JavaBreakpoint[]>([]);
+  const debugEditorRef = useRef<ReturnType<typeof attachDebugEditor>>();
+  const javaDebugStateRef = useRef(javaDebugState);
+  javaDebugStateRef.current = javaDebugState;
   const [javaPanelHeight, setJavaPanelHeight] = useState(240);
   const [problemsHeight, setProblemsHeight] = useState(220);
   const [gitLogHeight, setGitLogHeight] = useState(360);
@@ -278,7 +293,7 @@ export function App() {
   };
   const cancelProjectTransfer = async () => { const current = projectTransfer; if (!current || !window.desktop || !clientRef.current) return; await Promise.allSettled([window.desktop.cancelProjectTransfer(current.operationId), clientRef.current.request("filesystem.remoteTransferCancel", { token: current.token })]); setProjectTransfer(undefined); setStatusMessage("Transfer cancelled"); };
   const [editorGitMenu, setEditorGitMenu] = useState<{ x: number; y: number; path: string; startLine?: number; endLine?: number }>();
-  const [gitRollbackMenu, setGitRollbackMenu] = useState<{ x: number; y: number; entry: GitStatusEntry }>();
+  const [gitRollbackMenu, setGitRollbackMenu] = useState<{ x: number; y: number; entry: GitStatusEntry; taskRef?: string }>();
   const [tabContextMenu, setTabContextMenu] = useState<{ x: number; y: number; tab: EditorTab }>();
   const [draggedTabId, setDraggedTabId] = useState<string>();
   const [gitHistory, setGitHistory] = useState<{ path: string; startLine?: number; endLine?: number }>();
@@ -314,6 +329,7 @@ export function App() {
   const gitDecorationsRef = useRef<string[]>([]);
   const activeGitHunksRef = useRef<GitDiffHunk[]>([]);
   const diffRollbackTimer = useRef<ReturnType<typeof setTimeout>>();
+  const refreshJavaSemanticRef = useRef<(() => void) | undefined>();
   const javaLanguageDisposables = useRef<{ dispose(): void }[]>([]);
   const cursorPositionsRef = useRef<CursorPositionStore>();
   const cursorPositions = cursorPositionsRef.current ??= new CursorPositionStore({
@@ -521,8 +537,40 @@ export function App() {
     const saved = workspaceKeyRef.current ? readSetting(workspaceSettingKey(workspaceKeyRef.current, aiAgentTaskKey(taskId))) ?? "" : "";
     setSelectedAgentKey(next.some((agent) => agentKey(agent) === saved) ? saved : "");
   }, []);
+  const refreshHarnesses = useCallback(async (client = clientRef.current) => {
+    if (!client) return; const rootId = client.getRoot(); const result = await client.request("harnesses.list", {});
+    if (client.getRoot() === rootId) { setHarnesses(result.harnesses); setHarnessDiagnostics(result.diagnostics); }
+  }, []);
+  const refreshHarnessRuns = useCallback(async (client = clientRef.current) => { if (!client) return; const rootId = client.getRoot(); const runs = (await client.request("harnesses.runs", {})).runs; if (client.getRoot() === rootId) setHarnessRuns(runs); }, []);
+  const createHarness = useCallback(async (name: string, template?: "five-minute-check-in" | "git-review-commit") => {
+    const result = await clientRef.current!.request("harnesses.create", { name, template }); setHarnesses((current) => [result.harness, ...current]); return result.harness;
+  }, []);
+  const readHarness = useCallback(async (id: string) => {
+    return (await clientRef.current!.request("harnesses.read", { id })).harness;
+  }, []);
+  const saveHarness = useCallback(async (harness: HarnessDefinition) => {
+    const result = await clientRef.current!.request("harnesses.update", { harness }); setHarnesses((current) => current.map((item) => item.id === result.harness.id ? result.harness : item)); return result.harness;
+  }, []);
+  const deleteHarness = useCallback(async (id: string) => {
+    await clientRef.current!.request("harnesses.delete", { id }); setHarnesses((current) => current.filter((item) => item.id !== id));
+  }, []);
+  const runHarness = useCallback(async (harnessId: string, input: string, startBlockId?: string) => { const result = await clientRef.current!.request("harnesses.run", { harnessId, input, startBlockId, provider: aiProviderRef.current }); setHarnessRuns((current) => [result.run, ...current.filter((item) => item.id !== result.run.id)]); return result.run; }, []);
+  const appendHarnessRun = useCallback(async (runId: string, input: string) => { const result = await clientRef.current!.request("harnesses.append", { runId, input }); setHarnessRuns((current) => current.map((item) => item.id === runId ? result.run : item)); return result.run; }, []);
+  const resolveHarnessPermission = useCallback(async (runId: string, blockId: string, sessionId: string, pauseId: string, requestId: string, optionId?: string) => { const result = await clientRef.current!.request("harnesses.permission.resolve", { runId, blockId, sessionId, pauseId, requestId, optionId }); setHarnessRuns((current) => current.map((item) => item.id === runId ? result.run : item)); return result.run; }, []);
+  const answerHarnessQuestion = useCallback(async (runId: string, blockId: string, sessionId: string, pauseId: string, input: string) => { const result = await clientRef.current!.request("harnesses.answer", { runId, blockId, sessionId, pauseId, input }); setHarnessRuns((current) => current.map((item) => item.id === runId ? result.run : item)); return result.run; }, []);
+  const resumeHarnessPause = useCallback(async (runId: string, blockId: string, pauseId: string) => { const result = await clientRef.current!.request("harnesses.pause.resume", { runId, blockId, pauseId }); setHarnessRuns((current) => current.map((item) => item.id === runId ? result.run : item)); return result.run; }, []);
+  const retryHarnessPause = useCallback(async (runId: string, blockId: string, pauseId: string) => { const result = await clientRef.current!.request("harnesses.pause.retry", { runId, blockId, pauseId }); setHarnessRuns((current) => current.map((item) => item.id === runId ? result.run : item)); return result.run; }, []);
+  const cancelHarnessPause = useCallback(async (runId: string, blockId: string, pauseId: string) => { const result = await clientRef.current!.request("harnesses.pause.cancel", { runId, blockId, pauseId }); setHarnessRuns((current) => current.map((item) => item.id === runId ? result.run : item)); return result.run; }, []);
+  const cancelHarnessRun = useCallback(async (runId: string) => { const result = await clientRef.current!.request("harnesses.cancel", { runId }); setHarnessRuns((current) => current.map((item) => item.id === runId ? result.run : item)); }, []);
+  const loadHarnessModels = useCallback(async (provider: AiProvider) => (await clientRef.current!.request("ai.models", { provider })).models, []);
+  const validateHarnessDefinition = useCallback(async (harness: HarnessDefinition) => clientRef.current!.request("harnesses.validate", { harness }), []);
 
   const restoreWorkspaceOptions = useCallback(async (options: WorkspaceOptions, client: CoreClient, rootId = client.getRoot() ?? "legacy") => {
+    try {
+      const java = await client.request("java.getOptions", {});
+      if (client.getRoot() === rootId) { setJavaOptions(java.options); javaOptionsRef.current = java.options; }
+    } catch (error) { setStatusMessage(error instanceof Error ? error.message : "Could not load Java configuration"); }
+    setJavaBreakpoints(options.javaBreakpoints ?? []);
     setFileColors(options.fileColors ?? {});
     setGitCommitMessage(options.gitCommitMessage ?? "");
     setSearchQueries(options.searchQueries ?? {});
@@ -597,7 +645,7 @@ export function App() {
             setTree(result.tree);
             setJavaOptions(result.options.javaProject);
             await restoreWorkspaceOptions(result.options, client);
-            await Promise.all([refreshTasks(client), refreshGit(client), refreshAi(client), refreshAiSessions(client), refreshUsefulFiles(client), refreshRunConfigs(client), refreshAgents(client)]);
+            await Promise.all([refreshTasks(client), refreshGit(client), refreshAi(client), refreshAiSessions(client), refreshUsefulFiles(client), refreshRunConfigs(client), refreshAgents(client), refreshHarnesses(client), refreshHarnessRuns(client)]);
             if (clientRef.current !== client) return;
             showStatus("Backend connection restored", "success");
             return;
@@ -627,6 +675,7 @@ export function App() {
         updateTerminalGroup((current) => ({ ...current, tabs: current.tabs.map((tab) => tab.terminalId === event.payload.terminalId ? { ...tab, status: "exited", exitCode: event.payload.exitCode } : tab) }));
         return;
       }
+      if (event.type === "java.semantic.changed") { refreshJavaSemanticRef.current?.(); return; }
       if (event.type === "java.output") {
         setJavaLog((current) => (current + event.payload.data).slice(-1_000_000));
         return;
@@ -645,6 +694,14 @@ export function App() {
         streamedAiRefresh.current!.trigger();
         return;
       }
+      if (event.type === "workflow.document") {
+        if (event.payload.rootId !== client.getRoot()) return;
+        const { rootId, runId, blockId, title, content } = event.payload;
+        const id = `workflow-document:${rootId}:${runId}:${blockId}`;
+        updateGroup((tabs) => ({ tabs: [...tabs.filter((tab) => tab.id !== id), { id, type: "workflowDocument", rootId, title, path: title, content, savedContent: content, dirty: false, loading: false, markdownMode: "preview" }], activeTabId: id }));
+        return;
+      }
+      if (event.type === "harness.changed") { void refreshHarnessRuns(client); return; }
       if (event.type === "tasks.changed") {
         void Promise.all([refreshTasks(client), refreshAiStatuses(client)]).catch(() => undefined);
         return;
@@ -671,6 +728,13 @@ export function App() {
       };
       if (event.type === "git.changed") { refreshDiffs(); return; }
       const changedPaths = event.payload.paths;
+      if (changedPaths.includes(javaConfigurationPath) || event.payload.overflow) {
+        const rootId = client.getRoot();
+        void client.request("java.getOptions", {}).then((result) => {
+          if (client.getRoot() !== rootId) return;
+          setJavaOptions(result.options); javaOptionsRef.current = result.options;
+        }).catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : "Could not load Java configuration"));
+      }
       refreshDiffs(changedPaths.length === 1 ? changedPaths[0] : undefined);
       if (javaOptionsRef.current && changedPaths.some((changedPath) => changedPath.endsWith(".java"))) {
         if (javaRefreshTimer.current) clearTimeout(javaRefreshTimer.current);
@@ -717,6 +781,8 @@ export function App() {
         else if (wsHighlight === "default") setHighlightTheme("default");
         const wsFontFamily = setting("uiFontFamily");
         if (wsFontFamily === "inter" || wsFontFamily === "jetbrains") setUiFontFamily(wsFontFamily);
+        const wsFontWeight = Number(setting("uiFontWeight"));
+        setUiFontWeight(wsFontWeight >= 350 && wsFontWeight <= 600 ? wsFontWeight : 450);
         const wsFontSize = Number(setting("uiFontSize"));
         if (wsFontSize >= 10 && wsFontSize <= 20) setUiFontSize(wsFontSize);
         const wsLineHeight = Number(setting("uiLineHeight"));
@@ -731,9 +797,9 @@ export function App() {
         const savedTasksOpen = setting("classic.tasksOpen"); if (savedTasksOpen === "true" || savedTasksOpen === "false") setClassicTasksOpen(savedTasksOpen === "true");
         const savedAiOpen = setting("classic.aiOpen"); if (savedAiOpen === "true" || savedAiOpen === "false") setClassicAiOpen(savedAiOpen === "true");
         const savedSplit = Number(setting("classic.split")); if (savedSplit >= 10 && savedSplit <= 90) setClassicSplit(savedSplit);
-        const savedSideView = setting("classic.sideView"); if (["project", "git", "taskGit", "java", "useful", "agents"].includes(savedSideView ?? "")) setClassicSideView(savedSideView as typeof classicSideView);
+        const savedSideView = setting("classic.sideView"); if (["project", "git", "taskGit", "java", "useful", "agents", "harness"].includes(savedSideView ?? "")) setClassicSideView(savedSideView as typeof classicSideView);
         const savedTerminalHeight = Number(setting("bottom.terminalHeight")); if (savedTerminalHeight >= 130 && savedTerminalHeight <= 520) setTerminalHeight(savedTerminalHeight);
-        const savedJavaHeight = Number(setting("bottom.javaHeight")); if (savedJavaHeight >= 140 && savedJavaHeight <= 520) setJavaPanelHeight(savedJavaHeight);
+        const savedJavaHeight = Number(setting("bottom.javaHeight")); if (savedJavaHeight >= 140 && savedJavaHeight <= 1200) setJavaPanelHeight(savedJavaHeight);
         const savedProblemsHeight = Number(setting("bottom.problemsHeight")); if (savedProblemsHeight >= 120 && savedProblemsHeight <= 520) setProblemsHeight(savedProblemsHeight);
         const savedGitLogHeight = Number(setting("bottom.gitLogHeight")); if (savedGitLogHeight >= 180 && savedGitLogHeight <= 650) setGitLogHeight(savedGitLogHeight);
         const providerResult = await client.request("ai.providers", {});
@@ -767,7 +833,7 @@ export function App() {
         setAiModels(modelResult.models); setAiSession(session); setAiUsage((await client.request("ai.usage", { provider })).usage);
         setAiSessions((await client.request("ai.sessions", { provider })).sessions);
         await refreshAiStatuses(client);
-        await Promise.all([refreshUsefulFiles(client), refreshRunConfigs(client), refreshAgents(client, taskResult.selectedTaskId)]);
+        await Promise.all([refreshUsefulFiles(client), refreshRunConfigs(client), refreshAgents(client, taskResult.selectedTaskId), refreshHarnesses(client), refreshHarnessRuns(client)]);
         setTree(result.tree); connectionReady = true; setStatus("connected"); setStatusMessage("");
         void refreshGit(client); void refreshTaskGit(activeTaskRef.current, client);
         writeSetting("connection", JSON.stringify({ host, port }));
@@ -795,7 +861,7 @@ export function App() {
     cursorPositions.setWorkspace("");
     setWorkspaceOptionsReady(false);
     setTasks([]); setSelectedTaskId(undefined);
-    setJavaOptions(undefined); setJavaTree([]); setJavaRunning(false); setJavaLog("");
+    setJavaOptions(undefined); setJavaTree([]); setJavaRunning(false); setJavaDebugState({ status: "stopped", variables: [] }); setJavaLog("");
     setLayout(initialLayout); setTree([]); setStatus("idle"); setStatusMessage("");
     markdownBlockTerminals.current.clear();
   };
@@ -806,10 +872,10 @@ export function App() {
   const activeTerminalIndex = layout.terminalGroup.tabs.findIndex((tab) => tab.id === layout.terminalGroup.activeTabId);
   const terminalOptions: NonNullable<WorkspaceOptions["terminal"]> = { tabs: layout.terminalGroup.tabs.map((tab) => ({ displayName: tab.title, terminalId: tab.terminalId })), ...(activeTerminalIndex >= 0 ? { activeTabIndex: activeTerminalIndex } : {}), panelOpen: terminalPanelOpen };
   const pinnedFiles = pinnedFilePaths(persistedFileTabs);
-  const workspaceOptionsSignature = `${persistedFileTabs.map((tab) => tab.path).join("\0")}\n${pinnedFiles.join("\0")}\n${persistedActiveTab?.path ?? ""}\n${JSON.stringify(javaOptions)}\n${JSON.stringify(terminalOptions)}\n${JSON.stringify(fileColors)}\n${gitCommitMessage}\n${JSON.stringify(searchQueries)}`;
+  const workspaceOptionsSignature = `${persistedFileTabs.map((tab) => tab.path).join("\0")}\n${pinnedFiles.join("\0")}\n${persistedActiveTab?.path ?? ""}\n${JSON.stringify(javaOptions)}\n${JSON.stringify(terminalOptions)}\n${JSON.stringify(fileColors)}\n${gitCommitMessage}\n${JSON.stringify(searchQueries)}\n${JSON.stringify(javaBreakpoints)}`;
   useEffect(() => {
     if (status !== "connected" || !workspaceOptionsReady || !clientRef.current) return;
-    const options: WorkspaceOptions = { openFiles: persistedFileTabs.map((tab) => tab.path), ...(pinnedFiles.length ? { pinnedFiles } : {}), ...(persistedActiveTab ? { activeFile: persistedActiveTab.path } : {}), ...(javaOptions ? { javaProject: javaOptions } : {}), terminal: terminalOptions, ...(Object.keys(fileColors).length ? { fileColors } : {}), ...(gitCommitMessage ? { gitCommitMessage } : {}), ...(Object.keys(searchQueries).length ? { searchQueries } : {}) };
+    const options: WorkspaceOptions = { openFiles: persistedFileTabs.map((tab) => tab.path), ...(pinnedFiles.length ? { pinnedFiles } : {}), ...(persistedActiveTab ? { activeFile: persistedActiveTab.path } : {}), ...(javaOptions ? { javaProject: javaOptions } : {}), terminal: terminalOptions, ...(Object.keys(fileColors).length ? { fileColors } : {}), ...(gitCommitMessage ? { gitCommitMessage } : {}), javaBreakpoints, ...(Object.keys(searchQueries).length ? { searchQueries } : {}) };
     void clientRef.current.request("workspace.saveOptions", { options }).catch((error: unknown) => {
       setStatusMessage(error instanceof Error ? error.message : "Could not save workspace options");
     });
@@ -894,7 +960,7 @@ export function App() {
   const activateEditorTab = useCallback(async (tab: EditorTab) => {
     if (tab.rootId && tab.rootId !== selectedRootIdRef.current) await selectWorkspaceRootRef.current(tab.rootId);
     updateGroup((tabs) => ({ tabs, activeTabId: tab.id }));
-    if (!clientRef.current || tab.loading || tab.dirty) return;
+    if (!clientRef.current || tab.loading || tab.dirty || tab.type === "workflowDocument") return;
     try {
       if (tab.type === "diff") {
         const result = tab.diffRef
@@ -920,7 +986,7 @@ export function App() {
   }, [updateGroup]);
 
   const openUsefulFile = async (file: UsefulFile) => {
-    const existing = group.tabs.find((tab) => tab.type === "useful" && tab.usefulScope === file.scope && tab.path === file.name);
+    const existing = group.tabs.find((tab) => tab.type === "useful" && tab.usefulScope === file.scope && tab.path === file.name && (file.scope === "global" || tab.rootId === selectedRootIdRef.current));
     if (existing) { await activateEditorTab(existing); return; }
     const tab: EditorTab = { id: crypto.randomUUID(), type: "useful", rootId: selectedRootIdRef.current, title: file.name, path: file.name, usefulScope: file.scope, dirty: false, content: "", savedContent: "", loading: true, markdownMode: /\.md$/i.test(file.name) ? "preview" : undefined };
     updateGroup((tabs) => ({ tabs: [...tabs, tab], activeTabId: tab.id }));
@@ -928,9 +994,12 @@ export function App() {
     catch (error) { updateGroup((tabs, active) => ({ tabs: tabs.map((item) => item.id === tab.id ? { ...item, loading: false, error: error instanceof Error ? error.message : "Could not read useful file" } : item), activeTabId: active })); }
   };
   const openRunConfigFile = useCallback(async (config: RunConfig) => {
-    const existing = layoutRef.current.editorGroups[0]!.tabs.find((tab) => tab.type === "runConfig" && tab.runConfigScope === config.scope && tab.path === config.name);
+    const existing = layoutRef.current.editorGroups[0]!.tabs.find((tab) => tab.type === "runConfig" && tab.runConfigScope === config.scope && tab.path === config.name && (config.scope === "global" || tab.rootId === selectedRootIdRef.current));
     if (existing) { updateGroup((tabs) => ({ tabs, activeTabId: existing.id })); return; }
-    const result = await clientRef.current!.request("runConfig.read", { scope: config.scope, name: config.name });
+    const client = clientRef.current!;
+    const rootId = client.getRoot();
+    const result = await client.request("runConfig.read", { scope: config.scope, name: config.name });
+    if (clientRef.current !== client || client.getRoot() !== rootId) return;
     const tab: EditorTab = { id: crypto.randomUUID(), type: "runConfig", rootId: selectedRootIdRef.current, title: config.name, path: config.name, runConfigScope: config.scope, dirty: false, content: result.config.commands, savedContent: result.config.commands, loading: false };
     updateGroup((tabs) => ({ tabs: [...tabs, tab], activeTabId: tab.id }));
   }, [updateGroup]);
@@ -951,23 +1020,32 @@ export function App() {
     catch (error) { updateGroup((tabs, active) => ({ tabs: tabs.map((item) => item.id === tab.id ? { ...item, loading: false, error: error instanceof Error ? error.message : "Could not read agent" } : item), activeTabId: active })); }
   };
 
-  const rollbackFile = async (entry: GitStatusEntry) => {
+  const rollbackFile = async (entry: GitStatusEntry, taskRef?: string) => {
     setGitRollbackMenu(undefined);
-    if (gitOperationRunning || gitRollbackRunningRef.current || !window.confirm(isUntrackedGitEntry(entry) ? `Permanently delete untracked file ${entry.path}? This cannot be undone.` : `Rollback all staged and unstaged changes in ${entry.path} to HEAD? This cannot be undone.`)) return;
+    const removesFile = isUntrackedGitEntry(entry) || (taskRef && entry.indexStatus === "A");
+    const target = taskRef ?? "HEAD";
+    const message = removesFile
+      ? `Permanently delete ${entry.path}? This cannot be undone.`
+      : `Rollback all staged and unstaged changes in ${entry.originalPath ? `${entry.originalPath} → ${entry.path}` : entry.path} to ${target}? This cannot be undone.`;
+    if (gitOperationRunning || gitRollbackRunningRef.current || !window.confirm(message)) return;
     gitRollbackRunningRef.current = true; setGitRollingBack(true);
     try {
-      await clientRef.current!.request("git.rollback", { path: entry.path });
-      let restoredContent: string | undefined;
-      try { restoredContent = (await clientRef.current!.request("filesystem.readFile", { path: entry.path })).content; }
-      catch { /* Untracked rollback removes the file. */ }
+      if (taskRef) await clientRef.current!.request("git.rollbackCompared", { ref: taskRef, path: entry.path });
+      else await clientRef.current!.request("git.rollback", { path: entry.path });
+      const paths = entry.originalPath ? [entry.originalPath, entry.path] : [entry.path];
+      const restored = new Map<string, string>();
+      for (const path of paths) {
+        try { restored.set(path, (await clientRef.current!.request("filesystem.readFile", { path })).content); }
+        catch { /* Added files and rename destinations are removed by rollback. */ }
+      }
       updateGroup((tabs, active) => {
         const next = tabs
-          .filter((tab) => tab.path !== entry.path || (tab.type === "file" && restoredContent !== undefined))
-          .map((tab) => tab.path === entry.path && tab.type === "file" ? { ...tab, content: restoredContent!, savedContent: restoredContent!, dirty: false, error: undefined } : tab);
+          .filter((tab) => !(tab.type === "diff" && tab.diffRef === taskRef && paths.includes(tab.diffPath ?? tab.path)) && (!paths.includes(tab.path) || (tab.type === "file" && restored.has(tab.path))))
+          .map((tab) => paths.includes(tab.path) && tab.type === "file" ? { ...tab, content: restored.get(tab.path)!, savedContent: restored.get(tab.path)!, dirty: false, error: undefined } : tab);
         return { tabs: next, activeTabId: next.some((tab) => tab.id === active) ? active : next.at(-1)?.id };
       });
-      await Promise.all([refreshGit(), refreshTree()]);
-      showStatus(`Rolled back ${entry.path}`, "success");
+      await Promise.all([refreshGit(), refreshTaskGit(), refreshTree()]);
+      showStatus(`Rolled back ${entry.path}${taskRef ? ` to ${taskRef}` : ""}`, "success");
     } catch (error) { setStatusMessage(error instanceof Error ? error.message : "Could not rollback file"); }
     finally { gitRollbackRunningRef.current = false; setGitRollingBack(false); }
   };
@@ -1169,7 +1247,7 @@ export function App() {
 
   const openTabInWindow = async (tab: EditorTab) => {
     setTabContextMenu(undefined);
-    if (tab.type === "diff" || tab.type === "agent" || tab.type === "runConfig") return;
+    if (tab.type === "diff" || tab.type === "agent" || tab.type === "runConfig" || tab.type === "workflowDocument") return;
     if (tab.dirty) await saveFileTab(tab);
     const options = { host, port, type: tab.type, path: tab.path, ...(tab.type === "useful" ? { scope: tab.usefulScope } : {}) } as const;
     if (window.desktop?.openEditorWindow) window.desktop.openEditorWindow(options);
@@ -1194,7 +1272,7 @@ export function App() {
   };
 
   const saveFileTab = useCallback(async (current: EditorTab) => {
-    if ((current.type !== "file" && current.type !== "useful" && current.type !== "runConfig" && current.type !== "agent") || current.loading || current.error || !current.dirty || !clientRef.current) return;
+    if ((current.type !== "file" && current.type !== "useful" && current.type !== "runConfig" && current.type !== "agent") || current.loading || current.error || !current.dirty || !clientRef.current) return !current.dirty;
     const content = current.content;
     try {
       selfWriteUntil.current.set(current.path, Date.now() + 1500);
@@ -1208,9 +1286,11 @@ export function App() {
       if (current.type !== "file") updateGroup((tabs, active) => ({ tabs: tabs.map((tab) => tab.id === current.id ? { ...tab, dirty: tab.content !== content, savedContent: content, error: undefined } : tab), activeTabId: active }));
       if (current.type === "agent" || (current.type === "file" && /^\.agents\/[^/]+\.md$/i.test(current.path))) await refreshAgents();
       if (current.type === "file" && /\.java$/i.test(current.path)) scheduleJavaCheck();
+      return true;
     } catch (error) {
       selfWriteUntil.current.delete(current.path);
       updateGroup((tabs, active) => ({ tabs: tabs.map((tab) => tab.id === current.id ? { ...tab, error: error instanceof Error ? error.message : "Save failed" } : tab), activeTabId: active }));
+      return false;
     }
   }, [refreshAgents, scheduleJavaCheck, updateGroup]);
 
@@ -1264,7 +1344,7 @@ export function App() {
       const currentFiles = currentGroup.tabs.filter((tab) => tab.type === "file");
       const currentTerminal = layoutRef.current.terminalGroup;
       const currentActiveTerminalIndex = currentTerminal.tabs.findIndex((tab) => tab.id === currentTerminal.activeTabId);
-      await client.request("workspace.saveOptions", { options: { openFiles: currentFiles.map((tab) => tab.path), ...(pinnedFilePaths(currentFiles).length ? { pinnedFiles: pinnedFilePaths(currentFiles) } : {}), ...(currentFiles.find((tab) => tab.id === currentGroup.activeTabId) ? { activeFile: currentFiles.find((tab) => tab.id === currentGroup.activeTabId)!.path } : {}), ...(javaOptionsRef.current ? { javaProject: javaOptionsRef.current } : {}), terminal: { tabs: currentTerminal.tabs.map((tab) => ({ displayName: tab.title, terminalId: tab.terminalId })), ...(currentActiveTerminalIndex >= 0 ? { activeTabIndex: currentActiveTerminalIndex } : {}), panelOpen: layoutRef.current.panels.some((panel) => panel.type === "terminal") }, ...(Object.keys(fileColors).length ? { fileColors } : {}), ...(gitCommitMessage ? { gitCommitMessage } : {}), ...(Object.keys(searchQueries).length ? { searchQueries } : {}) } });
+      await client.request("workspace.saveOptions", { options: { openFiles: currentFiles.map((tab) => tab.path), ...(pinnedFilePaths(currentFiles).length ? { pinnedFiles: pinnedFilePaths(currentFiles) } : {}), ...(currentFiles.find((tab) => tab.id === currentGroup.activeTabId) ? { activeFile: currentFiles.find((tab) => tab.id === currentGroup.activeTabId)!.path } : {}), ...(javaOptionsRef.current ? { javaProject: javaOptionsRef.current } : {}), terminal: { tabs: currentTerminal.tabs.map((tab) => ({ displayName: tab.title, terminalId: tab.terminalId })), ...(currentActiveTerminalIndex >= 0 ? { activeTabIndex: currentActiveTerminalIndex } : {}), panelOpen: layoutRef.current.panels.some((panel) => panel.type === "terminal") }, ...(Object.keys(fileColors).length ? { fileColors } : {}), ...(gitCommitMessage ? { gitCommitMessage } : {}), javaBreakpoints, ...(Object.keys(searchQueries).length ? { searchQueries } : {}) } });
       if (!isCurrent()) return;
       const result = await client.request("tasks.switch", { ...(taskId ? { taskId } : {}), includeIgnored: showIgnoredRef.current });
       if (!isCurrent()) return;
@@ -1281,7 +1361,7 @@ export function App() {
       setActiveWorkspace(result.workspace); activeWorkspaceRef.current = result.workspace;
       cursorPositions.setWorkspace(result.workspace);
       setProjectName(result.projectName);
-      setJavaOptions(result.options.javaProject); setJavaTree([]); setJavaRunning(false); setJavaLog(""); setJavaDiagnostics([]);
+      setJavaOptions(result.options.javaProject); setJavaTree([]); setJavaRunning(false); setJavaDebugState({ status: "stopped", variables: [] }); setJavaLog(""); setJavaDiagnostics([]);
       if (result.options.javaProject) setJavaTree((await client.request("java.getProjectTree", {})).tree);
       if (!isCurrent()) return;
       await restoreWorkspaceOptions(result.options, client);
@@ -1304,7 +1384,7 @@ export function App() {
         if (queued !== null && queued !== selectedTaskIdRef.current) switchTaskRef.current(queued);
       }
     }
-  }, [aiProviders, fileColors, gitCommitMessage, refreshAgents, refreshAi, refreshAiSessions, refreshGit, refreshTaskGit, restoreWorkspaceOptions, saveFileTab, searchQueries, switchAiProvider]);
+  }, [aiProviders, fileColors, gitCommitMessage, refreshAgents, refreshAi, refreshAiSessions, refreshGit, refreshTaskGit, restoreWorkspaceOptions, saveFileTab, searchQueries, javaBreakpoints, switchAiProvider]);
   switchTaskRef.current = (taskId) => { void switchTask(taskId); };
 
   const selectClassicSideView = useCallback((view: ClassicTaskPanel) => {
@@ -1783,7 +1863,7 @@ export function App() {
     event.currentTarget.setPointerCapture(event.pointerId);
     const startY = event.clientY;
     const startHeight = terminalHeight;
-    const move = (moveEvent: PointerEvent) => setTerminalHeight(Math.max(130, Math.min(520, startHeight + startY - moveEvent.clientY)));
+    const move = (moveEvent: PointerEvent) => setTerminalHeight(Math.max(130, Math.min(window.innerHeight - 150, startHeight + startY - moveEvent.clientY)));
     const end = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", end); };
     window.addEventListener("pointermove", move); window.addEventListener("pointerup", end);
   };
@@ -1894,11 +1974,21 @@ export function App() {
     setLayout((current) => ({ ...current, panels: visible ? current.panels.filter((panel) => panel.type !== "gitlog") : [...current.panels.filter((panel) => !["terminal", "java", "problems", "gitlog"].includes(panel.type)), { id: "gitlog", type: "gitlog" }] }));
   };
 
+  const saveJavaLaunchFiles = async () => {
+    const client = clientRef.current!;
+    const rootId = client.getRoot();
+    for (const tab of layoutRef.current.editorGroups.flatMap((group) => group.tabs)) {
+      if (tab.type === "file" && (!tab.rootId || tab.rootId === rootId) && tab.dirty && !await saveFileTab(tab)) throw new Error(`Could not save ${tab.path} before launching Java`);
+    }
+    if (clientRef.current !== client || client.getRoot() !== rootId) throw new Error("Workspace changed while saving edits");
+    return client;
+  };
+
   const runJavaAction = async (action: "java.build" | "java.run") => {
     setLayout((current) => ({ ...current, panels: [...current.panels.filter((panel) => !["terminal", "java", "problems", "gitlog"].includes(panel.type)), { id: "java", type: "java" }] }));
     setJavaRunning(true);
-    try { await clientRef.current!.request(action, {}); }
-    catch (error) { setJavaRunning(false); setJavaLog((current) => `${current}${error instanceof Error ? error.message : "Java process failed"}\n`); }
+    try { const client = await saveJavaLaunchFiles(); await client.request(action, {}, { timeoutMs: 10 * 60_000 }); }
+    catch (error) { setJavaRunning(false); setJavaLog((current) => `${current}${error instanceof Error ? error.message : "Java process failed"}\n`); if (error instanceof Error && error.message.includes("Java configuration")) setShowRunConfigurationDialog(true); }
   };
 
   const stopJava = async () => {
@@ -1908,8 +1998,29 @@ export function App() {
   const debugJava = async () => {
     setLayout((current) => ({ ...current, panels: [...current.panels.filter((panel) => !["terminal", "java", "problems", "gitlog"].includes(panel.type)), { id: "java", type: "java" }] }));
     setJavaRunning(true);
-    try { await clientRef.current!.request("java.debug.start", { breakpoints: javaBreakpoints }); }
-    catch (error) { setJavaRunning(false); setJavaDebugState({ status: "stopped", variables: [] }); setJavaLog((current) => `${current}${error instanceof Error ? error.message : "Debugger failed"}\n`); }
+    try {
+      const client = await saveJavaLaunchFiles();
+      await client.request("java.debug.start", { breakpoints: javaBreakpoints }, { timeoutMs: 10 * 60_000 });
+    }
+    catch (error) { setJavaRunning(false); setJavaDebugState({ status: "stopped", variables: [] }); setJavaLog((current) => `${current}${error instanceof Error ? error.message : "Debugger failed"}\n`); if (error instanceof Error && error.message.includes("Java configuration")) setShowRunConfigurationDialog(true); }
+  };
+
+  const applyJavaChanges = async () => {
+    const client = clientRef.current;
+    if (!client) throw new Error("Not connected");
+    const rootId = client.getRoot();
+    for (const tab of layoutRef.current.editorGroups.flatMap((item) => item.tabs)) {
+      if (tab.type === "file" && tab.rootId === rootId && tab.dirty) {
+        if (!await saveFileTab(tab)) throw new Error(`Could not save ${tab.path}. Fix the save error before applying changes.`);
+      }
+    }
+    if (clientRef.current !== client || client.getRoot() !== rootId) throw new Error("Workspace changed while saving edits");
+    return client.request("java.debug.applyChanges", {}, { timeoutMs: 10 * 60_000 });
+  };
+
+  const commandJavaDebugger = async (command: ProtocolOperations["java.debug.command"]["payload"]["command"]) => {
+    try { await clientRef.current!.request("java.debug.command", { command }); }
+    catch (error) { setJavaLog((current) => `${current}${error instanceof Error ? error.message : "Debugger command failed"}\n`); }
   };
 
   const toggleBreakpoint = (filePath: string, content: string, line: number) => {
@@ -1921,11 +2032,18 @@ export function App() {
       : [...current, { path: filePath, line, className }]);
   };
 
+  const decorateBreakpoints = (instance: editor.IStandaloneCodeEditor, filePath: string, api: Monaco) => {
+    breakpointDecorationsRef.current = instance.deltaDecorations(breakpointDecorationsRef.current, javaBreakpoints.filter((item) => item.path === filePath).map((item) => ({ range: { startLineNumber: item.line, startColumn: 1, endLineNumber: item.line, endColumn: 1 }, options: { isWholeLine: false, glyphMarginClassName: "java-breakpoint", glyphMargin: { position: api.editor.GlyphMarginLane.Center }, glyphMarginHoverMessage: { value: `Breakpoint at line ${item.line}` } } })));
+  };
+
   useEffect(() => {
-    const instance = monacoEditorRef.current;
-    if (!instance || activeTab?.type !== "file" || !/\.java$/i.test(activeTab.path)) return;
-    breakpointDecorationsRef.current = instance.deltaDecorations(breakpointDecorationsRef.current, javaBreakpoints.filter((item) => item.path === activeTab.path).map((item) => ({ range: { startLineNumber: item.line, startColumn: 1, endLineNumber: item.line, endColumn: 1 }, options: { isWholeLine: false, glyphMarginClassName: "java-breakpoint", glyphMarginHoverMessage: { value: `Breakpoint at line ${item.line}` } } })));
+    if (monacoEditorRef.current && monacoRef.current && activeTab?.type === "file") decorateBreakpoints(monacoEditorRef.current, activeTab.path, monacoRef.current);
   }, [activeTab?.path, javaBreakpoints]);
+
+  useEffect(() => {
+    if (javaDebugState.status !== "running" && javaDebugState.status !== "paused") return;
+    void clientRef.current?.request("java.debug.setBreakpoints", { breakpoints: javaBreakpoints }).catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : "Could not update breakpoints"));
+  }, [javaBreakpoints, javaDebugState.status]);
 
   useEffect(() => {
     if (activeTab?.type !== "file" || !clientRef.current || !gitEntries.some((entry) => entry.path === activeTab.path)) { setActiveGitHunks([]); return; }
@@ -1962,6 +2080,14 @@ export function App() {
       setJavaOptions(result.options); javaOptionsRef.current = result.options;
     } catch (error) { setStatusMessage(error instanceof Error ? error.message : "Could not select run configuration"); }
   };
+
+  useEffect(() => {
+    debugEditorRef.current?.update(javaDebugState);
+    if (javaDebugState.status === "paused" && javaDebugState.path && activeTab?.path !== javaDebugState.path) {
+      void openFile({ name: javaDebugState.path.split("/").pop()!, path: javaDebugState.path, type: "file" });
+    }
+  }, [javaDebugState]);
+  useEffect(() => () => debugEditorRef.current?.dispose(), []);
 
   const beginJavaResize = (event: React.PointerEvent) => {
     event.currentTarget.setPointerCapture(event.pointerId);
@@ -2059,6 +2185,8 @@ export function App() {
   };
 
   const mountEditor = (instance: editor.IStandaloneCodeEditor, api: Monaco) => {
+    debugEditorRef.current?.dispose();
+    debugEditorRef.current = undefined;
     monacoEditorRef.current = instance;
     const restoredViewState = activeTab ? editorViewStates.mount(activeTab.id, instance) : false;
     editorStatusBarRef.current?.attach(instance);
@@ -2072,6 +2200,17 @@ export function App() {
     if (savedCursor && !restoredViewState) instance.setPosition(savedCursor);
     javaLanguageDisposables.current.push(instance.onDidChangeCursorPosition((event) => cursorPositions.update(activeTab, event.position)));
     const filePath = activeTab.path;
+    if (activeTab.type === "file" && /\.java$/i.test(filePath)) {
+      const client = clientRef.current!;
+      const rootId = client.getRoot();
+      debugEditorRef.current = attachDebugEditor(instance, api, filePath, (reference, start) => {
+        if (clientRef.current !== client || client.getRoot() !== rootId) return Promise.reject(new Error("Workspace changed"));
+        return client.request("java.debug.variables", { reference, start });
+      });
+      debugEditorRef.current.update(javaDebugStateRef.current);
+    }
+    breakpointDecorationsRef.current = [];
+    if (activeTab.type === "file") decorateBreakpoints(instance, filePath, api);
     if (activeTab.type === "file") javaLanguageDisposables.current.push(instance.onContextMenu((event) => {
       event.event.preventDefault();
       const selection = instance.getSelection();
@@ -2095,22 +2234,66 @@ export function App() {
       return;
     }
     if (activeTab.type !== "file") return;
+    if (model && ["javascript", "typescript"].includes(model.getLanguageId())) {
+      const markerCollection = instance.createDecorationsCollection();
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      let generation = 0;
+      let disposed = false;
+      const decorate = async () => {
+        const requestGeneration = ++generation;
+        const version = model.getVersionId();
+        try {
+          const getWorker = await (model.getLanguageId() === "typescript" ? api.languages.typescript.getTypeScriptWorker() : api.languages.typescript.getJavaScriptWorker());
+          const worker = await getWorker(model.uri);
+          const tree = await worker.getNavigationTree(model.uri.toString());
+          if (!disposed && requestGeneration === generation && version === model.getVersionId()) markerCollection.set(functionStartDecorations(navigationFunctionStarts(tree, model)));
+        } catch { if (!disposed && requestGeneration === generation) markerCollection.clear(); }
+      };
+      void decorate();
+      javaLanguageDisposables.current.push(instance.onDidChangeModelContent(() => { ++generation; if (timer) clearTimeout(timer); timer = setTimeout(() => void decorate(), 300); }));
+      javaLanguageDisposables.current.push({ dispose: () => { disposed = true; if (timer) clearTimeout(timer); markerCollection.clear(); } });
+    }
     if (!/\.java$/i.test(filePath)) return;
+    let lexicalDecorations: string[] = [];
+    const decorateJavaLexicalTokens = () => {
+      const decorations: editor.IModelDeltaDecoration[] = [];
+      if (highlightTheme === "ftpud" && theme === "light") {
+        const content = instance.getValue();
+        const lines = content.split(/\r?\n/);
+        api.editor.tokenize(content, "java").forEach((tokens, line) => tokens.forEach((token, index) => {
+          const kind = (token.type.startsWith("string.escape.invalid") || token.type.startsWith("string.invalid")) ? "invalid" : token.type.startsWith("string.escape") ? "escape" : token.type.startsWith("string") ? "string" : token.type.startsWith("annotation") ? "annotation" : undefined;
+          if (kind) decorations.push({ range: { startLineNumber: line + 1, startColumn: token.offset + 1, endLineNumber: line + 1, endColumn: (tokens[index + 1]?.offset ?? lines[line]?.length ?? 0) + 1 }, options: { inlineClassName: `ftpud-java-${kind}`, inlineClassNameAffectsLetterSpacing: true } });
+        }));
+      }
+      lexicalDecorations = instance.deltaDecorations(lexicalDecorations, decorations);
+    };
+    decorateJavaLexicalTokens();
+    javaLanguageDisposables.current.push(instance.onDidChangeModelContent(decorateJavaLexicalTokens));
+    javaLanguageDisposables.current.push({ dispose: () => { instance.deltaDecorations(lexicalDecorations, []); } });
+    const functionMarkers = instance.createDecorationsCollection();
+    let semanticGeneration = 0;
+    let semanticDisposed = false;
     let semanticDecorations: string[] = []; let semanticTimer: ReturnType<typeof setTimeout> | undefined;
     const decorateJavaTypes = async () => {
-      if (!clientRef.current || highlightTheme !== "ftpud") { semanticDecorations = instance.deltaDecorations(semanticDecorations, []); return; }
+      if (!clientRef.current) { semanticDecorations = instance.deltaDecorations(semanticDecorations, []); functionMarkers.clear(); return; }
+      const generation = ++semanticGeneration;
+      const version = instance.getModel()?.getVersionId();
       try {
         const result = await clientRef.current.request("java.semanticTokens", { path: filePath, content: instance.getValue() });
+        if (semanticDisposed || generation !== semanticGeneration || version !== instance.getModel()?.getVersionId()) return;
+        functionMarkers.set(functionStartDecorations(result.tokens.filter((token) => ["function", "method", "constructor"].includes(token.type) && (token.modifiers.includes("declaration") || token.modifiers.includes("definition"))).map((token) => ({ line: token.startLine, name: instance.getModel()?.getValueInRange({ startLineNumber: token.startLine, startColumn: token.startColumn, endLineNumber: token.endLine, endColumn: token.endColumn }) ?? "" }))));
+        if (highlightTheme !== "ftpud") { semanticDecorations = instance.deltaDecorations(semanticDecorations, []); return; }
         semanticDecorations = instance.deltaDecorations(semanticDecorations, result.tokens.flatMap((token) => {
           const constant = (token.modifiers.includes("readonly") || token.type === "enumMember") && (token.modifiers.includes("static") || token.type === "enumMember");
-          const kind = constant ? "constant" : token.type === "interface" ? "interface" : ["class", "type", "enum", "struct"].includes(token.type) ? "class" : token.type === "decorator" ? "annotation" : ["function", "method", "constructor"].includes(token.type) ? "function" : undefined;
-          return kind ? [{ range: { startLineNumber: token.startLine, startColumn: token.startColumn, endLineNumber: token.endLine, endColumn: token.endColumn }, options: { inlineClassName: `ftpud${theme === "dark" ? "-dark" : ""}-java-${kind}`, inlineClassNameAffectsLetterSpacing: false } }] : [];
+          const kind = constant ? "constant" : token.type === "interface" ? "interface" : ["class", "type", "enum", "struct"].includes(token.type) ? "class" : token.type === "decorator" ? "annotation" : ["property", "field"].includes(token.type) ? (token.modifiers.includes("static") ? "static-field" : "field") : ["function", "method", "constructor"].includes(token.type) ? (theme === "dark" || token.modifiers.includes("declaration") || token.type === "constructor" ? "function" : token.modifiers.includes("static") ? "static-method" : undefined) : undefined;
+          return kind ? [{ range: { startLineNumber: token.startLine, startColumn: token.startColumn, endLineNumber: token.endLine, endColumn: token.endColumn }, options: { inlineClassName: `ftpud${theme === "dark" ? "-dark" : ""}-java-${kind}`, inlineClassNameAffectsLetterSpacing: true } }] : [];
         }));
-      } catch { semanticDecorations = instance.deltaDecorations(semanticDecorations, []); }
+      } catch { if (!semanticDisposed && generation === semanticGeneration) { semanticDecorations = instance.deltaDecorations(semanticDecorations, []); functionMarkers.clear(); } }
     };
+    refreshJavaSemanticRef.current = () => { void decorateJavaTypes(); };
     void decorateJavaTypes();
-    javaLanguageDisposables.current.push(instance.onDidChangeModelContent(() => { if (semanticTimer) clearTimeout(semanticTimer); semanticTimer = setTimeout(() => void decorateJavaTypes(), 500); }));
-    javaLanguageDisposables.current.push({ dispose: () => { if (semanticTimer) clearTimeout(semanticTimer); } });
+    javaLanguageDisposables.current.push(instance.onDidChangeModelContent(() => { ++semanticGeneration; if (semanticTimer) clearTimeout(semanticTimer); semanticTimer = setTimeout(() => void decorateJavaTypes(), 500); }));
+    javaLanguageDisposables.current.push({ dispose: () => { semanticDisposed = true; refreshJavaSemanticRef.current = undefined; if (semanticTimer) clearTimeout(semanticTimer); functionMarkers.clear(); instance.deltaDecorations(semanticDecorations, []); } });
     javaLanguageDisposables.current.push(api.languages.registerCompletionItemProvider("java", {
       triggerCharacters: ["."],
       provideCompletionItems: async (model, position) => {
@@ -2126,7 +2309,7 @@ export function App() {
     }));
     javaLanguageDisposables.current.push(instance.addAction({ id: "java.semantic-completion", label: "Java completion", keybindings: [api.KeyMod.CtrlCmd | api.KeyCode.Enter, api.KeyMod.WinCtrl | api.KeyCode.Enter], run: () => instance.trigger("java", "editor.action.triggerSuggest", {}) }));
     javaLanguageDisposables.current.push(instance.onMouseDown((event) => {
-      if ((event.target.element as HTMLElement | null)?.closest(".git-change-marker")) return;
+      if ((event.target.element as HTMLElement | null)?.closest(".git-change-marker, .function-start-marker")) return;
       const line = event.target.position?.lineNumber ?? event.target.range?.startLineNumber;
       if ((event.target.type === 2 || event.target.type === 3) && line) { toggleBreakpoint(filePath, instance.getValue(), line); return; }
       const position = event.target.position;
@@ -2301,7 +2484,8 @@ export function App() {
     catch (error) { setStatusMessage(error instanceof Error ? error.message : "Could not set branch upstream"); }
   };
 
-  const editorFontFamily = uiFontFamily === "jetbrains" ? "JetBrains Mono Variable" : "Inter Variable";
+  const editorFontFamily = "JetBrains Mono";
+  const terminalFontFamily = uiFontFamily === "jetbrains" ? "JetBrains Mono Variable" : "Inter Variable";
   const editorLineHeight = Math.round(uiFontSize * uiLineHeight);
   const normalizedTaskFilter = taskFilter.trim().toLowerCase();
   const filteredTasks = useMemo(() => tasks.filter((task) => {
@@ -2319,12 +2503,14 @@ export function App() {
     setTaskSwitching(true);
     try {
       const currentGroup = layoutRef.current.editorGroups[0]!; const currentFiles = currentGroup.tabs.filter((tab) => tab.type === "file" && (!tab.rootId || tab.rootId === previous)); const currentTerminal = { ...layoutRef.current.terminalGroup, tabs: layoutRef.current.terminalGroup.tabs.filter((tab) => !tab.rootId || tab.rootId === previous) }; const activeTerminalIndex = currentTerminal.tabs.findIndex((tab) => tab.id === currentTerminal.activeTabId);
-      await client.request("workspace.saveOptions", { options: { openFiles: currentFiles.map((tab) => tab.path), ...(pinnedFilePaths(currentFiles).length ? { pinnedFiles: pinnedFilePaths(currentFiles) } : {}), ...(currentFiles.find((tab) => tab.id === currentGroup.activeTabId) ? { activeFile: currentFiles.find((tab) => tab.id === currentGroup.activeTabId)!.path } : {}), ...(javaOptionsRef.current ? { javaProject: javaOptionsRef.current } : {}), terminal: { tabs: currentTerminal.tabs.map((tab) => ({ displayName: tab.title, terminalId: tab.terminalId })), ...(activeTerminalIndex >= 0 ? { activeTabIndex: activeTerminalIndex } : {}), panelOpen: layoutRef.current.panels.some((panel) => panel.type === "terminal") }, ...(Object.keys(fileColors).length ? { fileColors } : {}), ...(gitCommitMessage ? { gitCommitMessage } : {}), ...(Object.keys(searchQueries).length ? { searchQueries } : {}) } });
+      await client.request("workspace.saveOptions", { options: { openFiles: currentFiles.map((tab) => tab.path), ...(pinnedFilePaths(currentFiles).length ? { pinnedFiles: pinnedFilePaths(currentFiles) } : {}), ...(currentFiles.find((tab) => tab.id === currentGroup.activeTabId) ? { activeFile: currentFiles.find((tab) => tab.id === currentGroup.activeTabId)!.path } : {}), ...(javaOptionsRef.current ? { javaProject: javaOptionsRef.current } : {}), terminal: { tabs: currentTerminal.tabs.map((tab) => ({ displayName: tab.title, terminalId: tab.terminalId })), ...(activeTerminalIndex >= 0 ? { activeTabIndex: activeTerminalIndex } : {}), panelOpen: layoutRef.current.panels.some((panel) => panel.type === "terminal") }, ...(Object.keys(fileColors).length ? { fileColors } : {}), ...(gitCommitMessage ? { gitCommitMessage } : {}), javaBreakpoints, ...(Object.keys(searchQueries).length ? { searchQueries } : {}) } });
       client.setRoot(rootId);
       const result = await client.request("workspace.selectRoot", { rootId, includeIgnored: showIgnoredRef.current });
       selectedRootIdRef.current = rootId; setSelectedRootId(rootId); setActiveWorkspace(result.workspace); activeWorkspaceRef.current = result.workspace; setProjectName(result.projectName); setTree(result.tree);
       workspaceKeyRef.current = result.workspace; cursorPositions.setWorkspace(result.workspace);
       setTasks([]); setSelectedTaskId(undefined); setGitEntries([]); setTaskGitEntries([]); setJavaOptions(result.options.javaProject);
+      setUsefulFiles((files) => files.filter((file) => file.scope === "global"));
+      setRunConfigs((configs) => configs.filter((config) => config.scope === "global"));
       await restoreWorkspaceOptions(result.options, client);
       await Promise.all([refreshTasks(client), refreshGit(client), refreshAi(client), refreshUsefulFiles(client), refreshRunConfigs(client), refreshAgents(client)]);
     } catch (error) { client.setRoot(previous); setStatusMessage(error instanceof Error ? error.message : "Could not switch workspace root"); }
@@ -2365,6 +2551,7 @@ export function App() {
     { id: "terminal.toggle", label: "Toggle Terminal Panel", category: "Terminal", when: (context) => context.connected, execute: toggleTerminalPanel },
     { id: "task.create", label: "Create Task", category: "Task", when: (context) => context.connected && !context.taskSwitching, execute: () => setShowCreateTaskDialog(true) },
     { id: "ai.open", label: "Open AI", category: "AI", when: (context) => context.connected, execute: () => { if (sideLayout === "classic") setClassicAiOpen(true); else setLeftPanels((current) => ({ ...current, ai: true })); void refreshAi(); } },
+    { id: "java.configuration", label: "Edit Java Run/Debug Configuration", category: "Java", when: (context) => context.connected, execute: () => setShowRunConfigurationDialog(true) },
     { id: "editor.save", label: "Save Active Editor", category: "Editor", when: (context) => context.hasActiveEditor && context.activeEditorDirty, execute: () => saveActive() }
   ];
 
@@ -2396,14 +2583,16 @@ export function App() {
       <nav className="tool-stripe" aria-label="Left tool windows">
         <button className={`tool-stripe-button ${leftPanels.tasks ? "active" : ""}`} title={leftPanels.tasks ? "Hide Tasks" : "Show Tasks"} onClick={() => setLeftPanels((current) => ({ ...current, tasks: !current.tasks }))}><ListTodo size={15} /><span>Tasks</span>{tasks.length > 0 && <span className="tool-badge">{tasks.length > 99 ? "99+" : tasks.length}</span>}</button>
         <button className={`tool-stripe-button ${leftPanels.ai ? "active" : ""}`} title={leftPanels.ai ? "Hide AI" : "Show AI"} onClick={() => setLeftPanels((current) => { if (!current.ai) void refreshAi(); return { ...current, ai: !current.ai }; })}><Bot size={15} /><span>AI</span>{aiSession.status === "in_progress" && <span className="tool-badge">...</span>}</button>
+        <button className={`tool-stripe-button ${leftPanels.harness ? "active" : ""}`} title={leftPanels.harness ? "Hide Workflows" : "Show Workflows"} onClick={() => setLeftPanels((current) => { if (!current.harness) void refreshHarnesses(); return { ...current, harness: !current.harness }; })}><Workflow size={15} /><span>Workflows</span></button>
       </nav>
-      {(leftPanels.tasks || leftPanels.ai) && <><aside className="side-panel side-panel-left" style={{ width: leftSidebarWidth }}><ResizablePanelStack workspace={activeWorkspace} setting="focused.leftSizes" ids={[...(leftPanels.tasks ? ["tasks"] : []), ...(leftPanels.ai ? ["ai"] : [])]}>
+      {(leftPanels.tasks || leftPanels.ai || leftPanels.harness) && <><aside className="side-panel side-panel-left" style={{ width: leftSidebarWidth }}><ResizablePanelStack workspace={activeWorkspace} setting="focused.leftSizes" ids={[...(leftPanels.tasks ? ["tasks"] : []), ...(leftPanels.ai ? ["ai"] : []), ...(leftPanels.harness ? ["harness"] : [])]}>
         {leftPanels.tasks && <section key="tasks" className="stacked-panel"><header className="panel-header"><span>Tasks</span><button title="Create task" disabled={taskSwitching} onClick={() => setShowCreateTaskDialog(true)}><Plus size={15} /></button></header><div className="task-filters"><QuickFilter value={taskFilter} placeholder="Filter tasks" label="Filter tasks" onChange={setTaskFilter} /><select aria-label="Task lifecycle filter" value={taskLifecycleFilter} onChange={(event) => setTaskLifecycleFilter(event.target.value as typeof taskLifecycleFilter)}><option value="active">Active</option><option value="finished">Finished</option><option value="archived">Archived</option><option value="all">All</option></select></div><div className="tasks-list">
           {showRootTask && <TaskRow icon={<Folder size={15} />} name="Root workspace" summary={aiStatuses.root} selected={selectedTaskId === undefined} disabled={taskSwitching} onClick={() => openTask(undefined, aiStatuses.root.pendingPermission)} onCancelTimer={() => void timerAction(undefined, "cancel")} onFireTimer={() => void timerAction(undefined, "fire")} />}
           {filteredTasks.map((task) => { const summary = aiStatuses.tasks[task.id] ?? emptyAiSummary; return <TaskRow key={task.id} icon={<ListTodo size={15} />} name={task.name} branch={task.branch} summary={summary} finished={task.status === "finished"} archived={task.archived} selected={selectedTaskId === task.id} disabled={taskSwitching} onClick={() => openTask(task.id, summary.pendingPermission)} onSetFinished={() => void setTaskStatus(task, task.status === "finished" ? "active" : "finished")} onRename={() => void renameTask(task)} onSetArchived={() => void setTaskArchived(task, !task.archived)} onMerge={() => setMergeDialog(task)} onDelete={() => void deleteTask(task)} onCancelTimer={() => void timerAction(task, "cancel")} onFireTimer={() => void timerAction(task, "fire")} />; })}
           {!showRootTask && filteredTasks.length === 0 && <div className="filter-empty">No matching tasks</div>}
         </div></section>}
         {leftPanels.ai && <section key="ai" className="stacked-panel"><header className="panel-header"><span>AI</span><AgentPicker agents={agents} value={selectedAgentKey} disabled={aiSession.status === "in_progress"} onChange={selectAgent} /><span className={`ai-status ${aiSession.status}`}>{formatAiStatus(aiSession.status)}</span></header><AiPanel key={`${activeWorkspace}:${selectedTaskId ?? "root"}:${aiProvider}:${aiSession.id ?? "legacy"}`} provider={aiProvider} providers={aiProviders} session={aiSession} sessions={aiSessions} models={aiModels} usage={aiUsage} attachments={currentAiAttachments} draft={currentAiDraft} workspacePath={activeWorkspace} permissionOwner={{ provider: aiProvider, ...(selectedTaskId ? { taskId: selectedTaskId } : {}), ...(aiSession.id ? { sessionId: aiSession.id } : {}) }} permissionActionsDisabled={taskSwitching} sessionChangesDisabled={selectedTaskTimerActive} onProviderChange={(provider) => void switchAiProvider(provider)} onConfigurationChange={configureAi} onAttachmentsChange={updateAiAttachments} onDraftChange={updateAiDraft} onSend={sendAiPrompt} onSendAsTask={selectedTaskId ? undefined : sendAiPromptAsTask} onSteer={steerAiPrompt} onInterrupt={() => void interruptAi()} onNewSession={() => void newAiSession()} onSwitchSession={(session) => void switchAiSession(session)} onRemoveSession={(session) => void removeAiSession(session)} onResolvePermission={resolveAiPermission} onOpenFile={(path, line, column) => void openAiFile(path, line, column)} onOpenExternal={(url) => void window.desktop?.openExternal(url)} /></section>}
+        {leftPanels.harness && <section key="harness" className="stacked-panel"><header className="panel-header"><span>Workflows</span><button title="Refresh workflows" onClick={() => void Promise.all([refreshHarnesses(), refreshHarnessRuns()])}><RefreshCw size={14} /></button></header><HarnessPanel harnesses={harnesses} runs={harnessRuns} diagnostics={harnessDiagnostics} providers={aiProviders} agents={agents} defaultProvider={aiProvider} onLoadModels={loadHarnessModels} onValidate={validateHarnessDefinition} onCreate={createHarness} onRead={readHarness} onSave={saveHarness} onDelete={deleteHarness} onRun={runHarness} onAppendRun={appendHarnessRun} onResolvePermission={resolveHarnessPermission} onAnswerQuestion={answerHarnessQuestion} onResumePause={resumeHarnessPause} onRetryPause={retryHarnessPause} onCancelPause={cancelHarnessPause} onCancelRun={cancelHarnessRun} onError={setStatusMessage} /></section>}
       </ResizablePanelStack></aside><div className="resize-handle" role="separator" aria-label="Resize left sidebar" aria-orientation="vertical" aria-valuemin={280} aria-valuemax={Math.round(Math.min(900, window.innerWidth * .65))} aria-valuenow={Math.round(leftSidebarWidth)} tabIndex={0} onKeyDown={(event) => keyboardResize(event, leftSidebarWidth, setLeftSidebarWidth, 280, Math.min(900, window.innerWidth * .65))} onPointerDown={beginLeftSidebarResize} /></>}
       </> : <>
       <nav className="tool-stripe" aria-label="Left tool windows">
@@ -2413,6 +2602,7 @@ export function App() {
         {selectedTaskId && <button className={`tool-stripe-button ${rightPanels.promptHistory ? "active" : ""}`} title={rightPanels.promptHistory ? "Hide Prompt History" : "Show Prompt History"} onClick={() => setRightPanels((current) => { if (!current.promptHistory) void refreshTaskGit(); return { ...current, promptHistory: !current.promptHistory }; })}><ListTree size={15} /><span>History</span>{taskCheckpoints.length > 0 && <span className="tool-badge">{taskCheckpoints.length > 99 ? "99+" : taskCheckpoints.length}</span>}</button>}
         <button className={`tool-stripe-button ${classicSideView === "useful" ? "active" : ""}`} title="Useful Files" onClick={() => { selectClassicSideView("useful"); void refreshUsefulFiles(); }}><Library size={15} /><span>Useful</span></button>
         <button className={`tool-stripe-button ${classicSideView === "agents" ? "active" : ""}`} title="Agents" onClick={() => { selectClassicSideView("agents"); void refreshAgents(); }}><Bot size={15} /><span>Agents</span></button>
+        <button className={`tool-stripe-button ${classicSideView === "harness" ? "active" : ""}`} title="Workflows" onClick={() => { selectClassicSideView("harness"); void refreshHarnesses(); }}><Workflow size={15} /><span>Workflows</span></button>
         {javaOptions && <button className={`tool-stripe-button ${classicSideView === "java" ? "active" : ""}`} title="Java project" onClick={() => { selectClassicSideView("java"); void refreshJavaTree(); }}><Coffee size={15} /><span>Java</span></button>}
       </nav>
       <aside className="side-panel classic-left-panel" style={{ width: classicLeftWidth }}>
@@ -2420,12 +2610,12 @@ export function App() {
           <header className="panel-header"><span>Project</span><div className="panel-header-actions"><button title={showIgnored ? "Hide ignored files" : "Show all files (including Git-ignored)"} className={showIgnored ? "active" : ""} onClick={toggleShowIgnored}>{showIgnored ? <Eye size={14} /> : <EyeOff size={14} />}</button><button title="Synchronize files" onClick={() => void refreshTree()}><RefreshCw size={14} /></button></div></header>
           <QuickFilter value={projectFilter} placeholder={projectContentFilter ? "Filter by file contents" : "Filter files"} label={projectContentFilter ? "Filter files by contents" : "Filter project files"} onChange={setProjectFilter} contentSearch={projectContentFilter} contentSearchLoading={projectContentFilterLoading} onContentSearchChange={setProjectContentFilter} />
           <div className="workspace-name"><select aria-label="Workspace root" value={selectedRootId} disabled={taskSwitching} onChange={(event) => void selectWorkspaceRoot(event.target.value)}>{workspaceRoots.map((root) => <option key={root.id} value={root.id}>{root.alias}</option>)}</select><button title="Add remote workspace root" onClick={() => setWorkspaceRootDialogOpen(true)}><Plus size={13} /></button><button title="Unregister an inactive workspace root" disabled={!workspaceRoots.some((root) => !root.primary && root.id !== selectedRootId)} onClick={() => void removeWorkspaceRoot()}><Trash2 size={13} /></button></div>
-          <ProjectTree nodes={tree} query={projectContentFilter ? "" : projectFilter} matchingPaths={projectContentFilter && projectFilter.trim() ? projectContentPaths ?? new Set() : undefined} activePath={activeTab?.path} selectedPaths={projectSelection} fileColors={fileColors} gitStatuses={projectGitStatuses} onAction={runProjectTreeAction} onSelectionChange={setProjectSelection} onContextMenu={(nodes, x, y) => setTreeContextMenu({ x: Math.min(x, window.innerWidth - 220), y: Math.min(y, window.innerHeight - 180), nodes })} />
+          <ProjectTree nodes={tree} javaNodes={javaOptions ? javaTree : undefined} query={projectContentFilter ? "" : projectFilter} matchingPaths={projectContentFilter && projectFilter.trim() ? projectContentPaths ?? new Set() : undefined} activePath={activeTab?.path} selectedPaths={projectSelection} fileColors={fileColors} gitStatuses={projectGitStatuses} onAction={runProjectTreeAction} onSelectionChange={setProjectSelection} onContextMenu={(nodes, x, y) => setTreeContextMenu({ x: Math.min(x, window.innerWidth - 220), y: Math.min(y, window.innerHeight - 180), nodes })} />
         </> : classicSideView === "git" ? <>
           <header className="panel-header"><span>Git Changes</span><div className="panel-header-actions"><button title="Stash manager" onClick={() => setGitStashDialog(true)}><Archive size={14} /></button><GitToolbarActions selectedCount={selectedRollbackEntries.length} operationRunning={gitOperationRunning} pushing={gitPushing} fetching={gitFetching} rollingBack={gitRollingBack} upstream={gitUpstream} onRollbackSelected={openRollbackSelected} onUndoLastCommit={() => void previewHistoryRewrite("undo")} onPush={() => void pushGit()} onFetch={() => void fetchGit()} onRefresh={() => void refreshGit()} /></div></header><div className="git-branch"><GitBranch size={13} /><span>{gitBranch}</span>{gitUpstream && <small title={gitUpstream.lastFetch ? `Last fetched ${new Date(gitUpstream.lastFetch).toLocaleString()}` : "Not fetched in this Core session"}>{gitUpstream.upstream} · {gitUpstream.ahead} ahead · {gitUpstream.behind} behind</small>}</div>
           <KeyboardGitChangesView entries={gitEntries} error={gitError} selectedPaths={selectedGitPaths} onTogglePath={(path) => setSelectedGitPaths((current) => { const next = new Set(current); next.has(path) ? next.delete(path) : next.add(path); return next; })} activePath={activeTab?.path} onOpenDiff={openDiff} onOpenConflict={(entry) => setGitConflictPath(entry.path)} onOpenFile={(entry) => void openFile({ name: entry.path.split("/").pop() ?? entry.path, path: entry.path, type: "file" })} onContextMenu={(event, entry) => { event.preventDefault(); setGitRollbackMenu({ ...menuPosition(event.clientX, event.clientY, 220, 100, window.innerWidth, window.innerHeight), entry }); }} />
           <GitCommitPanel message={gitCommitMessage} selectedCount={selectedGitPaths.size} operationRunning={gitOperationRunning} committing={gitCommitting} onMessageChange={setGitCommitMessage} onCommit={(message) => void commitSelectedFiles(message)} stagedCount={gitEntries.filter((entry) => entry.states.includes("index")).length} onAmend={() => void previewHistoryRewrite("amend")} />
-        </> : classicSideView === "taskGit" && selectedTaskId ? <><header className="panel-header"><span>Task Git</span><button title="Refresh task comparison" onClick={() => void refreshTaskGit()}><RefreshCw size={14} /></button></header><div className="git-branch"><GitCompareArrows size={13} /><span>{tasks.find((task) => task.id === selectedTaskId)?.baseBranch ?? "Base branch"}</span></div><GitChangesView entries={taskGitEntries} error={taskGitError} emptyMessage="No changes from base branch" groupTitle="Changes from Base" activePath={activeTab?.path} onOpenDiff={openTaskDiff} onOpenFile={(entry) => void openFile({ name: entry.path.split("/").pop() ?? entry.path, path: entry.path, type: "file" })} /></> : classicSideView === "useful" ? <><header className="panel-header"><span>Useful Files</span><button title="Refresh useful files" onClick={() => void refreshUsefulFiles()}><RefreshCw size={14} /></button></header><div className="useful-files-list"><UsefulFileSection title="Global" scope="global" files={usefulFiles} activeTab={activeTab} onOpen={openUsefulFile} onCreate={(scope) => setUsefulDialog({ mode: "create", scope })} onRename={(file) => setUsefulDialog({ mode: "rename", scope: file.scope, file })} onDelete={(file) => void deleteUsefulFile(file)} /><UsefulFileSection title="Local" scope="local" files={usefulFiles} activeTab={activeTab} onOpen={openUsefulFile} onCreate={(scope) => setUsefulDialog({ mode: "create", scope })} onRename={(file) => setUsefulDialog({ mode: "rename", scope: file.scope, file })} onDelete={(file) => void deleteUsefulFile(file)} /></div></> : classicSideView === "agents" ? <AgentsPanel agents={agents} activeTab={activeTab} onRefresh={() => void refreshAgents()} onOpen={(file) => void openAgentFile(file)} onCreate={(scope) => setAgentDialog({ mode: "create", scope })} onRename={(file) => { if (file.scope !== "workspace") setAgentDialog({ mode: "rename", scope: file.scope, file }); }} onDelete={(file) => void deleteAgent(file)} /> : <><header className="panel-header"><span>Java Project</span><button title="Refresh Java project" onClick={() => void refreshJavaTree()}><RefreshCw size={14} /></button></header><div className="java-project-meta"><Coffee size={13} /><span>{javaOptions?.pomPath}</span></div><div className="tree java-tree">{javaOptions && <JavaProjectTree nodes={javaTree} activePath={activeTab?.path} onOpen={openFile} />}</div></>}
+        </> : classicSideView === "taskGit" && selectedTaskId ? <><header className="panel-header"><span>Task Git</span><button title="Refresh task comparison" onClick={() => void refreshTaskGit()}><RefreshCw size={14} /></button></header><div className="git-branch"><GitCompareArrows size={13} /><span>{tasks.find((task) => task.id === selectedTaskId)?.baseBranch ?? "Base branch"}</span></div><GitChangesView entries={taskGitEntries} error={taskGitError} emptyMessage="No changes from base branch" groupTitle="Changes from Base" activePath={activeTab?.path} onOpenDiff={openTaskDiff} onContextMenu={(event, entry) => { event.preventDefault(); const task = activeTaskRef.current; if (task) setGitRollbackMenu({ ...menuPosition(event.clientX, event.clientY, 220, 40, window.innerWidth, window.innerHeight), entry, taskRef: task.baseBranch }); }} onOpenFile={(entry) => void openFile({ name: entry.path.split("/").pop() ?? entry.path, path: entry.path, type: "file" })} /></> : classicSideView === "useful" ? <><header className="panel-header"><span>Useful Files</span><button title="Refresh useful files" onClick={() => void refreshUsefulFiles()}><RefreshCw size={14} /></button></header><div className="useful-files-list"><UsefulFileSection title="Global" scope="global" files={usefulFiles} activeTab={activeTab} onOpen={openUsefulFile} onCreate={(scope) => setUsefulDialog({ mode: "create", scope })} onRename={(file) => setUsefulDialog({ mode: "rename", scope: file.scope, file })} onDelete={(file) => void deleteUsefulFile(file)} /><UsefulFileSection title="Local" scope="local" files={usefulFiles} activeTab={activeTab} onOpen={openUsefulFile} onCreate={(scope) => setUsefulDialog({ mode: "create", scope })} onRename={(file) => setUsefulDialog({ mode: "rename", scope: file.scope, file })} onDelete={(file) => void deleteUsefulFile(file)} /></div></> : classicSideView === "agents" ? <AgentsPanel agents={agents} activeTab={activeTab} onRefresh={() => void refreshAgents()} onOpen={(file) => void openAgentFile(file)} onCreate={(scope) => setAgentDialog({ mode: "create", scope })} onRename={(file) => { if (file.scope !== "workspace") setAgentDialog({ mode: "rename", scope: file.scope, file }); }} onDelete={(file) => void deleteAgent(file)} /> : classicSideView === "harness" ? <><header className="panel-header"><span>Workflows</span><button title="Refresh workflows" onClick={() => void Promise.all([refreshHarnesses(), refreshHarnessRuns()])}><RefreshCw size={14} /></button></header><HarnessPanel harnesses={harnesses} runs={harnessRuns} diagnostics={harnessDiagnostics} providers={aiProviders} agents={agents} defaultProvider={aiProvider} onLoadModels={loadHarnessModels} onValidate={validateHarnessDefinition} onCreate={createHarness} onRead={readHarness} onSave={saveHarness} onDelete={deleteHarness} onRun={runHarness} onAppendRun={appendHarnessRun} onResolvePermission={resolveHarnessPermission} onAnswerQuestion={answerHarnessQuestion} onResumePause={resumeHarnessPause} onRetryPause={retryHarnessPause} onCancelPause={cancelHarnessPause} onCancelRun={cancelHarnessRun} onError={setStatusMessage} /></> : <><header className="panel-header"><span>Java Project</span><button title="Refresh Java project" onClick={() => void refreshJavaTree()}><RefreshCw size={14} /></button></header><div className="java-project-meta"><Coffee size={13} /><span>{javaOptions?.pomPath}</span></div><div className="tree java-tree">{javaOptions && <JavaProjectTree nodes={javaTree} activePath={activeTab?.path} onOpen={openFile} />}</div></>}
       </aside><div className="resize-handle" role="separator" aria-label="Resize left sidebar" aria-orientation="vertical" aria-valuemin={180} aria-valuemax={500} aria-valuenow={Math.round(classicLeftWidth)} tabIndex={0} onKeyDown={(event) => keyboardResize(event, classicLeftWidth, setClassicLeftWidth, 180, 500)} onPointerDown={beginClassicLeftResize} />
       </>}
       <main className="workbench">
@@ -2435,9 +2625,10 @@ export function App() {
             <button title="Run selected Java configuration" disabled={javaRunning || !javaOptions.selectedRunConfigurationId} onClick={() => void runJavaAction("java.run")}><Play size={14} /></button>
             <button title="Debug selected Java configuration" disabled={javaRunning || !javaOptions.selectedRunConfigurationId} onClick={() => void debugJava()}><Bug size={14} /></button>
             <button title="Stop Java process" disabled={!javaRunning} onClick={() => void stopJava()}><Square size={13} /></button>
-            <select aria-label="Java run configuration" value={javaOptions.selectedRunConfigurationId ?? ""} onChange={(event) => event.target.value === "__create__" ? setShowRunConfigurationDialog(true) : void selectRunConfiguration(event.target.value)}><option value="" disabled>Select run configuration</option>{javaOptions.runConfigurations.map((configuration) => <option key={configuration.id} value={configuration.id}>{configuration.name}</option>)}<option value="__create__">Create new...</option></select>
+            <button title="Edit Java run/debug configuration" onClick={() => setShowRunConfigurationDialog(true)}><Settings size={14} /></button>
+            <select aria-label="Java run configuration" value={javaOptions.selectedRunConfigurationId ?? ""} onChange={(event) => event.target.value === "__create__" ? setShowRunConfigurationDialog(true) : void selectRunConfiguration(event.target.value)}><option value="" disabled>Select run configuration</option>{javaOptions.runConfigurations.map((configuration) => <option key={configuration.id} value={configuration.id}>{configuration.name}</option>)}<option value="__create__">Edit configurations…</option></select>
           </div>}
-          <span className="connection-dot" />{host}:{port}<div className="settings-anchor"><button title="Settings" onClick={() => setSettingsOpen((open) => !open)}><Settings size={15} /></button>{settingsOpen && <SettingsMenu workspace={activeWorkspace} sideLayout={sideLayout} onSideLayoutChange={changeSideLayout} commands={commands} shortcutBindings={shortcutBindings} platform={platform} onShortcutChange={changeShortcut} onShortcutsReset={resetShortcuts} values={{ theme, highlightTheme, uiFontFamily, uiFontSize, uiLineHeight }} isWorkspaceOverride={(setting) => hasWorkspaceSetting(activeWorkspace, setting)} onChange={(setting, value) => { workspaceDefaultsRef.current.delete(setting); if (setting === "theme") setTheme(value as DesktopSettings["theme"]); else if (setting === "highlightTheme") setHighlightTheme(value as DesktopSettings["highlightTheme"]); else if (setting === "uiFontFamily") setUiFontFamily(value as DesktopSettings["uiFontFamily"]); else if (setting === "uiFontSize") setUiFontSize(value as number); else setUiLineHeight(value as number); }} onReset={(setting) => { resetWorkspaceSetting(activeWorkspace, setting); workspaceDefaultsRef.current.add(setting); const value = readSetting(setting); if (setting === "theme") setTheme(value === "light" ? "light" : "dark"); else if (setting === "highlightTheme") setHighlightTheme(value === "ftpud" || value === "ftpud-dark" ? "ftpud" : "default"); else if (setting === "uiFontFamily") setUiFontFamily(value === "inter" ? "inter" : "jetbrains"); else if (setting === "uiFontSize") setUiFontSize(readSettingNumber(setting, 13, 10, 20)); else setUiLineHeight(readSettingNumber(setting, 1.2, 1, 2)); setSettingsRevision((revision) => revision + 1); }} />}</div><button title="Disconnect" onClick={disconnect}><LogOut size={15} /></button>
+          <span className="connection-dot" />{host}:{port}<div className="settings-anchor"><button title="Settings" onClick={() => setSettingsOpen((open) => !open)}><Settings size={15} /></button>{settingsOpen && <SettingsMenu workspace={activeWorkspace} sideLayout={sideLayout} onSideLayoutChange={changeSideLayout} commands={commands} shortcutBindings={shortcutBindings} platform={platform} onShortcutChange={changeShortcut} onShortcutsReset={resetShortcuts} values={{ theme, highlightTheme, uiFontFamily, uiFontWeight, uiFontSize, uiLineHeight }} isWorkspaceOverride={(setting) => hasWorkspaceSetting(activeWorkspace, setting)} onChange={(setting, value) => { workspaceDefaultsRef.current.delete(setting); if (setting === "theme") setTheme(value as DesktopSettings["theme"]); else if (setting === "highlightTheme") setHighlightTheme(value as DesktopSettings["highlightTheme"]); else if (setting === "uiFontFamily") setUiFontFamily(value as DesktopSettings["uiFontFamily"]); else if (setting === "uiFontWeight") setUiFontWeight(value as number); else if (setting === "uiFontSize") setUiFontSize(value as number); else setUiLineHeight(value as number); }} onReset={(setting) => { resetWorkspaceSetting(activeWorkspace, setting); workspaceDefaultsRef.current.add(setting); const value = readSetting(setting); if (setting === "theme") setTheme(value === "light" ? "light" : "dark"); else if (setting === "highlightTheme") setHighlightTheme(value === "ftpud" || value === "ftpud-dark" ? "ftpud" : "default"); else if (setting === "uiFontFamily") setUiFontFamily(value === "inter" ? "inter" : "jetbrains"); else if (setting === "uiFontWeight") setUiFontWeight(readSettingNumber(setting, 450, 350, 600)); else if (setting === "uiFontSize") setUiFontSize(readSettingNumber(setting, 13, 10, 20)); else setUiLineHeight(readSettingNumber(setting, 1.2, 1, 2)); setSettingsRevision((revision) => revision + 1); }} />}</div><button title="Disconnect" onClick={disconnect}><LogOut size={15} /></button>
         </div>
         <div className="tabs" role="tablist" aria-label="Open editors">
           {group.tabs.map((tab) => { const label = editorTabLabel(tab); return <div className={`tab ${tab.pinned ? "pinned" : ""} ${tab.id === group.activeTabId ? "active" : ""} ${tab.id === draggedTabId ? "dragging" : ""}`} role="tab" aria-selected={tab.id === group.activeTabId} aria-label={tab.pinned ? `${label} (pinned)` : label} tabIndex={tab.id === group.activeTabId ? 0 : -1} title={`${label}${tab.pinned ? " · Pinned" : ""} · Ctrl+Tab to switch · Ctrl/Cmd+W to close`} key={tab.id} draggable onDragStart={(event) => { setDraggedTabId(tab.id); event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/plain", tab.id); }} onDragEnd={() => setDraggedTabId(undefined)} onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = "move"; }} onDrop={(event) => { event.preventDefault(); moveTab(tab.id); }} onContextMenu={(event) => { event.preventDefault(); setTabContextMenu({ x: Math.min(event.clientX, window.innerWidth - 220), y: Math.min(event.clientY, window.innerHeight - 125), tab }); }} onMouseDown={(event) => { if (event.button === 1) event.preventDefault(); }} onAuxClick={(event) => { if (event.button === 1) { event.preventDefault(); closeTab(tab); } }} onClick={() => void activateEditorTab(tab)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); void activateEditorTab(tab); } }}>
@@ -2448,7 +2639,7 @@ export function App() {
             <button className={activeTab.diffMode === "split" ? "active" : ""} title="Side-by-side diff" onClick={() => updateGroup((tabs, active) => ({ tabs: tabs.map((tab) => tab.id === activeTab.id ? { ...tab, diffMode: "split" } : tab), activeTabId: active }))}><Columns2 size={14} /></button>
             <button className={activeTab.diffMode !== "split" ? "active" : ""} title="Unified diff" onClick={() => updateGroup((tabs, active) => ({ tabs: tabs.map((tab) => tab.id === activeTab.id ? { ...tab, diffMode: "unified" } : tab), activeTabId: active }))}><ListTree size={14} /></button>
           </div>}
-          {(activeTab?.type === "file" || activeTab?.type === "useful") && /\.md$/i.test(activeTab.path) && <div className="editor-mode-switch" aria-label="Markdown mode">
+          {(activeTab?.type === "file" || activeTab?.type === "useful" || activeTab?.type === "workflowDocument") && /\.md$/i.test(activeTab.path) && <div className="editor-mode-switch" aria-label="Markdown mode">
             <button className={activeTab.markdownMode !== "preview" ? "active" : ""} title="Edit Markdown" onClick={() => updateGroup((tabs, active) => ({ tabs: tabs.map((tab) => tab.id === activeTab.id ? { ...tab, markdownMode: "edit" } : tab), activeTabId: active }))}><Pencil size={14} /></button>
             <button className={activeTab.markdownMode === "preview" ? "active" : ""} title="Preview Markdown" onClick={() => updateGroup((tabs, active) => ({ tabs: tabs.map((tab) => tab.id === activeTab.id ? { ...tab, markdownMode: "preview" } : tab), activeTabId: active }))}><Eye size={14} /></button>
           </div>}
@@ -2463,7 +2654,7 @@ export function App() {
         }}>
           {!activeTab ? <div className="empty-editor">Open a file from Project</div> : activeTab.loading ? <div className="empty-editor">Loading {activeTab.title}...</div> : activeTab.error && !activeTab.content ? <div className="editor-error">{activeTab.error}</div> : <>
             {activeTab.error && <div className="inline-error">{activeTab.error}</div>}
-            {activeTab.type === "diff" ? <><DiffEditor key={`${activeTab.id}:${activeTab.diffMode ?? "unified"}`} original={activeTab.originalContent ?? ""} modified={activeTab.content} language={languageByExtension[activeTab.path.split(".").pop()?.toLowerCase() ?? ""] ?? "plaintext"} beforeMount={configureMonacoThemes} theme={monacoTheme(theme, highlightTheme)} onMount={mountWorkingDiff} options={{ automaticLayout: true, readOnly: false, originalEditable: false, renderMarginRevertIcon: true, renderSideBySide: activeTab.diffMode === "split", useInlineViewWhenSpaceIsLimited: false, minimap: { enabled: false }, fontFamily: editorFontFamily, fontSize: uiFontSize, lineHeight: editorLineHeight, scrollBeyondLastLine: false }} /><DiffNavigation editorRef={monacoDiffEditorRef} /></> : activeTab.markdownMode === "preview" ? <div className="markdown-preview"><MarkdownPreview sourcePath={activeTab.path} workspacePath={activeWorkspace} renderPre={renderMarkdownPre} onOpenFile={(path) => void openFile({ name: path.split("/").pop() ?? path, path, type: "file" })} onOpenExternal={(url) => { void window.desktop?.openExternal(url).catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : "Could not open external link")); }} onChange={(content) => updateGroup((tabs, active) => ({ tabs: tabs.map((tab) => tab.id === activeTab.id ? { ...tab, content, dirty: content !== tab.savedContent, error: undefined } : tab), activeTabId: active }))}>{activeTab.content}</MarkdownPreview></div> : <StableEditor key={`${activeTab.type}:${activeTab.usefulScope ?? activeTab.runConfigScope ?? activeTab.agentScope ?? "workspace"}:${activeTab.path}`} path={activeTab.type === "useful" ? `useful-${activeTab.usefulScope}/${activeTab.path}` : activeTab.type === "runConfig" ? `run-config-${activeTab.runConfigScope}/${activeTab.path}.sh` : activeTab.type === "agent" ? `agent-${activeTab.agentScope}/${activeTab.path}` : activeTab.path} language={activeTab.type === "runConfig" ? "shell" : languageByExtension[activeTab.path.split(".").pop()?.toLowerCase() ?? ""] ?? "plaintext"} value={activeTab.content} beforeMount={configureMonacoThemes} theme={monacoTheme(theme, highlightTheme)} onMount={mountEditor} options={{ automaticLayout: true, contextmenu: false, minimap: { enabled: false }, glyphMargin: activeTab.type === "file" || /\.http$/i.test(activeTab.path), fontFamily: editorFontFamily, fontSize: uiFontSize, lineHeight: editorLineHeight, scrollBeyondLastLine: false, padding: { top: 10 } }} onChange={(value) => updateGroup((tabs, active) => ({ tabs: tabs.map((tab) => tab.id === activeTab.id ? { ...tab, content: value, dirty: value !== tab.savedContent, error: undefined } : tab), activeTabId: active }))} />}
+            {activeTab.type === "diff" ? <><DiffEditor key={`${activeTab.id}:${activeTab.diffMode ?? "unified"}`} original={activeTab.originalContent ?? ""} modified={activeTab.content} language={languageByExtension[activeTab.path.split(".").pop()?.toLowerCase() ?? ""] ?? "plaintext"} beforeMount={configureMonacoThemes} theme={monacoTheme(theme, highlightTheme)} onMount={mountWorkingDiff} options={{ automaticLayout: true, readOnly: false, originalEditable: false, renderMarginRevertIcon: true, renderSideBySide: activeTab.diffMode === "split", useInlineViewWhenSpaceIsLimited: false, minimap: { enabled: false }, fontFamily: editorFontFamily, fontWeight: "normal", fontSize: uiFontSize, lineHeight: editorLineHeight, scrollBeyondLastLine: false }} /><DiffNavigation editorRef={monacoDiffEditorRef} /></> : activeTab.markdownMode === "preview" ? <div className="markdown-preview"><MarkdownPreview sourcePath={activeTab.path} workspacePath={activeWorkspace} renderPre={renderMarkdownPre} onOpenFile={(path) => void openFile({ name: path.split("/").pop() ?? path, path, type: "file" })} onOpenExternal={(url) => { void window.desktop?.openExternal(url).catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : "Could not open external link")); }} onChange={activeTab.type === "workflowDocument" ? undefined : (content) => updateGroup((tabs, active) => ({ tabs: tabs.map((tab) => tab.id === activeTab.id ? { ...tab, content, dirty: content !== tab.savedContent, error: undefined } : tab), activeTabId: active }))}>{activeTab.content}</MarkdownPreview></div> : <StableEditor key={`${activeTab.type}:${activeTab.usefulScope ?? activeTab.runConfigScope ?? activeTab.agentScope ?? "workspace"}:${activeTab.path}`} path={activeTab.type === "workflowDocument" ? `${activeTab.id}.md` : activeTab.type === "useful" ? `useful-${activeTab.usefulScope}/${activeTab.path}` : activeTab.type === "runConfig" ? `run-config-${activeTab.runConfigScope}/${activeTab.path}.sh` : activeTab.type === "agent" ? `agent-${activeTab.agentScope}/${activeTab.path}` : activeTab.path} language={activeTab.type === "runConfig" ? "shell" : languageByExtension[activeTab.path.split(".").pop()?.toLowerCase() ?? ""] ?? "plaintext"} value={activeTab.content} beforeMount={configureMonacoThemes} theme={monacoTheme(theme, highlightTheme)} onMount={mountEditor} options={{ readOnly: activeTab.type === "workflowDocument", automaticLayout: true, contextmenu: false, minimap: { enabled: false }, glyphMargin: activeTab.type === "file" || /\.http$/i.test(activeTab.path), fontFamily: editorFontFamily, fontWeight: "normal", fontSize: uiFontSize, lineHeight: editorLineHeight, scrollBeyondLastLine: false, padding: { top: 10 } }} onChange={(value) => updateGroup((tabs, active) => ({ tabs: tabs.map((tab) => tab.id === activeTab.id ? { ...tab, content: value, dirty: value !== tab.savedContent, error: undefined } : tab), activeTabId: active }))} />}
           </>}
           <EditorStatusBar ref={editorStatusBarRef} active={Boolean(activeTab && !activeTab.loading && !(activeTab.error && !activeTab.content) && activeTab.markdownMode !== "preview")} />
         </div>
@@ -2476,7 +2667,7 @@ export function App() {
           <header className="panel-header"><span>Project</span><div className="panel-header-actions"><button title={showIgnored ? "Hide ignored files" : "Show all files (including Git-ignored)"} className={showIgnored ? "active" : ""} onClick={toggleShowIgnored}>{showIgnored ? <Eye size={14} /> : <EyeOff size={14} />}</button><button title="Synchronize files" onClick={() => void refreshTree()}><RefreshCw size={14} /></button></div></header>
           <QuickFilter value={projectFilter} placeholder={projectContentFilter ? "Filter by file contents" : "Filter files"} label={projectContentFilter ? "Filter files by contents" : "Filter project files"} onChange={setProjectFilter} contentSearch={projectContentFilter} contentSearchLoading={projectContentFilterLoading} onContentSearchChange={setProjectContentFilter} />
           <div className="workspace-name"><select aria-label="Workspace root" value={selectedRootId} disabled={taskSwitching} onChange={(event) => void selectWorkspaceRoot(event.target.value)}>{workspaceRoots.map((root) => <option key={root.id} value={root.id}>{root.alias}</option>)}</select><button title="Add remote workspace root" onClick={() => setWorkspaceRootDialogOpen(true)}><Plus size={13} /></button><button title="Unregister an inactive workspace root" disabled={!workspaceRoots.some((root) => !root.primary && root.id !== selectedRootId)} onClick={() => void removeWorkspaceRoot()}><Trash2 size={13} /></button></div>
-          <ProjectTree nodes={tree} query={projectContentFilter ? "" : projectFilter} matchingPaths={projectContentFilter && projectFilter.trim() ? projectContentPaths ?? new Set() : undefined} activePath={activeTab?.path} selectedPaths={projectSelection} fileColors={fileColors} gitStatuses={projectGitStatuses} onAction={runProjectTreeAction} onSelectionChange={setProjectSelection} onContextMenu={(nodes, x, y) => setTreeContextMenu({ x: Math.min(x, window.innerWidth - 220), y: Math.min(y, window.innerHeight - 180), nodes })} />
+          <ProjectTree nodes={tree} javaNodes={javaOptions ? javaTree : undefined} query={projectContentFilter ? "" : projectFilter} matchingPaths={projectContentFilter && projectFilter.trim() ? projectContentPaths ?? new Set() : undefined} activePath={activeTab?.path} selectedPaths={projectSelection} fileColors={fileColors} gitStatuses={projectGitStatuses} onAction={runProjectTreeAction} onSelectionChange={setProjectSelection} onContextMenu={(nodes, x, y) => setTreeContextMenu({ x: Math.min(x, window.innerWidth - 220), y: Math.min(y, window.innerHeight - 180), nodes })} />
         </section>}
         {rightPanels.git && <section key="git" className="stacked-panel">
           <header className="panel-header"><span>Git Changes</span><div className="panel-header-actions"><button title="Stash manager" onClick={() => setGitStashDialog(true)}><Archive size={14} /></button><GitToolbarActions selectedCount={selectedRollbackEntries.length} operationRunning={gitOperationRunning} pushing={gitPushing} fetching={gitFetching} rollingBack={gitRollingBack} upstream={gitUpstream} onRollbackSelected={openRollbackSelected} onUndoLastCommit={() => void previewHistoryRewrite("undo")} onPush={() => void pushGit()} onFetch={() => void fetchGit()} onRefresh={() => void refreshGit()} /></div></header>
@@ -2484,7 +2675,7 @@ export function App() {
           <KeyboardGitChangesView entries={gitEntries} error={gitError} selectedPaths={selectedGitPaths} onTogglePath={(path) => setSelectedGitPaths((current) => { const next = new Set(current); next.has(path) ? next.delete(path) : next.add(path); return next; })} activePath={activeTab?.path} onOpenDiff={openDiff} onOpenConflict={(entry) => setGitConflictPath(entry.path)} onOpenFile={(entry) => void openFile({ name: entry.path.split("/").pop() ?? entry.path, path: entry.path, type: "file" })} onContextMenu={(event, entry) => { event.preventDefault(); setGitRollbackMenu({ ...menuPosition(event.clientX, event.clientY, 220, 100, window.innerWidth, window.innerHeight), entry }); }} />
           <GitCommitPanel message={gitCommitMessage} selectedCount={selectedGitPaths.size} operationRunning={gitOperationRunning} committing={gitCommitting} onMessageChange={setGitCommitMessage} onCommit={(message) => void commitSelectedFiles(message)} stagedCount={gitEntries.filter((entry) => entry.states.includes("index")).length} onAmend={() => void previewHistoryRewrite("amend")} />
         </section>}
-        {rightPanels.taskGit && selectedTaskId && <section key="taskGit" className="stacked-panel"><header className="panel-header"><span>Task Git</span><button title="Refresh task comparison" onClick={() => void refreshTaskGit()}><RefreshCw size={14} /></button></header><div className="git-branch"><GitCompareArrows size={13} /><span>{tasks.find((task) => task.id === selectedTaskId)?.baseBranch ?? "Base branch"}</span></div><GitChangesView entries={taskGitEntries} error={taskGitError} emptyMessage="No changes from base branch" groupTitle="Changes from Base" activePath={activeTab?.path} onOpenDiff={openTaskDiff} onOpenFile={(entry) => void openFile({ name: entry.path.split("/").pop() ?? entry.path, path: entry.path, type: "file" })} /></section>}
+        {rightPanels.taskGit && selectedTaskId && <section key="taskGit" className="stacked-panel"><header className="panel-header"><span>Task Git</span><button title="Refresh task comparison" onClick={() => void refreshTaskGit()}><RefreshCw size={14} /></button></header><div className="git-branch"><GitCompareArrows size={13} /><span>{tasks.find((task) => task.id === selectedTaskId)?.baseBranch ?? "Base branch"}</span></div><GitChangesView entries={taskGitEntries} error={taskGitError} emptyMessage="No changes from base branch" groupTitle="Changes from Base" activePath={activeTab?.path} onOpenDiff={openTaskDiff} onContextMenu={(event, entry) => { event.preventDefault(); const task = activeTaskRef.current; if (task) setGitRollbackMenu({ ...menuPosition(event.clientX, event.clientY, 220, 40, window.innerWidth, window.innerHeight), entry, taskRef: task.baseBranch }); }} onOpenFile={(entry) => void openFile({ name: entry.path.split("/").pop() ?? entry.path, path: entry.path, type: "file" })} /></section>}
         {rightPanels.promptHistory && selectedTaskId && <TaskCheckpointHistory key="promptHistory" checkpoints={taskCheckpoints} onOpen={openCheckpointDiff} onReview={reviewCheckpointFile} onRestore={restoreCheckpoint} onFollowUp={followUpCheckpoint} onClose={() => setRightPanels((current) => ({ ...current, promptHistory: false }))} />}
         {rightPanels.java && javaOptions && <section key="java" className="stacked-panel"><header className="panel-header"><span>Java Project</span><button title="Refresh Java project" onClick={() => void refreshJavaTree()}><RefreshCw size={14} /></button></header><div className="java-project-meta"><Coffee size={13} /><span>{javaOptions.pomPath}</span></div><div className="tree java-tree"><JavaProjectTree nodes={javaTree} activePath={activeTab?.path} onOpen={openFile} /></div></section>}
         {rightPanels.useful && <section key="useful" className="stacked-panel"><header className="panel-header"><span>Useful Files</span><button title="Refresh useful files" onClick={() => void refreshUsefulFiles()}><RefreshCw size={14} /></button></header><div className="useful-files-list"><UsefulFileSection title="Global" scope="global" files={usefulFiles} activeTab={activeTab} onOpen={openUsefulFile} onCreate={(scope) => setUsefulDialog({ mode: "create", scope })} onRename={(file) => setUsefulDialog({ mode: "rename", scope: file.scope, file })} onDelete={(file) => void deleteUsefulFile(file)} /><UsefulFileSection title="Local" scope="local" files={usefulFiles} activeTab={activeTab} onOpen={openUsefulFile} onCreate={(scope) => setUsefulDialog({ mode: "create", scope })} onRename={(file) => setUsefulDialog({ mode: "rename", scope: file.scope, file })} onDelete={(file) => void deleteUsefulFile(file)} /></div></section>}
@@ -2513,8 +2704,8 @@ export function App() {
       <nav className="right-tool-stripe" aria-label="Right tool windows"><button className={`tool-stripe-button right ${classicTasksOpen ? "active" : ""}`} title={classicTasksOpen ? "Hide Tasks" : "Show Tasks"} onClick={() => setClassicTasksOpen((open) => !open)}><ListTodo size={15} /><span>Tasks</span>{tasks.length > 0 && <span className="tool-badge">{tasks.length > 99 ? "99+" : tasks.length}</span>}</button><button className={`tool-stripe-button right ${classicAiOpen ? "active" : ""}`} title={classicAiOpen ? "Hide AI" : "Show AI"} onClick={() => { setClassicAiOpen((open) => { if (!open) void refreshAi(); return !open; }); }}><Bot size={15} /><span>AI</span>{aiSession.status === "in_progress" && <span className="tool-badge">...</span>}</button></nav>
       </>}
     </div>
-    {layout.panels.some((panel) => panel.type === "terminal") && <TerminalPanel theme={theme} fontFamily={editorFontFamily} fontSize={uiFontSize} lineHeight={uiLineHeight} client={clientRef.current!} group={layout.terminalGroup} height={terminalHeight} highlightedTerminalIds={new Set(runConfigs.filter((config) => ["starting", "running", "stopping"].includes(config.status)).flatMap((config) => config.terminalId ? [config.terminalId] : []))} onActivate={activateTerminalTab} onCreate={() => void createTerminal()} onClose={closeTerminal} onRename={renameTerminal} onDuplicate={(tab) => void duplicateTerminal(tab)} onMove={moveTerminal} onRecoveryShown={(tabId) => updateTerminalGroup((group) => ({ ...group, tabs: group.tabs.map((tab) => tab.id === tabId ? { ...tab, recovery: undefined } : tab) }))} onResizeStart={beginTerminalResize} registerWriter={registerTerminalWriter} />}
-    {layout.panels.some((panel) => panel.type === "java") && javaOptions && <JavaPanel height={javaPanelHeight} log={javaLog} running={javaRunning} options={javaOptions} debugState={javaDebugState} onBuild={() => void runJavaAction("java.build")} onRun={() => void runJavaAction("java.run")} onDebug={() => void debugJava()} onStop={() => void stopJava()} onDebugCommand={(command) => void clientRef.current!.request("java.debug.command", { command })} onClear={() => setJavaLog("")} onResizeStart={beginJavaResize} />}
+    {layout.panels.some((panel) => panel.type === "terminal") && <TerminalPanel theme={theme} fontFamily={terminalFontFamily} fontSize={uiFontSize} lineHeight={uiLineHeight} client={clientRef.current!} group={layout.terminalGroup} height={terminalHeight} highlightedTerminalIds={new Set(runConfigs.filter((config) => ["starting", "running", "stopping"].includes(config.status)).flatMap((config) => config.terminalId ? [config.terminalId] : []))} onActivate={activateTerminalTab} onCreate={() => void createTerminal()} onClose={closeTerminal} onRename={renameTerminal} onDuplicate={(tab) => void duplicateTerminal(tab)} onMove={moveTerminal} onRecoveryShown={(tabId) => updateTerminalGroup((group) => ({ ...group, tabs: group.tabs.map((tab) => tab.id === tabId ? { ...tab, recovery: undefined } : tab) }))} onResizeStart={beginTerminalResize} registerWriter={registerTerminalWriter} />}
+    {layout.panels.some((panel) => panel.type === "java") && javaOptions && <JavaPanel key={`java-panel:${selectedRootId}`} height={javaPanelHeight} log={javaLog} running={javaRunning} options={javaOptions} debugState={javaDebugState} onConfigure={() => setShowRunConfigurationDialog(true)} onApplyChanges={applyJavaChanges} onInspect={(reference, start) => clientRef.current!.request("java.debug.variables", { reference, start })} onBuild={() => void runJavaAction("java.build")} onRun={() => void runJavaAction("java.run")} onDebug={() => void debugJava()} onStop={() => void stopJava()} onDebugCommand={(command) => void commandJavaDebugger(command)} onClear={() => setJavaLog("")} onResizeStart={beginJavaResize} onHeightChange={setJavaPanelHeight} />}
     {layout.panels.some((panel) => panel.type === "problems") && javaOptions && <ProblemsPanel height={problemsHeight} diagnostics={javaDiagnostics} checking={javaChecking} onRefresh={() => void checkJava()} onOpen={(diagnostic) => void openDiagnostic(diagnostic)} onResizeStart={beginProblemsResize} />}
     {layout.panels.some((panel) => panel.type === "gitlog") && <GitLogPanel client={clientRef.current!} height={gitLogHeight} onResizeStart={beginGitLogResize} onRepositoryChanged={() => { void Promise.all([refreshGit(), refreshTree()]); }} onMergeConflict={() => { void clientRef.current?.request("git.conflicts", {}).then((conflicts) => setGitConflictPath(conflicts.files[0]?.path ?? "")); }} />}
     <footer className="bottom-tool-bar">
@@ -2548,8 +2739,8 @@ export function App() {
       </div>
     </div>}
     {editorGitMenu && <div className="context-menu-layer" onMouseDown={() => setEditorGitMenu(undefined)}><div className="context-menu editor-git-menu" style={{ left: editorGitMenu.x, top: editorGitMenu.y }} onMouseDown={(event) => event.stopPropagation()}><button onClick={() => attachWorkspaceFile(editorGitMenu.path)}><Bot size={14} /><span>Attach to AI</span></button><div className="context-submenu-trigger"><button><GitBranch size={14} /><span>Git</span><ChevronRight size={13} /></button><div className="context-menu context-submenu"><button onClick={() => { setGitHistory({ path: editorGitMenu.path }); setEditorGitMenu(undefined); }}><FileDiff size={14} /><span>Show file changes</span></button><button disabled={editorGitMenu.startLine === undefined} onClick={() => { setGitHistory({ path: editorGitMenu.path, startLine: editorGitMenu.startLine, endLine: editorGitMenu.endLine }); setEditorGitMenu(undefined); }}><ListTree size={14} /><span>Show selection changes</span></button></div></div></div></div>}
-    {gitRollbackMenu && <div className="context-menu-layer" onMouseDown={() => setGitRollbackMenu(undefined)}><div className="context-menu" style={{ left: gitRollbackMenu.x, top: gitRollbackMenu.y }} onMouseDown={(event) => event.stopPropagation()}>{gitRollbackMenu.entry.states.includes("conflict") ? <button onClick={() => { setGitConflictPath(gitRollbackMenu.entry.path); setGitRollbackMenu(undefined); }}><GitBranch size={14} /><span>Resolve Conflict</span></button> : <><button disabled={gitOperationRunning || !gitRollbackMenu.entry.states.includes("worktree") && !gitRollbackMenu.entry.states.includes("untracked")} onClick={() => void updateGitIndex("stage", gitRollbackMenu.entry.path)}><Check size={14} /><span>Stage File</span></button><button disabled={gitOperationRunning || !gitRollbackMenu.entry.states.includes("index")} onClick={() => void updateGitIndex("unstage", gitRollbackMenu.entry.path)}><X size={14} /><span>Unstage File</span></button></>}<button className="danger" disabled={gitOperationRunning} onClick={() => void rollbackFile(gitRollbackMenu.entry)}><RefreshCw size={14} /><span>Rollback</span></button></div></div>}
-    {tabContextMenu && <div className="context-menu-layer" onMouseDown={() => setTabContextMenu(undefined)}><div className="context-menu tab-context-menu" style={{ left: tabContextMenu.x, top: tabContextMenu.y }} onMouseDown={(event) => event.stopPropagation()}>{tabContextMenu.tab.type === "file" && <button onClick={() => toggleTabPin(tabContextMenu.tab)}>{tabContextMenu.tab.pinned ? <PinOff size={14} /> : <Pin size={14} />}<span>{tabContextMenu.tab.pinned ? "Unpin Tab" : "Pin Tab"}</span></button>}<button onClick={() => closeTabs(tabContextMenu.tab, "all")}><X size={14} /><span>Close All Unpinned</span></button><button disabled={!group.tabs.slice(group.tabs.findIndex((tab) => tab.id === tabContextMenu.tab.id) + 1).some((tab) => !tab.pinned)} onClick={() => closeTabs(tabContextMenu.tab, "right")}><ArrowUpRight className="close-right-icon" size={14} /><span>Close Unpinned to the Right</span></button><button disabled={tabContextMenu.tab.type === "diff" || tabContextMenu.tab.type === "agent" || tabContextMenu.tab.type === "runConfig"} onClick={() => void openTabInWindow(tabContextMenu.tab)}><Columns2 size={14} /><span>Open in New Window</span></button></div></div>}
+    {gitRollbackMenu && <div className="context-menu-layer" onMouseDown={() => setGitRollbackMenu(undefined)}><div className="context-menu" style={{ left: gitRollbackMenu.x, top: gitRollbackMenu.y }} onMouseDown={(event) => event.stopPropagation()}>{!gitRollbackMenu.taskRef && (gitRollbackMenu.entry.states.includes("conflict") ? <button onClick={() => { setGitConflictPath(gitRollbackMenu.entry.path); setGitRollbackMenu(undefined); }}><GitBranch size={14} /><span>Resolve Conflict</span></button> : <><button disabled={gitOperationRunning || !gitRollbackMenu.entry.states.includes("worktree") && !gitRollbackMenu.entry.states.includes("untracked")} onClick={() => void updateGitIndex("stage", gitRollbackMenu.entry.path)}><Check size={14} /><span>Stage File</span></button><button disabled={gitOperationRunning || !gitRollbackMenu.entry.states.includes("index")} onClick={() => void updateGitIndex("unstage", gitRollbackMenu.entry.path)}><X size={14} /><span>Unstage File</span></button></>)}<button className="danger" disabled={gitOperationRunning} onClick={() => void rollbackFile(gitRollbackMenu.entry, gitRollbackMenu.taskRef)}><RefreshCw size={14} /><span>Rollback</span></button></div></div>}
+    {tabContextMenu && <div className="context-menu-layer" onMouseDown={() => setTabContextMenu(undefined)}><div className="context-menu tab-context-menu" style={{ left: tabContextMenu.x, top: tabContextMenu.y }} onMouseDown={(event) => event.stopPropagation()}>{tabContextMenu.tab.type === "file" && <button onClick={() => toggleTabPin(tabContextMenu.tab)}>{tabContextMenu.tab.pinned ? <PinOff size={14} /> : <Pin size={14} />}<span>{tabContextMenu.tab.pinned ? "Unpin Tab" : "Pin Tab"}</span></button>}<button onClick={() => closeTabs(tabContextMenu.tab, "all")}><X size={14} /><span>Close All Unpinned</span></button><button disabled={!group.tabs.slice(group.tabs.findIndex((tab) => tab.id === tabContextMenu.tab.id) + 1).some((tab) => !tab.pinned)} onClick={() => closeTabs(tabContextMenu.tab, "right")}><ArrowUpRight className="close-right-icon" size={14} /><span>Close Unpinned to the Right</span></button><button disabled={tabContextMenu.tab.type === "diff" || tabContextMenu.tab.type === "agent" || tabContextMenu.tab.type === "runConfig" || tabContextMenu.tab.type === "workflowDocument"} onClick={() => void openTabInWindow(tabContextMenu.tab)}><Columns2 size={14} /><span>Open in New Window</span></button></div></div>}
     {runConfigMenu && <div className="context-menu-layer" onMouseDown={() => setRunConfigMenu(undefined)}><div className="context-menu" style={{ left: runConfigMenu.x, top: runConfigMenu.y }} onMouseDown={(event) => event.stopPropagation()}><button disabled={!runConfigMenu.config.terminalId} onClick={() => void runConfigAction(runConfigMenu.config, "openTerminal")}><SquareTerminal size={14} /><span>Open Terminal</span></button><button disabled={["starting", "running", "stopping"].includes(runConfigMenu.config.status)} onClick={() => void runConfigAction(runConfigMenu.config, "run")}><Play size={14} /><span>Run</span></button><button disabled={!['starting', 'running'].includes(runConfigMenu.config.status)} onClick={() => void runConfigAction(runConfigMenu.config, "stop")}><Square size={14} /><span>Stop</span></button><button disabled={runConfigMenu.config.status === "stopping"} onClick={() => void runConfigAction(runConfigMenu.config, "restart")}><RefreshCw size={14} /><span>Restart</span></button></div></div>}
     {projectPathDialog && <ProjectPathDialog mode={projectPathDialog.mode} initialName={projectPathDialog.mode === "rename" ? projectPathDialog.node.name : ""} parentPath={projectPathDialog.parentPath} onClose={() => setProjectPathDialog(undefined)} onSave={saveProjectPathDialog} />}
     {workspaceRootDialogOpen && <WorkspaceRootDialog onClose={() => setWorkspaceRootDialogOpen(false)} onSave={addWorkspaceRoot} />}
@@ -2568,7 +2759,7 @@ export function App() {
     {gitRebaseDialog && <GitRebaseDialog preview={gitRebaseDialog.preview} busy={gitRebasing} error={gitRebaseDialog.error} onClose={() => { if (!gitRebasing) setGitRebaseDialog(undefined); }} onConfirm={(items) => void executeInteractiveRebase(items)} />}
     {gitHunkDialog && <div className="context-menu-layer" onMouseDown={() => setGitHunkDialog(undefined)}><section className="git-hunk-popup" role="dialog" aria-label={`Previous content in ${gitHunkDialog.path}`} style={{ left: gitHunkDialog.x, top: gitHunkDialog.y }} onMouseDown={(event) => event.stopPropagation()}><header><div><strong>Before this change</strong><span>{gitHunkDialog.path.split("/").pop()} · line {gitHunkDialog.hunk.originalStart}</span></div><button title="Close" onClick={() => setGitHunkDialog(undefined)}><X size={14} /></button></header>{gitHunkDialog.error && <div className="git-hunk-error">{gitHunkDialog.error}</div>}<pre>{gitHunkDialog.hunk.originalLines === 0 ? "This block did not exist before." : gitHunkDialog.originalContent.split("\n").slice(Math.max(0, gitHunkDialog.hunk.originalStart - 1), Math.max(0, gitHunkDialog.hunk.originalStart - 1) + gitHunkDialog.hunk.originalLines).join("\n")}</pre><footer>{gitHunkDialog.hunk.source === "worktree" ? <button onClick={() => void updateGitIndex("stage", gitHunkDialog.path, gitHunkDialog.hunk)}><Check size={13} /><span>Stage Hunk</span></button> : <button onClick={() => void updateGitIndex("unstage", gitHunkDialog.path, gitHunkDialog.hunk)}><X size={13} /><span>Unstage Hunk</span></button>}<button className="danger" disabled={gitHunkDialog.hunk.source !== "worktree"} onClick={() => void rollbackGitHunk()}><RefreshCw size={13} /><span>Rollback</span></button></footer></section></div>}
     {externalConflict && <ExternalChangeConflict dialog={externalConflict} onClose={() => setExternalConflict(undefined)} onReload={() => { updateGroup((tabs, active) => ({ tabs: tabs.map((tab) => tab.id === externalConflict.tabId ? { ...tab, content: externalConflict.externalContent, savedContent: externalConflict.externalContent, revision: externalConflict.externalRevision, dirty: false, error: undefined } : tab), activeTabId: active })); setExternalConflict(undefined); }} onOverwrite={() => { const tab = layoutRef.current.editorGroups[0]?.tabs.find((item) => item.id === externalConflict.tabId); if (!tab || !clientRef.current) return; void clientRef.current.request("filesystem.writeFile", { path: externalConflict.path, content: tab.content, expectedRevision: externalConflict.externalRevision, force: true }).then((saved) => { updateGroup((tabs, active) => ({ tabs: tabs.map((item) => item.id === tab.id ? { ...item, savedContent: tab.content, dirty: false, revision: saved.revision, error: undefined } : item), activeTabId: active })); setExternalConflict(undefined); }).catch((error: unknown) => setExternalConflict((current) => current ? { ...current, error: error instanceof Error ? error.message : "Could not overwrite" } : current)); }} onSaveAs={(target) => { const tab = layoutRef.current.editorGroups[0]?.tabs.find((item) => item.id === externalConflict.tabId); if (!tab || !clientRef.current) return; void clientRef.current.request("filesystem.writeFile", { path: target, content: tab.content, create: true }).then(() => { setExternalConflict(undefined); void refreshTree(); }).catch((error: unknown) => setExternalConflict((current) => current ? { ...current, error: error instanceof Error ? error.message : "Could not save as" } : current)); }} />}
-    {showRunConfigurationDialog && <RunConfigurationDialog client={clientRef.current!} onClose={() => setShowRunConfigurationDialog(false)} onSaved={(options) => { setJavaOptions(options); javaOptionsRef.current = options; setShowRunConfigurationDialog(false); }} />}
+    {showRunConfigurationDialog && <JavaConfigurationDialog key={`java-configuration:${selectedRootId}`} client={clientRef.current!} running={javaRunning} onClose={() => setShowRunConfigurationDialog(false)} onSaved={(options) => { setJavaOptions(options); javaOptionsRef.current = options; setShowRunConfigurationDialog(false); void refreshJavaTree(); void refreshTree(); }} />}
     {showCreateTaskDialog && <CreateTaskDialog client={clientRef.current!} onClose={() => setShowCreateTaskDialog(false)} onCreate={createTask} />}
     {mergeDialog && <MergeTaskDialog task={mergeDialog} onClose={() => setMergeDialog(undefined)} onMerge={(strategy) => void mergeTask(mergeDialog, strategy)} />}
     {usefulDialog && <UsefulFileDialog mode={usefulDialog.mode} initialName={usefulDialog.file?.name ?? ""} scope={usefulDialog.scope} onClose={() => setUsefulDialog(undefined)} onSave={saveUsefulFileDialog} />}
@@ -2705,12 +2896,12 @@ function JavaProjectTree({ nodes, activePath, onOpen }: { nodes: JavaProjectNode
   useEffect(() => setExpanded((current) => new Set([...current, ...nodes.filter((node) => node.type === "sourceRoot").map((node) => node.path)])), [nodes]);
   const render = (items: JavaProjectNode[], depth: number): ReactNode => items.map((node) => {
     if (node.type === "file") return <button key={node.path} className={`tree-row java-file-row ${activePath === node.path ? "selected" : ""}`} style={{ paddingLeft: 11 + depth * 13 }} onClick={() => onOpen({ name: node.name, path: node.path, type: "file" })}>
-      <Coffee size={14} color="#d58b59" /><span>{node.name}</span>
+      <JavaFileIcon type={node.javaType} /><span className="tree-file-name">{node.name}</span>
     </button>;
     const open = expanded.has(node.path);
     return <div key={node.path}>
       <button className={`tree-row ${node.type === "sourceRoot" ? "java-source-root" : ""}`} style={{ paddingLeft: 7 + depth * 13 }} onClick={() => setExpanded((current) => { const next = new Set(current); open ? next.delete(node.path) : next.add(node.path); return next; })}>
-        {open ? <ChevronDown size={13} /> : <ChevronRight size={13} />}{node.type === "sourceRoot" ? <FolderOpen size={14} color="#6ea8fe" /> : <Package size={14} color="#b5a36a" />}<span>{node.name}</span>
+        {open ? <ChevronDown size={13} /> : <ChevronRight size={13} />}{node.type === "sourceRoot" ? <FolderOpen className={`folder-kind-icon java-root-${node.sourceKind ?? "source"}`} size={14} /> : <Package size={14} color="#b5a36a" />}<span className="tree-file-name">{node.name}</span>
       </button>
       {open && render(node.children ?? [], depth + 1)}
     </div>;
@@ -2768,7 +2959,7 @@ function UsefulFileSection({ title, scope, files, activeTab, onOpen, onCreate, o
   const [configs, setConfigs] = useState<RunConfig[]>([]);
   useEffect(() => { const listener = (event: Event) => setConfigs((event as CustomEvent<RunConfig[]>).detail); window.addEventListener("vibe:run-configs", listener); window.dispatchEvent(new Event("vibe:request-run-configs")); return () => window.removeEventListener("vibe:run-configs", listener); }, []);
   return <section className="useful-section"><header><span>{title}</span><button title={`Create ${title} file`} onClick={() => onCreate(scope)}><Plus size={14} /></button><button title={`Create ${title} Run Config`} onClick={() => window.dispatchEvent(new CustomEvent("vibe:create-run-config", { detail: scope }))}><Play size={13} /><Plus size={9} /></button></header>
-    {scoped.length === 0 ? <div className="useful-empty">No files</div> : scoped.map((file) => <div key={file.name} className={`useful-row ${activeTab?.type === "useful" && activeTab.usefulScope === scope && activeTab.path === file.name ? "selected" : ""}`}><button className="useful-open" title={file.name} onClick={() => void onOpen(file)}><FileText size={14} /><span>{file.name}</span></button><button title={`Rename ${file.name}`} onClick={() => onRename(file)}><Pencil size={12} /></button><button title={`Delete ${file.name}`} onClick={() => onDelete(file)}><Trash2 size={12} /></button></div>)}
+    {scoped.length === 0 ? <div className="useful-empty">No files</div> : scoped.map((file) => <div key={file.name} className={`useful-row ${activeTab?.type === "useful" && activeTab.usefulScope === scope && activeTab.path === file.name ? "selected" : ""}`}><button className="useful-open" title={file.name} onClick={() => void onOpen(file)}><FileKindIcon name={file.name} /><span>{file.name}</span></button><button title={`Rename ${file.name}`} onClick={() => onRename(file)}><Pencil size={12} /></button><button title={`Delete ${file.name}`} onClick={() => onDelete(file)}><Trash2 size={12} /></button></div>)}
     {configs.filter((config) => config.scope === scope).map((config) => <div key={`run:${config.name}`} className={`useful-row run-config-useful-row ${activeTab?.type === "runConfig" && activeTab.runConfigScope === scope && activeTab.path === config.name ? "selected" : ""}`}><button className="useful-open" title={`${config.name} (${config.status})`} onClick={() => window.dispatchEvent(new CustomEvent("vibe:open-run-config", { detail: config }))}><Play className={`run-config-icon ${config.status}`} size={14} /><span>{config.name}</span></button><button title={`Rename ${config.name}`} onClick={() => window.dispatchEvent(new CustomEvent("vibe:rename-run-config", { detail: config }))}><Pencil size={12} /></button><button title={`Delete ${config.name}`} onClick={() => window.dispatchEvent(new CustomEvent("vibe:delete-run-config", { detail: config }))}><Trash2 size={12} /></button></div>)}
   </section>;
 }
@@ -2832,7 +3023,7 @@ function AgentPicker({ agents, value, disabled, onChange }: { agents: AgentFile[
 function AgentSection({ title, scope, agents, activeTab, onOpen, onCreate, onRename, onDelete }: { title: string; scope: AgentFileScope; agents: AgentFile[]; activeTab?: EditorTab; onOpen(file: AgentFile): void; onCreate(scope: "global" | "local"): void; onRename(file: AgentFile): void; onDelete(file: AgentFile): void }) {
   const scoped = agents.filter((agent) => agent.scope === scope);
   return <section className="useful-section"><header><span>{title}</span>{scope !== "workspace" && <button title={`Create ${title} agent`} onClick={() => onCreate(scope)}><Plus size={14} /></button>}</header>
-    {scoped.length === 0 ? <div className="useful-empty">No agents</div> : scoped.map((file) => <div key={file.name} className={`useful-row ${activeTab?.type === "agent" && activeTab.agentScope === scope && activeTab.path === file.name || activeTab?.type === "file" && scope === "workspace" && activeTab.path === `.agents/${file.name}` ? "selected" : ""}`}><button className="useful-open" title={file.agent.description ?? file.agent.name} onClick={() => onOpen(file)}><Bot size={14} /><span>{file.agent.name}</span></button>{scope !== "workspace" && <><button title={`Rename ${file.name}`} onClick={() => onRename(file)}><Pencil size={12} /></button><button title={`Delete ${file.name}`} onClick={() => onDelete(file)}><Trash2 size={12} /></button></>}</div>)}
+    {scoped.length === 0 ? <div className="useful-empty">No agents</div> : scoped.map((file) => <div key={file.name} className={`useful-row ${activeTab?.type === "agent" && activeTab.agentScope === scope && activeTab.path === file.name || activeTab?.type === "file" && scope === "workspace" && activeTab.path === `.agents/${file.name}` ? "selected" : ""}`}><button className="useful-open" title={file.agent.description ?? file.agent.name} onClick={() => onOpen(file)}><Bot className="agent-kind-icon" size={14} /><span>{file.agent.name}</span></button>{scope !== "workspace" && <><button title={`Rename ${file.name}`} onClick={() => onRename(file)}><Pencil size={12} /></button><button title={`Delete ${file.name}`} onClick={() => onDelete(file)}><Trash2 size={12} /></button></>}</div>)}
   </section>;
 }
 
@@ -2863,7 +3054,7 @@ function GitChangeGroup({ title, entries, selectedPaths, onTogglePath, activePat
   const allSelected = entries.length > 0 && selectedCount === entries.length;
   return <section className={`git-group git-group-${title.toLowerCase()}`}>
     <button className="git-group-title" aria-expanded={expanded} onClick={() => setExpanded((current) => !current)}>
-      {expanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />}{selectable && <input type="checkbox" aria-label={`Select all ${title.toLowerCase()} files`} checked={allSelected} ref={(input) => { if (input) input.indeterminate = selectedCount > 0 && !allSelected; }} onClick={(event) => event.stopPropagation()} onChange={() => entries.forEach((entry) => { if ((selectedPaths?.has(entry.path) ?? false) === allSelected) onTogglePath?.(entry.path); })} />}<span>{title}</span><span className="git-count">{entries.length}</span>
+      {expanded ? <ChevronDown className="tree-chevron" size={14} /> : <ChevronRight className="tree-chevron" size={14} />}{selectable && <input type="checkbox" aria-label={`Select all ${title.toLowerCase()} files`} checked={allSelected} ref={(input) => { if (input) input.indeterminate = selectedCount > 0 && !allSelected; }} onClick={(event) => event.stopPropagation()} onChange={() => entries.forEach((entry) => { if ((selectedPaths?.has(entry.path) ?? false) === allSelected) onTogglePath?.(entry.path); })} />}<span>{title}</span><span className="git-count">{entries.length}</span>
     </button>
     {expanded && <GitStatusTree entries={entries} selectedPaths={selectedPaths} onTogglePath={onTogglePath} activePath={activePath} onOpenDiff={onOpenDiff} onOpenFile={onOpenFile} onContextMenu={onContextMenu} />}
   </section>;
@@ -2887,7 +3078,7 @@ function GitStatusTree({ entries, selectedPaths, onTogglePath, activePath, onOpe
       return <div key={node.path}>
         <button className="git-file-row git-directory-row" style={{ paddingLeft: (onTogglePath ? 9 : 27) + depth * 13 }} onClick={() => setExpanded((current) => { const next = new Set(current); open ? next.delete(node.path) : next.add(node.path); return next; })}>
           {onTogglePath && <input type="checkbox" aria-label={`Select all changes under ${node.path}`} checked={allSelected} ref={(input) => { if (input) input.indeterminate = selectedCount > 0 && !allSelected; }} onClick={(event) => event.stopPropagation()} onChange={() => descendantPaths.forEach((path) => { if ((selectedPaths?.has(path) ?? false) === allSelected) onTogglePath(path); })} />}
-          {open ? <ChevronDown size={13} /> : <ChevronRight size={13} />}{open ? <FolderOpen size={14} /> : <Folder size={14} />}<span className="git-file-name">{node.name}</span>
+          {open ? <ChevronDown className="tree-chevron" size={14} /> : <ChevronRight className="tree-chevron" size={14} />}{open ? <FolderOpen className="folder-kind-icon" size={15} /> : <Folder className="folder-kind-icon" size={15} />}<span className="git-file-name">{node.name}</span>
         </button>
         {open && renderNodes(node.children, depth + 1)}
       </div>;
@@ -2898,7 +3089,7 @@ function GitStatusTree({ entries, selectedPaths, onTogglePath, activePath, onOpe
     const kind = entry.indexStatus === "U" || entry.worktreeStatus === "U" ? "conflict" : entry.indexStatus === "?" ? "untracked" : deleted ? "deleted" : entry.indexStatus === "A" ? "added" : "modified";
     return <button key={node.path} className={`git-file-row ${activePath === entry.path ? "selected" : ""}`} style={{ paddingLeft: (onTogglePath ? 9 : 27) + depth * 13 }} title={deleted ? `${entry.path} (deleted)` : `${entry.path} - double-click to open file`} onClick={() => onOpenDiff(entry)} onDoubleClick={() => { if (!deleted) onOpenFile(entry); }} onContextMenu={onContextMenu ? (event) => onContextMenu(event, entry) : undefined}>
       {onTogglePath && <input type="checkbox" aria-label={`Select ${entry.path}`} checked={selectedPaths?.has(entry.path) ?? false} onClick={(event) => event.stopPropagation()} onChange={() => onTogglePath(entry.path)} />}
-      <FileCode2 size={14} /><span className="git-file-name">{node.name}</span><span className={`git-status ${kind}`}>{status}</span>
+      <span className="tree-indent" /><FileKindIcon name={node.name} /><span className="git-file-name">{node.name}</span><span className={`git-status ${kind}`}>{status}</span>
     </button>;
   });
   return <>{renderNodes(nodes, 0)}</>;
@@ -2992,50 +3183,6 @@ function CreateTaskDialog({ client, onClose, onCreate }: { client: CoreClient; o
         <div className="task-branch-mode">{selected ? <>Use existing {selected.remote ? "remote " : ""}branch <strong>{selected.name}</strong></> : <>Create new branch <strong>{branch.trim() || "..."}</strong></>}</div>
         {error && <div className="find-error">{error}</div>}
         <footer><button type="button" disabled={saving} onClick={onClose}>Cancel</button><button className="primary" disabled={saving || !branch.trim()}>{saving ? "Creating..." : "Create"}</button></footer>
-      </form>
-    </section>
-  </div>;
-}
-
-function RunConfigurationDialog({ client, onClose, onSaved }: { client: CoreClient; onClose(): void; onSaved(options: JavaProjectOptions): void }) {
-  const [classes, setClasses] = useState<JavaMainClass[]>([]);
-  const [mainClass, setMainClass] = useState("");
-  const [name, setName] = useState("");
-  const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState("");
-  useEffect(() => {
-    let current = true;
-    void client.request("java.listMainClasses", {}).then((result) => {
-      if (!current) return;
-      setClasses(result.classes);
-      const first = result.classes[0]?.className ?? "";
-      setMainClass(first); setName(first.split(".").pop() ?? first);
-    }).catch((loadError: unknown) => { if (current) setError(loadError instanceof Error ? loadError.message : "Could not discover main classes"); })
-      .finally(() => { if (current) setLoading(false); });
-    return () => { current = false; };
-  }, [client]);
-  useEffect(() => {
-    const listener = (event: KeyboardEvent) => { if (event.key === "Escape") onClose(); };
-    window.addEventListener("keydown", listener); return () => window.removeEventListener("keydown", listener);
-  }, [onClose]);
-
-  const save = async () => {
-    if (!name.trim() || !mainClass) return;
-    setSaving(true); setError("");
-    try { onSaved((await client.request("java.addRunConfiguration", { name: name.trim(), mainClass })).options); }
-    catch (saveError) { setError(saveError instanceof Error ? saveError.message : "Could not save run configuration"); setSaving(false); }
-  };
-
-  return <div className="dialog-overlay" onMouseDown={onClose}>
-    <section className="run-config-dialog" role="dialog" aria-modal="true" aria-label="Add Java run configuration" onMouseDown={(event) => event.stopPropagation()}>
-      <header><div><h2>Add Run Configuration</h2><span>Java Application</span></div><button title="Close" onClick={onClose}><X size={15} /></button></header>
-      <form onSubmit={(event) => { event.preventDefault(); void save(); }}>
-        <label>Profile name<input autoFocus value={name} onChange={(event) => setName(event.target.value)} maxLength={100} placeholder="Application" /></label>
-        <label>Main class<select value={mainClass} disabled={loading || classes.length === 0} onChange={(event) => { setMainClass(event.target.value); if (!name.trim()) setName(event.target.value.split(".").pop() ?? event.target.value); }}><option value="" disabled>{loading ? "Discovering classes..." : "Select main class"}</option>{classes.map((item) => <option key={item.className} value={item.className}>{item.className}</option>)}</select></label>
-        {classes.length === 0 && !loading && !error && <div className="run-config-empty">No classes with a public static void main method were found in configured source roots.</div>}
-        {error && <div className="find-error">{error}</div>}
-        <footer><button type="button" onClick={onClose}>Cancel</button><button className="primary" disabled={saving || !name.trim() || !mainClass}>{saving ? "Saving..." : "Add"}</button></footer>
       </form>
     </section>
   </div>;

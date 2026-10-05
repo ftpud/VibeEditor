@@ -6,7 +6,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { mkdir, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { Readable, Writable } from "node:stream";
 import { ClientSideConnection, PROTOCOL_VERSION, ndJsonStream, type Client, type ContentBlock, type McpServer, type RequestPermissionRequest, type RequestPermissionResponse, type SessionConfigOption, type SessionNotification } from "@agentclientprotocol/sdk";
-import { AcpProvider, applyConfiguration, type AcpSendRequest, type AiConfiguration, type AiContentBlock, type AiMessage, type AiModel, type AiModelDetails, type AiOption, type AiProviderDescriptor, type AiSession, type AiUsage } from "@remote-ide/acp";
+import { AcpProvider, applyConfiguration, normalizeAiFailure, type AcpSendRequest, type AiConfiguration, type AiContentBlock, type AiMessage, type AiModel, type AiModelDetails, type AiOption, type AiProviderDescriptor, type AiSession, type AiUsage } from "@remote-ide/acp";
 import type { TaskCheckpointProvenance } from "@remote-ide/protocol";
 import { CoreError } from "../errors.js";
 import { agentFingerprint } from "../agent-profile.js";
@@ -76,6 +76,7 @@ export abstract class StdioAcpProvider extends AcpProvider {
   abstract readonly descriptor: AiProviderDescriptor;
   protected abstract command(configuration: AiConfiguration): { command: string; args: string[]; env?: NodeJS.ProcessEnv };
   protected abstract fallbackModels(): Promise<AiModel[]>;
+  protected supportsUnlistedModel(_model: string): boolean { return false; }
   private readonly runtimes = new Map<string, Runtime>();
   private readonly queues = new Map<string, Promise<void>>();
   private readonly freshSessions = new Map<string, AcpSendRequest>();
@@ -132,10 +133,14 @@ export abstract class StdioAcpProvider extends AcpProvider {
     if (this.runtimes.get(workspace)?.running) throw new CoreError("INVALID_REQUEST", `${this.descriptor.name} is currently working`);
     const runtime = this.runtimes.get(workspace);
     const session = runtime?.session ?? await this.get(workspace);
+    const previousModel = session.model;
     const desired = typeof configuration === "string" ? { model: configuration, reasoning: legacyReasoning ?? session.reasoning } : configuration;
     applyConfiguration(session, desired);
     if (typeof desired.model === "string" || typeof desired.reasoning === "string") session.nextConfiguration = undefined;
-    if (runtime) {
+    const restartForModel = runtime && this.needsUnlistedModelLaunch(runtime, session.model);
+    if (restartForModel) { await this.closeRuntime(workspace); session.threadId = undefined; }
+    else if (!runtime && previousModel !== session.model && this.supportsUnlistedModel(session.model)) session.threadId = undefined;
+    if (runtime && !restartForModel) {
       const warnings = await this.applyAcpConfiguration(runtime, runtime.configOptions, runtime.modes);
       if (warnings.length > 0) session.messages.push(this.message("activity", `Session configuration\n${warnings.join("\n")}`));
       const dynamic = new Set(["model", "reasoning", "mode", ...runtime.configOptions.map((option) => option.id)]);
@@ -158,7 +163,9 @@ export abstract class StdioAcpProvider extends AcpProvider {
     if (this.runtimes.get(workspace)?.running) throw new CoreError("INVALID_REQUEST", `${this.descriptor.name} is already working`);
     const session = await this.get(workspace);
     const nextConfiguration = session.nextConfiguration;
+    const previousModel = session.model;
     applyConfiguration(session, { ...request.configuration, ...nextConfiguration });
+    if (!this.runtimes.has(workspace) && previousModel !== session.model && this.supportsUnlistedModel(session.model)) session.threadId = undefined;
     // The override belongs to exactly one newly started turn. Steering an active
     // turn never consumes it; a failed runtime/prompt start leaves it queued.
     const allowedServers = request.agent?.mcpServers ? request.mcpServers?.filter((server) => request.agent!.mcpServers!.includes(server.name)) : request.mcpServers;
@@ -223,6 +230,7 @@ export abstract class StdioAcpProvider extends AcpProvider {
     runtime.running = true;
     runtime.anchors = {};
     runtime.session.status = "in_progress";
+    runtime.session.failure = undefined;
     // The completion handlers go through the same queue as `session/update` so a
     // final status never overtakes text the agent streamed just before it.
     void runtime.connection.prompt({ sessionId: runtime.sessionId, prompt }).then((result) => this.queue(workspace, async () => {
@@ -245,6 +253,7 @@ export abstract class StdioAcpProvider extends AcpProvider {
       }
       else {
         runtime.session.status = result.stopReason === "cancelled" ? "idle" : result.stopReason === "end_turn" ? "done" : result.stopReason === "refusal" ? "error" : "user_prompt";
+        runtime.session.failure = result.stopReason === "refusal" ? { kind: "permanent", message: "The agent refused to continue this turn." } : undefined;
         if (result.stopReason === "max_tokens" || result.stopReason === "max_turn_requests") runtime.session.messages.push(this.message("activity", `Turn stopped early: ${result.stopReason}`));
         if (result.stopReason === "refusal") runtime.session.messages.push(this.message("error", "The agent refused to continue this turn."));
       }
@@ -255,7 +264,8 @@ export abstract class StdioAcpProvider extends AcpProvider {
       if (runtime.generation !== generation) return;
       runtime.running = false; runtime.anchors = {}; runtime.pending = [];
       this.freshSessions.delete(workspace);
-      runtime.session.status = "error"; runtime.session.messages.push(this.message("error", this.describe(error, runtime)));
+      const message = this.describe(error, runtime);
+      runtime.session.status = "error"; runtime.session.failure = normalizeAiFailure(error); runtime.session.failure.message = message; runtime.session.messages.push(this.message("error", message));
       await this.completeCheckpoints(workspace, runtime, "error");
       await this.save(workspace, runtime.session); this.onChanged(workspace);
     }));
@@ -459,6 +469,13 @@ export abstract class StdioAcpProvider extends AcpProvider {
     if (existing && servers !== undefined && existing.mcpKey !== mcpKey) { await this.closeRuntime(workspace); existing = undefined; }
     if (existing) {
       applyConfiguration(existing.session, session.configuration ?? {});
+      if (this.needsUnlistedModelLaunch(existing, existing.session.model)) {
+        await this.closeRuntime(workspace);
+        session.threadId = undefined;
+        existing = undefined;
+      }
+    }
+    if (existing) {
       const warnings = await this.applyAcpConfiguration(existing, existing.configOptions, existing.modes);
       if (warnings.length > 0) existing.session.messages.push(this.message("activity", `Session configuration\n${warnings.join("\n")}`));
       return existing;
@@ -479,6 +496,12 @@ export abstract class StdioAcpProvider extends AcpProvider {
     if (warnings.length > 0) session.messages.push(this.message("activity", `Session configuration\n${warnings.join("\n")}`));
     await this.save(workspace, session);
     return runtime;
+  }
+
+  private needsUnlistedModelLaunch(runtime: Runtime, model: string): boolean {
+    if (!this.supportsUnlistedModel(model)) return false;
+    const option = runtime.configOptions.find((item) => item.category === "model");
+    return !!option && option.currentValue !== model && !selectValues(option).includes(model);
   }
 
   /** Spawns the agent, performs the ACP handshake and opens a session. */
@@ -597,7 +620,7 @@ export abstract class StdioAcpProvider extends AcpProvider {
 
     const thoughtOption = current.find((option) => option.category === "thought_level");
     if (thoughtOption) await attempt(thoughtOption, session.reasoning);
-    else session.reasoning = "";
+    else if (!this.supportsUnlistedModel(session.model)) session.reasoning = "";
 
     for (const option of current) {
       if (option.category === "mode" || option.category === "model" || option.category === "thought_level") continue;
@@ -688,7 +711,7 @@ export abstract class StdioAcpProvider extends AcpProvider {
     const model = options.find((option) => option.category === "model");
     if (model) session.model = String(model.currentValue);
     const thought = options.find((option) => option.category === "thought_level");
-    session.reasoning = thought ? String(thought.currentValue) : "";
+    session.reasoning = thought ? String(thought.currentValue) : this.supportsUnlistedModel(session.model) ? session.reasoning : "";
     const mode = options.find((option) => option.category === "mode");
     session.configuration = { ...session.configuration, model: session.model, reasoning: session.reasoning, ...(mode ? { mode: String(mode.currentValue) } : {}) };
     this.rememberModels(options);
@@ -815,7 +838,7 @@ export abstract class StdioAcpProvider extends AcpProvider {
     runtime.child.stdin.end(); runtime.child.kill("SIGTERM");
   }
   private cancelPermissionWaiters(workspace: string): void { for (const [id, waiter] of this.permissionWaiters) if (waiter.workspace === workspace) { this.permissionWaiters.delete(id); waiter.resolve({ outcome: { outcome: "cancelled" } }); } }
-  private async runtimeFailed(workspace: string, message: string): Promise<void> { const session = await this.get(workspace); session.pendingPermission = undefined; if (session.status === "in_progress") { session.status = "error"; session.messages.push(this.message("error", message)); await this.save(workspace, session); this.onChanged(workspace); } }
+  private async runtimeFailed(workspace: string, message: string): Promise<void> { const session = await this.get(workspace); session.pendingPermission = undefined; if (session.status === "in_progress") { session.status = "error"; session.failure = normalizeAiFailure(message); session.messages.push(this.message("error", message)); await this.save(workspace, session); this.onChanged(workspace); } }
 }
 
 function processExists(pid?: number): boolean {

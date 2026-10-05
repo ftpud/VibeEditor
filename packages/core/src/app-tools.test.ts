@@ -10,7 +10,7 @@ function harness() {
     create: vi.fn(async () => task), createRandom: vi.fn(async () => task), delete: vi.fn(async () => ({ tasks: [] })),
     taskPath: vi.fn(() => "/tasks/task-1/workspace"), list: vi.fn(async () => ({ tasks: [task] })),
     setCommitMessage: vi.fn(async (_workspace: string, message: string) => ({ task, message, overwritten: false })),
-    setStatus: vi.fn(async (_taskId: string, status: "active" | "finished") => ({ ...task, status })),
+    setStatus: vi.fn(async (_taskId: string, status: "active" | "finished") => ({ ...task, status })), merge: vi.fn(async () => ({ targetBranch: "main" })), head: vi.fn(async () => "a".repeat(40)),
     updateGitCommitMessage: vi.fn(async (_taskId: string, message: string) => ({
       task, previousCommit: "old-sha", commit: "new-sha", previousMessage: "Old message", message
     }))
@@ -30,18 +30,40 @@ function harness() {
 }
 
 describe("Vibe Editor app tools", () => {
+  it("records child ownership before sending and preserves the worktree on workflow startup errors", async () => {
+    const { tasks, provider, agents, onTasksChanged, onCommitMessageChanged } = harness();
+    const registerChild = vi.fn(async () => undefined);
+    provider.send.mockImplementation(async () => { expect(registerChild).toHaveBeenCalledWith("task-1", "codex", "/tasks/task-1/workspace"); throw new Error("Usage limit reached"); });
+    const service = new AppToolService(tasks as never, { get: () => provider, list: () => [] } as never, "/parent", onTasksChanged, onCommitMessageChanged, "codex", agents as never, "/workspace", undefined, undefined, { runId: "run", blockId: "dispatcher", runStack: vi.fn(), registerChild });
+    await expect(service.call("task_create_and_start", { prompt: "Implement feature", provider: "codex", model: "gpt-5" })).resolves.toMatchObject({ task: { id: "task-1" }, error: "Usage limit reached" });
+    expect(tasks.delete).not.toHaveBeenCalled();
+  });
+  it("checks workflow cancellation before and after a tool side effect", async () => {
+    const { tasks, provider, agents, onTasksChanged, onCommitMessageChanged } = harness(); let active = true;
+    const service = new AppToolService(tasks as never, { get: () => provider, list: () => [] } as never, "/parent", onTasksChanged, onCommitMessageChanged, "codex", agents as never, "/workspace", undefined, undefined, {
+      runId: "run", blockId: "dispatcher", runStack: vi.fn(), assertActive: () => { if (!active) throw new Error("Workflow is no longer active"); }
+    });
+    tasks.create.mockImplementation(async () => { active = false; return { id: "task-1", name: "feature/one", branch: "feature/one", baseBranch: "main" }; });
+
+    await expect(service.call("task_create", { branch: "feature/one" })).rejects.toThrow("Workflow is no longer active");
+    expect(tasks.create).toHaveBeenCalledOnce();
+    await expect(service.call("task_create", { branch: "feature/two" })).rejects.toThrow("Workflow is no longer active");
+    expect(tasks.create).toHaveBeenCalledOnce();
+  });
   it("publishes task start agent and reasoning parameters", () => {
-    expect(appToolDefinitions.map((tool) => tool.name)).toEqual(["ai_usage", "timer_set", "model_switch_next", "session_new", "task_create", "task_create_and_start", "task_list", "task_delete", "task_set_status", "task_ai_response_tail", "task_append_prompt", "set_commit_message", "task_update_commit_message"]);
-    expect(appToolDefinitions[1]).toMatchObject({ name: "timer_set", inputSchema: { required: ["seconds", "prompt"] } });
-    expect(appToolDefinitions[2]).toMatchObject({ name: "model_switch_next", inputSchema: { required: ["model", "reasoning"] } });
-    expect(appToolDefinitions[3]).toMatchObject({ name: "session_new", inputSchema: { required: ["prompt"] } });
-    expect(appToolDefinitions[5].inputSchema.required).toEqual(["prompt", "provider", "model"]);
-    expect(appToolDefinitions[5].inputSchema.properties.agent).toMatchObject({
+    expect(appToolDefinitions.map((tool) => tool.name)).toEqual(["workflow_run_stack", "ai_usage", "timer_set", "timer_set_at", "model_switch_next", "session_new", "task_create", "task_create_and_start", "task_list", "task_merge", "task_delete", "task_set_status", "task_ai_response_tail", "task_append_prompt", "set_commit_message", "task_update_commit_message", "workflow_resume_failed", "workflow_plan_features"]);
+    expect(appToolDefinitions[0]).toMatchObject({ name: "workflow_run_stack", inputSchema: { required: ["inputs"] } });
+    expect(appToolDefinitions[2]).toMatchObject({ name: "timer_set", inputSchema: { required: ["seconds", "prompt"] } });
+    expect(appToolDefinitions[3]).toMatchObject({ name: "timer_set_at", inputSchema: { required: ["due_at", "prompt"] } });
+    expect(appToolDefinitions[4]).toMatchObject({ name: "model_switch_next", inputSchema: { required: ["model", "reasoning"] } });
+    expect(appToolDefinitions[5]).toMatchObject({ name: "session_new", inputSchema: { required: ["prompt"] } });
+    expect(appToolDefinitions[7].inputSchema.required).toEqual(["prompt", "provider", "model"]);
+    expect(appToolDefinitions[7].inputSchema.properties.agent).toMatchObject({
       oneOf: [{ type: "object", required: ["scope", "name"] }, { type: "null" }]
     });
-    expect(appToolDefinitions[5].inputSchema.properties.reasoning).toMatchObject({ type: "string", minLength: 1 });
-    expect(appToolDefinitions[8]).toMatchObject({ name: "task_set_status", inputSchema: { required: ["task_id", "status"], properties: { status: { enum: ["active", "finished"] } } } });
-    expect(appToolDefinitions[11]).toMatchObject({
+    expect(appToolDefinitions[7].inputSchema.properties.reasoning).toMatchObject({ type: "string", minLength: 1 });
+    expect(appToolDefinitions[11]).toMatchObject({ name: "task_set_status", inputSchema: { required: ["task_id", "status"], properties: { status: { enum: ["active", "finished"] } } } });
+    expect(appToolDefinitions[14]).toMatchObject({
       name: "set_commit_message",
       inputSchema: {
         additionalProperties: false,
@@ -49,7 +71,7 @@ describe("Vibe Editor app tools", () => {
         properties: { message: { type: "string", minLength: 1, maxLength: 10_000, pattern: "\\S" } }
       }
     });
-    expect(appToolDefinitions[12]).toMatchObject({
+    expect(appToolDefinitions[15]).toMatchObject({
       name: "task_update_commit_message",
       inputSchema: {
         additionalProperties: false,
@@ -60,6 +82,42 @@ describe("Vibe Editor app tools", () => {
         }
       }
     });
+  });
+
+  it("runs a workflow stack through the active orchestration callback", async () => {
+    const { tasks, provider, onTasksChanged, onCommitMessageChanged, agents } = harness(); const runStack = vi.fn(async () => ({ blocks: [{ blockId: "worker", output: "done" }] }));
+    const service = new AppToolService(tasks as never, { get: vi.fn(() => provider), list: vi.fn(() => []) } as never, "/tasks/parent/workspace", onTasksChanged, onCommitMessageChanged, "codex", agents as never, "/workspace", undefined, undefined, { runId: "run", blockId: "parent", runStack });
+    await expect(service.call("workflow_run_stack", { inputs: ["one", "two"], path: "review" })).resolves.toEqual({ blocks: [{ blockId: "worker", output: "done" }] });
+    expect(runStack).toHaveBeenCalledWith(["one", "two"], "review");
+  });
+
+  it("persists a feature plan and checks prerequisites before creating its task", async () => {
+    const { tasks, provider, onTasksChanged, onCommitMessageChanged, agents } = harness();
+    const planFeatures = vi.fn(async (features) => features); const assertFeatureReady = vi.fn(async () => undefined); const dispatchFeature = vi.fn(async () => undefined);
+    const service = new AppToolService(tasks as never, { get: vi.fn(() => provider), list: vi.fn(() => []) } as never, "/workflow/session", onTasksChanged, onCommitMessageChanged, "codex", agents as never, "/workspace", undefined, undefined, { runId: "run", blockId: "planner", runStack: vi.fn(), planFeatures, assertFeatureReady, dispatchFeature });
+    await expect(service.call("workflow_plan_features", { features: [{ id: "base", prompt: "Build base" }, { id: "ui", prompt: "Build UI", prerequisites: ["base"] }] })).resolves.toMatchObject({ features: [{ id: "base" }, { id: "ui" }] });
+    await service.call("task_create_and_start", { feature_id: "base", branch: "feature/base", prompt: "Build base", provider: "codex", model: "gpt-5" });
+    expect(assertFeatureReady).toHaveBeenCalledWith("base"); expect(dispatchFeature).toHaveBeenCalledWith("base", "task-1");
+  });
+
+  it("keeps workflow identity on self-resume timers", async () => {
+    const { tasks, provider, onTasksChanged, onCommitMessageChanged, agents } = harness(); const timers = { schedule: vi.fn(async () => ({ id: "timer", dueAt: "later", prompt: "continue" })) };
+    const service = new AppToolService(tasks as never, { get: vi.fn(() => provider), list: vi.fn(() => []) } as never, "/workflow/session", onTasksChanged, onCommitMessageChanged, "codex", agents as never, "/workspace", timers as never, undefined, { runId: "run", blockId: "block", runStack: vi.fn() });
+    await service.call("timer_set", { seconds: 60, prompt: "continue" });
+    expect(timers.schedule).toHaveBeenCalledWith("/workflow/session", "codex", "continue", 60, expect.objectContaining({ runId: "run", blockId: "block", operationKey: expect.any(String) }));
+  });
+
+  it("merges and finishes a task through MCP", async () => {
+    const { service, tasks, onTasksChanged } = harness();
+    await expect(service.call("task_merge", { task_id: "task-1" })).resolves.toMatchObject({ targetBranch: "main", task: { id: "task-1", status: "finished" } });
+    expect(tasks.merge).toHaveBeenCalledWith("task-1", "smart"); expect(onTasksChanged).toHaveBeenCalled();
+  });
+
+  it("serializes overlapping task merges against the root workspace", async () => {
+    const { service, tasks } = harness(); let active = 0; let maximum = 0;
+    tasks.merge.mockImplementation(async () => { active += 1; maximum = Math.max(maximum, active); await new Promise((resolve) => setTimeout(resolve, 10)); active -= 1; return { targetBranch: "main" }; });
+    await Promise.all([service.call("task_merge", { task_id: "task-1" }), service.call("task_merge", { task_id: "task-1" })]);
+    expect(maximum).toBe(1);
   });
 
   it("queues a validated model and reasoning override for the next turn", async () => {
@@ -108,6 +166,14 @@ describe("Vibe Editor app tools", () => {
 
     await expect(service.call("timer_set", { seconds: 30, prompt: "Check again" })).resolves.toEqual({ timer_id: "timer-1", status: "waiting", due_at: timer.dueAt, continuation_prompt: "Check again" });
     expect(timers.schedule).toHaveBeenCalledWith("/tasks/parent/workspace", "codex", "Check again", 30);
+  });
+
+  it("sets an exact continuation timer while preserving workflow identity", async () => {
+    const { tasks, provider, onTasksChanged, onCommitMessageChanged, agents } = harness(); const dueAt = new Date(Date.now() + 60_000).toISOString();
+    const timer = { id: "timer-exact", dueAt, prompt: "Resume at reset" }; const timers = { scheduleAt: vi.fn(async () => timer) };
+    const service = new AppToolService(tasks as never, { get: vi.fn(() => provider), list: vi.fn(() => []) } as never, "/workflow/session", onTasksChanged, onCommitMessageChanged, "codex", agents as never, "/workspace", timers as never, undefined, { runId: "run", blockId: "reviver", runStack: vi.fn() });
+    await expect(service.call("timer_set_at", { due_at: dueAt, prompt: "Resume at reset" })).resolves.toMatchObject({ timer_id: "timer-exact", due_at: dueAt });
+    expect(timers.scheduleAt).toHaveBeenCalledWith("/workflow/session", "codex", "Resume at reset", dueAt, expect.objectContaining({ runId: "run", blockId: "reviver", operationKey: expect.any(String) }));
   });
 
   it("reports usage and computes remaining capacity for the invoking provider", async () => {

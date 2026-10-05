@@ -6,6 +6,7 @@ import { createHash } from "node:crypto";
 import type { FileRevision, GitBranch, GitBranchDeletePreview, GitCommit, GitCommitFile, GitConflictOperationKind, GitConflictWorkspace, GitDiffHunk, GitHistoryRewritePreview, GitMergePreview, GitMergeRef, GitMergeResult, GitPullPreview, GitPullResult, GitPullStrategy, GitRebasePreview, GitRebaseResult, GitRebaseTodoItem, GitRollbackFailure, GitStash, GitStashInclusion, GitStashPreview, GitStatusEntry, GitTag, GitUpstreamStatus } from "@remote-ide/protocol";
 import { CoreError } from "./errors.js";
 import { WorkspaceFileSystem } from "./filesystem.js";
+import { serializedRootMutation } from "./root-mutation.js";
 import type { GitCommitPatch } from "@remote-ide/protocol";
 
 const execFileAsync = promisify(execFile);
@@ -231,6 +232,10 @@ export class GitService {
   }
 
   async merge(source: GitMergeRef, expectedHead: string, expectedRefHead: string, expectedMergeBase: string): Promise<GitMergeResult> {
+    return serializedRootMutation(this.workspace, () => this.mergeSerialized(source, expectedHead, expectedRefHead, expectedMergeBase));
+  }
+
+  private async mergeSerialized(source: GitMergeRef, expectedHead: string, expectedRefHead: string, expectedMergeBase: string): Promise<GitMergeResult> {
     validateFullHash(expectedHead); validateFullHash(expectedRefHead); validateFullHash(expectedMergeBase);
     const preview = await this.mergePreview(source);
     if (preview.head !== expectedHead || preview.refHead !== expectedRefHead || preview.mergeBase !== expectedMergeBase) throw new CoreError("GIT_FAILED", "The branch, source ref, or merge base changed after preview. Refresh the preview before merging.");
@@ -415,6 +420,21 @@ export class GitService {
     let modifiedContent = "";
     try { modifiedContent = (await filesystem.read(filePath)).content; } catch (error) { if (!(error instanceof CoreError) || error.code !== "FILE_NOT_FOUND") throw error; }
     return { originalContent, modifiedContent };
+  }
+
+  async rollbackCompared(ref: string, filePath: string): Promise<void> {
+    validateRef(ref); validatePath(filePath);
+    await serializedRootMutation(this.workspace, async () => {
+      const source = (await this.git(["rev-parse", "--verify", "--end-of-options", `${ref}^{commit}`])).trim();
+      const entry = (await this.compareFiles(source)).find((file) => file.path === filePath);
+      if (!entry) throw new CoreError("GIT_FAILED", `Path no longer differs from ${ref}: ${filePath}`);
+      if (entry.status === "?") {
+        await this.git(["--literal-pathspecs", "clean", "-f", "--", filePath]);
+        return;
+      }
+      const paths = entry.originalPath && entry.status.startsWith("R") ? [entry.originalPath, entry.path] : [entry.path];
+      await this.git(["--literal-pathspecs", "restore", `--source=${source}`, "--staged", "--worktree", "--", ...paths]);
+    });
   }
 
   async rollback(filePath: string): Promise<void> {

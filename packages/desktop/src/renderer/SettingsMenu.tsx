@@ -6,6 +6,7 @@ export type DesktopSettings = {
   theme: "dark" | "light";
   highlightTheme: "default" | "ftpud";
   uiFontFamily: "jetbrains" | "inter";
+  uiFontWeight: number;
   uiFontSize: number;
   uiLineHeight: number;
 };
@@ -22,7 +23,7 @@ type Props = {
   onShortcutChange: (id: CommandId, shortcut?: string) => void; onShortcutsReset: () => void;
 };
 
-const labels: Record<keyof DesktopSettings, string> = { theme: "Theme", highlightTheme: "Highlighting", uiFontFamily: "Font", uiFontSize: "Size", uiLineHeight: "Line height" };
+const labels: Record<keyof DesktopSettings, string> = { theme: "Theme", highlightTheme: "Highlighting", uiFontFamily: "Font", uiFontWeight: "Font weight", uiFontSize: "Size", uiLineHeight: "Line height" };
 
 export function SettingsMenu({ workspace, sideLayout, values, isWorkspaceOverride, onChange, onReset, onSideLayoutChange, commands, shortcutBindings, platform, onShortcutChange, onShortcutsReset }: Props) {
   const [query, setQuery] = useState("");
@@ -36,6 +37,7 @@ export function SettingsMenu({ workspace, sideLayout, values, isWorkspaceOverrid
     {row("theme", <div className="theme-switch"><button className={values.theme === "dark" ? "active" : ""} onClick={() => onChange("theme", "dark")}>Dark</button><button className={values.theme === "light" ? "active" : ""} onClick={() => onChange("theme", "light")}>Light</button></div>)}
     {row("highlightTheme", <div className="theme-switch"><button className={values.highlightTheme === "default" ? "active" : ""} onClick={() => onChange("highlightTheme", "default")}>Default</button><button className={values.highlightTheme === "ftpud" ? "active" : ""} onClick={() => onChange("highlightTheme", "ftpud")}>Ftpud</button></div>)}
     {row("uiFontFamily", <select aria-label="Font" value={values.uiFontFamily} onChange={(event) => onChange("uiFontFamily", event.target.value as DesktopSettings["uiFontFamily"])}><option value="jetbrains">JetBrains Mono</option><option value="inter">Inter</option></select>)}
+    {row("uiFontWeight", <input aria-label="Font weight" type="number" min="350" max="600" step="50" value={values.uiFontWeight} onChange={(event) => onChange("uiFontWeight", Math.min(600, Math.max(350, Number(event.target.value) || 450)))} />)}
     {row("uiFontSize", <input aria-label="Size" type="number" min="10" max="20" step="1" value={values.uiFontSize} onChange={(event) => onChange("uiFontSize", Math.min(20, Math.max(10, Number(event.target.value) || 13)))} />)}
     {row("uiLineHeight", <input aria-label="Line height" type="number" min="1" max="2" step="0.05" value={values.uiLineHeight} onChange={(event) => onChange("uiLineHeight", Math.min(2, Math.max(1, Number(event.target.value) || 1.2)))} />)}
     {matches("Keyboard shortcuts") && <ShortcutSettings commands={commands} bindings={shortcutBindings} platform={platform} onChange={onShortcutChange} onReset={onShortcutsReset} />}

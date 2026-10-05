@@ -60,6 +60,67 @@ describe("parseGitStatus", () => {
     await expect(access(path.join(root, "new.txt"))).rejects.toThrow();
   });
 
+  it("rolls back task changes to the base without changing HEAD or unrelated files", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "remote-ide-task-rollback-"));
+    const git = (...args: string[]) => execFileAsync("git", ["-C", root, ...args]);
+    await git("init");
+    await git("config", "user.email", "test@example.com");
+    await git("config", "user.name", "Test");
+    await writeFile(path.join(root, "tracked.txt"), "base\n");
+    await writeFile(path.join(root, "deleted.txt"), "restore me\n");
+    await git("add", ".");
+    await git("commit", "-m", "base");
+    await git("branch", "task-base");
+    await writeFile(path.join(root, "tracked.txt"), "committed task change\n");
+    await writeFile(path.join(root, "added.txt"), "task addition\n");
+    await git("rm", "deleted.txt");
+    await git("add", ".");
+    await git("commit", "-m", "task changes");
+    const head = (await git("rev-parse", "HEAD")).stdout;
+    await writeFile(path.join(root, "tracked.txt"), "staged task change\n");
+    await git("add", "tracked.txt");
+    await writeFile(path.join(root, "tracked.txt"), "unstaged task change\n");
+    await writeFile(path.join(root, "untracked.txt"), "new\n");
+    await writeFile(path.join(root, "unrelated.txt"), "keep me\n");
+    const service = new GitService(root);
+    for (const file of ["tracked.txt", "deleted.txt", "added.txt", "untracked.txt"]) await service.rollbackCompared("task-base", file);
+    expect(await readFile(path.join(root, "tracked.txt"), "utf8")).toBe("base\n");
+    expect((await git("show", ":tracked.txt")).stdout).toBe("base\n");
+    expect(await readFile(path.join(root, "deleted.txt"), "utf8")).toBe("restore me\n");
+    await expect(access(path.join(root, "added.txt"))).rejects.toThrow();
+    await expect(access(path.join(root, "untracked.txt"))).rejects.toThrow();
+    expect(await readFile(path.join(root, "unrelated.txt"), "utf8")).toBe("keep me\n");
+    expect((await git("rev-parse", "HEAD")).stdout).toBe(head);
+    expect(await service.compareFiles("task-base")).toEqual([{ path: "unrelated.txt", status: "?" }]);
+    await expect(service.rollbackCompared("task-base", "tracked.txt")).rejects.toThrow("no longer differs");
+    await expect(service.rollbackCompared("missing-base", "unrelated.txt")).rejects.toThrow();
+    await expect(service.rollbackCompared("task-base", "../outside")).rejects.toThrow("Invalid Git path");
+  });
+
+  it("rolls back task renames and treats wildcard paths literally", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "remote-ide-task-rollback-rename-"));
+    const git = (...args: string[]) => execFileAsync("git", ["-C", root, ...args]);
+    await git("init");
+    await git("config", "user.email", "test@example.com");
+    await git("config", "user.name", "Test");
+    await writeFile(path.join(root, "old.txt"), "base\n");
+    await git("add", ".");
+    await git("commit", "-m", "base");
+    await git("branch", "task-base");
+    await git("mv", "old.txt", "new.txt");
+    await git("commit", "-m", "rename");
+    const service = new GitService(root);
+    await service.rollbackCompared("task-base", "new.txt");
+    expect(await readFile(path.join(root, "old.txt"), "utf8")).toBe("base\n");
+    await expect(access(path.join(root, "new.txt"))).rejects.toThrow();
+    expect(await service.compareFiles("task-base")).toEqual([]);
+    await writeFile(path.join(root, "*.txt"), "remove me\n");
+    await writeFile(path.join(root, "keep.txt"), "keep me\n");
+    await service.rollbackCompared("task-base", "*.txt");
+    await expect(access(path.join(root, "*.txt"))).rejects.toThrow();
+    expect(await readFile(path.join(root, "keep.txt"), "utf8")).toBe("keep me\n");
+  });
+
   it("stages and unstages exact reviewed hunks without changing the worktree", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "remote-ide-git-hunks-"));
     await execFileAsync("git", ["-C", root, "init"]);
