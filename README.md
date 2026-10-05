@@ -9,6 +9,7 @@ The experiment is built around a simple idea from [WHY.md](WHY.md): **the develo
 <img width="2940" height="1912" alt="image" src="https://github.com/user-attachments/assets/1a1cfd39-f127-4e07-b843-e4b8a8c71d90" />
 
 
+
 The repository, terminals, language servers, agents, builds, tests, and task state stay close to the compute. A lightweight React/Monaco desktop client provides the interaction layer over WebSockets. Tasks become durable workspaces—with their own Git worktree, editor state, terminals, AI sessions, notes, and Git state—rather than branches whose context must be reconstructed every time.
 
 Vibe Editor is AI-first, not AI-only: agents can do the initial work, while the editor, terminal, Git tooling, HTTP files, executable Markdown, and Java tooling keep a human in control. It is intended as a sandbox for implementing and reviewing updates and features quickly, not as a replacement for every deep debugging, profiling, or framework-specific capability of a heavyweight IDE.
