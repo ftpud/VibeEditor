@@ -9,7 +9,7 @@ const revision = { identity: "file", version: "1" };
 afterEach(cleanup);
 function clientFixture(content = JSON.stringify(options)) {
   const request = vi.fn(async (type: string, payload?: { content?: string }) => {
-    if (type === "java.configuration.read") return { path: ".project/java.json", content, revision, template: JSON.stringify(options, null, 2) };
+    if (type === "java.configuration.read") return { path: ".settings/java.json", content, revision, template: JSON.stringify(options, null, 2) };
     if (type === "java.listMainClasses") return { classes: [{ className: "demo.App", path: "src/main/java/demo/App.java" }] };
     if (type === "java.tools.check") return { checks: [{ tool: "Maven", executable: "mvn", ok: false, message: '"mvn" was not found on the Core host. Choose ./mvnw or an installed Maven executable.' }] };
     if (type === "java.configuration.save") return { options: JSON.parse(payload!.content!), content: payload!.content, revision };
