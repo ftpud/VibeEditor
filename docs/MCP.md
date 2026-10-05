@@ -147,7 +147,8 @@ level, create a task with a configured preset:
 }
 ```
 
-Create a task with no agent preset and the provider/model's default reasoning:
+For a Copilot model available in your account, create a task with no agent preset
+and the provider/model's default reasoning:
 
 ```json
 {
