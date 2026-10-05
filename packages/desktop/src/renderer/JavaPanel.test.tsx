@@ -14,7 +14,7 @@ it("expands nested objects, loads more array values, and clears them on resume",
     height: 250, log: "", running: true,
     options: { type: "maven" as const, pomPath: "pom.xml", mavenExecutable: "mvn", sourceRoots: [], outputPath: "target/classes", testOutputPath: "target/test-classes", runConfigurations: [] },
     debugState: { status: "paused" as const, variables: [{ name: "obj", value: "instance of Probe(id=1)", reference: "object" }] },
-    onApplyChanges: vi.fn().mockResolvedValue({ appliedClasses: [], deferredClasses: [], failedClasses: [], restartRequired: false }), onInspect: inspect, onBuild: vi.fn(), onRun: vi.fn(), onDebug: vi.fn(), onStop: vi.fn(), onDebugCommand: vi.fn(), onClear: vi.fn(), onResizeStart: vi.fn()
+    onApplyChanges: vi.fn().mockResolvedValue({ appliedClasses: [], deferredClasses: [], failedClasses: [], restartRequired: false }), onInspect: inspect, onConfigure: vi.fn(), onBuild: vi.fn(), onRun: vi.fn(), onDebug: vi.fn(), onStop: vi.fn(), onDebugCommand: vi.fn(), onClear: vi.fn(), onResizeStart: vi.fn()
   };
   const view = render(<JavaPanel {...props} />);
   fireEvent.click(screen.getByRole("button", { name: "Expand obj" }));
@@ -32,7 +32,7 @@ function applyProps(onApplyChanges: React.ComponentProps<typeof JavaPanel>["onAp
     height: 250, log: "", running: true,
     options: { type: "maven", pomPath: "pom.xml", mavenExecutable: "mvn", sourceRoots: [], outputPath: "target/classes", testOutputPath: "target/test-classes", runConfigurations: [] },
     debugState: { status: "paused", variables: [] },
-    onApplyChanges, onInspect: vi.fn(), onBuild: vi.fn(), onRun: vi.fn(), onDebug: vi.fn(), onStop: vi.fn(), onDebugCommand: vi.fn(), onClear: vi.fn(), onResizeStart: vi.fn()
+    onApplyChanges, onInspect: vi.fn(), onConfigure: vi.fn(), onBuild: vi.fn(), onRun: vi.fn(), onDebug: vi.fn(), onStop: vi.fn(), onDebugCommand: vi.fn(), onClear: vi.fn(), onResizeStart: vi.fn()
   };
 }
 

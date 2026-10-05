@@ -1,4 +1,4 @@
-import { RefreshCw, ChevronRight, ChevronDown, ArrowDownToLine, ArrowRight, ArrowUpFromLine, Bug, CornerDownRight, Hammer, Play, Square, Trash2 } from "lucide-react";
+import { Settings, RefreshCw, ChevronRight, ChevronDown, ArrowDownToLine, ArrowRight, ArrowUpFromLine, Bug, CornerDownRight, Hammer, Play, Square, Trash2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { JavaApplyChangesResult, JavaDebugVariable, JavaDebugState, JavaProjectOptions, ProtocolOperations } from "@remote-ide/protocol";
 
@@ -8,6 +8,7 @@ type Props = {
   running: boolean;
   options: JavaProjectOptions;
   debugState: JavaDebugState;
+  onConfigure(): void;
   onBuild(): void;
   onRun(): void;
   onDebug(): void;
@@ -19,7 +20,7 @@ type Props = {
   onResizeStart(event: React.PointerEvent): void;
 };
 
-export function JavaPanel({ height, log, running, options, debugState, onBuild, onRun, onDebug, onStop, onDebugCommand, onApplyChanges, onInspect, onClear, onResizeStart }: Props) {
+export function JavaPanel({ height, log, running, options, debugState, onConfigure, onBuild, onRun, onDebug, onStop, onDebugCommand, onApplyChanges, onInspect, onClear, onResizeStart }: Props) {
   const [applying, setApplying] = useState(false);
   const [applyResult, setApplyResult] = useState<JavaApplyChangesResult>();
   const [applyError, setApplyError] = useState<string>();
@@ -52,6 +53,7 @@ export function JavaPanel({ height, log, running, options, debugState, onBuild, 
       <button title="Run selected configuration" disabled={running || !options.selectedRunConfigurationId} onClick={onRun}><Play size={16} /></button>
       <button title="Debug selected configuration" disabled={running || !options.selectedRunConfigurationId} onClick={onDebug}><Bug size={16} /></button>
       <button title="Stop Java process" disabled={!running} onClick={onStop}><Square size={15} /></button>
+      <button title="Edit Java run/debug configuration" onClick={onConfigure}><Settings size={16} /></button>
       <span />
       <button title="Clear build log" onClick={onClear}><Trash2 size={15} /></button>
     </aside>

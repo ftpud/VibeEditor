@@ -21,7 +21,7 @@ public class App {
   static class Base { Node inherited; } static class Node extends Base { int value = 7; Node child = this; int[] nums = {3, 5}; Object[] mixed = {this, "comma,quote", null, new String[]{"first,second", "third"}}; Node() { inherited = this; } }
   ${extra}
   static int calculate(Node node) { return node.value + ${value}; }
-  public static void main(String[] args) throws Exception {
+  public static void main(String[] args) throws Exception { if (!"greeting with spaces".equals(args[0]) || args[1].length() != 0 || !"flag with spaces".equals(System.getProperty("demo.flag")) || !"from-profile".equals(System.getenv("DEMO_MODE"))) throw new IllegalStateException("Launch configuration was not applied");
     Node node = new Node();
     int result = calculate(node);
     java.nio.file.Files.writeString(java.nio.file.Path.of("result.txt"), result + ":" + node.value); System.out.println("RESULT=" + result + ",STATE=" + node.value);
@@ -32,12 +32,14 @@ public class App {
 `;
     let latest: JavaDebugState = { status: "stopped", variables: [] };
     let output = "";
+    let exits = 0;
     const filesystem = new WorkspaceFileSystem();
     await filesystem.open(root);
     const state = new WorkspaceStateStore(root, stateDirectory);
     const service = new JavaProjectService(filesystem, state, (event) => {
       if (event.type === "debug") latest = event.state;
       if (event.type === "output") output += event.data;
+      if (event.type === "exit") exits++;
     });
     const waitFor = async (predicate: () => boolean | Promise<boolean>, label: string) => {
       const deadline = Date.now() + 15_000;
@@ -63,7 +65,12 @@ process.exit(build.status ?? 1);
       await chmod(compiler, 0o755);
       const { options } = await service.loadMavenProject("pom.xml");
       await state.save({ ...(await state.load()), javaProject: { ...options, mavenExecutable: compiler } });
-      await service.addRunConfiguration("App", "com.example.App");
+      const configured = await service.addRunConfiguration("App", "com.example.App");
+      await mkdir(path.join(root, "runtime"));
+      const javaSettings = spawnSync("java", ["-XshowSettings:properties", "-version"], { encoding: "utf8" });
+      const javaHome = javaSettings.stderr.match(/java\.home\s*=\s*(.+)/)?.[1]?.trim();
+      expect(javaHome).toBeDefined();
+      await service.saveConfiguration(JSON.stringify({ ...configured, javaHome, mavenArguments: ["-Pfixture"], buildGoals: ["compile"], runConfigurations: configured.runConfigurations.map((item) => ({ ...item, programArguments: ["greeting with spaces", ""], vmArguments: ["-ea", "-Ddemo.flag=flag with spaces"], environment: { DEMO_MODE: "from-profile" }, workingDirectory: "runtime" })) }));
       await service.debug([8, 5].map((line) => ({ path: "src/main/java/com/example/App.java", className: "com.example.App", line })));
       await waitFor(() => latest.status === "paused", "first breakpoint");
       const node = latest.variables.find((variable) => variable.name === "node")!;
@@ -111,11 +118,15 @@ process.exit(build.status ?? 1);
       service.debugCommand("continue");
       await waitFor(() => latest.status === "paused" && latest.line === 5, "restored method breakpoint");
       service.debugCommand("continue");
-      await waitFor(async () => (await readFile(path.join(root, "result.txt"), "utf8").catch(() => "")) === "17:7", "new method result");
+      await waitFor(async () => (await readFile(path.join(root, "runtime/result.txt"), "utf8").catch(() => "")) === "17:7", "new method result");
       await waitFor(() => latest.status === "paused" && latest.line === 5, "second method breakpoint");
       service.debugCommand("continue");
       await waitFor(() => latest.status === "stopped", "normal exit");
-      expect(await readFile(path.join(root, "second.txt"), "utf8")).toBe("17");
+      expect(await readFile(path.join(root, "runtime/second.txt"), "utf8")).toBe("17");
+      await rm(path.join(root, "runtime/result.txt"));
+      await service.run();
+      await waitFor(() => exits === 2, "configured normal Java run");
+      expect(await readFile(path.join(root, "runtime/result.txt"), "utf8")).toBe("17:7");
     } finally {
       service.stop();
       await new Promise((resolve) => setTimeout(resolve, 100));

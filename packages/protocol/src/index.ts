@@ -197,6 +197,9 @@ export type JavaProjectOptions = {
   type: "maven";
   pomPath: string;
   mavenExecutable: string;
+  javaHome?: string;
+  mavenArguments?: string[];
+  buildGoals?: string[];
   sourceRoots: string[];
   outputPath: string;
   testOutputPath: string;
@@ -204,7 +207,17 @@ export type JavaProjectOptions = {
   selectedRunConfigurationId?: string;
 };
 
-export type JavaRunConfiguration = { id: string; name: string; mainClass: string };
+export type JavaRunConfiguration = {
+  id: string;
+  name: string;
+  mainClass: string;
+  programArguments?: string[];
+  vmArguments?: string[];
+  workingDirectory?: string;
+  environment?: Record<string, string>;
+};
+export type JavaToolCheck = { tool: "Maven" | "Java" | "Java compiler" | "Java debugger"; executable: string; ok: boolean; message: string };
+export const javaConfigurationPath = ".vibe/java.json";
 export type JavaMainClass = { className: string; path: string };
 export type JavaBreakpoint = { path: string; line: number; className: string };
 export type JavaDebugVariable = { name: string; value: string; reference?: string; type?: string; objectId?: string; indexedCount?: number };
@@ -489,6 +502,18 @@ export type ProtocolOperations = {
   "java.loadMavenProject": {
     payload: { pomPath: string };
     result: { options: JavaProjectOptions; tree: JavaProjectNode[] };
+  };
+  "java.configuration.read": {
+    payload: Record<string, never>;
+    result: { path: string; content: string; revision?: FileRevision; template: string };
+  };
+  "java.configuration.save": {
+    payload: { content: string; expectedRevision?: FileRevision };
+    result: { options: JavaProjectOptions; content: string; revision: FileRevision };
+  };
+  "java.tools.check": {
+    payload: { content: string };
+    result: { checks: JavaToolCheck[] };
   };
   "java.getOptions": {
     payload: Record<string, never>;
@@ -780,6 +805,9 @@ const requestTypeRegistry: Record<RequestType, true> = {
   "taskGit.restore": true,
   "java.loadMavenProject": true,
   "java.getOptions": true,
+  "java.configuration.read": true,
+  "java.configuration.save": true,
+  "java.tools.check": true,
   "java.addSourceRoot": true,
   "java.getProjectTree": true,
   "java.workspaceSymbols": true,

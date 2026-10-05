@@ -1,7 +1,7 @@
 /** A provider-neutral Desktop command contract. Commands carry their own availability
  * rather than relying on UI event names or button text. */
-export type CommandCategory = "Project" | "Git" | "Terminal" | "Task" | "AI" | "Editor";
-export const commandIds = ["project.commandPalette", "project.quickOpen", "project.workspaceSymbols", "project.refresh", "project.findInFiles", "editor.navigateBack", "editor.navigateForward", "editor.save", "git.refresh", "terminal.new", "terminal.toggle", "task.create", "ai.open"] as const;
+export type CommandCategory = "Project" | "Git" | "Terminal" | "Task" | "AI" | "Editor" | "Java";
+export const commandIds = ["project.commandPalette", "project.quickOpen", "project.workspaceSymbols", "project.refresh", "project.findInFiles", "editor.navigateBack", "editor.navigateForward", "editor.save", "java.configuration", "git.refresh", "terminal.new", "terminal.toggle", "task.create", "ai.open"] as const;
 export type CommandId = typeof commandIds[number];
 export type DesktopPlatform = "mac" | "windows" | "linux";
 export type ShortcutBindings = Partial<Record<CommandId, string>>;

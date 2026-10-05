@@ -935,6 +935,9 @@ async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStor
       if (typeof request.payload.pomPath !== "string") throw new CoreError("INVALID_REQUEST", "pomPath must be a string");
       return java.loadMavenProject(request.payload.pomPath);
     }
+    case "java.configuration.read": return java.readConfiguration();
+    case "java.configuration.save": return java.saveConfiguration(request.payload.content, request.payload.expectedRevision);
+    case "java.tools.check": return { checks: await java.checkTools(request.payload.content) };
     case "java.getOptions": return { options: await java.getOptions() };
     case "java.addSourceRoot": {
       if (typeof request.payload.path !== "string") throw new CoreError("INVALID_REQUEST", "path must be a string");
