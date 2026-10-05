@@ -334,6 +334,8 @@ export async function createServer(host: string, port: number, workspacePath: st
       const filesystem = new WorkspaceFileSystem();
       await filesystem.open(nextWorkspace);
       workspaceOwners.set(path.resolve(nextWorkspace), ownerRootId);
+      runConfigs.registerWorkspace(nextWorkspace, roots.get(ownerRootId).path);
+      runConfigWatcher.add(runConfigs.directory(nextWorkspace, "local"));
       const workspaceState = new WorkspaceStateStore(nextWorkspace, process.env.REMOTE_IDE_STATE_DIR);
       const search = new WorkspaceSearch(filesystem);
       const git = new GitService(nextWorkspace);

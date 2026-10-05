@@ -15,6 +15,26 @@ async function fixture() {
 }
 
 describe("RunConfigService", () => {
+  it("isolates local configurations by project, shares them with that project's tasks, and keeps globals shared", async () => {
+    const { service, workspace, root } = await fixture();
+    const other = path.join(root, "other-project");
+    const task = path.join(root, "task-worktree");
+    service.registerWorkspace(other, other);
+    service.registerWorkspace(task, workspace);
+    await service.create(workspace, "local", "dev", "echo project-a");
+    await service.create(other, "local", "dev", "echo project-b");
+    await service.create(workspace, "global", "shared", "echo shared");
+    expect(await service.list(other)).toMatchObject([{ scope: "local", name: "dev", commands: "echo project-b" }, { scope: "global", name: "shared" }]);
+    expect(await service.read(task, "local", "dev")).toMatchObject({ commands: "echo project-a" });
+    await service.write(task, "local", "dev", "echo updated-a");
+    expect(await service.read(workspace, "local", "dev")).toMatchObject({ commands: "echo updated-a" });
+    expect(await service.read(other, "local", "dev")).toMatchObject({ commands: "echo project-b" });
+    await service.rename(other, "local", "dev", "serve");
+    await service.delete(other, "local", "serve");
+    expect(await service.read(workspace, "local", "dev")).toMatchObject({ commands: "echo updated-a" });
+    expect(await service.list(other)).toMatchObject([{ scope: "global", name: "shared" }]);
+  });
+
   it("discovers both scopes without executing and preserves colliding names", async () => {
     const { service, workspace, global, local, terminal } = await fixture(); await mkdir(global, { recursive: true }); await mkdir(local, { recursive: true });
     await writeFile(path.join(global, "dev.sh"), "echo global\n"); await writeFile(path.join(local, "dev.sh"), "echo local\n");

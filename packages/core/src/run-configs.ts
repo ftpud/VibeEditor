@@ -14,15 +14,23 @@ export class RunConfigService {
   private readonly runtime = new Map<string, Runtime>();
   private readonly storageRoot: string;
   private readonly localDirectory: string;
+  private readonly workspaceDirectories = new Map<string, string>();
   constructor(private readonly terminals: TerminalSessionHost, private readonly changed: (workspace: string) => void, rootWorkspace: string, stateDirectory = process.env.REMOTE_IDE_STATE_DIR ?? path.join(os.homedir(), ".remote-ide", "workspaces")) {
     this.storageRoot = path.join(stateDirectory, "run-configs");
     const workspaceKey = crypto.createHash("sha256").update(rootWorkspace).digest("hex");
     this.localDirectory = path.join(this.storageRoot, "local", workspaceKey);
+    this.workspaceDirectories.set(path.resolve(rootWorkspace), this.localDirectory);
+  }
+
+  /** Tasks share their owning project's files while runtime state remains workspace-specific. */
+  registerWorkspace(workspace: string, rootWorkspace: string): void {
+    const workspaceKey = crypto.createHash("sha256").update(rootWorkspace).digest("hex");
+    this.workspaceDirectories.set(path.resolve(workspace), path.join(this.storageRoot, "local", workspaceKey));
   }
 
   directory(workspace: string, scope: RunConfigScope): string {
     if (scope !== "local" && scope !== "global") throw new CoreError("INVALID_REQUEST", "Invalid run configuration scope");
-    return scope === "local" ? this.localDirectory : path.join(this.storageRoot, "global");
+    return scope === "local" ? this.workspaceDirectories.get(path.resolve(workspace)) ?? this.localDirectory : path.join(this.storageRoot, "global");
   }
   private target(workspace: string, scope: RunConfigScope, name: string): string {
     if (!name || name.length > 120 || name !== path.basename(name) || name === "." || name === ".." || name.includes("\0") || /[\\/]/.test(name)) throw new CoreError("INVALID_REQUEST", "Run configuration name must be a plain file name");
