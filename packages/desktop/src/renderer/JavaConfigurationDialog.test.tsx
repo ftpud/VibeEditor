@@ -21,6 +21,7 @@ function clientFixture(content = JSON.stringify(options)) {
 it("edits tools and launch arguments without losing line breaks, and saves the remote revision", async () => {
   const { client, request } = clientFixture(); const saved = vi.fn();
   render(<JavaConfigurationDialog client={client} running={false} onClose={vi.fn()} onSaved={saved} />);
+  fireEvent.change(await screen.findByLabelText("Environment JSON file (optional)"), { target: { value: "config/env.json" } });
   fireEvent.change(await screen.findByLabelText("Maven executable"), { target: { value: "./mvnw" } });
   fireEvent.change(screen.getByLabelText("JDK home (optional)"), { target: { value: "/opt/jdk" } });
   const argumentsField = screen.getByLabelText("Program arguments — one per line");
@@ -33,7 +34,7 @@ it("edits tools and launch arguments without losing line breaks, and saves the r
   await waitFor(() => expect(saved).toHaveBeenCalled());
   const payload = request.mock.calls.find(([type]) => type === "java.configuration.save")![1] as { content: string; expectedRevision: unknown };
   expect(payload.expectedRevision).toEqual(revision);
-  expect(JSON.parse(payload.content)).toMatchObject({ mavenExecutable: "./mvnw", javaHome: "/opt/jdk", runConfigurations: [{ programArguments: ["--message", "hello world"], vmArguments: ["-ea", "-Dvalue=hello world"], environment: { MODE: "dev" } }] });
+  expect(JSON.parse(payload.content)).toMatchObject({ mavenExecutable: "./mvnw", javaHome: "/opt/jdk", runConfigurations: [{ environmentFile: "config/env.json", programArguments: ["--message", "hello world"], vmArguments: ["-ea", "-Dvalue=hello world"], environment: { MODE: "dev" } }] });
 });
 
 it("duplicates, selects, and deletes launch profiles", async () => {

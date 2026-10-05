@@ -1,6 +1,6 @@
 import os from "node:os";
 import path from "node:path";
-import { javaConfigurationPath, type FileRevision, type JavaProjectOptions } from "@remote-ide/protocol";
+import { javaConfigurationPath, type FileRevision, type JavaProjectOptions, type JavaRunConfiguration } from "@remote-ide/protocol";
 import { CoreError } from "./errors.js";
 import type { WorkspaceFileSystem } from "./filesystem.js";
 import { validateJavaProjectOptions } from "./workspace-state.js";
@@ -68,4 +68,21 @@ export function javaSpawnError(error: Error, executable: string, label: string):
   if (code === "ENOENT") return new CoreError("JAVA_PROCESS_FAILED", `${label}: "${executable}" was not found on the Core host. Open Java configuration → ${setting}. ${advice} These tools run on the Core host, not your desktop. If the executable exists, check that the working directory and script interpreter exist too.`);
   if (code === "EACCES") return new CoreError("JAVA_PROCESS_FAILED", `${label}: permission denied for "${executable}" on the Core host. Make the file executable (for example, chmod +x mvnw) or choose another executable in Java configuration.`);
   return new CoreError("JAVA_PROCESS_FAILED", `${label} could not start "${executable}": ${error.message}`);
+}
+
+/** File variables are reloaded on every launch; inline profile variables take precedence. */
+export async function javaLaunchEnvironment(filesystem: WorkspaceFileSystem, profile: JavaRunConfiguration): Promise<Record<string, string>> {
+  let fileEnvironment: Record<string, string> = {};
+  if (profile.environmentFile) {
+    try {
+      const { content } = await filesystem.read(profile.environmentFile);
+      if (Buffer.byteLength(content) > 200_000) throw new Error("JSON environment file must be under 200 KB");
+      const value: unknown = JSON.parse(content);
+      if (!value || typeof value !== "object" || Array.isArray(value) || Object.keys(value).length > 100 || !Object.entries(value).every(([key, item]) => /^[A-Za-z_][\w]*$/.test(key) && typeof item === "string" && item.length <= 10_000 && !item.includes("\0"))) throw new Error("Expected a JSON object mapping environment variable names to strings");
+      fileEnvironment = value as Record<string, string>;
+    } catch (error) {
+      throw new CoreError("INVALID_REQUEST", `Environment file ${profile.environmentFile}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+  return { ...fileEnvironment, ...profile.environment };
 }
