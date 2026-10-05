@@ -241,6 +241,9 @@ export async function createServer(host: string, port: number, workspacePath: st
         const harnessEvent = JSON.stringify({ type: "harness.changed", payload: { rootId, runId } } satisfies ServerEvent);
         const tasksEvent = JSON.stringify({ type: "tasks.changed", payload: { rootId } } satisfies ServerEvent);
         for (const socket of activeSessions) { sendWebSocketData(socket, harnessEvent); sendWebSocketData(socket, tasksEvent); }
+      }, 4, undefined, (document) => {
+        const event = JSON.stringify({ type: "workflow.document", payload: { rootId, ...document } } satisfies ServerEvent);
+        for (const socket of activeSessions) sendWebSocketData(socket, event);
       });
       harnessRunners.set(rootId, runner);
     }

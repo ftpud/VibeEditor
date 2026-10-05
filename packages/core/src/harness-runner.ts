@@ -32,7 +32,7 @@ export class HarnessRunner {
   private readonly operationsInFlight = new Map<string, Promise<unknown>>();
   private updateQueue = Promise.resolve();
   private readonly recovery: ResolvedRecoveryPolicy;
-  constructor(private readonly store: HarnessStore, private readonly changed: (runId: string) => void, private readonly concurrency = 4, recovery: RecoveryPolicy = { maxAttempts: 3, transportBackoffMs: 5_000 }) {
+  constructor(private readonly store: HarnessStore, private readonly changed: (runId: string) => void, private readonly concurrency = 4, recovery: RecoveryPolicy = { maxAttempts: 3, transportBackoffMs: 5_000 }, private readonly openDocument?: (document: { runId: string; blockId: string; title: string; content: string }) => void) {
     this.recovery = { maxElapsedMs: 15 * 60_000, jitterRatio: 0.2, random: Math.random, ...recovery };
   }
 
@@ -228,7 +228,7 @@ export class HarnessRunner {
         await this.failRecovery(run, "The persisted workflow execution plan does not match its frozen definition. Start a new run; completed sessions and task workspaces were preserved.");
         recovered.push(structuredClone(run)); continue;
       }
-      if (definition.blocks.some((block) => ["ai", "text", "timer", "script", "user_prompt", "yes_no_prompt", "start_button", "start_input"].includes(block.type))) {
+      if (definition.blocks.some((block) => ["ai", "text", "timer", "script", "user_prompt", "yes_no_prompt", "markdown", "start_button", "start_input"].includes(block.type))) {
         await this.failRecovery(run, "Core restarted during this flow. Start a new run; existing AI sessions and block outputs are preserved, and scripts will not be replayed automatically.");
         recovered.push(structuredClone(run)); continue;
       }
@@ -477,7 +477,7 @@ export class HarnessRunner {
     await this.update(run);
     const running = new Map<string, Promise<{ blockId: string; error?: unknown }>>();
     try {
-      if (blocks.some((block) => ["ai", "text", "timer", "script", "user_prompt", "yes_no_prompt", "start_button", "start_input"].includes(block.type))) {
+      if (blocks.some((block) => ["ai", "text", "timer", "script", "user_prompt", "yes_no_prompt", "markdown", "start_button", "start_input"].includes(block.type))) {
         await this.executeFlow(this.executions.get(run.id)!, startBlockId);
         run.status = "succeeded"; run.completedAt = new Date().toISOString(); await this.recordCompletedOperation(run, "terminal_outcome", "terminal:succeeded", undefined, { status: "succeeded" }); await this.update(run); return;
       }
@@ -606,6 +606,7 @@ export class HarnessRunner {
           output = state.output ?? "";
           if (paths.length && !state.selectedRoute) throw new Error(`${block.label} finished without choosing a path`);
         } else if (block.type === "text" || block.type === "start_button") output = prompt;
+        else if (block.type === "markdown") output = block.prompt.trim() ? prompt : input;
         else if (block.type === "user_prompt" || block.type === "yes_no_prompt") {
           state.status = "awaiting_user_input"; state.question = prompt || input; state.pauseId = crypto.randomUUID(); state.sessionId = `flow:${id}`;
           const key = `${run.id}:${id}:${state.pauseId}`;
@@ -629,6 +630,7 @@ export class HarnessRunner {
       } catch (error) {
         state.status = this.isActive(run.id) ? "failed" : "cancelled"; state.error = error instanceof Error ? error.message : String(error); state.completedAt = new Date().toISOString(); this.log(state, "error", state.error); await this.update(run); throw error;
       } finally { busy.delete(id); }
+      if (block.type === "markdown") this.openDocument?.({ runId: run.id, blockId: id, title: block.label.endsWith(".md") ? block.label : `${block.label}.md`, content: output });
       for (const edge of edges.filter((edge) => edge.from === id && (edge.type === "follow" || !edge.type || (edge.type === "path" && edge.label === state.selectedRoute)))) { await this.traceConnection(run, edge, "forward", "succeeded"); await invoke(edge.to, output, [...ancestors, id]); }
       return output;
     };
