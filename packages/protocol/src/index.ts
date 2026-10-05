@@ -225,6 +225,8 @@ export type JavaMainClass = { className: string; path: string };
 export type JavaBreakpoint = { path: string; line: number; className: string };
 export type JavaDebugVariable = { name: string; value: string; reference?: string; type?: string; objectId?: string; indexedCount?: number };
 export type JavaDebugState = {
+  /** Workspace-relative source file for the current paused frame. */
+  path?: string;
   status: "starting" | "running" | "paused" | "stopped";
   className?: string;
   method?: string;
