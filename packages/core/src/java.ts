@@ -1,13 +1,17 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import crypto from "node:crypto";
-import { mkdtemp, readFile, readdir, rm, stat } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { XMLParser } from "fast-xml-parser";
-import type { JavaBreakpoint, JavaDebugState, JavaDiagnostic, JavaMainClass, JavaProjectNode, JavaProjectOptions, JavaTypeSuggestion } from "@remote-ide/protocol";
+import type { FileRevision, JavaToolCheck, JavaRunConfiguration, JavaApplyChangesResult, JavaBreakpoint, JavaDebugVariable, JavaDebugState, JavaDiagnostic, JavaMainClass, JavaProjectNode, JavaProjectOptions, JavaTypeSuggestion } from "@remote-ide/protocol";
+import { javaBuildKey, javaBuildFingerprint, javaOutputFingerprint } from "./java-launch-cache.js";
+import { javaFileType } from "./java-file-type.js";
 import { CoreError } from "./errors.js";
 import { WorkspaceFileSystem } from "./filesystem.js";
-import { WorkspaceStateStore } from "./workspace-state.js";
+import { javaConfigurationPath } from "@remote-ide/protocol";
+import { javaLaunchEnvironment, expandJavaToolPath, javaConfigurationTemplate, javaSpawnError, javaToolEnvironment, javaToolExecutable, parseJavaConfiguration, readJavaConfiguration, writeJavaConfiguration } from "./java-configuration.js";
+import { validateJavaBreakpoints, WorkspaceStateStore } from "./workspace-state.js";
 
 type JavaProcessEvent =
   | { type: "output"; data: string }
@@ -16,16 +20,33 @@ type JavaProcessEvent =
 
 export class JavaProjectService {
   private process?: ChildProcessWithoutNullStreams;
+  private debugStarting = false;
+  private debugLaunchGeneration = 0;
   private debugging = false;
+  private debugTarget?: ChildProcessWithoutNullStreams;
+  private activeDebugOptions?: JavaProjectOptions;
+  private debugState: JavaDebugState = { status: "stopped", variables: [] };
+  private debugGeneration = 0;
+  private applyingChanges = false;
+  private applyBuildProcess?: ChildProcessWithoutNullStreams;
+  private debugClassFiles = new Map<string, { file: string; hash: string }>();
+  private debugBreakpoints: JavaBreakpoint[] = [];
   private debugBuffer = "";
-  private debugLocation?: { className: string; method: string; line: number };
+  private debugLocation?: { className: string; method: string; line: number; path?: string };
   private awaitingDebugLocals = false;
+  private awaitingDebugStopPrompt = false;
+  private debugReferences = new Map<string, { expression: string; length?: number }>();
+  private debugPaused = false;
+  private inspectionQueue: Promise<unknown> = Promise.resolve();
+  private pendingInspection?: { quiet?: boolean; resolve: (output: string) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> };
   private dependencyTypes?: JavaTypeSuggestion[];
+  private launchBuild?: { key: string; inputs: string; outputs: string; classpath: string };
 
   constructor(
     private readonly filesystem: WorkspaceFileSystem,
     private readonly state: WorkspaceStateStore,
-    private readonly onProcessEvent: (event: JavaProcessEvent) => void
+    private readonly onProcessEvent: (event: JavaProcessEvent) => void,
+    private readonly onBuildSucceeded: () => Promise<void> = async () => undefined
   ) {}
 
   async loadMavenProject(pomPath: string): Promise<{ options: JavaProjectOptions; tree: JavaProjectNode[] }> {
@@ -45,14 +66,15 @@ export class JavaProjectService {
     for (const candidate of candidates) {
       try { if ((await stat(await this.filesystem.resolveExisting(candidate))).isDirectory()) sourceRoots.push(candidate); } catch { /* Optional Maven source directory. */ }
     }
-    const existing = (await this.state.load()).javaProject;
+    const existing = await this.getOptions();
     if (existing?.pomPath === pomPath) {
       for (const existingRoot of existing.sourceRoots) if (!sourceRoots.includes(existingRoot)) sourceRoots.push(existingRoot);
     }
     const options: JavaProjectOptions = {
       type: "maven",
       pomPath,
-      mavenExecutable: existing?.pomPath === pomPath ? existing.mavenExecutable : "mvn",
+      mavenExecutable: existing?.pomPath === pomPath ? existing.mavenExecutable : await this.detectMavenExecutable(pomPath),
+      ...(existing?.pomPath === pomPath ? { javaHome: existing.javaHome, mavenArguments: existing.mavenArguments, buildGoals: existing.buildGoals } : {}),
       sourceRoots,
       outputPath: relative(build.outputDirectory, "target/classes"),
       testOutputPath: relative(build.testOutputDirectory, "target/test-classes"),
@@ -64,7 +86,65 @@ export class JavaProjectService {
   }
 
   async getOptions(): Promise<JavaProjectOptions | undefined> {
-    return (await this.state.load()).javaProject;
+    const file = await readJavaConfiguration(this.filesystem);
+    return file ? parseJavaConfiguration(file.content) : (await this.state.load()).javaProject;
+  }
+
+  async readConfiguration(): Promise<{ path: string; content: string; revision?: FileRevision; template: string }> {
+    const file = await readJavaConfiguration(this.filesystem);
+    let options = (await this.state.load()).javaProject;
+    if (file) { try { options = parseJavaConfiguration(file.content); } catch { /* Keep invalid JSON accessible for repair. */ } }
+    options ??= { type: "maven", pomPath: "pom.xml", mavenExecutable: await this.detectMavenExecutable("pom.xml"), sourceRoots: ["src/main/java", "src/test/java"], outputPath: "target/classes", testOutputPath: "target/test-classes", runConfigurations: [] };
+    const template = javaConfigurationTemplate(options);
+    return { path: javaConfigurationPath, content: file?.content ?? JSON.stringify(options, null, 2) + "\n", revision: file?.revision, template };
+  }
+
+  async saveConfiguration(content: string, expectedRevision?: FileRevision): Promise<{ options: JavaProjectOptions; content: string; revision: FileRevision }> {
+    if (this.process || this.debugStarting || this.applyingChanges) throw new CoreError("JAVA_PROCESS_FAILED", "Stop the Java process before changing its configuration");
+    const options = parseJavaConfiguration(content);
+    await this.filesystem.resolveExisting(options.pomPath);
+    for (const profile of options.runConfigurations) await this.launchDirectory(profile);
+    const normalized = JSON.stringify(options, null, 2) + "\n";
+    const revision = await writeJavaConfiguration(this.filesystem, normalized, expectedRevision);
+    await this.state.save({ ...(await this.state.load()), javaProject: options });
+    this.dependencyTypes = undefined;
+    return { options, content: normalized, revision };
+  }
+
+  async checkTools(content: string): Promise<JavaToolCheck[]> {
+    const options = parseJavaConfiguration(content);
+    const workspace = this.filesystem.getWorkspace();
+    const tools = [
+      { tool: "Maven" as const, executable: expandJavaToolPath(options.mavenExecutable, workspace), args: ["--version"] },
+      { tool: "Java" as const, executable: javaToolExecutable(options, "java", workspace), args: ["-version"] },
+      { tool: "Java compiler" as const, executable: javaToolExecutable(options, "javac", workspace), args: ["-version"] },
+      { tool: "Java debugger" as const, executable: javaToolExecutable(options, "jdb", workspace), args: ["-version"] }
+    ];
+    return Promise.all(tools.map(({ tool, executable, args }) => new Promise<JavaToolCheck>((resolve) => {
+      const child = spawn(executable, args, { cwd: workspace, env: javaToolEnvironment(options, workspace), stdio: "pipe" });
+      let output = "";
+      const append = (data: Buffer) => { output = (output + data.toString()).slice(-4000); };
+      child.stdout.on("data", append); child.stderr.on("data", append);
+      const timer = setTimeout(() => { child.kill("SIGKILL"); resolve({ tool, executable, ok: false, message: "Tool check timed out after 15 seconds. Verify the executable on the Core host." }); }, 15_000);
+      child.on("error", (error) => { clearTimeout(timer); resolve({ tool, executable, ok: false, message: javaSpawnError(error, executable, tool).message }); });
+      child.on("close", (code) => { clearTimeout(timer); resolve({ tool, executable, ok: code === 0, message: output.trim() || `Exited with code ${code}` }); });
+    })));
+  }
+
+  private async detectMavenExecutable(pomPath: string): Promise<string> {
+    for (const root of [...new Set([path.posix.dirname(pomPath), "."])]) {
+      const wrapper = path.posix.join(root, process.platform === "win32" ? "mvnw.cmd" : "mvnw");
+      try { if ((await stat(await this.filesystem.resolveExisting(wrapper))).isFile()) return `./${wrapper}`; }
+      catch { /* A project wrapper is optional. */ }
+    }
+    return "mvn";
+  }
+
+  private async launchDirectory(profile: JavaRunConfiguration): Promise<string> {
+    if (!profile.workingDirectory || profile.workingDirectory === ".") return this.filesystem.getWorkspace();
+    const directory = await this.filesystem.resolveExisting(profile.workingDirectory);
+    if (!(await stat(directory)).isDirectory()) throw new CoreError("INVALID_REQUEST", `Working directory is not a directory: ${profile.workingDirectory}`);
+    return directory;
   }
 
   async addSourceRoot(sourcePath: string): Promise<{ options: JavaProjectOptions; tree: JavaProjectNode[] }> {
@@ -117,11 +197,11 @@ export class JavaProjectService {
     return next;
   }
 
-  async build(): Promise<void> { await this.start(["package", "-DskipTests"], "Build"); }
+  async build(): Promise<void> { const options = await this.requireOptions(); await this.start(options.buildGoals ?? ["package", "-DskipTests"], "Build"); }
   async check(): Promise<JavaDiagnostic[]> {
-    if (this.process) throw new CoreError("JAVA_PROCESS_FAILED", "Java checks are unavailable while a build, run, or debug process is active");
+    if (this.process || this.debugStarting) throw new CoreError("JAVA_PROCESS_FAILED", "Java checks are unavailable while a build, run, or debug process is active");
     const options = await this.requireOptions();
-    const output = await this.capture(options.mavenExecutable, ["-f", options.pomPath, "compile", "-DskipTests", "-Dstyle.color=never"]);
+    const output = await this.capture(options.mavenExecutable, ["-f", options.pomPath, "compile", "-DskipTests", "-Dstyle.color=never"], options, "Java check");
     const diagnostics: JavaDiagnostic[] = [];
     const workspace = this.filesystem.getWorkspace();
     for (const rawLine of output.split(/\r?\n/)) {
@@ -161,57 +241,451 @@ export class JavaProjectService {
         }
       }
     }
-    if (!this.dependencyTypes) this.dependencyTypes = await this.indexDependencyTypes(options);
+    if (!this.dependencyTypes && !this.process && !this.debugStarting) this.dependencyTypes = await this.indexDependencyTypes(options);
     const lower = normalized.toLowerCase();
-    return [...projectTypes, ...this.dependencyTypes]
+    return [...projectTypes, ...(this.dependencyTypes ?? [])]
       .filter((item) => item.simpleName.toLowerCase().startsWith(lower))
       .filter((item, index, all) => all.findIndex((candidate) => candidate.qualifiedName === item.qualifiedName) === index)
       .sort((a, b) => Number(b.simpleName === normalized) - Number(a.simpleName === normalized) || a.simpleName.localeCompare(b.simpleName) || a.qualifiedName.localeCompare(b.qualifiedName))
       .slice(0, 100);
   }
   async run(): Promise<void> {
-    const options = await this.requireOptions();
-    const configuration = options.runConfigurations.find((item) => item.id === options.selectedRunConfigurationId);
-    if (!configuration) throw new CoreError("JAVA_PROCESS_FAILED", "Select a Java run configuration first");
-    await this.start(["exec:java", `-Dexec.mainClass=${configuration.mainClass}`], "Run");
+    if (this.process || this.debugStarting) throw new CoreError("JAVA_PROCESS_FAILED", "A Java process is already active");
+    this.debugStarting = true;
+    const launch = ++this.debugLaunchGeneration;
+    try {
+      const options = await this.requireOptions();
+      const configuration = options.runConfigurations.find((item) => item.id === options.selectedRunConfigurationId);
+      if (!configuration) throw new CoreError("JAVA_PROCESS_FAILED", "Choose a launch profile in Java configuration first");
+      if (launch !== this.debugLaunchGeneration) throw new CoreError("JAVA_PROCESS_FAILED", "Java run was cancelled");
+      const classpath = await this.prepareLaunch(options, "Run build", launch);
+      if (launch !== this.debugLaunchGeneration) throw new CoreError("JAVA_PROCESS_FAILED", "Java run was cancelled");
+      const environment = await javaLaunchEnvironment(this.filesystem, configuration);
+      const cwd = await this.launchDirectory(configuration);
+      if (launch !== this.debugLaunchGeneration) throw new CoreError("JAVA_PROCESS_FAILED", "Java run was cancelled");
+      const executable = javaToolExecutable(options, "java", this.filesystem.getWorkspace());
+      const child = spawn(executable, [...(configuration.vmArguments ?? []), "-classpath", classpath, configuration.mainClass, ...(configuration.programArguments ?? [])], { cwd, env: javaToolEnvironment(options, this.filesystem.getWorkspace(), environment), stdio: "pipe" });
+      this.process = child;
+      this.onProcessEvent({ type: "output", data: `> Run ${configuration.name} (${configuration.mainClass})\n` });
+      child.stdout.on("data", (data: Buffer) => this.onProcessEvent({ type: "output", data: data.toString() }));
+      child.stderr.on("data", (data: Buffer) => this.onProcessEvent({ type: "output", data: data.toString() }));
+      child.on("close", (exitCode, signal) => { if (this.process === child) { this.process = undefined; this.onProcessEvent({ type: "exit", exitCode, signal }); } });
+      await new Promise<void>((resolve, reject) => { child.once("spawn", resolve); child.once("error", (error) => reject(javaSpawnError(error, executable, "Java run"))); });
+    } finally { this.debugStarting = false; }
+  }
+
+  private async prepareLaunch(options: JavaProjectOptions, label: string, launch: number): Promise<string> {
+    const workspace = this.filesystem.getWorkspace();
+    const ensureLaunching = () => {
+      if (launch !== this.debugLaunchGeneration) throw new CoreError("JAVA_PROCESS_FAILED", "Java launch was cancelled");
+    };
+    const key = javaBuildKey(workspace, options);
+    const inputs = await javaBuildFingerprint(workspace, options);
+    ensureLaunching();
+    const cached = this.launchBuild;
+    if (cached?.key === key && cached.inputs === inputs && cached.outputs === await javaOutputFingerprint(workspace, options)) {
+      const entries = cached.classpath.split(path.delimiter);
+      // Optional test output need not exist, but missing dependency jars must be resolved again.
+      const dependenciesExist = (await Promise.all(entries.slice(2).map((entry) => stat(entry).then(() => true, () => false)))).every(Boolean);
+      ensureLaunching();
+      if (dependenciesExist) {
+        this.onProcessEvent({ type: "output", data: "> Reusing unchanged Java build and dependency classpath\n" });
+        return cached.classpath;
+      }
+    }
+    this.launchBuild = undefined;
+    // Both launch modes use debug information so switching to Debug can reuse the same classes.
+    await this.runAndWait(options.mavenExecutable, ["-f", options.pomPath, ...(options.buildGoals ?? ["package", "-DskipTests"]), "-Dmaven.compiler.debug=true", "-Dmaven.compiler.debuglevel=lines,vars,source"], label, options);
+    ensureLaunching();
+    const classpath = await this.buildDebugClasspath(options);
+    ensureLaunching();
+    const after = await javaBuildFingerprint(workspace, options);
+    const outputs = await javaOutputFingerprint(workspace, options);
+    ensureLaunching();
+    // Edits during compilation need another build on the next launch.
+    if (inputs === after) this.launchBuild = { key, inputs, outputs, classpath };
+    return classpath;
+  }
+
+  private async launchDebugTarget(options: JavaProjectOptions, configuration: JavaRunConfiguration, launch: number, classpath: string): Promise<string> {
+    const workspace = this.filesystem.getWorkspace();
+    const environment = await javaLaunchEnvironment(this.filesystem, configuration);
+    const cwd = await this.launchDirectory(configuration);
+    const executable = javaToolExecutable(options, "java", workspace);
+    if (launch !== this.debugLaunchGeneration) throw new CoreError("JAVA_PROCESS_FAILED", "Debugger start was cancelled");
+    return new Promise((resolve, reject) => {
+      const child = spawn(executable, [...(configuration.vmArguments ?? []), "-agentlib:jdwp=transport=dt_socket,server=y,suspend=y,address=127.0.0.1:0", "-classpath", classpath, configuration.mainClass, ...(configuration.programArguments ?? [])], { cwd, env: javaToolEnvironment(options, workspace, environment), stdio: "pipe" });
+      this.debugTarget = child;
+      this.process = child;
+      let buffer = "";
+      let ready = false;
+      const timer = setTimeout(() => { child.kill("SIGKILL"); reject(new CoreError("JAVA_PROCESS_FAILED", "Debug JVM did not start within 15 seconds. Check JDK home and VM arguments in Java configuration.")); }, 15_000);
+      const consume = (data: Buffer) => {
+        const text = data.toString();
+        this.onProcessEvent({ type: "output", data: text });
+        if (ready) return;
+        buffer = (buffer + text).slice(-4000);
+        const port = buffer.match(/Listening for transport dt_socket at address: (\d+)/)?.[1];
+        if (port) { ready = true; clearTimeout(timer); resolve(`127.0.0.1:${port}`); }
+      };
+      child.stdout.on("data", consume); child.stderr.on("data", consume);
+      child.on("error", (error) => { clearTimeout(timer); reject(javaSpawnError(error, executable, "Debug JVM")); });
+      child.on("close", (code) => {
+        clearTimeout(timer);
+        if (this.debugTarget === child) this.debugTarget = undefined;
+        if (this.process === child) this.process = undefined;
+        if (!ready) reject(new CoreError("JAVA_PROCESS_FAILED", `Debug JVM exited before connecting (code ${code}). ${buffer.trim()}`));
+      });
+    });
   }
 
   async debug(breakpoints: JavaBreakpoint[]): Promise<void> {
-    const options = await this.requireOptions();
-    const configuration = options.runConfigurations.find((item) => item.id === options.selectedRunConfigurationId);
-    if (!configuration) throw new CoreError("JAVA_PROCESS_FAILED", "Select a Java run configuration first");
-    if (this.process) throw new CoreError("JAVA_PROCESS_FAILED", "A Java build, run, or debug process is already active");
-    this.onProcessEvent({ type: "debug", state: { status: "starting", variables: [] } });
-    await this.runAndWait(options.mavenExecutable, ["-f", options.pomPath, "package", "-DskipTests"], "Debug build");
-    const classpath = await this.buildDebugClasspath(options);
-    const child = spawn("jdb", ["-classpath", classpath, configuration.mainClass], { cwd: this.filesystem.getWorkspace(), env: process.env, stdio: "pipe" });
-    this.process = child;
-    this.debugging = true;
-    this.debugBuffer = "";
-    child.stdout.on("data", (data: Buffer) => this.consumeDebugOutput(data.toString()));
-    child.stderr.on("data", (data: Buffer) => this.onProcessEvent({ type: "output", data: data.toString() }));
-    child.on("error", (error) => this.onProcessEvent({ type: "output", data: `Debugger failed to start: ${error.message}\n` }));
-    child.on("close", (exitCode, signal) => {
-      this.process = undefined; this.debugging = false;
-      this.onProcessEvent({ type: "debug", state: { status: "stopped", variables: [] } });
-      this.onProcessEvent({ type: "exit", exitCode, signal });
-    });
-    for (const breakpoint of breakpoints) child.stdin.write(`stop at ${breakpoint.className}:${breakpoint.line}\n`);
-    child.stdin.write("run\n");
-    this.onProcessEvent({ type: "debug", state: { status: "running", variables: [] } });
+    if (this.process || this.debugStarting) throw new CoreError("JAVA_PROCESS_FAILED", "A Java build, run, or debug process is already active");
+    this.debugStarting = true;
+    const launch = ++this.debugLaunchGeneration;
+    const ensureLaunching = () => {
+      if (launch !== this.debugLaunchGeneration) throw new CoreError("JAVA_PROCESS_FAILED", "Debugger start was cancelled");
+    };
+    try {
+      const options = await this.requireOptions();
+      const configuration = options.runConfigurations.find((item) => item.id === options.selectedRunConfigurationId);
+      if (!configuration) throw new CoreError("JAVA_PROCESS_FAILED", "Select a Java run configuration first");
+      this.debugBreakpoints = validateJavaBreakpoints(breakpoints);
+      ensureLaunching();
+      this.emitDebugState({ status: "starting", variables: [] });
+      const classpath = await this.prepareLaunch(options, "Debug build", launch);
+      ensureLaunching();
+      this.activeDebugOptions = options;
+      this.debugClassFiles = await this.snapshotDebugClasses(options);
+      ensureLaunching();
+      const address = await this.launchDebugTarget(options, configuration, launch, classpath);
+      ensureLaunching();
+      const executable = javaToolExecutable(options, "jdb", this.filesystem.getWorkspace());
+      const child = spawn(executable, ["-attach", address], { cwd: this.filesystem.getWorkspace(), env: javaToolEnvironment(options, this.filesystem.getWorkspace()), stdio: "pipe" });
+      this.process = child;
+      this.debugging = true;
+      this.invalidateDebugInspection();
+      this.debugBuffer = "";
+      child.stdout.on("data", (data: Buffer) => this.consumeDebugOutput(data.toString()));
+      child.stderr.on("data", (data: Buffer) => this.consumeDebugOutput(data.toString()));
+      child.on("error", (error) => this.onProcessEvent({ type: "output", data: `${javaSpawnError(error, executable, "Java debugger").message}\n` }));
+      child.on("close", (exitCode, signal) => {
+        if (this.process !== child) return;
+        this.invalidateDebugInspection();
+        this.process = undefined; this.debugging = false;
+        this.applyBuildProcess?.kill("SIGTERM");
+        this.debugTarget?.kill("SIGTERM");
+        this.activeDebugOptions = undefined;
+        this.emitDebugState({ status: "stopped", variables: [] });
+        this.onProcessEvent({ type: "exit", exitCode, signal });
+      });
+      await new Promise<void>((resolve, reject) => { child.once("spawn", resolve); child.once("error", (error) => reject(javaSpawnError(error, executable, "Java debugger"))); });
+      ensureLaunching();
+      for (const breakpoint of this.debugBreakpoints) child.stdin.write(`stop at ${breakpoint.className}:${breakpoint.line}\n`);
+      child.stdin.write("cont\n");
+      this.emitDebugState({ status: "running", variables: [] });
+    } catch (error) {
+      this.debugTarget?.kill("SIGTERM");
+      this.emitDebugState({ status: "stopped", variables: [] });
+      throw error;
+    } finally { this.debugStarting = false; }
+  }
+
+  async setDebugBreakpoints(breakpoints: JavaBreakpoint[]): Promise<void> {
+    const next = validateJavaBreakpoints(breakpoints);
+    const update = async () => {
+      if (this.applyingChanges) throw new CoreError("JAVA_PROCESS_FAILED", "Wait for code changes to finish applying");
+      const previous = this.debugBreakpoints;
+      const commands = [
+        ...previous.filter((item) => !next.some((other) => other.className === item.className && other.line === item.line)).map((item) => `clear ${item.className}:${item.line}`),
+        ...next.filter((item) => !previous.some((other) => other.className === item.className && other.line === item.line)).map((item) => `stop at ${item.className}:${item.line}`)
+      ];
+      if (this.debugging && this.process) {
+        for (const command of commands) {
+          if (this.debugPaused) await this.runDebugCommand(command);
+          else this.process.stdin.write(`${command}\n`);
+        }
+      }
+      this.debugBreakpoints = next;
+    };
+    const result = this.inspectionQueue.then(update);
+    this.inspectionQueue = result.catch(() => undefined);
+    return result;
   }
 
   debugCommand(command: "continue" | "stepInto" | "stepOver" | "stepOut"): void {
     if (!this.process || !this.debugging) throw new CoreError("JAVA_PROCESS_FAILED", "No Java debugger is active");
-    const jdbCommand = { continue: "cont", stepInto: "step", stepOver: "next", stepOut: "step up" }[command];
+    if (this.applyingChanges) throw new CoreError("JAVA_PROCESS_FAILED", "Wait for code changes to finish applying");
+    if (!this.debugPaused) throw new CoreError("JAVA_PROCESS_FAILED", "Pause the Java debugger before stepping");
+    const jdbCommands = { continue: "cont", stepInto: "step", stepOver: "next", stepOut: "step up" };
+    if (!Object.hasOwn(jdbCommands, command)) throw new CoreError("INVALID_REQUEST", "Unknown Java debugger command");
+    const jdbCommand = jdbCommands[command];
+    this.invalidateDebugInspection();
     this.process.stdin.write(`${jdbCommand}\n`);
-    this.onProcessEvent({ type: "debug", state: { status: "running", variables: [] } });
+    this.emitDebugState({ status: "running", variables: [] });
+  }
+
+  async debugVariables(reference: string, start = 0): Promise<{ variables: JavaDebugVariable[]; nextStart?: number }> {
+    if (this.applyingChanges) throw new CoreError("JAVA_PROCESS_FAILED", "Wait for code changes to finish applying");
+    const generation = this.debugGeneration;
+    const inspect = async () => {
+      if (generation !== this.debugGeneration) throw new CoreError("INVALID_REQUEST", "This object belongs to an expired debugger pause");
+      const target = this.debugReferences.get(reference);
+      if (!this.debugPaused || !target) throw new CoreError("INVALID_REQUEST", "This object belongs to an expired debugger pause");
+      if (!Number.isSafeInteger(start) || start < 0) throw new CoreError("INVALID_REQUEST", "Invalid array offset");
+      const readArray = async (length: number) => {
+        const end = Math.min(length, start + 50);
+        const variables: JavaDebugVariable[] = [];
+        for (let index = start; index < end; index++) {
+          const expression = `${target.expression}[${index}]`;
+          const output = await this.inspectDebugExpression(expression);
+          if (generation !== this.debugGeneration) throw new CoreError("INVALID_REQUEST", "Debugger pause ended during inspection");
+          const value = output.match(/ = ([\s\S]*?)\s*[\w$.-]+\[\d+\]\s*$/)?.[1]?.trim();
+          if (value === undefined) throw new CoreError("JAVA_PROCESS_FAILED", output.trim());
+          variables.push(this.debugVariable(`[${index}]`, value, expression));
+        }
+        return { variables, ...(end < length ? { nextStart: end } : {}) };
+      };
+      if (target.length !== undefined) return readArray(target.length);
+      const output = await this.inspectDebugExpression(target.expression);
+      if (generation !== this.debugGeneration) throw new CoreError("INVALID_REQUEST", "Debugger pause ended during inspection");
+      if (!/ = \{/.test(output)) throw new CoreError("JAVA_PROCESS_FAILED", output.trim());
+      const variables = [...output.matchAll(/^\s*([\w$.]+): (.+)$/gm)].map((match) => {
+        const name = match[1]!;
+        const separator = name.lastIndexOf(".");
+        const expression = separator < 0 ? `${target.expression}.${name}` : `((${name.slice(0, separator)})${target.expression}).${name.slice(separator + 1)}`;
+        return this.debugVariable(name, match[2]!.trim(), expression);
+      });
+      if (variables.length === 0) {
+        // An array element's dump has no identity/length header. Query its length rather than
+        // splitting jdb's unescaped strings on commas, which corrupts string array values.
+        const lengthOutput = await this.inspectDebugExpression(`${target.expression}.length`);
+        if (generation !== this.debugGeneration) throw new CoreError("INVALID_REQUEST", "Debugger pause ended during inspection");
+        const length = lengthOutput.match(/ = (\d+)\s*[\w$.-]+\[\d+\]\s*$/)?.[1];
+        if (length !== undefined) {
+          target.length = Number(length);
+          return readArray(target.length);
+        }
+      }
+      return { variables };
+    };
+    const result = this.inspectionQueue.then(inspect);
+    this.inspectionQueue = result.catch(() => undefined);
+    return result;
+  }
+
+  private debugVariable(name: string, value: string, expression: string): JavaDebugVariable {
+    const object = value.match(/^instance of (.+?)\s*\(id=(\d+)\)$/);
+    if (!object) {
+      if (value.startsWith("{")) {
+        const reference = crypto.randomUUID();
+        this.debugReferences.set(reference, { expression });
+        return { name, value: "Object / array", reference };
+      }
+      return { name, value };
+    }
+    const type = object[1]!;
+    const length = type.match(/\[(\d+)\]$/)?.[1];
+    const reference = crypto.randomUUID();
+    this.debugReferences.set(reference, { expression, ...(length !== undefined ? { length: Number(length) } : {}) });
+    return { name, value, type, objectId: object[2]!, reference, ...(length !== undefined ? { indexedCount: Number(length) } : {}) };
+  }
+
+  private inspectDebugExpression(expression: string): Promise<string> {
+    if (!this.debugPaused || !this.process) return Promise.reject(new CoreError("JAVA_PROCESS_FAILED", "Java debugger is no longer paused"));
+    return this.runDebugCommand(`dump ${expression}`);
+  }
+
+  private runDebugCommand(command: string, quiet = false): Promise<string> {
+    if (!this.debugPaused || !this.process) return Promise.reject(new CoreError("JAVA_PROCESS_FAILED", "Java debugger is no longer paused"));
+    if (this.pendingInspection) return Promise.reject(new CoreError("JAVA_PROCESS_FAILED", "A debugger command is already pending"));
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        // Stop accepting inspections until the next pause: a late prompt must not resolve another request.
+        this.invalidateDebugInspection();
+        this.debugPaused = true;
+        this.emitDebugState({ status: "paused", ...this.debugLocation, variables: [], applyingChanges: this.applyingChanges, inspectionError: "Debugger inspection timed out. Step or continue to refresh the pause." });
+      }, 10_000);
+      this.debugBuffer = "";
+      this.pendingInspection = { resolve, reject, timer, quiet };
+      this.process!.stdin.write(`${command}\n`);
+    });
+  }
+
+  private invalidateDebugInspection(): void {
+    this.debugGeneration++;
+    this.debugPaused = false;
+    this.debugReferences.clear();
+    this.awaitingDebugLocals = false;
+    this.awaitingDebugStopPrompt = false;
+    if (this.pendingInspection) {
+      clearTimeout(this.pendingInspection.timer);
+      this.pendingInspection.reject(new CoreError("JAVA_PROCESS_FAILED", "Debugger inspection ended; pause again to inspect values"));
+      this.pendingInspection = undefined;
+    }
+  }
+
+  private async publishDebugPause(state: JavaDebugState): Promise<void> {
+    const generation = this.debugGeneration;
+    if (state.method !== "main") {
+      try {
+        const output = await this.runDebugCommand("dump this", true);
+        if (generation !== this.debugGeneration || !this.debugPaused) return;
+        if (/ this = \{/.test(output)) {
+          const reference = crypto.randomUUID();
+          this.debugReferences.set(reference, { expression: "this" });
+          state = { ...state, variables: [{ name: "this", value: state.className ?? "Current instance", reference, type: state.className }, ...state.variables] };
+        }
+      } catch { /* Static methods have no current instance; locals remain inspectable. */ }
+    }
+    if (state.className && this.activeDebugOptions) {
+      const sourceName = state.className.split("$")[0]!.replaceAll(".", "/") + ".java";
+      for (const sourceRoot of this.activeDebugOptions.sourceRoots) {
+        const sourcePath = path.posix.join(sourceRoot, sourceName);
+        try {
+          await this.filesystem.resolveExisting(sourcePath);
+          if (generation !== this.debugGeneration) return;
+          state = { ...state, path: sourcePath };
+          if (this.debugLocation) this.debugLocation.path = sourcePath;
+          break;
+        } catch { /* Try another source root. */ }
+      }
+    }
+    if (generation === this.debugGeneration && this.debugPaused) this.emitDebugState(state);
+  }
+
+  private emitDebugState(state: JavaDebugState): void {
+    this.debugState = state;
+    this.onProcessEvent({ type: "debug", state });
+  }
+
+  private async snapshotDebugClasses(options: JavaProjectOptions): Promise<Map<string, { file: string; hash: string }>> {
+    const files = new Map<string, { file: string; hash: string }>();
+    const visit = async (directory: string, prefix: string) => {
+      for (const entry of await readdir(directory, { withFileTypes: true })) {
+        if (entry.isSymbolicLink()) continue;
+        const file = path.join(directory, entry.name);
+        const relative = prefix ? `${prefix}.${entry.name}` : entry.name;
+        if (entry.isDirectory()) await visit(file, relative);
+        else if (entry.isFile() && entry.name.endsWith(".class") && entry.name !== "module-info.class") {
+          const className = relative.slice(0, -6);
+          if (!files.has(className)) files.set(className, { file, hash: crypto.createHash("sha256").update(await readFile(file)).digest("hex") });
+        }
+      }
+    };
+    for (const output of [options.outputPath, options.testOutputPath]) {
+      let directory: string;
+      try { directory = await this.filesystem.resolveExisting(output); }
+      catch (error) { if (error instanceof CoreError && error.code === "FILE_NOT_FOUND") continue; throw error; }
+      await visit(directory, "");
+    }
+    return files;
+  }
+
+  private compileDebugChanges(options: JavaProjectOptions): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const args = [...(options.mavenArguments ?? []), "-f", options.pomPath, "compile", "test-compile", "-DskipTests", "-Dmaven.compiler.debug=true", "-Dmaven.compiler.debuglevel=lines,vars,source"];
+      this.onProcessEvent({ type: "output", data: `> ${options.mavenExecutable} ${args.join(" ")}\n` });
+      const child = spawn(expandJavaToolPath(options.mavenExecutable, this.filesystem.getWorkspace()), args, { cwd: this.filesystem.getWorkspace(), env: javaToolEnvironment(options, this.filesystem.getWorkspace()), stdio: "pipe" });
+      this.applyBuildProcess = child;
+      child.stdout.on("data", (data: Buffer) => this.onProcessEvent({ type: "output", data: data.toString() }));
+      child.stderr.on("data", (data: Buffer) => this.onProcessEvent({ type: "output", data: data.toString() }));
+      child.on("error", (error) => reject(javaSpawnError(error, options.mavenExecutable, "Compile")));
+      child.on("close", (code) => {
+        if (this.applyBuildProcess === child) this.applyBuildProcess = undefined;
+        if (code === 0) resolve();
+        else reject(new CoreError("JAVA_PROCESS_FAILED", "Compilation failed. No code changes were applied; see Build Output."));
+      });
+    });
+  }
+
+  async applyDebugChanges(): Promise<JavaApplyChangesResult> {
+    if (!this.debugPaused || !this.process || this.applyingChanges) throw new CoreError("JAVA_PROCESS_FAILED", "Pause the Java debugger before applying code changes");
+    const child = this.process;
+    const generation = this.debugGeneration;
+    this.applyingChanges = true;
+    this.emitDebugState({ ...this.debugState, applyingChanges: true });
+    const ensurePaused = () => {
+      if (this.process !== child || !this.debugPaused || this.debugGeneration !== generation) throw new CoreError("JAVA_PROCESS_FAILED", "Debugger pause ended while applying changes");
+    };
+    const result: JavaApplyChangesResult = { appliedClasses: [], deferredClasses: [], failedClasses: [], restartRequired: false };
+    try {
+      await this.inspectionQueue;
+      ensurePaused();
+      const options = this.activeDebugOptions ?? await this.requireOptions();
+      await this.compileDebugChanges(options);
+      ensurePaused();
+      const next = await this.snapshotDebugClasses(options);
+      const changed = [...next].filter(([name, entry]) => this.debugClassFiles.get(name)?.hash !== entry.hash);
+      const classesOutput = await this.runDebugCommand("classes", true);
+      ensurePaused();
+      const loaded = new Set(classesOutput.split(/\r?\n/).map((line) => line.trim()));
+      if (!classesOutput.includes("** classes list **")) throw new CoreError("JAVA_PROCESS_FAILED", "Could not list loaded Java classes");
+      const temporaryDirectory = await mkdtemp(path.join(os.tmpdir(), "vibe-hotswap-"));
+      try {
+        for (const [className, entry] of changed) {
+          ensurePaused();
+          if (!loaded.has(className)) {
+            result.deferredClasses.push(className);
+            this.debugClassFiles.set(className, entry);
+            continue;
+          }
+          // jdb tokenizes filenames on whitespace. A temporary file also freezes the bytes during reload.
+          const file = path.join(temporaryDirectory, `${result.appliedClasses.length + result.failedClasses.length}.class`);
+          if (/\s/.test(file)) throw new CoreError("JAVA_PROCESS_FAILED", "The debugger temporary directory must have a path without spaces");
+          await writeFile(file, await readFile(entry.file));
+          const output = await this.runDebugCommand(`redefine ${className} ${file}`);
+          ensurePaused();
+          const message = output.replace(/[\w$.-]+\[\d+\]\s*$/, "").trim();
+          if (message) {
+            result.failedClasses.push({ className, message });
+            result.restartRequired = true;
+          } else {
+            result.appliedClasses.push(className);
+            this.debugClassFiles.set(className, entry);
+          }
+        }
+      } finally { await rm(temporaryDirectory, { recursive: true, force: true }); }
+      for (const className of this.debugClassFiles.keys()) {
+        if (!next.has(className) && loaded.has(className)) {
+          result.failedClasses.push({ className, message: "Loaded class was removed. Restart to remove it from the JVM." });
+          result.restartRequired = true;
+        }
+      }
+      // HotSwap clears breakpoints in redefined classes. Restore the original line breakpoints.
+      for (const breakpoint of this.debugBreakpoints.filter((item) => result.appliedClasses.includes(item.className))) {
+        const output = await this.runDebugCommand(`stop at ${breakpoint.className}:${breakpoint.line}`);
+        ensurePaused();
+        if (!/(?:Set|Deferring) breakpoint/.test(output)) {
+          const warning = `Breakpoint could not be restored: ${breakpoint.className}:${breakpoint.line}. Move it to an executable line and restart debugging.`;
+          (result.warnings ??= []).push(warning);
+          this.onProcessEvent({ type: "output", data: `${warning}\n` });
+        }
+      }
+      return result;
+    } finally {
+      if (this.process === child && this.debugPaused) {
+        this.debugReferences.clear();
+        try {
+          const output = await this.runDebugCommand("locals");
+          const variables = [...output.matchAll(/^\s*([A-Za-z_$][\w$]*)\s+=\s+(.+)$/gm)].map((match) => this.debugVariable(match[1]!, match[2]!.trim(), match[1]!));
+          if (this.process === child && this.debugPaused) await this.publishDebugPause({ ...this.debugState, applyingChanges: false, inspectionError: undefined, variables });
+        } catch (error) {
+          if (this.process === child && this.debugPaused) this.emitDebugState({ ...this.debugState, applyingChanges: false, variables: [], inspectionError: error instanceof Error ? error.message : String(error) });
+        }
+      }
+      this.applyingChanges = false;
+    }
   }
 
   stop(): void {
+    this.debugLaunchGeneration++;
+    this.applyBuildProcess?.kill("SIGTERM");
+    this.debugTarget?.kill("SIGTERM");
     if (!this.process) return;
     const child = this.process;
     if (this.debugging) {
+      this.invalidateDebugInspection();
       child.stdin.write("exit\n");
       setTimeout(() => { if (this.process === child) child.kill("SIGKILL"); }, 1_000).unref();
       return;
@@ -222,55 +696,70 @@ export class JavaProjectService {
   close(): void { this.stop(); }
 
   private async start(goals: string[], label: string): Promise<void> {
-    if (this.process) throw new CoreError("JAVA_PROCESS_FAILED", "A Java build or run process is already active");
+    if (this.process || this.debugStarting) throw new CoreError("JAVA_PROCESS_FAILED", "A Java build or run process is already active");
     const options = await this.requireOptions();
+    const buildGeneration = this.debugLaunchGeneration;
+    if (this.process || this.debugStarting) throw new CoreError("JAVA_PROCESS_FAILED", "A Java process is already active");
     this.onProcessEvent({ type: "output", data: `> ${options.mavenExecutable} -f ${options.pomPath} ${goals.join(" ")}\n` });
     try {
-      const child = spawn(options.mavenExecutable, ["-f", options.pomPath, ...goals], { cwd: this.filesystem.getWorkspace(), env: process.env, stdio: "pipe" });
+      const executable = expandJavaToolPath(options.mavenExecutable, this.filesystem.getWorkspace());
+      const child = spawn(executable, [...(options.mavenArguments ?? []), "-f", options.pomPath, ...goals], { cwd: this.filesystem.getWorkspace(), env: javaToolEnvironment(options, this.filesystem.getWorkspace()), stdio: "pipe" });
       this.process = child;
       child.stdout.on("data", (data: Buffer) => this.onProcessEvent({ type: "output", data: data.toString() }));
       child.stderr.on("data", (data: Buffer) => this.onProcessEvent({ type: "output", data: data.toString() }));
-      child.on("error", (error) => this.onProcessEvent({ type: "output", data: `${label} failed to start: ${error.message}\n` }));
-      child.on("close", (exitCode, signal) => {
-        this.process = undefined;
+      child.on("error", (error) => this.onProcessEvent({ type: "output", data: `${javaSpawnError(error, executable, label).message}\n` }));
+      child.on("close", async (exitCode, signal) => {
+        if (this.process !== child) return;
+        if (exitCode === 0 && !signal && buildGeneration === this.debugLaunchGeneration) {
+          this.dependencyTypes = undefined;
+          try { await this.onBuildSucceeded(); }
+          catch (error) { this.onProcessEvent({ type: "output", data: `Java highlighting refresh failed: ${error instanceof Error ? error.message : String(error)}\n` }); }
+        }
+        if (this.process === child) this.process = undefined;
         this.onProcessEvent({ type: "exit", exitCode, signal });
       });
+      await new Promise<void>((resolve, reject) => { child.once("spawn", resolve); child.once("error", (error) => reject(javaSpawnError(error, executable, label))); });
     } catch (error) {
       this.process = undefined;
+      if (error instanceof CoreError) throw error;
       throw new CoreError("JAVA_PROCESS_FAILED", `${label} failed: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 
-  private runAndWait(command: string, args: string[], label: string): Promise<void> {
+  private runAndWait(command: string, args: string[], label: string, options?: JavaProjectOptions): Promise<void> {
+    if (options) { command = expandJavaToolPath(command, this.filesystem.getWorkspace()); args = [...(options.mavenArguments ?? []), ...args]; }
     return new Promise((resolve, reject) => {
-      const child = spawn(command, args, { cwd: this.filesystem.getWorkspace(), env: process.env, stdio: "pipe" });
+      const child = spawn(command, args, { cwd: this.filesystem.getWorkspace(), env: options ? javaToolEnvironment(options, this.filesystem.getWorkspace()) : process.env, stdio: "pipe" });
       this.process = child;
       child.stdout.on("data", (data: Buffer) => this.onProcessEvent({ type: "output", data: data.toString() }));
       child.stderr.on("data", (data: Buffer) => this.onProcessEvent({ type: "output", data: data.toString() }));
-      child.on("error", (error) => { this.process = undefined; reject(new CoreError("JAVA_PROCESS_FAILED", `${label} failed: ${error.message}`)); });
+      child.on("error", (error) => { if (this.process === child) this.process = undefined; reject(javaSpawnError(error, command, label)); });
       child.on("close", (code) => {
-        this.process = undefined;
+        if (this.process === child) this.process = undefined;
         if (code === 0) resolve(); else reject(new CoreError("JAVA_PROCESS_FAILED", `${label} exited with code ${code}`));
       });
     });
   }
 
-  private capture(command: string, args: string[]): Promise<string> {
+  private capture(command: string, args: string[], options?: JavaProjectOptions, label = "Java command", requireSuccess = false): Promise<string> {
+    if (options && command === options.mavenExecutable) { command = expandJavaToolPath(command, this.filesystem.getWorkspace()); args = [...(options.mavenArguments ?? []), ...args]; }
     return new Promise((resolve, reject) => {
-      const child = spawn(command, args, { cwd: this.filesystem.getWorkspace(), env: process.env, stdio: "pipe" });
+      const child = spawn(command, args, { cwd: this.filesystem.getWorkspace(), env: options ? javaToolEnvironment(options, this.filesystem.getWorkspace()) : process.env, stdio: "pipe" });
       let output = "";
       child.stdout.on("data", (data: Buffer) => { output += data.toString(); });
       child.stderr.on("data", (data: Buffer) => { output += data.toString(); });
-      child.on("error", (error) => reject(new CoreError("JAVA_PROCESS_FAILED", `Java diagnostics failed: ${error.message}`)));
-      child.on("close", () => resolve(output));
+      child.on("error", (error) => reject(javaSpawnError(error, command, label)));
+      child.on("close", (code) => { if (requireSuccess && code !== 0) reject(new CoreError("JAVA_PROCESS_FAILED", `${label} failed (code ${code}). ${output.slice(-2000)}`)); else resolve(output); });
     });
   }
 
-  private async buildDebugClasspath(options: JavaProjectOptions): Promise<string> {
+  private async buildDebugClasspath(options: JavaProjectOptions, managed = true): Promise<string> {
     const temporaryDirectory = await mkdtemp(path.join(os.tmpdir(), "vibe-jdb-"));
     const classpathFile = path.join(temporaryDirectory, "classpath.txt");
     try {
-      await this.runAndWait(options.mavenExecutable, ["-q", "-f", options.pomPath, "dependency:build-classpath", `-Dmdep.outputFile=${classpathFile}`], "Resolve debug classpath");
+      const args = ["-q", "-f", options.pomPath, "dependency:build-classpath", `-Dmdep.outputFile=${classpathFile}`];
+      if (managed) await this.runAndWait(options.mavenExecutable, args, "Resolve debug classpath", options);
+      else await this.capture(options.mavenExecutable, args, options, "Resolve dependency classpath", true);
       const dependencies = (await readFile(classpathFile, "utf8")).trim();
       const workspace = this.filesystem.getWorkspace();
       const outputs = [options.outputPath, options.testOutputPath].map((output) => path.resolve(workspace, output));
@@ -281,11 +770,11 @@ export class JavaProjectService {
   }
 
   private async indexDependencyTypes(options: JavaProjectOptions): Promise<JavaTypeSuggestion[]> {
-    const classpath = await this.buildDebugClasspath(options);
+    const classpath = await this.buildDebugClasspath(options, false);
     const jars = classpath.split(path.delimiter).filter((entry) => entry.endsWith(".jar"));
     const suggestions: JavaTypeSuggestion[] = [];
     for (const jar of jars) {
-      const listing = await this.capture("jar", ["tf", jar]).catch(() => "");
+      const listing = await this.capture(javaToolExecutable(options, "jar", this.filesystem.getWorkspace()), ["tf", jar], options).catch(() => "");
       for (const entry of listing.split(/\r?\n/)) {
         if (!entry.endsWith(".class") || entry.includes("$") || entry.endsWith("module-info.class") || entry.endsWith("package-info.class")) continue;
         const qualifiedName = entry.slice(0, -6).replaceAll("/", ".");
@@ -293,10 +782,10 @@ export class JavaProjectService {
         suggestions.push({ simpleName, qualifiedName, source: "dependency" });
       }
     }
-    const javaSettings = await this.capture("java", ["-XshowSettings:properties", "-version"]).catch(() => "");
+    const javaSettings = await this.capture(javaToolExecutable(options, "java", this.filesystem.getWorkspace()), ["-XshowSettings:properties", "-version"], options).catch(() => "");
     const javaHome = javaSettings.match(/^\s*java\.home\s*=\s*(.+)$/m)?.[1]?.trim();
     if (javaHome) {
-      const listing = await this.capture("jimage", ["list", path.join(javaHome, "lib", "modules")]).catch(() => "");
+      const listing = await this.capture(javaToolExecutable(options, "jimage", this.filesystem.getWorkspace()), ["list", path.join(javaHome, "lib", "modules")], options).catch(() => "");
       for (const entry of listing.split(/\r?\n/).map((line) => line.trim())) {
         if (!entry.endsWith(".class") || entry.includes("$") || entry.includes("module-info") || entry.includes("package-info")) continue;
         const normalized = entry.replace(/^modules\//, "").replace(/^[^/]+\/(?=(?:java|javax)\/)/, "");
@@ -309,21 +798,48 @@ export class JavaProjectService {
   }
 
   private consumeDebugOutput(data: string): void {
-    this.onProcessEvent({ type: "output", data });
-    this.debugBuffer = (this.debugBuffer + data).slice(-20_000);
-    const stopped = this.debugBuffer.match(/(?:Breakpoint hit:|Step completed:)\s+"[^"]+",\s+([\w$]+(?:\.[\w$]+)*)\.([\w$<>]+)\([^)]*\),\s+line=(\d+)/);
+    if (!this.pendingInspection?.quiet) this.onProcessEvent({ type: "output", data });
+    if (this.pendingInspection && this.debugBuffer.length + data.length > 1_000_000) {
+      this.invalidateDebugInspection();
+      this.debugPaused = true;
+      this.emitDebugState({ status: "paused", ...this.debugLocation, variables: [], applyingChanges: this.applyingChanges, inspectionError: "Debugger output exceeded the inspection limit. Step or continue to refresh the pause." });
+      this.debugBuffer = "";
+      return;
+    }
+    this.debugBuffer = (this.debugBuffer + data).slice(this.pendingInspection ? -1_000_000 : -20_000);
+    if (this.pendingInspection) {
+      if (/[\w$.-]+\[\d+\]\s*$/.test(this.debugBuffer)) {
+        const pending = this.pendingInspection;
+        this.pendingInspection = undefined;
+        clearTimeout(pending.timer);
+        pending.resolve(this.debugBuffer);
+        this.debugBuffer = "";
+      }
+      return;
+    }
+    const stopped = this.debugBuffer.match(/(?:Breakpoint hit:|Step completed:|Exception occurred:)[\s\S]*?"thread=[^"]+",\s+([\w$]+(?:\.[\w$]+)*)\.([\w$<>]+)\([^)]*\),\s+line=(\d+)/);
     if (stopped) {
+      this.invalidateDebugInspection();
+      const exception = this.debugBuffer.match(/Exception occurred: (.*?)(?:"thread=|\r?\n)/)?.[1]?.trim();
+      this.debugState = { status: "paused", variables: [], ...(exception ? { stopReason: exception } : {}) };
       this.debugLocation = { className: stopped[1]!, method: stopped[2]!, line: Number(stopped[3]) };
+      this.awaitingDebugStopPrompt = true;
+    }
+    if (this.awaitingDebugStopPrompt) {
+      if (!/[\w$.-]+\[\d+\]\s*$/.test(this.debugBuffer)) return;
+      this.awaitingDebugStopPrompt = false;
       this.awaitingDebugLocals = true;
       this.debugBuffer = "";
       this.process?.stdin.write("locals\n");
       return;
     }
-    if (!this.awaitingDebugLocals || !/[\w$]+\[\d+\]\s*$/.test(this.debugBuffer) || !this.debugLocation) return;
-    const variables = [...this.debugBuffer.matchAll(/^\s*([A-Za-z_$][\w$]*)\s+=\s+(.+)$/gm)].slice(-100).map((match) => ({ name: match[1]!, value: match[2]!.trim() }));
-    this.onProcessEvent({ type: "debug", state: { status: "paused", ...this.debugLocation, variables } });
+    if (!this.awaitingDebugLocals || !/[\w$.-]+\[\d+\]\s*$/.test(this.debugBuffer) || !this.debugLocation) return;
+    const variables = [...this.debugBuffer.matchAll(/^\s*([A-Za-z_$][\w$]*)\s+=\s+(.+)$/gm)].map((match) => this.debugVariable(match[1]!, match[2]!.trim(), match[1]!));
+    this.debugPaused = true;
+    const inspectionError = this.debugBuffer.match(/(?:Local variable information not available[^\r\n]*|No default thread specified[^\r\n]*|.*obsolete.*)/i)?.[0];
     this.awaitingDebugLocals = false;
     this.debugBuffer = "";
+    void this.publishDebugPause({ status: "paused", ...this.debugLocation, variables, ...(this.debugState.stopReason ? { stopReason: this.debugState.stopReason } : {}), ...(inspectionError ? { inspectionError } : {}) });
   }
 
   private async requireOptions(): Promise<JavaProjectOptions> {
@@ -333,16 +849,25 @@ export class JavaProjectService {
   }
 
   private async saveProject(javaProject: JavaProjectOptions): Promise<void> {
+    const file = await readJavaConfiguration(this.filesystem);
+    if (file) await writeJavaConfiguration(this.filesystem, JSON.stringify(javaProject, null, 2) + "\n", file.revision);
     const current = await this.state.load();
     await this.state.save({ ...current, javaProject });
   }
 
   private async buildProjectTree(options: JavaProjectOptions): Promise<JavaProjectNode[]> {
     const roots: JavaProjectNode[] = [];
+    const moduleRoot = path.posix.dirname(options.pomPath);
+    let testRoot = path.posix.join(moduleRoot, "src/test/java");
+    try {
+      const document = new XMLParser().parse((await this.filesystem.read(options.pomPath)).content);
+      const configured = document.project?.build?.testSourceDirectory;
+      if (typeof configured === "string") testRoot = path.posix.join(moduleRoot, configured);
+    } catch { /* Keep the conventional test root when the POM is unavailable. */ }
     for (const sourceRoot of options.sourceRoots) {
       let absolute: string;
       try { absolute = await this.filesystem.resolveExisting(sourceRoot); } catch { continue; }
-      roots.push({ name: sourceRoot, path: sourceRoot, type: "sourceRoot", children: await this.walkPackages(absolute, sourceRoot) });
+      roots.push({ name: sourceRoot, path: sourceRoot, type: "sourceRoot", sourceKind: sourceRoot === testRoot ? "test" : "source", children: await this.walkPackages(absolute, sourceRoot) });
     }
     return roots;
   }
@@ -355,7 +880,11 @@ export class JavaProjectService {
       const absolute = path.join(directory, entry.name);
       const relative = path.posix.join(relativeDirectory, entry.name);
       if (entry.isDirectory()) nodes.push({ name: entry.name, path: relative, type: "package", children: await this.walkPackages(absolute, relative) });
-      else if (entry.isFile() && entry.name.endsWith(".java")) nodes.push({ name: entry.name, path: relative, type: "file" });
+      else if (entry.isFile() && entry.name.endsWith(".java")) {
+        let javaType: JavaProjectNode["javaType"];
+        try { javaType = javaFileType((await this.filesystem.read(relative)).content, entry.name.slice(0, -5)); } catch { /* Unreadable files retain the generic Java icon. */ }
+        nodes.push({ name: entry.name, path: relative, type: "file", ...(javaType ? { javaType } : {}) });
+      }
     }
     return compactPackages(nodes);
   }

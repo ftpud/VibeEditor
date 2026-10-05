@@ -17,7 +17,7 @@ describe("editor highlighting themes", () => {
         setLanguageConfiguration: vi.fn(),
         setMonarchTokensProvider: vi.fn()
       },
-      editor: { defineTheme: (name: string, definition: { rules: { token: string; background?: string; fontStyle?: string }[] }) => themes.set(name, definition) }
+      editor: { onDidCreateEditor: vi.fn(), defineTheme: (name: string, definition: { rules: { token: string; background?: string; fontStyle?: string }[] }) => themes.set(name, definition) }
     } as unknown as Monaco;
     configureMonacoThemes(monaco);
     const dark = themes.get("ftpud-dark")!;

@@ -191,6 +191,7 @@ describe("WorkspaceTaskStore", () => {
     expect((await execFileAsync("git", ["-C", selected.workspace, "rev-list", "--left-right", "--count", "@{upstream}...HEAD"])).stdout.trim()).toBe("0\t1");
     expect((await execFileAsync("git", ["-C", selected.workspace, "status", "--short", "--branch"])).stdout).toContain("ahead 1");
     expect((await store.merge(task.id)).targetBranch).toBe(rootBranch);
+    await expect(store.integrations()).resolves.toEqual([expect.objectContaining({ taskId: task.id, status: "completed", expectedHead: expect.any(String), candidateRevision: expect.any(String), test: expect.objectContaining({ exitCode: 0 }) })]);
     expect(await readFile(path.join(root, "tracked.txt"), "utf8")).toBe("task\n");
     expect((await store.select()).workspace).toBe(root);
     await store.delete(task.id);

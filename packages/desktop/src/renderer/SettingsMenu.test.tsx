@@ -1,8 +1,10 @@
-import { fireEvent, render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { SettingsMenu } from "./SettingsMenu";
 
-const values = { theme: "dark" as const, highlightTheme: "default" as const, uiFontFamily: "jetbrains" as const, uiFontSize: 13, uiLineHeight: 1.2 };
+afterEach(cleanup);
+
+const values = { theme: "dark" as const, highlightTheme: "default" as const, uiFontFamily: "jetbrains" as const, uiFontWeight: 450, uiFontSize: 13, uiLineHeight: 1.2 };
 const shortcutProps = { commands: [], shortcutBindings: {}, platform: "linux" as const, onShortcutChange: vi.fn(), onShortcutsReset: vi.fn() };
 
 describe("SettingsMenu", () => {
@@ -19,7 +21,7 @@ describe("SettingsMenu", () => {
     const onReset = vi.fn();
     render(<SettingsMenu {...shortcutProps} workspace="/project" sideLayout="classic" onSideLayoutChange={vi.fn()} values={values} isWorkspaceOverride={(setting) => setting === "theme"} onChange={vi.fn()} onReset={onReset} />);
     expect(screen.getAllByText("Workspace override")).toHaveLength(1);
-    expect(screen.getAllByText("Global default")).toHaveLength(5);
+    expect(screen.getAllByText("Global default")).toHaveLength(6);
     fireEvent.click(screen.getByRole("button", { name: "Reset" }));
     expect(onReset).toHaveBeenCalledWith("theme");
   });
@@ -33,4 +35,14 @@ describe("SettingsMenu", () => {
     expect(onChange).toHaveBeenCalledWith("highlightTheme", "ftpud");
     expect([...view.container.querySelectorAll("button")].some((item) => item.textContent === "Ftpud Dark")).toBe(false);
   });
+});
+
+it("changes UI font weight and clamps it to the supported range", () => {
+  const onChange = vi.fn();
+  render(<SettingsMenu {...shortcutProps} workspace="/project" sideLayout="classic" onSideLayoutChange={vi.fn()} values={values} isWorkspaceOverride={() => false} onChange={onChange} onReset={vi.fn()} />);
+  const input = screen.getByRole("spinbutton", { name: "Font weight" });
+  fireEvent.change(input, { target: { value: "500" } });
+  expect(onChange).toHaveBeenLastCalledWith("uiFontWeight", 500);
+  fireEvent.change(input, { target: { value: "950" } });
+  expect(onChange).toHaveBeenLastCalledWith("uiFontWeight", 600);
 });

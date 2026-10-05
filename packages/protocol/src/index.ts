@@ -16,7 +16,7 @@ export type FileRevision = { identity: string; version: string };
  * Desktop can prove it is safe to talk to a newly deployed Core.
  */
 export type ProtocolCompatibility = { minimum: number; maximum: number };
-export const protocolCompatibility: ProtocolCompatibility = { minimum: 3, maximum: 3 };
+export const protocolCompatibility: ProtocolCompatibility = { minimum: 11, maximum: 11 };
 
 export function protocolRangeIsValid(range: ProtocolCompatibility): boolean {
   return Number.isInteger(range.minimum) && Number.isInteger(range.maximum) && range.minimum > 0 && range.minimum <= range.maximum;
@@ -138,6 +138,7 @@ export type WorkspaceOptions = {
   pinnedFiles?: string[];
   activeFile?: string;
   javaProject?: JavaProjectOptions;
+  javaBreakpoints?: JavaBreakpoint[];
   terminal?: WorkspaceTerminalOptions;
   fileColors?: Record<string, FileColor>;
   gitCommitMessage?: string;
@@ -153,8 +154,8 @@ export type TerminalSessionSnapshot = { terminalId: string; status: "running" | 
 /** Resolution is always against the currently selected workspace. A stale ID means Core no longer owns that process. */
 export type TerminalAttachResult = { state: "available"; session: TerminalSessionSnapshot } | { state: "stale"; reason: "session-unavailable" };
 export type WorkspaceTask = { id: string; name: string; branch: string; baseBranch: string; status: "active" | "finished"; archived: boolean };
-export type { AiAgent, AiAgentPreset, AiCommand, AiConfiguration, AiContentBlock, AiMessage, AiModel, AiMcpServer, AiOption, AiPermissionRequest, AiProvider, AiProviderCapabilities, AiProviderDescriptor, AiSession, AiSettingsLayout, AiSettingsSection, AiStatus, AiTaskSummary, AiUsage } from "@remote-ide/acp";
-import type { AiAgent, AiAgentPreset, AiConfiguration, AiContentBlock, AiMcpServer, AiModel, AiProvider, AiProviderDescriptor, AiSession, AiTaskSummary, AiUsage } from "@remote-ide/acp";
+export type { AiAgent, AiAgentPreset, AiCommand, AiConfiguration, AiContentBlock, AiFailure, AiFailureKind, AiMessage, AiModel, AiMcpServer, AiOption, AiPermissionRequest, AiProvider, AiProviderCapabilities, AiProviderDescriptor, AiSession, AiSettingsLayout, AiSettingsSection, AiStatus, AiTaskSummary, AiUsage } from "@remote-ide/acp";
+import type { AiAgent, AiAgentPreset, AiConfiguration, AiContentBlock, AiMcpServer, AiModel, AiPermissionRequest, AiProvider, AiProviderDescriptor, AiSession, AiTaskSummary, AiUsage } from "@remote-ide/acp";
 export type UsefulFileScope = "global" | "local";
 export type UsefulFile = { scope: UsefulFileScope; name: string };
 export type RunConfigScope = "global" | "local";
@@ -163,12 +164,44 @@ export type RunConfig = { scope: RunConfigScope; name: string; commands: string;
 export type AgentFileScope = "global" | "local" | "workspace";
 export type AgentFileReference = { scope: AgentFileScope; name: string };
 export type AgentFile = { scope: AgentFileScope; name: string; agent: AiAgent };
+export type HarnessDataSchema = { type: "string" | "number" | "boolean" | "object" | "array"; properties?: Record<string, HarnessDataSchema>; required?: string[]; items?: HarnessDataSchema };
+export type HarnessReview = { revision: string; baseRevision?: string; correction?: HarnessCorrection };
+/** A review can send its structured findings back to the block that owns the change. */
+export type HarnessCorrection = { ownerBlockId: string; maxCycles?: number; verificationBlockId?: string };
+export type HarnessReviewFinding = { id: string; message: string; ownerBlockId: string; revision: string };
+export type HarnessCorrectionCycle = { reviewBlockId: string; ownerBlockId: string; verificationBlockId?: string; cycle: number; revision: string; findings: HarnessReviewFinding[]; status: "requested" | "corrected" | "blocked"; correctedRevision?: string; requestedAt: string; completedAt?: string; error?: string };
+export type HarnessVerification = { command: string; revision?: string; workingDirectory?: string; timeoutMs?: number };
+export type HarnessBlock = { id: string; type: "ai" | "text" | "timer" | "user_prompt" | "yes_no_prompt" | "markdown" | "script" | "start_button" | "start_input" | "prompt" | "task" | "review" | "verification"; seconds?: number; command?: string; label: string; prompt: string; inputSchema?: HarnessDataSchema; outputSchema?: HarnessDataSchema; provider?: AiProvider; model?: string; agent?: AgentFileReference; watchdog?: boolean; review?: HarnessReview; verification?: HarnessVerification; join?: "all" | "any"; routing?: "all" | "ai"; position: { x: number; y: number } };
+export type HarnessEdge = { type?: "use" | "follow" | "path"; id: string; from: string; to: string; label?: string; loop?: boolean; execution?: "sync" | "async" };
+export type HarnessDefinition = { id: string; name: string; version: number; createdAt: string; updatedAt: string; blocks: HarnessBlock[]; edges: HarnessEdge[] };
+export type HarnessStateDiagnostic = { source: "index.json" | "runs.json"; reason: string; detectedAt: string };
+export type HarnessValidationIssue = { code: "empty" | "duplicate-id" | "duplicate-edge-id" | "missing-endpoint" | "self-edge" | "duplicate-edge" | "cycle" | "route-label" | "empty-label" | "empty-prompt" | "unknown-template" | "missing-template-block" | "invalid-loop" | "invalid-schema" | "invalid-gate" | "invalid-watchdog" | "unavailable-provider" | "unavailable-model" | "unavailable-agent"; message: string; blockId?: string; edgeId?: string };
+export type HarnessBlockIteration = { index: number; status: "running" | "succeeded" | "failed" | "cancelled"; startedAt: string; completedAt?: string; prompt?: string; output?: string; error?: string; sessionId?: string; workspace?: string };
+export type HarnessLogEntry = { timestamp: string; kind: "lifecycle" | "prompt" | "response" | "error"; message: string };
+export type HarnessFailureReason = "quota_exhausted" | "transient_transport" | "permission_required" | "user_input_required" | "schema_validation" | "recovery_orphaned" | "cancelled" | "permanent";
+export type HarnessExecutionPlan = { version: 1; createdAt: string; definitionVersion: number; order: string[]; blocks: { blockId: string; incoming: string[]; outgoing: string[] }[] };
+export type HarnessOperationKind = "block_attempt" | "dependency_decision" | "route_selection" | "prompt_delivery" | "session_binding" | "timer_create" | "timer_fire" | "child_registration" | "task_create" | "tool_command" | "merge" | "review" | "verification" | "terminal_outcome";
+export type HarnessOperationStatus = "intent" | "succeeded" | "failed";
+export type HarnessOperation = { id: string; idempotencyKey: string; kind: HarnessOperationKind; status: HarnessOperationStatus; blockId?: string; attemptId?: string; createdAt: string; updatedAt: string; input?: unknown; result?: unknown; error?: string };
+export type HarnessBlockAttempt = { id: string; index: number; status: "running" | "succeeded" | "failed" | "cancelled"; startedAt: string; completedAt?: string; operationId: string; sessionId?: string; workspace?: string; error?: string };
+export type HarnessPauseStatus = "awaiting_permission" | "awaiting_user_input" | "waiting_timer" | "retry_scheduled";
+export type HarnessBlockStatus = "queued" | "running" | "succeeded" | "failed" | "blocked" | "cancelled" | "waiting" | "skipped" | HarnessPauseStatus;
+export type HarnessRunStatus = "queued" | "running" | "succeeded" | "failed" | "blocked" | "cancelled" | "waiting" | HarnessPauseStatus;
+export type HarnessBlockRun = { blockId: string; status: HarnessBlockStatus; startedAt?: string; completedAt?: string; prompt?: string; output?: string; structuredInput?: unknown; structuredOutput?: unknown; error?: string; failureReason?: HarnessFailureReason; retryAt?: string; retryStartedAt?: string; provider?: AiProvider; sessionId?: string; workspace?: string; selectedRoute?: string; plannedRuns?: number; iterations?: HarnessBlockIteration[]; attempts?: HarnessBlockAttempt[]; log?: HarnessLogEntry[]; waitingUntil?: string; recoveryAttempts?: number; pendingPermission?: AiPermissionRequest; question?: string; pauseId?: string };
+export type HarnessChildTask = { taskId: string; blockId: string; provider: AiProvider; workspace: string; recoveryAttempts: number; recoveryError?: string; failureReason?: HarnessFailureReason; retryAt?: string; retryStartedAt?: string };
+export type HarnessFeatureStatus = "planned" | "dispatched" | "completed" | "blocked";
+export type HarnessFeature = { id: string; prompt: string; prerequisites: string[]; status: HarnessFeatureStatus; taskId?: string; commit?: string; blockedReason?: string };
+export type HarnessConnectionTrace = { id: string; edgeId: string; direction: "forward" | "return"; status: "active" | "succeeded" | "failed"; startedAt: string; completedAt?: string };
+export type HarnessRun = { connectionTraces?: HarnessConnectionTrace[]; id: string; harnessId: string; harnessVersion: number; definition?: HarnessDefinition; executionPlan?: HarnessExecutionPlan; operations?: HarnessOperation[]; children?: HarnessChildTask[]; features?: HarnessFeature[]; corrections?: HarnessCorrectionCycle[]; input: string; status: HarnessRunStatus; createdAt: string; startedAt?: string; completedAt?: string; blocks: HarnessBlockRun[]; error?: string; cleanupErrors?: string[] };
 export type HttpResponse = { status: number; statusText: string; headers: Record<string, string>; body: string; durationMs: number };
 
 export type JavaProjectOptions = {
   type: "maven";
   pomPath: string;
   mavenExecutable: string;
+  javaHome?: string;
+  mavenArguments?: string[];
+  buildGoals?: string[];
   sourceRoots: string[];
   outputPath: string;
   testOutputPath: string;
@@ -176,16 +209,40 @@ export type JavaProjectOptions = {
   selectedRunConfigurationId?: string;
 };
 
-export type JavaRunConfiguration = { id: string; name: string; mainClass: string };
+export type JavaRunConfiguration = {
+  id: string;
+  name: string;
+  mainClass: string;
+  activeProfile?: string;
+  programArguments?: string[];
+  vmArguments?: string[];
+  workingDirectory?: string;
+  environmentFile?: string;
+  environment?: Record<string, string>;
+};
+export type JavaToolCheck = { tool: "Maven" | "Java" | "Java compiler" | "Java debugger"; executable: string; ok: boolean; message: string };
+export const javaConfigurationPath = ".settings/java.json";
 export type JavaMainClass = { className: string; path: string };
 export type JavaBreakpoint = { path: string; line: number; className: string };
-export type JavaDebugVariable = { name: string; value: string };
+export type JavaDebugVariable = { name: string; value: string; reference?: string; type?: string; objectId?: string; indexedCount?: number };
 export type JavaDebugState = {
+  /** Workspace-relative source file for the current paused frame. */
+  path?: string;
   status: "starting" | "running" | "paused" | "stopped";
   className?: string;
   method?: string;
   line?: number;
   variables: JavaDebugVariable[];
+  applyingChanges?: boolean;
+  inspectionError?: string;
+  stopReason?: string;
+};
+export type JavaApplyChangesResult = {
+  appliedClasses: string[];
+  deferredClasses: string[];
+  failedClasses: { className: string; message: string }[];
+  restartRequired: boolean;
+  warnings?: string[];
 };
 export type JavaDiagnostic = { path: string; line: number; column: number; severity: "error" | "warning"; message: string };
 export type JavaTypeSuggestion = { simpleName: string; qualifiedName: string; source: "project" | "dependency" };
@@ -202,7 +259,16 @@ export type JavaProjectNode = {
   name: string;
   path: string;
   type: "sourceRoot" | "package" | "file";
+  sourceKind?: "source" | "test";
+  javaType?: JavaFileType;
   children?: JavaProjectNode[];
+};
+
+export type JavaFileType = {
+  kind: "class" | "interface" | "enum" | "record" | "annotation";
+  abstract?: boolean;
+  extends?: boolean;
+  implements?: boolean;
 };
 
 export type SearchContextLine = { line: number; text: string; truncated: boolean };
@@ -273,6 +339,21 @@ export type ProtocolOperations = {
   "agents.write": { payload: { scope: AgentFileScope; name: string; content: string }; result: Record<string, never> };
   "agents.rename": { payload: { scope: Exclude<AgentFileScope, "workspace">; name: string; newName: string }; result: { name: string } };
   "agents.delete": { payload: { scope: Exclude<AgentFileScope, "workspace">; name: string }; result: Record<string, never> };
+  "harnesses.list": { payload: Record<string, never>; result: { harnesses: HarnessDefinition[]; diagnostics: HarnessStateDiagnostic[] } };
+  "harnesses.read": { payload: { id: string }; result: { harness: HarnessDefinition } };
+  "harnesses.create": { payload: { name: string; template?: "five-minute-check-in" | "git-review-commit" }; result: { harness: HarnessDefinition } };
+  "harnesses.update": { payload: { harness: HarnessDefinition }; result: { harness: HarnessDefinition } };
+  "harnesses.delete": { payload: { id: string }; result: Record<string, never> };
+  "harnesses.validate": { payload: { harness: HarnessDefinition }; result: { valid: boolean; issues: HarnessValidationIssue[]; order: string[] } };
+  "harnesses.runs": { payload: { harnessId?: string }; result: { runs: HarnessRun[] } };
+  "harnesses.run": { payload: { harnessId: string; input: string; startBlockId?: string; provider?: AiProvider }; result: { run: HarnessRun } };
+  "harnesses.append": { payload: { runId: string; input: string }; result: { run: HarnessRun } };
+  "harnesses.permission.resolve": { payload: { runId: string; blockId: string; sessionId: string; pauseId: string; requestId: string; optionId?: string }; result: { run: HarnessRun } };
+  "harnesses.answer": { payload: { runId: string; blockId: string; sessionId: string; pauseId: string; input: string }; result: { run: HarnessRun } };
+  "harnesses.pause.resume": { payload: { runId: string; blockId: string; pauseId: string }; result: { run: HarnessRun } };
+  "harnesses.pause.retry": { payload: { runId: string; blockId: string; pauseId: string }; result: { run: HarnessRun } };
+  "harnesses.pause.cancel": { payload: { runId: string; blockId: string; pauseId: string }; result: { run: HarnessRun } };
+  "harnesses.cancel": { payload: { runId: string }; result: { run: HarnessRun } };
   "http.execute": { payload: { method: string; url: string; headers: Record<string, string>; body?: string }; result: HttpResponse };
   "filesystem.listTree": {
     payload: { includeIgnored?: boolean };
@@ -407,6 +488,7 @@ export type ProtocolOperations = {
   "git.compareFiles": { payload: { ref: string; path?: string }; result: { files: GitCommitFile[] } };
   "git.compareDiff": { payload: { ref: string; path: string; originalPath?: string }; result: { originalContent: string; modifiedContent: string } };
   "git.rollback": { payload: { path: string }; result: Record<string, never> };
+  "git.rollbackCompared": { payload: { ref: string; path: string }; result: Record<string, never> };
   "git.rollbackSelected": { payload: { paths: string[]; deleteUntracked: boolean }; result: { rolledBack: string[]; failures: GitRollbackFailure[] } };
   "git.commit": { payload: { paths: string[]; message: string }; result: { hash: string } };
   "git.historyRewritePreview": { payload: Record<string, never>; result: GitHistoryRewritePreview };
@@ -435,6 +517,18 @@ export type ProtocolOperations = {
   "java.loadMavenProject": {
     payload: { pomPath: string };
     result: { options: JavaProjectOptions; tree: JavaProjectNode[] };
+  };
+  "java.configuration.read": {
+    payload: Record<string, never>;
+    result: { path: string; content: string; revision?: FileRevision; template: string };
+  };
+  "java.configuration.save": {
+    payload: { content: string; expectedRevision?: FileRevision };
+    result: { options: JavaProjectOptions; content: string; revision: FileRevision };
+  };
+  "java.tools.check": {
+    payload: { content: string };
+    result: { checks: JavaToolCheck[] };
   };
   "java.getOptions": {
     payload: Record<string, never>;
@@ -473,9 +567,21 @@ export type ProtocolOperations = {
     payload: Record<string, never>;
     result: Record<string, never>;
   };
+  "java.debug.setBreakpoints": {
+    payload: { breakpoints: JavaBreakpoint[] };
+    result: Record<string, never>;
+  };
   "java.debug.start": {
     payload: { breakpoints: JavaBreakpoint[] };
     result: Record<string, never>;
+  };
+  "java.debug.applyChanges": {
+    payload: Record<string, never>;
+    result: JavaApplyChangesResult;
+  };
+  "java.debug.variables": {
+    payload: { reference: string; start?: number };
+    result: { variables: JavaDebugVariable[]; nextStart?: number };
   };
   "java.debug.command": {
     payload: { command: "continue" | "stepInto" | "stepOver" | "stepOut" };
@@ -512,6 +618,7 @@ export type ErrorCode =
   | "BINARY_FILE"
   | "READ_FAILED"
   | "WRITE_FAILED"
+  | "CONFLICT"
   | "FILE_CHANGED"
   | "TERMINAL_FAILED"
   | "RUN_CONFIG_NOT_FOUND"
@@ -547,6 +654,7 @@ export type TerminalExitEvent = {
 export type GitChangedEvent = { type: "git.changed"; payload: { rootId: WorkspaceRootId } };
 export type TaskGitChangedEvent = { type: "taskGit.changed"; payload: { rootId: WorkspaceRootId } };
 
+export type JavaSemanticChangedEvent = { type: "java.semantic.changed"; payload: { rootId: WorkspaceRootId } };
 export type JavaOutputEvent = { type: "java.output"; payload: { rootId: WorkspaceRootId; data: string } };
 export type JavaExitEvent = { type: "java.exit"; payload: { rootId: WorkspaceRootId; exitCode: number | null; signal: string | null } };
 export type JavaDebugStateEvent = { type: "java.debug.state"; payload: JavaDebugState & { rootId: WorkspaceRootId } };
@@ -555,7 +663,9 @@ export type TasksChangedEvent = { type: "tasks.changed"; payload: { rootId: Work
 export type CommitMessageChangedEvent = { type: "commit-message.changed"; payload: { rootId: WorkspaceRootId; message: string } };
 export type RunConfigChangedEvent = { type: "runConfig.changed"; payload: { rootId: WorkspaceRootId; configs: RunConfig[] } };
 
-export type ServerEvent = FilesystemChangedEvent | TerminalOutputEvent | TerminalExitEvent | GitChangedEvent | TaskGitChangedEvent | JavaOutputEvent | JavaExitEvent | JavaDebugStateEvent | AiChangedEvent | TasksChangedEvent | CommitMessageChangedEvent | RunConfigChangedEvent;
+export type HarnessChangedEvent = { type: "harness.changed"; payload: { rootId: WorkspaceRootId; runId: string } };
+export type WorkflowDocumentEvent = { type: "workflow.document"; payload: { rootId: WorkspaceRootId; runId: string; blockId: string; title: string; content: string } };
+export type ServerEvent = WorkflowDocumentEvent | FilesystemChangedEvent | TerminalOutputEvent | TerminalExitEvent | GitChangedEvent | TaskGitChangedEvent | JavaSemanticChangedEvent | JavaOutputEvent | JavaExitEvent | JavaDebugStateEvent | AiChangedEvent | TasksChangedEvent | CommitMessageChangedEvent | RunConfigChangedEvent | HarnessChangedEvent;
 
 /**
  * Every request the core accepts. Declaring it as a fully keyed record makes TypeScript
@@ -617,6 +727,21 @@ const requestTypeRegistry: Record<RequestType, true> = {
   "agents.write": true,
   "agents.rename": true,
   "agents.delete": true,
+  "harnesses.list": true,
+  "harnesses.read": true,
+  "harnesses.create": true,
+  "harnesses.update": true,
+  "harnesses.delete": true,
+  "harnesses.validate": true,
+  "harnesses.runs": true,
+  "harnesses.run": true,
+  "harnesses.append": true,
+  "harnesses.permission.resolve": true,
+  "harnesses.answer": true,
+  "harnesses.pause.resume": true,
+  "harnesses.pause.retry": true,
+  "harnesses.pause.cancel": true,
+  "harnesses.cancel": true,
   "http.execute": true,
   "filesystem.listTree": true,
   "filesystem.snapshot": true,
@@ -675,6 +800,7 @@ const requestTypeRegistry: Record<RequestType, true> = {
   "git.compareFiles": true,
   "git.compareDiff": true,
   "git.rollback": true,
+  "git.rollbackCompared": true,
   "git.rollbackSelected": true,
   "git.commit": true,
   "git.historyRewritePreview": true,
@@ -700,6 +826,9 @@ const requestTypeRegistry: Record<RequestType, true> = {
   "taskGit.restore": true,
   "java.loadMavenProject": true,
   "java.getOptions": true,
+  "java.configuration.read": true,
+  "java.configuration.save": true,
+  "java.tools.check": true,
   "java.addSourceRoot": true,
   "java.getProjectTree": true,
   "java.workspaceSymbols": true,
@@ -710,7 +839,10 @@ const requestTypeRegistry: Record<RequestType, true> = {
   "java.run": true,
   "java.stop": true,
   "java.debug.start": true,
+  "java.debug.setBreakpoints": true,
   "java.debug.command": true,
+  "java.debug.variables": true,
+  "java.debug.applyChanges": true,
   "java.check": true,
   "java.completeType": true,
   "java.completion": true,

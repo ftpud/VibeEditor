@@ -20,6 +20,18 @@ function renderTree(options: { query?: string; activePath?: string } = {}) {
 }
 
 describe("ProjectTree", () => {
+  it("keeps source roots visible and renders Core Java type metadata", () => {
+    const javaNodes = [{ name: "src/main/java", path: "src/main/java", type: "sourceRoot" as const, sourceKind: "source" as const, children: [{ name: "Contract.java", path: "src/main/java/example/Contract.java", type: "file" as const, javaType: { kind: "interface" as const, extends: true } }] }];
+    const tree: FileTreeNode[] = [{ name: "src", path: "src", type: "directory", children: [{ name: "main", path: "src/main", type: "directory", children: [{ name: "java", path: "src/main/java", type: "directory", children: [{ name: "example", path: "src/main/java/example", type: "directory", children: [{ name: "Contract.java", path: "src/main/java/example/Contract.java", type: "file" }] }] }] }] }];
+    const compacted = compactProjectTree(tree, new Set(["src/main/java"]));
+    expect(compacted[0]).toMatchObject({ name: "src/main/java", path: "src/main/java" });
+    expect(compacted[0]?.children?.[0]?.name).toBe("example");
+    render(<ProjectTree nodes={tree} javaNodes={javaNodes} query="" selectedPaths={new Set()} fileColors={{}} gitStatuses={{}} onAction={vi.fn()} onContextMenu={vi.fn()} onSelectionChange={vi.fn()} />);
+    expect(screen.getByLabelText("Source directory")).not.toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Expand all folders" }));
+    expect(screen.getByRole("img", { name: "Interface · extends a type" })).not.toBeNull();
+  });
+
   it("compacts directory-only chains into one explorer row", () => {
     const compacted = compactProjectTree([{ name: "packages", path: "packages", type: "directory", children: [{ name: "app", path: "packages/app", type: "directory", children: [{ name: "src", path: "packages/app/src", type: "directory", children: [{ name: "main.ts", path: "packages/app/src/main.ts", type: "file" }] }] }] }]);
     expect(compacted).toEqual([{ name: "packages/app/src", path: "packages/app/src", type: "directory", children: [{ name: "main.ts", path: "packages/app/src/main.ts", type: "file" }] }]);

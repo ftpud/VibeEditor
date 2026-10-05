@@ -1,7 +1,8 @@
-import { Braces, ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, Coffee, File, FileCode2, FileJson, FileText, Folder, FolderOpen, Hash, LocateFixed } from "lucide-react";
+import { ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, Folder, FolderOpen, LocateFixed } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent } from "react";
-import type { FileColor, FileTreeNode } from "@remote-ide/protocol";
+import type { FileColor, FileTreeNode, JavaFileType, JavaProjectNode } from "@remote-ide/protocol";
 import { projectTreeActions, type ProjectTreeAction } from "./project-tree-actions";
+import { FileKindIcon } from "./FileKindIcon";
 
 type VisibleNode = { node: FileTreeNode; depth: number };
 
@@ -23,11 +24,11 @@ export function filterProjectTreeByPaths(nodes: FileTreeNode[], paths: ReadonlyS
   });
 }
 
-export function compactProjectTree(nodes: FileTreeNode[]): FileTreeNode[] {
+export function compactProjectTree(nodes: FileTreeNode[], sourceRoots: ReadonlySet<string> = new Set()): FileTreeNode[] {
   return nodes.map((node) => {
     if (node.type === "file") return node;
-    let compacted: FileTreeNode = { ...node, children: compactProjectTree(node.children ?? []) };
-    while (compacted.children?.length === 1 && compacted.children[0]?.type === "directory") {
+    let compacted: FileTreeNode = { ...node, children: compactProjectTree(node.children ?? [], sourceRoots) };
+    while (!sourceRoots.has(compacted.path) && compacted.children?.length === 1 && compacted.children[0]?.type === "directory") {
       const child = compacted.children[0];
       compacted = { ...child, name: `${compacted.name}/${child.name}` };
     }
@@ -58,8 +59,9 @@ function countFiles(nodes: FileTreeNode[]): number {
   return nodes.reduce((total, node) => total + (node.type === "file" ? 1 : countFiles(node.children ?? [])), 0);
 }
 
-export function ProjectTree({ nodes, query, matchingPaths, activePath, selectedPaths, fileColors, gitStatuses, onAction, onContextMenu, onSelectionChange }: {
+export function ProjectTree({ nodes, javaNodes, query, matchingPaths, activePath, selectedPaths, fileColors, gitStatuses, onAction, onContextMenu, onSelectionChange }: {
   nodes: FileTreeNode[];
+  javaNodes?: JavaProjectNode[];
   query: string;
   matchingPaths?: ReadonlySet<string>;
   activePath?: string;
@@ -70,7 +72,13 @@ export function ProjectTree({ nodes, query, matchingPaths, activePath, selectedP
   onContextMenu(nodes: FileTreeNode[], x: number, y: number): void;
   onSelectionChange(paths: Set<string>): void;
 }) {
-  const compacted = useMemo(() => compactProjectTree(nodes), [nodes]);
+  const javaMetadata = useMemo(() => {
+    const metadata = new Map<string, JavaProjectNode>();
+    const visit = (items: JavaProjectNode[]) => items.forEach((node) => { metadata.set(node.path, node); visit(node.children ?? []); });
+    visit(javaNodes ?? []);
+    return metadata;
+  }, [javaNodes]);
+  const compacted = useMemo(() => compactProjectTree(nodes, new Set([...javaMetadata.values()].filter((node) => node.type === "sourceRoot").map((node) => node.path))), [nodes, javaMetadata]);
   const filtered = useMemo(() => matchingPaths ? filterProjectTreeByPaths(compacted, matchingPaths) : filterProjectTree(compacted, query), [compacted, matchingPaths, query]);
   const allDirectories = useMemo(() => directoryPaths(compacted), [compacted]);
   const filtering = matchingPaths !== undefined || Boolean(query.trim());
@@ -163,26 +171,23 @@ export function ProjectTree({ nodes, query, matchingPaths, activePath, selectedP
       <button title="Expand all folders" aria-label="Expand all folders" disabled={filtering || allDirectories.every((path) => expanded.has(path))} onClick={() => setExpanded(new Set(allDirectories))}><ChevronsUpDown size={13} /></button>
       <button title="Collapse all folders" aria-label="Collapse all folders" disabled={filtering || expanded.size === 0} onClick={() => setExpanded(new Set())}><ChevronsDownUp size={13} /></button>
     </div>
-    <div className="tree" role="tree" aria-label="Project files" onKeyDown={onKeyDown}>
+    <div className="tree project-file-tree" role="tree" aria-label="Project files" onKeyDown={onKeyDown}>
       {visible.length === 0 ? <div className="filter-empty">No matching files</div> : visible.map(({ node, depth }, index) => {
         const open = node.type === "directory" && effectiveExpanded.has(node.path);
         const selected = selectedPaths.has(node.path);
+        const javaNode = javaMetadata.get(node.path);
+        const sourceKind = javaNode?.type === "sourceRoot" ? javaNode.sourceKind ?? "source" : undefined;
         const handleContext = (event: MouseEvent) => { event.preventDefault(); const selection = selected ? selectedNodes() : [node]; if (!selected) onSelectionChange(new Set([node.path])); onContextMenu(selection, event.clientX, event.clientY); };
         return node.type === "directory" ? <button key={node.path} ref={(element) => { element ? rowRefs.current.set(node.path, element) : rowRefs.current.delete(node.path); }} role="treeitem" aria-level={depth + 1} aria-expanded={open} aria-selected={selected} tabIndex={(focusedPath ?? visible[0]?.node.path) === node.path ? 0 : -1} className={`tree-row ${selected ? "selected" : ""} ${fileColors[node.path] ? `file-color-${fileColors[node.path]}` : ""}`} style={{ paddingLeft: 7 + depth * 13 }} onFocus={() => setFocusedPath(node.path)} onContextMenu={handleContext} onClick={(event) => { select(index, event.ctrlKey || event.metaKey, event.shiftKey); if (!event.ctrlKey && !event.metaKey && !event.shiftKey) toggle(node.path); }}>
-          {open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}{open ? <FolderOpen className="folder-kind-icon" size={15} /> : <Folder className="folder-kind-icon" size={15} />}<span>{node.name}</span>
-        </button> : <ProjectFileRow key={node.path} node={node} depth={depth} selected={selected} active={activePath === node.path} focused={(focusedPath ?? visible[0]?.node.path) === node.path} color={fileColors[node.path]} gitStatus={gitStatuses[node.path]} setRef={(element) => { element ? rowRefs.current.set(node.path, element) : rowRefs.current.delete(node.path); }} onFocus={() => setFocusedPath(node.path)} onOpen={(event) => { select(index, event.ctrlKey || event.metaKey, event.shiftKey); if (!event.ctrlKey && !event.metaKey && !event.shiftKey) onAction("open", [node]); }} onContextMenu={handleContext} />;
+          {open ? <ChevronDown className="tree-chevron" size={14} /> : <ChevronRight className="tree-chevron" size={14} />}{open ? <FolderOpen className={`folder-kind-icon ${sourceKind ? `java-root-${sourceKind}` : ""}`} aria-label={sourceKind ? `${sourceKind === "test" ? "Test" : "Source"} directory` : undefined} size={15} /> : <Folder className={`folder-kind-icon ${sourceKind ? `java-root-${sourceKind}` : ""}`} aria-label={sourceKind ? `${sourceKind === "test" ? "Test" : "Source"} directory` : undefined} size={15} />}<span className="tree-file-name">{node.name}</span>
+        </button> : <ProjectFileRow key={node.path} node={node} javaType={javaNode?.javaType} depth={depth} selected={selected} active={activePath === node.path} focused={(focusedPath ?? visible[0]?.node.path) === node.path} color={fileColors[node.path]} gitStatus={gitStatuses[node.path]} setRef={(element) => { element ? rowRefs.current.set(node.path, element) : rowRefs.current.delete(node.path); }} onFocus={() => setFocusedPath(node.path)} onOpen={(event) => { select(index, event.ctrlKey || event.metaKey, event.shiftKey); if (!event.ctrlKey && !event.metaKey && !event.shiftKey) onAction("open", [node]); }} onContextMenu={handleContext} />;
       })}
     </div>
   </>;
 }
 
-function ProjectFileRow({ node, depth, selected, active, focused, color: rowColor, gitStatus, setRef, onFocus, onOpen, onContextMenu }: { node: FileTreeNode; depth: number; selected: boolean; active: boolean; focused: boolean; color?: FileColor; gitStatus?: "M" | "C"; setRef(element: HTMLButtonElement | null): void; onFocus(): void; onOpen(event: MouseEvent): void; onContextMenu(event: MouseEvent): void }) {
-  const extension = node.name.split(".").pop()?.toLowerCase() ?? "";
-  const appearance: Record<string, { color: string; Icon: typeof File }> = {
-    ts: { color: "#5e9fd6", Icon: FileCode2 }, tsx: { color: "#5e9fd6", Icon: FileCode2 }, js: { color: "#d9c65c", Icon: FileCode2 }, jsx: { color: "#d9c65c", Icon: FileCode2 }, json: { color: "#c9b45d", Icon: FileJson }, xml: { color: "#d7a85e", Icon: FileCode2 }, html: { color: "#e8845b", Icon: FileCode2 }, css: { color: "#8d7bd8", Icon: Hash }, md: { color: "#78a7cf", Icon: FileText }, java: { color: "#d58b59", Icon: Coffee }, py: { color: "#63a86f", Icon: FileCode2 }, yaml: { color: "#ca6b75", Icon: Braces }, yml: { color: "#ca6b75", Icon: Braces }, mta: { color: "#ca6b75", Icon: Braces }, mtaext: { color: "#ca6b75", Icon: Braces }, cds: { color: "#5aa7a0", Icon: FileCode2 }
-  };
-  const { color, Icon } = appearance[extension] ?? { color: "#9aa0a8", Icon: File };
+function ProjectFileRow({ node, javaType, depth, selected, active, focused, color: rowColor, gitStatus, setRef, onFocus, onOpen, onContextMenu }: { node: FileTreeNode; javaType?: JavaFileType; depth: number; selected: boolean; active: boolean; focused: boolean; color?: FileColor; gitStatus?: "M" | "C"; setRef(element: HTMLButtonElement | null): void; onFocus(): void; onOpen(event: MouseEvent): void; onContextMenu(event: MouseEvent): void }) {
   return <button ref={setRef} role="treeitem" aria-level={depth + 1} aria-selected={selected} aria-current={active ? "page" : undefined} tabIndex={focused ? 0 : -1} className={`tree-row file-row ${selected ? "selected" : ""} ${rowColor ? `file-color-${rowColor}` : ""}`} style={{ paddingLeft: 7 + depth * 13 }} onFocus={onFocus} onContextMenu={onContextMenu} onClick={onOpen}>
-    <span className="tree-indent" /><Icon className="file-kind-icon" color={color} size={14} /><span className="tree-file-name">{node.name}</span>{gitStatus && <span className={`tree-git-status ${gitStatus === "C" ? "created" : "modified"}`}>{gitStatus}</span>}
+    <span className="tree-indent" /><FileKindIcon name={node.name} javaType={javaType} /><span className="tree-file-name">{node.name}</span>{gitStatus && <span className={`tree-git-status ${gitStatus === "C" ? "created" : "modified"}`}>{gitStatus}</span>}
   </button>;
 }

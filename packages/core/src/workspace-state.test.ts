@@ -14,6 +14,25 @@ describe("WorkspaceStateStore", () => {
     await expect(store.load()).resolves.toEqual({ openFiles: ["src/a.ts", "README.md"], activeFile: "src/a.ts", terminal, fileColors });
   });
 
+  it("restores breakpoints for closed files after reopening the store and isolates workspaces", async () => {
+    const stateDirectory = await mkdtemp(path.join(tmpdir(), "remote-ide-breakpoints-"));
+    const javaBreakpoints = [{ path: "src/main/java/App.java", className: "App", line: 8 }];
+    const store = new WorkspaceStateStore("/workspace/debug", stateDirectory);
+    await store.save({ openFiles: [], javaBreakpoints });
+    await expect(new WorkspaceStateStore("/workspace/debug", stateDirectory).load()).resolves.toEqual({ openFiles: [], javaBreakpoints });
+    await expect(new WorkspaceStateStore("/workspace/other", stateDirectory).load()).resolves.toEqual({ openFiles: [] });
+    await store.save({ openFiles: [], javaBreakpoints: [] });
+    await expect(store.load()).resolves.toEqual({ openFiles: [], javaBreakpoints: [] });
+  });
+
+  it("rejects malformed breakpoints and deduplicates file locations", () => {
+    const breakpoint = { path: "src/App.java", className: "example.App$Inner", line: 8 };
+    expect(validateWorkspaceOptions({ openFiles: [], javaBreakpoints: [breakpoint, breakpoint] }).javaBreakpoints).toEqual([breakpoint]);
+    for (const invalid of [null, { ...breakpoint, path: "../App.java" }, { ...breakpoint, line: 0 }, { ...breakpoint, line: 1.5 }, { ...breakpoint, className: "App\ncont" }]) {
+      expect(() => validateWorkspaceOptions({ openFiles: [], javaBreakpoints: [invalid] })).toThrowError(expect.objectContaining({ code: "INVALID_REQUEST" }));
+    }
+  });
+
   it("returns empty options when no state exists", async () => {
     const stateDirectory = await mkdtemp(path.join(tmpdir(), "remote-ide-state-"));
     await expect(new WorkspaceStateStore("/workspace/missing", stateDirectory).load()).resolves.toEqual({ openFiles: [] });
