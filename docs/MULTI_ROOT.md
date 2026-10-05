@@ -1,16 +1,16 @@
 # Multi-root protocol boundary
 
 Core assigns each registered canonical remote directory a stable `WorkspaceRootId`.
-Desktop never derives an identity from a local path. Protocol v3 applies these rules:
+Desktop never derives an identity from a local path. The current protocol compatibility range is version 11 (see `protocolCompatibility` in `packages/protocol/src/index.ts`). It applies these rules:
 
-- Every root-owned request except handshake and root registration carries `Request.rootId`.
+- Every root-owned request except handshake, root listing, and root registration carries `Request.rootId`.
   Core validates it against the connection's selected root before dispatch, and root
   switching is serialized with other requests. Nested relative paths, terminal IDs,
   Git refs, task IDs, checkpoint IDs, replacement previews, recovery IDs, and transfer
   tickets inherit this enforced request root; their success response repeats the same
   `rootId`. A mismatched response is rejected by Desktop.
 - Every asynchronous filesystem, Git, terminal, run-config, Java/JDT, AI, task,
-  checkpoint, commit-message, and task-state event carries `payload.rootId`. Core binds
+  checkpoint, workflow, commit-message, and task-state event carries `payload.rootId`. Core binds
   process IDs and watchers when they are created rather than recovering ownership from
   a later selected path. Desktop centrally ignores stale non-terminal events. Inactive
   terminal output remains safe because it is addressed by both root and terminal ID;

@@ -4,12 +4,13 @@ Vibe Editor is a remote-workspace IDE: an Electron/React/Monaco desktop client t
 
 ## Architecture
 
-- **`@remote-ide/core`** — workspace-scoped WebSocket backend; owns filesystem, terminal, Git, Java, HTTP, and AI operations for a single root workspace.
+- **`@remote-ide/core`** — workspace-scoped WebSocket backend; owns filesystem, terminal, Git, Java, HTTP, and AI operations for registered workspace roots and their task worktrees.
 - **`@remote-ide/desktop`** — Electron/React/Monaco client; connects to Core via `--host`/`--port` and renders all IDE tool windows.
 - **`@remote-ide/gateway`** — separate Electron app that manages SSH connections, starts/stops a remote Core, tunnels the port, and launches Desktop against it.
 - **`@remote-ide/protocol`** — shared TypeScript request/response/event/DTO types used by Core and Desktop.
-- **`@remote-ide/acp`** — the "AI Capability Provider" contract (types only) implemented by AI provider adapters.
-- Each connected client is bound to a root or task workspace; Core watches files and Git metadata with Chokidar and pushes safe reloads/refresh events over the shared protocol.
+- **`@remote-ide/acp`** — the "AI Capability Provider" contract (shared types, provider base class, and configuration helpers) implemented by AI provider adapters.
+- Multiple project roots can be registered with aliases on the Core host; editor and terminal tabs retain their root ownership across switches. See [Multi-root protocol boundary](docs/MULTI_ROOT.md).
+- Each connected client selects a registered root and its root or task workspace; Core watches files and Git metadata with Chokidar and pushes safe reloads/refresh events over the shared protocol.
 
 ## Editor
 
@@ -17,8 +18,9 @@ Vibe Editor is a remote-workspace IDE: an Electron/React/Monaco desktop client t
 - Compact live editor status bar showing cursor line/column, non-empty selection size, language, and indentation; its position item opens Monaco's Go to Line command.
 - Filesystem tree (Project tool window) with automatic single-path expansion, file-type icons, persisted per-file icon colors, Git `M`/`C` status indicators, and external-change monitoring.
 - Keyboard-first **Quick Open / Go to File** (`Ctrl+P` / `Cmd+P`) with fuzzy workspace-path matching, ranked results, and arrow-key navigation.
-- Recursive **Find in Files** search across the workspace, with every occurrence grouped by file.
-- Tabs support keyboard navigation (`Ctrl+Tab` / `Ctrl+Shift+Tab`, with wraparound), keyboard close (`Ctrl+W` / `Cmd+W`), drag-and-drop reordering, middle-click close, Close All, Close All to the Right, and modified/created markers.
+- Recursive **Find in Files** search with context, case matching, include/exclude filters, and previewed replacement that rejects files changed since the preview.
+- Project file/directory creation, rename, copy/move with collision previews, recoverable deletion, and local upload/remote download through a separate binary channel.
+- Tabs support keyboard navigation (`Ctrl+Tab` / `Ctrl+Shift+Tab`, with wraparound), keyboard close (`Ctrl+W` / `Cmd+W`), drag-and-drop reordering, middle-click close, pinning, Close All Unpinned, Close Unpinned to the Right, and modified/created markers.
 - Autosave after a short pause; clean buffers reload automatically on external edits, dirty buffers keep a conflict warning instead of being overwritten.
 - Monaco gutter markers highlight changed blocks (not whole lines); clicking a marker shows previous content and offers a block-level rollback.
 - Syntax highlighting for TypeScript, JavaScript, JSON, HTML, CSS, XML, Java, Python, YAML, MTA/MTAEXT, SAP CDS, Markdown, and `.http` files.
@@ -27,7 +29,7 @@ Vibe Editor is a remote-workspace IDE: an Electron/React/Monaco desktop client t
 ## Terminal
 
 - Bottom Terminal tool window with multiple persisted tabs per task workspace, backed by real PTYs on Core (`node-pty`).
-- Terminal processes are recreated after reconnect or task switching (dimensions are not persisted).
+- Live Core-owned terminal processes reattach after reconnect or task switching with replayed output. When the previous session is missing, a replacement shell starts in the task workspace; it does not restore the former process environment or working directory.
 - Copy-on-selection / paste via `Ctrl`/`Cmd`+C/V, right-click Paste, and `Ctrl`/`Cmd`-click to open HTTP(S) links externally.
 - Closing a terminal tab terminates its backend PTY.
 
@@ -43,29 +45,31 @@ Vibe Editor is a remote-workspace IDE: an Electron/React/Monaco desktop client t
 
 ## Task Workspaces
 
-- Isolated task Git worktrees created under Core's state directory, each on its own new branch; legacy workspace copies are migrated automatically without losing commits or working changes.
+- Isolated task Git worktrees created under Core's state directory, on new, existing local, or remote branches; legacy workspace copies are migrated automatically without losing commits or working changes.
+- Task rename, finish, archive, deletion, and normal/smart merge back into the root workspace.
 - Per-task persistence of open files, active tab, terminal tabs/panel state, useful local files, AI sessions, file colors, and Git commit drafts.
-- Task Git compares a task's full working state against its recorded upstream and keeps Core-owned prompt checkpoints for per-turn review and safe worktree restore without creating Git commits or refs.
+- Task Git compares a task's full working state against its recorded upstream and keeps Core-owned prompt checkpoints for per-turn review and conflict-checked application of checkpoint changes without creating Git commits or refs. See [Task Git prompt history](docs/TASK_GIT_HISTORY.md).
 - Task list shows AI state, latest activity preview, Git additions/deletions, and an in-progress indicator; Tasks and AI panels can share the resizable right sidebar with a draggable divider.
 
 ## AI Integration
 
-- Pluggable **AI Capability Provider (ACP)** layer with adapters for the **Codex CLI** and **GitHub Copilot CLI**.
+- Pluggable **AI Capability Provider (ACP)** layer with adapters for **Codex ACP** (an npm dependency, with a managed runtime update cache) and **GitHub Copilot CLI** over Agent Client Protocol.
 - Providers declare supported models, reasoning levels, extra controls, usage reporting, MCP server support, and custom-agent support; the AI panel UI is generated from those capabilities.
-- Global and per-workspace agent presets with editable Markdown templates, automatic `.agents` discovery, and a persisted per-task agent selector.
+- Global, repository-local, and workspace `.agents` presets with editable Markdown templates, automatic `.agents` discovery, and a persisted per-task agent selector.
 - Searchable model picker showing each model's request-cost multiplier, context window, description, reasoning levels, input modalities, and availability as advertised by the agent.
 - Session send/interrupt/steer/clear, usage display, and MCP server injection.
 - Sessions, logs, configuration, and continuation state persisted per task workspace; "Clear context" starts a fresh provider context without deleting the task workspace.
 - Attach local or workspace files to a prompt, including "Attach to AI" from the editor's right-click menu.
 - Long-running execution/output is collapsed into expandable activity blocks; task cards show in-progress, waiting-for-user, done, and error states.
-- **Vibe MCP tools**: built-in `vibe-editor` MCP server exposes tools for creating/listing/deleting task worktrees, starting task agents, appending prompts to running conversations, reading recent responses, setting or replacing the current task's multiline commit-message draft, and rewriting the latest unpushed commit message for a task selected by explicit ID. Published tips and tasks without their own commit are rejected. Enabled when an agent preset lists MCP servers.
+- **Vibe MCP tools**: built-in `vibe-editor` MCP server exposes tools for creating/listing/deleting task worktrees, starting task agents, appending prompts to running conversations, reading recent responses, setting or replacing the current task's multiline commit-message draft, and rewriting the latest unpushed commit message for a task selected by explicit ID. Published tips and tasks without their own commit are rejected. Also supports usage inspection, persisted continuation timers, a one-turn model/reasoning override, and fresh-session handoff. Enabled when a preset explicitly includes `vibe-editor` in its MCP allowlist. See [ACP documentation](docs/ACP.md).
 
 ## Java & Maven
 
 - "Load as Maven Project" on `pom.xml`; automatic discovery of standard Java source roots, plus manual source-root marking from the Project context menu.
 - JDT Language Server integration: diagnostics, semantic highlighting, completion (objects/methods/fields/local variables), import edits, go-to-declaration, and find-usages.
 - Java run configuration discovery (classes with `public static void main`), plus Run/Debug/Stop actions.
-- Debugging via `jdb`: breakpoints, stepping, local variable inspection.
+- Editable `.settings/java.json` launch profiles: Maven/JDK selection, tool checks, program/VM arguments, environment, and working directory.
+- Debugging via `jdb`: breakpoints, stepping, object/array inspection, and **Apply code changes** through paused-session JVM HotSwap. See [Java debugging](docs/JAVA_DEBUGGING.md).
 - Java and Problems tool windows show Maven build/run output, debugger controls, and compiler diagnostics; Problems supports text/severity filtering and keyboard navigation.
 - A pinned Temurin Java 21 runtime (under `.tools/`) is bundled specifically to run JDT LS.
 
@@ -76,17 +80,26 @@ Vibe Editor is a remote-workspace IDE: an Electron/React/Monaco desktop client t
 - "Useful Files": editable Global (shared across workspaces using the same Core state directory) and Local (per root/task workspace) file collections with Create/Rename/Delete.
 - `.http` request files: multiple `###`-separated requests, each with method/URL, headers, and optional body; gutter "Play" action executes a request and shows status, headers, duration, and response body.
 
-## Vibe Gateway (Remote Workflow)
+## Run Configurations and Workflows
 
-- Add/edit/delete SSH connections (host, port, username, password) and remote workspace definitions (remote directory + preferred Core port).
+- Global and project-local shell Run Configurations stored outside the checkout, pinned to the bottom toolbar, with dedicated terminals and Run/Stop/Restart actions. See [Run Configurations](docs/RUN_CONFIGS.md).
+- Visual Workflows (harnesses) connect start blocks, AI agents, scripts, timers, user input, and documents through use/follow/path connections.
+- Blank, five-minute workspace check-in, and Git review/commit templates; graph validation, persisted definitions and run history, permission/user-input handling, and pause/retry/cancel controls.
+- Interrupted workflows are marked failed after Core restart; existing sessions and task work remain available for inspection.
+
+## Vibe Gateway (Remote and Local Workflows)
+
+- Add/edit/delete SSH connections with password, private-key/passphrase, or OS SSH-agent authentication; test connections and explicitly trust pinned SHA-256 host-key fingerprints.
+- Remote workspace definitions, directory discovery, connection health, and copyable diagnostics.
+- **This Mac** connections launch local Core/Desktop from the existing build without SSH.
 - Credentials encrypted at rest via Electron `safeStorage`.
-- **Start server**: connects over SSH, clones/updates the `dev` branch under `~/.vibe`, rebuilds dependencies/artifacts only when the Git revision changed or artifacts are missing, runs Core on remote loopback with per-workspace PID/log files, and auto-selects a free port if the preferred one is taken.
+- **Start server**: connects over SSH, clones the configured repository/branch under `~/.vibe` (default `https://github.com/ftpud/VibeEditor`, `main`), updating it when auto-update is enabled, rebuilds dependencies/artifacts only when the Git revision changed or artifacts are missing, runs Core on remote loopback with per-workspace PID/log files, and auto-selects a free port if the preferred one is taken.
 - **Start client**: reuses cached prebuilt Desktop JS/renderer artifacts from the remote host, opens an SSH tunnel, and launches Desktop locally against the tunneled port.
 - **Stop server**: closes the tunnel and stops the tracked remote Core process; workspace cards poll and display live server status.
 
 ## Persistence
 
-- Core persists workspace layout, tasks, useful files, AI session metadata, file colors, terminal restoration data, and Git commit drafts outside the project, under `~/.remote-ide/workspaces` (overridable via `REMOTE_IDE_STATE_DIR`).
+- Core persists workspace layout, tasks, useful files, AI session metadata, file colors, terminal restoration data, root registrations, run configurations, workflow definitions/history, AI timers, and Git commit drafts outside the project, under `~/.remote-ide/workspaces` (overridable via `REMOTE_IDE_STATE_DIR`).
 - Desktop persists client-side UI preferences (tool window visibility, side panel widths, stacked panel sizes, bottom panel heights, layout mode, theme, fonts) per remote workspace in `settings.json` inside its Electron application-data directory, so panel geometry survives client restarts.
 - Gateway stores its own connection/workspace data in the platform's Electron application-data directory.
 
