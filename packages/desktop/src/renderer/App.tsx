@@ -978,7 +978,7 @@ export function App() {
   }, [updateGroup]);
 
   const openUsefulFile = async (file: UsefulFile) => {
-    const existing = group.tabs.find((tab) => tab.type === "useful" && tab.usefulScope === file.scope && tab.path === file.name);
+    const existing = group.tabs.find((tab) => tab.type === "useful" && tab.usefulScope === file.scope && tab.path === file.name && (file.scope === "global" || tab.rootId === selectedRootIdRef.current));
     if (existing) { await activateEditorTab(existing); return; }
     const tab: EditorTab = { id: crypto.randomUUID(), type: "useful", rootId: selectedRootIdRef.current, title: file.name, path: file.name, usefulScope: file.scope, dirty: false, content: "", savedContent: "", loading: true, markdownMode: /\.md$/i.test(file.name) ? "preview" : undefined };
     updateGroup((tabs) => ({ tabs: [...tabs, tab], activeTabId: tab.id }));
@@ -986,9 +986,12 @@ export function App() {
     catch (error) { updateGroup((tabs, active) => ({ tabs: tabs.map((item) => item.id === tab.id ? { ...item, loading: false, error: error instanceof Error ? error.message : "Could not read useful file" } : item), activeTabId: active })); }
   };
   const openRunConfigFile = useCallback(async (config: RunConfig) => {
-    const existing = layoutRef.current.editorGroups[0]!.tabs.find((tab) => tab.type === "runConfig" && tab.runConfigScope === config.scope && tab.path === config.name);
+    const existing = layoutRef.current.editorGroups[0]!.tabs.find((tab) => tab.type === "runConfig" && tab.runConfigScope === config.scope && tab.path === config.name && (config.scope === "global" || tab.rootId === selectedRootIdRef.current));
     if (existing) { updateGroup((tabs) => ({ tabs, activeTabId: existing.id })); return; }
-    const result = await clientRef.current!.request("runConfig.read", { scope: config.scope, name: config.name });
+    const client = clientRef.current!;
+    const rootId = client.getRoot();
+    const result = await client.request("runConfig.read", { scope: config.scope, name: config.name });
+    if (clientRef.current !== client || client.getRoot() !== rootId) return;
     const tab: EditorTab = { id: crypto.randomUUID(), type: "runConfig", rootId: selectedRootIdRef.current, title: config.name, path: config.name, runConfigScope: config.scope, dirty: false, content: result.config.commands, savedContent: result.config.commands, loading: false };
     updateGroup((tabs) => ({ tabs: [...tabs, tab], activeTabId: tab.id }));
   }, [updateGroup]);
@@ -2498,6 +2501,8 @@ export function App() {
       selectedRootIdRef.current = rootId; setSelectedRootId(rootId); setActiveWorkspace(result.workspace); activeWorkspaceRef.current = result.workspace; setProjectName(result.projectName); setTree(result.tree);
       workspaceKeyRef.current = result.workspace; cursorPositions.setWorkspace(result.workspace);
       setTasks([]); setSelectedTaskId(undefined); setGitEntries([]); setTaskGitEntries([]); setJavaOptions(result.options.javaProject);
+      setUsefulFiles((files) => files.filter((file) => file.scope === "global"));
+      setRunConfigs((configs) => configs.filter((config) => config.scope === "global"));
       await restoreWorkspaceOptions(result.options, client);
       await Promise.all([refreshTasks(client), refreshGit(client), refreshAi(client), refreshUsefulFiles(client), refreshRunConfigs(client), refreshAgents(client)]);
     } catch (error) { client.setRoot(previous); setStatusMessage(error instanceof Error ? error.message : "Could not switch workspace root"); }
