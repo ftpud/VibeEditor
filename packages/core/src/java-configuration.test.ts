@@ -26,6 +26,29 @@ async function workspace(wrapper = false) {
 }
 
 describe("Java configuration", () => {
+  it("copies legacy Java configuration to .project and saves subsequent edits there", async () => {
+    const { service, options, root } = await workspace();
+    const legacy = JSON.stringify({ ...options, javaHome: "/opt/legacy-jdk" }, null, 2) + "\n";
+    await mkdir(path.join(root, ".vibe"));
+    await writeFile(path.join(root, ".vibe/java.json"), legacy);
+    const result = await service.readConfiguration();
+    expect(result.path).toBe(".project/java.json");
+    expect(result.content).toBe(legacy);
+    expect(await readFile(path.join(root, javaConfigurationPath), "utf8")).toBe(legacy);
+    await service.saveConfiguration(JSON.stringify({ ...options, javaHome: "/opt/new-jdk" }), result.revision);
+    expect(await service.getOptions()).toMatchObject({ javaHome: "/opt/new-jdk" });
+    expect(await readFile(path.join(root, ".vibe/java.json"), "utf8")).toBe(legacy);
+  });
+
+  it("prefers .project configuration when both locations exist", async () => {
+    const { service, options, root } = await workspace();
+    await mkdir(path.join(root, ".vibe"));
+    await mkdir(path.join(root, ".project"));
+    await writeFile(path.join(root, ".vibe/java.json"), JSON.stringify({ ...options, javaHome: "/opt/legacy-jdk" }));
+    await writeFile(path.join(root, javaConfigurationPath), JSON.stringify({ ...options, javaHome: "/opt/project-jdk" }));
+    expect(await service.getOptions()).toMatchObject({ javaHome: "/opt/project-jdk" });
+  });
+
   it("detects a project Maven wrapper and supplies a JSON template", async () => {
     const { service, options } = await workspace(true);
     expect(options.mavenExecutable).toBe("./mvnw");
@@ -50,7 +73,7 @@ describe("Java configuration", () => {
 
   it("keeps malformed JSON accessible for repair without replacing it", async () => {
     const { service, root } = await workspace();
-    await mkdir(path.join(root, ".vibe")); await writeFile(path.join(root, javaConfigurationPath), "{broken");
+    await mkdir(path.join(root, ".project")); await writeFile(path.join(root, javaConfigurationPath), "{broken");
     await expect(service.getOptions()).rejects.toThrow("invalid JSON");
     const file = await service.readConfiguration();
     expect(file.content).toBe("{broken");

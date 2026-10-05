@@ -1,6 +1,7 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { Copy, Plus, Trash2, X } from "lucide-react";
 import type { FileRevision, JavaMainClass, JavaProjectOptions, JavaRunConfiguration, JavaToolCheck } from "@remote-ide/protocol";
+import { javaConfigurationPath } from "@remote-ide/protocol";
 import type { CoreClient } from "./client";
 
 type Props = { client: CoreClient; running: boolean; onClose(): void; onSaved(options: JavaProjectOptions): void };
@@ -103,7 +104,7 @@ export function JavaConfigurationDialog({ client, running, onClose, onSaved }: P
 
   return <div className="dialog-overlay java-config-overlay" onMouseDown={() => { if (!busy) onClose(); }}>
     <section className="run-config-dialog java-config-dialog" role="dialog" aria-modal="true" aria-label="Java run/debug configuration" onMouseDown={(event) => event.stopPropagation()}>
-      <header><div><h2>Java run/debug configuration</h2><span>Saved in .vibe/java.json for this workspace on the connected Core server</span></div><button title="Close" disabled={busy} onClick={onClose}><X size={15} /></button></header>
+      <header><div><h2>Java run/debug configuration</h2><span>Saved in {javaConfigurationPath} for this workspace on the connected Core server</span></div><button title="Close" disabled={busy} onClick={onClose}><X size={15} /></button></header>
       <div className="java-config-tabs" role="tablist" aria-label="Configuration editor">
         {tabs.map((item) => {
           const selected = mode === "json" ? item.id === "json" : item.id === tab;
