@@ -1,7 +1,20 @@
-# Multi-root protocol boundary
+# Multiple workspace roots
+
+Register remote project directories with aliases to work on several projects in one
+Core connection. Editor and terminal tabs retain their owning root, so you can keep
+tabs from different projects open. Opening a search result or tab from another root
+switches Core to that project before navigation or input.
+
+Removing a root unregisters it; it does not delete the directory. Roots still in use
+cannot be removed. The sections below explain how Core and Desktop keep requests and
+saved state associated with the right project.
+
+## Request and event ownership
 
 Core assigns each registered canonical remote directory a stable `WorkspaceRootId`.
-Desktop never derives an identity from a local path. The current protocol compatibility range is version 11 (see `protocolCompatibility` in `packages/protocol/src/index.ts`). It applies these rules:
+Desktop never derives an identity from a local path. The current protocol
+compatibility range is version 11 (see `protocolCompatibility` in
+`packages/protocol/src/index.ts`). It applies these rules:
 
 - Every root-owned request except handshake, root listing, and root registration carries `Request.rootId`.
   Core validates it against the connection's selected root before dispatch, and root
@@ -27,6 +40,8 @@ Desktop never derives an identity from a local path. The current protocol compat
   retain their current remote workspace, are mapped back to a registered root, and are
   dispatched with that root's task and agent stores.
 
+## Saved state and root removal
+
 Legacy workspace option files contain only relative paths. They are loaded solely by
 the primary root's path-derived state store. They are never copied or guessed into a
 new root. On first use the root registry contains only that primary canonical path.
@@ -35,6 +50,6 @@ Removing a root unregisters metadata only. Core refuses removal of the primary r
 any root selected (or being selected) by any connected client, and roots with task
 worktrees, persisted open files, terminal sessions, or transfer tickets. Disconnect
 releases the client's selection and drains its per-root watchers; successful removal
-also closes retained watchers before deleting the in-memory context. Desktop additionally
-refuses roots with live editor or terminal tabs. No removal operation deletes the
-registered directory.
+also closes retained watchers before deleting the in-memory context. Desktop
+additionally refuses roots with live editor or terminal tabs. No removal operation
+deletes the registered directory.

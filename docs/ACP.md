@@ -1,107 +1,111 @@
-# AI Capability Provider layer
+# ACP: the AI provider abstraction
 
-The core talks to AI tools only through `AcpProvider` from `packages/acp/src/index.ts` and `AcpRegistry` in `packages/core/src/ai/acp.ts`. Provider adapters live under `packages/core/src/ai/providers/`. Codex and Copilot are plugins registered at server startup; request routing and the desktop UI do not branch on their ids.
+Vibe Editor uses one interface for Codex and GitHub Copilot. Core handles each
+provider through `AcpProvider`; Desktop reads the provider's capabilities and
+settings to build the AI controls. Adding a provider should not require special
+cases in the UI or shared protocol.
 
-## Provider contract
+Here, **ACP** names Vibe's AI Capability Provider layer. The Codex and Copilot
+adapters communicate with their agents over **Agent Client Protocol**, also
+abbreviated ACP. The abstraction and the wire protocol have different roles.
 
-An ACP plugin supplies:
+For tools that agents can use to manage Vibe tasks, timers, sessions, and workflows,
+see [MCP tools](MCP.md).
 
-- a stable id, display name, capability flags, and provider-defined option schema;
-- model discovery, resumable session persistence, configuration, typed-content send, permission resolution, clear, and optional usage operations;
-- translation of the common MCP server and custom-agent structures to its native CLI/API.
+## How the pieces fit together
 
-To add a provider, subclass `AcpProvider`, implement its required session/model/configuration operations under `ai/providers`, and register one instance in `ai/index.ts`. `AiProvider` is an open string, and the desktop builds its provider selector and extra controls from `ai.providers`, so no protocol or UI enum needs editing.
+- `packages/acp/src/index.ts` defines `AcpProvider` and the shared data types.
+- `packages/core/src/ai/acp.ts` registers providers and looks them up by ID.
+- `packages/core/src/ai/providers/` contains the provider-specific adapters.
+- `packages/core/src/ai/index.ts` registers Codex and Copilot at startup.
 
-## Current adapters
+Desktop sends typed requests to Core. Core selects the registered provider, and its
+adapter translates the common request into the agent's native format. Provider IDs
+are open strings; capabilities and option metadata describe what the UI can offer.
 
-Codex discovers model and reasoning metadata from its local model cache, which also supplies context window sizes, input modalities, and retirement notices for the models advertised over ACP. Its ACP options expose sandbox and web search. Saved session ids are loaded when the agent advertises `loadSession`; loaded history replaces the local transcript. MCP definitions are supplied during session setup and selected custom-agent presets can restrict the enabled MCP set.
+## What a provider supplies
 
-Codex ACP may lag the Codex CLI release. The root npm override keeps ACP's bundled CLI on a version that can run GPT-6 Sol even when ACP's model catalogue has not advertised it yet.
+Each provider declares its ID, display name, capabilities, and settings schema. It
+implements model discovery, session configuration, sending and steering prompts,
+interruption, permission decisions, and conversation history. Sessions can be
+listed, restored, cleared, or removed. Usage reporting is optional.
 
-At Core process startup, Vibe checks npm's `latest` versions of `@agentclientprotocol/codex-acp` and `@openai/codex` before accepting connections. Changed versions are installed into a new directory under `~/.remote-ide/codex-runtime`; a completed installation is selected atomically without changing the project's dependencies or lockfile. Both ACP sessions and quota reads use this runtime. Registry requests have a 15-second fetch timeout and each npm command has a 60-second limit. An offline or failed update logs a warning and retains the previous cached runtime, or the bundled dependency on first startup. Set `REMOTE_IDE_CODEX_AUTO_UPDATE=0` to skip updates, or `REMOTE_IDE_CODEX_RUNTIME_DIR` to relocate the cache. An explicit `CODEX_PATH` still overrides the Codex binary for ACP sessions. Updating removes a source of stale model catalogues; model access still depends on the account and what the agent advertises.
+Common requests support text, base64 images, embedded text resources, and resource
+links. They can also carry MCP server definitions and custom-agent instructions.
+Adapters translate those definitions for their own backend. Provider settings live
+in the session's `configuration` map.
 
-Copilot discovers models from ACP configuration metadata, including the premium-request multiplier, cost tier, and availability published in the model option's `_meta`. Stored model and reasoning choices are passed at server launch and are also applied when their dynamic ACP options arrive. A per-session AI-credit ceiling remains available. Copilot documents quota details in interactive `/usage`; the shared usage view displays the context and latest-turn token data ACP reports.
+`StdioAcpProvider` implements Agent Client Protocol v1 over newline-delimited JSON.
+It handles permission prompts through `ai.permission.resolve`, slash command
+snapshots, rich output, saved-session loading, and dynamic settings. Session-scoped
+settings apply without restarting the agent. Launch-scoped changes restart it and
+resume the saved session when supported.
 
-## Model catalogue metadata
+## Codex
 
-`AiModel` carries optional catalogue details beside the id and name: `description`, `price` and `priceTier` (relative request cost), `available`, `contextWindow` and `maxContextWindow`, `inputModalities`, per-level `reasoningDescriptions`, and a free-form `note` for deprecations. Providers fill in only what their agent publishes — ACP itself mandates nothing beyond id, name, and description — and the desktop model picker renders whatever is present. Agents that report a context window only per turn (`usage_update`) have it recorded against the selected model as it is observed. Provider adapters can add facts the handshake omits by overriding `describeModels`.
+The Codex adapter supplements the agent's model list with its local model cache.
+That cache provides context-window sizes, accepted input types, reasoning
+descriptions, and retirement notices. The settings expose sandbox and web-search
+choices. When the agent supports `loadSession`, restoring a saved session loads its
+history in place of the local transcript.
 
-## Common request extensions
+The Codex ACP release can lag behind the Codex CLI. The root npm override pins its
+bundled CLI to a version that can run GPT-6 Sol, even when the ACP model catalogue
+has not advertised it yet.
 
-`ai.send` accepts typed `content` blocks (text, base64 images, embedded text resources, and resource links) plus optional `mcpServers` and `agent` fields. MCP supports stdio, HTTP, and SSE records. Environment variables and HTTP headers may contain secrets, so callers should retrieve them from secure local storage and must not persist them in workspace settings. Provider options live in the session's `configuration` map and are rendered from the option schema.
+### Managed runtime updates
 
-`StdioAcpProvider` is a real Agent Client Protocol v1 NDJSON transport. It surfaces blocking permission requests through `ai.permission.resolve`, stores complete dynamic command snapshots for slash completion, renders rich image/resource output, resumes saved sessions, and applies session-scoped configuration without restarting the process. Launch-scoped changes restart the process and resume the saved session when supported.
+Before accepting connections, Core checks npm's latest versions of
+`@agentclientprotocol/codex-acp` and `@openai/codex`. It installs updates in a new
+directory under `~/.remote-ide/codex-runtime` and selects that installation only
+after it succeeds. This does not change the repository dependencies or lockfile. ACP
+sessions and account-quota reads use the selected runtime.
 
-## Starting tasks through the Vibe Editor MCP server
+Registry fetches have a 15-second timeout; each npm command has a 60-second limit.
+If an update fails or the host is offline, Core logs a warning and keeps the
+previous cached runtime, falling back to the bundled dependency on first startup. An
+updated runtime can resolve stale model catalogues, but model access still depends
+on the account and the agent's advertised capabilities.
 
-In this API, an **agent** is a Vibe Editor instruction preset, not the Codex or Copilot process that executes a task. `provider` selects that execution backend, `model` selects its model, and `agent` optionally selects the Markdown preset whose instructions and MCP allowlist are attached to the new session.
+| Setting | Effect |
+| --- | --- |
+| `REMOTE_IDE_CODEX_AUTO_UPDATE=0` | Skip startup runtime updates. |
+| `REMOTE_IDE_CODEX_RUNTIME_DIR` | Store the runtime cache elsewhere. |
+| `CODEX_PATH` | Override the Codex binary used for ACP sessions. |
 
-Agent presets are Markdown files with optional YAML frontmatter. Create and edit global or repository-local presets in the Desktop **Agents** panel; repository-local presets are stored outside the checkout in Core's workspace state. A repository may also commit workspace presets under `.agents/*.md`. The scope names used by MCP are:
+## GitHub Copilot
 
-- `global` — a preset available to every workspace;
-- `local` — a preset configured for this root repository;
-- `workspace` — a preset from the active workspace's `.agents` directory.
+The Copilot adapter discovers models from the agent's configuration metadata. When
+published in the model option's `_meta`, it includes premium-request multipliers,
+cost tiers, and availability. Saved model and reasoning choices are supplied at
+launch and applied again when dynamic options arrive.
 
-For example, `.agents/reviewer.md` can contain:
+Sessions can have an AI-credit ceiling. Copilot exposes detailed quota information
+through its interactive `/usage` command; Vibe's shared usage view shows the context
+and latest-turn token data reported over ACP.
 
-```markdown
----
-name: Code Reviewer
-description: Reviews implementation and tests.
-mcpServers: []
----
+## Model and usage metadata
 
-Review the requested change, run focused checks, and report concrete findings.
-```
+Models always have an ID and name in the common catalogue, along with their
+reasoning choices. Optional `AiModel` fields describe cost, availability, context-
+window limits, accepted input types, reasoning levels, and deprecation notes.
+Providers fill in what they can discover; Desktop displays the fields that are
+present. A context window reported only in a turn's `usage_update` is recorded
+against the selected model when observed. Adapters can supplement handshake metadata
+by overriding `describeModels`.
 
-Add `vibe-editor` under `mcpServers` when the started task should itself receive the built-in Vibe Editor MCP tools. An empty or omitted `mcpServers` list gives the preset no built-in task tools.
+Conversation capacity and account quota are separate. Codex can read account quota
+from its authenticated app-server `account/rateLimits/read` endpoint; other
+providers may omit it. Missing usage data should be treated as unknown.
 
-`task_create_and_start` accepts `agent` as either a precise `{ "scope", "name" }` file reference or JSON `null`:
+## Adding a provider
 
-- omit `agent` to inherit the invoking AI session's selected preset, if it has one;
-- pass a reference to choose a configured preset explicitly;
-- pass `"agent": null` to suppress inherited preset instructions and start only the requested provider/model session.
+Implement an `AcpProvider` under Core's `ai/providers/` directory and register it in
+`ai/index.ts`. Use the shared session, model, content, failure, MCP, and agent
+types. Keep backend-specific translation in the adapter and expose settings through
+descriptor metadata instead of adding provider-ID branches to the protocol or UI.
 
-An empty string is not a no-agent value. References use the file name, including `.md`, rather than the preset's frontmatter display name. Missing or changed presets are rejected before a task worktree is created.
-
-`reasoning` is also optional. When omitted, normal provider/model default selection is preserved. An explicit value overrides that default and must occur in the selected model's advertised `reasoningLevels`; supported values are model- and provider-specific and may include values such as `none`, `low`, `medium`, `high`, `xhigh`, or `max`. Models that advertise no reasoning levels require the field to be omitted. Invalid model/reasoning combinations are rejected before task creation.
-
-Create a task with a configured preset and explicit reasoning:
-
-```json
-{
-  "name": "task_create_and_start",
-  "arguments": {
-    "branch": "feature/review-fix",
-    "prompt": "Implement the review fix and add regression tests.",
-    "provider": "codex",
-    "model": "gpt-5.6-sol",
-    "agent": { "scope": "workspace", "name": "reviewer.md" },
-    "reasoning": "high"
-  }
-}
-```
-
-Create a task with no agent preset and the provider/model's default reasoning:
-
-```json
-{
-  "name": "task_create_and_start",
-  "arguments": {
-    "prompt": "Update the dependency and run its tests.",
-    "provider": "copilot",
-    "model": "claude-sonnet-5",
-    "agent": null
-  }
-}
-```
-
-Existing callers that send only `prompt`, `provider`, and `model` remain valid. There is currently no separate MCP tool for starting an existing idle task: `task_append_prompt` steers a running task or starts a follow-up turn with that task's persisted session configuration, so it does not accept a new `agent` or `reasoning` selection.
-
-Agents with the `vibe-editor` MCP server can call `ai_usage` to inspect the invoking provider's current session. The result contains `used`, `limit`, computed `remaining`, `unit`, and `resets_at`; unavailable values are returned as `null`. `kind: "context_window"` means those top-level numbers describe conversation capacity. When available, `account_quota` separately reports the plan plus primary and secondary rolling windows, including used/remaining percentages and reset times. Codex retrieves this snapshot from its authenticated app-server `account/rateLimits/read` endpoint; other ACP providers may leave it `null`.
-
-The `timer_set` MCP tool lets an agent schedule one continuation for its current task and provider. It accepts `seconds` (1 through 604800) and a `prompt`; setting another timer replaces the existing timer for that task/provider. Timers are persisted by Core and recovered after restart. Once the current turn finishes, task summaries report `status: "waiting"` and `waitingUntil` until Core sends the continuation prompt. Deleting a task cancels its timers.
-
-`model_switch_next` queues a one-shot `model` and `reasoning` override for the invoking provider session. Both values are required and validated together against the provider's current model catalogue. It never changes the turn that calls it; when called during a running turn, it automatically queues a continuation, and that newly started turn consumes the override, replacing UI/default configuration for that turn only. Calling the tool again before consumption replaces the pending override. Generated assistant messages record their effective model so later configuration changes do not rewrite response provenance.
-
-`session_new` deliberately refreshes the invoking agent's context without creating a task or worktree. It accepts a self-contained `prompt`, waits for the MCP-calling turn to finish, archives the old conversation, creates a context-empty session in the same workspace and provider with the same configuration and selected agent preset, and sends the handoff prompt as that session's first message. Requesting a fresh session supersedes ordinary queued follow-ups.
+MCP definitions support stdio, HTTP, and SSE transports. Environment variables and
+headers can contain secrets; retrieve those from secure storage rather than
+persisting them in workspace settings. Internal Vibe MCP operations are documented
+separately in [MCP.md](MCP.md).
