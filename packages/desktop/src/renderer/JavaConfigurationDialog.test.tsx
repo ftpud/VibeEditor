@@ -30,11 +30,12 @@ it("edits tools and launch arguments without losing line breaks, and saves the r
   fireEvent.change(argumentsField, { target: { value: "--message\nhello world" } });
   fireEvent.change(screen.getByLabelText("VM arguments — one per line"), { target: { value: "-ea\n-Dvalue=hello world" } });
   fireEvent.change(screen.getByLabelText("Application environment (JSON)"), { target: { value: '{"MODE":"dev"}' } });
+  fireEvent.change(screen.getByLabelText("Active profile (optional)"), { target: { value: "dev,local" } });
   fireEvent.click(screen.getByRole("button", { name: "Save configuration" }));
   await waitFor(() => expect(saved).toHaveBeenCalled());
   const payload = request.mock.calls.find(([type]) => type === "java.configuration.save")![1] as { content: string; expectedRevision: unknown };
   expect(payload.expectedRevision).toEqual(revision);
-  expect(JSON.parse(payload.content)).toMatchObject({ mavenExecutable: "./mvnw", javaHome: "/opt/jdk", runConfigurations: [{ environmentFile: "config/app.env", programArguments: ["--message", "hello world"], vmArguments: ["-ea", "-Dvalue=hello world"], environment: { MODE: "dev" } }] });
+  expect(JSON.parse(payload.content)).toMatchObject({ mavenExecutable: "./mvnw", javaHome: "/opt/jdk", runConfigurations: [{ activeProfile: "dev,local", environmentFile: "config/app.env", programArguments: ["--message", "hello world"], vmArguments: ["-ea", "-Dvalue=hello world"], environment: { MODE: "dev" } }] });
 });
 
 it("duplicates, selects, and deletes launch profiles", async () => {

@@ -22,7 +22,7 @@ async function workspace(wrapper = false) {
   let exited = false;
   const service = new JavaProjectService(filesystem, state, (event) => { if (event.type === "exit") exited = true; });
   const { options } = await service.loadMavenProject("pom.xml");
-  return { root, filesystem, service, options, state, waitForExit: async () => { const deadline = Date.now() + 3000; while (!exited) { if (Date.now() > deadline) throw new Error("Process did not exit"); await new Promise((resolve) => setTimeout(resolve, 10)); } } };
+  return { root, filesystem, service, options, state, stateDirectory, waitForExit: async () => { const deadline = Date.now() + 3000; while (!exited) { if (Date.now() > deadline) throw new Error("Process did not exit"); await new Promise((resolve) => setTimeout(resolve, 10)); } } };
 }
 
 describe("Java configuration", () => {
@@ -146,4 +146,40 @@ it("preserves large JSON environment values and files above 200 KB", async () =>
   // A .json filename still contains dotenv KEY=value entries.
   await writeFile(path.join(root, "default-env.json"), Object.entries(values).map(([key, value]) => `${key}=${value}`).join("\n"));
   expect(await javaLaunchEnvironment(filesystem, profile)).toEqual({ ...values, MODE: "inline" });
+});
+
+it("restores launch profiles and selection after reconnecting to each Core workspace", async () => {
+  const first = await workspace();
+  const second = await workspace();
+  const save = async (fixture: typeof first, activeProfile: string) => {
+    const profile = { id: "app", name: "Application", mainClass: "demo.App", activeProfile };
+    const options = { ...fixture.options, runConfigurations: [profile], selectedRunConfigurationId: "app" };
+    await fixture.service.saveConfiguration(JSON.stringify(options));
+    return options;
+  };
+  const firstOptions = await save(first, "development");
+  const secondOptions = await save(second, "production");
+  for (const [fixture, expected] of [[first, firstOptions], [second, secondOptions]] as const) {
+    const filesystem = new WorkspaceFileSystem();
+    await filesystem.open(fixture.root);
+    const service = new JavaProjectService(filesystem, new WorkspaceStateStore(fixture.root, fixture.stateDirectory), () => undefined);
+    expect(await service.getOptions()).toEqual(expected);
+    expect(JSON.parse((await service.readConfiguration()).content)).toEqual(expected);
+  }
+});
+
+it("applies the active Spring profile over file and inline environments, and respects them when blank", async () => {
+  const { root, filesystem } = await workspace();
+  await writeFile(path.join(root, "app.env"), "SPRING_PROFILES_ACTIVE=file\nOTHER=preserved\n");
+  const profile = { id: "app", name: "Application", mainClass: "demo.App", environmentFile: "app.env", environment: { SPRING_PROFILES_ACTIVE: "inline" } };
+  expect(await javaLaunchEnvironment(filesystem, { ...profile, activeProfile: " dev,local " })).toEqual({ SPRING_PROFILES_ACTIVE: "dev,local", OTHER: "preserved" });
+  expect(await javaLaunchEnvironment(filesystem, { ...profile, activeProfile: " " })).toEqual({ SPRING_PROFILES_ACTIVE: "inline", OTHER: "preserved" });
+});
+
+it("validates and normalizes active profiles", async () => {
+  const { options } = await workspace();
+  const configuration = (activeProfile: unknown) => JSON.stringify({ ...options, runConfigurations: [{ id: "app", name: "Application", mainClass: "demo.App", activeProfile }] });
+  expect(parseJavaConfiguration(configuration(" dev,local ")).runConfigurations[0]?.activeProfile).toBe("dev,local");
+  expect(parseJavaConfiguration(configuration(" ")).runConfigurations[0]?.activeProfile).toBeUndefined();
+  for (const value of [42, "bad\0profile", "dev\nprod", "x".repeat(1001)]) expect(() => parseJavaConfiguration(configuration(value))).toThrow("activeProfile");
 });

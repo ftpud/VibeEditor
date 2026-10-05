@@ -30,6 +30,7 @@ import { AiPanel, type AiAttachment } from "./AiPanel";
 import { HarnessPanel } from "./HarnessPanel";
 import type { PermissionRequestOwner } from "./PermissionRequestActions";
 import { openTaskFromSummary } from "./permission-navigation";
+import { functionStartDecorations, navigationFunctionStarts } from "./function-markers";
 import { configureMonacoThemes, monacoTheme, type HighlightTheme } from "./theme";
 import { CURSOR_POSITIONS_SETTING, CursorPositionStore, validateCursorPosition } from "./cursor-state";
 import { MarkdownPreview } from "./MarkdownPreview";
@@ -2172,6 +2173,25 @@ export function App() {
       return;
     }
     if (activeTab.type !== "file") return;
+    if (model && ["javascript", "typescript"].includes(model.getLanguageId())) {
+      const markerCollection = instance.createDecorationsCollection();
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      let generation = 0;
+      let disposed = false;
+      const decorate = async () => {
+        const requestGeneration = ++generation;
+        const version = model.getVersionId();
+        try {
+          const getWorker = await (model.getLanguageId() === "typescript" ? api.languages.typescript.getTypeScriptWorker() : api.languages.typescript.getJavaScriptWorker());
+          const worker = await getWorker(model.uri);
+          const tree = await worker.getNavigationTree(model.uri.toString());
+          if (!disposed && requestGeneration === generation && version === model.getVersionId()) markerCollection.set(functionStartDecorations(navigationFunctionStarts(tree, model)));
+        } catch { if (!disposed && requestGeneration === generation) markerCollection.clear(); }
+      };
+      void decorate();
+      javaLanguageDisposables.current.push(instance.onDidChangeModelContent(() => { ++generation; if (timer) clearTimeout(timer); timer = setTimeout(() => void decorate(), 300); }));
+      javaLanguageDisposables.current.push({ dispose: () => { disposed = true; if (timer) clearTimeout(timer); markerCollection.clear(); } });
+    }
     if (!/\.java$/i.test(filePath)) return;
     let lexicalDecorations: string[] = [];
     const decorateJavaLexicalTokens = () => {
@@ -2189,21 +2209,29 @@ export function App() {
     decorateJavaLexicalTokens();
     javaLanguageDisposables.current.push(instance.onDidChangeModelContent(decorateJavaLexicalTokens));
     javaLanguageDisposables.current.push({ dispose: () => { instance.deltaDecorations(lexicalDecorations, []); } });
+    const functionMarkers = instance.createDecorationsCollection();
+    let semanticGeneration = 0;
+    let semanticDisposed = false;
     let semanticDecorations: string[] = []; let semanticTimer: ReturnType<typeof setTimeout> | undefined;
     const decorateJavaTypes = async () => {
-      if (!clientRef.current || highlightTheme !== "ftpud") { semanticDecorations = instance.deltaDecorations(semanticDecorations, []); return; }
+      if (!clientRef.current) { semanticDecorations = instance.deltaDecorations(semanticDecorations, []); functionMarkers.clear(); return; }
+      const generation = ++semanticGeneration;
+      const version = instance.getModel()?.getVersionId();
       try {
         const result = await clientRef.current.request("java.semanticTokens", { path: filePath, content: instance.getValue() });
+        if (semanticDisposed || generation !== semanticGeneration || version !== instance.getModel()?.getVersionId()) return;
+        functionMarkers.set(functionStartDecorations(result.tokens.filter((token) => ["function", "method", "constructor"].includes(token.type) && (token.modifiers.includes("declaration") || token.modifiers.includes("definition"))).map((token) => ({ line: token.startLine, name: instance.getModel()?.getValueInRange({ startLineNumber: token.startLine, startColumn: token.startColumn, endLineNumber: token.endLine, endColumn: token.endColumn }) ?? "" }))));
+        if (highlightTheme !== "ftpud") { semanticDecorations = instance.deltaDecorations(semanticDecorations, []); return; }
         semanticDecorations = instance.deltaDecorations(semanticDecorations, result.tokens.flatMap((token) => {
           const constant = (token.modifiers.includes("readonly") || token.type === "enumMember") && (token.modifiers.includes("static") || token.type === "enumMember");
           const kind = constant ? "constant" : token.type === "interface" ? "interface" : ["class", "type", "enum", "struct"].includes(token.type) ? "class" : token.type === "decorator" ? "annotation" : ["property", "field"].includes(token.type) ? (token.modifiers.includes("static") ? "static-field" : "field") : ["function", "method", "constructor"].includes(token.type) ? (theme === "dark" || token.modifiers.includes("declaration") || token.type === "constructor" ? "function" : token.modifiers.includes("static") ? "static-method" : undefined) : undefined;
           return kind ? [{ range: { startLineNumber: token.startLine, startColumn: token.startColumn, endLineNumber: token.endLine, endColumn: token.endColumn }, options: { inlineClassName: `ftpud${theme === "dark" ? "-dark" : ""}-java-${kind}`, inlineClassNameAffectsLetterSpacing: false } }] : [];
         }));
-      } catch { semanticDecorations = instance.deltaDecorations(semanticDecorations, []); }
+      } catch { if (!semanticDisposed && generation === semanticGeneration) { semanticDecorations = instance.deltaDecorations(semanticDecorations, []); functionMarkers.clear(); } }
     };
     void decorateJavaTypes();
-    javaLanguageDisposables.current.push(instance.onDidChangeModelContent(() => { if (semanticTimer) clearTimeout(semanticTimer); semanticTimer = setTimeout(() => void decorateJavaTypes(), 500); }));
-    javaLanguageDisposables.current.push({ dispose: () => { if (semanticTimer) clearTimeout(semanticTimer); } });
+    javaLanguageDisposables.current.push(instance.onDidChangeModelContent(() => { ++semanticGeneration; if (semanticTimer) clearTimeout(semanticTimer); semanticTimer = setTimeout(() => void decorateJavaTypes(), 500); }));
+    javaLanguageDisposables.current.push({ dispose: () => { semanticDisposed = true; if (semanticTimer) clearTimeout(semanticTimer); functionMarkers.clear(); instance.deltaDecorations(semanticDecorations, []); } });
     javaLanguageDisposables.current.push(api.languages.registerCompletionItemProvider("java", {
       triggerCharacters: ["."],
       provideCompletionItems: async (model, position) => {
@@ -2219,7 +2247,7 @@ export function App() {
     }));
     javaLanguageDisposables.current.push(instance.addAction({ id: "java.semantic-completion", label: "Java completion", keybindings: [api.KeyMod.CtrlCmd | api.KeyCode.Enter, api.KeyMod.WinCtrl | api.KeyCode.Enter], run: () => instance.trigger("java", "editor.action.triggerSuggest", {}) }));
     javaLanguageDisposables.current.push(instance.onMouseDown((event) => {
-      if ((event.target.element as HTMLElement | null)?.closest(".git-change-marker")) return;
+      if ((event.target.element as HTMLElement | null)?.closest(".git-change-marker, .function-start-marker")) return;
       const line = event.target.position?.lineNumber ?? event.target.range?.startLineNumber;
       if ((event.target.type === 2 || event.target.type === 3) && line) { toggleBreakpoint(filePath, instance.getValue(), line); return; }
       const position = event.target.position;
