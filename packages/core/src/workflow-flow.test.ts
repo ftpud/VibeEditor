@@ -85,6 +85,18 @@ describe("typed workflows", () => {
     expect((await store.read(definition.id)).blocks[1]?.type).toBe("yes_no_prompt");
   });
 
+  it("opens a Markdown document with the preceding output and passes it to followers", async () => {
+    const { definition, store } = await setup([block("start", "start_input"), block("report", "markdown", { label: "Report", prompt: "" }), block("after", "text")], [edge("start", "report"), edge("report", "after")]);
+    const openDocument = vi.fn();
+    const runner = new HarnessRunner(store, () => {}, 1, undefined, openDocument);
+    const run = await runner.start(definition.id, "# Report\n\nCommitted changes.", vi.fn(), "provider", undefined, "start");
+    await vi.waitFor(async () => expect((await store.runs())[0]?.status).toBe("succeeded"));
+    expect(openDocument).toHaveBeenCalledOnce();
+    expect(openDocument).toHaveBeenCalledWith({ runId: run.id, blockId: "report", title: "Report.md", content: "# Report\n\nCommitted changes." });
+    expect((await store.runs())[0]?.blocks.find((state) => state.blockId === "after")?.output).toBe("# Report\n\nCommitted changes.");
+    expect((await store.read(definition.id)).blocks[1]?.type).toBe("markdown");
+  });
+
   it("cancels a timer without launching its follower", async () => {
     const { runner, definition, store, finished } = await setup([block("start", "start_input"), block("timer", "timer", { seconds: 60 }), block("after", "ai")], [edge("start", "timer"), edge("timer", "after")]);
     const dispatch = vi.fn(); const run = await runner.start(definition.id, "wait", dispatch, "provider", undefined, "start");

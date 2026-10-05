@@ -63,7 +63,8 @@ function gitReviewCommitTemplate(): Pick<HarnessDefinition, "blocks" | "edges"> 
       { id: "git-receipt", type: "script", label: "Verify new commit", prompt: "", command: 'set -eu\ngit --no-pager show --no-ext-diff --no-textconv --stat --format=fuller HEAD\nprintf "\\nRemaining workspace changes:\\n"\ngit status --short --branch\nprintf "\\nPush destination:\\n"\ngit rev-parse --abbrev-ref --symbolic-full-name "@{upstream}" 2>/dev/null || printf "No upstream configured.\\n"', position: { x: 820, y: 550 } },
       { id: "git-push-question", type: "yes_no_prompt", label: "Approve push?", prompt: "{{input}}\n\nPush this commit to the current branch's configured upstream? Choose Yes to push or No to keep the commit local. No upstream means push is skipped.", position: { x: 1090, y: 210 } },
       { id: "git-push", type: "script", label: "Push only with approval", prompt: "", command: 'set -eu\nif [ "$VIBE_WORKFLOW_INPUT" != "yes" ]; then printf "Push skipped: user did not approve.\\n"; exit 0; fi\nbranch=$(git symbolic-ref --quiet --short HEAD) || { printf "Push skipped: detached HEAD.\\n"; exit 0; }\nremote=$(git config --get "branch.$branch.remote") || { printf "Push skipped: no upstream remote.\\n"; exit 0; }\nmerge=$(git config --get "branch.$branch.merge") || { printf "Push skipped: no upstream branch.\\n"; exit 0; }\ngit -c core.hooksPath=/dev/null push -- "$remote" "HEAD:$merge"\nprintf "\\nPush completed.\\n"', position: { x: 1090, y: 380 } },
-      { id: "git-finished", type: "ai", label: "Commit & push report", prompt: "Summarize the supplied result and review: {{blocks.git-review.output}}. State whether a commit was created and whether push succeeded, was declined, or was skipped. Include the commit hash/message if available. Do not run tools or modify anything.", position: { x: 1350, y: 280 } }
+      { id: "git-report-document", type: "markdown", label: "Git workflow report", prompt: "{{input}}", position: { x: 1610, y: 280 } },
+      { id: "git-finished", type: "ai", label: "Commit & push report", prompt: "Write a concise Markdown report with headings for Review, Commit, and Push. Summarize the supplied result and review: {{blocks.git-review.output}}. State whether a commit was created and whether push succeeded, was declined, or was skipped. Include the commit hash/message if available. Do not run tools or modify anything.", position: { x: 1350, y: 280 } }
     ],
     edges: [
       { id: "git-start-review", from: "git-start", to: "git-review", type: "follow" },
@@ -71,6 +72,7 @@ function gitReviewCommitTemplate(): Pick<HarnessDefinition, "blocks" | "edges"> 
       { id: "git-ask-push", from: "git-review", to: "git-push-question", type: "path", label: "ask-push" },
       { id: "git-no-commit", from: "git-review", to: "git-finished", type: "path", label: "finished" },
       { id: "git-answer-push", from: "git-push-question", to: "git-push", type: "follow" },
+      { id: "git-open-report", from: "git-finished", to: "git-report-document", type: "follow" },
       { id: "git-push-report", from: "git-push", to: "git-finished", type: "follow" }
     ]
   };

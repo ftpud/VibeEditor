@@ -1,7 +1,7 @@
 export type Panel = { id: string; type: "explorer" | "editor" | "terminal" | "java" | "problems" | "gitlog" };
 export type EditorTab = {
   id: string;
-  type: "file" | "diff" | "useful" | "agent" | "runConfig";
+  type: "file" | "diff" | "useful" | "agent" | "runConfig" | "workflowDocument";
   title: string;
   path: string;
   /** Stable owner for every workspace-relative path held by this tab. */

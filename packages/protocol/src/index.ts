@@ -171,7 +171,7 @@ export type HarnessCorrection = { ownerBlockId: string; maxCycles?: number; veri
 export type HarnessReviewFinding = { id: string; message: string; ownerBlockId: string; revision: string };
 export type HarnessCorrectionCycle = { reviewBlockId: string; ownerBlockId: string; verificationBlockId?: string; cycle: number; revision: string; findings: HarnessReviewFinding[]; status: "requested" | "corrected" | "blocked"; correctedRevision?: string; requestedAt: string; completedAt?: string; error?: string };
 export type HarnessVerification = { command: string; revision?: string; workingDirectory?: string; timeoutMs?: number };
-export type HarnessBlock = { id: string; type: "ai" | "text" | "timer" | "user_prompt" | "yes_no_prompt" | "script" | "start_button" | "start_input" | "prompt" | "task" | "review" | "verification"; seconds?: number; command?: string; label: string; prompt: string; inputSchema?: HarnessDataSchema; outputSchema?: HarnessDataSchema; provider?: AiProvider; model?: string; agent?: AgentFileReference; watchdog?: boolean; review?: HarnessReview; verification?: HarnessVerification; join?: "all" | "any"; routing?: "all" | "ai"; position: { x: number; y: number } };
+export type HarnessBlock = { id: string; type: "ai" | "text" | "timer" | "user_prompt" | "yes_no_prompt" | "markdown" | "script" | "start_button" | "start_input" | "prompt" | "task" | "review" | "verification"; seconds?: number; command?: string; label: string; prompt: string; inputSchema?: HarnessDataSchema; outputSchema?: HarnessDataSchema; provider?: AiProvider; model?: string; agent?: AgentFileReference; watchdog?: boolean; review?: HarnessReview; verification?: HarnessVerification; join?: "all" | "any"; routing?: "all" | "ai"; position: { x: number; y: number } };
 export type HarnessEdge = { type?: "use" | "follow" | "path"; id: string; from: string; to: string; label?: string; loop?: boolean; execution?: "sync" | "async" };
 export type HarnessDefinition = { id: string; name: string; version: number; createdAt: string; updatedAt: string; blocks: HarnessBlock[]; edges: HarnessEdge[] };
 export type HarnessStateDiagnostic = { source: "index.json" | "runs.json"; reason: string; detectedAt: string };
@@ -664,7 +664,8 @@ export type CommitMessageChangedEvent = { type: "commit-message.changed"; payloa
 export type RunConfigChangedEvent = { type: "runConfig.changed"; payload: { rootId: WorkspaceRootId; configs: RunConfig[] } };
 
 export type HarnessChangedEvent = { type: "harness.changed"; payload: { rootId: WorkspaceRootId; runId: string } };
-export type ServerEvent = FilesystemChangedEvent | TerminalOutputEvent | TerminalExitEvent | GitChangedEvent | TaskGitChangedEvent | JavaSemanticChangedEvent | JavaOutputEvent | JavaExitEvent | JavaDebugStateEvent | AiChangedEvent | TasksChangedEvent | CommitMessageChangedEvent | RunConfigChangedEvent | HarnessChangedEvent;
+export type WorkflowDocumentEvent = { type: "workflow.document"; payload: { rootId: WorkspaceRootId; runId: string; blockId: string; title: string; content: string } };
+export type ServerEvent = WorkflowDocumentEvent | FilesystemChangedEvent | TerminalOutputEvent | TerminalExitEvent | GitChangedEvent | TaskGitChangedEvent | JavaSemanticChangedEvent | JavaOutputEvent | JavaExitEvent | JavaDebugStateEvent | AiChangedEvent | TasksChangedEvent | CommitMessageChangedEvent | RunConfigChangedEvent | HarnessChangedEvent;
 
 /**
  * Every request the core accepts. Declaring it as a fully keyed record makes TypeScript

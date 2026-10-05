@@ -19,6 +19,8 @@ describe("Git review and commit template", () => {
     expect(template.edges.filter((edge) => edge.to === "git-push")).toEqual([
       { id: "git-answer-push", from: "git-push-question", to: "git-push", type: "follow" }
     ]);
+    expect(script("git-report-document").type).toBe("markdown");
+    expect(template.edges).toContainEqual({ id: "git-open-report", from: "git-finished", to: "git-report-document", type: "follow" });
     expect(script("git-start").type).toBe("start_button");
   });
 
