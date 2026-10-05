@@ -562,6 +562,7 @@ export function App() {
       const java = await client.request("java.getOptions", {});
       if (client.getRoot() === rootId) { setJavaOptions(java.options); javaOptionsRef.current = java.options; }
     } catch (error) { setStatusMessage(error instanceof Error ? error.message : "Could not load Java configuration"); }
+    setJavaBreakpoints(options.javaBreakpoints ?? []);
     setFileColors(options.fileColors ?? {});
     setGitCommitMessage(options.gitCommitMessage ?? "");
     setSearchQueries(options.searchQueries ?? {});
@@ -855,10 +856,10 @@ export function App() {
   const activeTerminalIndex = layout.terminalGroup.tabs.findIndex((tab) => tab.id === layout.terminalGroup.activeTabId);
   const terminalOptions: NonNullable<WorkspaceOptions["terminal"]> = { tabs: layout.terminalGroup.tabs.map((tab) => ({ displayName: tab.title, terminalId: tab.terminalId })), ...(activeTerminalIndex >= 0 ? { activeTabIndex: activeTerminalIndex } : {}), panelOpen: terminalPanelOpen };
   const pinnedFiles = pinnedFilePaths(persistedFileTabs);
-  const workspaceOptionsSignature = `${persistedFileTabs.map((tab) => tab.path).join("\0")}\n${pinnedFiles.join("\0")}\n${persistedActiveTab?.path ?? ""}\n${JSON.stringify(javaOptions)}\n${JSON.stringify(terminalOptions)}\n${JSON.stringify(fileColors)}\n${gitCommitMessage}\n${JSON.stringify(searchQueries)}`;
+  const workspaceOptionsSignature = `${persistedFileTabs.map((tab) => tab.path).join("\0")}\n${pinnedFiles.join("\0")}\n${persistedActiveTab?.path ?? ""}\n${JSON.stringify(javaOptions)}\n${JSON.stringify(terminalOptions)}\n${JSON.stringify(fileColors)}\n${gitCommitMessage}\n${JSON.stringify(searchQueries)}\n${JSON.stringify(javaBreakpoints)}`;
   useEffect(() => {
     if (status !== "connected" || !workspaceOptionsReady || !clientRef.current) return;
-    const options: WorkspaceOptions = { openFiles: persistedFileTabs.map((tab) => tab.path), ...(pinnedFiles.length ? { pinnedFiles } : {}), ...(persistedActiveTab ? { activeFile: persistedActiveTab.path } : {}), ...(javaOptions ? { javaProject: javaOptions } : {}), terminal: terminalOptions, ...(Object.keys(fileColors).length ? { fileColors } : {}), ...(gitCommitMessage ? { gitCommitMessage } : {}), ...(Object.keys(searchQueries).length ? { searchQueries } : {}) };
+    const options: WorkspaceOptions = { openFiles: persistedFileTabs.map((tab) => tab.path), ...(pinnedFiles.length ? { pinnedFiles } : {}), ...(persistedActiveTab ? { activeFile: persistedActiveTab.path } : {}), ...(javaOptions ? { javaProject: javaOptions } : {}), terminal: terminalOptions, ...(Object.keys(fileColors).length ? { fileColors } : {}), ...(gitCommitMessage ? { gitCommitMessage } : {}), javaBreakpoints, ...(Object.keys(searchQueries).length ? { searchQueries } : {}) };
     void clientRef.current.request("workspace.saveOptions", { options }).catch((error: unknown) => {
       setStatusMessage(error instanceof Error ? error.message : "Could not save workspace options");
     });
@@ -1324,7 +1325,7 @@ export function App() {
       const currentFiles = currentGroup.tabs.filter((tab) => tab.type === "file");
       const currentTerminal = layoutRef.current.terminalGroup;
       const currentActiveTerminalIndex = currentTerminal.tabs.findIndex((tab) => tab.id === currentTerminal.activeTabId);
-      await client.request("workspace.saveOptions", { options: { openFiles: currentFiles.map((tab) => tab.path), ...(pinnedFilePaths(currentFiles).length ? { pinnedFiles: pinnedFilePaths(currentFiles) } : {}), ...(currentFiles.find((tab) => tab.id === currentGroup.activeTabId) ? { activeFile: currentFiles.find((tab) => tab.id === currentGroup.activeTabId)!.path } : {}), ...(javaOptionsRef.current ? { javaProject: javaOptionsRef.current } : {}), terminal: { tabs: currentTerminal.tabs.map((tab) => ({ displayName: tab.title, terminalId: tab.terminalId })), ...(currentActiveTerminalIndex >= 0 ? { activeTabIndex: currentActiveTerminalIndex } : {}), panelOpen: layoutRef.current.panels.some((panel) => panel.type === "terminal") }, ...(Object.keys(fileColors).length ? { fileColors } : {}), ...(gitCommitMessage ? { gitCommitMessage } : {}), ...(Object.keys(searchQueries).length ? { searchQueries } : {}) } });
+      await client.request("workspace.saveOptions", { options: { openFiles: currentFiles.map((tab) => tab.path), ...(pinnedFilePaths(currentFiles).length ? { pinnedFiles: pinnedFilePaths(currentFiles) } : {}), ...(currentFiles.find((tab) => tab.id === currentGroup.activeTabId) ? { activeFile: currentFiles.find((tab) => tab.id === currentGroup.activeTabId)!.path } : {}), ...(javaOptionsRef.current ? { javaProject: javaOptionsRef.current } : {}), terminal: { tabs: currentTerminal.tabs.map((tab) => ({ displayName: tab.title, terminalId: tab.terminalId })), ...(currentActiveTerminalIndex >= 0 ? { activeTabIndex: currentActiveTerminalIndex } : {}), panelOpen: layoutRef.current.panels.some((panel) => panel.type === "terminal") }, ...(Object.keys(fileColors).length ? { fileColors } : {}), ...(gitCommitMessage ? { gitCommitMessage } : {}), javaBreakpoints, ...(Object.keys(searchQueries).length ? { searchQueries } : {}) } });
       if (!isCurrent()) return;
       const result = await client.request("tasks.switch", { ...(taskId ? { taskId } : {}), includeIgnored: showIgnoredRef.current });
       if (!isCurrent()) return;
@@ -1364,7 +1365,7 @@ export function App() {
         if (queued !== null && queued !== selectedTaskIdRef.current) switchTaskRef.current(queued);
       }
     }
-  }, [aiProviders, fileColors, gitCommitMessage, refreshAgents, refreshAi, refreshAiSessions, refreshGit, refreshTaskGit, restoreWorkspaceOptions, saveFileTab, searchQueries, switchAiProvider]);
+  }, [aiProviders, fileColors, gitCommitMessage, refreshAgents, refreshAi, refreshAiSessions, refreshGit, refreshTaskGit, restoreWorkspaceOptions, saveFileTab, searchQueries, javaBreakpoints, switchAiProvider]);
   switchTaskRef.current = (taskId) => { void switchTask(taskId); };
 
   const selectClassicSideView = useCallback((view: ClassicTaskPanel) => {
@@ -1968,7 +1969,15 @@ export function App() {
   const debugJava = async () => {
     setLayout((current) => ({ ...current, panels: [...current.panels.filter((panel) => !["terminal", "java", "problems", "gitlog"].includes(panel.type)), { id: "java", type: "java" }] }));
     setJavaRunning(true);
-    try { await clientRef.current!.request("java.debug.start", { breakpoints: javaBreakpoints }, { timeoutMs: 10 * 60_000 }); }
+    try {
+      const client = clientRef.current!;
+      const rootId = client.getRoot();
+      for (const tab of layoutRef.current.editorGroups.flatMap((group) => group.tabs)) {
+        if (tab.type === "file" && tab.rootId === rootId && tab.dirty && !await saveFileTab(tab)) throw new Error(`Could not save ${tab.path} before debugging`);
+      }
+      if (clientRef.current !== client || client.getRoot() !== rootId) throw new Error("Workspace changed while saving edits");
+      await client.request("java.debug.start", { breakpoints: javaBreakpoints }, { timeoutMs: 10 * 60_000 });
+    }
     catch (error) { setJavaRunning(false); setJavaDebugState({ status: "stopped", variables: [] }); setJavaLog((current) => `${current}${error instanceof Error ? error.message : "Debugger failed"}\n`); if (error instanceof Error && error.message.includes("Java configuration")) setShowRunConfigurationDialog(true); }
   };
 
@@ -1999,11 +2008,18 @@ export function App() {
       : [...current, { path: filePath, line, className }]);
   };
 
+  const decorateBreakpoints = (instance: editor.IStandaloneCodeEditor, filePath: string, api: Monaco) => {
+    breakpointDecorationsRef.current = instance.deltaDecorations(breakpointDecorationsRef.current, javaBreakpoints.filter((item) => item.path === filePath).map((item) => ({ range: { startLineNumber: item.line, startColumn: 1, endLineNumber: item.line, endColumn: 1 }, options: { isWholeLine: false, glyphMarginClassName: "java-breakpoint", glyphMargin: { position: api.editor.GlyphMarginLane.Center }, glyphMarginHoverMessage: { value: `Breakpoint at line ${item.line}` } } })));
+  };
+
   useEffect(() => {
-    const instance = monacoEditorRef.current;
-    if (!instance || activeTab?.type !== "file" || !/\.java$/i.test(activeTab.path)) return;
-    breakpointDecorationsRef.current = instance.deltaDecorations(breakpointDecorationsRef.current, javaBreakpoints.filter((item) => item.path === activeTab.path).map((item) => ({ range: { startLineNumber: item.line, startColumn: 1, endLineNumber: item.line, endColumn: 1 }, options: { isWholeLine: false, glyphMarginClassName: "java-breakpoint", glyphMarginHoverMessage: { value: `Breakpoint at line ${item.line}` } } })));
+    if (monacoEditorRef.current && monacoRef.current && activeTab?.type === "file") decorateBreakpoints(monacoEditorRef.current, activeTab.path, monacoRef.current);
   }, [activeTab?.path, javaBreakpoints]);
+
+  useEffect(() => {
+    if (javaDebugState.status !== "running" && javaDebugState.status !== "paused") return;
+    void clientRef.current?.request("java.debug.setBreakpoints", { breakpoints: javaBreakpoints }).catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : "Could not update breakpoints"));
+  }, [javaBreakpoints, javaDebugState.status]);
 
   useEffect(() => {
     if (activeTab?.type !== "file" || !clientRef.current || !gitEntries.some((entry) => entry.path === activeTab.path)) { setActiveGitHunks([]); return; }
@@ -2150,6 +2166,8 @@ export function App() {
     if (savedCursor && !restoredViewState) instance.setPosition(savedCursor);
     javaLanguageDisposables.current.push(instance.onDidChangeCursorPosition((event) => cursorPositions.update(activeTab, event.position)));
     const filePath = activeTab.path;
+    breakpointDecorationsRef.current = [];
+    if (activeTab.type === "file") decorateBreakpoints(instance, filePath, api);
     if (activeTab.type === "file") javaLanguageDisposables.current.push(instance.onContextMenu((event) => {
       event.event.preventDefault();
       const selection = instance.getSelection();
@@ -2440,7 +2458,7 @@ export function App() {
     setTaskSwitching(true);
     try {
       const currentGroup = layoutRef.current.editorGroups[0]!; const currentFiles = currentGroup.tabs.filter((tab) => tab.type === "file" && (!tab.rootId || tab.rootId === previous)); const currentTerminal = { ...layoutRef.current.terminalGroup, tabs: layoutRef.current.terminalGroup.tabs.filter((tab) => !tab.rootId || tab.rootId === previous) }; const activeTerminalIndex = currentTerminal.tabs.findIndex((tab) => tab.id === currentTerminal.activeTabId);
-      await client.request("workspace.saveOptions", { options: { openFiles: currentFiles.map((tab) => tab.path), ...(pinnedFilePaths(currentFiles).length ? { pinnedFiles: pinnedFilePaths(currentFiles) } : {}), ...(currentFiles.find((tab) => tab.id === currentGroup.activeTabId) ? { activeFile: currentFiles.find((tab) => tab.id === currentGroup.activeTabId)!.path } : {}), ...(javaOptionsRef.current ? { javaProject: javaOptionsRef.current } : {}), terminal: { tabs: currentTerminal.tabs.map((tab) => ({ displayName: tab.title, terminalId: tab.terminalId })), ...(activeTerminalIndex >= 0 ? { activeTabIndex: activeTerminalIndex } : {}), panelOpen: layoutRef.current.panels.some((panel) => panel.type === "terminal") }, ...(Object.keys(fileColors).length ? { fileColors } : {}), ...(gitCommitMessage ? { gitCommitMessage } : {}), ...(Object.keys(searchQueries).length ? { searchQueries } : {}) } });
+      await client.request("workspace.saveOptions", { options: { openFiles: currentFiles.map((tab) => tab.path), ...(pinnedFilePaths(currentFiles).length ? { pinnedFiles: pinnedFilePaths(currentFiles) } : {}), ...(currentFiles.find((tab) => tab.id === currentGroup.activeTabId) ? { activeFile: currentFiles.find((tab) => tab.id === currentGroup.activeTabId)!.path } : {}), ...(javaOptionsRef.current ? { javaProject: javaOptionsRef.current } : {}), terminal: { tabs: currentTerminal.tabs.map((tab) => ({ displayName: tab.title, terminalId: tab.terminalId })), ...(activeTerminalIndex >= 0 ? { activeTabIndex: activeTerminalIndex } : {}), panelOpen: layoutRef.current.panels.some((panel) => panel.type === "terminal") }, ...(Object.keys(fileColors).length ? { fileColors } : {}), ...(gitCommitMessage ? { gitCommitMessage } : {}), javaBreakpoints, ...(Object.keys(searchQueries).length ? { searchQueries } : {}) } });
       client.setRoot(rootId);
       const result = await client.request("workspace.selectRoot", { rootId, includeIgnored: showIgnoredRef.current });
       selectedRootIdRef.current = rootId; setSelectedRootId(rootId); setActiveWorkspace(result.workspace); activeWorkspaceRef.current = result.workspace; setProjectName(result.projectName); setTree(result.tree);

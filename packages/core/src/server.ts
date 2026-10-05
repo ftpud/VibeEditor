@@ -960,6 +960,7 @@ async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStor
     case "java.build": await java.build(); return {};
     case "java.run": await java.run(); return {};
     case "java.stop": java.stop(); return {};
+    case "java.debug.setBreakpoints": await java.setDebugBreakpoints(request.payload.breakpoints); return {};
     case "java.debug.start": await java.debug(request.payload.breakpoints); return {};
     case "java.debug.applyChanges": return java.applyDebugChanges();
     case "java.debug.variables": return java.debugVariables(request.payload.reference, request.payload.start);

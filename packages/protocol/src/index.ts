@@ -138,6 +138,7 @@ export type WorkspaceOptions = {
   pinnedFiles?: string[];
   activeFile?: string;
   javaProject?: JavaProjectOptions;
+  javaBreakpoints?: JavaBreakpoint[];
   terminal?: WorkspaceTerminalOptions;
   fileColors?: Record<string, FileColor>;
   gitCommitMessage?: string;
@@ -554,6 +555,10 @@ export type ProtocolOperations = {
     payload: Record<string, never>;
     result: Record<string, never>;
   };
+  "java.debug.setBreakpoints": {
+    payload: { breakpoints: JavaBreakpoint[] };
+    result: Record<string, never>;
+  };
   "java.debug.start": {
     payload: { breakpoints: JavaBreakpoint[] };
     result: Record<string, never>;
@@ -820,6 +825,7 @@ const requestTypeRegistry: Record<RequestType, true> = {
   "java.run": true,
   "java.stop": true,
   "java.debug.start": true,
+  "java.debug.setBreakpoints": true,
   "java.debug.command": true,
   "java.debug.variables": true,
   "java.debug.applyChanges": true,
