@@ -21,6 +21,19 @@ async function createMavenWorkspace(onEvent: ConstructorParameters<typeof JavaPr
 }
 
 describe("JavaProjectService", () => {
+  it("exposes source and custom test roots with Java declaration metadata", async () => {
+    const { root, service } = await createMavenWorkspace();
+    await mkdir(path.join(root, "tests", "java"), { recursive: true });
+    await writeFile(path.join(root, "pom.xml"), "<project><build><testSourceDirectory>tests/java</testSourceDirectory></build></project>");
+    await writeFile(path.join(root, "tests", "java", "Contract.java"), "public interface Contract {}");
+    const result = await service.loadMavenProject("pom.xml");
+    expect(result.tree[0]).toMatchObject({ path: "src/main/java", sourceKind: "source" });
+    expect(result.tree[0]?.children?.[0]?.children?.[0]).toMatchObject({ name: "App.java", javaType: { kind: "class" } });
+    expect(result.tree[1]).toMatchObject({ path: "tests/java", sourceKind: "test", children: [{ name: "Contract.java", javaType: { kind: "interface" } }] });
+    await writeFile(path.join(root, "tests", "java", "Contract.java"), "public abstract class Contract extends Base {}");
+    expect((await service.getProjectTree())[1]?.children?.[0]?.javaType).toEqual({ kind: "class", abstract: true, extends: true });
+  });
+
   it("loads Maven options and creates a compact package tree", async () => {
     const { service, state } = await createMavenWorkspace();
     const result = await service.loadMavenProject("pom.xml");
