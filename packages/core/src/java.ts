@@ -9,7 +9,7 @@ import { CoreError } from "./errors.js";
 import { WorkspaceFileSystem } from "./filesystem.js";
 import { javaConfigurationPath } from "@remote-ide/protocol";
 import { javaLaunchEnvironment, expandJavaToolPath, javaConfigurationTemplate, javaSpawnError, javaToolEnvironment, javaToolExecutable, parseJavaConfiguration, readJavaConfiguration, writeJavaConfiguration } from "./java-configuration.js";
-import { WorkspaceStateStore } from "./workspace-state.js";
+import { validateJavaBreakpoints, WorkspaceStateStore } from "./workspace-state.js";
 
 type JavaProcessEvent =
   | { type: "output"; data: string }
@@ -315,11 +315,7 @@ export class JavaProjectService {
       const options = await this.requireOptions();
       const configuration = options.runConfigurations.find((item) => item.id === options.selectedRunConfigurationId);
       if (!configuration) throw new CoreError("JAVA_PROCESS_FAILED", "Select a Java run configuration first");
-      if (!Array.isArray(breakpoints) || breakpoints.length > 1000) throw new CoreError("INVALID_REQUEST", "Invalid Java breakpoints");
-      this.debugBreakpoints = breakpoints.map((breakpoint) => {
-        if (!/^[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*$/.test(breakpoint.className) || !Number.isSafeInteger(breakpoint.line) || breakpoint.line < 1) throw new CoreError("INVALID_REQUEST", "Invalid Java breakpoint");
-        return { ...breakpoint };
-      });
+      this.debugBreakpoints = validateJavaBreakpoints(breakpoints);
       ensureLaunching();
       this.emitDebugState({ status: "starting", variables: [] });
       await this.runAndWait(options.mavenExecutable, ["-f", options.pomPath, ...(options.buildGoals ?? ["package", "-DskipTests"]), "-Dmaven.compiler.debug=true", "-Dmaven.compiler.debuglevel=lines,vars,source"], "Debug build", options);
@@ -358,6 +354,28 @@ export class JavaProjectService {
       this.emitDebugState({ status: "stopped", variables: [] });
       throw error;
     } finally { this.debugStarting = false; }
+  }
+
+  async setDebugBreakpoints(breakpoints: JavaBreakpoint[]): Promise<void> {
+    const next = validateJavaBreakpoints(breakpoints);
+    const update = async () => {
+      if (this.applyingChanges) throw new CoreError("JAVA_PROCESS_FAILED", "Wait for code changes to finish applying");
+      const previous = this.debugBreakpoints;
+      const commands = [
+        ...previous.filter((item) => !next.some((other) => other.className === item.className && other.line === item.line)).map((item) => `clear ${item.className}:${item.line}`),
+        ...next.filter((item) => !previous.some((other) => other.className === item.className && other.line === item.line)).map((item) => `stop at ${item.className}:${item.line}`)
+      ];
+      if (this.debugging && this.process) {
+        for (const command of commands) {
+          if (this.debugPaused) await this.runDebugCommand(command);
+          else this.process.stdin.write(`${command}\n`);
+        }
+      }
+      this.debugBreakpoints = next;
+    };
+    const result = this.inspectionQueue.then(update);
+    this.inspectionQueue = result.catch(() => undefined);
+    return result;
   }
 
   debugCommand(command: "continue" | "stepInto" | "stepOver" | "stepOut"): void {

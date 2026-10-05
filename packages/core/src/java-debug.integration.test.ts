@@ -71,7 +71,7 @@ process.exit(build.status ?? 1);
       const javaHome = javaSettings.stderr.match(/java\.home\s*=\s*(.+)/)?.[1]?.trim();
       expect(javaHome).toBeDefined();
       await service.saveConfiguration(JSON.stringify({ ...configured, javaHome, mavenArguments: ["-Pfixture"], buildGoals: ["compile"], runConfigurations: configured.runConfigurations.map((item) => ({ ...item, programArguments: ["greeting with spaces", ""], vmArguments: ["-ea", "-Ddemo.flag=flag with spaces"], environment: { DEMO_MODE: "from-profile" }, workingDirectory: "runtime" })) }));
-      await service.debug([8, 5].map((line) => ({ path: "src/main/java/com/example/App.java", className: "com.example.App", line })));
+      await service.debug([8].map((line) => ({ path: "src/main/java/com/example/App.java", className: "com.example.App", line })));
       await waitFor(() => latest.status === "paused", "first breakpoint");
       const node = latest.variables.find((variable) => variable.name === "node")!;
       expect(node.objectId).toBeDefined();
@@ -93,6 +93,8 @@ process.exit(build.status ?? 1);
       expect((await service.debugVariables(elements[0]!.reference!)).variables.find((field) => field.name === "value")?.value).toBe("7");
       expect((await service.debugVariables(elements[3]!.reference!)).variables).toEqual([{ name: "[0]", value: '"first,second"' }, { name: "[1]", value: '"third"' }]);
 
+      // Add the method breakpoint and remove the entry breakpoint in the live session.
+      await service.setDebugBreakpoints([{ path: "src/main/java/com/example/App.java", className: "com.example.App", line: 5 }]);
       await writeFile(source, code(10));
       const applied = await service.applyDebugChanges();
       expect(applied).toEqual({ appliedClasses: ["com.example.App"], deferredClasses: [], failedClasses: [], restartRequired: false });
@@ -120,6 +122,7 @@ process.exit(build.status ?? 1);
       service.debugCommand("continue");
       await waitFor(async () => (await readFile(path.join(root, "runtime/result.txt"), "utf8").catch(() => "")) === "17:7", "new method result");
       await waitFor(() => latest.status === "paused" && latest.line === 5, "second method breakpoint");
+      await service.setDebugBreakpoints([]);
       service.debugCommand("continue");
       await waitFor(() => latest.status === "stopped", "normal exit");
       expect(await readFile(path.join(root, "runtime/second.txt"), "utf8")).toBe("17");

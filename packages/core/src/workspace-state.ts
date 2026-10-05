@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import { mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
-import type { JavaProjectOptions, JavaRunConfiguration, WorkspaceOptions, WorkspaceSearchQuery, WorkspaceSearchQueries } from "@remote-ide/protocol";
+import type { JavaBreakpoint, JavaProjectOptions, JavaRunConfiguration, WorkspaceOptions, WorkspaceSearchQuery, WorkspaceSearchQueries } from "@remote-ide/protocol";
 import { CoreError } from "./errors.js";
 
 const EMPTY_OPTIONS: WorkspaceOptions = { openFiles: [] };
@@ -63,13 +63,28 @@ export function validateWorkspaceOptions(value: unknown): WorkspaceOptions {
   }
   const pinnedFiles = candidate.pinnedFiles === undefined ? undefined : [...new Set(candidate.pinnedFiles as string[])];
   const activeFile = typeof candidate.activeFile === "string" && openFiles.includes(candidate.activeFile) ? candidate.activeFile : undefined;
+  const javaBreakpoints = candidate.javaBreakpoints === undefined ? undefined : validateJavaBreakpoints(candidate.javaBreakpoints);
   const javaProject = candidate.javaProject === undefined ? undefined : validateJavaProjectOptions(candidate.javaProject);
   const terminal = candidate.terminal === undefined ? undefined : validateTerminalOptions(candidate.terminal);
   const fileColors = candidate.fileColors === undefined ? undefined : validateFileColors(candidate.fileColors);
   const searchQueries = candidate.searchQueries === undefined ? undefined : validateSearchQueries(candidate.searchQueries);
   if (candidate.gitCommitMessage !== undefined && (typeof candidate.gitCommitMessage !== "string" || candidate.gitCommitMessage.length > 10_000)) throw new CoreError("INVALID_REQUEST", "Invalid Git commit message draft");
   const gitCommitMessage = typeof candidate.gitCommitMessage === "string" ? candidate.gitCommitMessage : undefined;
-  return { openFiles, ...(pinnedFiles?.length ? { pinnedFiles } : {}), ...(activeFile ? { activeFile } : {}), ...(javaProject ? { javaProject } : {}), ...(terminal ? { terminal } : {}), ...(fileColors && Object.keys(fileColors).length ? { fileColors } : {}), ...(gitCommitMessage ? { gitCommitMessage } : {}), ...(searchQueries ? { searchQueries } : {}) };
+  return { openFiles, ...(javaBreakpoints ? { javaBreakpoints } : {}), ...(pinnedFiles?.length ? { pinnedFiles } : {}), ...(activeFile ? { activeFile } : {}), ...(javaProject ? { javaProject } : {}), ...(terminal ? { terminal } : {}), ...(fileColors && Object.keys(fileColors).length ? { fileColors } : {}), ...(gitCommitMessage ? { gitCommitMessage } : {}), ...(searchQueries ? { searchQueries } : {}) };
+}
+
+export function validateJavaBreakpoints(value: unknown): JavaBreakpoint[] {
+  if (!Array.isArray(value) || value.length > 1000) throw new CoreError("INVALID_REQUEST", "Invalid Java breakpoints");
+  const seen = new Set<string>();
+  return value.flatMap((item: unknown) => {
+    if (!item || typeof item !== "object") throw new CoreError("INVALID_REQUEST", "Invalid Java breakpoint");
+    const { path: filePath, line, className } = item as Record<string, unknown>;
+    if (!isSafeRelativePath(filePath) || !/\.java$/i.test(filePath) || !Number.isSafeInteger(line) || (line as number) < 1 || typeof className !== "string" || !/^[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*$/.test(className)) throw new CoreError("INVALID_REQUEST", "Invalid Java breakpoint");
+    const key = `${filePath}:${line}`;
+    if (seen.has(key)) return [];
+    seen.add(key);
+    return [{ path: filePath, line: line as number, className }];
+  });
 }
 
 function validateSearchQueries(value: unknown): WorkspaceSearchQueries {
