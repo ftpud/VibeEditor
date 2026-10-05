@@ -168,7 +168,7 @@ function validateRunConfiguration(value: unknown): JavaRunConfiguration {
   const programArguments = javaArgumentList(candidate.programArguments, "programArguments");
   const vmArguments = javaArgumentList(candidate.vmArguments, "vmArguments");
   if (candidate.workingDirectory !== undefined && !isSafeRelativePath(candidate.workingDirectory)) throw new CoreError("INVALID_REQUEST", "workingDirectory must be inside the workspace; use . for its root");
-  if (candidate.environmentFile !== undefined && !isSafeRelativePath(candidate.environmentFile)) throw new CoreError("INVALID_REQUEST", "environmentFile must be a JSON file inside the workspace");
+  if (candidate.environmentFile !== undefined && !isSafeRelativePath(candidate.environmentFile)) throw new CoreError("INVALID_REQUEST", "environmentFile must be an .env file inside the workspace");
   if (candidate.environment !== undefined && (!candidate.environment || typeof candidate.environment !== "object" || Array.isArray(candidate.environment) || Object.keys(candidate.environment).length > 100 || !Object.entries(candidate.environment).every(([key, item]) => /^[A-Za-z_][\w]*$/.test(key) && typeof item === "string" && item.length <= 10_000 && !item.includes("\0")))) throw new CoreError("INVALID_REQUEST", "environment must be a JSON object mapping environment variable names to strings");
   return {
     id: candidate.id, name: candidate.name.trim(), mainClass: candidate.mainClass,
