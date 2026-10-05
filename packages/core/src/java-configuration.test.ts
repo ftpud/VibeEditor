@@ -101,25 +101,39 @@ describe("Java configuration", () => {
   });
 });
 
-it("loads JSON environment files afresh and lets inline values override them", async () => {
+it("loads .env files afresh and lets inline values override them", async () => {
   const { root, filesystem, options } = await workspace();
-  const profile = { id: "app", name: "App", mainClass: "demo.App", environmentFile: "env.json", environment: { MODE: "inline" } };
+  const profile = { id: "app", name: "App", mainClass: "demo.App", environmentFile: "app.env", environment: { MODE: "inline" } };
   const config = { ...options, runConfigurations: [profile] };
-  expect(parseJavaConfiguration(JSON.stringify(config)).runConfigurations[0]?.environmentFile).toBe("env.json");
-  await writeFile(path.join(root, "env.json"), JSON.stringify({ MODE: "file", TOKEN: "first" }));
+  expect(parseJavaConfiguration(JSON.stringify(config)).runConfigurations[0]?.environmentFile).toBe("app.env");
+  await writeFile(path.join(root, "app.env"), "MODE=file\nTOKEN=first\n");
   expect(await javaLaunchEnvironment(filesystem, profile)).toEqual({ MODE: "inline", TOKEN: "first" });
-  await writeFile(path.join(root, "env.json"), JSON.stringify({ TOKEN: "second" }));
+  await writeFile(path.join(root, "app.env"), "TOKEN=second\n");
   expect(await javaLaunchEnvironment(filesystem, profile)).toEqual({ MODE: "inline", TOKEN: "second" });
-  expect(() => parseJavaConfiguration(JSON.stringify({ ...config, runConfigurations: [{ ...profile, environmentFile: "../env.json" }] }))).toThrow("environmentFile");
+  expect(() => parseJavaConfiguration(JSON.stringify({ ...config, runConfigurations: [{ ...profile, environmentFile: "../app.env" }] }))).toThrow("environmentFile");
 });
 
-it("rejects missing, malformed, and non-string JSON environment files", async () => {
+it("rejects missing and invalid .env files", async () => {
   const { root, filesystem } = await workspace();
-  const profile = { id: "app", name: "App", mainClass: "demo.App", environmentFile: "env.json" };
-  await expect(javaLaunchEnvironment(filesystem, profile)).rejects.toThrow("Environment file env.json");
-  for (const content of ["invalid", "[]", '{"PORT":8080}', '{"BAD-NAME":"value"}']) {
-    await writeFile(path.join(root, "env.json"), content);
-    await expect(javaLaunchEnvironment(filesystem, profile)).rejects.toThrow("Environment file env.json");
+  const profile = { id: "app", name: "App", mainClass: "demo.App", environmentFile: "app.env" };
+  await expect(javaLaunchEnvironment(filesystem, profile)).rejects.toThrow("Environment file app.env");
+  for (const content of ["invalid", '{"PORT":8080}', "BAD-NAME=value", "TOKEN=bad\0value", "TOKEN=" + "a".repeat(10_001)]) {
+    await writeFile(path.join(root, "app.env"), content);
+    await expect(javaLaunchEnvironment(filesystem, profile)).rejects.toThrow("Environment file app.env");
   }
   expect(await javaLaunchEnvironment(filesystem, { ...profile, environmentFile: undefined })).toEqual({});
+});
+
+it("supports .env comments, quotes, export prefixes, empty values, and literal variables", async () => {
+  const { root, filesystem } = await workspace();
+  const profile = { id: "app", name: "App", mainClass: "demo.App", environmentFile: "app.env" };
+  await writeFile(path.join(root, "app.env"), [
+    "# application settings", "export MODE=development # comment", 'MESSAGE="hello world # literal"',
+    "SINGLE='literal value'", "EMPTY=", "PORT=8080", "LITERAL=$MODE", 'MULTILINE="first\\nsecond"',
+    "DUPLICATE=first", "DUPLICATE=last"
+  ].join("\r\n"));
+  expect(await javaLaunchEnvironment(filesystem, profile)).toEqual({
+    MODE: "development", MESSAGE: "hello world # literal", SINGLE: "literal value", EMPTY: "", PORT: "8080",
+    LITERAL: "$MODE", MULTILINE: "first\nsecond", DUPLICATE: "last"
+  });
 });

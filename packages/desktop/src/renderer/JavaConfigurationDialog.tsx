@@ -138,8 +138,8 @@ export function JavaConfigurationDialog({ client, running, onClose, onSaved }: P
                 </div>
                 <p className="java-config-help">Each line is one argument. Spaces inside a line are preserved; no shell quoting is needed. JSON also supports empty arguments.</p>
                 <label>Working directory<input value={profile.workingDirectory ?? "."} onChange={(event) => updateProfile({ workingDirectory: event.target.value })} placeholder=". (workspace root)" /></label>
-                <label>Environment JSON file (optional)<input value={profile.environmentFile ?? ""} onChange={(event) => updateProfile({ environmentFile: event.target.value.trim() || undefined })} placeholder="config/environment.json" /></label>
-                <p className="java-config-help">Path relative to the workspace on the Core host. Use a JSON object with string values. Loaded for each Run / Debug; values below override file values.</p>
+                <label>Environment file (.env, optional)<input value={profile.environmentFile ?? ""} onChange={(event) => updateProfile({ environmentFile: event.target.value.trim() || undefined })} placeholder="config/app.env" /></label>
+                <p className="java-config-help">Path relative to the workspace on the Core host. Use .env format: KEY=value, one variable per line. Loaded for each Run / Debug; values below override file values.</p>
                 <label>Application environment (JSON)<textarea spellCheck={false} value={environmentDrafts[profile.id] ?? JSON.stringify(profile.environment ?? {}, null, 2)} onChange={(event) => { setEnvironmentDrafts((current) => ({ ...current, [profile.id]: event.target.value })); setChecks(undefined); }} placeholder={'{"MODE":"development"}'} /></label>
               </> : <p className="java-config-help">Add a profile, choose its main class, then save to enable Run and Debug.</p>}
             </fieldset>
