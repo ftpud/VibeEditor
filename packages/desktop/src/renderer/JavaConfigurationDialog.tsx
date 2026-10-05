@@ -99,7 +99,7 @@ export function JavaConfigurationDialog({ client, running, onClose, onSaved }: P
 
   return <div className="dialog-overlay" onMouseDown={() => { if (!busy) onClose(); }}>
     <section className="run-config-dialog java-config-dialog" role="dialog" aria-modal="true" aria-label="Java run/debug configuration" onMouseDown={(event) => event.stopPropagation()}>
-      <header><div><h2>Java run/debug configuration</h2><span>Saved in .vibe/java.json on the Core host</span></div><button title="Close" disabled={busy} onClick={onClose}><X size={15} /></button></header>
+      <header><div><h2>Java run/debug configuration</h2><span>Saved in .vibe/java.json for this workspace on the connected Core server</span></div><button title="Close" disabled={busy} onClick={onClose}><X size={15} /></button></header>
       <div className="java-config-tabs" role="tablist" aria-label="Configuration editor">
         <button role="tab" aria-selected={mode === "form"} disabled={loading || busy} onClick={() => switchMode("form")}>Settings &amp; profiles</button>
         <button role="tab" aria-selected={mode === "json"} disabled={loading || busy} onClick={() => switchMode("json")}>JSON</button>
@@ -131,6 +131,8 @@ export function JavaConfigurationDialog({ client, running, onClose, onSaved }: P
               {profile ? <>
                 <label className="java-config-check"><input type="checkbox" checked={options.selectedRunConfigurationId === profile.id} onChange={() => update({ ...options!, selectedRunConfigurationId: profile.id })} />Use this profile for Run / Debug</label>
                 <label>Profile name<input value={profile.name} onChange={(event) => updateProfile({ name: event.target.value })} /></label>
+                <label>Active profile (optional)<input value={profile.activeProfile ?? ""} onChange={(event) => updateProfile({ activeProfile: event.target.value })} placeholder="dev or dev,local" /></label>
+                <p className="java-config-help">Sets SPRING_PROFILES_ACTIVE for Run and Debug. Comma-separated profiles are supported. Blank uses the environment file or application environment.</p>
                 <label>Main class<input list="java-main-class-options" value={profile.mainClass} onChange={(event) => updateProfile({ mainClass: event.target.value })} placeholder="com.example.App" /><datalist id="java-main-class-options">{classes.map((item) => <option key={item.className} value={item.className} />)}</datalist></label>
                 <div className="java-config-grid">
                   <label>Program arguments — one per line<textarea value={argumentDrafts[`${profile.id}-program`] ?? (profile.programArguments ?? []).join("\n")} onChange={(event) => editArguments(`${profile.id}-program`, event.target.value, (items) => updateProfile({ programArguments: items }))} placeholder={"--port\n8080"} /></label>

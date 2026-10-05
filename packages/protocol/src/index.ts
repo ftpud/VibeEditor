@@ -211,6 +211,7 @@ export type JavaRunConfiguration = {
   id: string;
   name: string;
   mainClass: string;
+  activeProfile?: string;
   programArguments?: string[];
   vmArguments?: string[];
   workingDirectory?: string;

@@ -161,10 +161,11 @@ function rejectUnknownJavaFields(value: Record<string, unknown>, fields: string[
 function validateRunConfiguration(value: unknown): JavaRunConfiguration {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new CoreError("INVALID_REQUEST", "Each launch profile must be an object");
   const candidate = value as Record<string, unknown>;
-  rejectUnknownJavaFields(candidate, ["id", "name", "mainClass", "programArguments", "vmArguments", "workingDirectory", "environmentFile", "environment"], "Launch profile");
+  rejectUnknownJavaFields(candidate, ["id", "name", "mainClass", "activeProfile", "programArguments", "vmArguments", "workingDirectory", "environmentFile", "environment"], "Launch profile");
   if (typeof candidate.id !== "string" || !/^[a-zA-Z0-9-]{1,80}$/.test(candidate.id)) throw new CoreError("INVALID_REQUEST", "Launch profile id must use letters, numbers, or hyphens");
   if (typeof candidate.name !== "string" || !candidate.name.trim() || candidate.name.length > 100) throw new CoreError("INVALID_REQUEST", "Launch profile name is required (up to 100 characters)");
   if (typeof candidate.mainClass !== "string" || !/^[A-Za-z_$][\w$]*(\.[A-Za-z_$][\w$]*)*$/.test(candidate.mainClass)) throw new CoreError("INVALID_REQUEST", `Launch profile "${candidate.name}": mainClass must be a Java class name, such as com.example.App`);
+  if (candidate.activeProfile !== undefined && (typeof candidate.activeProfile !== "string" || candidate.activeProfile.length > 1000 || candidate.activeProfile.includes("\0") || /[\r\n]/.test(candidate.activeProfile))) throw new CoreError("INVALID_REQUEST", "activeProfile must be a string without NUL characters or line breaks (up to 1000 characters)");
   const programArguments = javaArgumentList(candidate.programArguments, "programArguments");
   const vmArguments = javaArgumentList(candidate.vmArguments, "vmArguments");
   if (candidate.workingDirectory !== undefined && !isSafeRelativePath(candidate.workingDirectory)) throw new CoreError("INVALID_REQUEST", "workingDirectory must be inside the workspace; use . for its root");
@@ -172,6 +173,7 @@ function validateRunConfiguration(value: unknown): JavaRunConfiguration {
   if (candidate.environment !== undefined && (!candidate.environment || typeof candidate.environment !== "object" || Array.isArray(candidate.environment) || Object.keys(candidate.environment).length > 100 || !Object.entries(candidate.environment).every(([key, item]) => /^[A-Za-z_][\w]*$/.test(key) && typeof item === "string" && item.length <= 10_000 && !item.includes("\0")))) throw new CoreError("INVALID_REQUEST", "environment must be a JSON object mapping environment variable names to strings");
   return {
     id: candidate.id, name: candidate.name.trim(), mainClass: candidate.mainClass,
+    ...(typeof candidate.activeProfile === "string" && candidate.activeProfile.trim() ? { activeProfile: candidate.activeProfile.trim() } : {}),
     ...(programArguments ? { programArguments } : {}), ...(vmArguments ? { vmArguments } : {}),
     ...(typeof candidate.workingDirectory === "string" ? { workingDirectory: candidate.workingDirectory } : {}),
     ...(typeof candidate.environmentFile === "string" ? { environmentFile: candidate.environmentFile } : {}),

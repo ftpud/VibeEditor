@@ -85,5 +85,5 @@ export async function javaLaunchEnvironment(filesystem: WorkspaceFileSystem, pro
       throw new CoreError("INVALID_REQUEST", `Environment file ${profile.environmentFile}: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
-  return { ...fileEnvironment, ...profile.environment };
+  return { ...fileEnvironment, ...profile.environment, ...(profile.activeProfile?.trim() ? { SPRING_PROFILES_ACTIVE: profile.activeProfile.trim() } : {}) };
 }

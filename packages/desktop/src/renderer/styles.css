@@ -820,6 +820,9 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .monaco-editor .git-change-marker.added { background: #58a863; }
 .monaco-editor .git-change-marker.modified { background: #4b8bd4; }
 .monaco-editor .git-change-marker.deleted { height: 4px !important; margin-top: 9px; background: #d45d65; }
+/* Dedicated right gutter lane leaves breakpoint markers visible. */
+.monaco-editor .function-start-marker::after { content: "◆"; color: #4b8bd4; font-size: 10px; line-height: 1; }
+.monaco-editor .function-start-marker { display: flex !important; align-items: center; justify-content: center; }
 .monaco-editor .http-run-marker { cursor: pointer; }
 .monaco-editor .http-run-marker::after { content: "▶"; position: absolute; left: 4px; top: 3px; color: #65b56f; font-size: 0.9231rem; line-height: 16px; }
 /* Paint selected text above syntax backgrounds; Monaco's selection layer sits below them. */
@@ -1535,6 +1538,239 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
   .status-toast-spinner::after, .task-progress-spinner::after { content: "…"; }
 }
 
+/* Complete light surfaces for native controls, dividers, menus, and harness tools. */
+:root[data-theme="light"] select,
+:root[data-theme="light"] select option,
+:root[data-theme="light"] select optgroup { background-color: #ffffff; color: #2b2d30; border-color: #b8bbc0; }
+:root[data-theme="light"] .settings-control > select,
+:root[data-theme="light"] .font-setting select,
+:root[data-theme="light"] .font-setting input,
+:root[data-theme="light"] .task-filters select,
+:root[data-theme="light"] .conflict-toolbar select,
+:root[data-theme="light"] .harness-picker select,
+:root[data-theme="light"] .harness-inspector select,
+:root[data-theme="light"] .harness-edge-controls select,
+:root[data-theme="light"] .settings-control > input[type="number"],
+:root[data-theme="light"] .settings-search,
+:root[data-theme="light"] .find-filter-controls input,
+:root[data-theme="light"] .terminal-tab-renaming input,
+:root[data-theme="light"] .harness-create input,
+:root[data-theme="light"] .harness-toolbar input,
+:root[data-theme="light"] .harness-inspector input,
+:root[data-theme="light"] .harness-inspector textarea,
+:root[data-theme="light"] .harness-run textarea,
+:root[data-theme="light"] .harness-pause textarea,
+:root[data-theme="light"] .ai-model-trigger { background: #ffffff; color: #2b2d30; border-color: #b8bbc0; }
+:root[data-theme="light"] input::placeholder,
+:root[data-theme="light"] textarea::placeholder { color: #73777e; }
+:root[data-theme="light"] .focused-panel-divider,
+:root[data-theme="light"] .classic-panel-divider,
+:root[data-theme="light"] .ai-composer-resize-handle,
+:root[data-theme="light"] .conflict-pane-resizer { background: #e7e9ec; border-color: #d5d7da; }
+:root[data-theme="light"] .focused-panel-divider:hover,
+:root[data-theme="light"] .classic-panel-divider:hover,
+:root[data-theme="light"] .ai-composer-resize-handle:hover,
+:root[data-theme="light"] .conflict-pane-resizer:hover,
+:root[data-theme="light"] .conflict-pane-resizer:focus-visible { background: #3574f0; }
+:root[data-theme="light"] .context-menu-separator { background: #d5d7da; }
+:root[data-theme="light"] .settings-search,
+:root[data-theme="light"] .settings-row,
+:root[data-theme="light"] .shortcut-settings,
+:root[data-theme="light"] .task-checkpoint,
+:root[data-theme="light"] .task-checkpoint-history > header,
+:root[data-theme="light"] .find-controls,
+:root[data-theme="light"] .find-filter-controls,
+:root[data-theme="light"] .find-replace-preview,
+:root[data-theme="light"] .find-query-library,
+:root[data-theme="light"] .find-query,
+:root[data-theme="light"] .match-case,
+:root[data-theme="light"] .find-result-group-header,
+:root[data-theme="light"] .ai-model-search,
+:root[data-theme="light"] .ai-model-cost-help,
+:root[data-theme="light"] .ai-sessions,
+:root[data-theme="light"] .ai-sessions > header,
+:root[data-theme="light"] .ai-session-item,
+:root[data-theme="light"] .harness-picker,
+:root[data-theme="light"] .harness-create,
+:root[data-theme="light"] .harness-toolbar,
+:root[data-theme="light"] .harness-inspector,
+:root[data-theme="light"] .harness-routes,
+:root[data-theme="light"] .harness-run,
+:root[data-theme="light"] .harness-run-details,
+:root[data-theme="light"] .harness-run-details > header,
+:root[data-theme="light"] .commit-patch-dialog,
+:root[data-theme="light"] .commit-patch-dialog > header,
+:root[data-theme="light"] .commit-patch-dialog > footer,
+:root[data-theme="light"] .commit-patch-source,
+:root[data-theme="light"] .commit-patch-result,
+:root[data-theme="light"] .commit-patch-pane-heading,
+:root[data-theme="light"] .commit-patch-block-actions,
+:root[data-theme="light"] .commit-block-diff,
+:root[data-theme="light"] .conflict-workspace,
+:root[data-theme="light"] .conflict-toolbar,
+:root[data-theme="light"] .conflict-body nav,
+:root[data-theme="light"] .conflict-pane-labels,
+:root[data-theme="light"] .conflict-code-pane,
+:root[data-theme="light"] .conflict-code-pane > header { border-color: #d5d7da; }
+:root[data-theme="light"] .settings-reset:hover,
+:root[data-theme="light"] .project-tree-actions button:hover:not(:disabled),
+:root[data-theme="light"] .git-file-row:hover,
+:root[data-theme="light"] .useful-section > header button:hover,
+:root[data-theme="light"] .useful-row > button:not(.useful-open):hover,
+:root[data-theme="light"] .task-actions:hover:not(:disabled),
+:root[data-theme="light"] .ai-session-select:hover,
+:root[data-theme="light"] .ai-session-remove:hover:not(:disabled),
+:root[data-theme="light"] .ai-toolbar > button:hover:not(:disabled),
+:root[data-theme="light"] .ai-session-control > button:hover:not(:disabled),
+:root[data-theme="light"] .find-query-library > div > button:hover,
+:root[data-theme="light"] .find-query button:hover,
+:root[data-theme="light"] .find-pane-header button:hover,
+:root[data-theme="light"] .find-result-group > button:not(.find-result-group-header):hover,
+:root[data-theme="light"] .import-chooser > div > button:hover,
+:root[data-theme="light"] .http-response-panel > header button:hover { background: #e7e9ec; color: #202124; }
+:root[data-theme="light"] .java-config-tabs button { color: #55585e; }
+:root[data-theme="light"] .java-config-tabs button[aria-selected="true"],
+:root[data-theme="light"] .quick-filter button.active,
+:root[data-theme="light"] .ai-toolbar > button.active,
+:root[data-theme="light"] .ai-session-control > button.active,
+:root[data-theme="light"] .find-result-group > button.selected,
+:root[data-theme="light"] .conflict-body nav button.active { background: #d9e7fb; color: #1f4f88; }
+:root[data-theme="light"] .ai-model-menu,
+:root[data-theme="light"] .ai-command-menu,
+:root[data-theme="light"] .stash-dialog,
+:root[data-theme="light"] .task-checkpoint-history { background: #ffffff; color: #303236; border-color: #c8cbd0; box-shadow: 0 8px 24px rgba(0, 0, 0, .16); }
+:root[data-theme="light"] .ai-model-search input,
+:root[data-theme="light"] .ai-model-cost-help strong,
+:root[data-theme="light"] .ai-model-item-name,
+:root[data-theme="light"] .ai-session-select,
+:root[data-theme="light"] .ai-command-menu button,
+:root[data-theme="light"] .find-replace-preview,
+:root[data-theme="light"] .find-query-library,
+:root[data-theme="light"] .find-result-group-header,
+:root[data-theme="light"] .harness-log-entry pre { color: #303236; }
+:root[data-theme="light"] .ai-model-search,
+:root[data-theme="light"] .ai-model-cost-help,
+:root[data-theme="light"] .ai-model-item-description,
+:root[data-theme="light"] .ai-model-item-meta,
+:root[data-theme="light"] .ai-model-empty,
+:root[data-theme="light"] .ai-session-select small,
+:root[data-theme="light"] .match-case,
+:root[data-theme="light"] .find-query-library > div > span:first-child,
+:root[data-theme="light"] .harness-inspector label,
+:root[data-theme="light"] .harness-input-help,
+:root[data-theme="light"] .harness-run small,
+:root[data-theme="light"] .harness-detail-meta,
+:root[data-theme="light"] .harness-detail-empty,
+:root[data-theme="light"] .harness-log-entry summary time { color: #65686e; }
+:root[data-theme="light"] .ai-model-item-note { color: #805500; }
+:root[data-theme="light"] .ai-model-item[data-active="true"],
+:root[data-theme="light"] .ai-command-menu button:hover,
+:root[data-theme="light"] .find-result-group-header:hover { background: #e7edf7; color: #202124; }
+:root[data-theme="light"] .ai-model-price,
+:root[data-theme="light"] .ai-model-tag,
+:root[data-theme="light"] .find-group-count,
+:root[data-theme="light"] .harness-run-state,
+:root[data-theme="light"] .tool-badge { background: #e7e9ec; color: #55585e; }
+:root[data-theme="light"] .ai-model-price.tier-low,
+:root[data-theme="light"] .harness-run-state.succeeded,
+:root[data-theme="light"] .git-push-badge { background: #e0f2e3; color: #276432; }
+:root[data-theme="light"] .ai-model-price.tier-medium,
+:root[data-theme="light"] .harness-run-state.running { background: #e2effc; color: #285c91; }
+:root[data-theme="light"] .ai-model-price.tier-high,
+:root[data-theme="light"] .harness-run-state.waiting,
+:root[data-theme="light"] .harness-run-state.awaiting_permission,
+:root[data-theme="light"] .harness-run-state.awaiting_user_input,
+:root[data-theme="light"] .harness-pause,
+:root[data-theme="light"] .harness-connect-hint { background: #fff5dd; color: #725116; border-color: #d9a441; }
+:root[data-theme="light"] .ai-model-price.tier-very-high,
+:root[data-theme="light"] .ai-model-tag.warn,
+:root[data-theme="light"] .harness-run-state.failed,
+:root[data-theme="light"] .harness-conflict,
+:root[data-theme="light"] .git-pull-blockers,
+:root[data-theme="light"] .git-pull-error,
+:root[data-theme="light"] .git-hunk-error,
+:root[data-theme="light"] .git-log-error,
+:root[data-theme="light"] .inline-error,
+:root[data-theme="light"] .git-rollback-delete-confirm { background: #fdecee; color: #9f292f; border-color: #d9b0b3; }
+:root[data-theme="light"] .harness-run-state.waiting_timer,
+:root[data-theme="light"] .harness-run-state.retry_scheduled { background: #efe7fa; color: #66438d; }
+:root[data-theme="light"] .ai-switch span { background: #c8cbd0; border-color: #b8bbc0; }
+:root[data-theme="light"] .ai-switch input:checked + span { background: #3574f0; border-color: #3574f0; }
+:root[data-theme="light"] .harness-panel,
+:root[data-theme="light"] .harness-inspector,
+:root[data-theme="light"] .harness-run-details,
+:root[data-theme="light"] .harness-mode,
+:root[data-theme="light"] .task-checkpoint-history > header,
+:root[data-theme="light"] .find-result-group-header,
+:root[data-theme="light"] .commit-patch-pane-heading,
+:root[data-theme="light"] .commit-patch-file article > label { background: #f2f3f5; color: #303236; }
+:root[data-theme="light"] .harness-block,
+:root[data-theme="light"] .harness-response-preview,
+:root[data-theme="light"] .harness-canvas-empty,
+:root[data-theme="light"] .harness-execution-log > summary,
+:root[data-theme="light"] .harness-log-entry,
+:root[data-theme="light"] .harness-log pre,
+:root[data-theme="light"] .harness-iteration-list details,
+:root[data-theme="light"] .git-rollback-content > ul { background: #ffffff; color: #303236; border-color: #c8cbd0; }
+:root[data-theme="light"] .harness-block > header,
+:root[data-theme="light"] .harness-routes > strong,
+:root[data-theme="light"] .harness-log > strong,
+:root[data-theme="light"] .harness-iteration-list > strong,
+:root[data-theme="light"] .harness-log-entry summary { color: #45484e; }
+:root[data-theme="light"] .harness-input-help code { color: #285c91; }
+:root[data-theme="light"] .harness-mode button,
+:root[data-theme="light"] .harness-picker button,
+:root[data-theme="light"] .harness-create button,
+:root[data-theme="light"] .harness-toolbar button,
+:root[data-theme="light"] .harness-empty button,
+:root[data-theme="light"] .harness-run button,
+:root[data-theme="light"] .harness-model-field > button,
+:root[data-theme="light"] .harness-conflict button,
+:root[data-theme="light"] .conflict-workspace button,
+:root[data-theme="light"] .git-rollback-content > footer button,
+:root[data-theme="light"] .git-commit-panel footer button { background: #e7e9ec; color: #303236; border-color: #c8cbd0; }
+:root[data-theme="light"] .harness-picker button:hover:not(:disabled),
+:root[data-theme="light"] .harness-create button:hover:not(:disabled),
+:root[data-theme="light"] .harness-toolbar button:hover:not(:disabled),
+:root[data-theme="light"] .harness-empty button:hover,
+:root[data-theme="light"] .harness-run button:hover:not(:disabled),
+:root[data-theme="light"] .harness-mode button.active,
+:root[data-theme="light"] .conflict-workspace button.conflict-primary { background: #3574f0; color: #ffffff; }
+:root[data-theme="light"] .harness-pause button.allow { background: #2f7d40; color: #ffffff; }
+:root[data-theme="light"] .harness-pause button.reject,
+:root[data-theme="light"] .harness-run button.danger { background: #fdecee; color: #9f292f; border-color: #d9b0b3; }
+:root[data-theme="light"] .harness-log-entry.error,
+:root[data-theme="light"] .harness-log.error pre,
+:root[data-theme="light"] .harness-run small.error,
+:root[data-theme="light"] .debug-inspect-message { color: #9f292f; border-color: #d9b0b3; }
+:root[data-theme="light"] .harness-block.selected { border-color: #3574f0; }
+:root[data-theme="light"] .harness-port { background: #e7edf7; border-color: #7297d4; }
+
+/* Maintain readable labels and visible keyboard focus on the repaired controls. */
+:root[data-theme="light"] .settings-choice label,
+:root[data-theme="light"] .settings-reset,
+:root[data-theme="light"] .task-checkpoint-files > button,
+:root[data-theme="light"] .harness-response-preview.available,
+:root[data-theme="light"] .harness-conflict-comparison pre { color: #45484e; }
+:root[data-theme="light"] .settings-reset { border-color: #b8bbc0; }
+:root[data-theme="light"] .settings-choice small,
+:root[data-theme="light"] .shortcut-settings > small,
+:root[data-theme="light"] .task-checkpoint-prompt em { color: #65686e; }
+:root[data-theme="light"] .shortcut-error,
+:root[data-theme="light"] .harness-log-entry.error summary { color: #9f292f; }
+:root[data-theme="light"] .harness-edge-label { fill: #285c91; stroke: #f2f3f5; }
+:root[data-theme="light"] .harness-edge.selected { stroke: #805500; }
+:root[data-theme="light"] .harness-connect-hint button { color: #66438d; }
+:root[data-theme="light"] .task-checkpoint-files > button:hover:not(:disabled) { background: #e7edf7; }
+:root[data-theme="light"] .task-checkpoint-files code { color: #0969da; }
+:root[data-theme="light"] .harness-block > footer button:hover { color: #202124; }
+:root[data-theme="light"] select:focus,
+:root[data-theme="light"] .settings-search:focus,
+:root[data-theme="light"] .settings-control > input:focus,
+:root[data-theme="light"] .font-setting input:focus,
+:root[data-theme="light"] .harness-inspector input:focus,
+:root[data-theme="light"] .harness-inspector textarea:focus { border-color: #3574f0; }
+
 @media (forced-colors: active) {
   button, input, select, textarea, [role="treeitem"], [role="option"] { forced-color-adjust: auto; }
   button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible, [tabindex]:focus-visible { outline: 2px solid Highlight; }
@@ -1601,12 +1837,14 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 :root[data-theme="light"] .debug-hot-swap-hint { color: #62666e; }
 :root[data-theme="light"] .debug-apply-result { color: #426a21; }
 
-.java-config-dialog { width: min(760px, calc(100vw - 48px)); max-height: calc(100vh - 48px); }
-.java-config-dialog form { min-height: 0; padding: 0; gap: 0; }
+.java-config-dialog { width: min(760px, calc(100vw - 32px)); max-height: calc(100dvh - 32px); }
+.java-config-dialog > header, .java-config-tabs { flex: 0 0 auto; }
+.java-config-dialog form { flex: 1 1 auto; min-height: 0; overflow: hidden; padding: 0; gap: 0; }
 .java-config-tabs { display: flex; gap: 4px; padding: 8px 16px; border-bottom: 1px solid #3d3f44; }
 .java-config-tabs button { border: 0; border-radius: 3px; padding: 6px 10px; background: transparent; color: #bfc1c5; cursor: pointer; }
 .java-config-tabs button[aria-selected="true"] { background: #354863; color: #fff; }
-.java-config-body { min-height: 0; overflow: auto; padding: 12px 16px; display: flex; flex-direction: column; gap: 14px; }
+.java-config-body { flex: 1 1 auto; min-height: 0; overflow: auto; overscroll-behavior: contain; padding: 12px 16px; display: flex; flex-direction: column; gap: 14px; }
+.java-config-body > * { flex-shrink: 0; }
 .java-config-dialog fieldset { margin: 0; padding: 12px; border: 1px solid #45484e; border-radius: 4px; display: flex; flex-direction: column; gap: 10px; min-width: 0; }
 .java-config-dialog legend { padding: 0 5px; color: #c8cbd0; font-weight: calc(var(--ui-font-weight) + 200); }
 .java-config-dialog textarea { min-height: 70px; width: 100%; box-sizing: border-box; padding: 8px; border: 1px solid #55585e; border-radius: 3px; background: #1e1f22; color: #eceef0; font: 12px Menlo, Monaco, Consolas, monospace; resize: vertical; }
@@ -1619,7 +1857,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .java-config-profile-actions button { display: flex; align-items: center; gap: 4px; padding: 6px; cursor: pointer; }
 .java-config-dialog .java-config-check { flex-direction: row; align-items: center; }
 .java-config-dialog .java-config-check input { width: 16px; height: 16px; }
-.java-config-dialog > form > footer { display: flex; flex: 0 0 auto; align-items: center; gap: 8px; padding: 12px 16px; border-top: 1px solid #3d3f44; }
+.java-config-dialog > form > footer { display: flex; flex-wrap: wrap; flex: 0 0 auto; align-items: center; gap: 8px; padding: 12px 16px; border-top: 1px solid #3d3f44; }
 .java-config-dialog > form > footer span { flex: 1; }
 .java-tool-checks > div { margin-bottom: 8px; padding: 8px; border-left: 3px solid currentColor; }
 .java-tool-checks .tool-ok { color: #a9c47f; }
