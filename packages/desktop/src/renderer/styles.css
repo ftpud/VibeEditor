@@ -840,17 +840,18 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 /* Paint selected text above syntax backgrounds; Monaco's selection layer sits below them. */
 .monaco-editor .view-line .vibe-code-selection { background-color: var(--vscode-editor-inactiveSelectionBackground) !important; color: var(--vscode-editor-foreground) !important; }
 .monaco-editor:focus-within .view-line .vibe-code-selection { background-color: var(--vscode-editor-selectionBackground) !important; }
+.monaco-editor .view-lines { font-synthesis: none; }
 /* Inline blocks paint token backgrounds across Monaco's full line height. */
 .monaco-editor :is(.ftpud-java-class, .ftpud-java-interface, .ftpud-java-annotation, .ftpud-java-constant, .ftpud-dark-java-class, .ftpud-dark-java-interface, .ftpud-dark-java-annotation, .ftpud-dark-java-constant, .ftpud-java-string, .ftpud-java-escape, .ftpud-java-invalid) { display: inline-block; line-height: inherit; vertical-align: top; }
 .monaco-editor .ftpud-java-class { background: #adc9ff; color: #000000 !important; }
 .monaco-editor .ftpud-java-interface { background: #ffd4aa; color: #000000 !important; }
 .monaco-editor .ftpud-java-annotation { background: #e4ffcd; color: #808000 !important; }
-.monaco-editor .ftpud-java-constant { background: #e4ffcd; color: #800080 !important; font-weight: min(900, calc(var(--ui-font-weight) + 300)); font-style: italic; }
+.monaco-editor .ftpud-java-constant { background: #e4ffcd; color: #800080 !important; font-weight: bold; font-style: italic; }
 .monaco-editor .ftpud-dark-java-class { background: #29384a; color: #cbd8e8 !important; }
 .monaco-editor .ftpud-dark-java-interface { background: #49392d; color: #ddcdbe !important; }
 .monaco-editor .ftpud-dark-java-annotation { background: #304231; color: #c2c07e !important; }
-.monaco-editor .ftpud-dark-java-constant { background: #304231; color: #caa2d1 !important; font-weight: min(900, calc(var(--ui-font-weight) + 300)); font-style: italic; }
-.monaco-editor .ftpud-java-function, .monaco-editor .ftpud-dark-java-function { font-weight: min(900, calc(var(--ui-font-weight) + 300)) !important; }
+.monaco-editor .ftpud-dark-java-constant { background: #304231; color: #caa2d1 !important; font-weight: bold; font-style: italic; }
+.monaco-editor .ftpud-java-function, .monaco-editor .ftpud-dark-java-function { font-weight: bold !important; }
 .monaco-editor .ftpud-java-string { background: #dfffdf; color: #008000 !important; font-weight: bold; }
 .monaco-editor .ftpud-java-escape { background: #ffd4aa; color: #008000 !important; font-weight: bold; }
 .monaco-editor .ftpud-java-invalid { background: #ffcccc; }
@@ -1898,7 +1899,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 :root[data-theme="light"] .java-tool-checks .tool-failed { color: #a43b28; }
 @media (max-width: 620px) { .java-config-grid { grid-template-columns: 1fr; } }
 
-.monaco-editor .mtkb { font-weight: min(900, calc(var(--ui-font-weight) + 300)); }
+.monaco-editor .mtkb { font-weight: bold; }
 
 .debug-resize-handle { position: absolute; top: 0; bottom: 0; left: -4px; width: 8px; z-index: 4; cursor: col-resize; touch-action: none; }
 .debug-resize-handle:hover, .debug-resize-handle:focus-visible { background: #4b8bd4; outline: none; }
