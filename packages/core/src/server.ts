@@ -958,6 +958,8 @@ async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStor
     case "java.run": await java.run(); return {};
     case "java.stop": java.stop(); return {};
     case "java.debug.start": await java.debug(request.payload.breakpoints); return {};
+    case "java.debug.applyChanges": return java.applyDebugChanges();
+    case "java.debug.variables": return java.debugVariables(request.payload.reference, request.payload.start);
     case "java.debug.command": java.debugCommand(request.payload.command); return {};
     case "java.check": return { diagnostics: (await java.check()).map((diagnostic) => ({ ...diagnostic, rootId: request.rootId })) };
     case "java.completeType": {

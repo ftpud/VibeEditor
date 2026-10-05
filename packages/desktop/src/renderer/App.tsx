@@ -1,7 +1,7 @@
 import { DiffEditor, type Monaco } from "@monaco-editor/react";
 import { Archive, ArrowDown, ArrowUp, ArrowUpRight, Bot, Bug, Check, ChevronDown, ChevronRight, CircleAlert, ClipboardCopy, Coffee, Columns2, Eye, EyeOff, File, FileCode2, FileDiff, FileText, Folder, FolderOpen, GitBranch, GitCompareArrows, GitMerge, Library, ListTodo, ListTree, LoaderCircle, LogOut, MoreVertical, Package, Palette, Pencil, Pin, PinOff, Play, Plus, RefreshCw, Save, Search, Settings, ShieldAlert, Square, SquareTerminal, Trash2, Workflow, X } from "lucide-react";
 import { Children, isValidElement, useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
-import type { AgentFile, AgentFileScope, AiConfiguration, AiModel, AiProvider, AiProviderDescriptor, AiSession, AiStatus, AiTaskSummary, AiUsage, FileColor, FileRevision, FileTreeNode, GitBranch as GitBranchInfo, GitDiffHunk, GitHistoryRewritePreview, GitStatusEntry, GitUpstreamStatus, HarnessDefinition, HarnessRun, HarnessStateDiagnostic, HttpResponse, JavaBreakpoint, JavaDebugState, JavaMainClass, JavaProjectNode, JavaProjectOptions, JavaTypeSuggestion, RootedJavaDiagnostic, RootedJavaLspLocation, RootedWorkspaceSymbol, RunConfig, RunConfigScope, SearchResult, TaskCheckpoint, TaskCheckpointFile, UsefulFile, UsefulFileScope, WorkspaceOptions, WorkspaceRoot, WorkspaceSearchQueries, WorkspaceTask } from "@remote-ide/protocol";
+import type { AgentFile, AgentFileScope, AiConfiguration, AiModel, AiProvider, AiProviderDescriptor, AiSession, AiStatus, AiTaskSummary, AiUsage, FileColor, FileRevision, FileTreeNode, GitBranch as GitBranchInfo, GitDiffHunk, GitHistoryRewritePreview, GitStatusEntry, GitUpstreamStatus, HarnessDefinition, HarnessRun, HarnessStateDiagnostic, HttpResponse, JavaBreakpoint, JavaDebugState, JavaMainClass, JavaProjectNode, JavaProjectOptions, JavaTypeSuggestion, ProtocolOperations, RootedJavaDiagnostic, RootedJavaLspLocation, RootedWorkspaceSymbol, RunConfig, RunConfigScope, SearchResult, TaskCheckpoint, TaskCheckpointFile, UsefulFile, UsefulFileScope, WorkspaceOptions, WorkspaceRoot, WorkspaceSearchQueries, WorkspaceTask } from "@remote-ide/protocol";
 import type { editor } from "monaco-editor";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -827,7 +827,7 @@ export function App() {
     cursorPositions.setWorkspace("");
     setWorkspaceOptionsReady(false);
     setTasks([]); setSelectedTaskId(undefined);
-    setJavaOptions(undefined); setJavaTree([]); setJavaRunning(false); setJavaLog("");
+    setJavaOptions(undefined); setJavaTree([]); setJavaRunning(false); setJavaDebugState({ status: "stopped", variables: [] }); setJavaLog("");
     setLayout(initialLayout); setTree([]); setStatus("idle"); setStatusMessage("");
     markdownBlockTerminals.current.clear();
   };
@@ -1235,7 +1235,7 @@ export function App() {
   };
 
   const saveFileTab = useCallback(async (current: EditorTab) => {
-    if ((current.type !== "file" && current.type !== "useful" && current.type !== "runConfig" && current.type !== "agent") || current.loading || current.error || !current.dirty || !clientRef.current) return;
+    if ((current.type !== "file" && current.type !== "useful" && current.type !== "runConfig" && current.type !== "agent") || current.loading || current.error || !current.dirty || !clientRef.current) return !current.dirty;
     const content = current.content;
     try {
       selfWriteUntil.current.set(current.path, Date.now() + 1500);
@@ -1249,9 +1249,11 @@ export function App() {
       if (current.type !== "file") updateGroup((tabs, active) => ({ tabs: tabs.map((tab) => tab.id === current.id ? { ...tab, dirty: tab.content !== content, savedContent: content, error: undefined } : tab), activeTabId: active }));
       if (current.type === "agent" || (current.type === "file" && /^\.agents\/[^/]+\.md$/i.test(current.path))) await refreshAgents();
       if (current.type === "file" && /\.java$/i.test(current.path)) scheduleJavaCheck();
+      return true;
     } catch (error) {
       selfWriteUntil.current.delete(current.path);
       updateGroup((tabs, active) => ({ tabs: tabs.map((tab) => tab.id === current.id ? { ...tab, error: error instanceof Error ? error.message : "Save failed" } : tab), activeTabId: active }));
+      return false;
     }
   }, [refreshAgents, scheduleJavaCheck, updateGroup]);
 
@@ -1322,7 +1324,7 @@ export function App() {
       setActiveWorkspace(result.workspace); activeWorkspaceRef.current = result.workspace;
       cursorPositions.setWorkspace(result.workspace);
       setProjectName(result.projectName);
-      setJavaOptions(result.options.javaProject); setJavaTree([]); setJavaRunning(false); setJavaLog(""); setJavaDiagnostics([]);
+      setJavaOptions(result.options.javaProject); setJavaTree([]); setJavaRunning(false); setJavaDebugState({ status: "stopped", variables: [] }); setJavaLog(""); setJavaDiagnostics([]);
       if (result.options.javaProject) setJavaTree((await client.request("java.getProjectTree", {})).tree);
       if (!isCurrent()) return;
       await restoreWorkspaceOptions(result.options, client);
@@ -1953,6 +1955,24 @@ export function App() {
     catch (error) { setJavaRunning(false); setJavaDebugState({ status: "stopped", variables: [] }); setJavaLog((current) => `${current}${error instanceof Error ? error.message : "Debugger failed"}\n`); }
   };
 
+  const applyJavaChanges = async () => {
+    const client = clientRef.current;
+    if (!client) throw new Error("Not connected");
+    const rootId = client.getRoot();
+    for (const tab of layoutRef.current.editorGroups.flatMap((item) => item.tabs)) {
+      if (tab.type === "file" && tab.rootId === rootId && tab.dirty) {
+        if (!await saveFileTab(tab)) throw new Error(`Could not save ${tab.path}. Fix the save error before applying changes.`);
+      }
+    }
+    if (clientRef.current !== client || client.getRoot() !== rootId) throw new Error("Workspace changed while saving edits");
+    return client.request("java.debug.applyChanges", {}, { timeoutMs: 10 * 60_000 });
+  };
+
+  const commandJavaDebugger = async (command: ProtocolOperations["java.debug.command"]["payload"]["command"]) => {
+    try { await clientRef.current!.request("java.debug.command", { command }); }
+    catch (error) { setJavaLog((current) => `${current}${error instanceof Error ? error.message : "Debugger command failed"}\n`); }
+  };
+
   const toggleBreakpoint = (filePath: string, content: string, line: number) => {
     const packageName = content.match(/^\s*package\s+([A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*)\s*;/m)?.[1];
     const simpleName = filePath.split("/").pop()?.replace(/\.java$/i, "") ?? "";
@@ -2558,7 +2578,7 @@ export function App() {
       </>}
     </div>
     {layout.panels.some((panel) => panel.type === "terminal") && <TerminalPanel theme={theme} fontFamily={editorFontFamily} fontSize={uiFontSize} lineHeight={uiLineHeight} client={clientRef.current!} group={layout.terminalGroup} height={terminalHeight} highlightedTerminalIds={new Set(runConfigs.filter((config) => ["starting", "running", "stopping"].includes(config.status)).flatMap((config) => config.terminalId ? [config.terminalId] : []))} onActivate={activateTerminalTab} onCreate={() => void createTerminal()} onClose={closeTerminal} onRename={renameTerminal} onDuplicate={(tab) => void duplicateTerminal(tab)} onMove={moveTerminal} onRecoveryShown={(tabId) => updateTerminalGroup((group) => ({ ...group, tabs: group.tabs.map((tab) => tab.id === tabId ? { ...tab, recovery: undefined } : tab) }))} onResizeStart={beginTerminalResize} registerWriter={registerTerminalWriter} />}
-    {layout.panels.some((panel) => panel.type === "java") && javaOptions && <JavaPanel height={javaPanelHeight} log={javaLog} running={javaRunning} options={javaOptions} debugState={javaDebugState} onBuild={() => void runJavaAction("java.build")} onRun={() => void runJavaAction("java.run")} onDebug={() => void debugJava()} onStop={() => void stopJava()} onDebugCommand={(command) => void clientRef.current!.request("java.debug.command", { command })} onClear={() => setJavaLog("")} onResizeStart={beginJavaResize} />}
+    {layout.panels.some((panel) => panel.type === "java") && javaOptions && <JavaPanel key={selectedRootId} height={javaPanelHeight} log={javaLog} running={javaRunning} options={javaOptions} debugState={javaDebugState} onApplyChanges={applyJavaChanges} onInspect={(reference, start) => clientRef.current!.request("java.debug.variables", { reference, start })} onBuild={() => void runJavaAction("java.build")} onRun={() => void runJavaAction("java.run")} onDebug={() => void debugJava()} onStop={() => void stopJava()} onDebugCommand={(command) => void commandJavaDebugger(command)} onClear={() => setJavaLog("")} onResizeStart={beginJavaResize} />}
     {layout.panels.some((panel) => panel.type === "problems") && javaOptions && <ProblemsPanel height={problemsHeight} diagnostics={javaDiagnostics} checking={javaChecking} onRefresh={() => void checkJava()} onOpen={(diagnostic) => void openDiagnostic(diagnostic)} onResizeStart={beginProblemsResize} />}
     {layout.panels.some((panel) => panel.type === "gitlog") && <GitLogPanel client={clientRef.current!} height={gitLogHeight} onResizeStart={beginGitLogResize} onRepositoryChanged={() => { void Promise.all([refreshGit(), refreshTree()]); }} onMergeConflict={() => { void clientRef.current?.request("git.conflicts", {}).then((conflicts) => setGitConflictPath(conflicts.files[0]?.path ?? "")); }} />}
     <footer className="bottom-tool-bar">

@@ -1,7 +1,7 @@
 import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { WorkspaceFileSystem } from "./filesystem.js";
 import { JavaProjectService } from "./java.js";
 import { WorkspaceStateStore } from "./workspace-state.js";
@@ -48,5 +48,59 @@ describe("JavaProjectService", () => {
     expect(options.runConfigurations).toEqual([expect.objectContaining({ name: "Application", mainClass: "com.example.App" })]);
     expect(options.selectedRunConfigurationId).toBe(options.runConfigurations[0]?.id);
     await expect(service.getOptions()).resolves.toEqual(options);
+  });
+});
+
+// Exercise jdb's chunked command/response stream without requiring Maven.
+describe("Java debugger inspection", () => {
+  async function pausedDebugger() {
+    const { service } = await createMavenWorkspace();
+    const debuggerService = service as unknown as {
+      process: { stdin: { write: ReturnType<typeof vi.fn> } };
+      debugging: boolean;
+      consumeDebugOutput(data: string): void;
+      debugReferences: Map<string, unknown>;
+    };
+    debuggerService.process = { stdin: { write: vi.fn() } };
+    debuggerService.debugging = true;
+    debuggerService.consumeDebugOutput('Breakpoint hit: "thread=main", Probe.main(), line=6 bci=13\n');
+    expect(debuggerService.process.stdin.write).not.toHaveBeenCalled();
+    debuggerService.consumeDebugOutput("main[1] ");
+    expect(debuggerService.process.stdin.write).toHaveBeenCalledWith("locals\n");
+    debuggerService.consumeDebugOutput("Local variables:\nobj = instance of Probe(id=413)\nmain[1] ");
+    const reference = [...debuggerService.debugReferences.keys()][0]!;
+    return { service, debuggerService, reference };
+  }
+
+  it("expands fields and nested references without evaluating methods", async () => {
+    const { service, debuggerService, reference } = await pausedDebugger();
+    const result = service.debugVariables(reference);
+    await Promise.resolve();
+    expect(debuggerService.process.stdin.write).toHaveBeenLastCalledWith("dump obj\n");
+    debuggerService.consumeDebugOutput(' obj = {\n    number: 42\n    text: "hello, world"\n    child: instance of Probe(id=413)\n    nums: instance of int[2] (id=415)\n}\nma');
+    debuggerService.consumeDebugOutput("in[1] ");
+    const fields = (await result).variables;
+    expect(fields).toEqual([
+      { name: "number", value: "42" },
+      { name: "text", value: '\"hello, world\"' },
+      expect.objectContaining({ name: "child", objectId: "413", reference: expect.any(String) }),
+      expect.objectContaining({ name: "nums", indexedCount: 2, reference: expect.any(String) })
+    ]);
+    const elements = service.debugVariables(fields[3]!.reference!);
+    await Promise.resolve();
+    debuggerService.consumeDebugOutput(" obj.nums[0] = 3\nmain[1] ");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    debuggerService.consumeDebugOutput(" obj.nums[1] = 5\nmain[1] ");
+    expect((await elements).variables).toEqual([{ name: "[0]", value: "3" }, { name: "[1]", value: "5" }]);
+  });
+
+  it("rejects stale and pending inspections when execution resumes", async () => {
+    const { service, reference } = await pausedDebugger();
+    const pending = service.debugVariables(reference);
+    await Promise.resolve();
+    const rejected = expect(pending).rejects.toThrow("inspection ended");
+    service.debugCommand("continue");
+    await rejected;
+    await expect(service.debugVariables(reference)).rejects.toThrow("expired debugger pause");
   });
 });

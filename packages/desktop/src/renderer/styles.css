@@ -1573,3 +1573,17 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 :root[data-theme="light"] .commit-result-legend.clean { color: #1d5db5; }
 :root[data-theme="light"] .commit-result-legend.conflict { color: #b42323; }
 @media (max-width: 760px) { .commit-patch-split { grid-template-columns: 1fr; grid-template-rows: minmax(180px, .3fr) minmax(300px, .7fr); } }
+
+.debug-variable-name { display: flex; align-items: center; min-width: 0; gap: 3px; }
+.debug-variable-name > span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.debug-variable-name button { flex: 0 0 16px; width: 16px; height: 20px; display: grid; place-items: center; padding: 0; border: 0; background: transparent; color: inherit; cursor: pointer; }
+.debug-variable-spacer { flex: 0 0 16px; }
+.debug-inspect-message { padding: 6px 9px; color: #d99386; font-size: 11px; overflow-wrap: anywhere; }
+.debug-load-more { margin: 5px 9px; cursor: pointer; }
+
+.debug-apply { display: flex; align-items: center; justify-content: center; gap: 6px; margin: 5px 9px; padding: 5px 8px; cursor: pointer; }
+.debug-apply:disabled { opacity: .5; cursor: default; }
+.debug-hot-swap-hint, .debug-apply-result { flex: 0 0 auto; padding: 4px 9px; color: #9da1a8; font-size: 11px; line-height: 1.4; }
+.debug-apply-result { color: #a9c47f; max-height: 80px; overflow: auto; overflow-wrap: anywhere; }
+:root[data-theme="light"] .debug-hot-swap-hint { color: #62666e; }
+:root[data-theme="light"] .debug-apply-result { color: #426a21; }
