@@ -6,7 +6,7 @@ VibeEditor is a place to explore what a remote-first, AI-first development envir
 
 The experiment is built around a simple idea from [WHY.md](WHY.md): **the development machine is the server, and the local app is the control surface**.
 
-<img width="1469" height="925" alt="screenshot" src="https://github.com/user-attachments/assets/5cef4748-aab8-4869-9cc6-a98c6fc1e81d" />
+<img width="2940" height="1912" alt="image" src="https://github.com/user-attachments/assets/1a1cfd39-f127-4e07-b843-e4b8a8c71d90" />
 
 
 The repository, terminals, language servers, agents, builds, tests, and task state stay close to the compute. A lightweight React/Monaco desktop client provides the interaction layer over WebSockets. Tasks become durable workspaces—with their own Git worktree, editor state, terminals, AI sessions, notes, and Git state—rather than branches whose context must be reconstructed every time.
