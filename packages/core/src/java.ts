@@ -32,7 +32,7 @@ export class JavaProjectService {
   private debugReferences = new Map<string, { expression: string; length?: number }>();
   private debugPaused = false;
   private inspectionQueue: Promise<unknown> = Promise.resolve();
-  private pendingInspection?: { resolve: (output: string) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> };
+  private pendingInspection?: { quiet?: boolean; resolve: (output: string) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> };
   private dependencyTypes?: JavaTypeSuggestion[];
 
   constructor(
@@ -200,6 +200,7 @@ export class JavaProjectService {
       const options = await this.requireOptions();
       const configuration = options.runConfigurations.find((item) => item.id === options.selectedRunConfigurationId);
       if (!configuration) throw new CoreError("JAVA_PROCESS_FAILED", "Select a Java run configuration first");
+      if (!Array.isArray(breakpoints) || breakpoints.length > 1000) throw new CoreError("INVALID_REQUEST", "Invalid Java breakpoints");
       this.debugBreakpoints = breakpoints.map((breakpoint) => {
         if (!/^[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*$/.test(breakpoint.className) || !Number.isSafeInteger(breakpoint.line) || breakpoint.line < 1) throw new CoreError("INVALID_REQUEST", "Invalid Java breakpoint");
         return { ...breakpoint };
@@ -242,8 +243,10 @@ export class JavaProjectService {
     if (!this.process || !this.debugging) throw new CoreError("JAVA_PROCESS_FAILED", "No Java debugger is active");
     if (this.applyingChanges) throw new CoreError("JAVA_PROCESS_FAILED", "Wait for code changes to finish applying");
     if (!this.debugPaused) throw new CoreError("JAVA_PROCESS_FAILED", "Pause the Java debugger before stepping");
+    const jdbCommands = { continue: "cont", stepInto: "step", stepOver: "next", stepOut: "step up" };
+    if (!Object.hasOwn(jdbCommands, command)) throw new CoreError("INVALID_REQUEST", "Unknown Java debugger command");
+    const jdbCommand = jdbCommands[command];
     this.invalidateDebugInspection();
-    const jdbCommand = { continue: "cont", stepInto: "step", stepOver: "next", stepOut: "step up" }[command];
     this.process.stdin.write(`${jdbCommand}\n`);
     this.emitDebugState({ status: "running", variables: [] });
   }
@@ -256,8 +259,8 @@ export class JavaProjectService {
       const target = this.debugReferences.get(reference);
       if (!this.debugPaused || !target) throw new CoreError("INVALID_REQUEST", "This object belongs to an expired debugger pause");
       if (!Number.isSafeInteger(start) || start < 0) throw new CoreError("INVALID_REQUEST", "Invalid array offset");
-      if (target.length !== undefined) {
-        const end = Math.min(target.length, start + 50);
+      const readArray = async (length: number) => {
+        const end = Math.min(length, start + 50);
         const variables: JavaDebugVariable[] = [];
         for (let index = start; index < end; index++) {
           const expression = `${target.expression}[${index}]`;
@@ -267,18 +270,28 @@ export class JavaProjectService {
           if (value === undefined) throw new CoreError("JAVA_PROCESS_FAILED", output.trim());
           variables.push(this.debugVariable(`[${index}]`, value, expression));
         }
-        return { variables, ...(end < target.length ? { nextStart: end } : {}) };
-      }
+        return { variables, ...(end < length ? { nextStart: end } : {}) };
+      };
+      if (target.length !== undefined) return readArray(target.length);
       const output = await this.inspectDebugExpression(target.expression);
       if (generation !== this.debugGeneration) throw new CoreError("INVALID_REQUEST", "Debugger pause ended during inspection");
       if (!/ = \{/.test(output)) throw new CoreError("JAVA_PROCESS_FAILED", output.trim());
-      const variables = [...output.matchAll(/^\s*([\w$.]+): (.+)$/gm)].map((match) =>
-        this.debugVariable(match[1]!, match[2]!.trim(), `${target.expression}.${match[1]!.split(".").pop()}`));
+      const variables = [...output.matchAll(/^\s*([\w$.]+): (.+)$/gm)].map((match) => {
+        const name = match[1]!;
+        const separator = name.lastIndexOf(".");
+        const expression = separator < 0 ? `${target.expression}.${name}` : `((${name.slice(0, separator)})${target.expression}).${name.slice(separator + 1)}`;
+        return this.debugVariable(name, match[2]!.trim(), expression);
+      });
       if (variables.length === 0) {
-        const body = output.match(/ = \{([\s\S]*?)\n\}/)?.[1]?.trim() ?? "";
-        const elements = body.match(/"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^,\r\n]+/g) ?? [];
-        const end = Math.min(elements.length, start + 50);
-        return { variables: elements.slice(start, end).map((value, offset) => this.debugVariable(`[${start + offset}]`, value.trim(), `${target.expression}[${start + offset}]`)), ...(end < elements.length ? { nextStart: end } : {}) };
+        // An array element's dump has no identity/length header. Query its length rather than
+        // splitting jdb's unescaped strings on commas, which corrupts string array values.
+        const lengthOutput = await this.inspectDebugExpression(`${target.expression}.length`);
+        if (generation !== this.debugGeneration) throw new CoreError("INVALID_REQUEST", "Debugger pause ended during inspection");
+        const length = lengthOutput.match(/ = (\d+)\s*[\w$.-]+\[\d+\]\s*$/)?.[1];
+        if (length !== undefined) {
+          target.length = Number(length);
+          return readArray(target.length);
+        }
       }
       return { variables };
     };
@@ -309,7 +322,7 @@ export class JavaProjectService {
     return this.runDebugCommand(`dump ${expression}`);
   }
 
-  private runDebugCommand(command: string): Promise<string> {
+  private runDebugCommand(command: string, quiet = false): Promise<string> {
     if (!this.debugPaused || !this.process) return Promise.reject(new CoreError("JAVA_PROCESS_FAILED", "Java debugger is no longer paused"));
     if (this.pendingInspection) return Promise.reject(new CoreError("JAVA_PROCESS_FAILED", "A debugger command is already pending"));
     return new Promise((resolve, reject) => {
@@ -317,9 +330,10 @@ export class JavaProjectService {
         // Stop accepting inspections until the next pause: a late prompt must not resolve another request.
         this.invalidateDebugInspection();
         this.debugPaused = true;
+        this.emitDebugState({ status: "paused", ...this.debugLocation, variables: [], applyingChanges: this.applyingChanges, inspectionError: "Debugger inspection timed out. Step or continue to refresh the pause." });
       }, 10_000);
       this.debugBuffer = "";
-      this.pendingInspection = { resolve, reject, timer };
+      this.pendingInspection = { resolve, reject, timer, quiet };
       this.process!.stdin.write(`${command}\n`);
     });
   }
@@ -335,6 +349,22 @@ export class JavaProjectService {
       this.pendingInspection.reject(new CoreError("JAVA_PROCESS_FAILED", "Debugger inspection ended; pause again to inspect values"));
       this.pendingInspection = undefined;
     }
+  }
+
+  private async publishDebugPause(state: JavaDebugState): Promise<void> {
+    const generation = this.debugGeneration;
+    if (state.method !== "main") {
+      try {
+        const output = await this.runDebugCommand("dump this", true);
+        if (generation !== this.debugGeneration || !this.debugPaused) return;
+        if (/ this = \{/.test(output)) {
+          const reference = crypto.randomUUID();
+          this.debugReferences.set(reference, { expression: "this" });
+          state = { ...state, variables: [{ name: "this", value: state.className ?? "Current instance", reference, type: state.className }, ...state.variables] };
+        }
+      } catch { /* Static methods have no current instance; locals remain inspectable. */ }
+    }
+    if (generation === this.debugGeneration && this.debugPaused) this.emitDebugState(state);
   }
 
   private emitDebugState(state: JavaDebugState): void {
@@ -400,7 +430,7 @@ export class JavaProjectService {
       ensurePaused();
       const next = await this.snapshotDebugClasses(options);
       const changed = [...next].filter(([name, entry]) => this.debugClassFiles.get(name)?.hash !== entry.hash);
-      const classesOutput = await this.runDebugCommand("classes");
+      const classesOutput = await this.runDebugCommand("classes", true);
       ensurePaused();
       const loaded = new Set(classesOutput.split(/\r?\n/).map((line) => line.trim()));
       if (!classesOutput.includes("** classes list **")) throw new CoreError("JAVA_PROCESS_FAILED", "Could not list loaded Java classes");
@@ -439,7 +469,11 @@ export class JavaProjectService {
       for (const breakpoint of this.debugBreakpoints.filter((item) => result.appliedClasses.includes(item.className))) {
         const output = await this.runDebugCommand(`stop at ${breakpoint.className}:${breakpoint.line}`);
         ensurePaused();
-        if (!/(?:Set|Deferring) breakpoint/.test(output)) this.onProcessEvent({ type: "output", data: `Breakpoint could not be restored: ${breakpoint.className}:${breakpoint.line}\n` });
+        if (!/(?:Set|Deferring) breakpoint/.test(output)) {
+          const warning = `Breakpoint could not be restored: ${breakpoint.className}:${breakpoint.line}. Move it to an executable line and restart debugging.`;
+          (result.warnings ??= []).push(warning);
+          this.onProcessEvent({ type: "output", data: `${warning}\n` });
+        }
       }
       return result;
     } finally {
@@ -448,7 +482,7 @@ export class JavaProjectService {
         try {
           const output = await this.runDebugCommand("locals");
           const variables = [...output.matchAll(/^\s*([A-Za-z_$][\w$]*)\s+=\s+(.+)$/gm)].map((match) => this.debugVariable(match[1]!, match[2]!.trim(), match[1]!));
-          if (this.process === child && this.debugPaused) this.emitDebugState({ ...this.debugState, applyingChanges: false, variables });
+          if (this.process === child && this.debugPaused) await this.publishDebugPause({ ...this.debugState, applyingChanges: false, inspectionError: undefined, variables });
         } catch (error) {
           if (this.process === child && this.debugPaused) this.emitDebugState({ ...this.debugState, applyingChanges: false, variables: [], inspectionError: error instanceof Error ? error.message : String(error) });
         }
@@ -499,9 +533,9 @@ export class JavaProjectService {
       this.process = child;
       child.stdout.on("data", (data: Buffer) => this.onProcessEvent({ type: "output", data: data.toString() }));
       child.stderr.on("data", (data: Buffer) => this.onProcessEvent({ type: "output", data: data.toString() }));
-      child.on("error", (error) => { this.process = undefined; reject(new CoreError("JAVA_PROCESS_FAILED", `${label} failed: ${error.message}`)); });
+      child.on("error", (error) => { if (this.process === child) this.process = undefined; reject(new CoreError("JAVA_PROCESS_FAILED", `${label} failed: ${error.message}`)); });
       child.on("close", (code) => {
-        this.process = undefined;
+        if (this.process === child) this.process = undefined;
         if (code === 0) resolve(); else reject(new CoreError("JAVA_PROCESS_FAILED", `${label} exited with code ${code}`));
       });
     });
@@ -561,10 +595,11 @@ export class JavaProjectService {
   }
 
   private consumeDebugOutput(data: string): void {
-    this.onProcessEvent({ type: "output", data });
+    if (!this.pendingInspection?.quiet) this.onProcessEvent({ type: "output", data });
     if (this.pendingInspection && this.debugBuffer.length + data.length > 1_000_000) {
       this.invalidateDebugInspection();
       this.debugPaused = true;
+      this.emitDebugState({ status: "paused", ...this.debugLocation, variables: [], applyingChanges: this.applyingChanges, inspectionError: "Debugger output exceeded the inspection limit. Step or continue to refresh the pause." });
       this.debugBuffer = "";
       return;
     }
@@ -579,9 +614,11 @@ export class JavaProjectService {
       }
       return;
     }
-    const stopped = this.debugBuffer.match(/(?:Breakpoint hit:|Step completed:)\s+"[^"]+",\s+([\w$]+(?:\.[\w$]+)*)\.([\w$<>]+)\([^)]*\),\s+line=(\d+)/);
+    const stopped = this.debugBuffer.match(/(?:Breakpoint hit:|Step completed:|Exception occurred:)[\s\S]*?"thread=[^"]+",\s+([\w$]+(?:\.[\w$]+)*)\.([\w$<>]+)\([^)]*\),\s+line=(\d+)/);
     if (stopped) {
       this.invalidateDebugInspection();
+      const exception = this.debugBuffer.match(/Exception occurred: (.*?)(?:"thread=|\r?\n)/)?.[1]?.trim();
+      this.debugState = { status: "paused", variables: [], ...(exception ? { stopReason: exception } : {}) };
       this.debugLocation = { className: stopped[1]!, method: stopped[2]!, line: Number(stopped[3]) };
       this.awaitingDebugStopPrompt = true;
     }
@@ -597,9 +634,9 @@ export class JavaProjectService {
     const variables = [...this.debugBuffer.matchAll(/^\s*([A-Za-z_$][\w$]*)\s+=\s+(.+)$/gm)].map((match) => this.debugVariable(match[1]!, match[2]!.trim(), match[1]!));
     this.debugPaused = true;
     const inspectionError = this.debugBuffer.match(/(?:Local variable information not available[^\r\n]*|No default thread specified[^\r\n]*|.*obsolete.*)/i)?.[0];
-    this.emitDebugState({ status: "paused", ...this.debugLocation, variables, ...(inspectionError ? { inspectionError } : {}) });
     this.awaitingDebugLocals = false;
     this.debugBuffer = "";
+    void this.publishDebugPause({ status: "paused", ...this.debugLocation, variables, ...(this.debugState.stopReason ? { stopReason: this.debugState.stopReason } : {}), ...(inspectionError ? { inspectionError } : {}) });
   }
 
   private async requireOptions(): Promise<JavaProjectOptions> {

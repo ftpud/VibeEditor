@@ -68,16 +68,18 @@ export function JavaPanel({ height, log, running, options, debugState, onBuild, 
         <button title="Step out" disabled={debugState.status !== "paused" || busy} onClick={() => onDebugCommand("stepOut")}><ArrowUpFromLine size={14} /></button>
       </div>
       <button className="debug-apply" disabled={debugState.status !== "paused" || busy} title="Save edits, compile, and reload changed method bodies without restarting" onClick={() => void applyChanges()}><RefreshCw size={13} />{busy ? "Applying code changes…" : "Apply code changes"}</button>
-      <div className="debug-hot-swap-hint">Pause to apply method-body edits. Changes to fields or methods may require a restart. Active calls keep their previous code until they return.</div>
+      <details className="debug-hot-swap-hint"><summary>HotSwap limitations</summary>Pause to apply method-body edits. Changes to fields or methods may require a restart. Active calls keep their previous code until they return.</details>
       {applyError && <div className="debug-inspect-message" role="alert">{applyError}</div>}
       {applyResult && <div className="debug-apply-result" role="status">
         {applyResult.appliedClasses.length > 0 && <div>Applied {applyResult.appliedClasses.length} class{applyResult.appliedClasses.length === 1 ? "" : "es"}. Existing objects and state are preserved.</div>}
         {applyResult.deferredClasses.length > 0 && <div>{applyResult.deferredClasses.length} class{applyResult.deferredClasses.length === 1 ? "" : "es"} will use the compiled changes when first loaded.</div>}
         {!applyResult.appliedClasses.length && !applyResult.deferredClasses.length && !applyResult.failedClasses.length && <div>No compiled code changes.</div>}
         {applyResult.restartRequired && <div>Some changes require restarting the debug session.</div>}
+        {applyResult.warnings?.map((warning) => <div key={warning}>{warning}</div>)}
         {applyResult.failedClasses.map((item) => <div key={item.className}>{item.className}: {item.message}</div>)}
       </div>}
       {debugState.status === "paused" ? <>
+        {debugState.stopReason && <div className="debug-inspect-message" role="status">{debugState.stopReason}</div>}
         <div className="debug-location">{debugState.className}.{debugState.method}<span>:{debugState.line}</span></div>
         <div className="debug-section-title">Variables</div>
         {debugState.inspectionError && <div className="debug-inspect-message" role="alert">{debugState.inspectionError}</div>}

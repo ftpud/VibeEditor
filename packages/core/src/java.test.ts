@@ -6,7 +6,7 @@ import { WorkspaceFileSystem } from "./filesystem.js";
 import { JavaProjectService } from "./java.js";
 import { WorkspaceStateStore } from "./workspace-state.js";
 
-async function createMavenWorkspace() {
+async function createMavenWorkspace(onEvent: ConstructorParameters<typeof JavaProjectService>[2] = () => undefined) {
   const root = await mkdtemp(path.join(tmpdir(), "remote-ide-java-"));
   const stateDirectory = await mkdtemp(path.join(tmpdir(), "remote-ide-java-state-"));
   await mkdir(path.join(root, "src", "main", "java", "com", "example"), { recursive: true });
@@ -17,7 +17,7 @@ async function createMavenWorkspace() {
   const filesystem = new WorkspaceFileSystem();
   await filesystem.open(root);
   const state = new WorkspaceStateStore(root, stateDirectory);
-  return { root, filesystem, state, service: new JavaProjectService(filesystem, state, () => undefined) };
+  return { root, filesystem, state, service: new JavaProjectService(filesystem, state, onEvent) };
 }
 
 describe("JavaProjectService", () => {
@@ -54,7 +54,8 @@ describe("JavaProjectService", () => {
 // Exercise jdb's chunked command/response stream without requiring Maven.
 describe("Java debugger inspection", () => {
   async function pausedDebugger() {
-    const { service } = await createMavenWorkspace();
+    const onEvent = vi.fn();
+    const { service } = await createMavenWorkspace(onEvent);
     const debuggerService = service as unknown as {
       process: { stdin: { write: ReturnType<typeof vi.fn> } };
       debugging: boolean;
@@ -69,7 +70,7 @@ describe("Java debugger inspection", () => {
     expect(debuggerService.process.stdin.write).toHaveBeenCalledWith("locals\n");
     debuggerService.consumeDebugOutput("Local variables:\nobj = instance of Probe(id=413)\nmain[1] ");
     const reference = [...debuggerService.debugReferences.keys()][0]!;
-    return { service, debuggerService, reference };
+    return { service, debuggerService, reference, onEvent };
   }
 
   it("expands fields and nested references without evaluating methods", async () => {
@@ -103,4 +104,31 @@ describe("Java debugger inspection", () => {
     await rejected;
     await expect(service.debugVariables(reference)).rejects.toThrow("expired debugger pause");
   });
+});
+
+describe("Java debugger pause handling", () => {
+  it("recognizes uncaught exceptions and exposes this in instance methods", async () => {
+    const onEvent = vi.fn();
+    const { service } = await createMavenWorkspace(onEvent);
+    const debuggerService = service as unknown as { process: { stdin: { write: ReturnType<typeof vi.fn> } }; debugging: boolean; consumeDebugOutput(data: string): void };
+    debuggerService.process = { stdin: { write: vi.fn() } }; debuggerService.debugging = true;
+    debuggerService.consumeDebugOutput('Exception occurred: java.lang.RuntimeException (uncaught)"thread=main", Probe.work(), line=12 bci=9\nmain[1] ');
+    expect(debuggerService.process.stdin.write).toHaveBeenLastCalledWith("locals\n");
+    debuggerService.consumeDebugOutput("Local variables:\ncount = 4\nmain[1] ");
+    expect(debuggerService.process.stdin.write).toHaveBeenLastCalledWith("dump this\n");
+    debuggerService.consumeDebugOutput(" this = {\n    field: 7\n}\nmain[1] ");
+    await Promise.resolve();
+    expect(onEvent).toHaveBeenLastCalledWith({ type: "debug", state: expect.objectContaining({ status: "paused", stopReason: "java.lang.RuntimeException (uncaught)", variables: [expect.objectContaining({ name: "this", reference: expect.any(String) }), { name: "count", value: "4" }] }) });
+  });
+});
+
+it("detects a pause when application output interrupts a breakpoint message", async () => {
+  const onEvent = vi.fn();
+  const { service } = await createMavenWorkspace(onEvent);
+  const debuggerService = service as unknown as { process: { stdin: { write: ReturnType<typeof vi.fn> } }; consumeDebugOutput(data: string): void };
+  debuggerService.process = { stdin: { write: vi.fn() } };
+  debuggerService.consumeDebugOutput('RESULT=17,STATE\nBreakpoint hit: =7\n"thread=main", Probe.main(), line=8 bci=9\nmain[1] ');
+  expect(debuggerService.process.stdin.write).toHaveBeenLastCalledWith("locals\n");
+  debuggerService.consumeDebugOutput("Local variables:\nvalue = 17\nmain[1] ");
+  expect(onEvent).toHaveBeenLastCalledWith({ type: "debug", state: expect.objectContaining({ status: "paused", className: "Probe", line: 8, variables: [{ name: "value", value: "17" }] }) });
 });

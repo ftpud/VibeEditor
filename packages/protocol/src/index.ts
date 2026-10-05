@@ -16,7 +16,7 @@ export type FileRevision = { identity: string; version: string };
  * Desktop can prove it is safe to talk to a newly deployed Core.
  */
 export type ProtocolCompatibility = { minimum: number; maximum: number };
-export const protocolCompatibility: ProtocolCompatibility = { minimum: 9, maximum: 9 };
+export const protocolCompatibility: ProtocolCompatibility = { minimum: 10, maximum: 10 };
 
 export function protocolRangeIsValid(range: ProtocolCompatibility): boolean {
   return Number.isInteger(range.minimum) && Number.isInteger(range.maximum) && range.minimum > 0 && range.minimum <= range.maximum;
@@ -216,12 +216,14 @@ export type JavaDebugState = {
   variables: JavaDebugVariable[];
   applyingChanges?: boolean;
   inspectionError?: string;
+  stopReason?: string;
 };
 export type JavaApplyChangesResult = {
   appliedClasses: string[];
   deferredClasses: string[];
   failedClasses: { className: string; message: string }[];
   restartRequired: boolean;
+  warnings?: string[];
 };
 export type JavaDiagnostic = { path: string; line: number; column: number; severity: "error" | "warning"; message: string };
 export type JavaTypeSuggestion = { simpleName: string; qualifiedName: string; source: "project" | "dependency" };
