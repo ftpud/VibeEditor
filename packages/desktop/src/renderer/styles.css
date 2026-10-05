@@ -1235,12 +1235,12 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 :root[data-theme="light"] .project-file-tree,
 :root[data-theme="light"] .project-tree-actions,
 :root[data-theme="light"] .workspace-name { background: #ffffff; }
-:root[data-theme="light"] .project-file-tree .tree-row { color: #252830; }
+:root[data-theme="light"] .project-file-tree .tree-row { color: #111111; }
 :root[data-theme="light"] .project-file-tree .tree-chevron { color: #8b909b; }
 :root[data-theme="light"] .project-file-tree :where(.tree-row:not([class*="file-color-"])) .folder-kind-icon { color: #9298a5; }
 :root[data-theme="light"] .project-file-tree .folder-kind-icon { fill: #f0f1f4; }
 :root[data-theme="light"] .project-file-tree .tree-row:hover { background: #f3f4f6; }
-:root[data-theme="light"] .project-file-tree .tree-row.selected { background: #e9eaef; color: #252830; border-radius: 3px; }
+:root[data-theme="light"] .project-file-tree .tree-row.selected { background: #e9eaef; color: #111111; border-radius: 3px; }
 :root[data-theme="light"] .project-file-tree .tree-row.selected::before { display: none; }
 :root[data-theme="light"] .ai-message { background: #f5f6f7; }
 :root[data-theme="light"] .ai-permission { background: #fff8e6; border-color: #d9a441; color: #5f4611; }
