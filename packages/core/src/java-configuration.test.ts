@@ -6,7 +6,7 @@ import { javaConfigurationPath } from "@remote-ide/protocol";
 import { WorkspaceFileSystem } from "./filesystem.js";
 import { JavaProjectService } from "./java.js";
 import { WorkspaceStateStore } from "./workspace-state.js";
-import { javaToolEnvironment, javaToolExecutable, parseJavaConfiguration } from "./java-configuration.js";
+import { javaLaunchEnvironment, javaToolEnvironment, javaToolExecutable, parseJavaConfiguration } from "./java-configuration.js";
 
 const directories: string[] = [];
 afterEach(async () => { await Promise.all(directories.splice(0).map((directory) => rm(directory, { recursive: true, force: true }))); });
@@ -99,4 +99,27 @@ describe("Java configuration", () => {
     expect(environment.PATH?.startsWith(path.join(root, "jdk/bin") + path.delimiter)).toBe(true);
     expect(environment.MODE).toBe("dev");
   });
+});
+
+it("loads JSON environment files afresh and lets inline values override them", async () => {
+  const { root, filesystem, options } = await workspace();
+  const profile = { id: "app", name: "App", mainClass: "demo.App", environmentFile: "env.json", environment: { MODE: "inline" } };
+  const config = { ...options, runConfigurations: [profile] };
+  expect(parseJavaConfiguration(JSON.stringify(config)).runConfigurations[0]?.environmentFile).toBe("env.json");
+  await writeFile(path.join(root, "env.json"), JSON.stringify({ MODE: "file", TOKEN: "first" }));
+  expect(await javaLaunchEnvironment(filesystem, profile)).toEqual({ MODE: "inline", TOKEN: "first" });
+  await writeFile(path.join(root, "env.json"), JSON.stringify({ TOKEN: "second" }));
+  expect(await javaLaunchEnvironment(filesystem, profile)).toEqual({ MODE: "inline", TOKEN: "second" });
+  expect(() => parseJavaConfiguration(JSON.stringify({ ...config, runConfigurations: [{ ...profile, environmentFile: "../env.json" }] }))).toThrow("environmentFile");
+});
+
+it("rejects missing, malformed, and non-string JSON environment files", async () => {
+  const { root, filesystem } = await workspace();
+  const profile = { id: "app", name: "App", mainClass: "demo.App", environmentFile: "env.json" };
+  await expect(javaLaunchEnvironment(filesystem, profile)).rejects.toThrow("Environment file env.json");
+  for (const content of ["invalid", "[]", '{"PORT":8080}', '{"BAD-NAME":"value"}']) {
+    await writeFile(path.join(root, "env.json"), content);
+    await expect(javaLaunchEnvironment(filesystem, profile)).rejects.toThrow("Environment file env.json");
+  }
+  expect(await javaLaunchEnvironment(filesystem, { ...profile, environmentFile: undefined })).toEqual({});
 });

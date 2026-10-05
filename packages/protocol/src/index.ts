@@ -214,6 +214,7 @@ export type JavaRunConfiguration = {
   programArguments?: string[];
   vmArguments?: string[];
   workingDirectory?: string;
+  environmentFile?: string;
   environment?: Record<string, string>;
 };
 export type JavaToolCheck = { tool: "Maven" | "Java" | "Java compiler" | "Java debugger"; executable: string; ok: boolean; message: string };

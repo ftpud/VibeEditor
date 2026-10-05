@@ -8,7 +8,7 @@ import type { FileRevision, JavaToolCheck, JavaRunConfiguration, JavaApplyChange
 import { CoreError } from "./errors.js";
 import { WorkspaceFileSystem } from "./filesystem.js";
 import { javaConfigurationPath } from "@remote-ide/protocol";
-import { expandJavaToolPath, javaConfigurationTemplate, javaSpawnError, javaToolEnvironment, javaToolExecutable, parseJavaConfiguration, readJavaConfiguration, writeJavaConfiguration } from "./java-configuration.js";
+import { javaLaunchEnvironment, expandJavaToolPath, javaConfigurationTemplate, javaSpawnError, javaToolEnvironment, javaToolExecutable, parseJavaConfiguration, readJavaConfiguration, writeJavaConfiguration } from "./java-configuration.js";
 import { WorkspaceStateStore } from "./workspace-state.js";
 
 type JavaProcessEvent =
@@ -257,10 +257,11 @@ export class JavaProjectService {
       await this.runAndWait(options.mavenExecutable, ["-f", options.pomPath, ...(options.buildGoals ?? ["package", "-DskipTests"])], "Run build", options);
       if (launch !== this.debugLaunchGeneration) throw new CoreError("JAVA_PROCESS_FAILED", "Java run was cancelled");
       const classpath = await this.buildDebugClasspath(options);
+      const environment = await javaLaunchEnvironment(this.filesystem, configuration);
       const cwd = await this.launchDirectory(configuration);
       if (launch !== this.debugLaunchGeneration) throw new CoreError("JAVA_PROCESS_FAILED", "Java run was cancelled");
       const executable = javaToolExecutable(options, "java", this.filesystem.getWorkspace());
-      const child = spawn(executable, [...(configuration.vmArguments ?? []), "-classpath", classpath, configuration.mainClass, ...(configuration.programArguments ?? [])], { cwd, env: javaToolEnvironment(options, this.filesystem.getWorkspace(), configuration.environment), stdio: "pipe" });
+      const child = spawn(executable, [...(configuration.vmArguments ?? []), "-classpath", classpath, configuration.mainClass, ...(configuration.programArguments ?? [])], { cwd, env: javaToolEnvironment(options, this.filesystem.getWorkspace(), environment), stdio: "pipe" });
       this.process = child;
       this.onProcessEvent({ type: "output", data: `> Run ${configuration.name} (${configuration.mainClass})\n` });
       child.stdout.on("data", (data: Buffer) => this.onProcessEvent({ type: "output", data: data.toString() }));
@@ -272,12 +273,13 @@ export class JavaProjectService {
 
   private async launchDebugTarget(options: JavaProjectOptions, configuration: JavaRunConfiguration, launch: number): Promise<string> {
     const workspace = this.filesystem.getWorkspace();
+    const environment = await javaLaunchEnvironment(this.filesystem, configuration);
     const cwd = await this.launchDirectory(configuration);
     const executable = javaToolExecutable(options, "java", workspace);
     const classpath = await this.buildDebugClasspath(options);
     if (launch !== this.debugLaunchGeneration) throw new CoreError("JAVA_PROCESS_FAILED", "Debugger start was cancelled");
     return new Promise((resolve, reject) => {
-      const child = spawn(executable, [...(configuration.vmArguments ?? []), "-agentlib:jdwp=transport=dt_socket,server=y,suspend=y,address=127.0.0.1:0", "-classpath", classpath, configuration.mainClass, ...(configuration.programArguments ?? [])], { cwd, env: javaToolEnvironment(options, workspace, configuration.environment), stdio: "pipe" });
+      const child = spawn(executable, [...(configuration.vmArguments ?? []), "-agentlib:jdwp=transport=dt_socket,server=y,suspend=y,address=127.0.0.1:0", "-classpath", classpath, configuration.mainClass, ...(configuration.programArguments ?? [])], { cwd, env: javaToolEnvironment(options, workspace, environment), stdio: "pipe" });
       this.debugTarget = child;
       this.process = child;
       let buffer = "";
