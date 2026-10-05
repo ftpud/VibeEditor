@@ -40,11 +40,13 @@ npm run gateway
 
 In Gateway's first run:
 
-1. Add an SSH connection with host, port, and username. Choose **Password**, or choose **Private key**, select the local private-key file, and enter its optional passphrase. The matching public key must already be in the remote user's `~/.ssh/authorized_keys`; Gateway does not install or copy public keys. Use **Test connection** to verify the current form values before saving.
+1. Add an SSH connection with host, port, and username. Choose **Password**, **SSH agent** (for keys already loaded in your OS agent), or **Private key** with a local key file and optional passphrase. The matching public key must already be in the remote user's `~/.ssh/authorized_keys`; Gateway does not install or copy public keys. Use **Test connection** to verify the current form values before saving.
 2. Review **Gateway repository settings**. The default repository is `https://github.com/ftpud/VibeEditor` on branch `main`; choose a different repository or branch if needed. Auto-update is enabled by default.
 3. Add a remote workspace using the absolute path to an existing project directory on that server.
 4. Click **Start server**. Gateway clones the selected repository and branch into `~/.vibe`, installs/builds what changed, and starts remote Core on loopback.
 5. Click **Start client** and keep Gateway open while using the editor; it owns the SSH tunnel.
+
+Gateway also supports a **This Mac** connection: select a local project directory, then start Core and Desktop from the existing local build without SSH.
 
 For deployment details, caching behavior, and lifecycle notes, see [Vibe Gateway](#vibe-gateway). Use the direct Core/Desktop commands below only for local development, debugging, or when you intentionally manage Core and its connection yourself.
 
@@ -116,7 +118,7 @@ npm test
 npm run build
 ```
 
-The root `typecheck` script builds ACP and Protocol, then checks Core and Desktop; the explicit workspace command checks Gateway. Tests currently live in Core and run with Vitest. The build covers all workspaces.
+The root `typecheck` script builds ACP and Protocol, then checks Core and Desktop; the explicit workspace command checks Gateway. The root test command runs the Core, Desktop, and Gateway test suites; the workspace scripts use Vitest and Node's test runner. The build covers all workspaces.
 
 ## Remote connections
 
@@ -173,25 +175,31 @@ Gateway deploys committed code from the repository and branch saved in its setti
 ## Features
 
 - **Editor:** Monaco editing and diffs, autosave, external-change handling, detached windows, tab reordering, recursive search, Git gutter markers and block rollback, Markdown preview, and persisted themes/fonts/layout.
-- **Terminal:** multiple workspace-specific `node-pty` terminals with restored tab metadata. Processes are recreated after a reconnect or task switch; dimensions and shell process state are not restored.
+- **Terminal:** multiple workspace-specific `node-pty` terminals with restored tab metadata. Live Core-owned processes reattach after reconnect or task switching. If the previous session is unavailable, restoration can create a new shell; it does not reconstruct the old process environment or working directory.
 - **Git:** status and diffs, selective commits, push, checkout and branch rename, searchable graph/history, file/selection history, compare-with-ref, cherry-pick, and file or hunk rollback.
 - **Task workspaces:** isolated Git worktrees on new, existing, or remote branches. A new task copies the root's staged, unstaged, untracked, ignored, and deleted-file state but excludes `node_modules`. Tasks can be compared with their recorded base and merged back with normal or smart merge.
 - **AI:** a shared AI Capability Provider layer with Codex ACP and Copilot ACP adapters, model/configuration discovery, resumable sessions, permission prompts, usage data, attachments, steering, MCP servers, and global/local/workspace agent presets. See [docs/ACP.md](docs/ACP.md).
 - **Vibe MCP tools:** an agent preset may opt into the built-in `vibe-editor` MCP server to create/list/delete task worktrees, start provider/model sessions with an inherited, configured, or explicitly absent agent preset and validated reasoning effort, select a validated model/reasoning pair for its next turn, append prompts, inspect recent responses, set the current task's commit-message draft, and safely update the latest unpushed commit message for an explicit task ID. It is not enabled when `mcpServers` is empty or omitted; task-start examples are in [docs/ACP.md](docs/ACP.md#starting-tasks-through-the-vibe-editor-mcp-server).
-- **Java/Maven:** Maven project loading, source roots, JDT LS completion/navigation/diagnostics/semantic tokens, main-class run configurations, and `jdb` debugging.
+- **Java/Maven:** Maven project loading, source roots, JDT LS completion/navigation/diagnostics/semantic tokens, editable launch profiles and tool settings, `jdb` debugging with object/array inspection, and paused-session HotSwap. See [Java debugging](docs/JAVA_DEBUGGING.md).
 - **HTTP and notes:** executable requests in `.http` files, executable shell blocks in Markdown, and global or workspace-local Useful Files.
+- **Multiple roots:** register remote project directories with aliases in one Core connection, retaining root-owned editor and terminal tabs. See [Multi-root protocol boundary](docs/MULTI_ROOT.md).
+- **Workflows:** a visual block editor connects AI agents, scripts, timers, user input, and documents, with templates, run history, and pause/retry/cancel controls.
+- **Run configurations:** global and project-local shell scripts with dedicated terminals and Run/Stop/Restart controls. See [Run Configurations](docs/RUN_CONFIGS.md).
+- **Project files:** create, rename, copy/move, recoverable deletion, local upload/remote download, and previewed search replacement.
+
+See [FEATURES.md](FEATURES.md) for the detailed feature inventory.
 
 ## Architecture
 
 The npm workspaces are:
 
-- `@remote-ide/acp`: provider-neutral AI capability and session types.
+- `@remote-ide/acp`: provider-neutral AI capability/session types, provider base class, and configuration helpers.
 - `@remote-ide/protocol`: typed WebSocket requests, responses, events, and DTOs shared by Core and Desktop.
-- `@remote-ide/core`: the single-root, workspace-scoped backend and its services.
+- `@remote-ide/core`: the backend managing registered workspace roots, task worktrees, and their services.
 - `@remote-ide/desktop`: the Electron/React/Monaco IDE client.
 - `@remote-ide/gateway`: the Electron SSH provisioner, tunnel owner, and Desktop launcher.
 
-This split follows the project's core rule: **the server owns the state; the client owns the interaction**. Each connected client is bound to the configured root or a Core-managed task worktree. Task switching replaces the active service context; clients cannot submit an arbitrary workspace path. Chokidar watches workspace and Git changes and Core sends typed refresh events to Desktop.
+This split follows the project's core rule: **the server owns the state; the client owns the interaction**. Core starts with one primary workspace root; Desktop can register additional directories on the Core host and switch between them. Each client selects a registered root and its root or task-worktree context. Root-owned requests and events carry Core-issued identities; ordinary operations cannot submit an arbitrary workspace path. Chokidar watches workspace and Git changes and Core sends typed refresh events to Desktop.
 
 Core state defaults to:
 
@@ -211,7 +219,7 @@ Task Git prompt checkpoints are also stored there as content-addressed snapshots
 
 ## Current limitations and security
 
-- Core exposes one root workspace per process and has no authentication, authorization, or TLS. Anyone who can reach its port can modify files and run commands with Core's operating-system permissions. Do not expose it to the public internet.
+- Core can register multiple workspace roots per process and has no authentication, authorization, or TLS. Anyone who can reach its port can modify files and run commands with Core's operating-system permissions. Do not expose it to the public internet.
 - Filesystem methods reject parent traversal and symlinks escaping the active workspace, but this boundary does not make an exposed Core safe. Text files, useful files, agent files, HTTP bodies, and HTTP responses are limited to 2 MB where applicable; HTTP requests time out after 30 seconds.
 - Task workspaces require the root to be a Git repository. Each task has an independent dependency tree, so run its package installation after switching when needed. Deleting a task forcibly removes its worktree and local task branch. Merging first commits all task changes; smart merge may stash and restore root changes.
 - Gateway supports password, local private-key, and OS SSH-agent authentication. It pins the explicitly trusted server SHA-256 host-key fingerprint, deploys the saved repository and branch, and owns non-persistent tunnels. Closing Gateway closes its tunnels but does not stop remote Core unless **Stop server** is used.
