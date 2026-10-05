@@ -26,16 +26,31 @@ export function javaConfigurationTemplate(options: JavaProjectOptions): string {
 
 export async function readJavaConfiguration(filesystem: WorkspaceFileSystem): Promise<{ content: string; revision: FileRevision } | undefined> {
   try { return await filesystem.read(javaConfigurationPath); }
+  catch (error) { if (!(error instanceof CoreError) || error.code !== "FILE_NOT_FOUND") throw error; }
+  let legacy: { content: string; revision: FileRevision };
+  try { legacy = await filesystem.read(".vibe/java.json"); }
   catch (error) { if (error instanceof CoreError && error.code === "FILE_NOT_FOUND") return undefined; throw error; }
+  await ensureJavaConfigurationDirectory(filesystem);
+  try { await filesystem.write(javaConfigurationPath, legacy.content, undefined, false, true); }
+  catch (error) {
+    // Another session may have migrated or created the configuration first.
+    try { return await filesystem.read(javaConfigurationPath); } catch { throw error; }
+  }
+  return filesystem.read(javaConfigurationPath);
+}
+
+async function ensureJavaConfigurationDirectory(filesystem: WorkspaceFileSystem): Promise<void> {
+  const directory = path.posix.dirname(javaConfigurationPath);
+  try { await filesystem.resolveExisting(directory); }
+  catch (error) {
+    if (!(error instanceof CoreError) || error.code !== "FILE_NOT_FOUND") throw error;
+    try { await filesystem.createDirectory(directory); }
+    catch (createError) { try { await filesystem.resolveExisting(directory); } catch { throw createError; } }
+  }
 }
 
 export async function writeJavaConfiguration(filesystem: WorkspaceFileSystem, content: string, expectedRevision?: FileRevision): Promise<FileRevision> {
-  try { await filesystem.resolveExisting(".vibe"); }
-  catch (error) {
-    if (!(error instanceof CoreError) || error.code !== "FILE_NOT_FOUND") throw error;
-    try { await filesystem.createDirectory(".vibe"); }
-    catch (createError) { try { await filesystem.resolveExisting(".vibe"); } catch { throw createError; } }
-  }
+  await ensureJavaConfigurationDirectory(filesystem);
   if (!expectedRevision && await readJavaConfiguration(filesystem)) throw new CoreError("FILE_CHANGED", "Java configuration changed. Reopen the editor to load the latest file before saving.");
   return (await filesystem.write(javaConfigurationPath, content, expectedRevision, false, !expectedRevision)).revision;
 }

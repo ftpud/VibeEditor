@@ -48,8 +48,10 @@ Java run. Class redefinition support and restrictions are determined by the JVM.
 Open **Java run/debug configuration** with the gear beside the launch-profile
 selector or in the Java panel. You can also find it in the command palette.
 The editor has a form and a JSON tab with an **Insert template** action. Saving
-writes `.vibe/java.json` in the remote workspace. Existing workspace settings
+writes `.project/java.json` in the remote workspace. Existing workspace settings
 are used until you save this file; subsequent runs read the JSON file directly.
+If only `.vibe/java.json` exists, Core copies it to `.project/java.json` and keeps
+the original as a backup. When both files exist, `.project/java.json` takes precedence.
 You can edit it in the regular file editor too. Invalid JSON stays available for
 repair, and the configuration dialog checks the file revision before overwriting
 an externally edited file.
