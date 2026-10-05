@@ -1,9 +1,11 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { Copy, Plus, Trash2, X } from "lucide-react";
 import type { FileRevision, JavaMainClass, JavaProjectOptions, JavaRunConfiguration, JavaToolCheck } from "@remote-ide/protocol";
 import type { CoreClient } from "./client";
 
 type Props = { client: CoreClient; running: boolean; onClose(): void; onSaved(options: JavaProjectOptions): void };
+const tabs = [{ id: "launch", label: "Launch profiles" }, { id: "tools", label: "Tools & build" }, { id: "environment", label: "Environment" }, { id: "paths", label: "Project paths" }, { id: "json", label: "JSON" }] as const;
+type SettingsTab = Exclude<typeof tabs[number]["id"], "json">;
 const lines = (value: string) => value.split(/\r?\n/).filter((item) => item.trim());
 
 function formOptions(content: string): JavaProjectOptions {
@@ -19,6 +21,8 @@ export function JavaConfigurationDialog({ client, running, onClose, onSaved }: P
   const [content, setContent] = useState("");
   const [template, setTemplate] = useState("");
   const [revision, setRevision] = useState<FileRevision>();
+  const dialogId = useId();
+  const [tab, setTab] = useState<SettingsTab>("launch");
   const [mode, setMode] = useState<"form" | "json">("form");
   const [classes, setClasses] = useState<JavaMainClass[]>([]);
   const [profileId, setProfileId] = useState("");
@@ -73,8 +77,8 @@ export function JavaConfigurationDialog({ client, running, onClose, onSaved }: P
     try {
       const draft = draftContent();
       if (next === "form") formOptions(draft);
-      setContent(draft); setEnvironmentDrafts({}); setArgumentDrafts({}); setMode(next); setError("");
-    } catch (switchError) { setError(switchError instanceof Error ? switchError.message : String(switchError)); }
+      setContent(draft); setEnvironmentDrafts({}); setArgumentDrafts({}); setMode(next); setError(""); return true;
+    } catch (switchError) { setError(switchError instanceof Error ? switchError.message : String(switchError)); return false; }
   };
   const addProfile = (duplicate = false) => {
     if (!options) return;
@@ -97,23 +101,35 @@ export function JavaConfigurationDialog({ client, running, onClose, onSaved }: P
     finally { if (mounted.current) setChecking(false); }
   };
 
-  return <div className="dialog-overlay" onMouseDown={() => { if (!busy) onClose(); }}>
+  return <div className="dialog-overlay java-config-overlay" onMouseDown={() => { if (!busy) onClose(); }}>
     <section className="run-config-dialog java-config-dialog" role="dialog" aria-modal="true" aria-label="Java run/debug configuration" onMouseDown={(event) => event.stopPropagation()}>
       <header><div><h2>Java run/debug configuration</h2><span>Saved in .vibe/java.json for this workspace on the connected Core server</span></div><button title="Close" disabled={busy} onClick={onClose}><X size={15} /></button></header>
       <div className="java-config-tabs" role="tablist" aria-label="Configuration editor">
-        <button role="tab" aria-selected={mode === "form"} disabled={loading || busy} onClick={() => switchMode("form")}>Settings &amp; profiles</button>
-        <button role="tab" aria-selected={mode === "json"} disabled={loading || busy} onClick={() => switchMode("json")}>JSON</button>
+        {tabs.map((item) => {
+          const selected = mode === "json" ? item.id === "json" : item.id === tab;
+          return <button key={item.id} id={`${dialogId}-${item.id}`} role="tab" aria-selected={selected} aria-controls={`${dialogId}-panel`} tabIndex={selected ? 0 : -1} disabled={loading || busy} onClick={() => {
+            if (item.id === "json") switchMode("json");
+            else if (mode === "form" || switchMode("form")) setTab(item.id);
+          }} onKeyDown={(event) => {
+            if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+            event.preventDefault();
+            const buttons = Array.from(event.currentTarget.parentElement!.querySelectorAll<HTMLButtonElement>('[role="tab"]'));
+            const index = buttons.indexOf(event.currentTarget);
+            const next = event.key === "Home" ? 0 : event.key === "End" ? buttons.length - 1 : (index + (event.key === "ArrowRight" ? 1 : -1) + buttons.length) % buttons.length;
+            buttons[next]?.click(); buttons[next]?.focus();
+          }}>{item.label}</button>;
+        })}
       </div>
       <form onSubmit={(event) => { event.preventDefault(); void save(); }}>
-        <div className="java-config-body">
+        <div className="java-config-body" id={`${dialogId}-panel`} role="tabpanel" aria-labelledby={`${dialogId}-${mode === "json" ? "json" : tab}`}>
           <p className="java-config-help">Maven and Java run on the Core host. Use paths on that machine. The same launch profile works for Run and Debug.</p>
           {running && <p role="status" className="java-config-help">Stop the Java process before saving configuration changes.</p>}
           {loading ? <p>Loading configuration…</p> : mode === "json" ? <>
             <button type="button" disabled={busy} onClick={() => { setContent(template); setEnvironmentDrafts({}); setArgumentDrafts({}); setChecks(undefined); setError(""); }}>Insert template</button>
             <label>Configuration JSON<textarea className="java-config-json" spellCheck={false} value={content} disabled={busy} onChange={(event) => { setContent(event.target.value); setChecks(undefined); }} /></label>
           </> : options && <>
-            <fieldset disabled={busy}><legend>Tools and build</legend>
-              <label>Maven executable<input autoFocus value={options.mavenExecutable} onChange={(event) => update({ ...options!, mavenExecutable: event.target.value })} placeholder="mvn, ./mvnw, or /opt/maven/bin/mvn" /></label>
+            {tab === "tools" && <fieldset disabled={busy}><legend>Tools and build</legend>
+              <label>Maven executable<input value={options.mavenExecutable} onChange={(event) => update({ ...options!, mavenExecutable: event.target.value })} placeholder="mvn, ./mvnw, or /opt/maven/bin/mvn" /></label>
               <p className="java-config-help">Use ./mvnw when the project contains a Maven wrapper, or enter the installed Maven executable. Put extra flags below, not in this field.</p>
               <label>JDK home (optional)<input value={options.javaHome ?? ""} onChange={(event) => update({ ...options!, javaHome: event.target.value })} placeholder="/usr/lib/jvm/java-21-openjdk" /></label>
               <p className="java-config-help">The JDK directory, not its bin/java executable. Blank uses the Core host’s JAVA_HOME or PATH.</p>
@@ -121,36 +137,37 @@ export function JavaConfigurationDialog({ client, running, onClose, onSaved }: P
                 <label>Maven arguments — one per line<textarea value={argumentDrafts.maven ?? (options.mavenArguments ?? []).join("\n")} onChange={(event) => editArguments("maven", event.target.value, (items) => update({ ...options!, mavenArguments: items }))} placeholder={"-Pdevelopment\n-DskipTests"} /></label>
                 <label>Build goals / flags — one per line<textarea value={argumentDrafts.goals ?? (options.buildGoals ?? ["package", "-DskipTests"]).join("\n")} onChange={(event) => editArguments("goals", event.target.value, (items) => update({ ...options!, buildGoals: items }))} /></label>
               </div>
-            </fieldset>
-            <fieldset disabled={busy}><legend>Launch profiles</legend>
+            </fieldset>}
+            {(tab === "launch" || tab === "environment") && <fieldset disabled={busy}><legend>{tab === "launch" ? "Launch profiles" : "Profile environment"}</legend>
               <div className="java-config-profile-actions"><select aria-label="Edit launch profile" value={profile?.id ?? ""} onChange={(event) => setProfileId(event.target.value)}>{!options.runConfigurations.length && <option value="">No profiles yet</option>}{options.runConfigurations.map((item) => <option key={item.id} value={item.id}>{item.name || "Unnamed profile"}</option>)}</select>
                 <button type="button" title="Add launch profile" onClick={() => addProfile()}><Plus size={14} />Add</button>
                 <button type="button" title="Duplicate launch profile" disabled={!profile} onClick={() => { try { addProfile(true); } catch { setError("Fix the environment JSON before duplicating this profile."); } }}><Copy size={14} /></button>
                 <button type="button" title="Delete launch profile" disabled={!profile} onClick={() => { const remaining = options!.runConfigurations.filter((item) => item.id !== profile!.id); update({ ...options!, runConfigurations: remaining, selectedRunConfigurationId: options!.selectedRunConfigurationId === profile!.id ? remaining[0]?.id : options!.selectedRunConfigurationId }); setProfileId(remaining[0]?.id ?? ""); }}><Trash2 size={14} /></button>
               </div>
-              {profile ? <>
+              {profile ? <>{tab === "launch" ? <>
                 <label className="java-config-check"><input type="checkbox" checked={options.selectedRunConfigurationId === profile.id} onChange={() => update({ ...options!, selectedRunConfigurationId: profile.id })} />Use this profile for Run / Debug</label>
                 <label>Profile name<input value={profile.name} onChange={(event) => updateProfile({ name: event.target.value })} /></label>
-                <label>Active profile (optional)<input value={profile.activeProfile ?? ""} onChange={(event) => updateProfile({ activeProfile: event.target.value })} placeholder="dev or dev,local" /></label>
-                <p className="java-config-help">Sets SPRING_PROFILES_ACTIVE for Run and Debug. Comma-separated profiles are supported. Blank uses the environment file or application environment.</p>
                 <label>Main class<input list="java-main-class-options" value={profile.mainClass} onChange={(event) => updateProfile({ mainClass: event.target.value })} placeholder="com.example.App" /><datalist id="java-main-class-options">{classes.map((item) => <option key={item.className} value={item.className} />)}</datalist></label>
                 <div className="java-config-grid">
                   <label>Program arguments — one per line<textarea value={argumentDrafts[`${profile.id}-program`] ?? (profile.programArguments ?? []).join("\n")} onChange={(event) => editArguments(`${profile.id}-program`, event.target.value, (items) => updateProfile({ programArguments: items }))} placeholder={"--port\n8080"} /></label>
                   <label>VM arguments — one per line<textarea value={argumentDrafts[`${profile.id}-vm`] ?? (profile.vmArguments ?? []).join("\n")} onChange={(event) => editArguments(`${profile.id}-vm`, event.target.value, (items) => updateProfile({ vmArguments: items }))} placeholder={"-ea\n-Xmx1g\n-Dapp.mode=development"} /></label>
                 </div>
                 <p className="java-config-help">Each line is one argument. Spaces inside a line are preserved; no shell quoting is needed. JSON also supports empty arguments.</p>
+              </> : <>
+                <label>Active profile (optional)<input value={profile.activeProfile ?? ""} onChange={(event) => updateProfile({ activeProfile: event.target.value })} placeholder="dev or dev,local" /></label>
+                <p className="java-config-help">Sets SPRING_PROFILES_ACTIVE for Run and Debug. Comma-separated profiles are supported. Blank uses the environment file or application environment.</p>
                 <label>Working directory<input value={profile.workingDirectory ?? "."} onChange={(event) => updateProfile({ workingDirectory: event.target.value })} placeholder=". (workspace root)" /></label>
                 <label>Environment file (.env, optional)<input value={profile.environmentFile ?? ""} onChange={(event) => updateProfile({ environmentFile: event.target.value.trim() || undefined })} placeholder="config/app.env" /></label>
                 <p className="java-config-help">Path relative to the workspace on the Core host. Use .env format: KEY=value, one variable per line. Loaded for each Run / Debug; values below override file values.</p>
                 <label>Application environment (JSON)<textarea spellCheck={false} value={environmentDrafts[profile.id] ?? JSON.stringify(profile.environment ?? {}, null, 2)} onChange={(event) => { setEnvironmentDrafts((current) => ({ ...current, [profile.id]: event.target.value })); setChecks(undefined); }} placeholder={'{"MODE":"development"}'} /></label>
-              </> : <p className="java-config-help">Add a profile, choose its main class, then save to enable Run and Debug.</p>}
-            </fieldset>
-            <details><summary>Project paths</summary><fieldset disabled={busy}>
+              </>}</> : <p className="java-config-help">Add a profile, choose its main class, then save to enable Run and Debug.</p>}
+            </fieldset>}
+            {tab === "paths" && <fieldset disabled={busy}><legend>Project paths</legend>
               <label>Maven project file<input value={options.pomPath} onChange={(event) => update({ ...options!, pomPath: event.target.value })} /></label>
               <label>Source roots — one per line<textarea value={argumentDrafts.sources ?? options.sourceRoots.join("\n")} onChange={(event) => editArguments("sources", event.target.value, (items) => update({ ...options!, sourceRoots: items }))} /></label>
               <label>Compiled classes<input value={options.outputPath} onChange={(event) => update({ ...options!, outputPath: event.target.value })} /></label>
               <label>Compiled test classes<input value={options.testOutputPath} onChange={(event) => update({ ...options!, testOutputPath: event.target.value })} /></label>
-            </fieldset></details>
+            </fieldset>}
           </>}
           {checks && <div className="java-tool-checks" role="status">{checks.map((item) => <div key={item.tool} className={item.ok ? "tool-ok" : "tool-failed"}><strong>{item.ok ? "✓" : "✗"} {item.tool}</strong><code>{item.executable}</code><p>{item.message}</p></div>)}</div>}
           {error && <div className="find-error" role="alert">{error}</div>}

@@ -21,14 +21,19 @@ function clientFixture(content = JSON.stringify(options)) {
 it("edits tools and launch arguments without losing line breaks, and saves the remote revision", async () => {
   const { client, request } = clientFixture(); const saved = vi.fn();
   render(<JavaConfigurationDialog client={client} running={false} onClose={vi.fn()} onSaved={saved} />);
-  fireEvent.change(await screen.findByLabelText("Environment file (.env, optional)"), { target: { value: "config/app.env" } });
-  fireEvent.change(await screen.findByLabelText("Maven executable"), { target: { value: "./mvnw" } });
+  await screen.findByLabelText("Main class");
+  fireEvent.click(screen.getByRole("tab", { name: "Environment" }));
+  fireEvent.change(screen.getByLabelText("Environment file (.env, optional)"), { target: { value: "config/app.env" } });
+  fireEvent.click(screen.getByRole("tab", { name: "Tools & build" }));
+  fireEvent.change(screen.getByLabelText("Maven executable"), { target: { value: "./mvnw" } });
   fireEvent.change(screen.getByLabelText("JDK home (optional)"), { target: { value: "/opt/jdk" } });
+  fireEvent.click(screen.getByRole("tab", { name: "Launch profiles" }));
   const argumentsField = screen.getByLabelText("Program arguments — one per line");
   fireEvent.change(argumentsField, { target: { value: "--message\n" } });
   expect((argumentsField as HTMLTextAreaElement).value).toBe("--message\n");
   fireEvent.change(argumentsField, { target: { value: "--message\nhello world" } });
   fireEvent.change(screen.getByLabelText("VM arguments — one per line"), { target: { value: "-ea\n-Dvalue=hello world" } });
+  fireEvent.click(screen.getByRole("tab", { name: "Environment" }));
   fireEvent.change(screen.getByLabelText("Application environment (JSON)"), { target: { value: '{"MODE":"dev"}' } });
   fireEvent.change(screen.getByLabelText("Active profile (optional)"), { target: { value: "dev,local" } });
   fireEvent.click(screen.getByRole("button", { name: "Save configuration" }));
@@ -58,14 +63,16 @@ it("keeps invalid JSON editable and offers a repair template", async () => {
   render(<JavaConfigurationDialog client={client} running={false} onClose={vi.fn()} onSaved={vi.fn()} />);
   const json = await screen.findByLabelText("Configuration JSON"); expect((json as HTMLTextAreaElement).value).toBe("{bad JSON");
   fireEvent.click(screen.getByRole("button", { name: "Insert template" })); expect(JSON.parse((json as HTMLTextAreaElement).value)).toEqual(options);
-  fireEvent.click(screen.getByRole("tab", { name: "Settings & profiles" }));
+  fireEvent.click(screen.getByRole("tab", { name: "Tools & build" }));
   expect(await screen.findByLabelText("Maven executable")).toHaveProperty("value", "mvn");
 });
 
 it("checks unsaved settings and displays actionable tool errors", async () => {
   const { client, request } = clientFixture();
   render(<JavaConfigurationDialog client={client} running={false} onClose={vi.fn()} onSaved={vi.fn()} />);
-  fireEvent.change(await screen.findByLabelText("Maven executable"), { target: { value: "/opt/maven/bin/mvn" } });
+  await screen.findByLabelText("Main class");
+  fireEvent.click(screen.getByRole("tab", { name: "Tools & build" }));
+  fireEvent.change(screen.getByLabelText("Maven executable"), { target: { value: "/opt/maven/bin/mvn" } });
   fireEvent.click(screen.getByRole("button", { name: "Check tools" }));
   expect(await screen.findByText(/was not found on the Core host/)).toBeTruthy();
   const payload = request.mock.calls.find(([type]) => type === "java.tools.check")![1]!;
@@ -77,8 +84,43 @@ it("blocks saving while Java runs and rejects invalid environment JSON", async (
   const view = render(<JavaConfigurationDialog client={client} running={true} onClose={vi.fn()} onSaved={vi.fn()} />);
   await screen.findByLabelText("Main class"); expect((screen.getByRole("button", { name: "Save configuration" }) as HTMLButtonElement).disabled).toBe(true);
   view.rerender(<JavaConfigurationDialog client={client} running={false} onClose={vi.fn()} onSaved={vi.fn()} />);
+  fireEvent.click(screen.getByRole("tab", { name: "Environment" }));
   fireEvent.change(screen.getByLabelText("Application environment (JSON)"), { target: { value: "{bad" } });
   fireEvent.click(screen.getByRole("button", { name: "Save configuration" }));
   expect((await screen.findByRole("alert")).textContent).toContain("application environment must be a JSON object");
   expect(request.mock.calls.some(([type]) => type === "java.configuration.save")).toBe(false);
+});
+
+
+it("shows one section at a time, preserves drafts across tabs, and keeps actions outside the scrolling body", async () => {
+  const { client, request } = clientFixture();
+  render(<JavaConfigurationDialog client={client} running={false} onClose={vi.fn()} onSaved={vi.fn()} />);
+  await screen.findByLabelText("Main class");
+  expect(screen.queryByLabelText("Maven executable")).toBeNull();
+  fireEvent.change(screen.getByLabelText("Profile name"), { target: { value: "Edited profile" } });
+  fireEvent.click(screen.getByRole("tab", { name: "Environment" }));
+  fireEvent.change(screen.getByLabelText("Application environment (JSON)"), { target: { value: '{"MODE":"dev"}' } });
+  fireEvent.click(screen.getByRole("tab", { name: "Project paths" }));
+  expect(screen.queryByLabelText("Main class")).toBeNull();
+  fireEvent.change(screen.getByLabelText("Compiled classes"), { target: { value: "build/classes" } });
+  fireEvent.click(screen.getByRole("tab", { name: "Launch profiles" }));
+  expect(screen.getByLabelText("Profile name")).toHaveProperty("value", "Edited profile");
+  fireEvent.click(screen.getByRole("tab", { name: "Environment" }));
+  expect(screen.getByLabelText("Application environment (JSON)")).toHaveProperty("value", '{"MODE":"dev"}');
+  fireEvent.click(screen.getByRole("tab", { name: "JSON" }));
+  expect(JSON.parse((screen.getByLabelText("Configuration JSON") as HTMLTextAreaElement).value)).toMatchObject({ outputPath: "build/classes", runConfigurations: [{ name: "Edited profile", environment: { MODE: "dev" } }] });
+  const save = screen.getByRole("button", { name: "Save configuration" });
+  expect(screen.getByRole("tabpanel").contains(save)).toBe(false);
+  expect(save.closest("footer")).toBeTruthy();
+  fireEvent.click(save);
+  await waitFor(() => expect(request.mock.calls.some(([type]) => type === "java.configuration.save")).toBe(true));
+});
+
+it("supports keyboard tab navigation", async () => {
+  const { client } = clientFixture();
+  render(<JavaConfigurationDialog client={client} running={false} onClose={vi.fn()} onSaved={vi.fn()} />);
+  await screen.findByLabelText("Main class");
+  fireEvent.keyDown(screen.getByRole("tab", { name: "Launch profiles" }), { key: "ArrowRight" });
+  expect(screen.getByRole("tab", { name: "Tools & build" }).getAttribute("aria-selected")).toBe("true");
+  expect(screen.getByLabelText("Maven executable")).toBeTruthy();
 });
