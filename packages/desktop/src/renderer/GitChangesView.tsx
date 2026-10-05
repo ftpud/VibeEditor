@@ -1,4 +1,5 @@
-import { ChevronDown, ChevronRight, FileCode2, Folder, FolderOpen } from "lucide-react";
+import { FileKindIcon } from "./FileKindIcon";
+import { ChevronDown, ChevronRight, Folder, FolderOpen } from "lucide-react";
 import { useEffect, useMemo, useState, type KeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
 import type { GitStatusEntry } from "@remote-ide/protocol";
 
@@ -41,7 +42,7 @@ function GitChangeGroup({ title, entries, selectedPaths, onTogglePath, activePat
   const toggle = () => setExpanded((current) => !current);
   return <section className={`git-group git-group-${title.toLowerCase()}`}>
     <button data-git-row className="git-group-title" aria-expanded={expanded} onClick={toggle} onKeyDown={(event) => { rowNavigation(event, toggle); if (event.key === "ArrowRight" && !expanded) { event.preventDefault(); toggle(); } if (event.key === "ArrowLeft" && expanded) { event.preventDefault(); toggle(); } }}>
-      {expanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />}{selectable && <input type="checkbox" aria-label={`Select all ${title.toLowerCase()} files`} checked={allSelected} ref={(input) => { if (input) input.indeterminate = selectedCount > 0 && !allSelected; }} onClick={(event) => event.stopPropagation()} onChange={toggleAll} />}<span>{title}</span><span className="git-count">{entries.length}</span>
+      {expanded ? <ChevronDown className="tree-chevron" size={14} /> : <ChevronRight className="tree-chevron" size={14} />}{selectable && <input type="checkbox" aria-label={`Select all ${title.toLowerCase()} files`} checked={allSelected} ref={(input) => { if (input) input.indeterminate = selectedCount > 0 && !allSelected; }} onClick={(event) => event.stopPropagation()} onChange={toggleAll} />}<span>{title}</span><span className="git-count">{entries.length}</span>
     </button>
     {expanded && <GitStatusTree entries={entries} selectedPaths={selectedPaths} onTogglePath={onTogglePath} activePath={activePath} onOpenDiff={onOpenDiff} onOpenConflict={onOpenConflict} onOpenFile={onOpenFile} onContextMenu={onContextMenu} />}
   </section>;
@@ -61,14 +62,14 @@ function GitStatusTree({ entries, selectedPaths, onTogglePath, activePath, onOpe
       const toggleAll = () => descendantPaths.forEach((path) => { if ((selectedPaths?.has(path) ?? false) === allSelected) onTogglePath?.(path); });
       return <div key={node.path}>
         <button data-git-row className="git-file-row git-directory-row" aria-expanded={open} style={{ paddingLeft: (onTogglePath ? 9 : 27) + depth * 13 }} onClick={toggle} onKeyDown={(event) => { rowNavigation(event, toggle); if (event.key === "ArrowRight" && !open) { event.preventDefault(); toggle(); } if (event.key === "ArrowLeft" && open) { event.preventDefault(); toggle(); } }}>
-          {onTogglePath && <input type="checkbox" aria-label={`Select all changes under ${node.path}`} checked={allSelected} ref={(input) => { if (input) input.indeterminate = selectedCount > 0 && !allSelected; }} onClick={(event) => event.stopPropagation()} onChange={toggleAll} />}{open ? <ChevronDown size={13} /> : <ChevronRight size={13} />}{open ? <FolderOpen size={14} /> : <Folder size={14} />}<span className="git-file-name">{node.name}</span>
+          {onTogglePath && <input type="checkbox" aria-label={`Select all changes under ${node.path}`} checked={allSelected} ref={(input) => { if (input) input.indeterminate = selectedCount > 0 && !allSelected; }} onClick={(event) => event.stopPropagation()} onChange={toggleAll} />}{open ? <ChevronDown className="tree-chevron" size={14} /> : <ChevronRight className="tree-chevron" size={14} />}{open ? <FolderOpen className="folder-kind-icon" size={15} /> : <Folder className="folder-kind-icon" size={15} />}<span className="git-file-name">{node.name}</span>
         </button>{open && renderNodes(node.children, depth + 1)}
       </div>;
     }
     const entry = node.entry; const deleted = entry.indexStatus === "D" || entry.worktreeStatus === "D"; const status = entry.indexStatus === "?" ? "U" : `${entry.indexStatus}${entry.worktreeStatus}`.trim(); const kind = entry.indexStatus === "U" || entry.worktreeStatus === "U" ? "conflict" : entry.indexStatus === "?" ? "untracked" : deleted ? "deleted" : entry.indexStatus === "A" ? "added" : "modified"; const checked = selectedPaths?.has(entry.path) ?? false; const active = activePath === entry.path;
     const conflicted = entry.states.includes("conflict"); const review = () => conflicted && onOpenConflict ? onOpenConflict(entry) : onOpenDiff(entry); const openFile = () => { if (!deleted) onOpenFile(entry); };
     return <button data-git-row key={node.path} className={`git-file-row ${checked ? "checked-for-commit" : ""} ${active ? "active-diff" : ""}`} aria-current={active ? "page" : undefined} style={{ paddingLeft: (onTogglePath ? 9 : 27) + depth * 13 }} title={deleted ? `${entry.path} (deleted)` : `${entry.path} — Enter: review diff; Shift+Enter: open file`} onClick={review} onDoubleClick={openFile} onKeyDown={(event) => { if (event.key === "Enter" && event.shiftKey) { event.preventDefault(); openFile(); return; } rowNavigation(event, review, onTogglePath ? () => onTogglePath(entry.path) : undefined); }} onContextMenu={onContextMenu ? (event) => onContextMenu(event, entry) : undefined}>
-      {onTogglePath && <input type="checkbox" aria-label={`Select ${entry.path} for commit`} checked={checked} onClick={(event) => event.stopPropagation()} onChange={() => onTogglePath(entry.path)} />}<FileCode2 size={14} /><span className="git-file-name">{node.name}</span><span className={`git-status ${kind}`}>{status}</span>
+      {onTogglePath && <input type="checkbox" aria-label={`Select ${entry.path} for commit`} checked={checked} onClick={(event) => event.stopPropagation()} onChange={() => onTogglePath(entry.path)} />}<span className="tree-indent" /><FileKindIcon name={node.name} /><span className="git-file-name">{node.name}</span><span className={`git-status ${kind}`}>{status}</span>
     </button>;
   });
   return <>{renderNodes(nodes, 0)}</>;
