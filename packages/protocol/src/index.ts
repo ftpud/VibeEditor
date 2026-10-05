@@ -16,7 +16,7 @@ export type FileRevision = { identity: string; version: string };
  * Desktop can prove it is safe to talk to a newly deployed Core.
  */
 export type ProtocolCompatibility = { minimum: number; maximum: number };
-export const protocolCompatibility: ProtocolCompatibility = { minimum: 10, maximum: 10 };
+export const protocolCompatibility: ProtocolCompatibility = { minimum: 11, maximum: 11 };
 
 export function protocolRangeIsValid(range: ProtocolCompatibility): boolean {
   return Number.isInteger(range.minimum) && Number.isInteger(range.maximum) && range.minimum > 0 && range.minimum <= range.maximum;

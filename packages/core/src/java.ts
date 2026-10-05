@@ -88,8 +88,9 @@ export class JavaProjectService {
 
   async readConfiguration(): Promise<{ path: string; content: string; revision?: FileRevision; template: string }> {
     const file = await readJavaConfiguration(this.filesystem);
-    const options = (await this.state.load()).javaProject;
-    if (!options) throw new CoreError("JAVA_NOT_CONFIGURED", "Load a pom.xml as a Maven project first");
+    let options = (await this.state.load()).javaProject;
+    if (file) { try { options = parseJavaConfiguration(file.content); } catch { /* Keep invalid JSON accessible for repair. */ } }
+    options ??= { type: "maven", pomPath: "pom.xml", mavenExecutable: await this.detectMavenExecutable("pom.xml"), sourceRoots: ["src/main/java", "src/test/java"], outputPath: "target/classes", testOutputPath: "target/test-classes", runConfigurations: [] };
     const template = javaConfigurationTemplate(options);
     return { path: javaConfigurationPath, content: file?.content ?? JSON.stringify(options, null, 2) + "\n", revision: file?.revision, template };
   }
@@ -236,9 +237,9 @@ export class JavaProjectService {
         }
       }
     }
-    if (!this.dependencyTypes) this.dependencyTypes = await this.indexDependencyTypes(options);
+    if (!this.dependencyTypes && !this.process && !this.debugStarting) this.dependencyTypes = await this.indexDependencyTypes(options);
     const lower = normalized.toLowerCase();
-    return [...projectTypes, ...this.dependencyTypes]
+    return [...projectTypes, ...(this.dependencyTypes ?? [])]
       .filter((item) => item.simpleName.toLowerCase().startsWith(lower))
       .filter((item, index, all) => all.findIndex((candidate) => candidate.qualifiedName === item.qualifiedName) === index)
       .sort((a, b) => Number(b.simpleName === normalized) - Number(a.simpleName === normalized) || a.simpleName.localeCompare(b.simpleName) || a.qualifiedName.localeCompare(b.qualifiedName))
@@ -629,6 +630,7 @@ export class JavaProjectService {
   private async start(goals: string[], label: string): Promise<void> {
     if (this.process || this.debugStarting) throw new CoreError("JAVA_PROCESS_FAILED", "A Java build or run process is already active");
     const options = await this.requireOptions();
+    if (this.process || this.debugStarting) throw new CoreError("JAVA_PROCESS_FAILED", "A Java process is already active");
     this.onProcessEvent({ type: "output", data: `> ${options.mavenExecutable} -f ${options.pomPath} ${goals.join(" ")}\n` });
     try {
       const executable = expandJavaToolPath(options.mavenExecutable, this.filesystem.getWorkspace());
@@ -665,7 +667,7 @@ export class JavaProjectService {
     });
   }
 
-  private capture(command: string, args: string[], options?: JavaProjectOptions, label = "Java command"): Promise<string> {
+  private capture(command: string, args: string[], options?: JavaProjectOptions, label = "Java command", requireSuccess = false): Promise<string> {
     if (options && command === options.mavenExecutable) { command = expandJavaToolPath(command, this.filesystem.getWorkspace()); args = [...(options.mavenArguments ?? []), ...args]; }
     return new Promise((resolve, reject) => {
       const child = spawn(command, args, { cwd: this.filesystem.getWorkspace(), env: options ? javaToolEnvironment(options, this.filesystem.getWorkspace()) : process.env, stdio: "pipe" });
@@ -673,15 +675,17 @@ export class JavaProjectService {
       child.stdout.on("data", (data: Buffer) => { output += data.toString(); });
       child.stderr.on("data", (data: Buffer) => { output += data.toString(); });
       child.on("error", (error) => reject(javaSpawnError(error, command, label)));
-      child.on("close", () => resolve(output));
+      child.on("close", (code) => { if (requireSuccess && code !== 0) reject(new CoreError("JAVA_PROCESS_FAILED", `${label} failed (code ${code}). ${output.slice(-2000)}`)); else resolve(output); });
     });
   }
 
-  private async buildDebugClasspath(options: JavaProjectOptions): Promise<string> {
+  private async buildDebugClasspath(options: JavaProjectOptions, managed = true): Promise<string> {
     const temporaryDirectory = await mkdtemp(path.join(os.tmpdir(), "vibe-jdb-"));
     const classpathFile = path.join(temporaryDirectory, "classpath.txt");
     try {
-      await this.runAndWait(options.mavenExecutable, ["-q", "-f", options.pomPath, "dependency:build-classpath", `-Dmdep.outputFile=${classpathFile}`], "Resolve debug classpath", options);
+      const args = ["-q", "-f", options.pomPath, "dependency:build-classpath", `-Dmdep.outputFile=${classpathFile}`];
+      if (managed) await this.runAndWait(options.mavenExecutable, args, "Resolve debug classpath", options);
+      else await this.capture(options.mavenExecutable, args, options, "Resolve dependency classpath", true);
       const dependencies = (await readFile(classpathFile, "utf8")).trim();
       const workspace = this.filesystem.getWorkspace();
       const outputs = [options.outputPath, options.testOutputPath].map((output) => path.resolve(workspace, output));
@@ -692,7 +696,7 @@ export class JavaProjectService {
   }
 
   private async indexDependencyTypes(options: JavaProjectOptions): Promise<JavaTypeSuggestion[]> {
-    const classpath = await this.buildDebugClasspath(options);
+    const classpath = await this.buildDebugClasspath(options, false);
     const jars = classpath.split(path.delimiter).filter((entry) => entry.endsWith(".jar"));
     const suggestions: JavaTypeSuggestion[] = [];
     for (const jar of jars) {

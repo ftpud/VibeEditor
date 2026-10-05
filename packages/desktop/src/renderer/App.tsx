@@ -1952,7 +1952,7 @@ export function App() {
   const runJavaAction = async (action: "java.build" | "java.run") => {
     setLayout((current) => ({ ...current, panels: [...current.panels.filter((panel) => !["terminal", "java", "problems", "gitlog"].includes(panel.type)), { id: "java", type: "java" }] }));
     setJavaRunning(true);
-    try { await clientRef.current!.request(action, {}); }
+    try { await clientRef.current!.request(action, {}, { timeoutMs: 10 * 60_000 }); }
     catch (error) { setJavaRunning(false); setJavaLog((current) => `${current}${error instanceof Error ? error.message : "Java process failed"}\n`); if (error instanceof Error && error.message.includes("Java configuration")) setShowRunConfigurationDialog(true); }
   };
 
@@ -1963,7 +1963,7 @@ export function App() {
   const debugJava = async () => {
     setLayout((current) => ({ ...current, panels: [...current.panels.filter((panel) => !["terminal", "java", "problems", "gitlog"].includes(panel.type)), { id: "java", type: "java" }] }));
     setJavaRunning(true);
-    try { await clientRef.current!.request("java.debug.start", { breakpoints: javaBreakpoints }); }
+    try { await clientRef.current!.request("java.debug.start", { breakpoints: javaBreakpoints }, { timeoutMs: 10 * 60_000 }); }
     catch (error) { setJavaRunning(false); setJavaDebugState({ status: "stopped", variables: [] }); setJavaLog((current) => `${current}${error instanceof Error ? error.message : "Debugger failed"}\n`); if (error instanceof Error && error.message.includes("Java configuration")) setShowRunConfigurationDialog(true); }
   };
 
@@ -2438,7 +2438,7 @@ export function App() {
     { id: "terminal.toggle", label: "Toggle Terminal Panel", category: "Terminal", when: (context) => context.connected, execute: toggleTerminalPanel },
     { id: "task.create", label: "Create Task", category: "Task", when: (context) => context.connected && !context.taskSwitching, execute: () => setShowCreateTaskDialog(true) },
     { id: "ai.open", label: "Open AI", category: "AI", when: (context) => context.connected, execute: () => { if (sideLayout === "classic") setClassicAiOpen(true); else setLeftPanels((current) => ({ ...current, ai: true })); void refreshAi(); } },
-    { id: "java.configuration", label: "Edit Java Run/Debug Configuration", category: "Java", when: (context) => context.connected && !!javaOptions, execute: () => setShowRunConfigurationDialog(true) },
+    { id: "java.configuration", label: "Edit Java Run/Debug Configuration", category: "Java", when: (context) => context.connected, execute: () => setShowRunConfigurationDialog(true) },
     { id: "editor.save", label: "Save Active Editor", category: "Editor", when: (context) => context.hasActiveEditor && context.activeEditorDirty, execute: () => saveActive() }
   ];
 
@@ -3074,4 +3074,3 @@ function CreateTaskDialog({ client, onClose, onCreate }: { client: CoreClient; o
     </section>
   </div>;
 }
-
