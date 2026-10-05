@@ -36,7 +36,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .status-toast-spinner { animation: task-progress-spin .9s linear infinite; }
 .workspace-row { min-width: 0; min-height: 0; flex: 1; display: flex; }
 .tool-stripe { width: 30px; flex: 0 0 30px; display: flex; flex-direction: column; align-items: center; padding: 2px 0; overflow-y: auto; overflow-x: hidden; border-right: 1px solid #393b40; background: #2b2d30; }
-.tool-stripe-button { width: 29px; min-height: 86px; padding: 10px 0; display: flex; flex-direction: column; align-items: center; gap: 5px; border: 0; border-left: 2px solid transparent; background: transparent; color: #8b8d91; cursor: pointer; }
+.tool-stripe-button { width: 29px; min-height: 78px; padding: 6px 0; display: flex; flex-direction: column; align-items: center; gap: 5px; border: 0; border-left: 2px solid transparent; background: transparent; color: #8b8d91; cursor: pointer; }
 .tool-stripe-button { position: relative; }
 .tool-stripe-button > span:not(.tool-badge) { writing-mode: vertical-rl; transform: rotate(180deg); font-size: 0.8462rem; letter-spacing: 0; }
 .tool-badge { position: absolute; right: 1px; bottom: 1px; min-width: 13px; height: 13px; padding: 0 2px; display: grid; place-items: center; border-radius: 6px; background: #3574f0; color: white; font-size: 0.6154rem; line-height: 1; }
@@ -840,6 +840,8 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 /* Paint selected text above syntax backgrounds; Monaco's selection layer sits below them. */
 .monaco-editor .view-line .vibe-code-selection { background-color: var(--vscode-editor-inactiveSelectionBackground) !important; color: var(--vscode-editor-foreground) !important; }
 .monaco-editor:focus-within .view-line .vibe-code-selection { background-color: var(--vscode-editor-selectionBackground) !important; }
+/* Inline blocks paint token backgrounds across Monaco's full line height. */
+.monaco-editor :is(.ftpud-java-class, .ftpud-java-interface, .ftpud-java-annotation, .ftpud-java-constant, .ftpud-dark-java-class, .ftpud-dark-java-interface, .ftpud-dark-java-annotation, .ftpud-dark-java-constant, .ftpud-java-string, .ftpud-java-escape, .ftpud-java-invalid) { display: inline-block; line-height: inherit; vertical-align: top; }
 .monaco-editor .ftpud-java-class { background: #adc9ff; color: #000000 !important; }
 .monaco-editor .ftpud-java-interface { background: #ffd4aa; color: #000000 !important; }
 .monaco-editor .ftpud-java-annotation { background: #e4ffcd; color: #808000 !important; }
