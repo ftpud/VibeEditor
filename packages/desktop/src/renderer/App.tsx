@@ -2173,6 +2173,22 @@ export function App() {
     }
     if (activeTab.type !== "file") return;
     if (!/\.java$/i.test(filePath)) return;
+    let lexicalDecorations: string[] = [];
+    const decorateJavaLexicalTokens = () => {
+      const decorations: editor.IModelDeltaDecoration[] = [];
+      if (highlightTheme === "ftpud" && theme === "light") {
+        const content = instance.getValue();
+        const lines = content.split(/\r?\n/);
+        api.editor.tokenize(content, "java").forEach((tokens, line) => tokens.forEach((token, index) => {
+          const kind = (token.type.startsWith("string.escape.invalid") || token.type.startsWith("string.invalid")) ? "invalid" : token.type.startsWith("string.escape") ? "escape" : token.type.startsWith("string") ? "string" : token.type.startsWith("annotation") ? "annotation" : undefined;
+          if (kind) decorations.push({ range: { startLineNumber: line + 1, startColumn: token.offset + 1, endLineNumber: line + 1, endColumn: (tokens[index + 1]?.offset ?? lines[line]?.length ?? 0) + 1 }, options: { inlineClassName: `ftpud-java-${kind}` } });
+        }));
+      }
+      lexicalDecorations = instance.deltaDecorations(lexicalDecorations, decorations);
+    };
+    decorateJavaLexicalTokens();
+    javaLanguageDisposables.current.push(instance.onDidChangeModelContent(decorateJavaLexicalTokens));
+    javaLanguageDisposables.current.push({ dispose: () => { instance.deltaDecorations(lexicalDecorations, []); } });
     let semanticDecorations: string[] = []; let semanticTimer: ReturnType<typeof setTimeout> | undefined;
     const decorateJavaTypes = async () => {
       if (!clientRef.current || highlightTheme !== "ftpud") { semanticDecorations = instance.deltaDecorations(semanticDecorations, []); return; }
@@ -2180,7 +2196,7 @@ export function App() {
         const result = await clientRef.current.request("java.semanticTokens", { path: filePath, content: instance.getValue() });
         semanticDecorations = instance.deltaDecorations(semanticDecorations, result.tokens.flatMap((token) => {
           const constant = (token.modifiers.includes("readonly") || token.type === "enumMember") && (token.modifiers.includes("static") || token.type === "enumMember");
-          const kind = constant ? "constant" : token.type === "interface" ? "interface" : ["class", "type", "enum", "struct"].includes(token.type) ? "class" : token.type === "decorator" ? "annotation" : ["function", "method", "constructor"].includes(token.type) ? "function" : undefined;
+          const kind = constant ? "constant" : token.type === "interface" ? "interface" : ["class", "type", "enum", "struct"].includes(token.type) ? "class" : token.type === "decorator" ? "annotation" : ["property", "field"].includes(token.type) ? (token.modifiers.includes("static") ? "static-field" : "field") : ["function", "method", "constructor"].includes(token.type) ? (theme === "dark" || token.modifiers.includes("declaration") || token.type === "constructor" ? "function" : token.modifiers.includes("static") ? "static-method" : undefined) : undefined;
           return kind ? [{ range: { startLineNumber: token.startLine, startColumn: token.startColumn, endLineNumber: token.endLine, endColumn: token.endColumn }, options: { inlineClassName: `ftpud${theme === "dark" ? "-dark" : ""}-java-${kind}`, inlineClassNameAffectsLetterSpacing: false } }] : [];
         }));
       } catch { semanticDecorations = instance.deltaDecorations(semanticDecorations, []); }
