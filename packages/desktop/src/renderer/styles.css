@@ -97,7 +97,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .project-tree-actions button { width: 23px; height: 21px; padding: 0; display: grid; place-items: center; border: 0; border-radius: 3px; background: transparent; color: #a7a9ad; cursor: pointer; }
 .project-tree-actions button:hover:not(:disabled) { background: #3a3c41; color: #e4e5e7; }
 .project-tree-actions button:disabled { opacity: .35; cursor: default; }
-.workspace-name { height: 28px; padding: 0 8px; display: flex; align-items: center; gap: 3px; font-size: 0.9231rem; font-weight: calc(var(--ui-font-weight) + 200); color: #c9cbd0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.workspace-name { height: 28px; padding: 0 8px; display: flex; align-items: center; gap: 3px; font-size: 0.9231rem; font-weight: min(400, var(--ui-font-weight)); color: #c9cbd0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .workspace-name select { width: 0; flex: 1 1 auto; min-width: 0; border: 0; background: transparent; color: inherit; font: inherit; }
 .workspace-name button { width: 24px; height: 24px; padding: 0; flex: 0 0 24px; border: 0; background: transparent; color: inherit; display: grid; place-items: center; cursor: pointer; }
 .root-badge { border: 1px solid var(--border); border-radius: 4px; padding: 1px 4px; color: var(--muted); font-size: 0.72em; font-weight: calc(var(--ui-font-weight) + 200); }
@@ -122,6 +122,9 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .tree-indent { width: 14px; flex: 0 0 14px; }
 .file-kind-icon { flex: 0 0 14px; }
 .folder-kind-icon { flex: 0 0 15px; }
+.project-file-tree .tree-row { font-weight: min(400, var(--ui-font-weight)); }
+.project-file-tree .tree-chevron { flex: 0 0 14px; color: #85888e; stroke-width: 1.5; }
+.project-file-tree .folder-kind-icon { color: #9298a3; fill: #9298a31a; stroke-width: 1.25; }
 .git-branch { height: 28px; padding: 0 9px; display: flex; align-items: center; gap: 6px; border-bottom: 1px solid #393b40; color: #b7bac0; }
 .git-branch span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .git-changes { flex: 1; overflow: auto; padding-bottom: 12px; }
@@ -1229,6 +1232,16 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 :root[data-theme="light"] .useful-row.selected { background: #d9e7fb; color: #17233a; }
 :root[data-theme="light"] .task-row.selected .task-title strong,
 :root[data-theme="light"] .tree-row.selected { color: #17233a; }
+:root[data-theme="light"] .project-file-tree,
+:root[data-theme="light"] .project-tree-actions,
+:root[data-theme="light"] .workspace-name { background: #ffffff; }
+:root[data-theme="light"] .project-file-tree .tree-row { color: #252830; }
+:root[data-theme="light"] .project-file-tree .tree-chevron { color: #8b909b; }
+:root[data-theme="light"] .project-file-tree :where(.tree-row:not([class*="file-color-"])) .folder-kind-icon { color: #9298a5; }
+:root[data-theme="light"] .project-file-tree .folder-kind-icon { fill: #f0f1f4; }
+:root[data-theme="light"] .project-file-tree .tree-row:hover { background: #f3f4f6; }
+:root[data-theme="light"] .project-file-tree .tree-row.selected { background: #e9eaef; color: #252830; border-radius: 3px; }
+:root[data-theme="light"] .project-file-tree .tree-row.selected::before { display: none; }
 :root[data-theme="light"] .ai-message { background: #f5f6f7; }
 :root[data-theme="light"] .ai-permission { background: #fff8e6; border-color: #d9a441; color: #5f4611; }
 :root[data-theme="light"] .ai-permission button { border-color: #c2c5ca; }
