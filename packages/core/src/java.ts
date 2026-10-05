@@ -44,7 +44,8 @@ export class JavaProjectService {
   constructor(
     private readonly filesystem: WorkspaceFileSystem,
     private readonly state: WorkspaceStateStore,
-    private readonly onProcessEvent: (event: JavaProcessEvent) => void
+    private readonly onProcessEvent: (event: JavaProcessEvent) => void,
+    private readonly onBuildSucceeded: () => Promise<void> = async () => undefined
   ) {}
 
   async loadMavenProject(pomPath: string): Promise<{ options: JavaProjectOptions; tree: JavaProjectNode[] }> {
@@ -696,6 +697,7 @@ export class JavaProjectService {
   private async start(goals: string[], label: string): Promise<void> {
     if (this.process || this.debugStarting) throw new CoreError("JAVA_PROCESS_FAILED", "A Java build or run process is already active");
     const options = await this.requireOptions();
+    const buildGeneration = this.debugLaunchGeneration;
     if (this.process || this.debugStarting) throw new CoreError("JAVA_PROCESS_FAILED", "A Java process is already active");
     this.onProcessEvent({ type: "output", data: `> ${options.mavenExecutable} -f ${options.pomPath} ${goals.join(" ")}\n` });
     try {
@@ -705,9 +707,14 @@ export class JavaProjectService {
       child.stdout.on("data", (data: Buffer) => this.onProcessEvent({ type: "output", data: data.toString() }));
       child.stderr.on("data", (data: Buffer) => this.onProcessEvent({ type: "output", data: data.toString() }));
       child.on("error", (error) => this.onProcessEvent({ type: "output", data: `${javaSpawnError(error, executable, label).message}\n` }));
-      child.on("close", (exitCode, signal) => {
+      child.on("close", async (exitCode, signal) => {
         if (this.process !== child) return;
-        this.process = undefined;
+        if (exitCode === 0 && !signal && buildGeneration === this.debugLaunchGeneration) {
+          this.dependencyTypes = undefined;
+          try { await this.onBuildSucceeded(); }
+          catch (error) { this.onProcessEvent({ type: "output", data: `Java highlighting refresh failed: ${error instanceof Error ? error.message : String(error)}\n` }); }
+        }
+        if (this.process === child) this.process = undefined;
         this.onProcessEvent({ type: "exit", exitCode, signal });
       });
       await new Promise<void>((resolve, reject) => { child.once("spawn", resolve); child.once("error", (error) => reject(javaSpawnError(error, executable, label))); });

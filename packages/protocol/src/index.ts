@@ -644,6 +644,7 @@ export type TerminalExitEvent = {
 export type GitChangedEvent = { type: "git.changed"; payload: { rootId: WorkspaceRootId } };
 export type TaskGitChangedEvent = { type: "taskGit.changed"; payload: { rootId: WorkspaceRootId } };
 
+export type JavaSemanticChangedEvent = { type: "java.semantic.changed"; payload: { rootId: WorkspaceRootId } };
 export type JavaOutputEvent = { type: "java.output"; payload: { rootId: WorkspaceRootId; data: string } };
 export type JavaExitEvent = { type: "java.exit"; payload: { rootId: WorkspaceRootId; exitCode: number | null; signal: string | null } };
 export type JavaDebugStateEvent = { type: "java.debug.state"; payload: JavaDebugState & { rootId: WorkspaceRootId } };
@@ -653,7 +654,7 @@ export type CommitMessageChangedEvent = { type: "commit-message.changed"; payloa
 export type RunConfigChangedEvent = { type: "runConfig.changed"; payload: { rootId: WorkspaceRootId; configs: RunConfig[] } };
 
 export type HarnessChangedEvent = { type: "harness.changed"; payload: { rootId: WorkspaceRootId; runId: string } };
-export type ServerEvent = FilesystemChangedEvent | TerminalOutputEvent | TerminalExitEvent | GitChangedEvent | TaskGitChangedEvent | JavaOutputEvent | JavaExitEvent | JavaDebugStateEvent | AiChangedEvent | TasksChangedEvent | CommitMessageChangedEvent | RunConfigChangedEvent | HarnessChangedEvent;
+export type ServerEvent = FilesystemChangedEvent | TerminalOutputEvent | TerminalExitEvent | GitChangedEvent | TaskGitChangedEvent | JavaSemanticChangedEvent | JavaOutputEvent | JavaExitEvent | JavaDebugStateEvent | AiChangedEvent | TasksChangedEvent | CommitMessageChangedEvent | RunConfigChangedEvent | HarnessChangedEvent;
 
 /**
  * Every request the core accepts. Declaring it as a fully keyed record makes TypeScript

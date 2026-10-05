@@ -337,14 +337,17 @@ export async function createServer(host: string, port: number, workspacePath: st
       const workspaceState = new WorkspaceStateStore(nextWorkspace, process.env.REMOTE_IDE_STATE_DIR);
       const search = new WorkspaceSearch(filesystem);
       const git = new GitService(nextWorkspace);
+      const jdt = new JdtLanguageService(filesystem);
       const java = new JavaProjectService(filesystem, workspaceState, (event) => {
       if (socket.readyState !== WebSocket.OPEN) return;
       const message: ServerEvent = event.type === "output" ? { type: "java.output", payload: { rootId: ownerRootId, data: event.data } }
         : event.type === "debug" ? { type: "java.debug.state", payload: { ...event.state, rootId: ownerRootId } }
         : { type: "java.exit", payload: { rootId: ownerRootId, exitCode: event.exitCode, signal: event.signal } };
       sendWebSocketData(socket, JSON.stringify(message));
+      }, async () => {
+        try { await jdt.rebuild(); }
+        finally { if (socket.readyState === WebSocket.OPEN) sendWebSocketData(socket, JSON.stringify({ type: "java.semantic.changed", payload: { rootId: ownerRootId } } satisfies ServerEvent)); }
       });
-      const jdt = new JdtLanguageService(filesystem);
       const checkpoints = checkpointStore(nextWorkspace); await checkpoints.recover();
       return { workspacePath: nextWorkspace, filesystem, search, git, java, jdt, workspaceState, checkpoints };
     };
