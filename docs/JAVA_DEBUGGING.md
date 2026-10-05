@@ -42,3 +42,60 @@ See the [Java class redefinition specification](https://docs.oracle.com/en/java/
 Core needs a project JDK providing `java`, `javac`, and `jdb`, plus the configured
 Maven executable. Apply is available in a paused debug session, not in a normal
 Java run. Class redefinition support and restrictions are determined by the JVM.
+
+## Configure Maven, Java, and launch profiles
+
+Open **Java run/debug configuration** with the gear beside the launch-profile
+selector or in the Java panel. You can also find it in the command palette.
+The editor has a form and a JSON tab with an **Insert template** action. Saving
+writes `.vibe/java.json` in the remote workspace. Existing workspace settings
+are used until you save this file; subsequent runs read the JSON file directly.
+You can edit it in the regular file editor too. Invalid JSON stays available for
+repair, and the configuration dialog checks the file revision before overwriting
+an externally edited file.
+
+Configure **Maven executable** as `mvn`, `./mvnw`, or the full executable path on
+the Core host. Loading a Maven project detects a wrapper beside its pom.xml or
+at the workspace root. Maven arguments, such as `-Pdevelopment`, have their own
+field. Build goals default to `package` and `-DskipTests` and run before both Run
+and Debug. The project pom.xml controls compiler/plugin details.
+
+**JDK home** is a JDK directory, such as `/usr/lib/jvm/java-21-openjdk`, rather
+than the `bin/java` executable. Blank uses the Core host's `JAVA_HOME` or `PATH`.
+An explicit JDK home selects its Java and debugger binaries and sets `JAVA_HOME`
+and `PATH` for Maven. **Check tools** runs version checks for Maven, Java, javac,
+and jdb using the unsaved draft settings.
+
+Create, rename, duplicate, or remove launch profiles in the form. Choose the
+profile used for Run/Debug, set a main class, and optionally supply program
+arguments, VM arguments, application environment variables, and a working
+directory relative to the workspace (`.` means its root). Form argument lists
+use one argument per line; a line containing spaces is one argument. Shell
+quoting is unnecessary. JSON supports empty arguments as well.
+
+For example, the launch-specific part of a profile can be:
+
+```json
+{
+  "id": "development",
+  "name": "Development",
+  "mainClass": "com.example.App",
+  "programArguments": ["--message", "hello world"],
+  "vmArguments": ["-ea", "-Xmx1g", "-Dapp.mode=development"],
+  "workingDirectory": ".",
+  "environment": { "APP_MODE": "development" }
+}
+```
+
+If a build previously reported `spawn mvn ENOENT`, the Core host could not find
+Maven in its environment. Choose a project wrapper or the full installed Maven
+path, check the tools, save, and retry. A permission error on a wrapper means its
+script needs execute permission, such as `chmod +x mvnw` on the Core host. A
+wrapper also needs its script interpreter to be installed.
+
+Run now builds and launches the configured main class directly using Java,
+without depending on Maven's exec plugin. Debug starts the same application JVM
+with a local-only debugging connection and attaches jdb. Application output is
+kept separate from debugger command output. Stop the Java process before saving
+configuration changes; applying method-body edits uses the session's original
+build/tool settings until you start a new session.

@@ -62,7 +62,7 @@ export function javaToolEnvironment(options: JavaProjectOptions, workspace: stri
 
 export function javaSpawnError(error: Error, executable: string, label: string): CoreError {
   const code = (error as NodeJS.ErrnoException).code;
-  const maven = /(?:mvn|maven)/i.test(path.basename(executable)) || label.toLowerCase().includes("build") || label.toLowerCase().includes("compile") || label.includes("classpath");
+  const maven = label === "Maven" || label !== "Java compiler" && /(?:mvn|maven|build|compile|classpath)/i.test(`${path.basename(executable)} ${label}`);
   const setting = maven ? "Maven executable" : "JDK home";
   const advice = maven ? "Choose the project's ./mvnw wrapper or the full path to your Maven installation." : "Choose a full JDK installation that includes java, javac, and jdb.";
   if (code === "ENOENT") return new CoreError("JAVA_PROCESS_FAILED", `${label}: "${executable}" was not found on the Core host. Open Java configuration → ${setting}. ${advice} These tools run on the Core host, not your desktop. If the executable exists, check that the working directory and script interpreter exist too.`);
