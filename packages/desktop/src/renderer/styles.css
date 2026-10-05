@@ -1928,3 +1928,19 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 :root[data-theme="light"] .useful-files-list .useful-row:hover { background: #f3f4f6; }
 :root[data-theme="light"] .useful-files-list .useful-row.selected { background: #e9eaef; color: #111111; border-radius: 3px; }
 :root[data-theme="light"] .agent-kind-icon { color: #9298a5; }
+
+/* File names use the static Regular face at its default weight. */
+.tree-file-name,
+.git-file-name,
+.useful-open > span,
+.tab-file-name {
+  font-family: "JetBrains Mono", monospace;
+  font-weight: normal;
+  font-synthesis: none;
+}
+:root[data-theme="light"] .tree-file-name,
+:root[data-theme="light"] .git-file-name,
+:root[data-theme="light"] .useful-open > span,
+:root[data-theme="light"] .tab-file-name,
+:root[data-theme="light"] .tab-file-name.git-modified,
+:root[data-theme="light"] .tab-file-name.git-created { color: #000000; }
