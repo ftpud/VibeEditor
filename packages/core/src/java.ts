@@ -6,6 +6,7 @@ import path from "node:path";
 import { XMLParser } from "fast-xml-parser";
 import type { FileRevision, JavaToolCheck, JavaRunConfiguration, JavaApplyChangesResult, JavaBreakpoint, JavaDebugVariable, JavaDebugState, JavaDiagnostic, JavaMainClass, JavaProjectNode, JavaProjectOptions, JavaTypeSuggestion } from "@remote-ide/protocol";
 import { javaBuildKey, javaBuildFingerprint, javaOutputFingerprint } from "./java-launch-cache.js";
+import { javaFileType } from "./java-file-type.js";
 import { CoreError } from "./errors.js";
 import { WorkspaceFileSystem } from "./filesystem.js";
 import { javaConfigurationPath } from "@remote-ide/protocol";
@@ -856,10 +857,17 @@ export class JavaProjectService {
 
   private async buildProjectTree(options: JavaProjectOptions): Promise<JavaProjectNode[]> {
     const roots: JavaProjectNode[] = [];
+    const moduleRoot = path.posix.dirname(options.pomPath);
+    let testRoot = path.posix.join(moduleRoot, "src/test/java");
+    try {
+      const document = new XMLParser().parse((await this.filesystem.read(options.pomPath)).content);
+      const configured = document.project?.build?.testSourceDirectory;
+      if (typeof configured === "string") testRoot = path.posix.join(moduleRoot, configured);
+    } catch { /* Keep the conventional test root when the POM is unavailable. */ }
     for (const sourceRoot of options.sourceRoots) {
       let absolute: string;
       try { absolute = await this.filesystem.resolveExisting(sourceRoot); } catch { continue; }
-      roots.push({ name: sourceRoot, path: sourceRoot, type: "sourceRoot", children: await this.walkPackages(absolute, sourceRoot) });
+      roots.push({ name: sourceRoot, path: sourceRoot, type: "sourceRoot", sourceKind: sourceRoot === testRoot ? "test" : "source", children: await this.walkPackages(absolute, sourceRoot) });
     }
     return roots;
   }
@@ -872,7 +880,11 @@ export class JavaProjectService {
       const absolute = path.join(directory, entry.name);
       const relative = path.posix.join(relativeDirectory, entry.name);
       if (entry.isDirectory()) nodes.push({ name: entry.name, path: relative, type: "package", children: await this.walkPackages(absolute, relative) });
-      else if (entry.isFile() && entry.name.endsWith(".java")) nodes.push({ name: entry.name, path: relative, type: "file" });
+      else if (entry.isFile() && entry.name.endsWith(".java")) {
+        let javaType: JavaProjectNode["javaType"];
+        try { javaType = javaFileType((await this.filesystem.read(relative)).content, entry.name.slice(0, -5)); } catch { /* Unreadable files retain the generic Java icon. */ }
+        nodes.push({ name: entry.name, path: relative, type: "file", ...(javaType ? { javaType } : {}) });
+      }
     }
     return compactPackages(nodes);
   }

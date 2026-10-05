@@ -122,9 +122,18 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .tree-indent { width: 14px; flex: 0 0 14px; }
 .file-kind-icon { flex: 0 0 14px; }
 .folder-kind-icon { flex: 0 0 15px; }
-.project-file-tree .tree-row { font-weight: min(400, var(--ui-font-weight)); }
+.project-file-tree .tree-row { height: 22px; font-size: calc(1rem - 1pt); font-weight: min(400, var(--ui-font-weight)); line-height: 1; }
 .project-file-tree .tree-chevron { flex: 0 0 14px; color: #85888e; stroke-width: 1.5; }
 .project-file-tree .folder-kind-icon { color: #9298a3; fill: #9298a31a; stroke-width: 1.25; }
+.java-generic-icon { color: #ae9580; stroke-width: 1.5; }
+.java-type-icon { color: #829dbb; overflow: visible; }
+.java-type-interface { color: #82a28a; }
+.java-type-enum, .java-type-record { color: #a094b5; }
+.java-type-annotation { color: #ad9f78; }
+.folder-kind-icon:where(.java-root-source) { color: #789bc3; fill: #789bc314; }
+.folder-kind-icon:where(.java-root-test) { color: #7fa489; fill: #7fa48914; }
+.project-file-tree .folder-kind-icon:where(.java-root-source) { color: #789bc3; fill: #789bc314; }
+.project-file-tree .folder-kind-icon:where(.java-root-test) { color: #7fa489; fill: #7fa48914; }
 .git-branch { height: 28px; padding: 0 9px; display: flex; align-items: center; gap: 6px; border-bottom: 1px solid #393b40; color: #b7bac0; }
 .git-branch span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .git-changes { flex: 1; overflow: auto; padding-bottom: 12px; }
@@ -1239,6 +1248,8 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 :root[data-theme="light"] .project-file-tree .tree-chevron { color: #8b909b; }
 :root[data-theme="light"] .project-file-tree :where(.tree-row:not([class*="file-color-"])) .folder-kind-icon { color: #9298a5; }
 :root[data-theme="light"] .project-file-tree .folder-kind-icon { fill: #f0f1f4; }
+:root[data-theme="light"] .project-file-tree :where(.tree-row:not([class*="file-color-"])) .folder-kind-icon.java-root-source { color: #789bc3; fill: #eef3f9; }
+:root[data-theme="light"] .project-file-tree :where(.tree-row:not([class*="file-color-"])) .folder-kind-icon.java-root-test { color: #7fa489; fill: #eff5f0; }
 :root[data-theme="light"] .project-file-tree .tree-row:hover { background: #f3f4f6; }
 :root[data-theme="light"] .project-file-tree .tree-row.selected { background: #e9eaef; color: #111111; border-radius: 3px; }
 :root[data-theme="light"] .project-file-tree .tree-row.selected::before { display: none; }

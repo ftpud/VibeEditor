@@ -258,7 +258,16 @@ export type JavaProjectNode = {
   name: string;
   path: string;
   type: "sourceRoot" | "package" | "file";
+  sourceKind?: "source" | "test";
+  javaType?: JavaFileType;
   children?: JavaProjectNode[];
+};
+
+export type JavaFileType = {
+  kind: "class" | "interface" | "enum" | "record" | "annotation";
+  abstract?: boolean;
+  extends?: boolean;
+  implements?: boolean;
 };
 
 export type SearchContextLine = { line: number; text: string; truncated: boolean };
