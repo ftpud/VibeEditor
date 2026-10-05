@@ -1,3 +1,4 @@
+import { installSelectionHighlight } from "./selection-highlight";
 import type { Monaco } from "@monaco-editor/react";
 import { readSetting } from "./settings";
 
@@ -18,6 +19,7 @@ export function monacoTheme(appTheme = currentTheme(), highlightTheme = currentH
 }
 
 export function configureMonacoThemes(monaco: Monaco): void {
+  installSelectionHighlight(monaco);
   if (!monaco.languages.getLanguages().some((language) => language.id === "sap-cds")) {
     monaco.languages.register({ id: "sap-cds", extensions: [".cds"], aliases: ["SAP CDS", "CDS"] });
     monaco.languages.setLanguageConfiguration("sap-cds", {
