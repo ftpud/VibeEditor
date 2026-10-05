@@ -39,6 +39,7 @@ import { FindInFilesDialog } from "./FindInFilesDialog";
 import { initialTaskPanel, switchedTaskPanel, taskPanelPreferenceKey, type ClassicTaskPanel } from "./task-panel-state";
 import { ProjectTree } from "./ProjectTree";
 import { JavaFileIcon } from "./JavaFileIcon";
+import { FileKindIcon } from "./FileKindIcon";
 import { menuPosition } from "./menu-position";
 import { projectTreeActions, type ProjectTreeAction } from "./project-tree-actions";
 import { copyProjectTreeActions } from "./project-context-menu";
@@ -3040,7 +3041,7 @@ function GitChangeGroup({ title, entries, selectedPaths, onTogglePath, activePat
   const allSelected = entries.length > 0 && selectedCount === entries.length;
   return <section className={`git-group git-group-${title.toLowerCase()}`}>
     <button className="git-group-title" aria-expanded={expanded} onClick={() => setExpanded((current) => !current)}>
-      {expanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />}{selectable && <input type="checkbox" aria-label={`Select all ${title.toLowerCase()} files`} checked={allSelected} ref={(input) => { if (input) input.indeterminate = selectedCount > 0 && !allSelected; }} onClick={(event) => event.stopPropagation()} onChange={() => entries.forEach((entry) => { if ((selectedPaths?.has(entry.path) ?? false) === allSelected) onTogglePath?.(entry.path); })} />}<span>{title}</span><span className="git-count">{entries.length}</span>
+      {expanded ? <ChevronDown className="tree-chevron" size={14} /> : <ChevronRight className="tree-chevron" size={14} />}{selectable && <input type="checkbox" aria-label={`Select all ${title.toLowerCase()} files`} checked={allSelected} ref={(input) => { if (input) input.indeterminate = selectedCount > 0 && !allSelected; }} onClick={(event) => event.stopPropagation()} onChange={() => entries.forEach((entry) => { if ((selectedPaths?.has(entry.path) ?? false) === allSelected) onTogglePath?.(entry.path); })} />}<span>{title}</span><span className="git-count">{entries.length}</span>
     </button>
     {expanded && <GitStatusTree entries={entries} selectedPaths={selectedPaths} onTogglePath={onTogglePath} activePath={activePath} onOpenDiff={onOpenDiff} onOpenFile={onOpenFile} onContextMenu={onContextMenu} />}
   </section>;
@@ -3064,7 +3065,7 @@ function GitStatusTree({ entries, selectedPaths, onTogglePath, activePath, onOpe
       return <div key={node.path}>
         <button className="git-file-row git-directory-row" style={{ paddingLeft: (onTogglePath ? 9 : 27) + depth * 13 }} onClick={() => setExpanded((current) => { const next = new Set(current); open ? next.delete(node.path) : next.add(node.path); return next; })}>
           {onTogglePath && <input type="checkbox" aria-label={`Select all changes under ${node.path}`} checked={allSelected} ref={(input) => { if (input) input.indeterminate = selectedCount > 0 && !allSelected; }} onClick={(event) => event.stopPropagation()} onChange={() => descendantPaths.forEach((path) => { if ((selectedPaths?.has(path) ?? false) === allSelected) onTogglePath(path); })} />}
-          {open ? <ChevronDown size={13} /> : <ChevronRight size={13} />}{open ? <FolderOpen size={14} /> : <Folder size={14} />}<span className="git-file-name">{node.name}</span>
+          {open ? <ChevronDown className="tree-chevron" size={14} /> : <ChevronRight className="tree-chevron" size={14} />}{open ? <FolderOpen className="folder-kind-icon" size={15} /> : <Folder className="folder-kind-icon" size={15} />}<span className="git-file-name">{node.name}</span>
         </button>
         {open && renderNodes(node.children, depth + 1)}
       </div>;
@@ -3075,7 +3076,7 @@ function GitStatusTree({ entries, selectedPaths, onTogglePath, activePath, onOpe
     const kind = entry.indexStatus === "U" || entry.worktreeStatus === "U" ? "conflict" : entry.indexStatus === "?" ? "untracked" : deleted ? "deleted" : entry.indexStatus === "A" ? "added" : "modified";
     return <button key={node.path} className={`git-file-row ${activePath === entry.path ? "selected" : ""}`} style={{ paddingLeft: (onTogglePath ? 9 : 27) + depth * 13 }} title={deleted ? `${entry.path} (deleted)` : `${entry.path} - double-click to open file`} onClick={() => onOpenDiff(entry)} onDoubleClick={() => { if (!deleted) onOpenFile(entry); }} onContextMenu={onContextMenu ? (event) => onContextMenu(event, entry) : undefined}>
       {onTogglePath && <input type="checkbox" aria-label={`Select ${entry.path}`} checked={selectedPaths?.has(entry.path) ?? false} onClick={(event) => event.stopPropagation()} onChange={() => onTogglePath(entry.path)} />}
-      <FileCode2 size={14} /><span className="git-file-name">{node.name}</span><span className={`git-status ${kind}`}>{status}</span>
+      <span className="tree-indent" /><FileKindIcon name={node.name} /><span className="git-file-name">{node.name}</span><span className={`git-status ${kind}`}>{status}</span>
     </button>;
   });
   return <>{renderNodes(nodes, 0)}</>;

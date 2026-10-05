@@ -1,8 +1,8 @@
-import { Braces, ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, File, FileCode2, FileJson, FileText, Folder, FolderOpen, Hash, LocateFixed } from "lucide-react";
+import { ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, Folder, FolderOpen, LocateFixed } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent } from "react";
 import type { FileColor, FileTreeNode, JavaFileType, JavaProjectNode } from "@remote-ide/protocol";
 import { projectTreeActions, type ProjectTreeAction } from "./project-tree-actions";
-import { JavaFileIcon } from "./JavaFileIcon";
+import { FileKindIcon } from "./FileKindIcon";
 
 type VisibleNode = { node: FileTreeNode; depth: number };
 
@@ -187,12 +187,7 @@ export function ProjectTree({ nodes, javaNodes, query, matchingPaths, activePath
 }
 
 function ProjectFileRow({ node, javaType, depth, selected, active, focused, color: rowColor, gitStatus, setRef, onFocus, onOpen, onContextMenu }: { node: FileTreeNode; javaType?: JavaFileType; depth: number; selected: boolean; active: boolean; focused: boolean; color?: FileColor; gitStatus?: "M" | "C"; setRef(element: HTMLButtonElement | null): void; onFocus(): void; onOpen(event: MouseEvent): void; onContextMenu(event: MouseEvent): void }) {
-  const extension = node.name.split(".").pop()?.toLowerCase() ?? "";
-  const appearance: Record<string, { color: string; Icon: typeof File }> = {
-    ts: { color: "#5e9fd6", Icon: FileCode2 }, tsx: { color: "#5e9fd6", Icon: FileCode2 }, js: { color: "#d9c65c", Icon: FileCode2 }, jsx: { color: "#d9c65c", Icon: FileCode2 }, json: { color: "#c9b45d", Icon: FileJson }, xml: { color: "#d7a85e", Icon: FileCode2 }, html: { color: "#e8845b", Icon: FileCode2 }, css: { color: "#8d7bd8", Icon: Hash }, md: { color: "#78a7cf", Icon: FileText }, py: { color: "#63a86f", Icon: FileCode2 }, yaml: { color: "#ca6b75", Icon: Braces }, yml: { color: "#ca6b75", Icon: Braces }, mta: { color: "#ca6b75", Icon: Braces }, mtaext: { color: "#ca6b75", Icon: Braces }, cds: { color: "#5aa7a0", Icon: FileCode2 }
-  };
-  const { color, Icon } = appearance[extension] ?? { color: "#9aa0a8", Icon: File };
   return <button ref={setRef} role="treeitem" aria-level={depth + 1} aria-selected={selected} aria-current={active ? "page" : undefined} tabIndex={focused ? 0 : -1} className={`tree-row file-row ${selected ? "selected" : ""} ${rowColor ? `file-color-${rowColor}` : ""}`} style={{ paddingLeft: 7 + depth * 13 }} onFocus={onFocus} onContextMenu={onContextMenu} onClick={onOpen}>
-    <span className="tree-indent" />{extension === "java" ? <JavaFileIcon type={javaType} /> : <Icon className="file-kind-icon" color={color} size={14} />}<span className="tree-file-name">{node.name}</span>{gitStatus && <span className={`tree-git-status ${gitStatus === "C" ? "created" : "modified"}`}>{gitStatus}</span>}
+    <span className="tree-indent" /><FileKindIcon name={node.name} javaType={javaType} /><span className="tree-file-name">{node.name}</span>{gitStatus && <span className={`tree-git-status ${gitStatus === "C" ? "created" : "modified"}`}>{gitStatus}</span>}
   </button>;
 }
