@@ -828,12 +828,12 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .monaco-editor .ftpud-java-class { background: #dce8fa; color: #17243a !important; }
 .monaco-editor .ftpud-java-interface { background: #f5e6d8; color: #3a2a1d !important; }
 .monaco-editor .ftpud-java-annotation { background: #e8f2e3; color: #687000 !important; }
-.monaco-editor .ftpud-java-constant { background: #e8f2e3; color: #6a2775 !important; font-weight: 700; font-style: italic; }
+.monaco-editor .ftpud-java-constant { background: #e8f2e3; color: #6a2775 !important; font-weight: min(900, calc(var(--ui-font-weight) + 300)); font-style: italic; }
 .monaco-editor .ftpud-dark-java-class { background: #29384a; color: #cbd8e8 !important; }
 .monaco-editor .ftpud-dark-java-interface { background: #49392d; color: #ddcdbe !important; }
 .monaco-editor .ftpud-dark-java-annotation { background: #304231; color: #c2c07e !important; }
-.monaco-editor .ftpud-dark-java-constant { background: #304231; color: #caa2d1 !important; font-weight: 700; font-style: italic; }
-.monaco-editor .ftpud-java-function, .monaco-editor .ftpud-dark-java-function { font-weight: 700 !important; }
+.monaco-editor .ftpud-dark-java-constant { background: #304231; color: #caa2d1 !important; font-weight: min(900, calc(var(--ui-font-weight) + 300)); font-style: italic; }
+.monaco-editor .ftpud-java-function, .monaco-editor .ftpud-dark-java-function { font-weight: min(900, calc(var(--ui-font-weight) + 300)) !important; }
 .http-response-panel { height: min(300px, 38%); min-height: 130px; flex: 0 0 auto; display: flex; flex-direction: column; border-top: 1px solid #4a4d52; background: #1e1f22; }
 .http-response-panel > header { height: 32px; flex: 0 0 32px; padding: 0 6px 0 10px; display: flex; align-items: center; gap: 9px; border-bottom: 1px solid #393b40; background: #292b2e; }
 .http-response-panel > header > span { min-width: 0; flex: 1; overflow: hidden; color: #c7c9cc; font: 10px Menlo, Monaco, Consolas, monospace; text-overflow: ellipsis; white-space: nowrap; }
@@ -1623,3 +1623,5 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 :root[data-theme="light"] .java-tool-checks .tool-ok { color: #426a21; }
 :root[data-theme="light"] .java-tool-checks .tool-failed { color: #a43b28; }
 @media (max-width: 620px) { .java-config-grid { grid-template-columns: 1fr; } }
+
+.monaco-editor .mtkb { font-weight: min(900, calc(var(--ui-font-weight) + 300)); }

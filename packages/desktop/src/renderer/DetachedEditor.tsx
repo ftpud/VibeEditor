@@ -1,3 +1,4 @@
+import { readSetting, readSettingNumber } from "./settings";
 import Editor from "@monaco-editor/react";
 import { useEffect, useRef, useState } from "react";
 import { CoreClient } from "./client";
@@ -41,5 +42,5 @@ export function DetachedEditor() {
     return () => clearTimeout(timer);
   }, [content, dirty, path, ready, revision, scope, type]);
   if (error && !ready) return <main className="detached-error">{error}</main>;
-  return <main className="detached-editor">{error && <div className="inline-error">{error}</div>}{ready ? <Editor path={`detached/${type}/${scope ?? "workspace"}/${path}`} language={languages[path.split(".").pop()?.toLowerCase() ?? ""] ?? "plaintext"} value={content} beforeMount={configureMonacoThemes} theme={monacoTheme()} options={{ automaticLayout: true, minimap: { enabled: false }, fontSize: 13, scrollBeyondLastLine: false, padding: { top: 10 } }} onChange={(value) => { setContent(value ?? ""); setError(""); }} /> : <div className="empty-editor">Opening {path}...</div>}</main>;
+  return <main className="detached-editor">{error && <div className="inline-error">{error}</div>}{ready ? <Editor path={`detached/${type}/${scope ?? "workspace"}/${path}`} language={languages[path.split(".").pop()?.toLowerCase() ?? ""] ?? "plaintext"} value={content} beforeMount={configureMonacoThemes} theme={monacoTheme()} options={{ automaticLayout: true, minimap: { enabled: false }, fontFamily: readSetting("uiFontFamily") === "inter" ? "Inter Variable" : "JetBrains Mono Variable", fontWeight: String(readSettingNumber("uiFontWeight", 450, 350, 600)), fontSize: 13, scrollBeyondLastLine: false, padding: { top: 10 } }} onChange={(value) => { setContent(value ?? ""); setError(""); }} /> : <div className="empty-editor">Opening {path}...</div>}</main>;
 }
