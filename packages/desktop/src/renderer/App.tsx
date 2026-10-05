@@ -326,6 +326,7 @@ export function App() {
   const gitDecorationsRef = useRef<string[]>([]);
   const activeGitHunksRef = useRef<GitDiffHunk[]>([]);
   const diffRollbackTimer = useRef<ReturnType<typeof setTimeout>>();
+  const refreshJavaSemanticRef = useRef<(() => void) | undefined>();
   const javaLanguageDisposables = useRef<{ dispose(): void }[]>([]);
   const cursorPositionsRef = useRef<CursorPositionStore>();
   const cursorPositions = cursorPositionsRef.current ??= new CursorPositionStore({
@@ -671,6 +672,7 @@ export function App() {
         updateTerminalGroup((current) => ({ ...current, tabs: current.tabs.map((tab) => tab.terminalId === event.payload.terminalId ? { ...tab, status: "exited", exitCode: event.payload.exitCode } : tab) }));
         return;
       }
+      if (event.type === "java.semantic.changed") { refreshJavaSemanticRef.current?.(); return; }
       if (event.type === "java.output") {
         setJavaLog((current) => (current + event.payload.data).slice(-1_000_000));
         return;
@@ -2275,9 +2277,10 @@ export function App() {
         }));
       } catch { if (!semanticDisposed && generation === semanticGeneration) { semanticDecorations = instance.deltaDecorations(semanticDecorations, []); functionMarkers.clear(); } }
     };
+    refreshJavaSemanticRef.current = () => { void decorateJavaTypes(); };
     void decorateJavaTypes();
     javaLanguageDisposables.current.push(instance.onDidChangeModelContent(() => { ++semanticGeneration; if (semanticTimer) clearTimeout(semanticTimer); semanticTimer = setTimeout(() => void decorateJavaTypes(), 500); }));
-    javaLanguageDisposables.current.push({ dispose: () => { semanticDisposed = true; if (semanticTimer) clearTimeout(semanticTimer); functionMarkers.clear(); instance.deltaDecorations(semanticDecorations, []); } });
+    javaLanguageDisposables.current.push({ dispose: () => { semanticDisposed = true; refreshJavaSemanticRef.current = undefined; if (semanticTimer) clearTimeout(semanticTimer); functionMarkers.clear(); instance.deltaDecorations(semanticDecorations, []); } });
     javaLanguageDisposables.current.push(api.languages.registerCompletionItemProvider("java", {
       triggerCharacters: ["."],
       provideCompletionItems: async (model, position) => {

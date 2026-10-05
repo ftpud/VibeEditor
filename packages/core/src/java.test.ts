@@ -6,7 +6,7 @@ import { WorkspaceFileSystem } from "./filesystem.js";
 import { JavaProjectService } from "./java.js";
 import { WorkspaceStateStore } from "./workspace-state.js";
 
-async function createMavenWorkspace(onEvent: ConstructorParameters<typeof JavaProjectService>[2] = () => undefined) {
+async function createMavenWorkspace(onEvent: ConstructorParameters<typeof JavaProjectService>[2] = () => undefined, onBuildSucceeded?: () => Promise<void>) {
   const root = await mkdtemp(path.join(tmpdir(), "remote-ide-java-"));
   const stateDirectory = await mkdtemp(path.join(tmpdir(), "remote-ide-java-state-"));
   await mkdir(path.join(root, "src", "main", "java", "com", "example"), { recursive: true });
@@ -17,7 +17,7 @@ async function createMavenWorkspace(onEvent: ConstructorParameters<typeof JavaPr
   const filesystem = new WorkspaceFileSystem();
   await filesystem.open(root);
   const state = new WorkspaceStateStore(root, stateDirectory);
-  return { root, filesystem, state, service: new JavaProjectService(filesystem, state, onEvent) };
+  return { root, filesystem, state, service: new JavaProjectService(filesystem, state, onEvent, onBuildSucceeded) };
 }
 
 describe("JavaProjectService", () => {
@@ -188,4 +188,23 @@ describe("Java launch build reuse", () => {
     service.stop();
     await expect(launch.prepareLaunch(options, "Run build", 0)).rejects.toThrow("cancelled");
   });
+});
+
+
+it("refreshes language metadata only after a successful explicit Java Build", async () => {
+  const refresh = vi.fn(async () => undefined);
+  const events: unknown[] = [];
+  const { root, state, service } = await createMavenWorkspace((event) => events.push(event), refresh);
+  const { options } = await service.loadMavenProject("pom.xml");
+  const script = path.join(root, "fake-maven.cjs");
+  await writeFile(script, "process.exit(0)");
+  await state.save({ openFiles: [], javaProject: { ...options, mavenExecutable: process.execPath, mavenArguments: [script] } });
+  await service.build();
+  await vi.waitFor(() => expect(events).toContainEqual(expect.objectContaining({ type: "exit", exitCode: 0 })));
+  expect(refresh).toHaveBeenCalledTimes(1);
+  events.length = 0;
+  await writeFile(script, "process.exit(1)");
+  await service.build();
+  await vi.waitFor(() => expect(events).toContainEqual(expect.objectContaining({ type: "exit", exitCode: 1 })));
+  expect(refresh).toHaveBeenCalledTimes(1);
 });

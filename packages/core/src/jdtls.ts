@@ -1,11 +1,10 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import crypto from "node:crypto";
 import { cp, mkdir, readdir } from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { pathToFileURL, fileURLToPath } from "node:url";
 import { createMessageConnection, StreamMessageReader, StreamMessageWriter, type MessageConnection } from "vscode-jsonrpc/node.js";
 import type { JavaLspCompletion, JavaLspLocation, JavaSemanticToken, WorkspaceSymbol } from "@remote-ide/protocol";
+import { JavaSemanticCache, javaLanguageStateDirectory } from "./java-semantic-cache.js";
 import { CoreError } from "./errors.js";
 import { WorkspaceFileSystem } from "./filesystem.js";
 
@@ -21,7 +20,11 @@ export class JdtLanguageService {
   private readonly documents = new Map<string, { content: string; version: number }>();
   private semanticLegend: { tokenTypes: string[]; tokenModifiers: string[] } = { tokenTypes: [], tokenModifiers: [] };
 
-  constructor(private readonly filesystem: WorkspaceFileSystem) {}
+  private readonly cache: JavaSemanticCache;
+  private closed = false;
+  constructor(private readonly filesystem: WorkspaceFileSystem, private readonly stateDirectory?: string) {
+    this.cache = new JavaSemanticCache(filesystem.getWorkspace(), stateDirectory);
+  }
 
   async completion(filePath: string, content: string, line: number, column: number): Promise<JavaLspCompletion[]> {
     const connection = await this.ready();
@@ -62,6 +65,10 @@ export class JdtLanguageService {
   }
 
   async semanticTokens(filePath: string, content: string): Promise<JavaSemanticToken[]> {
+    if (this.closed) throw new CoreError("JAVA_PROCESS_FAILED", "Java language service is closed");
+    await this.filesystem.resolveExisting(filePath);
+    const cached = await this.cache.get(filePath, content).catch(() => ({ generation: "unavailable", tokens: undefined }));
+    if (cached.tokens) return cached.tokens;
     const connection = await this.ready();
     const uri = await this.sync(filePath, content);
     const result = await connection.sendRequest("textDocument/semanticTokens/full", { textDocument: { uri } }) as { data?: number[] } | null;
@@ -73,10 +80,33 @@ export class JdtLanguageService {
       const modifiers = this.semanticLegend.tokenModifiers.filter((_, bit) => (bits & (1 << bit)) !== 0);
       tokens.push({ startLine: line + 1, startColumn: column + 1, endLine: line + 1, endColumn: column + length + 1, type, modifiers });
     }
+    if (tokens.length || !content.trim()) await this.cache.put(filePath, content, tokens, cached.generation).catch((error) => console.error(`[jdtls] could not cache highlighting: ${String(error)}`));
     return tokens;
   }
 
+  async rebuild(): Promise<void> {
+    if (this.closed) return;
+    const files = new Set([...await this.cache.files(), ...[...this.documents.keys()].map((uri) => this.relativeUri(uri))]);
+    await this.cache.invalidate();
+    const connection = await this.ready();
+    const snapshots = await Promise.all([...files].map(async (file) => {
+      try { return { file, content: (await this.filesystem.read(file)).content }; } catch { return undefined; }
+    }));
+    const existing = snapshots.filter((snapshot): snapshot is { file: string; content: string } => !!snapshot);
+    await Promise.all(existing.map((snapshot) => this.sync(snapshot.file, snapshot.content)));
+    connection.sendNotification("workspace/didChangeWatchedFiles", { changes: existing.map(({ file }) => ({ uri: pathToFileURL(path.resolve(this.filesystem.getWorkspace(), file)).href, type: 2 })) });
+    const result = await connection.sendRequest("java/buildWorkspace", true);
+    if (result !== 1) throw new CoreError("JAVA_PROCESS_FAILED", `Java type index rebuild did not succeed (status ${result})`);
+    for (const { file, content } of existing) {
+      if (this.closed) return;
+      try { await this.semanticTokens(file, content); }
+      catch (error) { console.error(`[jdtls] could not refresh ${file}: ${String(error)}`); }
+    }
+  }
+
   close(): void {
+    if (this.closed) return;
+    this.closed = true;
     const connection = this.connection;
     const child = this.process;
     if (!connection) { child?.kill("SIGTERM"); return; }
@@ -113,8 +143,10 @@ export class JdtLanguageService {
   }
 
   private async ready(): Promise<MessageConnection> {
-    if (!this.starting) this.starting = this.start();
+    if (this.closed) throw new CoreError("JAVA_PROCESS_FAILED", "Java language service is closed");
+    if (!this.starting) this.starting = this.start().catch((error) => { this.starting = undefined; throw error; });
     await this.starting;
+    if (this.closed) throw new CoreError("JAVA_PROCESS_FAILED", "Java language service is closed");
     return this.connection!;
   }
 
@@ -125,19 +157,21 @@ export class JdtLanguageService {
     const launcher = plugins.find((name) => /^org\.eclipse\.equinox\.launcher_.*\.jar$/.test(name));
     if (!launcher) throw new CoreError("JAVA_PROCESS_FAILED", "JDT LS launcher was not found");
     const platform = process.platform === "darwin" ? "mac" : process.platform === "win32" ? "win" : "linux";
-    const id = crypto.createHash("sha1").update(this.filesystem.getWorkspace()).digest("hex");
-    const data = path.join(os.tmpdir(), "vibe-jdtls", id, "data");
-    const configuration = path.join(os.tmpdir(), "vibe-jdtls", id, "config");
+    const state = javaLanguageStateDirectory(this.filesystem.getWorkspace(), this.stateDirectory);
+    const data = path.join(state, "jdtls", "data");
+    const configuration = path.join(state, "jdtls", "config");
     await mkdir(path.dirname(configuration), { recursive: true });
     await cp(path.join(distribution, `config_${platform}`), configuration, { recursive: true, force: true });
     await mkdir(data, { recursive: true });
     const bundledJava = path.join(bundledTools, "jre21", process.platform === "darwin" ? "Contents/Home/bin/java" : process.platform === "win32" ? "bin/java.exe" : "bin/java");
+    if (this.closed) throw new CoreError("JAVA_PROCESS_FAILED", "Java language service is closed");
     const child = spawn(bundledJava, ["-Declipse.application=org.eclipse.jdt.ls.core.id1", "-Dosgi.bundles.defaultStartLevel=4", "-Declipse.product=org.eclipse.jdt.ls.core.product", "-Dlog.level=ERROR", "-Xmx1G", "--add-modules=ALL-SYSTEM", "--add-opens", "java.base/java.util=ALL-UNNAMED", "--add-opens", "java.base/java.lang=ALL-UNNAMED", "-jar", path.join(distribution, "plugins", launcher), "-configuration", configuration, "-data", data], { cwd: this.filesystem.getWorkspace(), stdio: "pipe" });
     this.process = child;
     child.stderr.on("data", (data) => console.error(`[jdtls] ${data.toString().trimEnd()}`));
     const connection = createMessageConnection(new StreamMessageReader(child.stdout), new StreamMessageWriter(child.stdin));
     this.connection = connection;
-    connection.onRequest("workspace/configuration", () => []);
+    const javaSettings = { autobuild: { enabled: false } };
+    connection.onRequest("workspace/configuration", (params: any) => (params?.items ?? []).map((item: any) => item.section === "java.autobuild.enabled" ? false : item.section === "java" ? javaSettings : { java: javaSettings }));
     connection.onRequest("client/registerCapability", () => null);
     connection.onRequest("workspace/workspaceFolders", () => [{ uri: pathToFileURL(this.filesystem.getWorkspace()).href, name: path.basename(this.filesystem.getWorkspace()) }]);
     const serviceReady = new Promise<void>((resolve) => {
@@ -145,10 +179,11 @@ export class JdtLanguageService {
       connection.onNotification("language/status", (status: any) => { if (status?.type === "ServiceReady") { clearTimeout(timer); resolve(); } });
     });
     connection.listen();
-    const initialized = await connection.sendRequest("initialize", { processId: process.pid, rootUri: pathToFileURL(this.filesystem.getWorkspace()).href, initializationOptions: { bundles: [], extendedClientCapabilities: { progressReportProvider: true, classFileContentsSupport: true } }, capabilities: { textDocument: { synchronization: { dynamicRegistration: false, didSave: true }, completion: { completionItem: { snippetSupport: false, resolveSupport: { properties: ["additionalTextEdits", "textEdit"] } } }, definition: {}, references: {}, semanticTokens: { requests: { full: true }, tokenTypes: ["namespace", "type", "class", "enum", "interface", "struct", "typeParameter", "parameter", "variable", "property", "enumMember", "event", "function", "method", "macro", "keyword", "modifier", "comment", "string", "number", "regexp", "operator", "decorator"], tokenModifiers: ["declaration", "definition", "readonly", "static", "deprecated", "abstract", "async", "modification", "documentation", "defaultLibrary"] } }, workspace: { workspaceFolders: true, configuration: true } }, workspaceFolders: [{ uri: pathToFileURL(this.filesystem.getWorkspace()).href, name: path.basename(this.filesystem.getWorkspace()) }] }) as any;
+    const initialized = await connection.sendRequest("initialize", { processId: process.pid, rootUri: pathToFileURL(this.filesystem.getWorkspace()).href, initializationOptions: { settings: { java: javaSettings }, bundles: [], extendedClientCapabilities: { progressReportProvider: true, classFileContentsSupport: true } }, capabilities: { textDocument: { synchronization: { dynamicRegistration: false, didSave: true }, completion: { completionItem: { snippetSupport: false, resolveSupport: { properties: ["additionalTextEdits", "textEdit"] } } }, definition: {}, references: {}, semanticTokens: { requests: { full: true }, tokenTypes: ["namespace", "type", "class", "enum", "interface", "struct", "typeParameter", "parameter", "variable", "property", "enumMember", "event", "function", "method", "macro", "keyword", "modifier", "comment", "string", "number", "regexp", "operator", "decorator"], tokenModifiers: ["declaration", "definition", "readonly", "static", "deprecated", "abstract", "async", "modification", "documentation", "defaultLibrary"] } }, workspace: { workspaceFolders: true, configuration: true } }, workspaceFolders: [{ uri: pathToFileURL(this.filesystem.getWorkspace()).href, name: path.basename(this.filesystem.getWorkspace()) }] }) as any;
     const provider = initialized?.capabilities?.semanticTokensProvider;
     if (provider?.legend) this.semanticLegend = provider.legend;
     connection.sendNotification("initialized", {});
+    connection.sendNotification("workspace/didChangeConfiguration", { settings: { java: javaSettings } });
     await serviceReady;
   }
 
