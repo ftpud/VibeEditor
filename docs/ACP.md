@@ -1,6 +1,6 @@
 # AI Capability Provider layer
 
-The core talks to AI tools only through `AcpProvider` and `AcpRegistry` in `packages/core/src/ai/acp.ts`. Provider adapters live under `packages/core/src/ai/providers/`. Codex and Copilot are plugins registered at server startup; request routing and the desktop UI do not branch on their ids.
+The core talks to AI tools only through `AcpProvider` from `packages/acp/src/index.ts` and `AcpRegistry` in `packages/core/src/ai/acp.ts`. Provider adapters live under `packages/core/src/ai/providers/`. Codex and Copilot are plugins registered at server startup; request routing and the desktop UI do not branch on their ids.
 
 ## Provider contract
 
@@ -10,7 +10,7 @@ An ACP plugin supplies:
 - model discovery, resumable session persistence, configuration, typed-content send, permission resolution, clear, and optional usage operations;
 - translation of the common MCP server and custom-agent structures to its native CLI/API.
 
-To add a provider, subclass `AcpProvider`, implement the six operations under `ai/providers`, and register one instance in `ai/index.ts`. `AiProvider` is an open string, and the desktop builds its provider selector and extra controls from `ai.providers`, so no protocol or UI enum needs editing.
+To add a provider, subclass `AcpProvider`, implement its required session/model/configuration operations under `ai/providers`, and register one instance in `ai/index.ts`. `AiProvider` is an open string, and the desktop builds its provider selector and extra controls from `ai.providers`, so no protocol or UI enum needs editing.
 
 ## Current adapters
 
