@@ -8,10 +8,12 @@ export function validateHarness(harness: HarnessDefinition): { valid: boolean; i
   for (const block of harness.blocks) {
     if (ids.has(block.id)) issues.push({ code: "duplicate-id", blockId: block.id, message: `Block ID '${block.id}' is duplicated` }); ids.add(block.id);
     if (!block.label.trim()) issues.push({ code: "empty-label", blockId: block.id, message: "Every block needs a name" });
-    if (!block.watchdog && !block.prompt.trim()) issues.push({ code: "empty-prompt", blockId: block.id, message: `Block '${block.label || block.id}' needs a prompt` });
+    if (!["text", "timer", "script", "start_input"].includes(block.type) && !block.watchdog && !block.prompt.trim()) issues.push({ code: "empty-prompt", blockId: block.id, message: `Block '${block.label || block.id}' needs a prompt` });
     if (block.type === "review" && (!block.review || !isCommit(block.review.revision) || (block.review.baseRevision !== undefined && !isCommit(block.review.baseRevision)))) issues.push({ code: "invalid-gate", blockId: block.id, message: `Review block '${block.label || block.id}' needs an exact commit SHA and optional base SHA` });
     if (block.review?.correction && (!harness.blocks.some((item) => item.id === block.review!.correction!.ownerBlockId) || block.review.correction.ownerBlockId === block.id || (block.review.correction.maxCycles !== undefined && (!Number.isInteger(block.review.correction.maxCycles) || block.review.correction.maxCycles < 1 || block.review.correction.maxCycles > 20)) || (block.review.correction.verificationBlockId !== undefined && !harness.blocks.some((item) => item.id === block.review!.correction!.verificationBlockId)))) issues.push({ code: "invalid-gate", blockId: block.id, message: `Review correction settings need an existing owner block, optional verification block, and a cycle limit from 1 to 20` });
     if (block.type === "verification" && (!block.verification || !block.verification.command.trim() || (block.verification.revision !== undefined && !isCommit(block.verification.revision)) || (block.verification.timeoutMs !== undefined && (!Number.isInteger(block.verification.timeoutMs) || block.verification.timeoutMs < 1 || block.verification.timeoutMs > 30 * 60_000)) || (block.verification.workingDirectory !== undefined && (!block.verification.workingDirectory.trim() || block.verification.workingDirectory.includes("\\0"))))) issues.push({ code: "invalid-gate", blockId: block.id, message: `Verification block '${block.label || block.id}' needs a command, valid optional revision, working directory, and timeout` });
+    if (block.type === "timer" && (!Number.isFinite(block.seconds) || block.seconds! < 0 || block.seconds! > 86400)) issues.push({ code: "invalid-gate", blockId: block.id, message: "Timer duration must be between 0 and 86400 seconds" });
+    if (block.type === "script" && !block.command?.trim()) issues.push({ code: "invalid-gate", blockId: block.id, message: "Script execution needs a command" });
     for (const [name, schema] of [["input", block.inputSchema], ["output", block.outputSchema]] as const) if (schema && !validDataSchema(schema)) issues.push({ code: "invalid-schema", blockId: block.id, message: `Block '${block.label || block.id}' has an invalid ${name} schema` });
     for (const match of block.prompt.matchAll(/\{\{\s*([^}]+?)\s*\}\}/g)) {
       const variable = match[1]!; const reference = /^blocks\.([A-Za-z0-9_-]+)\.output$/.exec(variable);
@@ -28,12 +30,16 @@ export function validateHarness(harness: HarnessDefinition): { valid: boolean; i
     if (!ids.has(edge.from) || !ids.has(edge.to)) { issues.push({ code: "missing-endpoint", edgeId: edge.id, message: "Connection refers to a block that no longer exists" }); continue; }
     if (harness.blocks.find((block) => block.id === edge.from)?.watchdog || harness.blocks.find((block) => block.id === edge.to)?.watchdog) issues.push({ code: "invalid-watchdog", edgeId: edge.id, message: "A Core watchdog runs independently and cannot have workflow connections" });
     if (edge.from === edge.to) issues.push({ code: "self-edge", edgeId: edge.id, blockId: edge.from, message: "A block cannot connect to itself" });
-    const key = `${edge.from}\0${edge.to}`; if (edgeKeys.has(key)) issues.push({ code: "duplicate-edge", edgeId: edge.id, message: "This connection already exists" }); edgeKeys.add(key);
+    if (edge.type === "use" || edge.type === "path") {
+      if (harness.blocks.find((block) => block.id === edge.from)?.type !== "ai") issues.push({ code: "invalid-gate", edgeId: edge.id, message: "Use and path connections must start at an AI Agent" });
+    }
+    const key = `${edge.from}\0${edge.to}\0${edge.type ?? "follow"}`; if (edgeKeys.has(key)) issues.push({ code: "duplicate-edge", edgeId: edge.id, message: "This connection already exists" }); edgeKeys.add(key);
+    if (edge.type && edge.loop) issues.push({ code: "invalid-loop", edgeId: edge.id, message: "Typed connections cannot be legacy loop edges" });
     if (edge.loop && !hasNonLoopPath(harness, edge.to, edge.from)) issues.push({ code: "invalid-loop", edgeId: edge.id, message: "A loop must return to an earlier block on an existing forward path" });
-    if (!edge.loop) { outgoing.set(edge.from, [...outgoing.get(edge.from) ?? [], edge.to]); indegree.set(edge.to, (indegree.get(edge.to) ?? 0) + 1); }
+    if (!edge.loop && edge.type !== "use" && harness.blocks.find((block) => block.id === edge.from)?.type !== "timer") { outgoing.set(edge.from, [...outgoing.get(edge.from) ?? [], edge.to]); indegree.set(edge.to, (indegree.get(edge.to) ?? 0) + 1); }
   }
-  for (const block of harness.blocks.filter((item) => item.routing === "ai")) {
-    const outgoingEdges = harness.edges.filter((edge) => edge.from === block.id); const labels = new Set<string>();
+  for (const block of harness.blocks.filter((item) => item.routing === "ai" || harness.edges.some((edge) => edge.from === item.id && edge.type === "path"))) {
+    const outgoingEdges = harness.edges.filter((edge) => edge.from === block.id && (block.type !== "ai" || edge.type === "path")); const labels = new Set<string>();
     for (const edge of outgoingEdges) { const label = edge.label?.trim(); if (!label || labels.has(label)) issues.push({ code: "route-label", blockId: block.id, edgeId: edge.id, message: `AI-routed block '${block.label}' needs a unique label on every outgoing path` }); else labels.add(label); }
   }
   const queue = harness.blocks.filter((block) => (indegree.get(block.id) ?? 0) === 0).map((block) => block.id); const order: string[] = []; const pending = new Map(indegree);

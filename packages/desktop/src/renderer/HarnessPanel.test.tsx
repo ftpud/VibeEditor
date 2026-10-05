@@ -1,6 +1,6 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { HarnessDefinition } from "@remote-ide/protocol";
+import type { HarnessDefinition, HarnessRun } from "@remote-ide/protocol";
 import { dragPosition, edgePath, HarnessPanel, responsePreview } from "./HarnessPanel";
 
 afterEach(cleanup);
@@ -17,6 +17,15 @@ describe("HarnessPanel", () => {
 
     await waitFor(() => expect(onCreate).toHaveBeenCalledWith("Review flow"));
     await waitFor(() => expect(screen.queryByRole("textbox", { name: "Workflow name" })).toBeNull());
+  });
+
+  it.each([["five-minute-check-in", "Five-minute workspace check-in"], ["git-review-commit", "Review, commit & ask to push"]])("creates the %s template from the creation form", async (template, name) => {
+    const onCreate = vi.fn().mockResolvedValue({ id: "flow", name: "Check-ins", version: 1, createdAt: "now", updatedAt: "now", blocks: [], edges: [] });
+    render(<HarnessPanel harnesses={[]} runs={[]} providers={[]} agents={[]} onCreate={onCreate} onSave={vi.fn()} onDelete={vi.fn()} onRun={vi.fn()} onCancelRun={vi.fn()} onError={vi.fn()} />);
+    fireEvent.click(screen.getByText("Create workflow", { selector: "button" }));
+    fireEvent.change(screen.getByLabelText("Workflow template"), { target: { value: template } });
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    await waitFor(() => expect(onCreate).toHaveBeenCalledWith(name, template));
   });
 
   it("shows persisted workflow-state recovery diagnostics", () => {
@@ -45,20 +54,21 @@ describe("HarnessPanel", () => {
     expect(edge?.textContent).toContain("Plan then Build");
   });
 
-  it("turns a backward connection into a visible loop edge", async () => {
+  it("connects an AI to another AI as a tool", async () => {
     const harness: HarnessDefinition = { id: "harness-1", name: "Cycle", version: 1, createdAt: "now", updatedAt: "now", blocks: [
-      { id: "a", type: "task", label: "Build", prompt: "", position: { x: 20, y: 20 } },
-      { id: "b", type: "prompt", label: "Review", prompt: "", position: { x: 260, y: 20 } },
+      { id: "a", type: "ai", label: "Build", prompt: "", position: { x: 20, y: 20 } },
+      { id: "b", type: "ai", label: "Review", prompt: "", position: { x: 260, y: 20 } },
     ], edges: [{ id: "forward", from: "a", to: "b", label: "review" }] };
     const onSave = vi.fn().mockImplementation(async (value) => value);
     render(<HarnessPanel harnesses={[harness]} runs={[]} providers={[]} agents={[]} onCreate={vi.fn()} onSave={onSave} onDelete={vi.fn()} onRun={vi.fn()} onCancelRun={vi.fn()} onError={vi.fn()} />);
 
     fireEvent.click(await screen.findByRole("button", { name: "Connect from Review" }));
+    fireEvent.change(screen.getByLabelText("New connection type"), { target: { value: "use" } });
     fireEvent.click(screen.getByRole("button", { name: "Connect into Build" }));
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
 
-    await waitFor(() => expect(onSave.mock.calls.at(0)?.[0].edges[1]).toMatchObject({ from: "b", to: "a", loop: true }));
-    expect(screen.getByLabelText("Workflow connections").querySelector(".harness-edge.loop")?.textContent).toContain("Review loops to Build");
+    await waitFor(() => expect(onSave.mock.calls.at(0)?.[0].edges[1]).toMatchObject({ from: "b", to: "a", type: "use" }));
+    expect(screen.getByLabelText("Workflow connections").querySelector(".harness-edge.use")?.textContent).toContain("Review then Build");
   });
 
   it("selects and deletes an individual connection", async () => {
@@ -77,19 +87,87 @@ describe("HarnessPanel", () => {
     await waitFor(() => expect(onSave.mock.calls.at(0)?.[0].edges).toEqual([]));
   });
 
-  it("changes a selected connection from sync to async", async () => {
+  it("changes a selected connection from follow to path", async () => {
     const harness: HarnessDefinition = { id: "harness-1", name: "Flow", version: 1, createdAt: "now", updatedAt: "now", blocks: [
-      { id: "a", type: "prompt", label: "Plan", prompt: "", position: { x: 20, y: 20 } },
+      { id: "a", type: "ai", label: "Plan", prompt: "", position: { x: 20, y: 20 } },
       { id: "b", type: "task", label: "Build", prompt: "", position: { x: 260, y: 20 } },
     ], edges: [{ id: "edge", from: "a", to: "b" }] };
     const onSave = vi.fn().mockImplementation(async (value) => value);
     render(<HarnessPanel harnesses={[harness]} runs={[]} providers={[]} agents={[]} onCreate={vi.fn()} onSave={onSave} onDelete={vi.fn()} onRun={vi.fn()} onCancelRun={vi.fn()} onError={vi.fn()} />);
 
     fireEvent.click(await screen.findByRole("button", { name: "Select connection: Plan then Build" }));
-    fireEvent.change(screen.getByRole("combobox", { name: "Connection execution" }), { target: { value: "async" } });
+    fireEvent.change(screen.getByRole("combobox", { name: "Connection type" }), { target: { value: "path" } });
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
 
-    await waitFor(() => expect(onSave.mock.calls.at(0)?.[0].edges[0].execution).toBe("async"));
+    await waitFor(() => expect(onSave.mock.calls.at(0)?.[0].edges[0].type).toBe("path"));
+  });
+
+  it("starts both entry types from their canvas controls in View mode", async () => {
+    const harness: HarnessDefinition = { id: "flow", name: "Flow", version: 1, createdAt: "now", updatedAt: "now", blocks: [
+      { id: "button", type: "start_button", label: "Button start", prompt: "Configured prompt", position: { x: 20, y: 20 } },
+      { id: "input", type: "start_input", label: "Text start", prompt: "", position: { x: 250, y: 20 } }
+    ], edges: [] };
+    const onRun = vi.fn().mockResolvedValue({ id: "run" });
+    render(<HarnessPanel harnesses={[harness]} runs={[]} providers={[]} agents={[]} onCreate={vi.fn()} onSave={vi.fn()} onDelete={vi.fn()} onRun={onRun} onCancelRun={vi.fn()} onError={vi.fn()} />);
+    await screen.findByLabelText("Workflow name"); fireEvent.click(screen.getByRole("button", { name: "View" }));
+    expect(screen.queryByLabelText("Workflow input")).toBeNull();
+    fireEvent.click(screen.getAllByRole("button", { name: "Start" })[0]!);
+    await waitFor(() => expect(onRun).toHaveBeenCalledWith("flow", "Configured prompt", "button"));
+    fireEvent.change(screen.getByLabelText("Input for Text start"), { target: { value: "Typed prompt" } });
+    fireEvent.click(screen.getAllByRole("button", { name: "Start" })[1]!);
+    await waitFor(() => expect(onRun).toHaveBeenCalledWith("flow", "Typed prompt", "input"));
+    fireEvent.click(screen.getByText("Button start")); expect(screen.queryByLabelText("Block type")).toBeNull();
+  });
+
+  it("adds a timer with type-specific settings", async () => {
+    const harness: HarnessDefinition = { id: "flow", name: "Flow", version: 1, createdAt: "now", updatedAt: "now", blocks: [], edges: [] };
+    const onSave = vi.fn().mockImplementation(async (value) => value);
+    render(<HarnessPanel harnesses={[harness]} runs={[]} providers={[]} agents={[]} onCreate={vi.fn()} onSave={onSave} onDelete={vi.fn()} onRun={vi.fn()} onCancelRun={vi.fn()} onError={vi.fn()} />);
+    fireEvent.change(await screen.findByLabelText("Add block type"), { target: { value: "timer" } });
+    expect((screen.getByLabelText("Block type") as HTMLSelectElement).value).toBe("timer");
+    expect(screen.queryByLabelText("Block role")).toBeNull();
+    fireEvent.change(screen.getByLabelText("Timer seconds"), { target: { value: "5" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(onSave.mock.calls[0]?.[0].blocks[0]).toMatchObject({ type: "timer", seconds: 5 }));
+  });
+
+  it("animates real forward and return transfers, pulses ports, and clears finished traces", async () => {
+    vi.useFakeTimers();
+    try {
+      const harness: HarnessDefinition = { id: "flow", name: "Flow", version: 1, createdAt: "now", updatedAt: "now", blocks: [
+        { id: "agent", type: "ai", label: "Agent", prompt: "Work", position: { x: 20, y: 20 } },
+        { id: "tool", type: "text", label: "Tool", prompt: "Text", position: { x: 250, y: 20 } },
+        { id: "unused", type: "text", label: "Unused", prompt: "Text", position: { x: 500, y: 20 } }
+      ], edges: [{ id: "use", from: "agent", to: "tool", type: "use" }, { id: "unused-path", from: "agent", to: "unused", type: "path", label: "unused" }] };
+      const run: HarnessRun = { id: "run", harnessId: "flow", harnessVersion: 1, input: "work", status: "running", createdAt: "now", blocks: [{ blockId: "agent", status: "running" }], connectionTraces: [] };
+      const props = { harnesses: [harness], providers: [], agents: [], onCreate: vi.fn(), onSave: vi.fn(), onDelete: vi.fn(), onRun: vi.fn(), onCancelRun: vi.fn(), onError: vi.fn() };
+      const view = render(<HarnessPanel {...props} runs={[run]} />);
+      view.rerender(<HarnessPanel {...props} runs={[{ ...run, connectionTraces: [{ id: "request", edgeId: "use", direction: "forward", status: "succeeded", startedAt: "now" }, { id: "reply", edgeId: "use", direction: "return", status: "succeeded", startedAt: "now" }] }]} />);
+      expect(screen.getByLabelText("Input: Agent → Tool").classList.contains("forward")).toBe(true);
+      expect(screen.getByLabelText("Output: Tool → Agent").classList.contains("return")).toBe(true);
+      expect(screen.queryByLabelText("Input: Agent → Unused")).toBeNull();
+      expect(screen.getByLabelText("Connect into Tool").classList.contains("flowing")).toBe(true);
+      expect(screen.getByLabelText("Connect from Agent").classList.contains("flowing")).toBe(true);
+      await act(async () => { vi.advanceTimersByTime(2500); });
+      expect(screen.queryByLabelText("Input: Agent → Tool")).toBeNull();
+      expect(screen.queryByLabelText("Output: Tool → Agent")).toBeNull();
+      expect(screen.getByLabelText("Connect into Tool").classList.contains("flowing")).toBe(false);
+    } finally { vi.useRealTimers(); }
+  });
+
+  it("clears active traces when a run is cancelled and does not replay historical traces", () => {
+    const harness: HarnessDefinition = { id: "flow", name: "Flow", version: 1, createdAt: "now", updatedAt: "now", blocks: [
+      { id: "a", type: "ai", label: "Agent", prompt: "Work", position: { x: 20, y: 20 } },
+      { id: "b", type: "text", label: "Tool", prompt: "Text", position: { x: 250, y: 20 } }
+    ], edges: [{ id: "use", from: "a", to: "b", type: "use" }] };
+    const run: HarnessRun = { id: "run", harnessId: "flow", harnessVersion: 1, input: "work", status: "running", createdAt: "now", blocks: [], connectionTraces: [{ id: "request", edgeId: "use", direction: "forward", status: "active", startedAt: "now" }] };
+    const props = { harnesses: [harness], providers: [], agents: [], onCreate: vi.fn(), onSave: vi.fn(), onDelete: vi.fn(), onRun: vi.fn(), onCancelRun: vi.fn(), onError: vi.fn() };
+    const view = render(<HarnessPanel {...props} runs={[run]} />);
+    expect(screen.getByLabelText("Input: Agent → Tool")).toBeTruthy();
+    view.rerender(<HarnessPanel {...props} runs={[{ ...run, status: "cancelled" }]} />);
+    expect(screen.queryByLabelText("Input: Agent → Tool")).toBeNull();
+    view.rerender(<HarnessPanel {...props} runs={[{ ...run, id: "historical", status: "succeeded", connectionTraces: [{ ...run.connectionTraces![0]!, status: "succeeded" }] }]} />);
+    expect(screen.queryByLabelText("Input: Agent → Tool")).toBeNull();
   });
 
   it("routes vertical connections from the block edges", () => {

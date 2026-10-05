@@ -251,7 +251,7 @@ export class AppToolService {
     private readonly rootWorkspace?: string,
     private readonly timers?: Pick<AiTimerService, "schedule" | "scheduleAt" | "next" | "cancelWorkspace">,
     private readonly bridgeWorkspace?: string,
-    private readonly workflow?: { runId: string; blockId: string; runStack(inputs: string[], path?: string): Promise<unknown>; resumeFailed?(): Promise<unknown>; planFeatures?(features: Array<{ id: string; prompt: string; prerequisites?: string[] }>): Promise<unknown>; assertFeatureReady?(featureId: string): Promise<void>; dispatchFeature?(featureId: string, taskId: string): Promise<unknown>; completeFeature?(taskId: string, commit: string): Promise<unknown>; registerChild?(taskId: string, provider: AiProvider, workspace: string): Promise<void>; operation?<T>(kind: "timer_create" | "task_create" | "prompt_delivery" | "merge", key: string, input: unknown, effect: () => Promise<T>, reconcile?: () => Promise<T | null | undefined>): Promise<T>; recordTool?(name: string, args: Record<string, unknown>, result?: unknown, error?: unknown): Promise<void>; assertActive?(): void }
+    private readonly workflow?: { runId: string; blockId: string; flow?: boolean; runStack(inputs: string[], path?: string): Promise<unknown>; resumeFailed?(): Promise<unknown>; planFeatures?(features: Array<{ id: string; prompt: string; prerequisites?: string[] }>): Promise<unknown>; assertFeatureReady?(featureId: string): Promise<void>; dispatchFeature?(featureId: string, taskId: string): Promise<unknown>; completeFeature?(taskId: string, commit: string): Promise<unknown>; registerChild?(taskId: string, provider: AiProvider, workspace: string): Promise<void>; operation?<T>(kind: "timer_create" | "task_create" | "prompt_delivery" | "merge", key: string, input: unknown, effect: () => Promise<T>, reconcile?: () => Promise<T | null | undefined>): Promise<T>; recordTool?(name: string, args: Record<string, unknown>, result?: unknown, error?: unknown): Promise<void>; assertActive?(): void }
   ) {}
 
   async call(name: string, args: Record<string, unknown>): Promise<unknown> {
@@ -295,7 +295,7 @@ export class AppToolService {
       if (prompt.length > 10_000) throw new Error("prompt must be at most 10000 characters");
       const seconds = requiredInteger(args, "seconds", 1, 604_800);
       const timer = this.workflow
-        ? await this.timers.schedule(this.currentWorkspace, this.currentProvider, prompt, seconds, { runId: this.workflow.runId, blockId: this.workflow.blockId, operationKey: operationKey(name, args) })
+        ? await this.timers.schedule(this.currentWorkspace, this.currentProvider, prompt, seconds, { runId: this.workflow.runId, blockId: this.workflow.blockId, flow: this.workflow.flow, operationKey: operationKey(name, args) })
         : await this.timers.schedule(this.currentWorkspace, this.currentProvider, prompt, seconds);
       return { timer_id: timer.id, status: "waiting", due_at: timer.dueAt, continuation_prompt: timer.prompt };
     }
@@ -308,7 +308,7 @@ export class AppToolService {
       if (!Number.isFinite(due) || due <= now) throw new Error("due_at must be a valid future ISO-8601 timestamp");
       if (due - now > 604_800_000) throw new Error("due_at must be no more than 7 days ahead");
       const timer = this.workflow
-        ? await this.timers.scheduleAt(this.currentWorkspace, this.currentProvider, prompt, new Date(due).toISOString(), { runId: this.workflow.runId, blockId: this.workflow.blockId, operationKey: operationKey(name, args) })
+        ? await this.timers.scheduleAt(this.currentWorkspace, this.currentProvider, prompt, new Date(due).toISOString(), { runId: this.workflow.runId, blockId: this.workflow.blockId, flow: this.workflow.flow, operationKey: operationKey(name, args) })
         : await this.timers.scheduleAt(this.currentWorkspace, this.currentProvider, prompt, new Date(due).toISOString());
       return { timer_id: timer.id, status: "waiting", due_at: timer.dueAt, continuation_prompt: timer.prompt };
     }
@@ -590,6 +590,12 @@ function requiredCommitMessage(args: Record<string, unknown>, key: string): stri
   return value;
 }
 
+export const flowToolDefinitions = [
+  { name: "workflow_connections", description: "List blocks connected to this AI Agent and their use, follow, or path connection types.", inputSchema: { type: "object", properties: {} } },
+  { name: "workflow_use_block", description: "Use a connected block. Timer blocks arm their configured countdown and return immediately; when they fire, their follow connections receive the supplied input. Other blocks return their output when done. An AI block continues its own existing context.", inputSchema: { type: "object", properties: { block_id: { type: "string" }, input: { type: "string" } }, required: ["block_id", "input"] } },
+  { name: "workflow_choose_path", description: "Choose a connected path by label. The chosen block receives your final output after you finish. Follow connections also run.", inputSchema: { type: "object", properties: { path: { type: "string" } }, required: ["path"] } }
+];
+
 async function main() {
   const rootWorkspace = process.env.VIBE_EDITOR_ROOT_WORKSPACE;
   if (!rootWorkspace) throw new Error("VIBE_EDITOR_ROOT_WORKSPACE is required");
@@ -606,7 +612,7 @@ async function main() {
       let result: unknown;
       if (request.method === "initialize") result = { protocolVersion: "2025-06-18", capabilities: { tools: {} }, serverInfo: { name: "vibe-editor", version: "0.1.0" } };
       else if (request.method === "ping") result = {};
-      else if (request.method === "tools/list") result = { tools: appToolDefinitions };
+      else if (request.method === "tools/list") result = { tools: process.env.VIBE_EDITOR_FLOW_TOOLS ? [...flowToolDefinitions, ...appToolDefinitions.filter((tool) => !["workflow_run_stack", "workflow_resume_failed", "workflow_plan_features"].includes(tool.name))] : appToolDefinitions };
       else if (request.method === "tools/call") {
         const params = request.params ?? {};
         const workflowRunId = process.env.VIBE_EDITOR_WORKFLOW_RUN_ID; const workflowBlockId = process.env.VIBE_EDITOR_WORKFLOW_BLOCK_ID;
@@ -643,13 +649,13 @@ export function withAppTools(rootWorkspace: string, currentWorkspace: string, se
   return { servers: [...filtered, appServer], agent };
 }
 
-export function appToolServer(rootWorkspace: string, currentWorkspace: string, currentProvider?: AiProvider, bridgeWorkspace = rootWorkspace, workflow?: { runId: string; blockId: string }): AiMcpServer {
+export function appToolServer(rootWorkspace: string, currentWorkspace: string, currentProvider?: AiProvider, bridgeWorkspace = rootWorkspace, workflow?: { runId: string; blockId: string; flow?: boolean }): AiMcpServer {
   const compiled = fileURLToPath(new URL("app-tools.js", import.meta.url));
   const source = fileURLToPath(new URL("app-tools.ts", import.meta.url));
   const runningFromSource = import.meta.url.endsWith("/src/app-tools.ts");
   return runningFromSource
-    ? { transport: "stdio", name: "vibe-editor", command: process.execPath, args: ["--import", "tsx", source], env: { VIBE_EDITOR_ROOT_WORKSPACE: rootWorkspace, VIBE_EDITOR_CURRENT_WORKSPACE: currentWorkspace, VIBE_EDITOR_BRIDGE_WORKSPACE: bridgeWorkspace, ...(currentProvider ? { VIBE_EDITOR_CURRENT_PROVIDER: currentProvider } : {}), ...(workflow ? { VIBE_EDITOR_WORKFLOW_RUN_ID: workflow.runId, VIBE_EDITOR_WORKFLOW_BLOCK_ID: workflow.blockId } : {}) } }
-    : { transport: "stdio", name: "vibe-editor", command: process.execPath, args: [compiled], env: { VIBE_EDITOR_ROOT_WORKSPACE: rootWorkspace, VIBE_EDITOR_CURRENT_WORKSPACE: currentWorkspace, VIBE_EDITOR_BRIDGE_WORKSPACE: bridgeWorkspace, ...(currentProvider ? { VIBE_EDITOR_CURRENT_PROVIDER: currentProvider } : {}), ...(workflow ? { VIBE_EDITOR_WORKFLOW_RUN_ID: workflow.runId, VIBE_EDITOR_WORKFLOW_BLOCK_ID: workflow.blockId } : {}) } };
+    ? { transport: "stdio", name: "vibe-editor", command: process.execPath, args: ["--import", "tsx", source], env: { VIBE_EDITOR_ROOT_WORKSPACE: rootWorkspace, VIBE_EDITOR_CURRENT_WORKSPACE: currentWorkspace, VIBE_EDITOR_BRIDGE_WORKSPACE: bridgeWorkspace, ...(currentProvider ? { VIBE_EDITOR_CURRENT_PROVIDER: currentProvider } : {}), ...(workflow ? { VIBE_EDITOR_WORKFLOW_RUN_ID: workflow.runId, VIBE_EDITOR_WORKFLOW_BLOCK_ID: workflow.blockId, ...(workflow.flow ? { VIBE_EDITOR_FLOW_TOOLS: "1" } : {}) } : {}) } }
+    : { transport: "stdio", name: "vibe-editor", command: process.execPath, args: [compiled], env: { VIBE_EDITOR_ROOT_WORKSPACE: rootWorkspace, VIBE_EDITOR_CURRENT_WORKSPACE: currentWorkspace, VIBE_EDITOR_BRIDGE_WORKSPACE: bridgeWorkspace, ...(currentProvider ? { VIBE_EDITOR_CURRENT_PROVIDER: currentProvider } : {}), ...(workflow ? { VIBE_EDITOR_WORKFLOW_RUN_ID: workflow.runId, VIBE_EDITOR_WORKFLOW_BLOCK_ID: workflow.blockId, ...(workflow.flow ? { VIBE_EDITOR_FLOW_TOOLS: "1" } : {}) } : {}) } };
 }
 
 function workflowOperationKind(name: string): "timer_create" | "task_create" | "prompt_delivery" | "merge" | undefined {

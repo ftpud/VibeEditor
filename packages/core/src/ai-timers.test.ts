@@ -81,6 +81,26 @@ describe("AI continuation timers", () => {
     } finally { vi.useRealTimers(); }
   });
 
+  it("preserves typed MCP tools and the next five-minute timer across repeated cycles", async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "flow-repeat-timer-")); const store = new AiTimerStore("/workspace", directory);
+    let cycle = 1;
+    const provider = { get: vi.fn(async () => ({ status: "done", messages: [] })), send: vi.fn(async () => {
+      cycle += 1;
+      await service.schedule("/workspace/agent", "codex", "repeat", 300, { runId: "run", blockId: "agent", flow: true, operationKey: `cycle-${cycle}` });
+    }), steer: vi.fn() };
+    const service = new AiTimerService(store, { get: () => provider } as never, "/workspace", vi.fn());
+    try {
+      await service.schedule("/workspace/agent", "codex", "repeat", 300, { runId: "run", blockId: "agent", flow: true, operationKey: "cycle-1" });
+      for (let index = 0; index < 2; index += 1) {
+        await service.fireNext("/workspace/agent");
+        expect(await store.list()).toMatchObject([{ workflowFlow: true, workflowOperationKey: `cycle-${index + 2}` }]);
+        expect(Date.parse((await store.next("/workspace/agent"))!.dueAt) - Date.now()).toBeGreaterThan(299_000);
+      }
+      expect(provider.send).toHaveBeenCalledTimes(2);
+      expect(provider.send).toHaveBeenLastCalledWith("/workspace/agent", expect.objectContaining({ mcpServers: [expect.objectContaining({ env: expect.objectContaining({ VIBE_EDITOR_FLOW_TOOLS: "1" }) })] }));
+    } finally { await service.cancelWorkspace("/workspace/agent"); }
+  });
+
   it("cancels the next timer without delivering it", async () => {
     vi.useFakeTimers();
     try {

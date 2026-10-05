@@ -6,7 +6,7 @@ import type { AiProvider } from "@remote-ide/acp";
 import type { AcpRegistry } from "./ai/index.js";
 import { appToolServer } from "./app-tools.js";
 
-export type AiContinuationTimer = { id: string; workspace: string; provider: AiProvider; prompt: string; dueAt: string; createdAt: string; workflowRunId?: string; workflowBlockId?: string; workflowOperationKey?: string };
+export type AiContinuationTimer = { id: string; workspace: string; provider: AiProvider; prompt: string; dueAt: string; createdAt: string; workflowRunId?: string; workflowBlockId?: string; workflowOperationKey?: string; workflowFlow?: boolean };
 type TimerFile = { timers: AiContinuationTimer[] };
 
 export class AiTimerStore {
@@ -37,17 +37,17 @@ export class AiTimerStore {
     }
   }
 
-  async set(workspace: string, provider: AiProvider, prompt: string, seconds: number, workflow?: { runId: string; blockId: string; operationKey?: string }): Promise<AiContinuationTimer> {
+  async set(workspace: string, provider: AiProvider, prompt: string, seconds: number, workflow?: { runId: string; blockId: string; flow?: boolean; operationKey?: string }): Promise<AiContinuationTimer> {
     return this.setAt(workspace, provider, prompt, new Date(Date.now() + seconds * 1_000).toISOString(), workflow);
   }
 
-  async setAt(workspace: string, provider: AiProvider, prompt: string, dueAt: string, workflow?: { runId: string; blockId: string; operationKey?: string }): Promise<AiContinuationTimer> {
+  async setAt(workspace: string, provider: AiProvider, prompt: string, dueAt: string, workflow?: { runId: string; blockId: string; flow?: boolean; operationKey?: string }): Promise<AiContinuationTimer> {
     return this.mutate(async () => {
     const timers = await this.list();
     const existing = workflow?.operationKey ? timers.find((item) => item.workflowRunId === workflow.runId && item.workflowBlockId === workflow.blockId && item.workflowOperationKey === workflow.operationKey) : undefined;
     if (existing) return existing;
     const now = new Date();
-    const timer = { id: crypto.randomUUID(), workspace: path.resolve(workspace), provider, prompt, createdAt: now.toISOString(), dueAt, ...(workflow ? { workflowRunId: workflow.runId, workflowBlockId: workflow.blockId, ...(workflow.operationKey ? { workflowOperationKey: workflow.operationKey } : {}) } : {}) };
+    const timer = { id: crypto.randomUUID(), workspace: path.resolve(workspace), provider, prompt, createdAt: now.toISOString(), dueAt, ...(workflow ? { workflowRunId: workflow.runId, workflowBlockId: workflow.blockId, ...(workflow.flow ? { workflowFlow: true } : {}), ...(workflow.operationKey ? { workflowOperationKey: workflow.operationKey } : {}) } : {}) };
     await this.save([...timers.filter((item) => item.workspace !== timer.workspace || item.provider !== provider), timer]);
     return timer;
     });
@@ -87,12 +87,12 @@ export class AiTimerService {
 
   async start(): Promise<void> { for (const timer of await this.store.list()) this.arm(timer); }
 
-  async schedule(workspace: string, provider: AiProvider, prompt: string, seconds: number, workflow?: { runId: string; blockId: string; operationKey?: string }): Promise<AiContinuationTimer> {
+  async schedule(workspace: string, provider: AiProvider, prompt: string, seconds: number, workflow?: { runId: string; blockId: string; flow?: boolean; operationKey?: string }): Promise<AiContinuationTimer> {
     const timer = await this.store.set(workspace, provider, prompt, seconds, workflow);
     return this.activate(timer);
   }
 
-  async scheduleAt(workspace: string, provider: AiProvider, prompt: string, dueAt: string, workflow?: { runId: string; blockId: string; operationKey?: string }): Promise<AiContinuationTimer> {
+  async scheduleAt(workspace: string, provider: AiProvider, prompt: string, dueAt: string, workflow?: { runId: string; blockId: string; flow?: boolean; operationKey?: string }): Promise<AiContinuationTimer> {
     const timer = await this.store.setAt(workspace, provider, prompt, dueAt, workflow);
     return this.activate(timer);
   }
@@ -169,7 +169,7 @@ export class AiTimerService {
     const session = await manager.get(timer.workspace);
       if (cancelled()) return { delivered: true };
       if (session.status === "in_progress" || session.status === "user_prompt") await manager.steer(timer.workspace, timer.prompt);
-      else await manager.send(timer.workspace, { prompt: timer.prompt, configuration: session.configuration ?? { model: session.model, reasoning: session.reasoning }, mcpServers: [appToolServer(this.rootWorkspace, timer.workspace, timer.provider, this.rootWorkspace, timer.workflowRunId && timer.workflowBlockId ? { runId: timer.workflowRunId, blockId: timer.workflowBlockId } : undefined)] });
+      else await manager.send(timer.workspace, { prompt: timer.prompt, configuration: session.configuration ?? { model: session.model, reasoning: session.reasoning }, mcpServers: [appToolServer(this.rootWorkspace, timer.workspace, timer.provider, this.rootWorkspace, timer.workflowRunId && timer.workflowBlockId ? { runId: timer.workflowRunId, blockId: timer.workflowBlockId, flow: timer.workflowFlow } : undefined)] });
       if (cancelled()) { await manager.interrupt(timer.workspace); return { delivered: true }; }
       return { delivered: true };
     } finally { this.delivering.delete(timer.id); this.onChanged(timer.workspace); }
@@ -188,5 +188,5 @@ export class AiTimerService {
 function isTimer(value: unknown): value is AiContinuationTimer {
   if (!value || typeof value !== "object") return false;
   const timer = value as Record<string, unknown>;
-  return typeof timer.id === "string" && typeof timer.workspace === "string" && typeof timer.provider === "string" && typeof timer.prompt === "string" && typeof timer.dueAt === "string" && typeof timer.createdAt === "string" && (timer.workflowRunId === undefined || typeof timer.workflowRunId === "string") && (timer.workflowBlockId === undefined || typeof timer.workflowBlockId === "string") && (timer.workflowOperationKey === undefined || typeof timer.workflowOperationKey === "string");
+  return typeof timer.id === "string" && typeof timer.workspace === "string" && typeof timer.provider === "string" && typeof timer.prompt === "string" && typeof timer.dueAt === "string" && typeof timer.createdAt === "string" && (timer.workflowRunId === undefined || typeof timer.workflowRunId === "string") && (timer.workflowBlockId === undefined || typeof timer.workflowBlockId === "string") && (timer.workflowOperationKey === undefined || typeof timer.workflowOperationKey === "string") && (timer.workflowFlow === undefined || typeof timer.workflowFlow === "boolean");
 }
