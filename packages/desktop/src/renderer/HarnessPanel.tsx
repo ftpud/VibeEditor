@@ -1,4 +1,4 @@
-import { useEffect, useId, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import { useCallback, useEffect, useLayoutEffect, useId, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { Play, Plus, Save, Square, Trash2, X } from "lucide-react";
 import type { AgentFile, AiModel, AiProvider, AiProviderDescriptor, HarnessBlock, HarnessDataSchema, HarnessDefinition, HarnessRun, HarnessLogEntry, HarnessStateDiagnostic, HarnessValidationIssue } from "@remote-ide/protocol";
 import { useWorkflowTraces } from "./workflow-tracing";
@@ -47,10 +47,52 @@ export function HarnessPanel({ harnesses, runs, diagnostics = [], providers, age
   const [modelsByProvider, setModelsByProvider] = useState<Record<string, AiModel[]>>({});
   const [remoteValidationIssues, setRemoteValidationIssues] = useState<HarnessValidationIssue[]>([]);
   const [saveConflict, setSaveConflict] = useState<{ local: HarnessDefinition; remote: HarnessDefinition; comparing: boolean }>();
+  const canvasRef = useRef<HTMLDivElement>(null);
+  const [zoom, setZoom] = useState(1);
+  const zoomRef = useRef(1);
+  const pendingScroll = useRef<{ left: number; top: number }>();
+  const changeZoom = useCallback((requested: number, clientX?: number, clientY?: number) => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const next = Math.max(0.25, Math.min(2, requested));
+    if (next === zoomRef.current) return;
+    const bounds = canvas.getBoundingClientRect();
+    const x = clientX === undefined ? canvas.clientWidth / 2 : clientX - bounds.left - canvas.clientLeft;
+    const y = clientY === undefined ? canvas.clientHeight / 2 : clientY - bounds.top - canvas.clientTop;
+    const ratio = next / zoomRef.current;
+    pendingScroll.current = { left: ((pendingScroll.current?.left ?? canvas.scrollLeft) + x) * ratio - x, top: ((pendingScroll.current?.top ?? canvas.scrollTop) + y) * ratio - y };
+    zoomRef.current = next;
+    setZoom(next);
+  }, []);
+  useLayoutEffect(() => {
+    const canvas = canvasRef.current;
+    if (canvas && pendingScroll.current) {
+      canvas.scrollLeft = pendingScroll.current.left;
+      canvas.scrollTop = pendingScroll.current.top;
+      pendingScroll.current = undefined;
+    }
+  }, [zoom]);
   const drag = useRef<{ id: string; grabX: number; grabY: number }>();
   const selected = harnesses.find((item) => item.id === selectedId);
   useEffect(() => { if (!selectedId && harnesses[0]) setSelectedId(harnesses[0].id); }, [harnesses, selectedId]);
   useEffect(() => { const next = selected ? structuredClone(selected) : undefined; setDraft(next); setBaseline(next); setSelectedBlockId(undefined); setSelectedEdgeId(undefined); setSaveConflict(undefined); }, [selected?.id, selected?.version]);
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const wheel = (event: WheelEvent) => {
+      if (!event.ctrlKey && !event.shiftKey) return;
+      // Shift can remap vertical wheel motion to deltaX on Windows.
+      const delta = event.deltaY || (event.shiftKey ? event.deltaX : 0);
+      event.preventDefault();
+      if (!delta) return;
+      const pixels = delta * (event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? canvas.clientHeight : 1);
+      changeZoom(zoomRef.current * Math.exp(-Math.max(-100, Math.min(100, pixels)) * 0.002), event.clientX, event.clientY);
+    };
+    canvas.addEventListener("wheel", wheel, { passive: false });
+    return () => canvas.removeEventListener("wheel", wheel);
+  }, [Boolean(draft), changeZoom]);
+  const canvasWidth = Math.max(1200, ...draft?.blocks.map((block) => block.position.x + BLOCK_WIDTH + 80) ?? []);
+  const canvasHeight = Math.max(800, ...draft?.blocks.map((block) => block.position.y + BLOCK_HEIGHT + 80) ?? []);
   const block = draft?.blocks.find((item) => item.id === selectedBlockId);
   const blockProvider = block && ["ai", "prompt", "task", "review"].includes(block.type) ? block.provider ?? defaultProvider : undefined;
   const blockModels = blockProvider ? modelsByProvider[blockProvider] ?? [] : [];
@@ -171,15 +213,15 @@ export function HarnessPanel({ harnesses, runs, diagnostics = [], providers, age
     setConnectFrom(undefined);
   };
   const pointerDown = (event: ReactPointerEvent, item: HarnessBlock) => {
-    if (mode !== "edit") return;
+    if (mode !== "edit" || event.button !== 0) return;
     const target = event.currentTarget as HTMLElement; target.setPointerCapture(event.pointerId);
     const bounds = target.getBoundingClientRect();
-    drag.current = { id: item.id, grabX: event.clientX - bounds.left, grabY: event.clientY - bounds.top };
+    drag.current = { id: item.id, grabX: (event.clientX - bounds.left) / zoom, grabY: (event.clientY - bounds.top) / zoom };
   };
   const pointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
-    if (!draft || !drag.current) return;
+    if (!draft || mode !== "edit" || !drag.current) return;
     const bounds = event.currentTarget.getBoundingClientRect(); const item = drag.current;
-    const position = dragPosition(event.clientX, event.clientY, bounds.left, bounds.top, event.currentTarget.scrollLeft, event.currentTarget.scrollTop, item.grabX, item.grabY);
+    const position = dragPosition(event.clientX, event.clientY, bounds.left + event.currentTarget.clientLeft, bounds.top + event.currentTarget.clientTop, event.currentTarget.scrollLeft, event.currentTarget.scrollTop, item.grabX, item.grabY, zoom);
     setDraft({ ...draft, blocks: draft.blocks.map((block) => block.id === item.id ? { ...block, position } : block) });
   };
 
@@ -192,10 +234,19 @@ export function HarnessPanel({ harnesses, runs, diagnostics = [], providers, age
       {saveConflict && <div className="harness-conflict" role="alert"><strong>This workflow was changed elsewhere.</strong><span>The saved version is {saveConflict.remote.version}; your draft is version {saveConflict.local.version}.</span><div><button onClick={() => { const next = structuredClone(saveConflict.remote); setDraft(next); setBaseline(next); setSaveConflict(undefined); }}>Reload</button><button onClick={() => setSaveConflict((current) => current ? { ...current, comparing: !current.comparing } : current)}>{saveConflict.comparing ? "Hide comparison" : "Compare"}</button><button onClick={() => void saveAsCopy()} disabled={saving}>Save as copy</button></div>{saveConflict.comparing && <div className="harness-conflict-comparison"><section><strong>Your draft</strong><pre>{JSON.stringify(saveConflict.local, null, 2)}</pre></section><section><strong>Saved workflow</strong><pre>{JSON.stringify(saveConflict.remote, null, 2)}</pre></section></div>}</div>}
       {mode === "edit" && connectFrom && <div className="harness-connect-hint">Select an input port to connect from <strong>{blockById.get(connectFrom)?.label}</strong>. <select aria-label="New connection type" value={connectionType} onChange={(event) => setConnectionType(event.target.value as typeof connectionType)}><option value="follow">Follow · pass output when done</option>{blockById.get(connectFrom)?.type === "ai" && <><option value="use">Use · expose as an MCP tool</option><option value="path">Path · AI chooses</option></>}</select> <button onClick={() => setConnectFrom(undefined)}>Cancel</button></div>}
       {mode === "edit" && selectedEdge && <div className="harness-connect-hint harness-edge-controls">Selected connection: <strong>{blockById.get(selectedEdge.from)?.label} → {blockById.get(selectedEdge.to)?.label}</strong><label>Type<select aria-label="Connection type" value={selectedEdge.type ?? "follow"} onChange={(event) => setDraft({ ...draft, edges: draft.edges.map((edge) => edge.id === selectedEdge.id ? { ...edge, type: event.target.value as "use" | "follow" | "path", loop: undefined, execution: undefined } : edge) })}><option value="follow">Follow</option>{blockById.get(selectedEdge.from)?.type === "ai" && <><option value="use">Use</option><option value="path">Path</option></>}</select></label>{selectedEdge.type === "path" && <label>Path name<input aria-label="Path name" value={selectedEdge.label ?? ""} onChange={(event) => setDraft({ ...draft, edges: draft.edges.map((edge) => edge.id === selectedEdge.id ? { ...edge, label: event.target.value } : edge) })} /></label>}<button onClick={() => removeEdge(selectedEdge.id)}>Remove connection</button></div>}
-      <div className={`harness-canvas ${mode}`} onClick={() => setSelectedEdgeId(undefined)} onPointerMove={pointerMove} onPointerUp={() => { drag.current = undefined; }} onPointerCancel={() => { drag.current = undefined; }}>
-        <svg aria-label="Workflow connections" style={{ width: Math.max(1200, ...draft.blocks.map((block) => block.position.x + BLOCK_WIDTH + 80)), height: Math.max(800, ...draft.blocks.map((block) => block.position.y + BLOCK_HEIGHT + 80)) }}><defs><marker id={arrowMarkerId} markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto" markerUnits="strokeWidth"><path d="M 0 0 L 8 4 L 0 8 z" /></marker></defs>{draft.edges.map((edge) => { const from = blockById.get(edge.from); const to = blockById.get(edge.to); if (!from || !to) return null; const lane = draft.edges.filter((item) => item.from === edge.from && item.to === edge.to).findIndex((item) => item.id === edge.id) * 16; const labelX = (from.position.x + to.position.x) / 2 + BLOCK_WIDTH / 2; const labelY = (from.position.y + to.position.y) / 2 + BLOCK_HEIGHT / 2 - 7 + lane + (edge.loop ? 45 : 0); const title = edge.loop ? `${from.label} loops to ${to.label}` : `${from.label} then ${to.label}`; const traces = animatedTraces.filter((trace) => trace.edgeId === edge.id); const path = edgePath(from, to, edge.loop, lane); return <g key={edge.id}><path className={`harness-edge ${edge.type ?? "follow"}${edge.loop ? " loop" : ""}${selectedEdgeId === edge.id ? " selected" : ""}`} d={path} markerEnd={`url(#${arrowMarkerId})`} role={mode === "edit" ? "button" : undefined} aria-label={mode === "edit" ? `Select connection: ${title}` : undefined} tabIndex={mode === "edit" ? 0 : undefined} onClick={mode === "edit" ? (event) => { event.stopPropagation(); setSelectedEdgeId(edge.id); setSelectedBlockId(undefined); } : undefined}><title>{title}</title></path>{traces.map((trace) => <path key={trace.id} className={`harness-transfer ${edge.type ?? "follow"} ${trace.direction} ${trace.status}`} d={path} pathLength={100} style={{ animationDelay: `${trace.delayMs}ms` }} aria-label={`${trace.direction === "return" ? "Output" : "Input"}: ${trace.direction === "return" ? to.label : from.label} → ${trace.direction === "return" ? from.label : to.label}`} />)}{edge.label && <text className="harness-edge-label" x={labelX} y={labelY} textAnchor="middle">{`${edge.type ?? "follow"}${edge.type === "path" ? `: ${edge.label}` : ""}`}</text>}</g>; })}</svg>
+      <div className="harness-zoom" role="group" aria-label="Workflow zoom">
+        <button aria-label="Zoom out" disabled={zoom <= 0.25} onClick={() => changeZoom(zoomRef.current / 1.2)}>−</button>
+        <button aria-label="Reset workflow zoom" title="Reset zoom to 100%" onClick={() => changeZoom(1)}>{Math.round(zoom * 100)}%</button>
+        <button aria-label="Zoom in" disabled={zoom >= 2} onClick={() => changeZoom(zoomRef.current * 1.2)}>+</button>
+        <small>Pinch or Shift+scroll to zoom</small>
+      </div>
+      <div ref={canvasRef} aria-label="Workflow canvas" className={`harness-canvas ${mode}`} onClick={() => setSelectedEdgeId(undefined)} onPointerMove={pointerMove} onPointerUp={() => { drag.current = undefined; }} onPointerCancel={() => { drag.current = undefined; }}>
+        <div className="harness-canvas-extent" style={{ width: canvasWidth * zoom, height: canvasHeight * zoom }}>
+        <div className="harness-canvas-content" style={{ width: canvasWidth, height: canvasHeight, transform: `scale(${zoom})` }}>
+        <svg aria-label="Workflow connections" style={{ width: canvasWidth, height: canvasHeight }}><defs><marker id={arrowMarkerId} markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto" markerUnits="strokeWidth"><path d="M 0 0 L 8 4 L 0 8 z" /></marker></defs>{draft.edges.map((edge) => { const from = blockById.get(edge.from); const to = blockById.get(edge.to); if (!from || !to) return null; const lane = draft.edges.filter((item) => item.from === edge.from && item.to === edge.to).findIndex((item) => item.id === edge.id) * 16; const labelX = (from.position.x + to.position.x) / 2 + BLOCK_WIDTH / 2; const labelY = (from.position.y + to.position.y) / 2 + BLOCK_HEIGHT / 2 - 7 + lane + (edge.loop ? 45 : 0); const title = edge.loop ? `${from.label} loops to ${to.label}` : `${from.label} then ${to.label}`; const traces = animatedTraces.filter((trace) => trace.edgeId === edge.id); const path = edgePath(from, to, edge.loop, lane); return <g key={edge.id}><path className={`harness-edge ${edge.type ?? "follow"}${edge.loop ? " loop" : ""}${selectedEdgeId === edge.id ? " selected" : ""}`} d={path} markerEnd={`url(#${arrowMarkerId})`} role={mode === "edit" ? "button" : undefined} aria-label={mode === "edit" ? `Select connection: ${title}` : undefined} tabIndex={mode === "edit" ? 0 : undefined} onClick={mode === "edit" ? (event) => { event.stopPropagation(); setSelectedEdgeId(edge.id); setSelectedBlockId(undefined); } : undefined}><title>{title}</title></path>{traces.map((trace) => <path key={trace.id} className={`harness-transfer ${edge.type ?? "follow"} ${trace.direction} ${trace.status}`} d={path} pathLength={100} style={{ animationDelay: `${trace.delayMs}ms` }} aria-label={`${trace.direction === "return" ? "Output" : "Input"}: ${trace.direction === "return" ? to.label : from.label} → ${trace.direction === "return" ? from.label : to.label}`} />)}{edge.label && <text className="harness-edge-label" x={labelX} y={labelY} textAnchor="middle">{`${edge.type ?? "follow"}${edge.type === "path" ? `: ${edge.label}` : ""}`}</text>}</g>; })}</svg>
         {draft.blocks.map((item) => { const state = run?.blocks.find((block) => block.blockId === item.id); const preview = responsePreview(state?.output, state?.status); const inputActive = animatedTraces.some((trace) => { const edge = draft.edges.find((edge) => edge.id === trace.edgeId); return trace.direction === "return" ? edge?.from === item.id : edge?.to === item.id; }); const outputActive = animatedTraces.some((trace) => { const edge = draft.edges.find((edge) => edge.id === trace.edgeId); return trace.direction === "return" ? edge?.to === item.id : edge?.from === item.id; }); return <div key={item.id} className={`harness-block ${state?.status === "running" ? "working" : ""} ${selectedBlockId === item.id ? "selected" : ""} ${connectFrom === item.id ? "connecting" : ""}`} style={{ left: item.position.x, top: item.position.y }} onPointerDown={(event) => pointerDown(event, item)} onClick={() => setSelectedBlockId(item.id)}><button className={`harness-port input${inputActive ? " flowing" : ""}`} tabIndex={mode === "view" ? -1 : 0} aria-label={`Connect into ${item.label}`} title="Input: connect selected block here" disabled={!connectFrom || connectFrom === item.id} onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); connectTo(item.id); }} /><button className={`harness-port output${outputActive ? " flowing" : ""}`} disabled={mode === "view"} tabIndex={mode === "view" ? -1 : 0} aria-label={`Connect from ${item.label}`} title={connectFrom === item.id ? "Cancel connection" : "Output: start connection"} onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); setConnectionType("follow"); setConnectFrom((current) => current === item.id ? undefined : item.id); }} /><header><span className={`harness-status ${state?.status ?? "idle"}`} />{item.label}</header><small>{state?.status === "running" && state.iterations?.length ? `Stack item ${state.iterations.length} of ${state.plannedRuns ?? state.iterations.length}` : state?.status === "running" ? "Running…" : state?.error ?? (item.type === "ai" || ["prompt", "task", "review"].includes(item.type) ? item.model ?? item.provider ?? "Default model" : blockTypeLabels[item.type] ?? item.type)}</small>{mode === "view" && (item.type === "start_button" || item.type === "start_input") ? <div className="harness-start" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => event.stopPropagation()}>{item.type === "start_input" && <input aria-label={`Input for ${item.label}`} placeholder="Type text…" value={startInputs[item.id] ?? ""} onChange={(event) => setStartInputs((current) => ({ ...current, [item.id]: event.target.value }))} onKeyDown={(event) => { if (event.key === "Enter") void start(item); }} />}<button disabled={dirty || validationIssues.length > 0 || !(item.type === "start_button" ? item.prompt : startInputs[item.id])?.trim()} onClick={() => void start(item)}><Play size={12} /> Start</button></div> : <div className={`harness-response-preview ${state?.output ? "available" : ""}`} title={state?.output} aria-label={`${item.label} response preview`}>{preview}</div>}<footer><button title="Delete block" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); removeBlock(item.id); }}><Trash2 size={12} /></button></footer></div>; })}
         {!draft.blocks.length && <button className="harness-canvas-empty" onClick={() => addBlock()}><Plus size={16} /> Add the first AI Agent</button>}
+        </div></div>
       </div>
       {block && mode === "view" && <BlockRunDetails block={block} state={blockRun} tasks={run?.children?.filter((child) => child.blockId === block.id)} onClose={() => setSelectedBlockId(undefined)} />}
       {block && mode === "edit" && <div className="harness-inspector"><header><strong>Block settings</strong><button title="Close block settings" onClick={() => setSelectedBlockId(undefined)}>×</button></header>
@@ -318,8 +369,8 @@ export function responsePreview(output?: string, status?: HarnessRun["blocks"][n
   return compact.length > 140 ? `${compact.slice(0, 139)}…` : compact;
 }
 
-export function dragPosition(clientX: number, clientY: number, canvasLeft: number, canvasTop: number, scrollLeft: number, scrollTop: number, grabX: number, grabY: number): HarnessBlock["position"] {
-  return { x: Math.max(8, clientX - canvasLeft + scrollLeft - grabX), y: Math.max(8, clientY - canvasTop + scrollTop - grabY) };
+export function dragPosition(clientX: number, clientY: number, canvasLeft: number, canvasTop: number, scrollLeft: number, scrollTop: number, grabX: number, grabY: number, zoom = 1): HarnessBlock["position"] {
+  return { x: Math.max(8, (clientX - canvasLeft + scrollLeft) / zoom - grabX), y: Math.max(8, (clientY - canvasTop + scrollTop) / zoom - grabY) };
 }
 
 export function edgePath(from: HarnessBlock, to: HarnessBlock, loop = false, lane = 0): string {
