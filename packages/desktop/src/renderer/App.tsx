@@ -1,7 +1,7 @@
 import { DiffEditor, type Monaco } from "@monaco-editor/react";
 import { Archive, ArrowDown, ArrowUp, ArrowUpRight, Bot, Bug, Check, ChevronDown, ChevronRight, CircleAlert, ClipboardCopy, Coffee, Columns2, Eye, EyeOff, File, FileCode2, FileDiff, FileText, Folder, FolderOpen, GitBranch, GitCompareArrows, GitMerge, Library, ListTodo, ListTree, LoaderCircle, LogOut, MoreVertical, Package, Palette, Pencil, Pin, PinOff, Play, Plus, RefreshCw, Save, Search, Settings, ShieldAlert, Square, SquareTerminal, Trash2, Workflow, X } from "lucide-react";
 import { Children, isValidElement, useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
-import type { AgentFile, AgentFileScope, AiConfiguration, AiModel, AiProvider, AiProviderDescriptor, AiSession, AiStatus, AiTaskSummary, AiUsage, FileColor, FileRevision, FileTreeNode, GitBranch as GitBranchInfo, GitDiffHunk, GitHistoryRewritePreview, GitStatusEntry, GitUpstreamStatus, HarnessDefinition, HarnessRun, HarnessStateDiagnostic, HttpResponse, JavaBreakpoint, JavaDebugState, JavaMainClass, JavaProjectNode, JavaProjectOptions, JavaTypeSuggestion, ProtocolOperations, RootedJavaDiagnostic, RootedJavaLspLocation, RootedWorkspaceSymbol, RunConfig, RunConfigScope, SearchResult, TaskCheckpoint, TaskCheckpointFile, UsefulFile, UsefulFileScope, WorkspaceOptions, WorkspaceRoot, WorkspaceSearchQueries, WorkspaceTask } from "@remote-ide/protocol";
+import type { AgentFile, AgentFileScope, AiConfiguration, AiModel, AiProvider, AiProviderDescriptor, AiSession, AiStatus, AiTaskSummary, AiUsage, FileColor, FileRevision, FileTreeNode, GitBranch as GitBranchInfo, GitDiffHunk, GitHistoryRewritePreview, GitStatusEntry, GitUpstreamStatus, HarnessDefinition, HarnessRun, HarnessStateDiagnostic, HttpResponse, JavaBreakpoint, JavaDebugState, JavaProjectNode, JavaProjectOptions, JavaTypeSuggestion, ProtocolOperations, RootedJavaDiagnostic, RootedJavaLspLocation, RootedWorkspaceSymbol, RunConfig, RunConfigScope, SearchResult, TaskCheckpoint, TaskCheckpointFile, UsefulFile, UsefulFileScope, WorkspaceOptions, WorkspaceRoot, WorkspaceSearchQueries, WorkspaceTask } from "@remote-ide/protocol";
 import type { editor } from "monaco-editor";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -12,6 +12,7 @@ import { SettingsMenu, type DesktopSettings } from "./SettingsMenu";
 import { readAiPromptDraft, writeAiPromptDraft } from "./ai-prompt-drafts";
 import { editorTabLabel, initialLayout, type EditorTab, type LayoutModel, type Panel } from "./model";
 import { TerminalPanel } from "./TerminalPanel";
+import { JavaConfigurationDialog } from "./JavaConfigurationDialog";
 import { JavaPanel } from "./JavaPanel";
 import { ProblemsPanel } from "./ProblemsPanel";
 import { GitLogPanel } from "./GitLogPanel";
@@ -554,6 +555,10 @@ export function App() {
   const validateHarnessDefinition = useCallback(async (harness: HarnessDefinition) => clientRef.current!.request("harnesses.validate", { harness }), []);
 
   const restoreWorkspaceOptions = useCallback(async (options: WorkspaceOptions, client: CoreClient, rootId = client.getRoot() ?? "legacy") => {
+    try {
+      const java = await client.request("java.getOptions", {});
+      if (client.getRoot() === rootId) { setJavaOptions(java.options); javaOptionsRef.current = java.options; }
+    } catch (error) { setStatusMessage(error instanceof Error ? error.message : "Could not load Java configuration"); }
     setFileColors(options.fileColors ?? {});
     setGitCommitMessage(options.gitCommitMessage ?? "");
     setSearchQueries(options.searchQueries ?? {});
@@ -703,6 +708,13 @@ export function App() {
       };
       if (event.type === "git.changed") { refreshDiffs(); return; }
       const changedPaths = event.payload.paths;
+      if (changedPaths.includes(".vibe/java.json") || event.payload.overflow) {
+        const rootId = client.getRoot();
+        void client.request("java.getOptions", {}).then((result) => {
+          if (client.getRoot() !== rootId) return;
+          setJavaOptions(result.options); javaOptionsRef.current = result.options;
+        }).catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : "Could not load Java configuration"));
+      }
       refreshDiffs(changedPaths.length === 1 ? changedPaths[0] : undefined);
       if (javaOptionsRef.current && changedPaths.some((changedPath) => changedPath.endsWith(".java"))) {
         if (javaRefreshTimer.current) clearTimeout(javaRefreshTimer.current);
@@ -1941,7 +1953,7 @@ export function App() {
     setLayout((current) => ({ ...current, panels: [...current.panels.filter((panel) => !["terminal", "java", "problems", "gitlog"].includes(panel.type)), { id: "java", type: "java" }] }));
     setJavaRunning(true);
     try { await clientRef.current!.request(action, {}); }
-    catch (error) { setJavaRunning(false); setJavaLog((current) => `${current}${error instanceof Error ? error.message : "Java process failed"}\n`); }
+    catch (error) { setJavaRunning(false); setJavaLog((current) => `${current}${error instanceof Error ? error.message : "Java process failed"}\n`); if (error instanceof Error && error.message.includes("Java configuration")) setShowRunConfigurationDialog(true); }
   };
 
   const stopJava = async () => {
@@ -1952,7 +1964,7 @@ export function App() {
     setLayout((current) => ({ ...current, panels: [...current.panels.filter((panel) => !["terminal", "java", "problems", "gitlog"].includes(panel.type)), { id: "java", type: "java" }] }));
     setJavaRunning(true);
     try { await clientRef.current!.request("java.debug.start", { breakpoints: javaBreakpoints }); }
-    catch (error) { setJavaRunning(false); setJavaDebugState({ status: "stopped", variables: [] }); setJavaLog((current) => `${current}${error instanceof Error ? error.message : "Debugger failed"}\n`); }
+    catch (error) { setJavaRunning(false); setJavaDebugState({ status: "stopped", variables: [] }); setJavaLog((current) => `${current}${error instanceof Error ? error.message : "Debugger failed"}\n`); if (error instanceof Error && error.message.includes("Java configuration")) setShowRunConfigurationDialog(true); }
   };
 
   const applyJavaChanges = async () => {
@@ -2426,6 +2438,7 @@ export function App() {
     { id: "terminal.toggle", label: "Toggle Terminal Panel", category: "Terminal", when: (context) => context.connected, execute: toggleTerminalPanel },
     { id: "task.create", label: "Create Task", category: "Task", when: (context) => context.connected && !context.taskSwitching, execute: () => setShowCreateTaskDialog(true) },
     { id: "ai.open", label: "Open AI", category: "AI", when: (context) => context.connected, execute: () => { if (sideLayout === "classic") setClassicAiOpen(true); else setLeftPanels((current) => ({ ...current, ai: true })); void refreshAi(); } },
+    { id: "java.configuration", label: "Edit Java Run/Debug Configuration", category: "Java", when: (context) => context.connected && !!javaOptions, execute: () => setShowRunConfigurationDialog(true) },
     { id: "editor.save", label: "Save Active Editor", category: "Editor", when: (context) => context.hasActiveEditor && context.activeEditorDirty, execute: () => saveActive() }
   ];
 
@@ -2499,7 +2512,8 @@ export function App() {
             <button title="Run selected Java configuration" disabled={javaRunning || !javaOptions.selectedRunConfigurationId} onClick={() => void runJavaAction("java.run")}><Play size={14} /></button>
             <button title="Debug selected Java configuration" disabled={javaRunning || !javaOptions.selectedRunConfigurationId} onClick={() => void debugJava()}><Bug size={14} /></button>
             <button title="Stop Java process" disabled={!javaRunning} onClick={() => void stopJava()}><Square size={13} /></button>
-            <select aria-label="Java run configuration" value={javaOptions.selectedRunConfigurationId ?? ""} onChange={(event) => event.target.value === "__create__" ? setShowRunConfigurationDialog(true) : void selectRunConfiguration(event.target.value)}><option value="" disabled>Select run configuration</option>{javaOptions.runConfigurations.map((configuration) => <option key={configuration.id} value={configuration.id}>{configuration.name}</option>)}<option value="__create__">Create new...</option></select>
+            <button title="Edit Java run/debug configuration" onClick={() => setShowRunConfigurationDialog(true)}><Settings size={14} /></button>
+            <select aria-label="Java run configuration" value={javaOptions.selectedRunConfigurationId ?? ""} onChange={(event) => event.target.value === "__create__" ? setShowRunConfigurationDialog(true) : void selectRunConfiguration(event.target.value)}><option value="" disabled>Select run configuration</option>{javaOptions.runConfigurations.map((configuration) => <option key={configuration.id} value={configuration.id}>{configuration.name}</option>)}<option value="__create__">Edit configurations…</option></select>
           </div>}
           <span className="connection-dot" />{host}:{port}<div className="settings-anchor"><button title="Settings" onClick={() => setSettingsOpen((open) => !open)}><Settings size={15} /></button>{settingsOpen && <SettingsMenu workspace={activeWorkspace} sideLayout={sideLayout} onSideLayoutChange={changeSideLayout} commands={commands} shortcutBindings={shortcutBindings} platform={platform} onShortcutChange={changeShortcut} onShortcutsReset={resetShortcuts} values={{ theme, highlightTheme, uiFontFamily, uiFontSize, uiLineHeight }} isWorkspaceOverride={(setting) => hasWorkspaceSetting(activeWorkspace, setting)} onChange={(setting, value) => { workspaceDefaultsRef.current.delete(setting); if (setting === "theme") setTheme(value as DesktopSettings["theme"]); else if (setting === "highlightTheme") setHighlightTheme(value as DesktopSettings["highlightTheme"]); else if (setting === "uiFontFamily") setUiFontFamily(value as DesktopSettings["uiFontFamily"]); else if (setting === "uiFontSize") setUiFontSize(value as number); else setUiLineHeight(value as number); }} onReset={(setting) => { resetWorkspaceSetting(activeWorkspace, setting); workspaceDefaultsRef.current.add(setting); const value = readSetting(setting); if (setting === "theme") setTheme(value === "light" ? "light" : "dark"); else if (setting === "highlightTheme") setHighlightTheme(value === "ftpud" || value === "ftpud-dark" ? "ftpud" : "default"); else if (setting === "uiFontFamily") setUiFontFamily(value === "inter" ? "inter" : "jetbrains"); else if (setting === "uiFontSize") setUiFontSize(readSettingNumber(setting, 13, 10, 20)); else setUiLineHeight(readSettingNumber(setting, 1.2, 1, 2)); setSettingsRevision((revision) => revision + 1); }} />}</div><button title="Disconnect" onClick={disconnect}><LogOut size={15} /></button>
         </div>
@@ -2578,7 +2592,7 @@ export function App() {
       </>}
     </div>
     {layout.panels.some((panel) => panel.type === "terminal") && <TerminalPanel theme={theme} fontFamily={editorFontFamily} fontSize={uiFontSize} lineHeight={uiLineHeight} client={clientRef.current!} group={layout.terminalGroup} height={terminalHeight} highlightedTerminalIds={new Set(runConfigs.filter((config) => ["starting", "running", "stopping"].includes(config.status)).flatMap((config) => config.terminalId ? [config.terminalId] : []))} onActivate={activateTerminalTab} onCreate={() => void createTerminal()} onClose={closeTerminal} onRename={renameTerminal} onDuplicate={(tab) => void duplicateTerminal(tab)} onMove={moveTerminal} onRecoveryShown={(tabId) => updateTerminalGroup((group) => ({ ...group, tabs: group.tabs.map((tab) => tab.id === tabId ? { ...tab, recovery: undefined } : tab) }))} onResizeStart={beginTerminalResize} registerWriter={registerTerminalWriter} />}
-    {layout.panels.some((panel) => panel.type === "java") && javaOptions && <JavaPanel key={selectedRootId} height={javaPanelHeight} log={javaLog} running={javaRunning} options={javaOptions} debugState={javaDebugState} onApplyChanges={applyJavaChanges} onInspect={(reference, start) => clientRef.current!.request("java.debug.variables", { reference, start })} onBuild={() => void runJavaAction("java.build")} onRun={() => void runJavaAction("java.run")} onDebug={() => void debugJava()} onStop={() => void stopJava()} onDebugCommand={(command) => void commandJavaDebugger(command)} onClear={() => setJavaLog("")} onResizeStart={beginJavaResize} />}
+    {layout.panels.some((panel) => panel.type === "java") && javaOptions && <JavaPanel key={selectedRootId} height={javaPanelHeight} log={javaLog} running={javaRunning} options={javaOptions} debugState={javaDebugState} onConfigure={() => setShowRunConfigurationDialog(true)} onApplyChanges={applyJavaChanges} onInspect={(reference, start) => clientRef.current!.request("java.debug.variables", { reference, start })} onBuild={() => void runJavaAction("java.build")} onRun={() => void runJavaAction("java.run")} onDebug={() => void debugJava()} onStop={() => void stopJava()} onDebugCommand={(command) => void commandJavaDebugger(command)} onClear={() => setJavaLog("")} onResizeStart={beginJavaResize} />}
     {layout.panels.some((panel) => panel.type === "problems") && javaOptions && <ProblemsPanel height={problemsHeight} diagnostics={javaDiagnostics} checking={javaChecking} onRefresh={() => void checkJava()} onOpen={(diagnostic) => void openDiagnostic(diagnostic)} onResizeStart={beginProblemsResize} />}
     {layout.panels.some((panel) => panel.type === "gitlog") && <GitLogPanel client={clientRef.current!} height={gitLogHeight} onResizeStart={beginGitLogResize} onRepositoryChanged={() => { void Promise.all([refreshGit(), refreshTree()]); }} onMergeConflict={() => { void clientRef.current?.request("git.conflicts", {}).then((conflicts) => setGitConflictPath(conflicts.files[0]?.path ?? "")); }} />}
     <footer className="bottom-tool-bar">
@@ -2632,7 +2646,7 @@ export function App() {
     {gitRebaseDialog && <GitRebaseDialog preview={gitRebaseDialog.preview} busy={gitRebasing} error={gitRebaseDialog.error} onClose={() => { if (!gitRebasing) setGitRebaseDialog(undefined); }} onConfirm={(items) => void executeInteractiveRebase(items)} />}
     {gitHunkDialog && <div className="context-menu-layer" onMouseDown={() => setGitHunkDialog(undefined)}><section className="git-hunk-popup" role="dialog" aria-label={`Previous content in ${gitHunkDialog.path}`} style={{ left: gitHunkDialog.x, top: gitHunkDialog.y }} onMouseDown={(event) => event.stopPropagation()}><header><div><strong>Before this change</strong><span>{gitHunkDialog.path.split("/").pop()} · line {gitHunkDialog.hunk.originalStart}</span></div><button title="Close" onClick={() => setGitHunkDialog(undefined)}><X size={14} /></button></header>{gitHunkDialog.error && <div className="git-hunk-error">{gitHunkDialog.error}</div>}<pre>{gitHunkDialog.hunk.originalLines === 0 ? "This block did not exist before." : gitHunkDialog.originalContent.split("\n").slice(Math.max(0, gitHunkDialog.hunk.originalStart - 1), Math.max(0, gitHunkDialog.hunk.originalStart - 1) + gitHunkDialog.hunk.originalLines).join("\n")}</pre><footer>{gitHunkDialog.hunk.source === "worktree" ? <button onClick={() => void updateGitIndex("stage", gitHunkDialog.path, gitHunkDialog.hunk)}><Check size={13} /><span>Stage Hunk</span></button> : <button onClick={() => void updateGitIndex("unstage", gitHunkDialog.path, gitHunkDialog.hunk)}><X size={13} /><span>Unstage Hunk</span></button>}<button className="danger" disabled={gitHunkDialog.hunk.source !== "worktree"} onClick={() => void rollbackGitHunk()}><RefreshCw size={13} /><span>Rollback</span></button></footer></section></div>}
     {externalConflict && <ExternalChangeConflict dialog={externalConflict} onClose={() => setExternalConflict(undefined)} onReload={() => { updateGroup((tabs, active) => ({ tabs: tabs.map((tab) => tab.id === externalConflict.tabId ? { ...tab, content: externalConflict.externalContent, savedContent: externalConflict.externalContent, revision: externalConflict.externalRevision, dirty: false, error: undefined } : tab), activeTabId: active })); setExternalConflict(undefined); }} onOverwrite={() => { const tab = layoutRef.current.editorGroups[0]?.tabs.find((item) => item.id === externalConflict.tabId); if (!tab || !clientRef.current) return; void clientRef.current.request("filesystem.writeFile", { path: externalConflict.path, content: tab.content, expectedRevision: externalConflict.externalRevision, force: true }).then((saved) => { updateGroup((tabs, active) => ({ tabs: tabs.map((item) => item.id === tab.id ? { ...item, savedContent: tab.content, dirty: false, revision: saved.revision, error: undefined } : item), activeTabId: active })); setExternalConflict(undefined); }).catch((error: unknown) => setExternalConflict((current) => current ? { ...current, error: error instanceof Error ? error.message : "Could not overwrite" } : current)); }} onSaveAs={(target) => { const tab = layoutRef.current.editorGroups[0]?.tabs.find((item) => item.id === externalConflict.tabId); if (!tab || !clientRef.current) return; void clientRef.current.request("filesystem.writeFile", { path: target, content: tab.content, create: true }).then(() => { setExternalConflict(undefined); void refreshTree(); }).catch((error: unknown) => setExternalConflict((current) => current ? { ...current, error: error instanceof Error ? error.message : "Could not save as" } : current)); }} />}
-    {showRunConfigurationDialog && <RunConfigurationDialog client={clientRef.current!} onClose={() => setShowRunConfigurationDialog(false)} onSaved={(options) => { setJavaOptions(options); javaOptionsRef.current = options; setShowRunConfigurationDialog(false); }} />}
+    {showRunConfigurationDialog && <JavaConfigurationDialog key={selectedRootId} client={clientRef.current!} running={javaRunning} onClose={() => setShowRunConfigurationDialog(false)} onSaved={(options) => { setJavaOptions(options); javaOptionsRef.current = options; setShowRunConfigurationDialog(false); void refreshJavaTree(); void refreshTree(); }} />}
     {showCreateTaskDialog && <CreateTaskDialog client={clientRef.current!} onClose={() => setShowCreateTaskDialog(false)} onCreate={createTask} />}
     {mergeDialog && <MergeTaskDialog task={mergeDialog} onClose={() => setMergeDialog(undefined)} onMerge={(strategy) => void mergeTask(mergeDialog, strategy)} />}
     {usefulDialog && <UsefulFileDialog mode={usefulDialog.mode} initialName={usefulDialog.file?.name ?? ""} scope={usefulDialog.scope} onClose={() => setUsefulDialog(undefined)} onSave={saveUsefulFileDialog} />}
@@ -3061,46 +3075,3 @@ function CreateTaskDialog({ client, onClose, onCreate }: { client: CoreClient; o
   </div>;
 }
 
-function RunConfigurationDialog({ client, onClose, onSaved }: { client: CoreClient; onClose(): void; onSaved(options: JavaProjectOptions): void }) {
-  const [classes, setClasses] = useState<JavaMainClass[]>([]);
-  const [mainClass, setMainClass] = useState("");
-  const [name, setName] = useState("");
-  const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState("");
-  useEffect(() => {
-    let current = true;
-    void client.request("java.listMainClasses", {}).then((result) => {
-      if (!current) return;
-      setClasses(result.classes);
-      const first = result.classes[0]?.className ?? "";
-      setMainClass(first); setName(first.split(".").pop() ?? first);
-    }).catch((loadError: unknown) => { if (current) setError(loadError instanceof Error ? loadError.message : "Could not discover main classes"); })
-      .finally(() => { if (current) setLoading(false); });
-    return () => { current = false; };
-  }, [client]);
-  useEffect(() => {
-    const listener = (event: KeyboardEvent) => { if (event.key === "Escape") onClose(); };
-    window.addEventListener("keydown", listener); return () => window.removeEventListener("keydown", listener);
-  }, [onClose]);
-
-  const save = async () => {
-    if (!name.trim() || !mainClass) return;
-    setSaving(true); setError("");
-    try { onSaved((await client.request("java.addRunConfiguration", { name: name.trim(), mainClass })).options); }
-    catch (saveError) { setError(saveError instanceof Error ? saveError.message : "Could not save run configuration"); setSaving(false); }
-  };
-
-  return <div className="dialog-overlay" onMouseDown={onClose}>
-    <section className="run-config-dialog" role="dialog" aria-modal="true" aria-label="Add Java run configuration" onMouseDown={(event) => event.stopPropagation()}>
-      <header><div><h2>Add Run Configuration</h2><span>Java Application</span></div><button title="Close" onClick={onClose}><X size={15} /></button></header>
-      <form onSubmit={(event) => { event.preventDefault(); void save(); }}>
-        <label>Profile name<input autoFocus value={name} onChange={(event) => setName(event.target.value)} maxLength={100} placeholder="Application" /></label>
-        <label>Main class<select value={mainClass} disabled={loading || classes.length === 0} onChange={(event) => { setMainClass(event.target.value); if (!name.trim()) setName(event.target.value.split(".").pop() ?? event.target.value); }}><option value="" disabled>{loading ? "Discovering classes..." : "Select main class"}</option>{classes.map((item) => <option key={item.className} value={item.className}>{item.className}</option>)}</select></label>
-        {classes.length === 0 && !loading && !error && <div className="run-config-empty">No classes with a public static void main method were found in configured source roots.</div>}
-        {error && <div className="find-error">{error}</div>}
-        <footer><button type="button" onClick={onClose}>Cancel</button><button className="primary" disabled={saving || !name.trim() || !mainClass}>{saving ? "Saving..." : "Add"}</button></footer>
-      </form>
-    </section>
-  </div>;
-}
