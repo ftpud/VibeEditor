@@ -220,7 +220,7 @@ export type JavaRunConfiguration = {
   environment?: Record<string, string>;
 };
 export type JavaToolCheck = { tool: "Maven" | "Java" | "Java compiler" | "Java debugger"; executable: string; ok: boolean; message: string };
-export const javaConfigurationPath = ".project/java.json";
+export const javaConfigurationPath = ".settings/java.json";
 export type JavaMainClass = { className: string; path: string };
 export type JavaBreakpoint = { path: string; line: number; className: string };
 export type JavaDebugVariable = { name: string; value: string; reference?: string; type?: string; objectId?: string; indexedCount?: number };

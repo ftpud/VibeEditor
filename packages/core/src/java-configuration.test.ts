@@ -26,25 +26,31 @@ async function workspace(wrapper = false) {
 }
 
 describe("Java configuration", () => {
-  it("copies legacy Java configuration to .project and saves subsequent edits there", async () => {
+  it.each([".project", ".vibe"])("copies %s Java configuration to .settings and saves subsequent edits there", async (directory) => {
     const { service, options, root } = await workspace();
     const legacy = JSON.stringify({ ...options, javaHome: "/opt/legacy-jdk" }, null, 2) + "\n";
-    await mkdir(path.join(root, ".vibe"));
-    await writeFile(path.join(root, ".vibe/java.json"), legacy);
+    await mkdir(path.join(root, directory));
+    await writeFile(path.join(root, directory, "java.json"), legacy);
+    if (directory === ".project") {
+      await mkdir(path.join(root, ".vibe"));
+      await writeFile(path.join(root, ".vibe/java.json"), JSON.stringify({ ...options, javaHome: "/opt/older-jdk" }));
+    }
     const result = await service.readConfiguration();
-    expect(result.path).toBe(".project/java.json");
+    expect(result.path).toBe(".settings/java.json");
     expect(result.content).toBe(legacy);
     expect(await readFile(path.join(root, javaConfigurationPath), "utf8")).toBe(legacy);
     await service.saveConfiguration(JSON.stringify({ ...options, javaHome: "/opt/new-jdk" }), result.revision);
     expect(await service.getOptions()).toMatchObject({ javaHome: "/opt/new-jdk" });
-    expect(await readFile(path.join(root, ".vibe/java.json"), "utf8")).toBe(legacy);
+    expect(await readFile(path.join(root, directory, "java.json"), "utf8")).toBe(legacy);
   });
 
-  it("prefers .project configuration when both locations exist", async () => {
+  it("prefers .settings configuration when previous locations also exist", async () => {
     const { service, options, root } = await workspace();
     await mkdir(path.join(root, ".vibe"));
     await mkdir(path.join(root, ".project"));
+    await mkdir(path.join(root, ".settings"));
     await writeFile(path.join(root, ".vibe/java.json"), JSON.stringify({ ...options, javaHome: "/opt/legacy-jdk" }));
+    await writeFile(path.join(root, ".project/java.json"), JSON.stringify({ ...options, javaHome: "/opt/previous-jdk" }));
     await writeFile(path.join(root, javaConfigurationPath), JSON.stringify({ ...options, javaHome: "/opt/project-jdk" }));
     expect(await service.getOptions()).toMatchObject({ javaHome: "/opt/project-jdk" });
   });
@@ -73,7 +79,7 @@ describe("Java configuration", () => {
 
   it("keeps malformed JSON accessible for repair without replacing it", async () => {
     const { service, root } = await workspace();
-    await mkdir(path.join(root, ".project")); await writeFile(path.join(root, javaConfigurationPath), "{broken");
+    await mkdir(path.join(root, ".settings")); await writeFile(path.join(root, javaConfigurationPath), "{broken");
     await expect(service.getOptions()).rejects.toThrow("invalid JSON");
     const file = await service.readConfiguration();
     expect(file.content).toBe("{broken");
