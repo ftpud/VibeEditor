@@ -207,13 +207,21 @@ export type JavaProjectOptions = {
 export type JavaRunConfiguration = { id: string; name: string; mainClass: string };
 export type JavaMainClass = { className: string; path: string };
 export type JavaBreakpoint = { path: string; line: number; className: string };
-export type JavaDebugVariable = { name: string; value: string };
+export type JavaDebugVariable = { name: string; value: string; reference?: string; type?: string; objectId?: string; indexedCount?: number };
 export type JavaDebugState = {
   status: "starting" | "running" | "paused" | "stopped";
   className?: string;
   method?: string;
   line?: number;
   variables: JavaDebugVariable[];
+  applyingChanges?: boolean;
+  inspectionError?: string;
+};
+export type JavaApplyChangesResult = {
+  appliedClasses: string[];
+  deferredClasses: string[];
+  failedClasses: { className: string; message: string }[];
+  restartRequired: boolean;
 };
 export type JavaDiagnostic = { path: string; line: number; column: number; severity: "error" | "warning"; message: string };
 export type JavaTypeSuggestion = { simpleName: string; qualifiedName: string; source: "project" | "dependency" };
@@ -521,6 +529,14 @@ export type ProtocolOperations = {
     payload: { breakpoints: JavaBreakpoint[] };
     result: Record<string, never>;
   };
+  "java.debug.applyChanges": {
+    payload: Record<string, never>;
+    result: JavaApplyChangesResult;
+  };
+  "java.debug.variables": {
+    payload: { reference: string; start?: number };
+    result: { variables: JavaDebugVariable[]; nextStart?: number };
+  };
   "java.debug.command": {
     payload: { command: "continue" | "stepInto" | "stepOver" | "stepOut" };
     result: Record<string, never>;
@@ -773,6 +789,8 @@ const requestTypeRegistry: Record<RequestType, true> = {
   "java.stop": true,
   "java.debug.start": true,
   "java.debug.command": true,
+  "java.debug.variables": true,
+  "java.debug.applyChanges": true,
   "java.check": true,
   "java.completeType": true,
   "java.completion": true,

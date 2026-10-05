@@ -1,10 +1,10 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import crypto from "node:crypto";
-import { mkdtemp, readFile, readdir, rm, stat } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { XMLParser } from "fast-xml-parser";
-import type { JavaBreakpoint, JavaDebugState, JavaDiagnostic, JavaMainClass, JavaProjectNode, JavaProjectOptions, JavaTypeSuggestion } from "@remote-ide/protocol";
+import type { JavaApplyChangesResult, JavaBreakpoint, JavaDebugVariable, JavaDebugState, JavaDiagnostic, JavaMainClass, JavaProjectNode, JavaProjectOptions, JavaTypeSuggestion } from "@remote-ide/protocol";
 import { CoreError } from "./errors.js";
 import { WorkspaceFileSystem } from "./filesystem.js";
 import { WorkspaceStateStore } from "./workspace-state.js";
@@ -16,10 +16,23 @@ type JavaProcessEvent =
 
 export class JavaProjectService {
   private process?: ChildProcessWithoutNullStreams;
+  private debugStarting = false;
+  private debugLaunchGeneration = 0;
   private debugging = false;
+  private debugState: JavaDebugState = { status: "stopped", variables: [] };
+  private debugGeneration = 0;
+  private applyingChanges = false;
+  private applyBuildProcess?: ChildProcessWithoutNullStreams;
+  private debugClassFiles = new Map<string, { file: string; hash: string }>();
+  private debugBreakpoints: JavaBreakpoint[] = [];
   private debugBuffer = "";
   private debugLocation?: { className: string; method: string; line: number };
   private awaitingDebugLocals = false;
+  private awaitingDebugStopPrompt = false;
+  private debugReferences = new Map<string, { expression: string; length?: number }>();
+  private debugPaused = false;
+  private inspectionQueue: Promise<unknown> = Promise.resolve();
+  private pendingInspection?: { resolve: (output: string) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> };
   private dependencyTypes?: JavaTypeSuggestion[];
 
   constructor(
@@ -119,7 +132,7 @@ export class JavaProjectService {
 
   async build(): Promise<void> { await this.start(["package", "-DskipTests"], "Build"); }
   async check(): Promise<JavaDiagnostic[]> {
-    if (this.process) throw new CoreError("JAVA_PROCESS_FAILED", "Java checks are unavailable while a build, run, or debug process is active");
+    if (this.process || this.debugStarting) throw new CoreError("JAVA_PROCESS_FAILED", "Java checks are unavailable while a build, run, or debug process is active");
     const options = await this.requireOptions();
     const output = await this.capture(options.mavenExecutable, ["-f", options.pomPath, "compile", "-DskipTests", "-Dstyle.color=never"]);
     const diagnostics: JavaDiagnostic[] = [];
@@ -177,41 +190,280 @@ export class JavaProjectService {
   }
 
   async debug(breakpoints: JavaBreakpoint[]): Promise<void> {
-    const options = await this.requireOptions();
-    const configuration = options.runConfigurations.find((item) => item.id === options.selectedRunConfigurationId);
-    if (!configuration) throw new CoreError("JAVA_PROCESS_FAILED", "Select a Java run configuration first");
-    if (this.process) throw new CoreError("JAVA_PROCESS_FAILED", "A Java build, run, or debug process is already active");
-    this.onProcessEvent({ type: "debug", state: { status: "starting", variables: [] } });
-    await this.runAndWait(options.mavenExecutable, ["-f", options.pomPath, "package", "-DskipTests"], "Debug build");
-    const classpath = await this.buildDebugClasspath(options);
-    const child = spawn("jdb", ["-classpath", classpath, configuration.mainClass], { cwd: this.filesystem.getWorkspace(), env: process.env, stdio: "pipe" });
-    this.process = child;
-    this.debugging = true;
-    this.debugBuffer = "";
-    child.stdout.on("data", (data: Buffer) => this.consumeDebugOutput(data.toString()));
-    child.stderr.on("data", (data: Buffer) => this.onProcessEvent({ type: "output", data: data.toString() }));
-    child.on("error", (error) => this.onProcessEvent({ type: "output", data: `Debugger failed to start: ${error.message}\n` }));
-    child.on("close", (exitCode, signal) => {
-      this.process = undefined; this.debugging = false;
-      this.onProcessEvent({ type: "debug", state: { status: "stopped", variables: [] } });
-      this.onProcessEvent({ type: "exit", exitCode, signal });
-    });
-    for (const breakpoint of breakpoints) child.stdin.write(`stop at ${breakpoint.className}:${breakpoint.line}\n`);
-    child.stdin.write("run\n");
-    this.onProcessEvent({ type: "debug", state: { status: "running", variables: [] } });
+    if (this.process || this.debugStarting) throw new CoreError("JAVA_PROCESS_FAILED", "A Java build, run, or debug process is already active");
+    this.debugStarting = true;
+    const launch = ++this.debugLaunchGeneration;
+    const ensureLaunching = () => {
+      if (launch !== this.debugLaunchGeneration) throw new CoreError("JAVA_PROCESS_FAILED", "Debugger start was cancelled");
+    };
+    try {
+      const options = await this.requireOptions();
+      const configuration = options.runConfigurations.find((item) => item.id === options.selectedRunConfigurationId);
+      if (!configuration) throw new CoreError("JAVA_PROCESS_FAILED", "Select a Java run configuration first");
+      this.debugBreakpoints = breakpoints.map((breakpoint) => {
+        if (!/^[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*$/.test(breakpoint.className) || !Number.isSafeInteger(breakpoint.line) || breakpoint.line < 1) throw new CoreError("INVALID_REQUEST", "Invalid Java breakpoint");
+        return { ...breakpoint };
+      });
+      ensureLaunching();
+      this.emitDebugState({ status: "starting", variables: [] });
+      await this.runAndWait(options.mavenExecutable, ["-f", options.pomPath, "package", "-DskipTests", "-Dmaven.compiler.debug=true", "-Dmaven.compiler.debuglevel=lines,vars,source"], "Debug build");
+      ensureLaunching();
+      const classpath = await this.buildDebugClasspath(options);
+      ensureLaunching();
+      this.debugClassFiles = await this.snapshotDebugClasses(options);
+      ensureLaunching();
+      const child = spawn("jdb", ["-classpath", classpath, configuration.mainClass], { cwd: this.filesystem.getWorkspace(), env: process.env, stdio: "pipe" });
+      this.process = child;
+      this.debugging = true;
+      this.invalidateDebugInspection();
+      this.debugBuffer = "";
+      child.stdout.on("data", (data: Buffer) => this.consumeDebugOutput(data.toString()));
+      child.stderr.on("data", (data: Buffer) => this.consumeDebugOutput(data.toString()));
+      child.on("error", (error) => this.onProcessEvent({ type: "output", data: `Debugger failed to start: ${error.message}\n` }));
+      child.on("close", (exitCode, signal) => {
+        if (this.process !== child) return;
+        this.invalidateDebugInspection();
+        this.process = undefined; this.debugging = false;
+        this.applyBuildProcess?.kill("SIGTERM");
+        this.emitDebugState({ status: "stopped", variables: [] });
+        this.onProcessEvent({ type: "exit", exitCode, signal });
+      });
+      await new Promise<void>((resolve, reject) => { child.once("spawn", resolve); child.once("error", reject); });
+      for (const breakpoint of this.debugBreakpoints) child.stdin.write(`stop at ${breakpoint.className}:${breakpoint.line}\n`);
+      child.stdin.write("run\n");
+      this.emitDebugState({ status: "running", variables: [] });
+    } catch (error) {
+      this.emitDebugState({ status: "stopped", variables: [] });
+      throw error;
+    } finally { this.debugStarting = false; }
   }
 
   debugCommand(command: "continue" | "stepInto" | "stepOver" | "stepOut"): void {
     if (!this.process || !this.debugging) throw new CoreError("JAVA_PROCESS_FAILED", "No Java debugger is active");
+    if (this.applyingChanges) throw new CoreError("JAVA_PROCESS_FAILED", "Wait for code changes to finish applying");
+    if (!this.debugPaused) throw new CoreError("JAVA_PROCESS_FAILED", "Pause the Java debugger before stepping");
+    this.invalidateDebugInspection();
     const jdbCommand = { continue: "cont", stepInto: "step", stepOver: "next", stepOut: "step up" }[command];
     this.process.stdin.write(`${jdbCommand}\n`);
-    this.onProcessEvent({ type: "debug", state: { status: "running", variables: [] } });
+    this.emitDebugState({ status: "running", variables: [] });
+  }
+
+  async debugVariables(reference: string, start = 0): Promise<{ variables: JavaDebugVariable[]; nextStart?: number }> {
+    if (this.applyingChanges) throw new CoreError("JAVA_PROCESS_FAILED", "Wait for code changes to finish applying");
+    const generation = this.debugGeneration;
+    const inspect = async () => {
+      if (generation !== this.debugGeneration) throw new CoreError("INVALID_REQUEST", "This object belongs to an expired debugger pause");
+      const target = this.debugReferences.get(reference);
+      if (!this.debugPaused || !target) throw new CoreError("INVALID_REQUEST", "This object belongs to an expired debugger pause");
+      if (!Number.isSafeInteger(start) || start < 0) throw new CoreError("INVALID_REQUEST", "Invalid array offset");
+      if (target.length !== undefined) {
+        const end = Math.min(target.length, start + 50);
+        const variables: JavaDebugVariable[] = [];
+        for (let index = start; index < end; index++) {
+          const expression = `${target.expression}[${index}]`;
+          const output = await this.inspectDebugExpression(expression);
+          if (generation !== this.debugGeneration) throw new CoreError("INVALID_REQUEST", "Debugger pause ended during inspection");
+          const value = output.match(/ = ([\s\S]*?)\s*[\w$.-]+\[\d+\]\s*$/)?.[1]?.trim();
+          if (value === undefined) throw new CoreError("JAVA_PROCESS_FAILED", output.trim());
+          variables.push(this.debugVariable(`[${index}]`, value, expression));
+        }
+        return { variables, ...(end < target.length ? { nextStart: end } : {}) };
+      }
+      const output = await this.inspectDebugExpression(target.expression);
+      if (generation !== this.debugGeneration) throw new CoreError("INVALID_REQUEST", "Debugger pause ended during inspection");
+      if (!/ = \{/.test(output)) throw new CoreError("JAVA_PROCESS_FAILED", output.trim());
+      const variables = [...output.matchAll(/^\s*([\w$.]+): (.+)$/gm)].map((match) =>
+        this.debugVariable(match[1]!, match[2]!.trim(), `${target.expression}.${match[1]!.split(".").pop()}`));
+      if (variables.length === 0) {
+        const body = output.match(/ = \{([\s\S]*?)\n\}/)?.[1]?.trim() ?? "";
+        const elements = body.match(/"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^,\r\n]+/g) ?? [];
+        const end = Math.min(elements.length, start + 50);
+        return { variables: elements.slice(start, end).map((value, offset) => this.debugVariable(`[${start + offset}]`, value.trim(), `${target.expression}[${start + offset}]`)), ...(end < elements.length ? { nextStart: end } : {}) };
+      }
+      return { variables };
+    };
+    const result = this.inspectionQueue.then(inspect);
+    this.inspectionQueue = result.catch(() => undefined);
+    return result;
+  }
+
+  private debugVariable(name: string, value: string, expression: string): JavaDebugVariable {
+    const object = value.match(/^instance of (.+?)\s*\(id=(\d+)\)$/);
+    if (!object) {
+      if (value.startsWith("{")) {
+        const reference = crypto.randomUUID();
+        this.debugReferences.set(reference, { expression });
+        return { name, value: "Object / array", reference };
+      }
+      return { name, value };
+    }
+    const type = object[1]!;
+    const length = type.match(/\[(\d+)\]$/)?.[1];
+    const reference = crypto.randomUUID();
+    this.debugReferences.set(reference, { expression, ...(length !== undefined ? { length: Number(length) } : {}) });
+    return { name, value, type, objectId: object[2]!, reference, ...(length !== undefined ? { indexedCount: Number(length) } : {}) };
+  }
+
+  private inspectDebugExpression(expression: string): Promise<string> {
+    if (!this.debugPaused || !this.process) return Promise.reject(new CoreError("JAVA_PROCESS_FAILED", "Java debugger is no longer paused"));
+    return this.runDebugCommand(`dump ${expression}`);
+  }
+
+  private runDebugCommand(command: string): Promise<string> {
+    if (!this.debugPaused || !this.process) return Promise.reject(new CoreError("JAVA_PROCESS_FAILED", "Java debugger is no longer paused"));
+    if (this.pendingInspection) return Promise.reject(new CoreError("JAVA_PROCESS_FAILED", "A debugger command is already pending"));
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        // Stop accepting inspections until the next pause: a late prompt must not resolve another request.
+        this.invalidateDebugInspection();
+        this.debugPaused = true;
+      }, 10_000);
+      this.debugBuffer = "";
+      this.pendingInspection = { resolve, reject, timer };
+      this.process!.stdin.write(`${command}\n`);
+    });
+  }
+
+  private invalidateDebugInspection(): void {
+    this.debugGeneration++;
+    this.debugPaused = false;
+    this.debugReferences.clear();
+    this.awaitingDebugLocals = false;
+    this.awaitingDebugStopPrompt = false;
+    if (this.pendingInspection) {
+      clearTimeout(this.pendingInspection.timer);
+      this.pendingInspection.reject(new CoreError("JAVA_PROCESS_FAILED", "Debugger inspection ended; pause again to inspect values"));
+      this.pendingInspection = undefined;
+    }
+  }
+
+  private emitDebugState(state: JavaDebugState): void {
+    this.debugState = state;
+    this.onProcessEvent({ type: "debug", state });
+  }
+
+  private async snapshotDebugClasses(options: JavaProjectOptions): Promise<Map<string, { file: string; hash: string }>> {
+    const files = new Map<string, { file: string; hash: string }>();
+    const visit = async (directory: string, prefix: string) => {
+      for (const entry of await readdir(directory, { withFileTypes: true })) {
+        if (entry.isSymbolicLink()) continue;
+        const file = path.join(directory, entry.name);
+        const relative = prefix ? `${prefix}.${entry.name}` : entry.name;
+        if (entry.isDirectory()) await visit(file, relative);
+        else if (entry.isFile() && entry.name.endsWith(".class") && entry.name !== "module-info.class") {
+          const className = relative.slice(0, -6);
+          if (!files.has(className)) files.set(className, { file, hash: crypto.createHash("sha256").update(await readFile(file)).digest("hex") });
+        }
+      }
+    };
+    for (const output of [options.outputPath, options.testOutputPath]) {
+      let directory: string;
+      try { directory = await this.filesystem.resolveExisting(output); }
+      catch (error) { if (error instanceof CoreError && error.code === "FILE_NOT_FOUND") continue; throw error; }
+      await visit(directory, "");
+    }
+    return files;
+  }
+
+  private compileDebugChanges(options: JavaProjectOptions): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const args = ["-f", options.pomPath, "compile", "test-compile", "-DskipTests", "-Dmaven.compiler.debug=true", "-Dmaven.compiler.debuglevel=lines,vars,source"];
+      this.onProcessEvent({ type: "output", data: `> ${options.mavenExecutable} ${args.join(" ")}\n` });
+      const child = spawn(options.mavenExecutable, args, { cwd: this.filesystem.getWorkspace(), env: process.env, stdio: "pipe" });
+      this.applyBuildProcess = child;
+      child.stdout.on("data", (data: Buffer) => this.onProcessEvent({ type: "output", data: data.toString() }));
+      child.stderr.on("data", (data: Buffer) => this.onProcessEvent({ type: "output", data: data.toString() }));
+      child.on("error", (error) => reject(new CoreError("JAVA_PROCESS_FAILED", `Compile failed: ${error.message}`)));
+      child.on("close", (code) => {
+        if (this.applyBuildProcess === child) this.applyBuildProcess = undefined;
+        if (code === 0) resolve();
+        else reject(new CoreError("JAVA_PROCESS_FAILED", "Compilation failed. No code changes were applied; see Build Output."));
+      });
+    });
+  }
+
+  async applyDebugChanges(): Promise<JavaApplyChangesResult> {
+    if (!this.debugPaused || !this.process || this.applyingChanges) throw new CoreError("JAVA_PROCESS_FAILED", "Pause the Java debugger before applying code changes");
+    const child = this.process;
+    const generation = this.debugGeneration;
+    this.applyingChanges = true;
+    this.emitDebugState({ ...this.debugState, applyingChanges: true });
+    const ensurePaused = () => {
+      if (this.process !== child || !this.debugPaused || this.debugGeneration !== generation) throw new CoreError("JAVA_PROCESS_FAILED", "Debugger pause ended while applying changes");
+    };
+    const result: JavaApplyChangesResult = { appliedClasses: [], deferredClasses: [], failedClasses: [], restartRequired: false };
+    try {
+      await this.inspectionQueue;
+      ensurePaused();
+      const options = await this.requireOptions();
+      await this.compileDebugChanges(options);
+      ensurePaused();
+      const next = await this.snapshotDebugClasses(options);
+      const changed = [...next].filter(([name, entry]) => this.debugClassFiles.get(name)?.hash !== entry.hash);
+      const classesOutput = await this.runDebugCommand("classes");
+      ensurePaused();
+      const loaded = new Set(classesOutput.split(/\r?\n/).map((line) => line.trim()));
+      if (!classesOutput.includes("** classes list **")) throw new CoreError("JAVA_PROCESS_FAILED", "Could not list loaded Java classes");
+      const temporaryDirectory = await mkdtemp(path.join(os.tmpdir(), "vibe-hotswap-"));
+      try {
+        for (const [className, entry] of changed) {
+          ensurePaused();
+          if (!loaded.has(className)) {
+            result.deferredClasses.push(className);
+            this.debugClassFiles.set(className, entry);
+            continue;
+          }
+          // jdb tokenizes filenames on whitespace. A temporary file also freezes the bytes during reload.
+          const file = path.join(temporaryDirectory, `${result.appliedClasses.length + result.failedClasses.length}.class`);
+          if (/\s/.test(file)) throw new CoreError("JAVA_PROCESS_FAILED", "The debugger temporary directory must have a path without spaces");
+          await writeFile(file, await readFile(entry.file));
+          const output = await this.runDebugCommand(`redefine ${className} ${file}`);
+          ensurePaused();
+          const message = output.replace(/[\w$.-]+\[\d+\]\s*$/, "").trim();
+          if (message) {
+            result.failedClasses.push({ className, message });
+            result.restartRequired = true;
+          } else {
+            result.appliedClasses.push(className);
+            this.debugClassFiles.set(className, entry);
+          }
+        }
+      } finally { await rm(temporaryDirectory, { recursive: true, force: true }); }
+      for (const className of this.debugClassFiles.keys()) {
+        if (!next.has(className) && loaded.has(className)) {
+          result.failedClasses.push({ className, message: "Loaded class was removed. Restart to remove it from the JVM." });
+          result.restartRequired = true;
+        }
+      }
+      // HotSwap clears breakpoints in redefined classes. Restore the original line breakpoints.
+      for (const breakpoint of this.debugBreakpoints.filter((item) => result.appliedClasses.includes(item.className))) {
+        const output = await this.runDebugCommand(`stop at ${breakpoint.className}:${breakpoint.line}`);
+        ensurePaused();
+        if (!/(?:Set|Deferring) breakpoint/.test(output)) this.onProcessEvent({ type: "output", data: `Breakpoint could not be restored: ${breakpoint.className}:${breakpoint.line}\n` });
+      }
+      return result;
+    } finally {
+      if (this.process === child && this.debugPaused) {
+        this.debugReferences.clear();
+        try {
+          const output = await this.runDebugCommand("locals");
+          const variables = [...output.matchAll(/^\s*([A-Za-z_$][\w$]*)\s+=\s+(.+)$/gm)].map((match) => this.debugVariable(match[1]!, match[2]!.trim(), match[1]!));
+          if (this.process === child && this.debugPaused) this.emitDebugState({ ...this.debugState, applyingChanges: false, variables });
+        } catch (error) {
+          if (this.process === child && this.debugPaused) this.emitDebugState({ ...this.debugState, applyingChanges: false, variables: [], inspectionError: error instanceof Error ? error.message : String(error) });
+        }
+      }
+      this.applyingChanges = false;
+    }
   }
 
   stop(): void {
+    this.debugLaunchGeneration++;
+    this.applyBuildProcess?.kill("SIGTERM");
     if (!this.process) return;
     const child = this.process;
     if (this.debugging) {
+      this.invalidateDebugInspection();
       child.stdin.write("exit\n");
       setTimeout(() => { if (this.process === child) child.kill("SIGKILL"); }, 1_000).unref();
       return;
@@ -222,7 +474,7 @@ export class JavaProjectService {
   close(): void { this.stop(); }
 
   private async start(goals: string[], label: string): Promise<void> {
-    if (this.process) throw new CoreError("JAVA_PROCESS_FAILED", "A Java build or run process is already active");
+    if (this.process || this.debugStarting) throw new CoreError("JAVA_PROCESS_FAILED", "A Java build or run process is already active");
     const options = await this.requireOptions();
     this.onProcessEvent({ type: "output", data: `> ${options.mavenExecutable} -f ${options.pomPath} ${goals.join(" ")}\n` });
     try {
@@ -310,18 +562,42 @@ export class JavaProjectService {
 
   private consumeDebugOutput(data: string): void {
     this.onProcessEvent({ type: "output", data });
-    this.debugBuffer = (this.debugBuffer + data).slice(-20_000);
+    if (this.pendingInspection && this.debugBuffer.length + data.length > 1_000_000) {
+      this.invalidateDebugInspection();
+      this.debugPaused = true;
+      this.debugBuffer = "";
+      return;
+    }
+    this.debugBuffer = (this.debugBuffer + data).slice(this.pendingInspection ? -1_000_000 : -20_000);
+    if (this.pendingInspection) {
+      if (/[\w$.-]+\[\d+\]\s*$/.test(this.debugBuffer)) {
+        const pending = this.pendingInspection;
+        this.pendingInspection = undefined;
+        clearTimeout(pending.timer);
+        pending.resolve(this.debugBuffer);
+        this.debugBuffer = "";
+      }
+      return;
+    }
     const stopped = this.debugBuffer.match(/(?:Breakpoint hit:|Step completed:)\s+"[^"]+",\s+([\w$]+(?:\.[\w$]+)*)\.([\w$<>]+)\([^)]*\),\s+line=(\d+)/);
     if (stopped) {
+      this.invalidateDebugInspection();
       this.debugLocation = { className: stopped[1]!, method: stopped[2]!, line: Number(stopped[3]) };
+      this.awaitingDebugStopPrompt = true;
+    }
+    if (this.awaitingDebugStopPrompt) {
+      if (!/[\w$.-]+\[\d+\]\s*$/.test(this.debugBuffer)) return;
+      this.awaitingDebugStopPrompt = false;
       this.awaitingDebugLocals = true;
       this.debugBuffer = "";
       this.process?.stdin.write("locals\n");
       return;
     }
-    if (!this.awaitingDebugLocals || !/[\w$]+\[\d+\]\s*$/.test(this.debugBuffer) || !this.debugLocation) return;
-    const variables = [...this.debugBuffer.matchAll(/^\s*([A-Za-z_$][\w$]*)\s+=\s+(.+)$/gm)].slice(-100).map((match) => ({ name: match[1]!, value: match[2]!.trim() }));
-    this.onProcessEvent({ type: "debug", state: { status: "paused", ...this.debugLocation, variables } });
+    if (!this.awaitingDebugLocals || !/[\w$.-]+\[\d+\]\s*$/.test(this.debugBuffer) || !this.debugLocation) return;
+    const variables = [...this.debugBuffer.matchAll(/^\s*([A-Za-z_$][\w$]*)\s+=\s+(.+)$/gm)].map((match) => this.debugVariable(match[1]!, match[2]!.trim(), match[1]!));
+    this.debugPaused = true;
+    const inspectionError = this.debugBuffer.match(/(?:Local variable information not available[^\r\n]*|No default thread specified[^\r\n]*|.*obsolete.*)/i)?.[0];
+    this.emitDebugState({ status: "paused", ...this.debugLocation, variables, ...(inspectionError ? { inspectionError } : {}) });
     this.awaitingDebugLocals = false;
     this.debugBuffer = "";
   }

@@ -80,8 +80,9 @@ export class CoreClient {
     });
   }
 
-  request<T extends RequestType>(type: T, payload: ProtocolOperations[T]["payload"]): Promise<ProtocolOperations[T]["result"]> {
+  request<T extends RequestType>(type: T, payload: ProtocolOperations[T]["payload"], options?: { timeoutMs?: number }): Promise<ProtocolOperations[T]["result"]> {
     if (!this.socket || this.socket.readyState !== WebSocket.OPEN) return Promise.reject(new Error("Not connected"));
+    const timeoutMs = options?.timeoutMs ?? this.requestTimeoutMs;
     const id = crypto.randomUUID();
     const socket = this.socket;
     const unscoped = type === "protocol.handshake" || type === "workspace.roots" || type === "workspace.addRoot";
@@ -92,8 +93,8 @@ export class CoreClient {
         const item = this.pending.get(id);
         if (!item || item.socket !== socket) return;
         this.pending.delete(id);
-        reject(new Error(`Request ${type} timed out after ${this.requestTimeoutMs}ms`));
-      }, this.requestTimeoutMs);
+        reject(new Error(`Request ${type} timed out after ${timeoutMs}ms`));
+      }, timeoutMs);
       this.pending.set(id, { socket, rootId: unscoped ? undefined : this.rootId, timer, resolve: resolve as (value: unknown) => void, reject });
       try { socket.send(JSON.stringify(request)); }
       catch (error) {
