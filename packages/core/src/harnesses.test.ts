@@ -3,6 +3,7 @@ import path from "node:path";
 import crypto from "node:crypto";
 import { mkdtemp, readFile, readdir, writeFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
+import { validateHarness } from "./harness-graph.js";
 import { HarnessStore } from "./harnesses.js";
 
 describe("HarnessStore", () => {
@@ -23,6 +24,23 @@ describe("HarnessStore", () => {
 
     await first.delete(created.id);
     expect(await first.list()).toEqual([]);
+  });
+
+  it("creates and persists the five-minute button template", async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "workflow-template-")); const store = new HarnessStore("/workspace", directory);
+    const template = await store.create("Recurring check-in", "five-minute-check-in");
+    expect(validateHarness(template).valid).toBe(true);
+    expect(template.blocks.map((block) => block.type)).toEqual(["start_button", "start_input", "ai", "timer", "text", "script", "ai", "user_prompt", "ai", "text"]);
+    expect(template.blocks.find((block) => block.id === "repeat-timer")).toMatchObject({ id: "repeat-timer", type: "timer", seconds: 300 });
+    expect(template.blocks.find((block) => block.id === "check-in")?.prompt).toContain('block_id: "repeat-timer"');
+    expect(template.edges).toEqual(expect.arrayContaining([
+      expect.objectContaining({ from: "start", to: "check-in", type: "follow" }),
+      expect.objectContaining({ from: "check-in", to: "repeat-timer", type: "use" }),
+      expect.objectContaining({ from: "repeat-timer", to: "check-in", type: "follow" }),
+      expect.objectContaining({ from: "check-in", to: "report-agent", type: "path", label: "report" }),
+      expect.objectContaining({ from: "check-in", to: "user-question", type: "path", label: "ask-user" })
+    ]));
+    expect(await new HarnessStore("/workspace", directory).read(template.id)).toEqual(template);
   });
 
   it("rejects invalid names and stale identifiers", async () => {

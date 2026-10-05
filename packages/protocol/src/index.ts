@@ -171,8 +171,8 @@ export type HarnessCorrection = { ownerBlockId: string; maxCycles?: number; veri
 export type HarnessReviewFinding = { id: string; message: string; ownerBlockId: string; revision: string };
 export type HarnessCorrectionCycle = { reviewBlockId: string; ownerBlockId: string; verificationBlockId?: string; cycle: number; revision: string; findings: HarnessReviewFinding[]; status: "requested" | "corrected" | "blocked"; correctedRevision?: string; requestedAt: string; completedAt?: string; error?: string };
 export type HarnessVerification = { command: string; revision?: string; workingDirectory?: string; timeoutMs?: number };
-export type HarnessBlock = { id: string; type: "prompt" | "task" | "review" | "verification"; label: string; prompt: string; inputSchema?: HarnessDataSchema; outputSchema?: HarnessDataSchema; provider?: AiProvider; model?: string; agent?: AgentFileReference; watchdog?: boolean; review?: HarnessReview; verification?: HarnessVerification; join?: "all" | "any"; routing?: "all" | "ai"; position: { x: number; y: number } };
-export type HarnessEdge = { id: string; from: string; to: string; label?: string; loop?: boolean; execution?: "sync" | "async" };
+export type HarnessBlock = { id: string; type: "ai" | "text" | "timer" | "user_prompt" | "script" | "start_button" | "start_input" | "prompt" | "task" | "review" | "verification"; seconds?: number; command?: string; label: string; prompt: string; inputSchema?: HarnessDataSchema; outputSchema?: HarnessDataSchema; provider?: AiProvider; model?: string; agent?: AgentFileReference; watchdog?: boolean; review?: HarnessReview; verification?: HarnessVerification; join?: "all" | "any"; routing?: "all" | "ai"; position: { x: number; y: number } };
+export type HarnessEdge = { type?: "use" | "follow" | "path"; id: string; from: string; to: string; label?: string; loop?: boolean; execution?: "sync" | "async" };
 export type HarnessDefinition = { id: string; name: string; version: number; createdAt: string; updatedAt: string; blocks: HarnessBlock[]; edges: HarnessEdge[] };
 export type HarnessStateDiagnostic = { source: "index.json" | "runs.json"; reason: string; detectedAt: string };
 export type HarnessValidationIssue = { code: "empty" | "duplicate-id" | "duplicate-edge-id" | "missing-endpoint" | "self-edge" | "duplicate-edge" | "cycle" | "route-label" | "empty-label" | "empty-prompt" | "unknown-template" | "missing-template-block" | "invalid-loop" | "invalid-schema" | "invalid-gate" | "invalid-watchdog" | "unavailable-provider" | "unavailable-model" | "unavailable-agent"; message: string; blockId?: string; edgeId?: string };
@@ -191,7 +191,8 @@ export type HarnessBlockRun = { blockId: string; status: HarnessBlockStatus; sta
 export type HarnessChildTask = { taskId: string; blockId: string; provider: AiProvider; workspace: string; recoveryAttempts: number; recoveryError?: string; failureReason?: HarnessFailureReason; retryAt?: string; retryStartedAt?: string };
 export type HarnessFeatureStatus = "planned" | "dispatched" | "completed" | "blocked";
 export type HarnessFeature = { id: string; prompt: string; prerequisites: string[]; status: HarnessFeatureStatus; taskId?: string; commit?: string; blockedReason?: string };
-export type HarnessRun = { id: string; harnessId: string; harnessVersion: number; definition?: HarnessDefinition; executionPlan?: HarnessExecutionPlan; operations?: HarnessOperation[]; children?: HarnessChildTask[]; features?: HarnessFeature[]; corrections?: HarnessCorrectionCycle[]; input: string; status: HarnessRunStatus; createdAt: string; startedAt?: string; completedAt?: string; blocks: HarnessBlockRun[]; error?: string; cleanupErrors?: string[] };
+export type HarnessConnectionTrace = { id: string; edgeId: string; direction: "forward" | "return"; status: "active" | "succeeded" | "failed"; startedAt: string; completedAt?: string };
+export type HarnessRun = { connectionTraces?: HarnessConnectionTrace[]; id: string; harnessId: string; harnessVersion: number; definition?: HarnessDefinition; executionPlan?: HarnessExecutionPlan; operations?: HarnessOperation[]; children?: HarnessChildTask[]; features?: HarnessFeature[]; corrections?: HarnessCorrectionCycle[]; input: string; status: HarnessRunStatus; createdAt: string; startedAt?: string; completedAt?: string; blocks: HarnessBlockRun[]; error?: string; cleanupErrors?: string[] };
 export type HttpResponse = { status: number; statusText: string; headers: Record<string, string>; body: string; durationMs: number };
 
 export type JavaProjectOptions = {
@@ -340,12 +341,12 @@ export type ProtocolOperations = {
   "agents.delete": { payload: { scope: Exclude<AgentFileScope, "workspace">; name: string }; result: Record<string, never> };
   "harnesses.list": { payload: Record<string, never>; result: { harnesses: HarnessDefinition[]; diagnostics: HarnessStateDiagnostic[] } };
   "harnesses.read": { payload: { id: string }; result: { harness: HarnessDefinition } };
-  "harnesses.create": { payload: { name: string }; result: { harness: HarnessDefinition } };
+  "harnesses.create": { payload: { name: string; template?: "five-minute-check-in" | "git-review-commit" }; result: { harness: HarnessDefinition } };
   "harnesses.update": { payload: { harness: HarnessDefinition }; result: { harness: HarnessDefinition } };
   "harnesses.delete": { payload: { id: string }; result: Record<string, never> };
   "harnesses.validate": { payload: { harness: HarnessDefinition }; result: { valid: boolean; issues: HarnessValidationIssue[]; order: string[] } };
   "harnesses.runs": { payload: { harnessId?: string }; result: { runs: HarnessRun[] } };
-  "harnesses.run": { payload: { harnessId: string; input: string; provider?: AiProvider }; result: { run: HarnessRun } };
+  "harnesses.run": { payload: { harnessId: string; input: string; startBlockId?: string; provider?: AiProvider }; result: { run: HarnessRun } };
   "harnesses.append": { payload: { runId: string; input: string }; result: { run: HarnessRun } };
   "harnesses.permission.resolve": { payload: { runId: string; blockId: string; sessionId: string; pauseId: string; requestId: string; optionId?: string }; result: { run: HarnessRun } };
   "harnesses.answer": { payload: { runId: string; blockId: string; sessionId: string; pauseId: string; input: string }; result: { run: HarnessRun } };

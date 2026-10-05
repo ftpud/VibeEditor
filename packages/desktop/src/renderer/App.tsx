@@ -542,8 +542,8 @@ export function App() {
     if (client.getRoot() === rootId) { setHarnesses(result.harnesses); setHarnessDiagnostics(result.diagnostics); }
   }, []);
   const refreshHarnessRuns = useCallback(async (client = clientRef.current) => { if (!client) return; const rootId = client.getRoot(); const runs = (await client.request("harnesses.runs", {})).runs; if (client.getRoot() === rootId) setHarnessRuns(runs); }, []);
-  const createHarness = useCallback(async (name: string) => {
-    const result = await clientRef.current!.request("harnesses.create", { name }); setHarnesses((current) => [result.harness, ...current]); return result.harness;
+  const createHarness = useCallback(async (name: string, template?: "five-minute-check-in" | "git-review-commit") => {
+    const result = await clientRef.current!.request("harnesses.create", { name, template }); setHarnesses((current) => [result.harness, ...current]); return result.harness;
   }, []);
   const readHarness = useCallback(async (id: string) => {
     return (await clientRef.current!.request("harnesses.read", { id })).harness;
@@ -554,7 +554,7 @@ export function App() {
   const deleteHarness = useCallback(async (id: string) => {
     await clientRef.current!.request("harnesses.delete", { id }); setHarnesses((current) => current.filter((item) => item.id !== id));
   }, []);
-  const runHarness = useCallback(async (harnessId: string, input: string) => { const result = await clientRef.current!.request("harnesses.run", { harnessId, input, provider: aiProviderRef.current }); setHarnessRuns((current) => [result.run, ...current.filter((item) => item.id !== result.run.id)]); return result.run; }, []);
+  const runHarness = useCallback(async (harnessId: string, input: string, startBlockId?: string) => { const result = await clientRef.current!.request("harnesses.run", { harnessId, input, startBlockId, provider: aiProviderRef.current }); setHarnessRuns((current) => [result.run, ...current.filter((item) => item.id !== result.run.id)]); return result.run; }, []);
   const appendHarnessRun = useCallback(async (runId: string, input: string) => { const result = await clientRef.current!.request("harnesses.append", { runId, input }); setHarnessRuns((current) => current.map((item) => item.id === runId ? result.run : item)); return result.run; }, []);
   const resolveHarnessPermission = useCallback(async (runId: string, blockId: string, sessionId: string, pauseId: string, requestId: string, optionId?: string) => { const result = await clientRef.current!.request("harnesses.permission.resolve", { runId, blockId, sessionId, pauseId, requestId, optionId }); setHarnessRuns((current) => current.map((item) => item.id === runId ? result.run : item)); return result.run; }, []);
   const answerHarnessQuestion = useCallback(async (runId: string, blockId: string, sessionId: string, pauseId: string, input: string) => { const result = await clientRef.current!.request("harnesses.answer", { runId, blockId, sessionId, pauseId, input }); setHarnessRuns((current) => current.map((item) => item.id === runId ? result.run : item)); return result.run; }, []);
