@@ -319,7 +319,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .harness-panel.view .harness-canvas { min-height: 120px; }
 .harness-canvas.view .harness-block { cursor: pointer; }
 .harness-canvas.view .harness-port, .harness-canvas.view .harness-block > footer, .harness-canvas.view .harness-canvas-empty { display: none; }
-.harness-canvas > svg { width: 1200px; height: 800px; position: absolute; inset: 0; pointer-events: none; }
+.harness-canvas-content > svg { width: 1200px; height: 800px; position: absolute; inset: 0; pointer-events: none; }
 .harness-edge { fill: none; stroke: #78a8f5; stroke-width: 2; }
 .harness-edge.loop { stroke: #b99aec; stroke-dasharray: 6 4; }
 .harness-canvas.edit .harness-edge { pointer-events: stroke; cursor: pointer; }
@@ -1974,3 +1974,10 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 :root[data-theme="light"] .harness-block.working.selected { --working-outline: #3574f0; }
 @keyframes harness-working-glow { 0%, 100% { box-shadow: 0 0 0 1px var(--working-outline), inset 0 0 18px var(--working-tint), 0 0 10px var(--working-glow); } 50% { box-shadow: 0 0 0 1px var(--working-outline), inset 0 0 36px var(--working-glow), 0 0 24px var(--working-glow); } }
 @media (prefers-reduced-motion: reduce) { .harness-block.working { animation: none; box-shadow: 0 0 0 1px var(--working-outline), inset 0 0 24px var(--working-tint), 0 0 14px var(--working-glow); } }
+
+.harness-canvas-extent { position: relative; overflow: hidden; }
+.harness-canvas-content { position: relative; transform-origin: top left; }
+.harness-zoom { display: flex; align-items: center; gap: 6px; padding: 4px 8px; }
+.harness-zoom button { color: inherit; background: transparent; border: 1px solid #555a62; border-radius: 3px; min-width: 28px; cursor: pointer; }
+.harness-zoom button:disabled { opacity: .4; cursor: default; }
+.harness-zoom small { opacity: .7; }

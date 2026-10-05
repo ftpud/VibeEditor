@@ -6,6 +6,87 @@ import { dragPosition, edgePath, HarnessPanel, responsePreview } from "./Harness
 afterEach(cleanup);
 
 describe("HarnessPanel", () => {
+  const zoomHarness: HarnessDefinition = { id: "zoom", name: "Zoom flow", version: 1, createdAt: "now", updatedAt: "now", blocks: [
+    { id: "a", type: "text", label: "First", prompt: "", position: { x: 200, y: 200 } },
+    { id: "b", type: "text", label: "Second", prompt: "", position: { x: 500, y: 200 } },
+  ], edges: [{ id: "edge", from: "a", to: "b" }] };
+  function renderZoomHarness() {
+    const onSave = vi.fn().mockImplementation(async (value) => value);
+    render(<HarnessPanel harnesses={[zoomHarness]} runs={[]} providers={[]} agents={[]} onCreate={vi.fn()} onSave={onSave} onDelete={vi.fn()} onRun={vi.fn()} onCancelRun={vi.fn()} onError={vi.fn()} />);
+    const canvas = screen.getByLabelText("Workflow canvas");
+    vi.spyOn(canvas, "getBoundingClientRect").mockReturnValue({ left: 100, top: 80 } as DOMRect);
+    Object.defineProperties(canvas, { clientWidth: { value: 600 }, clientHeight: { value: 400 } });
+    canvas.scrollLeft = 300; canvas.scrollTop = 200;
+    return { canvas, onSave };
+  }
+
+  it.each([{ ctrlKey: true, deltaY: -80 }, { shiftKey: true, deltaY: -80 }, { shiftKey: true, deltaX: -80 }])("anchors modified wheel zoom and prevents page zoom: %j", (gesture) => {
+    const { canvas } = renderZoomHarness();
+    const event = new WheelEvent("wheel", { ...gesture, clientX: 300, clientY: 180, bubbles: true, cancelable: true });
+    // happy-dom's WheelEvent extends UIEvent and omits MouseEvent fields.
+    Object.defineProperties(event, { ctrlKey: { value: "ctrlKey" in gesture }, shiftKey: { value: "shiftKey" in gesture }, clientX: { value: 300 }, clientY: { value: 180 } });
+    act(() => { canvas.dispatchEvent(event); });
+    expect(event.defaultPrevented).toBe(true);
+    const scale = Math.exp(0.16);
+    expect(canvas.scrollLeft).toBeCloseTo(500 * scale - 200);
+    expect(canvas.scrollTop).toBeCloseTo(300 * scale - 100);
+    expect(canvas.querySelector<HTMLElement>(".harness-canvas-content")?.style.transform).toBe(`scale(${scale})`);
+    // Connections and blocks share the same transformed coordinate space.
+    expect(screen.getByLabelText("Workflow connections").parentElement).toBe(canvas.querySelector(".harness-canvas-content"));
+    expect(screen.getByLabelText("First response preview").closest(".harness-block")?.parentElement).toBe(canvas.querySelector(".harness-canvas-content"));
+    expect(screen.getByRole("button", { name: "Save" }).hasAttribute("disabled")).toBe(true);
+  });
+
+  it("preserves ordinary scrolling and supports bounded controls/reset in both modes", () => {
+    const { canvas } = renderZoomHarness();
+    const event = new WheelEvent("wheel", { deltaY: 40, bubbles: true, cancelable: true });
+    act(() => { canvas.dispatchEvent(event); });
+    expect(event.defaultPrevented).toBe(false);
+    expect(screen.getByRole("button", { name: "Reset workflow zoom" }).textContent).toBe("100%");
+    for (let i = 0; i < 20; i++) fireEvent.click(screen.getByRole("button", { name: "Zoom in" }));
+    expect(screen.getByRole("button", { name: "Zoom in" }).hasAttribute("disabled")).toBe(true);
+    expect(screen.getByRole("button", { name: "Reset workflow zoom" }).textContent).toBe("200%");
+    fireEvent.click(screen.getByRole("button", { name: "View" }));
+    for (let i = 0; i < 30; i++) fireEvent.click(screen.getByRole("button", { name: "Zoom out" }));
+    expect(screen.getByRole("button", { name: "Zoom out" }).hasAttribute("disabled")).toBe(true);
+    expect(screen.getByRole("button", { name: "Reset workflow zoom" }).textContent).toBe("25%");
+    fireEvent.click(screen.getByRole("button", { name: "Reset workflow zoom" }));
+    expect(screen.getByRole("button", { name: "Reset workflow zoom" }).textContent).toBe("100%");
+  });
+
+  it("drags and updates connection geometry after zoom, but leaves View mode fixed", () => {
+    const { canvas } = renderZoomHarness();
+    fireEvent.click(screen.getByRole("button", { name: "Zoom in" }));
+    const node = screen.getByLabelText("First response preview").closest(".harness-block") as HTMLElement;
+    vi.spyOn(node, "getBoundingClientRect").mockReturnValue({ left: 120, top: 100 } as DOMRect);
+    node.setPointerCapture = vi.fn();
+    const edge = screen.getByLabelText("Workflow connections").querySelector(".harness-edge")!;
+    const originalPath = edge.getAttribute("d");
+    // Grab 30/20 workflow pixels inside the node; the move uses scaled scroll coordinates.
+    fireEvent.pointerDown(node, { pointerId: 1, button: 0, clientX: 156, clientY: 124 });
+    fireEvent.pointerMove(canvas, { pointerId: 1, clientX: 100 + 300 * 1.2 - canvas.scrollLeft, clientY: 80 + 280 * 1.2 - canvas.scrollTop });
+    expect(parseFloat(node.style.left)).toBeCloseTo(270);
+    expect(parseFloat(node.style.top)).toBeCloseTo(260);
+    expect(edge.getAttribute("d")).not.toBe(originalPath);
+    fireEvent.pointerUp(canvas, { pointerId: 1 });
+    fireEvent.pointerMove(canvas, { pointerId: 1, clientX: 900, clientY: 900 });
+    expect(parseFloat(node.style.left)).toBeCloseTo(270);
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    fireEvent.click(screen.getByRole("button", { name: "View" }));
+    fireEvent.pointerDown(node, { pointerId: 2, button: 0, clientX: 156, clientY: 124 });
+    fireEvent.pointerMove(canvas, { pointerId: 2, clientX: 900, clientY: 900 });
+    expect(parseFloat(node.style.left)).toBeCloseTo(270);
+    vi.restoreAllMocks();
+  });
+
+  it.each([0.5, 2])("drags with workflow coordinates at %sx including scroll and grab offset", (zoom) => {
+    // The grabbed workflow point is (230, 220); move by 60/40 screen pixels.
+    const scrollLeft = 100; const scrollTop = 50;
+    const clientX = 100 + 230 * zoom - scrollLeft + 60;
+    const clientY = 80 + 220 * zoom - scrollTop + 40;
+    expect(dragPosition(clientX, clientY, 100, 80, scrollLeft, scrollTop, 30, 20, zoom)).toEqual({ x: 200 + 60 / zoom, y: 200 + 40 / zoom });
+  });
+
   it("creates a workflow from the in-panel name form", async () => {
     const onCreate = vi.fn().mockResolvedValue({ id: "harness-1", name: "Review flow", version: 1, createdAt: "now", updatedAt: "now", blocks: [], edges: [] });
     render(<HarnessPanel harnesses={[]} runs={[]} providers={[]} agents={[]} onCreate={onCreate} onSave={vi.fn()} onDelete={vi.fn()} onRun={vi.fn()} onCancelRun={vi.fn()} onError={vi.fn()} />);
