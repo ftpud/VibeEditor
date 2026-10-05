@@ -36,3 +36,12 @@ describe("horizontal editor layout containment", () => {
     expect(declarations(".tab-file-name")).toContain("white-space: nowrap");
   });
 });
+
+it("keeps Java output and configuration dialog keys distinct within a workspace", () => {
+  const app = readFileSync("src/renderer/App.tsx", "utf8");
+  const panelKey = app.match(/<JavaPanel key=\{([^}]+)\}/)?.[1];
+  const dialogKey = app.match(/<JavaConfigurationDialog key=\{([^}]+)\}/)?.[1];
+  expect(panelKey).toBeDefined();
+  expect(dialogKey).toBeDefined();
+  expect(panelKey).not.toBe(dialogKey);
+});

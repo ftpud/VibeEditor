@@ -14,6 +14,7 @@ if (import.meta.hot) import.meta.hot.dispose(removeDialogFocusRecovery);
 document.documentElement.dataset.theme = readSetting("theme") === "light" ? "light" : "dark";
 document.documentElement.dataset.platform = navigator.platform.toLowerCase().includes("win") ? "windows" : navigator.platform.toLowerCase().includes("mac") ? "mac" : "linux";
 document.documentElement.style.setProperty("--ui-font-family", readSetting("uiFontFamily") === "inter" ? '"Inter Variable"' : '"JetBrains Mono Variable"');
+document.documentElement.style.setProperty("--ui-font-weight", String(readSettingNumber("uiFontWeight", 450, 350, 600)));
 document.documentElement.style.setProperty("--ui-font-size", `${readSettingNumber("uiFontSize", 13, 10, 20)}px`);
 document.documentElement.style.setProperty("--ui-line-height", String(readSettingNumber("uiLineHeight", 1.2, 1, 2)));
 const detached = new URLSearchParams(window.location.search).get("detached") === "1";
