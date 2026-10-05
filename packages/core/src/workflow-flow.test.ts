@@ -74,6 +74,17 @@ describe("typed workflows", () => {
     const result = await finished(); expect(result.status).toBe("succeeded"); expect(result.blocks.find((state) => state.blockId === "after")?.output).toBe("build");
   });
 
+  it.each(["yes", "no"])("validates a Yes/No answer and passes %s to followers", async (answer) => {
+    const { runner, definition, store, finished } = await setup([block("start", "start_input"), block("question", "yes_no_prompt"), block("after", "text")], [edge("start", "question"), edge("question", "after")]);
+    const run = await runner.start(definition.id, "Push?", vi.fn(), "provider", undefined, "start");
+    await vi.waitFor(async () => expect((await store.runs())[0]?.status).toBe("awaiting_user_input"));
+    const paused = (await store.runs())[0]!.blocks.find((state) => state.blockId === "question")!;
+    await expect(runner.answerQuestion(run.id, "question", paused.sessionId!, paused.pauseId!, "maybe", vi.fn())).rejects.toThrow("Choose Yes or No");
+    await runner.answerQuestion(run.id, "question", paused.sessionId!, paused.pauseId!, answer, vi.fn());
+    expect((await finished()).blocks.find((state) => state.blockId === "after")?.output).toBe(answer);
+    expect((await store.read(definition.id)).blocks[1]?.type).toBe("yes_no_prompt");
+  });
+
   it("cancels a timer without launching its follower", async () => {
     const { runner, definition, store, finished } = await setup([block("start", "start_input"), block("timer", "timer", { seconds: 60 }), block("after", "ai")], [edge("start", "timer"), edge("timer", "after")]);
     const dispatch = vi.fn(); const run = await runner.start(definition.id, "wait", dispatch, "provider", undefined, "start");

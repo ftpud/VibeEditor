@@ -228,7 +228,7 @@ export class HarnessRunner {
         await this.failRecovery(run, "The persisted workflow execution plan does not match its frozen definition. Start a new run; completed sessions and task workspaces were preserved.");
         recovered.push(structuredClone(run)); continue;
       }
-      if (definition.blocks.some((block) => ["ai", "text", "timer", "script", "user_prompt", "start_button", "start_input"].includes(block.type))) {
+      if (definition.blocks.some((block) => ["ai", "text", "timer", "script", "user_prompt", "yes_no_prompt", "start_button", "start_input"].includes(block.type))) {
         await this.failRecovery(run, "Core restarted during this flow. Start a new run; existing AI sessions and block outputs are preserved, and scripts will not be replayed automatically.");
         recovered.push(structuredClone(run)); continue;
       }
@@ -310,7 +310,12 @@ export class HarnessRunner {
   async answerQuestion(runId: string, blockId: string, sessionId: string, pauseId: string, input: string, answer: AnswerQuestion): Promise<HarnessRun> {
     if (!this.isActive(runId)) throw new CoreError("INVALID_REQUEST", "Workflow is no longer active");
     const flowAnswer = this.flowAnswers.get(`${runId}:${blockId}:${pauseId}`);
-    if (flowAnswer) { if (!input.trim() || input.length > 100_000) throw new CoreError("INVALID_REQUEST", "Enter an answer of up to 100,000 characters"); this.flowAnswers.delete(`${runId}:${blockId}:${pauseId}`); flowAnswer(input); return structuredClone(this.executions.get(runId)!.run); }
+    if (flowAnswer) {
+      const execution = this.executions.get(runId)!;
+      const state = execution.run.blocks.find((block) => block.blockId === blockId);
+      if (state?.sessionId !== sessionId) throw new CoreError("INVALID_REQUEST", "Question session does not match");
+      if (execution.blocks.find((block) => block.id === blockId)?.type === "yes_no_prompt" && input !== "yes" && input !== "no") throw new CoreError("INVALID_REQUEST", "Choose Yes or No");
+      if (!input.trim() || input.length > 100_000) throw new CoreError("INVALID_REQUEST", "Enter an answer of up to 100,000 characters"); this.flowAnswers.delete(`${runId}:${blockId}:${pauseId}`); flowAnswer(input); return structuredClone(this.executions.get(runId)!.run); }
     const value = input.trim();
     if (!value || value.length > 100_000) throw new CoreError("INVALID_REQUEST", "Workflow answer must contain 1–100,000 characters");
     const { execution, state, provider, workspace } = this.pausedAttempt(runId, blockId, pauseId, "awaiting_user_input", sessionId);
@@ -359,7 +364,7 @@ export class HarnessRunner {
 
   async cancelPause(runId: string, blockId: string, pauseId: string, interrupt: Interrupt): Promise<HarnessRun> {
     const flow = this.executions.get(runId);
-    if (flow?.blocks.some((block) => block.id === blockId && ["user_prompt", "timer"].includes(block.type)) && flow.run.blocks.some((state) => state.blockId === blockId && state.pauseId === pauseId)) return this.cancel(runId, interrupt);
+    if (flow?.blocks.some((block) => block.id === blockId && ["user_prompt", "yes_no_prompt", "timer"].includes(block.type)) && flow.run.blocks.some((state) => state.blockId === blockId && state.pauseId === pauseId)) return this.cancel(runId, interrupt);
     this.pausedAttempt(runId, blockId, pauseId, ["awaiting_permission", "awaiting_user_input", "waiting_timer", "retry_scheduled"], undefined, false);
     return this.cancel(runId, interrupt);
   }
@@ -472,7 +477,7 @@ export class HarnessRunner {
     await this.update(run);
     const running = new Map<string, Promise<{ blockId: string; error?: unknown }>>();
     try {
-      if (blocks.some((block) => ["ai", "text", "timer", "script", "user_prompt", "start_button", "start_input"].includes(block.type))) {
+      if (blocks.some((block) => ["ai", "text", "timer", "script", "user_prompt", "yes_no_prompt", "start_button", "start_input"].includes(block.type))) {
         await this.executeFlow(this.executions.get(run.id)!, startBlockId);
         run.status = "succeeded"; run.completedAt = new Date().toISOString(); await this.recordCompletedOperation(run, "terminal_outcome", "terminal:succeeded", undefined, { status: "succeeded" }); await this.update(run); return;
       }
@@ -601,7 +606,7 @@ export class HarnessRunner {
           output = state.output ?? "";
           if (paths.length && !state.selectedRoute) throw new Error(`${block.label} finished without choosing a path`);
         } else if (block.type === "text" || block.type === "start_button") output = prompt;
-        else if (block.type === "user_prompt") {
+        else if (block.type === "user_prompt" || block.type === "yes_no_prompt") {
           state.status = "awaiting_user_input"; state.question = prompt || input; state.pauseId = crypto.randomUUID(); state.sessionId = `flow:${id}`;
           const key = `${run.id}:${id}:${state.pauseId}`;
           try {

@@ -345,6 +345,18 @@ describe("HarnessPanel", () => {
     await waitFor(() => expect(onResolvePermission).toHaveBeenCalledWith("run-1", "a", "session-1", "pause-1", "permission-1", "yes"));
   });
 
+  it.each(["Yes", "No"])("submits %s from a Yes/No prompt without a text input", async (choice) => {
+    const harness: HarnessDefinition = { id: "confirm-flow", name: "Confirm", version: 1, createdAt: "now", updatedAt: "now", blocks: [{ id: "confirm", type: "yes_no_prompt", label: "Approve push", prompt: "Push?", position: { x: 20, y: 20 } }], edges: [] };
+    const runs: HarnessRun[] = [{ id: "confirm-run", harnessId: harness.id, harnessVersion: 1, input: "", status: "awaiting_user_input", createdAt: "now", blocks: [{ blockId: "confirm", status: "awaiting_user_input", sessionId: "flow:confirm", pauseId: "pause", question: "Push?" }] }];
+    const onAnswerQuestion = vi.fn().mockResolvedValue(runs[0]);
+    render(<HarnessPanel harnesses={[harness]} runs={runs} providers={[]} agents={[]} onCreate={vi.fn()} onSave={vi.fn()} onDelete={vi.fn()} onRun={vi.fn()} onCancelRun={vi.fn()} onAnswerQuestion={onAnswerQuestion} onError={vi.fn()} />);
+    expect(screen.getByText("Yes/No Prompt", { selector: "small" })).toBeTruthy();
+    expect(screen.queryByText("Default model")).toBeNull();
+    expect(screen.queryByLabelText("Answer Approve push")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: choice }));
+    await waitFor(() => expect(onAnswerQuestion).toHaveBeenCalledWith("confirm-run", "confirm", "flow:confirm", "pause", choice.toLowerCase()));
+  });
+
   it("shows a provider question and submits the answer to its owning attempt", async () => {
     const harness: HarnessDefinition = { id: "harness-1", name: "Flow", version: 1, createdAt: "now", updatedAt: "now", blocks: [{ id: "a", type: "prompt", label: "Planner", prompt: "{{input}}", position: { x: 20, y: 20 } }], edges: [] };
     const runs = [{ id: "run-1", harnessId: harness.id, harnessVersion: 1, input: "plan", status: "awaiting_user_input" as const, createdAt: "now", blocks: [{ blockId: "a", status: "awaiting_user_input" as const, provider: "codex", workspace: "/workflow/a", sessionId: "session-2", pauseId: "pause-2", question: "Which branch?" }] }];
