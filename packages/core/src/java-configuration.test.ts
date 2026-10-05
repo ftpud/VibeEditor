@@ -117,7 +117,7 @@ it("rejects missing and invalid .env files", async () => {
   const { root, filesystem } = await workspace();
   const profile = { id: "app", name: "App", mainClass: "demo.App", environmentFile: "app.env" };
   await expect(javaLaunchEnvironment(filesystem, profile)).rejects.toThrow("Environment file app.env");
-  for (const content of ["invalid", '{"PORT":8080}', "BAD-NAME=value", "TOKEN=bad\0value", "TOKEN=" + "a".repeat(10_001)]) {
+  for (const content of ["invalid", '{"PORT":8080}', "BAD-NAME=value", "TOKEN=bad\0value"]) {
     await writeFile(path.join(root, "app.env"), content);
     await expect(javaLaunchEnvironment(filesystem, profile)).rejects.toThrow("Environment file app.env");
   }
@@ -136,4 +136,14 @@ it("supports .env comments, quotes, export prefixes, empty values, and literal v
     MODE: "development", MESSAGE: "hello world # literal", SINGLE: "literal value", EMPTY: "", PORT: "8080",
     LITERAL: "$MODE", MULTILINE: "first\nsecond", DUPLICATE: "last"
   });
+});
+
+it("preserves large JSON environment values and files above 200 KB", async () => {
+  const { root, filesystem } = await workspace();
+  const profile = { id: "app", name: "App", mainClass: "demo.App", environmentFile: "default-env.json", environment: { MODE: "inline" } };
+  const json = JSON.stringify({ message: "complex=value", nested: { data: "x".repeat(30_000) }, enabled: true });
+  const values = { CONFIG: json, ...Object.fromEntries(Array.from({ length: 110 }, (_, index) => [`CONFIG_${index}`, JSON.stringify({ data: "y".repeat(2_000) })])) };
+  // A .json filename still contains dotenv KEY=value entries.
+  await writeFile(path.join(root, "default-env.json"), Object.entries(values).map(([key, value]) => `${key}=${value}`).join("\n"));
+  expect(await javaLaunchEnvironment(filesystem, profile)).toEqual({ ...values, MODE: "inline" });
 });

@@ -77,10 +77,9 @@ export async function javaLaunchEnvironment(filesystem: WorkspaceFileSystem, pro
   if (profile.environmentFile) {
     try {
       const { content } = await filesystem.read(profile.environmentFile);
-      if (Buffer.byteLength(content) > 200_000) throw new Error("Environment file must be under 200 KB");
       const value = parseEnv(content);
       if (Object.keys(value).length === 0 && content.split(/\r?\n/).some((line) => line.trim() && !line.trim().startsWith("#"))) throw new Error("Expected .env entries in KEY=value format");
-      if (!value || typeof value !== "object" || Array.isArray(value) || Object.keys(value).length > 100 || !Object.entries(value).every(([key, item]) => /^[A-Za-z_][\w]*$/.test(key) && typeof item === "string" && item.length <= 10_000 && !item.includes("\0"))) throw new Error("Environment file must contain valid variable names and values under 10 KB");
+      if (!value || typeof value !== "object" || Array.isArray(value) || !Object.entries(value).every(([key, item]) => /^[A-Za-z_][\w]*$/.test(key) && typeof item === "string" && !item.includes("\0"))) throw new Error("Environment file must contain valid variable names and string values without NUL characters");
       fileEnvironment = value as Record<string, string>;
     } catch (error) {
       throw new CoreError("INVALID_REQUEST", `Environment file ${profile.environmentFile}: ${error instanceof Error ? error.message : String(error)}`);
