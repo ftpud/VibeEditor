@@ -49,11 +49,11 @@ describe("Git review and commit template", () => {
     await git("remote", "add", "origin", remote);
     await git("config", "branch.main.remote", "origin");
     await git("config", "branch.main.merge", "refs/heads/main");
-    for (const answer of ["no", "yes", "PUSH\n"]) {
+    for (const answer of ["no", "PUSH", "yes\n"]) {
       await executeFlowScript(script("git-push"), answer, directory, () => {});
       await expect(exec("git", ["--git-dir", remote, "rev-parse", "refs/heads/main"])).rejects.toThrow();
     }
-    await executeFlowScript(script("git-push"), "PUSH", directory, () => {});
+    await executeFlowScript(script("git-push"), "yes", directory, () => {});
     expect((await exec("git", ["--git-dir", remote, "rev-parse", "refs/heads/main"])).stdout).toBe((await git("rev-parse", "HEAD")).stdout);
   });
 });
