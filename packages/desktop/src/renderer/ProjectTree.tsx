@@ -163,13 +163,13 @@ export function ProjectTree({ nodes, query, matchingPaths, activePath, selectedP
       <button title="Expand all folders" aria-label="Expand all folders" disabled={filtering || allDirectories.every((path) => expanded.has(path))} onClick={() => setExpanded(new Set(allDirectories))}><ChevronsUpDown size={13} /></button>
       <button title="Collapse all folders" aria-label="Collapse all folders" disabled={filtering || expanded.size === 0} onClick={() => setExpanded(new Set())}><ChevronsDownUp size={13} /></button>
     </div>
-    <div className="tree" role="tree" aria-label="Project files" onKeyDown={onKeyDown}>
+    <div className="tree project-file-tree" role="tree" aria-label="Project files" onKeyDown={onKeyDown}>
       {visible.length === 0 ? <div className="filter-empty">No matching files</div> : visible.map(({ node, depth }, index) => {
         const open = node.type === "directory" && effectiveExpanded.has(node.path);
         const selected = selectedPaths.has(node.path);
         const handleContext = (event: MouseEvent) => { event.preventDefault(); const selection = selected ? selectedNodes() : [node]; if (!selected) onSelectionChange(new Set([node.path])); onContextMenu(selection, event.clientX, event.clientY); };
         return node.type === "directory" ? <button key={node.path} ref={(element) => { element ? rowRefs.current.set(node.path, element) : rowRefs.current.delete(node.path); }} role="treeitem" aria-level={depth + 1} aria-expanded={open} aria-selected={selected} tabIndex={(focusedPath ?? visible[0]?.node.path) === node.path ? 0 : -1} className={`tree-row ${selected ? "selected" : ""} ${fileColors[node.path] ? `file-color-${fileColors[node.path]}` : ""}`} style={{ paddingLeft: 7 + depth * 13 }} onFocus={() => setFocusedPath(node.path)} onContextMenu={handleContext} onClick={(event) => { select(index, event.ctrlKey || event.metaKey, event.shiftKey); if (!event.ctrlKey && !event.metaKey && !event.shiftKey) toggle(node.path); }}>
-          {open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}{open ? <FolderOpen className="folder-kind-icon" size={15} /> : <Folder className="folder-kind-icon" size={15} />}<span>{node.name}</span>
+          {open ? <ChevronDown className="tree-chevron" size={14} /> : <ChevronRight className="tree-chevron" size={14} />}{open ? <FolderOpen className="folder-kind-icon" size={15} /> : <Folder className="folder-kind-icon" size={15} />}<span>{node.name}</span>
         </button> : <ProjectFileRow key={node.path} node={node} depth={depth} selected={selected} active={activePath === node.path} focused={(focusedPath ?? visible[0]?.node.path) === node.path} color={fileColors[node.path]} gitStatus={gitStatuses[node.path]} setRef={(element) => { element ? rowRefs.current.set(node.path, element) : rowRefs.current.delete(node.path); }} onFocus={() => setFocusedPath(node.path)} onOpen={(event) => { select(index, event.ctrlKey || event.metaKey, event.shiftKey); if (!event.ctrlKey && !event.metaKey && !event.shiftKey) onAction("open", [node]); }} onContextMenu={handleContext} />;
       })}
     </div>
