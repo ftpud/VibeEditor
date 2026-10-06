@@ -1,7 +1,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { HarnessDefinition, HarnessRun } from "@remote-ide/protocol";
-import { dragPosition, edgePath, HarnessPanel, responsePreview } from "./HarnessPanel";
+import { dragPosition, edgePath, fitCanvasViewport, HarnessPanel, responsePreview } from "./HarnessPanel";
 
 afterEach(cleanup);
 
@@ -52,6 +52,15 @@ describe("HarnessPanel", () => {
     expect(screen.getByRole("button", { name: "Reset workflow zoom" }).textContent).toBe("25%");
     fireEvent.click(screen.getByRole("button", { name: "Reset workflow zoom" }));
     expect(screen.getByRole("button", { name: "Reset workflow zoom" }).textContent).toBe("100%");
+  });
+
+  it("fits every workflow block into the canvas and centers the resulting viewport", () => {
+    const { canvas } = renderZoomHarness();
+    fireEvent.click(screen.getByRole("button", { name: "Fit workflow to canvas" }));
+    const fitted = fitCanvasViewport(zoomHarness.blocks, 600, 400);
+    expect(screen.getByRole("button", { name: "Reset workflow zoom" }).textContent).toBe(`${Math.round(fitted.zoom * 100)}%`);
+    expect(canvas.scrollLeft).toBeCloseTo(fitted.scrollLeft);
+    expect(canvas.scrollTop).toBeCloseTo(fitted.scrollTop);
   });
 
   it("drags and updates connection geometry after zoom, but leaves View mode fixed", () => {

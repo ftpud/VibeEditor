@@ -93,6 +93,18 @@ export function HarnessPanel({ harnesses, runs, diagnostics = [], providers, age
   }, [Boolean(draft), changeZoom]);
   const canvasWidth = Math.max(1200, ...draft?.blocks.map((block) => block.position.x + BLOCK_WIDTH + 80) ?? []);
   const canvasHeight = Math.max(800, ...draft?.blocks.map((block) => block.position.y + BLOCK_HEIGHT + 80) ?? []);
+  const fitCanvasToBlocks = useCallback(() => {
+    const canvas = canvasRef.current;
+    if (!canvas || !draft?.blocks.length) return;
+    const next = fitCanvasViewport(draft.blocks, canvas.clientWidth, canvas.clientHeight);
+    const zoomChanged = next.zoom !== zoomRef.current;
+    pendingScroll.current = zoomChanged ? { left: next.scrollLeft, top: next.scrollTop } : undefined;
+    zoomRef.current = next.zoom;
+    setZoom(next.zoom);
+    // Changing only the scroll position does not cause a render, so apply it now too.
+    canvas.scrollLeft = next.scrollLeft;
+    canvas.scrollTop = next.scrollTop;
+  }, [draft?.blocks]);
   const block = draft?.blocks.find((item) => item.id === selectedBlockId);
   const blockProvider = block && ["ai", "prompt", "task", "review"].includes(block.type) ? block.provider ?? defaultProvider : undefined;
   const blockModels = blockProvider ? modelsByProvider[blockProvider] ?? [] : [];
@@ -238,6 +250,7 @@ export function HarnessPanel({ harnesses, runs, diagnostics = [], providers, age
         <button aria-label="Zoom out" disabled={zoom <= 0.25} onClick={() => changeZoom(zoomRef.current / 1.2)}>−</button>
         <button aria-label="Reset workflow zoom" title="Reset zoom to 100%" onClick={() => changeZoom(1)}>{Math.round(zoom * 100)}%</button>
         <button aria-label="Zoom in" disabled={zoom >= 2} onClick={() => changeZoom(zoomRef.current * 1.2)}>+</button>
+        <button aria-label="Fit workflow to canvas" title="Fit all blocks in the canvas" disabled={!draft.blocks.length} onClick={fitCanvasToBlocks}>Fit</button>
         <small>Pinch or Shift+scroll to zoom</small>
       </div>
       <div ref={canvasRef} aria-label="Workflow canvas" className={`harness-canvas ${mode}`} onClick={() => setSelectedEdgeId(undefined)} onPointerMove={pointerMove} onPointerUp={() => { drag.current = undefined; }} onPointerCancel={() => { drag.current = undefined; }}>
@@ -371,6 +384,21 @@ export function responsePreview(output?: string, status?: HarnessRun["blocks"][n
 
 export function dragPosition(clientX: number, clientY: number, canvasLeft: number, canvasTop: number, scrollLeft: number, scrollTop: number, grabX: number, grabY: number, zoom = 1): HarnessBlock["position"] {
   return { x: Math.max(8, (clientX - canvasLeft + scrollLeft) / zoom - grabX), y: Math.max(8, (clientY - canvasTop + scrollTop) / zoom - grabY) };
+}
+
+export function fitCanvasViewport(blocks: HarnessBlock[], viewportWidth: number, viewportHeight: number, padding = 48): { zoom: number; scrollLeft: number; scrollTop: number } {
+  const left = Math.min(...blocks.map((block) => block.position.x));
+  const top = Math.min(...blocks.map((block) => block.position.y));
+  const right = Math.max(...blocks.map((block) => block.position.x + BLOCK_WIDTH));
+  const bottom = Math.max(...blocks.map((block) => block.position.y + BLOCK_HEIGHT));
+  const width = right - left;
+  const height = bottom - top;
+  const zoom = Math.max(0.25, Math.min(2, viewportWidth / (width + padding * 2), viewportHeight / (height + padding * 2)));
+  return {
+    zoom,
+    scrollLeft: Math.max(0, (left + width / 2) * zoom - viewportWidth / 2),
+    scrollTop: Math.max(0, (top + height / 2) * zoom - viewportHeight / 2),
+  };
 }
 
 export function edgePath(from: HarnessBlock, to: HarnessBlock, loop = false, lane = 0): string {
