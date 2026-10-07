@@ -1,5 +1,5 @@
-import { useMemo, useState } from "react";
-import { Play, Square, Workflow, RotateCcw } from "lucide-react";
+import { useId, useMemo, useState } from "react";
+import { Play, Square, Workflow, RotateCcw, ChevronDown, ChevronUp, Maximize2, Minimize2 } from "lucide-react";
 import type { HarnessBlock, HarnessDefinition, HarnessRun } from "@remote-ide/protocol";
 import { BlockRunDetails, PauseResolution, WorkflowMessage, type HarnessPanelProps } from "./HarnessPanel";
 import { useWorkflowTraces } from "./workflow-tracing";
@@ -11,17 +11,23 @@ const statusLabel = (status: string) => status.replaceAll("_", " ");
 
 export function WorkflowRunPanel(props: Props) {
   const [filter, setFilter] = useState("");
-  const workflows = props.harnesses.filter((workflow) => workflow.name.toLowerCase().includes(filter.toLowerCase()));
-  return <div className="workflow-run-panel harness-panel">
+  const [expandedId, setExpandedId] = useState<string>();
+  const expandedWorkflowId = props.harnesses.some((workflow) => workflow.id === expandedId) ? expandedId : undefined;
+  const workflows = props.harnesses.filter((workflow) => workflow.id === expandedWorkflowId || workflow.name.toLowerCase().includes(filter.toLowerCase()));
+  return <div className={`workflow-run-panel harness-panel${expandedWorkflowId ? " expanded" : ""}`}>
+    <div className="workflow-library-toolbar" hidden={!!expandedWorkflowId}>
     <div className="workflow-library-heading"><strong>View / Run</strong><span>{props.harnesses.length} workflows</span></div>
     <input className="workflow-filter" aria-label="Filter workflows" placeholder="Find a workflow…" value={filter} onChange={(event) => setFilter(event.target.value)} />
     {!!props.diagnostics?.length && <div role="alert" className="harness-connect-hint">Workflow state recovered from backup. {props.diagnostics.map((item) => item.reason).join("; ")}</div>}
-    <div className="workflow-library">{workflows.map((workflow) => <WorkflowCard key={workflow.id} {...props} workflow={workflow} runs={props.runs.filter((run) => run.harnessId === workflow.id)} />)}</div>
+    </div>
+    <div className="workflow-library">{workflows.map((workflow) => <WorkflowCard key={workflow.id} {...props} workflow={workflow} runs={props.runs.filter((run) => run.harnessId === workflow.id)} expanded={expandedWorkflowId === workflow.id} hidden={!!expandedWorkflowId && expandedWorkflowId !== workflow.id} onToggleExpanded={() => setExpandedId((current) => current === workflow.id ? undefined : workflow.id)} />)}</div>
     {!workflows.length && <div className="harness-empty"><Workflow size={30} /><strong>{props.harnesses.length ? "No matching workflows" : "No workflows yet"}</strong><span>{props.harnesses.length ? "Try another name." : "Create your first workflow in Workflow design."}</span></div>}
   </div>;
 }
 
-function WorkflowCard({ workflow, ...props }: Props & { workflow: HarnessDefinition }) {
+function WorkflowCard({ workflow, expanded, hidden, onToggleExpanded, ...props }: Props & { workflow: HarnessDefinition; expanded: boolean; hidden: boolean; onToggleExpanded(): void }) {
+  const [collapsed, setCollapsed] = useState(false);
+  const bodyId = useId();
   const [selectedRunId, setSelectedRunId] = useState<string>();
   const [startedRun, setStartedRun] = useState<HarnessRun>();
   const [inputs, setInputs] = useState<Record<string, string>>({});
@@ -65,8 +71,12 @@ function WorkflowCard({ workflow, ...props }: Props & { workflow: HarnessDefinit
       <button type="submit" disabled={starting || !value.trim() || !workflow.blocks.length} aria-label={`Start ${label}`}><Play size={13} />{starting ? "Starting…" : "Start"}</button>
     </form>;
   };
-  return <article className={`workflow-card ${run && activeStatuses.has(run.status) ? "live" : ""}`} aria-label={workflow.name}>
-    <header><Workflow size={16} /><strong>{workflow.name}</strong><span className={`workflow-overall-status ${run?.status ?? "idle"}`} role="status" aria-label={statusLabel(run?.status ?? "Ready")} title={statusLabel(run?.status ?? "Ready")}><i className={`harness-status ${run?.status ?? "idle"}`} /></span></header>
+  return <article className={`workflow-card${run && activeStatuses.has(run.status) ? " live" : ""}${collapsed ? " collapsed" : ""}${expanded ? " expanded" : ""}`} aria-label={workflow.name} hidden={hidden}>
+    <header><Workflow size={16} aria-hidden="true" /><strong title={workflow.name}>{workflow.name}</strong><span className={`workflow-overall-status ${run?.status ?? "idle"}`} role="status" aria-label={statusLabel(run?.status ?? "Ready")} title={statusLabel(run?.status ?? "Ready")}><i className={`harness-status ${run?.status ?? "idle"}`} /></span><div className="workflow-view-controls">
+      <button type="button" aria-label={`${collapsed ? "Show" : "Collapse"} ${workflow.name}`} title={collapsed ? "Show workflow content" : "Collapse workflow"} aria-expanded={!collapsed} aria-controls={bodyId} onClick={() => { setCollapsed((current) => !current); if (expanded) onToggleExpanded(); }}>{collapsed ? <ChevronDown size={15} aria-hidden="true" /> : <ChevronUp size={15} aria-hidden="true" />}</button>
+      <button type="button" aria-label={`${expanded ? "Restore" : "Expand"} ${workflow.name}`} title={expanded ? "Restore item size" : "Expand to panel"} aria-pressed={expanded} onClick={() => { setCollapsed(false); onToggleExpanded(); }}>{expanded ? <Minimize2 size={15} aria-hidden="true" /> : <Maximize2 size={15} aria-hidden="true" />}</button>
+    </div></header>
+    <div id={bodyId} className="workflow-card-body" hidden={collapsed}>
     {run ? <>
       <div className="workflow-run-meta"><select aria-label={`Run for ${workflow.name}`} value={run.id} onChange={(event) => { setSelectedRunId(event.target.value); setSelectedBlockId(undefined); }}>{runs.map((item) => <option key={item.id} value={item.id}>{statusLabel(item.status)} · {new Date(item.createdAt).toLocaleString()}</option>)}</select><span>{completed}/{definition.blocks.length} complete</span></div>
       <details className="workflow-run-input"><summary>Run prompt</summary><WorkflowMessage key={run.id} title="Prompt" value={run.input} /></details>
@@ -79,6 +89,7 @@ function WorkflowCard({ workflow, ...props }: Props & { workflow: HarnessDefinit
     {selectedBlock && <BlockRunDetails key={`${run?.id ?? workflow.id}:${selectedBlock.id}`} block={selectedBlock} run={run} state={run?.blocks.find((block) => block.blockId === selectedBlock.id)} tasks={run?.children?.filter((child) => child.blockId === selectedBlock.id)} onClose={() => setSelectedBlockId(undefined)} onChat={props.onChat ? async (message) => { const next = await props.onChat!(workflow.id, selectedBlock.id, message, run?.id); setStartedRun(next); setSelectedRunId(next.id); } : undefined} onCancelChat={run ? () => props.onCancelRun(run.id) : undefined} definition={definition} />}
     {(!run || showStarts) && <div className="workflow-starts">{starts.length ? starts.map((block) => renderStart(block)) : renderStart()}</div>}
     {error && <p role="alert" className="workflow-card-error">{error}</p>}
+    </div>
   </article>;
 }
 
