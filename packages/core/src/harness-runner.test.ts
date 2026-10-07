@@ -202,6 +202,17 @@ describe("HarnessRunner", () => {
     const run = (await store.runs())[0]!; expect(run.error).toContain("token budget"); expect(run.blocks[0]?.tokens?.total).toBe(1_001);
   });
 
+  it("fails a workflow after its configured run duration expires", async () => {
+    const state = await mkdtemp(path.join(os.tmpdir(), "workflow-run-duration-")); const store = new HarnessStore("/workspace", state); const definition = await store.create("Run duration");
+    await store.update({ ...definition, settings: { maxRunDurationMs: 60_000 }, blocks: [{ id: "worker", type: "prompt", label: "worker", prompt: "work", position: { x: 0, y: 0 } }], edges: [] });
+    const runner = new HarnessRunner(store, () => undefined); let clock: ReturnType<typeof vi.spyOn> | undefined;
+    await runner.start(definition.id, "work", async () => { const now = Date.now(); clock = vi.spyOn(Date, "now").mockReturnValue(now + 60_001); return session("done"); });
+    try {
+      await vi.waitFor(async () => expect((await store.runs())[0]?.status).toBe("failed"));
+      expect((await store.runs())[0]?.error).toContain("run duration");
+    } finally { clock?.mockRestore(); }
+  });
+
   it("stops retries whose next backoff exceeds the elapsed retry budget", async () => {
     const state = await mkdtemp(path.join(os.tmpdir(), "workflow-retry-budget-")); const store = new HarnessStore("/workspace", state);
     const definition = await store.create("Retry budget");
