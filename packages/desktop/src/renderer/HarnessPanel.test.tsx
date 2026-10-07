@@ -591,6 +591,16 @@ describe("HarnessPanel", () => {
     confirm.mockRestore();
   });
 
+  it("duplicates a workflow using a new workflow identity", async () => {
+    const harness: HarnessDefinition = { id: "harness-1", name: "Flow", version: 2, createdAt: "old", updatedAt: "old", blocks: [{ id: "a", type: "prompt", label: "Plan", prompt: "{{input}}", position: { x: 20, y: 20 } }], edges: [] };
+    const copy = { ...harness, id: "copy", name: "Flow copy", version: 1, createdAt: "new", updatedAt: "new", blocks: [] };
+    const onCreate = vi.fn().mockResolvedValue(copy); const onSave = vi.fn().mockImplementation(async (value) => value);
+    render(<HarnessPanel harnesses={[harness]} runs={[]} providers={[]} agents={[]} onCreate={onCreate} onSave={onSave} onDelete={vi.fn()} onRun={vi.fn()} onCancelRun={vi.fn()} onError={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: "Duplicate workflow" }));
+    await waitFor(() => expect(onCreate).toHaveBeenCalledWith("Flow copy"));
+    expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ id: "copy", name: "Flow copy", version: 1, blocks: harness.blocks }));
+  });
+
   it("offers reload, comparison, and save-as-copy when a concurrent save conflicts", async () => {
     const harness: HarnessDefinition = { id: "harness-1", name: "Flow", version: 1, createdAt: "now", updatedAt: "now", blocks: [], edges: [] };
     const remote = { ...harness, name: "Remote change", version: 2 };
