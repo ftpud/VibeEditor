@@ -26,15 +26,12 @@ async function workspace(wrapper = false) {
 }
 
 describe("Java configuration", () => {
-  it.each([".project", ".vibe"])("copies %s Java configuration to .settings and saves subsequent edits there", async (directory) => {
+  it("copies .vibe Java configuration to .settings and saves subsequent edits there", async () => {
+    const directory = ".vibe";
     const { service, options, root } = await workspace();
     const legacy = JSON.stringify({ ...options, javaHome: "/opt/legacy-jdk" }, null, 2) + "\n";
     await mkdir(path.join(root, directory));
     await writeFile(path.join(root, directory, "java.json"), legacy);
-    if (directory === ".project") {
-      await mkdir(path.join(root, ".vibe"));
-      await writeFile(path.join(root, ".vibe/java.json"), JSON.stringify({ ...options, javaHome: "/opt/older-jdk" }));
-    }
     const result = await service.readConfiguration();
     expect(result.path).toBe(".settings/java.json");
     expect(result.content).toBe(legacy);
@@ -44,15 +41,24 @@ describe("Java configuration", () => {
     expect(await readFile(path.join(root, directory, "java.json"), "utf8")).toBe(legacy);
   });
 
-  it("prefers .settings configuration when previous locations also exist", async () => {
+  it("prefers .settings configuration when .vibe also exists", async () => {
     const { service, options, root } = await workspace();
     await mkdir(path.join(root, ".vibe"));
-    await mkdir(path.join(root, ".project"));
     await mkdir(path.join(root, ".settings"));
     await writeFile(path.join(root, ".vibe/java.json"), JSON.stringify({ ...options, javaHome: "/opt/legacy-jdk" }));
-    await writeFile(path.join(root, ".project/java.json"), JSON.stringify({ ...options, javaHome: "/opt/previous-jdk" }));
     await writeFile(path.join(root, javaConfigurationPath), JSON.stringify({ ...options, javaHome: "/opt/project-jdk" }));
     expect(await service.getOptions()).toMatchObject({ javaHome: "/opt/project-jdk" });
+  });
+
+  it("ignores the removed .project Java configuration location", async () => {
+    const { service, options, root } = await workspace();
+    await mkdir(path.join(root, ".project"));
+    await writeFile(path.join(root, ".project/java.json"), JSON.stringify({ ...options, javaHome: "/opt/removed-jdk" }));
+    expect(await service.getOptions()).toEqual(options);
+    const result = await service.readConfiguration();
+    expect(JSON.parse(result.content)).toEqual(options);
+    expect(result.revision).toBeUndefined();
+    await expect(readFile(path.join(root, javaConfigurationPath), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("detects a project Maven wrapper and supplies a JSON template", async () => {
