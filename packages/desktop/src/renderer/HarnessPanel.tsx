@@ -407,11 +407,13 @@ function isDataSchema(value: unknown, depth = 0): value is HarnessDataSchema {
 function BlockRunDetails({ block, run, state, tasks, onClose }: { block: HarnessBlock; run?: HarnessRun; state?: HarnessRun["blocks"][number]; tasks?: HarnessRun["children"]; onClose(): void }) {
   const totalTokens = run?.blocks.reduce((total, item) => total + (item.tokens?.total ?? 0), 0) ?? 0;
   const tokenBudget = run?.definition?.settings?.tokenBudget;
+  const limits = run?.definition?.settings;
   const waitingMessage = state && waitingStatus(block, state);
   return <section className="harness-run-details" aria-label={`${block.label} run details`}>
     <header><div><strong>{block.label}</strong><span className={`harness-run-state ${state?.status ?? "idle"}`}>{state?.status ?? "not run"}</span></div><button title="Close run details" onClick={onClose}>×</button></header>
     <div className="harness-run-details-body">{!state ? <p className="harness-detail-empty">This block has not run yet.</p> : <>
       {run && <p className={`harness-detail-empty${tokenBudget !== undefined && totalTokens > tokenBudget ? " error" : ""}`}>Run {run.id} · definition v{run.harnessVersion}{run.startedAt ? ` · started ${new Date(run.startedAt).toLocaleString()}` : ""}{run.completedAt && run.startedAt ? ` · ${Math.max(0, Date.parse(run.completedAt) - Date.parse(run.startedAt)) / 1000}s` : ""}{totalTokens ? ` · ${totalTokens.toLocaleString()} tokens` : ""}{tokenBudget !== undefined ? ` / ${tokenBudget.toLocaleString()} budget` : ""}</p>}
+      {limits && <p className="harness-detail-empty" aria-label="Workflow run limits">Limits: {limits.maxActiveRuns ?? 4} active runs · {limits.maxBlockAttempts ?? 100} block attempts · {limits.maxStackSize ?? 100} stack inputs · {limits.maxLoopCount ?? 100} loop iterations · {limits.maxChildTasks ?? 100} child tasks</p>}
       {tasks?.length ? <section className="harness-execution-log"><strong>Owned implementation tasks</strong>{tasks.map((child) => <LogSection key={`${child.provider}:${child.taskId}`} title={`${child.taskId} · ${child.provider}`} value={`Recovery attempts: ${child.recoveryAttempts}/3${child.failureReason ? `\nFailure: ${child.failureReason.replaceAll("_", " ")}` : ""}${child.retryAt ? `\nRetry after: ${new Date(child.retryAt).toLocaleString()}` : ""}${child.recoveryError ? `\nLast recovery error: ${child.recoveryError}` : ""}`} error={Boolean(child.recoveryError)} />)}</section> : null}
       {waitingMessage && <p className="harness-detail-empty" aria-label="Block waiting status">{waitingMessage}</p>}
       {block.watchdog && <p className="harness-detail-empty">Core-managed watchdog · no model calls{state.waitingUntil ? ` · Next check: ${new Date(state.waitingUntil).toLocaleString()}` : ""}</p>}

@@ -445,7 +445,7 @@ describe("HarnessPanel", () => {
   it("saves declared JSON schemas and shows the validated run data", async () => {
     const harness: HarnessDefinition = { id: "harness-1", name: "Flow", version: 1, createdAt: "now", updatedAt: "now", blocks: [{ id: "a", type: "prompt", label: "Plan", prompt: "{{input}}", position: { x: 20, y: 20 } }], edges: [] };
     const onSave = vi.fn().mockImplementation(async (value) => value);
-    const runs = [{ id: "run-1", harnessId: harness.id, harnessVersion: 1, definition: { ...harness, settings: { tokenBudget: 20_000 } }, input: '{"featureId":"F-1"}', status: "succeeded" as const, createdAt: "now", blocks: [{ blockId: "a", status: "succeeded" as const, tokens: { total: 12_345, input: 8_000, output: 4_345 }, structuredInput: { featureId: "F-1" }, structuredOutput: { commitSha: "abc123" } }] }];
+    const runs = [{ id: "run-1", harnessId: harness.id, harnessVersion: 1, definition: { ...harness, settings: { tokenBudget: 20_000, maxActiveRuns: 2, maxBlockAttempts: 20, maxStackSize: 10, maxLoopCount: 5, maxChildTasks: 8 } }, input: '{"featureId":"F-1"}', status: "succeeded" as const, createdAt: "now", blocks: [{ blockId: "a", status: "succeeded" as const, tokens: { total: 12_345, input: 8_000, output: 4_345 }, structuredInput: { featureId: "F-1" }, structuredOutput: { commitSha: "abc123" } }] }];
     render(<HarnessPanel harnesses={[harness]} runs={runs} providers={[]} agents={[]} onCreate={vi.fn()} onSave={onSave} onDelete={vi.fn()} onRun={vi.fn()} onCancelRun={vi.fn()} onError={vi.fn()} />);
 
     fireEvent.click(await screen.findByText("Plan"));
@@ -463,6 +463,7 @@ describe("HarnessPanel", () => {
     expect(details.textContent).toContain("Run run-1 · definition v1");
     expect(details.textContent).toContain("12,345 tokens");
     expect(details.textContent).toContain("/ 20,000 budget");
+    expect(details.textContent).toContain("Limits: 2 active runs · 20 block attempts · 10 stack inputs · 5 loop iterations · 8 child tasks");
   });
 
   it("shows prompts, answers, and stack runs when a block is selected in view mode", async () => {
