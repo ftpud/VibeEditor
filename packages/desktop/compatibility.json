@@ -1,4 +1,4 @@
 {
-  "compatibility": { "minimum": 13, "maximum": 13 },
+  "compatibility": { "minimum": 14, "maximum": 14 },
   "clientVersion": "0.1.0"
 }

@@ -20,6 +20,7 @@ describe("skills panel", () => {
     const handlers = actions(); const onSelection = vi.fn(async () => undefined);
     render(<SkillsPanel catalog={catalog} selected={[]} running onRefresh={vi.fn()} onSelection={onSelection} actions={handlers} />);
     expect(screen.getByText("Global")).toBeTruthy(); expect(screen.getByText("Local")).toBeTruthy();
+    fireEvent.click(screen.getByTitle("Settings for Reviewer"));
     expect(screen.getByText(/Changes apply to the next turn/)).toBeTruthy();
     fireEvent.click(screen.getByLabelText("Use Reviewer by default"));
     await waitFor(() => expect(handlers.policy).toHaveBeenCalledWith({ allowed: catalog.policy.allowed, defaults: ["local/style", "global/review"] }));
@@ -32,6 +33,7 @@ describe("skills panel", () => {
   it("removing project availability also removes the default without changing existing chats", async () => {
     const handlers = actions();
     render(<SkillsPanel catalog={catalog} selected={["local/style"]} running={false} onRefresh={vi.fn()} onSelection={vi.fn()} actions={handlers} />);
+    fireEvent.click(screen.getByTitle("Settings for Style"));
     fireEvent.click(screen.getByLabelText("Allow Style in project"));
     await waitFor(() => expect(handlers.policy).toHaveBeenCalledWith({ allowed: ["global/review"], defaults: [] }));
   });
@@ -41,6 +43,7 @@ describe("skills panel", () => {
     const preset = { scope: "workspace" as const, name: "reviewer.md" };
     const restricted = { ...catalog, policy: { ...catalog.policy, agents: { "global/review": [preset] } } };
     render(<SkillsPanel catalog={restricted} selected={[]} agentPreset={null} agents={[{ ...preset, agent: { name: "Code Reviewer", instructions: "Review" } }]} running={false} onRefresh={vi.fn()} onSelection={vi.fn()} actions={handlers} />);
+    fireEvent.click(screen.getByTitle("Settings for Reviewer"));
     expect((screen.getByLabelText("Enable Reviewer") as HTMLInputElement).disabled).toBe(true);
     fireEvent.click(screen.getByLabelText("No agent for Reviewer"));
     await waitFor(() => expect(handlers.policy).toHaveBeenCalledWith({ ...restricted.policy, agents: { "global/review": [preset, null] } }));
@@ -58,7 +61,7 @@ describe("skills panel", () => {
     fireEvent.click(screen.getByText("Save"));
     await waitFor(() => expect(handlers.write).toHaveBeenCalledWith("local/testing", "Run focused tests"));
     await waitFor(() => expect(screen.queryByLabelText("Skill instructions")).toBeNull());
-    fireEvent.click(screen.getAllByText("Edit")[0]!);
+    fireEvent.click(screen.getByTitle("Edit Reviewer"));
     await waitFor(() => expect((screen.getByLabelText("Skill instructions") as HTMLTextAreaElement).value).toBe("Review carefully"));
   });
 });

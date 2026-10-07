@@ -46,6 +46,9 @@ describe("WorkspaceTaskStore", () => {
     await expect(access(store.taskPath(task.id))).resolves.toBeUndefined();
     await expect(execFileAsync("git", ["-C", root, "rev-parse", "--verify", "feature/lifecycle"])).resolves.toBeDefined();
     await expect(new WorkspaceTaskStore(root, state).list()).resolves.toMatchObject({ tasks: [expect.objectContaining({ id: task.id, name: "Polished lifecycle", archived: true })] });
+    await store.updateMetadata(task.id, { name: "Configured task", status: "finished", archived: false });
+    await expect(new WorkspaceTaskStore(root, state).list()).resolves.toMatchObject({ tasks: [expect.objectContaining({ id: task.id, name: "Configured task", status: "finished", archived: false, branch: "feature/lifecycle" })] });
+    await expect(access(store.taskPath(task.id))).resolves.toBeUndefined();
 
     await store.delete(task.id);
   });

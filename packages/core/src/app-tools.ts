@@ -8,6 +8,7 @@ import type { AcpRegistry } from "./ai/index.js";
 import { summarizeAiSessions } from "./ai/summary.js";
 import { AppEventBridge, appBridgeInstanceId } from "./app-events.js";
 import type { AgentsStore } from "./agents.js";
+import type { ConfigurationService } from "./configuration.js";
 import { agentFingerprint } from "./agent-profile.js";
 import type { AiTimerService } from "./ai-timers.js";
 
@@ -236,7 +237,22 @@ export const appToolDefinitions = [
     name: "workflow_plan_features",
     description: "Persist the complete feature plan before creating implementation tasks. Each feature has a stable ID, implementation prompt, and prerequisite IDs.",
     inputSchema: { type: "object", additionalProperties: false, properties: { features: { type: "array", minItems: 1, items: { type: "object", additionalProperties: false, properties: { id: { type: "string", minLength: 1, maxLength: 120 }, prompt: { type: "string", minLength: 1, maxLength: 10000 }, prerequisites: { type: "array", items: { type: "string", minLength: 1, maxLength: 120 } } }, required: ["id", "prompt"] } } }, required: ["features"] }
-  }
+  },
+  {
+    name: "configuration_list",
+    description: "Discover editable Vibe Editor configuration documents, resource formats, scopes and provider metadata. Optionally include provider models when designing AI workflow blocks.",
+    inputSchema: { type: "object", additionalProperties: false, properties: { include_models: { type: "boolean", description: "Include live provider model catalogues; omit for ordinary configuration edits." } } }
+  },
+  {
+    name: "configuration_read",
+    description: "Read a logical configuration document and its revision. Read workflows/new.json for a new-workflow template. Missing agent/skill/useful documents return exists=false and revision=null.",
+    inputSchema: { type: "object", additionalProperties: false, properties: { resource: { type: "string", minLength: 1, description: "Logical resource from configuration_list, or a new agents/skills/useful resource in the documented format." } }, required: ["resource"] }
+  },
+  {
+    name: "configuration_write",
+    description: "Create or replace a configuration document through validated Core stores. Use the read revision; null creates a new document. Returns the saved document, revision and workflow validation. Does not run workflows, commands or tasks.",
+    inputSchema: { type: "object", additionalProperties: false, properties: { resource: { type: "string", minLength: 1 }, content: { type: "string", maxLength: 2097152, description: "Full document text. JSON for workflows, skill policy and task metadata; Markdown/text for agents, skills and useful files." }, expected_revision: { type: ["string", "null"], description: "Revision returned by configuration_read; null for a new resource. Stale revisions are rejected." } }, required: ["resource", "content", "expected_revision"] }
+  },
 ] as const;
 
 export class AppToolService {
@@ -251,7 +267,8 @@ export class AppToolService {
     private readonly rootWorkspace?: string,
     private readonly timers?: Pick<AiTimerService, "schedule" | "scheduleAt" | "next" | "cancelWorkspace">,
     private readonly bridgeWorkspace?: string,
-    private readonly workflow?: { runId: string; blockId: string; flow?: boolean; runStack(inputs: string[], path?: string): Promise<unknown>; resumeFailed?(): Promise<unknown>; planFeatures?(features: Array<{ id: string; prompt: string; prerequisites?: string[] }>): Promise<unknown>; assertFeatureReady?(featureId: string): Promise<void>; dispatchFeature?(featureId: string, taskId: string): Promise<unknown>; completeFeature?(taskId: string, commit: string): Promise<unknown>; registerChild?(taskId: string, provider: AiProvider, workspace: string): Promise<void>; operation?<T>(kind: "timer_create" | "task_create" | "prompt_delivery" | "merge", key: string, input: unknown, effect: () => Promise<T>, reconcile?: () => Promise<T | null | undefined>): Promise<T>; recordTool?(name: string, args: Record<string, unknown>, result?: unknown, error?: unknown): Promise<void>; assertActive?(): void }
+    private readonly workflow?: { runId: string; blockId: string; flow?: boolean; runStack(inputs: string[], path?: string): Promise<unknown>; resumeFailed?(): Promise<unknown>; planFeatures?(features: Array<{ id: string; prompt: string; prerequisites?: string[] }>): Promise<unknown>; assertFeatureReady?(featureId: string): Promise<void>; dispatchFeature?(featureId: string, taskId: string): Promise<unknown>; completeFeature?(taskId: string, commit: string): Promise<unknown>; registerChild?(taskId: string, provider: AiProvider, workspace: string): Promise<void>; operation?<T>(kind: "timer_create" | "task_create" | "prompt_delivery" | "merge", key: string, input: unknown, effect: () => Promise<T>, reconcile?: () => Promise<T | null | undefined>): Promise<T>; recordTool?(name: string, args: Record<string, unknown>, result?: unknown, error?: unknown): Promise<void>; assertActive?(): void },
+    private readonly configuration?: Pick<ConfigurationService, "list" | "read" | "write">
   ) {}
 
   async call(name: string, args: Record<string, unknown>): Promise<unknown> {
@@ -265,6 +282,17 @@ export class AppToolService {
   }
 
   private async callActive(name: string, args: Record<string, unknown>): Promise<unknown> {
+    if (["configuration_list", "configuration_read", "configuration_write"].includes(name)) {
+      if (!this.configuration) throw new Error("Configuration interface is unavailable");
+      if (name === "configuration_list") {
+        if (args.include_models !== undefined && typeof args.include_models !== "boolean") throw new Error("include_models must be boolean");
+        return this.configuration.list(args.include_models === true);
+      }
+      const resource = requiredString(args, "resource");
+      if (name === "configuration_read") return this.configuration.read(resource);
+      if (typeof args.content !== "string" || (args.expected_revision !== null && typeof args.expected_revision !== "string")) throw new Error("content and expected_revision are required; revision must be a string or null");
+      return this.configuration.write(resource, args.content, args.expected_revision);
+    }
     if (name === "workflow_resume_failed") {
       if (!this.workflow?.resumeFailed) throw new Error("Workflow recovery is unavailable");
       return this.workflow.resumeFailed();

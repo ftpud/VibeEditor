@@ -51,6 +51,13 @@ export class AgentsStore {
     catch (error) { throw new CoreError("WRITE_FAILED", `Could not create agent: ${error instanceof Error ? error.message : String(error)}`); }
   }
 
+  async createWorkspace(name: string, workspace: string): Promise<void> {
+    const target = this.target("workspace", name, workspace);
+    await mkdir(path.dirname(target), { recursive: true });
+    try { await writeFile(target, AGENT_TEMPLATE, { encoding: "utf8", flag: "wx" }); }
+    catch (error) { throw new CoreError("WRITE_FAILED", `Could not create workspace agent: ${error instanceof Error ? error.message : String(error)}`); }
+  }
+
   async write(scope: AgentFileScope, name: string, content: string, workspace: string): Promise<void> {
     if (Buffer.byteLength(content) > 2 * 1024 * 1024) throw new CoreError("FILE_TOO_LARGE", "Agent file exceeds 2 MB");
     try { await writeFile(this.target(scope, name, workspace), content, "utf8"); }

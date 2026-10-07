@@ -195,3 +195,70 @@ A skill omitted from the `agents` map retains **Any agent** access. Renaming a
 preset does not rewrite committed skill policy; update its assignment to the new
 preset name. Core checks these assignments on selection and on every new turn,
 including queued follow-ups.
+
+## Self-configuration through MCP
+
+Core ships a global **Vibe Configurator** agent (`vibe-configurator.md`) and a global
+**vibe-self-configuration** skill. They are installed on Core startup for every
+project on that host. Existing custom versions are preserved; a missing shipped
+file is recreated at startup. Choose the agent in the chatbox to configure the app
+with natural language. Its `mcpServers: [vibe-editor]` preset grants access to the
+built-in app tools. The agent reads the configuration skill through the same
+configuration interface; projects can also allow/enable the skill in the Skills panel.
+
+Three generic MCP tools expose logical configuration documents instead of private
+registry paths:
+
+- `configuration_list` lists document resource names, formats and provider metadata.
+  Set `include_models: true` when choosing provider/model settings for AI workflows.
+- `configuration_read` returns `content`, `exists` and a `revision` for a resource.
+- `configuration_write` accepts `resource`, full-text `content`, and
+  `expected_revision`. Supply the revision from the read; use JSON `null` to create
+  a new agent, skill or useful file. A stale revision is rejected. Writes through
+  this interface to the same document are serialized, including global edits from
+  different projects. Workflow edits also retain native workflow version checks.
+
+| Resource | Format and scope |
+| --- | --- |
+| `agents/global/reviewer.md` | Shared Core agent preset, Markdown |
+| `agents/local/developer.md` | Root-project agent preset in Core state, Markdown |
+| `agents/workspace/reviewer.md` | Invoking checkout's `.agents/reviewer.md`, Markdown |
+| `skills/global/review/SKILL.md` | Shared Core skill instructions, Markdown |
+| `skills/local/testing/SKILL.md` | Invoking checkout's `.agents/skills/testing/SKILL.md` |
+| `skills/policy.json` | Invoking checkout's skill availability/defaults/agent assignments |
+| `useful/global/reference.md` | Shared Core useful file, text |
+| `useful/local/notes.md` | Root-project useful file in Core state, text |
+| `workflows/<id>.json` | Root-project workflow definition, JSON |
+| `tasks/<id>.json` | Task metadata: `name`, `status` and `archived`, JSON |
+
+Read `workflows/new.json` for a starter definition; write its edited content with
+`expected_revision: null` to create a workflow. The result contains the actual
+resource ID and graph validation issues. Edit that returned resource thereafter.
+Core validates the document structure before storing it. Graph issues are returned
+separately so incomplete drafts remain editable; runtime validation still applies
+when starting a workflow. Creating/updating definitions does not start runs.
+
+For example, create a global agent preset:
+
+```json
+{
+  "name": "configuration_write",
+  "arguments": {
+    "resource": "agents/global/reviewer.md",
+    "content": "---\nname: Reviewer\ndescription: Review changes for regressions.\nmcpServers: [vibe-editor]\n---\n\nInspect changes and run focused tests.\n",
+    "expected_revision": null
+  }
+}
+```
+
+Use the existing `task_create`, `task_create_and_start`, `task_append_prompt`,
+`task_set_status`, `task_merge` and `task_delete` tools for worktree and execution
+operations. Configuration documents cannot rewrite worktree paths, branches,
+provider transcripts, raw registries or workflow-run state. The interface does
+not expose provider credentials or MCP connection configuration. Creating a skill
+does not automatically enable it or execute its supporting scripts.
+
+Successful writes broadcast `configuration.changed`; Desktop refreshes its agents,
+skills, useful files, workflows and tasks panels. Global changes refresh every
+connected project's panels. Global here means projects sharing the same Core
+state directory, rather than an installation across unrelated Core hosts.
