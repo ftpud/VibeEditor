@@ -1,11 +1,15 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { HarnessDefinition, HarnessRun } from "@remote-ide/protocol";
-import { alignBlocks, autoLayoutBlocks, dragPosition, edgePath, fitCanvasViewport, HarnessPanel, minimapScrollPosition, minimapViewport, responsePreview } from "./HarnessPanel";
+import { alignBlocks, autoLayoutBlocks, dragPosition, edgePath, fitCanvasViewport, HarnessPanel, minimapScrollPosition, minimapViewport, responsePreview, workflowRunExport } from "./HarnessPanel";
 
 afterEach(cleanup);
 
 describe("HarnessPanel", () => {
+  it("serializes a selected workflow run for export", () => {
+    const run: HarnessRun = { id: "run-1", harnessId: "flow", harnessVersion: 1, input: "work", status: "succeeded", createdAt: "now", blocks: [] };
+    expect(JSON.parse(workflowRunExport(run))).toEqual(run);
+  });
   const zoomHarness: HarnessDefinition = { id: "zoom", name: "Zoom flow", version: 1, createdAt: "now", updatedAt: "now", blocks: [
     { id: "a", type: "text", label: "First", prompt: "", position: { x: 200, y: 200 } },
     { id: "b", type: "text", label: "Second", prompt: "", position: { x: 500, y: 200 } },
