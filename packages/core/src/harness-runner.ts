@@ -12,7 +12,7 @@ type Interrupt = (provider: string, context: { runId: string; blockId: string; w
 type ResolvePermission = (provider: string, workspace: string, requestId: string, optionId?: string) => Promise<AiSession>;
 type AnswerQuestion = (provider: string, workspace: string, input: string) => Promise<AiSession>;
 type FireTimer = (provider: string, workspace: string) => Promise<boolean>;
-type ActiveExecution = { run: HarnessRun; blocks: HarnessBlock[]; edges: HarnessEdge[]; outputs: Map<string, string>; dispatch: Dispatch; append: Append; defaultProvider: string; background: Set<Promise<void>>; stackInvocations: Map<string, number>; turnClaims: Map<string, string>; scheduler: ExecutionScheduler };
+type ActiveExecution = { run: HarnessRun; blocks: HarnessBlock[]; edges: HarnessEdge[]; outputs: Map<string, string>; dispatch: Dispatch; append: Append; defaultProvider: string; background: Set<Promise<void>>; stackInvocations: Map<string, number>; loopInvocations: Map<string, number>; turnClaims: Map<string, string>; scheduler: ExecutionScheduler };
 type RecoveryPolicy = { maxAttempts: number; transportBackoffMs: number; maxElapsedMs?: number; jitterRatio?: number; random?: () => number };
 type ResolvedRecoveryPolicy = Required<RecoveryPolicy>;
 export type HarnessRecoveryInspector = {
@@ -407,6 +407,12 @@ export class HarnessRunner {
     let outgoing = execution.edges.filter((edge) => edge.from === blockId);
     if (path !== undefined) outgoing = outgoing.filter((edge) => edge.label === path);
     if (!outgoing.length) throw new Error(path === undefined ? "This block has no downstream path" : `No downstream path named '${path}'`);
+    for (const edge of outgoing.filter((item) => item.loop)) {
+      const count = (execution.loopInvocations.get(edge.id) ?? 0) + 1;
+      const limit = execution.run.definition?.settings?.maxLoopCount ?? 100;
+      if (count > limit) throw new CoreError("INVALID_REQUEST", `Workflow loop '${edge.label ?? edge.id}' reached its limit of ${limit} iterations`);
+      execution.loopInvocations.set(edge.id, count);
+    }
     if (caller.routing === "ai" && path === undefined) throw new Error("path is required because this block uses AI-selected routing");
     if (path !== undefined) { callerState.selectedRoute = path; await this.recordCompletedOperation(execution.run, "route_selection", `route:${blockId}:${callerState.attempts?.at(-1)?.id ?? "initial"}`, blockId, { path }); }
     const targets = outgoing.map((edge) => ({ edge, block: execution.blocks.find((block) => block.id === edge.to)! })).filter((target) => Boolean(target.block));
@@ -478,7 +484,7 @@ export class HarnessRunner {
   private async execute(run: HarnessRun, blocks: HarnessBlock[], edges: HarnessEdge[], order: string[], dispatch: Dispatch, defaultProvider: string, append: Append, recovering = false, startBlockId?: string): Promise<void> {
     const outputs = new Map(run.blocks.flatMap((state) => state.status === "succeeded" && state.output !== undefined ? [[state.blockId, state.output] as const] : []));
     const concurrency = run.definition?.settings?.concurrency ?? this.concurrency;
-    run.status = this.runActivityStatus(run); run.startedAt ??= new Date().toISOString(); const background = new Set<Promise<void>>(); this.executions.set(run.id, { run, blocks, edges, outputs, dispatch, append, defaultProvider, background, stackInvocations: new Map(), turnClaims: new Map(), scheduler: new ExecutionScheduler(concurrency, () => this.assertActive(run.id)) });
+    run.status = this.runActivityStatus(run); run.startedAt ??= new Date().toISOString(); const background = new Set<Promise<void>>(); this.executions.set(run.id, { run, blocks, edges, outputs, dispatch, append, defaultProvider, background, stackInvocations: new Map(), loopInvocations: new Map(), turnClaims: new Map(), scheduler: new ExecutionScheduler(concurrency, () => this.assertActive(run.id)) });
     if (recovering) for (const state of run.blocks) if (isActiveStatus(state.status)) this.log(state, "lifecycle", "Core restarted and reconciled this workflow stage");
     await this.update(run);
     const running = new Map<string, Promise<{ blockId: string; error?: unknown }>>();
