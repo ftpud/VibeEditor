@@ -399,6 +399,8 @@ export class HarnessRunner {
     const execution = this.executions.get(runId); if (!execution || !this.isActive(runId)) throw new Error("Workflow execution is no longer active");
     if (execution.blocks.find((block) => block.id === blockId)?.type === "ai") throw new Error("Use workflow_use_block and workflow_choose_path for typed flow connections");
     if (!inputs.length || !inputs.every((input) => typeof input === "string" && input.trim())) throw new Error("inputs must be a non-empty array of strings");
+    const maxStackSize = execution.run.definition?.settings?.maxStackSize ?? 100;
+    if (inputs.length > maxStackSize) throw new CoreError("INVALID_REQUEST", `Workflow stack accepts at most ${maxStackSize} input${maxStackSize === 1 ? "" : "s"} per invocation`);
     const caller = execution.blocks.find((block) => block.id === blockId); const callerState = execution.run.blocks.find((block) => block.blockId === blockId);
     if (!caller || callerState?.status !== "running") throw new Error("Only a currently running workflow block can launch a stack");
     execution.stackInvocations.set(blockId, (execution.stackInvocations.get(blockId) ?? 0) + 1);

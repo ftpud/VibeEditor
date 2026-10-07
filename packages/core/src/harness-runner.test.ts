@@ -64,6 +64,16 @@ describe("HarnessRunner", () => {
     expect((await store.runs())[0]?.error).toContain("limit of 1 attempts");
   });
 
+  it("rejects an oversized dynamic stack before scheduling downstream blocks", async () => {
+    const state = await mkdtemp(path.join(os.tmpdir(), "workflow-stack-limit-")); const store = new HarnessStore("/workspace", state); const created = await store.create("Limited stack");
+    const definition = await store.update({ ...created, settings: { maxStackSize: 1 }, blocks: [{ id: "root", type: "prompt", label: "Root", prompt: "{{input}}", position: { x: 0, y: 0 } }, { id: "worker", type: "prompt", label: "Worker", prompt: "{{input}}", position: { x: 0, y: 0 } }], edges: [{ id: "next", from: "root", to: "worker" }] });
+    const runner = new HarnessRunner(store, () => undefined); const dispatch = vi.fn(async (block: HarnessBlock, _prompt: string, runtime: { runId: string; blockId: string }) => { if (block.id === "root") await runner.runStack(runtime.runId, runtime.blockId, ["one", "two"]); return session("done"); });
+    await runner.start(definition.id, "work", dispatch);
+    await vi.waitFor(async () => expect((await store.runs())[0]?.status).toBe("failed"));
+    expect(dispatch).toHaveBeenCalledTimes(1);
+    expect((await store.runs())[0]?.error).toContain("at most 1 input");
+  });
+
   it("deduplicates a concurrent external operation by its stable key", async () => {
     const state = await mkdtemp(path.join(os.tmpdir(), "workflow-operation-")); const store = new HarnessStore("/workspace", state); const definition = await store.create("Operation");
     await store.update({ ...definition, blocks: [{ id: "worker", type: "prompt", label: "Worker", prompt: "work", position: { x: 0, y: 0 } }], edges: [] });
