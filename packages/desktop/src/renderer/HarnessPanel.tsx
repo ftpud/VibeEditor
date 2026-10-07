@@ -814,11 +814,25 @@ export function autoLayoutBlocks(blocks: HarnessBlock[], edges: HarnessDefinitio
 export function edgePath(from: HarnessBlock, to: HarnessBlock, loop = false, lane = 0): string {
   const fromCenter = { x: from.position.x + BLOCK_WIDTH / 2, y: from.position.y + BLOCK_HEIGHT / 2 };
   const toCenter = { x: to.position.x + BLOCK_WIDTH / 2, y: to.position.y + BLOCK_HEIGHT / 2 };
-  if (loop) {
-    const startY = fromCenter.y + BLOCK_HEIGHT / 2; const endY = toCenter.y + BLOCK_HEIGHT / 2; const bendY = Math.max(startY, endY) + 58;
-    return `M ${fromCenter.x} ${startY} C ${fromCenter.x} ${bendY}, ${toCenter.x} ${bendY}, ${toCenter.x} ${endY}`;
-  }
   const horizontal = Math.abs(toCenter.x - fromCenter.x) >= Math.abs(toCenter.y - fromCenter.y);
+  // Return connections can be ordinary follow links without the legacy loop flag.
+  // Route them around the cards so they do not retrace the forward connection.
+  const backward = horizontal ? toCenter.x <= fromCenter.x : toCenter.y <= fromCenter.y;
+  if (loop || backward) {
+    const clearance = 72 + lane * 2;
+    if (horizontal && from.id !== to.id) {
+      const startY = from.position.y + BLOCK_HEIGHT;
+      const endY = to.position.y + BLOCK_HEIGHT;
+      const bendY = Math.max(startY, endY) + clearance;
+      return `M ${fromCenter.x} ${startY} C ${fromCenter.x} ${bendY}, ${toCenter.x} ${bendY}, ${toCenter.x} ${endY}`;
+    }
+    const startX = from.position.x + BLOCK_WIDTH;
+    const endX = to.position.x + BLOCK_WIDTH;
+    const bendX = Math.max(startX, endX) + clearance;
+    const startY = fromCenter.y - (from.id === to.id ? 24 : 0);
+    const endY = toCenter.y + (from.id === to.id ? 24 : 0);
+    return `M ${startX} ${startY} C ${bendX} ${startY}, ${bendX} ${endY}, ${endX} ${endY}`;
+  }
   if (horizontal) {
     const direction = toCenter.x >= fromCenter.x ? 1 : -1;
     const startX = fromCenter.x + direction * BLOCK_WIDTH / 2; const endX = toCenter.x - direction * BLOCK_WIDTH / 2;
