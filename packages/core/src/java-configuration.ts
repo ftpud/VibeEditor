@@ -28,10 +28,8 @@ export async function readJavaConfiguration(filesystem: WorkspaceFileSystem): Pr
   try { return await filesystem.read(javaConfigurationPath); }
   catch (error) { if (!(error instanceof CoreError) || error.code !== "FILE_NOT_FOUND") throw error; }
   let legacy: { content: string; revision: FileRevision } | undefined;
-  for (const previousPath of [".project/java.json", ".vibe/java.json"]) {
-    try { legacy = await filesystem.read(previousPath); break; }
-    catch (error) { if (!(error instanceof CoreError) || error.code !== "FILE_NOT_FOUND") throw error; }
-  }
+  try { legacy = await filesystem.read(".vibe/java.json"); }
+  catch (error) { if (!(error instanceof CoreError) || error.code !== "FILE_NOT_FOUND") throw error; }
   if (!legacy) return undefined;
   await ensureJavaConfigurationDirectory(filesystem);
   try { await filesystem.write(javaConfigurationPath, legacy.content, undefined, false, true); }

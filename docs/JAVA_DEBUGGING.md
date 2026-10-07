@@ -50,8 +50,8 @@ selector or in the Java panel. You can also find it in the command palette.
 The editor has a form and a JSON tab with an **Insert template** action. Saving
 writes `.settings/java.json` in the remote workspace. Existing workspace settings
 are used until you save this file; subsequent runs read the JSON file directly.
-When `.settings/java.json` is absent, Core copies an existing `.project/java.json`
-(or the older `.vibe/java.json`) there and keeps the original as a backup.
+When `.settings/java.json` is absent, Core copies an existing `.vibe/java.json`
+there and keeps the original as a backup.
 `.settings/java.json` takes precedence when multiple locations exist.
 You can edit it in the regular file editor too. Invalid JSON stays available for
 repair, and the configuration dialog checks the file revision before overwriting
