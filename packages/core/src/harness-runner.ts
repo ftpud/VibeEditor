@@ -690,6 +690,8 @@ export class HarnessRunner {
         if (loopOutgoing.length) prompt += `\nLoop paths return to earlier workflow blocks for another cycle. Use one only when another pass is needed: ${loopOutgoing.map((edge) => edge.label ?? blocks.find((item) => item.id === edge.to)?.label ?? edge.to).join(", ")}.`;
         if (block.routing === "ai" && outgoing.length) prompt += `\nChoose a named path when calling workflow_run_stack. Available paths: ${outgoing.map((edge) => edge.label).join(", ")}.`;
         if (block.type === "task") prompt += `\n\nThis is a visible task-orchestration block. Create implementation workspaces with task_create_and_start, inspect them with task_list and task_ai_response_tail, append instructions with task_append_prompt, and merge completed work with task_merge.`;
+        const promptLimit = run.definition?.settings?.promptLimitChars ?? 100_000;
+        if (prompt.length > promptLimit) throw new CoreError("INVALID_REQUEST", `Block '${block.label}' rendered a ${prompt.length.toLocaleString()} character prompt, exceeding its ${promptLimit.toLocaleString()} character limit`);
         state.prompt = prompt;
         this.log(state, "prompt", prompt);
         const attemptIndex = (state.attempts?.length ?? 0) + 1;
