@@ -105,6 +105,11 @@ export function HarnessPanel({ harnesses, runs, diagnostics = [], providers, age
     canvas.scrollLeft = next.scrollLeft;
     canvas.scrollTop = next.scrollTop;
   }, [draft?.blocks]);
+  const autoLayout = () => {
+    if (!draft || mode !== "edit") return;
+    setDraft({ ...draft, blocks: autoLayoutBlocks(draft.blocks, draft.edges) });
+    setSelectedEdgeId(undefined);
+  };
   const block = draft?.blocks.find((item) => item.id === selectedBlockId);
   const blockProvider = block && ["ai", "prompt", "task", "review"].includes(block.type) ? block.provider ?? defaultProvider : undefined;
   const blockModels = blockProvider ? modelsByProvider[blockProvider] ?? [] : [];
@@ -251,6 +256,7 @@ export function HarnessPanel({ harnesses, runs, diagnostics = [], providers, age
         <button aria-label="Reset workflow zoom" title="Reset zoom to 100%" onClick={() => changeZoom(1)}>{Math.round(zoom * 100)}%</button>
         <button aria-label="Zoom in" disabled={zoom >= 2} onClick={() => changeZoom(zoomRef.current * 1.2)}>+</button>
         <button aria-label="Fit workflow to canvas" title="Fit all blocks in the canvas" disabled={!draft.blocks.length} onClick={fitCanvasToBlocks}>Fit</button>
+        {mode === "edit" && <button aria-label="Automatically lay out workflow" title="Arrange blocks by workflow connections" disabled={draft.blocks.length < 2} onClick={autoLayout}>Layout</button>}
         <small>Pinch or Shift+scroll to zoom</small>
       </div>
       <div ref={canvasRef} aria-label="Workflow canvas" className={`harness-canvas ${mode}`} onClick={() => setSelectedEdgeId(undefined)} onPointerMove={pointerMove} onPointerUp={() => { drag.current = undefined; }} onPointerCancel={() => { drag.current = undefined; }}>
@@ -399,6 +405,43 @@ export function fitCanvasViewport(blocks: HarnessBlock[], viewportWidth: number,
     scrollLeft: Math.max(0, (left + width / 2) * zoom - viewportWidth / 2),
     scrollTop: Math.max(0, (top + height / 2) * zoom - viewportHeight / 2),
   };
+}
+
+/** Arrange executable connections from left to right while retaining a stable order for cycles and disconnected blocks. */
+export function autoLayoutBlocks(blocks: HarnessBlock[], edges: HarnessDefinition["edges"]): HarnessBlock[] {
+  const order = new Map(blocks.map((block, index) => [block.id, index]));
+  const blockIds = new Set(order.keys());
+  // Tool and loop links do not establish a downstream execution rank.
+  const layoutEdges = edges.filter((edge) => !edge.loop && edge.type !== "use" && blockIds.has(edge.from) && blockIds.has(edge.to) && edge.from !== edge.to);
+  const incoming = new Map(blocks.map((block) => [block.id, 0]));
+  const outgoing = new Map(blocks.map((block) => [block.id, [] as string[]]));
+  for (const edge of layoutEdges) {
+    incoming.set(edge.to, (incoming.get(edge.to) ?? 0) + 1);
+    outgoing.get(edge.from)?.push(edge.to);
+  }
+  const rank = new Map(blocks.map((block) => [block.id, 0]));
+  const ready = blocks.filter((block) => incoming.get(block.id) === 0).map((block) => block.id);
+  for (let cursor = 0; cursor < ready.length; cursor += 1) {
+    const id = ready[cursor]!;
+    for (const target of outgoing.get(id) ?? []) {
+      rank.set(target, Math.max(rank.get(target) ?? 0, (rank.get(id) ?? 0) + 1));
+      const remaining = (incoming.get(target) ?? 1) - 1;
+      incoming.set(target, remaining);
+      if (remaining === 0) ready.push(target);
+    }
+  }
+  const columns = new Map<number, HarnessBlock[]>();
+  for (const block of blocks) {
+    const column = rank.get(block.id) ?? 0;
+    const items = columns.get(column) ?? [];
+    items.push(block);
+    columns.set(column, items);
+  }
+  return blocks.map((block) => {
+    const column = rank.get(block.id) ?? 0;
+    const row = columns.get(column)!.sort((left, right) => (order.get(left.id) ?? 0) - (order.get(right.id) ?? 0)).findIndex((item) => item.id === block.id);
+    return { ...block, position: { x: 32 + column * 260, y: 32 + row * 160 } };
+  });
 }
 
 export function edgePath(from: HarnessBlock, to: HarnessBlock, loop = false, lane = 0): string {
