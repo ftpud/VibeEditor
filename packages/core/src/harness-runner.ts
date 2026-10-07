@@ -680,7 +680,10 @@ export class HarnessRunner {
         if (block.type === "task") prompt += `\n\nThis is a visible task-orchestration block. Create implementation workspaces with task_create_and_start, inspect them with task_list and task_ai_response_tail, append instructions with task_append_prompt, and merge completed work with task_merge.`;
         state.prompt = prompt;
         this.log(state, "prompt", prompt);
-        const attemptIndex = (state.attempts?.length ?? 0) + 1; const attemptId = crypto.randomUUID();
+        const attemptIndex = (state.attempts?.length ?? 0) + 1;
+        const maxAttempts = run.definition?.settings?.maxBlockAttempts ?? 100;
+        if (attemptIndex > maxAttempts) throw new CoreError("INVALID_REQUEST", `Block '${block.label}' reached its limit of ${maxAttempts} attempts`);
+        const attemptId = crypto.randomUUID();
         latestAttemptId = attemptId;
         const attemptOperation = await this.beginOperation(run, "block_attempt", `block-attempt:${block.id}:${attemptIndex}`, block.id, { attemptIndex, iteration: index + 1, provider: state.provider }, attemptId);
         const attempt: HarnessBlockAttempt = { id: attemptId, index: attemptIndex, status: "running", startedAt: new Date().toISOString(), operationId: attemptOperation.id };
