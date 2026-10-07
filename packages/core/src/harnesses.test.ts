@@ -50,6 +50,17 @@ describe("HarnessStore", () => {
     await expect(store.delete("missing")).rejects.toThrow("does not exist");
   });
 
+  it("redacts secret-like values before persisting workflow definitions and runs", async () => {
+    const state = await mkdtemp(path.join(os.tmpdir(), "workflow-redaction-")); const store = new HarnessStore("/workspace", state); const created = await store.create("Flow");
+    const definition = await store.update({ ...created, blocks: [{ id: "worker", type: "prompt", label: "Worker", prompt: "Use api_key=super-secret-value and sk_abcdefghijklmnop", position: { x: 0, y: 0 } }], edges: [] });
+    await store.saveRun({ id: "run", harnessId: definition.id, harnessVersion: definition.version, input: "Authorization: bearer-secret", status: "succeeded", createdAt: "now", blocks: [{ blockId: "worker", status: "succeeded", prompt: "token=provider-secret", output: "password: output-secret", log: [{ timestamp: "now", kind: "response", message: "secret=log-secret" }] }] });
+    expect((await store.read(definition.id)).blocks[0]?.prompt).toContain("[REDACTED]");
+    const run = (await store.runs())[0]!;
+    expect(JSON.stringify(run)).not.toContain("secret-value");
+    expect(JSON.stringify(run)).not.toContain("output-secret");
+    expect(JSON.stringify(run)).toContain("[REDACTED]");
+  });
+
   it("serializes concurrent creates without losing definitions", async () => {
     const state = await mkdtemp(path.join(os.tmpdir(), "remote-ide-harness-state-"));
     const store = new HarnessStore("/workspace", state); const secondInstance = new HarnessStore("/workspace", state);
