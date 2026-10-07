@@ -485,6 +485,20 @@ describe("HarnessPanel", () => {
     expect((await screen.findByLabelText("Block waiting status")).textContent).toContain("Waiting for every incoming synchronous connection to finish.");
   });
 
+  it("shows the selected block's persisted attempt history", async () => {
+    const harness: HarnessDefinition = { id: "harness-1", name: "Flow", version: 1, createdAt: "now", updatedAt: "now", blocks: [{ id: "a", type: "prompt", label: "Review", prompt: "{{input}}", position: { x: 20, y: 20 } }], edges: [] };
+    const runs: HarnessRun[] = [{ id: "run-1", harnessId: harness.id, harnessVersion: 1, input: "task", status: "succeeded", createdAt: "now", blocks: [{ blockId: "a", status: "succeeded", attempts: [{ id: "first", index: 1, status: "failed", startedAt: "2026-09-18T00:00:00Z", completedAt: "2026-09-18T00:00:01Z", operationId: "first-operation", error: "Timed out" }, { id: "second", index: 2, status: "succeeded", startedAt: "2026-09-18T00:00:02Z", completedAt: "2026-09-18T00:00:03Z", operationId: "second-operation" }] }] }];
+    render(<HarnessPanel harnesses={[harness]} runs={runs} providers={[]} agents={[]} onCreate={vi.fn()} onSave={vi.fn()} onDelete={vi.fn()} onRun={vi.fn()} onCancelRun={vi.fn()} onError={vi.fn()} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "View" }));
+    fireEvent.click(await screen.findByText("Review"));
+    const details = await screen.findByLabelText("Review run details");
+    expect(details.textContent).toContain("Attempts (2)");
+    expect(details.textContent).toContain("Attempt 1 · failed");
+    expect(details.textContent).toContain("Timed out");
+    expect(details.textContent).toContain("Attempt 2 · succeeded");
+  });
+
   it("keeps the execution log collapsed until requested", async () => {
     const harness: HarnessDefinition = { id: "harness-1", name: "Flow", version: 1, createdAt: "now", updatedAt: "now", blocks: [{ id: "a", type: "prompt", label: "Review", prompt: "{{input}}", position: { x: 20, y: 20 } }], edges: [] };
     const runs = [{ id: "run-1", harnessId: harness.id, harnessVersion: 1, input: "task", status: "succeeded" as const, createdAt: "now", blocks: [{ blockId: "a", status: "succeeded" as const, output: "answer", log: [{ timestamp: "2026-09-18T00:00:00Z", kind: "lifecycle" as const, message: "Started" }] }] }];
