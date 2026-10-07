@@ -404,11 +404,13 @@ function isDataSchema(value: unknown, depth = 0): value is HarnessDataSchema {
 function BlockRunDetails({ block, run, state, tasks, onClose }: { block: HarnessBlock; run?: HarnessRun; state?: HarnessRun["blocks"][number]; tasks?: HarnessRun["children"]; onClose(): void }) {
   const totalTokens = run?.blocks.reduce((total, item) => total + (item.tokens?.total ?? 0), 0) ?? 0;
   const tokenBudget = run?.definition?.settings?.tokenBudget;
+  const waitingMessage = state && waitingStatus(block, state);
   return <section className="harness-run-details" aria-label={`${block.label} run details`}>
     <header><div><strong>{block.label}</strong><span className={`harness-run-state ${state?.status ?? "idle"}`}>{state?.status ?? "not run"}</span></div><button title="Close run details" onClick={onClose}>×</button></header>
     <div className="harness-run-details-body">{!state ? <p className="harness-detail-empty">This block has not run yet.</p> : <>
       {run && <p className={`harness-detail-empty${tokenBudget !== undefined && totalTokens > tokenBudget ? " error" : ""}`}>Run {run.id} · definition v{run.harnessVersion}{run.startedAt ? ` · started ${new Date(run.startedAt).toLocaleString()}` : ""}{run.completedAt && run.startedAt ? ` · ${Math.max(0, Date.parse(run.completedAt) - Date.parse(run.startedAt)) / 1000}s` : ""}{totalTokens ? ` · ${totalTokens.toLocaleString()} tokens` : ""}{tokenBudget !== undefined ? ` / ${tokenBudget.toLocaleString()} budget` : ""}</p>}
       {tasks?.length ? <section className="harness-execution-log"><strong>Owned implementation tasks</strong>{tasks.map((child) => <LogSection key={`${child.provider}:${child.taskId}`} title={`${child.taskId} · ${child.provider}`} value={`Recovery attempts: ${child.recoveryAttempts}/3${child.failureReason ? `\nFailure: ${child.failureReason.replaceAll("_", " ")}` : ""}${child.retryAt ? `\nRetry after: ${new Date(child.retryAt).toLocaleString()}` : ""}${child.recoveryError ? `\nLast recovery error: ${child.recoveryError}` : ""}`} error={Boolean(child.recoveryError)} />)}</section> : null}
+      {waitingMessage && <p className="harness-detail-empty" aria-label="Block waiting status">{waitingMessage}</p>}
       {block.watchdog && <p className="harness-detail-empty">Core-managed watchdog · no model calls{state.waitingUntil ? ` · Next check: ${new Date(state.waitingUntil).toLocaleString()}` : ""}</p>}
       {(state.failureReason || state.recoveryAttempts) && <p className="harness-detail-empty">{state.failureReason ? `Failure: ${state.failureReason.replaceAll("_", " ")} · ` : ""}Automatic recovery attempts: {state.recoveryAttempts ?? 0}/3{state.retryAt ? ` · Retry after: ${new Date(state.retryAt).toLocaleString()}` : ""}</p>}
       <div className="harness-detail-meta"><span>Provider: {state.provider ?? block.provider ?? "default"}</span>{state.tokens && <span>Tokens: {state.tokens.total.toLocaleString()}</span>}{state.workspace && <span>Persistent session: active</span>}{state.selectedRoute && <span>Route: {state.selectedRoute}</span>}{state.startedAt && <span>Started: {new Date(state.startedAt).toLocaleString()}</span>}</div>
@@ -418,6 +420,16 @@ function BlockRunDetails({ block, run, state, tasks, onClose }: { block: Harness
       {state.iterations?.length ? <div className="harness-iteration-list"><strong>Stack items ({state.iterations.length}/{state.plannedRuns ?? state.iterations.length})</strong>{state.iterations.map((iteration) => <details key={iteration.index} open={iteration.index === state.iterations!.length}><summary><span>Item {iteration.index}</span><span className={`harness-run-state ${iteration.status}`}>{iteration.status}</span></summary>{iteration.prompt && <LogSection title="Prompt" value={iteration.prompt} />}{iteration.output && <LogSection title="Answer" value={iteration.output} />}{iteration.error && <LogSection title="Error" value={iteration.error} error />}</details>)}</div> : <>{state.prompt && <LogSection title="Prompt" value={state.prompt} />}{state.output && <LogSection title="Answer" value={state.output} />}{state.error && <LogSection title="Error" value={state.error} error />}</>}
     </>}</div>
   </section>;
+}
+
+function waitingStatus(block: HarnessBlock, state: HarnessRun["blocks"][number]): string | undefined {
+  if (state.status === "queued") return "Queued to start when scheduler capacity is available.";
+  if (state.status === "waiting") return block.join === "any" ? "Waiting for any incoming synchronous connection to finish." : "Waiting for every incoming synchronous connection to finish.";
+  if (state.status === "awaiting_permission") return "Waiting for a permission decision. Next action: approve or reject the request.";
+  if (state.status === "awaiting_user_input") return state.question ? `Waiting for your answer: ${state.question}` : "Waiting for your answer before the block can resume.";
+  if (state.status === "waiting_timer") return state.waitingUntil ? `Waiting for a timer until ${new Date(state.waitingUntil).toLocaleString()}. Next action: resume when it fires.` : "Waiting for a timer to fire.";
+  if (state.status === "retry_scheduled") return state.retryAt ? `Waiting to retry at ${new Date(state.retryAt).toLocaleString()}. Next action: retry this attempt.` : "Waiting to retry this attempt.";
+  return undefined;
 }
 
 function WorkflowTimeline({ run, blocks }: { run: HarnessRun; blocks: HarnessBlock[] }) {
