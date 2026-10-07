@@ -654,6 +654,20 @@ describe("HarnessPanel", () => {
     expect(comparison.textContent).toContain("old: failed · 100 tokens");
   });
 
+  it("confirms deletion of a completed selected run and disables it for active runs", async () => {
+    const harness: HarnessDefinition = { id: "harness-1", name: "Flow", version: 1, createdAt: "now", updatedAt: "now", blocks: [], edges: [] };
+    const completed: HarnessRun = { id: "completed", harnessId: harness.id, harnessVersion: 1, input: "work", status: "succeeded", createdAt: "2026-01-01T00:00:00Z", blocks: [] };
+    const active: HarnessRun = { id: "active", harnessId: harness.id, harnessVersion: 1, input: "work", status: "running", createdAt: "2026-01-02T00:00:00Z", blocks: [] };
+    const onDeleteRun = vi.fn().mockResolvedValue(undefined); const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    render(<HarnessPanel harnesses={[harness]} runs={[completed, active]} providers={[]} agents={[]} onCreate={vi.fn()} onSave={vi.fn()} onDelete={vi.fn()} onRun={vi.fn()} onCancelRun={vi.fn()} onDeleteRun={onDeleteRun} onError={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: "View" }));
+    expect((await screen.findByRole("button", { name: "Delete selected workflow run" }) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.change(screen.getByRole("combobox", { name: "Selected workflow run" }), { target: { value: "completed" } });
+    fireEvent.click(screen.getByRole("button", { name: "Delete selected workflow run" }));
+    await waitFor(() => expect(onDeleteRun).toHaveBeenCalledWith("completed"));
+    expect(confirm).toHaveBeenCalled(); confirm.mockRestore();
+  });
+
   it("shows and resolves a workflow-owned permission request", async () => {
     const harness: HarnessDefinition = { id: "harness-1", name: "Flow", version: 1, createdAt: "now", updatedAt: "now", blocks: [{ id: "a", type: "prompt", label: "Deploy", prompt: "{{input}}", position: { x: 20, y: 20 } }], edges: [] };
     const permission = { id: "permission-1", title: "Run deployment", toolCallId: "tool-1", options: [{ optionId: "yes", name: "Allow once", kind: "allow_once" as const }] };
