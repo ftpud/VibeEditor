@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useId, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import { useCallback, useEffect, useLayoutEffect, useId, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from "react";
 import { Play, Plus, Save, Square, Trash2, X } from "lucide-react";
 import type { AgentFile, AiModel, AiProvider, AiProviderDescriptor, HarnessBlock, HarnessDataSchema, HarnessDefinition, HarnessRun, HarnessLogEntry, HarnessStateDiagnostic, HarnessValidationIssue } from "@remote-ide/protocol";
 import { useWorkflowTraces } from "./workflow-tracing";
@@ -51,6 +51,11 @@ export function HarnessPanel({ harnesses, runs, diagnostics = [], providers, age
   const [zoom, setZoom] = useState(1);
   const zoomRef = useRef(1);
   const pendingScroll = useRef<{ left: number; top: number }>();
+  const [canvasViewport, setCanvasViewport] = useState({ left: 0, top: 0, width: 0, height: 0 });
+  const updateCanvasViewport = useCallback(() => {
+    const canvas = canvasRef.current;
+    if (canvas) setCanvasViewport({ left: canvas.scrollLeft, top: canvas.scrollTop, width: canvas.clientWidth, height: canvas.clientHeight });
+  }, []);
   const changeZoom = useCallback((requested: number, clientX?: number, clientY?: number) => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -71,7 +76,8 @@ export function HarnessPanel({ harnesses, runs, diagnostics = [], providers, age
       canvas.scrollTop = pendingScroll.current.top;
       pendingScroll.current = undefined;
     }
-  }, [zoom]);
+    updateCanvasViewport();
+  }, [draft?.id, updateCanvasViewport, zoom]);
   const drag = useRef<{ id: string; grabX: number; grabY: number }>();
   const selected = harnesses.find((item) => item.id === selectedId);
   useEffect(() => { if (!selectedId && harnesses[0]) setSelectedId(harnesses[0].id); }, [harnesses, selectedId]);
@@ -91,6 +97,10 @@ export function HarnessPanel({ harnesses, runs, diagnostics = [], providers, age
     canvas.addEventListener("wheel", wheel, { passive: false });
     return () => canvas.removeEventListener("wheel", wheel);
   }, [Boolean(draft), changeZoom]);
+  useEffect(() => {
+    window.addEventListener("resize", updateCanvasViewport);
+    return () => window.removeEventListener("resize", updateCanvasViewport);
+  }, [updateCanvasViewport]);
   const canvasWidth = Math.max(1200, ...draft?.blocks.map((block) => block.position.x + BLOCK_WIDTH + 80) ?? []);
   const canvasHeight = Math.max(800, ...draft?.blocks.map((block) => block.position.y + BLOCK_HEIGHT + 80) ?? []);
   const fitCanvasToBlocks = useCallback(() => {
@@ -241,6 +251,19 @@ export function HarnessPanel({ harnesses, runs, diagnostics = [], providers, age
     const position = dragPosition(event.clientX, event.clientY, bounds.left + event.currentTarget.clientLeft, bounds.top + event.currentTarget.clientTop, event.currentTarget.scrollLeft, event.currentTarget.scrollTop, item.grabX, item.grabY, zoom);
     setDraft({ ...draft, blocks: draft.blocks.map((block) => block.id === item.id ? { ...block, position } : block) });
   };
+  const moveViewportFromMinimap = (event: ReactMouseEvent<HTMLButtonElement>) => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const bounds = event.currentTarget.getBoundingClientRect();
+    const x = event.detail === 0 ? bounds.width / 2 : event.clientX - bounds.left;
+    const y = event.detail === 0 ? bounds.height / 2 : event.clientY - bounds.top;
+    const next = minimapScrollPosition(x, y, bounds.width, bounds.height, canvasWidth, canvasHeight, zoom, canvas.clientWidth, canvas.clientHeight);
+    canvas.scrollLeft = next.left;
+    canvas.scrollTop = next.top;
+    updateCanvasViewport();
+  };
+  const minimap = minimapViewport(canvasWidth, canvasHeight, zoom, canvasViewport);
+  const showMinimap = (draft?.blocks.length ?? 0) > 1 && canvasViewport.width > 0 && (canvasWidth * zoom > canvasViewport.width || canvasHeight * zoom > canvasViewport.height);
 
   return <div className={`harness-panel ${mode}`}>
     {diagnostics.length > 0 && <div className="harness-connect-hint" role="alert"><strong>Workflow state recovered from backup</strong><ul>{diagnostics.map((diagnostic, index) => <li key={`${diagnostic.source}:${diagnostic.detectedAt}:${index}`}>{diagnostic.source}: {diagnostic.reason}</li>)}</ul></div>}
@@ -259,7 +282,11 @@ export function HarnessPanel({ harnesses, runs, diagnostics = [], providers, age
         {mode === "edit" && <button aria-label="Automatically lay out workflow" title="Arrange blocks by workflow connections" disabled={draft.blocks.length < 2} onClick={autoLayout}>Layout</button>}
         <small>Pinch or Shift+scroll to zoom</small>
       </div>
-      <div ref={canvasRef} aria-label="Workflow canvas" className={`harness-canvas ${mode}`} onClick={() => setSelectedEdgeId(undefined)} onPointerMove={pointerMove} onPointerUp={() => { drag.current = undefined; }} onPointerCancel={() => { drag.current = undefined; }}>
+      <div ref={canvasRef} aria-label="Workflow canvas" className={`harness-canvas ${mode}`} onScroll={updateCanvasViewport} onClick={() => setSelectedEdgeId(undefined)} onPointerMove={pointerMove} onPointerUp={() => { drag.current = undefined; }} onPointerCancel={() => { drag.current = undefined; }}>
+        {showMinimap && <button className="harness-minimap" aria-label="Workflow minimap" title="Click to move the workflow viewport" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); moveViewportFromMinimap(event); }}>
+          {draft.blocks.map((block) => <span key={block.id} className="harness-minimap-block" style={{ left: `${block.position.x / canvasWidth * 100}%`, top: `${block.position.y / canvasHeight * 100}%`, width: `${BLOCK_WIDTH / canvasWidth * 100}%`, height: `${BLOCK_HEIGHT / canvasHeight * 100}%` }} />)}
+          <span className="harness-minimap-viewport" style={{ left: `${minimap.left}%`, top: `${minimap.top}%`, width: `${minimap.width}%`, height: `${minimap.height}%` }} />
+        </button>}
         <div className="harness-canvas-extent" style={{ width: canvasWidth * zoom, height: canvasHeight * zoom }}>
         <div className="harness-canvas-content" style={{ width: canvasWidth, height: canvasHeight, transform: `scale(${zoom})` }}>
         <svg aria-label="Workflow connections" style={{ width: canvasWidth, height: canvasHeight }}><defs><marker id={arrowMarkerId} markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto" markerUnits="strokeWidth"><path d="M 0 0 L 8 4 L 0 8 z" /></marker></defs>{draft.edges.map((edge) => { const from = blockById.get(edge.from); const to = blockById.get(edge.to); if (!from || !to) return null; const lane = draft.edges.filter((item) => item.from === edge.from && item.to === edge.to).findIndex((item) => item.id === edge.id) * 16; const labelX = (from.position.x + to.position.x) / 2 + BLOCK_WIDTH / 2; const labelY = (from.position.y + to.position.y) / 2 + BLOCK_HEIGHT / 2 - 7 + lane + (edge.loop ? 45 : 0); const title = edge.loop ? `${from.label} loops to ${to.label}` : `${from.label} then ${to.label}`; const traces = animatedTraces.filter((trace) => trace.edgeId === edge.id); const path = edgePath(from, to, edge.loop, lane); return <g key={edge.id}><path className={`harness-edge ${edge.type ?? "follow"}${edge.loop ? " loop" : ""}${selectedEdgeId === edge.id ? " selected" : ""}`} d={path} markerEnd={`url(#${arrowMarkerId})`} role={mode === "edit" ? "button" : undefined} aria-label={mode === "edit" ? `Select connection: ${title}` : undefined} tabIndex={mode === "edit" ? 0 : undefined} onClick={mode === "edit" ? (event) => { event.stopPropagation(); setSelectedEdgeId(edge.id); setSelectedBlockId(undefined); } : undefined}><title>{title}</title></path>{traces.map((trace) => <path key={trace.id} className={`harness-transfer ${edge.type ?? "follow"} ${trace.direction} ${trace.status}`} d={path} pathLength={100} style={{ animationDelay: `${trace.delayMs}ms` }} aria-label={`${trace.direction === "return" ? "Output" : "Input"}: ${trace.direction === "return" ? to.label : from.label} → ${trace.direction === "return" ? from.label : to.label}`} />)}{edge.label && <text className="harness-edge-label" x={labelX} y={labelY} textAnchor="middle">{`${edge.type ?? "follow"}${edge.type === "path" ? `: ${edge.label}` : ""}`}</text>}</g>; })}</svg>
@@ -404,6 +431,26 @@ export function fitCanvasViewport(blocks: HarnessBlock[], viewportWidth: number,
     zoom,
     scrollLeft: Math.max(0, (left + width / 2) * zoom - viewportWidth / 2),
     scrollTop: Math.max(0, (top + height / 2) * zoom - viewportHeight / 2),
+  };
+}
+
+export function minimapViewport(canvasWidth: number, canvasHeight: number, zoom: number, viewport: { left: number; top: number; width: number; height: number }): { left: number; top: number; width: number; height: number } {
+  const width = canvasWidth * zoom;
+  const height = canvasHeight * zoom;
+  return {
+    left: Math.max(0, Math.min(100, viewport.left / width * 100)),
+    top: Math.max(0, Math.min(100, viewport.top / height * 100)),
+    width: Math.max(0, Math.min(100, viewport.width / width * 100)),
+    height: Math.max(0, Math.min(100, viewport.height / height * 100)),
+  };
+}
+
+export function minimapScrollPosition(x: number, y: number, minimapWidth: number, minimapHeight: number, canvasWidth: number, canvasHeight: number, zoom: number, viewportWidth: number, viewportHeight: number): { left: number; top: number } {
+  const contentWidth = canvasWidth * zoom;
+  const contentHeight = canvasHeight * zoom;
+  return {
+    left: Math.max(0, Math.min(contentWidth - viewportWidth, x / minimapWidth * contentWidth - viewportWidth / 2)),
+    top: Math.max(0, Math.min(contentHeight - viewportHeight, y / minimapHeight * contentHeight - viewportHeight / 2)),
   };
 }
 

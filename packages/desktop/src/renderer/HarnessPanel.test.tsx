@@ -1,7 +1,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { HarnessDefinition, HarnessRun } from "@remote-ide/protocol";
-import { autoLayoutBlocks, dragPosition, edgePath, fitCanvasViewport, HarnessPanel, responsePreview } from "./HarnessPanel";
+import { autoLayoutBlocks, dragPosition, edgePath, fitCanvasViewport, HarnessPanel, minimapScrollPosition, minimapViewport, responsePreview } from "./HarnessPanel";
 
 afterEach(cleanup);
 
@@ -61,6 +61,26 @@ describe("HarnessPanel", () => {
     expect(screen.getByRole("button", { name: "Reset workflow zoom" }).textContent).toBe(`${Math.round(fitted.zoom * 100)}%`);
     expect(canvas.scrollLeft).toBeCloseTo(fitted.scrollLeft);
     expect(canvas.scrollTop).toBeCloseTo(fitted.scrollTop);
+  });
+
+  it("shows the current canvas viewport in a minimap and moves it on click", () => {
+    const { canvas } = renderZoomHarness();
+    canvas.scrollLeft = 300; canvas.scrollTop = 200;
+    fireEvent.scroll(canvas);
+    const minimap = screen.getByRole("button", { name: "Workflow minimap" });
+    vi.spyOn(minimap, "getBoundingClientRect").mockReturnValue({ left: 20, top: 30, width: 150, height: 100 } as DOMRect);
+    const viewport = minimapViewport(1200, 800, 1, { left: 300, top: 200, width: 600, height: 400 });
+    const indicator = minimap.querySelector<HTMLElement>(".harness-minimap-viewport")!;
+    expect(indicator.style.left).toBe(`${viewport.left}%`);
+    expect(indicator.style.width).toBe(`${viewport.width}%`);
+    fireEvent.click(minimap, { clientX: 95, clientY: 80, detail: 1 });
+    expect(canvas.scrollLeft).toBeCloseTo(300);
+    expect(canvas.scrollTop).toBeCloseTo(200);
+  });
+
+  it("clamps minimap navigation to the canvas edges", () => {
+    expect(minimapScrollPosition(0, 0, 150, 100, 1200, 800, 1, 600, 400)).toEqual({ left: 0, top: 0 });
+    expect(minimapScrollPosition(150, 100, 150, 100, 1200, 800, 1, 600, 400)).toEqual({ left: 600, top: 400 });
   });
 
   it("arranges connected blocks into stable workflow columns", () => {
