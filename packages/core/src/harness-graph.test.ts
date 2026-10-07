@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { HarnessDefinition } from "@remote-ide/protocol";
+import type { HarnessBlock, HarnessDefinition } from "@remote-ide/protocol";
 import { parseHarnessData, renderHarnessPrompt, validateHarness } from "./harness-graph.js";
 
 const harness = (edges: HarnessDefinition["edges"]): HarnessDefinition => ({ id: "h", name: "Flow", version: 1, createdAt: "now", updatedAt: "now", blocks: [
@@ -8,6 +8,19 @@ const harness = (edges: HarnessDefinition["edges"]): HarnessDefinition => ({ id:
 ], edges });
 
 describe("harness graph", () => {
+  it("validates Run App action settings without requiring AI instructions", () => {
+    const app: HarnessBlock = { id: "app", type: "run_app", label: "App", prompt: "", position: { x: 0, y: 0 }, command: "npm run dev", app: { action: "start", name: "server" } };
+    const validate = (changes: Partial<HarnessBlock>) => validateHarness({ ...harness([]), blocks: [{ ...app, ...changes }] });
+    expect(validate({}).valid).toBe(true);
+    expect(validate({ command: "" }).issues).toMatchObject([{ code: "invalid-gate" }]);
+    expect(validate({ app: undefined }).valid).toBe(false);
+    expect(validate({ app: { action: "status", name: " " } }).valid).toBe(false);
+    expect(validate({ command: "", app: { action: "status", name: "server" } }).valid).toBe(true);
+    expect(validate({ app: { action: "tail", name: "server", lines: 0 } }).valid).toBe(false);
+    expect(validate({ app: { action: "tail", name: "server", lines: 2.5 } }).valid).toBe(false);
+    expect(validate({ app: { action: "tail", name: "server", lines: 10000 } }).valid).toBe(true);
+  });
+
   it("requires explicit, valid Core gate configuration", () => {
     const invalid: HarnessDefinition = { ...harness([]), blocks: [
       { id: "review", type: "review", label: "Review", prompt: "Review", position: { x: 0, y: 0 } },

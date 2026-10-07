@@ -12,6 +12,25 @@ function renderEditor(ui: Parameters<typeof render>[0]) {
 }
 
 describe("HarnessPanel", () => {
+  it("configures and saves a long-lived app block", async () => {
+    const harness: HarnessDefinition = { id: "flow", name: "Apps", version: 1, createdAt: "now", updatedAt: "now", blocks: [], edges: [] };
+    const onSave = vi.fn(async (definition) => definition);
+    renderEditor(<HarnessPanel harnesses={[harness]} runs={[]} providers={[]} agents={[]} onCreate={vi.fn()} onSave={onSave} onDelete={vi.fn()} onRun={vi.fn()} onCancelRun={vi.fn()} onError={vi.fn()} />);
+    fireEvent.change(screen.getByLabelText("Add block type"), { target: { value: "run_app" } });
+    fireEvent.change(screen.getByLabelText("Run App name"), { target: { value: "dev-server" } });
+    fireEvent.change(screen.getByLabelText("Run App script"), { target: { value: "npm run dev" } });
+    expect(screen.queryByLabelText("AI model")).toBeNull();
+    fireEvent.change(screen.getByLabelText("Run App action"), { target: { value: "status" } });
+    expect(screen.queryByLabelText("Run App script")).toBeNull();
+    fireEvent.change(screen.getByLabelText("Run App action"), { target: { value: "kill" } });
+    expect(screen.queryByLabelText("Run App tail lines")).toBeNull();
+    fireEvent.change(screen.getByLabelText("Run App action"), { target: { value: "tail" } });
+    fireEvent.change(screen.getByLabelText("Run App tail lines"), { target: { value: "25" } });
+    fireEvent.click(screen.getByTitle("Save workflow"));
+    await waitFor(() => expect(onSave).toHaveBeenCalled());
+    expect(onSave.mock.calls[0]?.[0].blocks[0]).toMatchObject({ type: "run_app", command: "npm run dev", app: { name: "dev-server", action: "tail", lines: 25 } });
+  });
+
   it("retries a selected failed block from its frozen snapshot", async () => {
     const harness: HarnessDefinition = { id: "flow", name: "Flow", version: 1, createdAt: "now", updatedAt: "now", blocks: [{ id: "failed", type: "prompt", label: "Failed", prompt: "{{input}}", position: { x: 20, y: 20 } }], edges: [] };
     const run: HarnessRun = { id: "old-run", harnessId: "flow", harnessVersion: 1, definition: harness, input: "retry this", status: "failed", createdAt: "now", blocks: [{ blockId: "failed", status: "failed", error: "provider failed" }] };

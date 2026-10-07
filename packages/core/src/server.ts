@@ -24,6 +24,7 @@ import { SkillsStore } from "./skills.js";
 import { AgentsStore } from "./agents.js";
 import { HarnessStore } from "./harnesses.js";
 import { executeFlowScript } from "./workflow-script.js";
+import { WorkflowAppService } from "./workflow-app.js";
 import { HarnessRunner } from "./harness-runner.js";
 import { validateHarness } from "./harness-graph.js";
 import { RunConfigService } from "./run-configs.js";
@@ -192,6 +193,7 @@ export async function createServer(host: string, port: number, workspacePath: st
   const removingRoots = new Set<string>();
   const terminalSubscriptions = new Map<WebSocket, { rootId: string; workspace: string; terminalIds: Set<string> }>();
   const terminalOwners = new Map<string, { socket: WebSocket; rootId: string; workspace: string }>();
+  const workflowApps = new WorkflowAppService();
   let runConfigs: RunConfigService;
   const terminalHost = new TerminalSessionHost((event) => {
     runConfigs?.onTerminalEvent(event);
@@ -265,6 +267,7 @@ export async function createServer(host: string, port: number, workspacePath: st
   const recoveryRunner = harnessRunner(roots.primary().id);
   const recoveryDispatch = async (block: HarnessBlock, prompt: string, runtime: Parameters<Parameters<HarnessRunner["start"]>[2]>[2]) => providerOperation(async () => {
     if (block.type === "script") return executeFlowScript(block, prompt, rootWorkspace, runtime.assertActive);
+    if (block.type === "run_app") return workflowApps.execute(block, prompt, rootWorkspace, runtime.assertActive);
     const provider = acp.get(block.provider ?? "codex");
     await assertWorkflowModelAvailable(provider, block.model, block.reasoning);
     if (block.watchdog) return recoveryRunner.watch(runtime.runId, runtime.blockId, () => provider.usage());
@@ -305,7 +308,7 @@ export async function createServer(host: string, port: number, workspacePath: st
       const previous = schedule.lastWorkflowRunId ? (await context.harnesses.runs()).find((item) => item.id === schedule.lastWorkflowRunId) : undefined;
       if (previous && ["queued", "running", "waiting", "awaiting_permission", "awaiting_user_input", "waiting_timer", "retry_scheduled"].includes(previous.status)) throw new CoreError("INVALID_REQUEST", "Previous scheduled workflow is still active; schedule paused to prevent overlap");
       if (!active()) return {};
-      const run = await startWorkflow({ harnessId: action.harnessId, input: action.input, provider: action.provider, startBlockId: action.startBlockId }, { acp, tasks: context.tasks, agents: context.agents, harnessRunner: harnessRunner(root.id), aiTimers, rootWorkspace: root.path, bridgeWorkspace: rootWorkspace, workspacePath: target });
+      const run = await startWorkflow({ harnessId: action.harnessId, input: action.input, provider: action.provider, startBlockId: action.startBlockId }, { acp, tasks: context.tasks, agents: context.agents, harnessRunner: harnessRunner(root.id), workflowApps, aiTimers, rootWorkspace: root.path, bridgeWorkspace: rootWorkspace, workspacePath: target });
       return { workflowRunId: run.id };
     }
     const targetKey = `${target}\0${provider.descriptor.id}`;
@@ -384,7 +387,7 @@ export async function createServer(host: string, port: number, workspacePath: st
     .on("add", broadcastChange).on("change", broadcastChange).on("unlink", broadcastChange).on("addDir", broadcastChange).on("unlinkDir", broadcastChange)
     .on("raw", (eventName) => { if (String(eventName).includes("OVERFLOW")) rootBatcher.degrade("Filesystem watcher overflow; synchronizing affected files."); })
     .on("error", (error) => { console.error(`[core] watcher error: ${String(error)}`); rootBatcher.degrade(`Filesystem watcher degraded: ${String(error)}`); });
-  server.on("close", () => { schedules.close(); rootBatcher.dispose(); terminalHost.closeAll(); void watcher.close(); void gitIndexWatcher.close(); void runConfigWatcher.close(); void appEventWatcher.close(); void appCommandWatcher.close(); });
+  server.on("close", () => { schedules.close(); rootBatcher.dispose(); workflowApps.closeAll(); terminalHost.closeAll(); void watcher.close(); void gitIndexWatcher.close(); void runConfigWatcher.close(); void appEventWatcher.close(); void appCommandWatcher.close(); });
   server.on("listening", () => console.log(`[core] listening on ws://${host}:${port}`));
   server.on("connection", (socket, request) => {
     if (remoteTransfers.accepts(request.url)) { void remoteTransfers.attach(socket, request.url); return; }
@@ -515,6 +518,7 @@ export async function createServer(host: string, port: number, workspacePath: st
           assertRootRemovalAllowed(liveRootSelections, parsed.payload.rootId);
           const target = roots.get(parsed.payload.rootId);
           const targetContext = contextFor(target.id);
+          if (workflowApps.hasWorkspace(target.path)) throw new CoreError("INVALID_REQUEST", "Kill running workflow apps before removing this root");
           const [targetTasks, targetOptions] = await Promise.all([targetContext.tasks.list(), new WorkspaceStateStore(target.path, process.env.REMOTE_IDE_STATE_DIR).load()]);
           const blocker = rootRemovalBlocker({ tasks: targetTasks.tasks.length, openFiles: targetOptions.openFiles.length, terminals: terminalHost.hasWorkspace(target.path), transfers: remoteTransfers.hasWorkspace(target.path) });
           if (blocker) throw new CoreError("INVALID_REQUEST", blocker);
@@ -590,7 +594,7 @@ export async function createServer(host: string, port: number, workspacePath: st
         } finally { release?.(); }
         const result = parsed.type === "workspace.selectRoot"
           ? rootSelectionResult!
-          : await handleRequest(services, rootContext.tasks, acp, rootContext.usefulFiles, rootContext.agents, rootContext.harnesses, harnessRunner(selectedRoot.id), terminalHost, runConfigs, aiTimers, schedules, remoteTransfers, selectedRoot.path, parsed, rootWorkspace);
+          : await handleRequest(services, rootContext.tasks, acp, rootContext.usefulFiles, rootContext.agents, rootContext.harnesses, harnessRunner(selectedRoot.id), workflowApps, terminalHost, runConfigs, aiTimers, schedules, remoteTransfers, selectedRoot.path, parsed, rootWorkspace);
         if (["tasks.create", "tasks.createFromPrompt", "tasks.status", "tasks.rename", "tasks.archive", "tasks.delete"].includes(parsed.type)) { const encoded = JSON.stringify({ type: "tasks.changed", payload: { rootId: selectedRoot.id } } satisfies ServerEvent); for (const session of activeSessions) sendWebSocketData(session, encoded); }
         const terminalSubscription = terminalSubscriptions.get(socket);
         if (terminalSubscription && parsed.type === "terminal.create") { const terminalId = (result as { terminalId: string }).terminalId; terminalSubscription.terminalIds.add(terminalId); terminalOwners.set(terminalId, { socket, rootId: parsed.rootId, workspace: services.workspacePath }); }
@@ -655,7 +659,7 @@ export function rootRemovalBlocker(state: { tasks: number; openFiles: number; te
   return undefined;
 }
 
-async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStore, acp: AcpRegistry, usefulFiles: UsefulFilesStore, agents: AgentsStore, harnesses: HarnessStore, harnessRunner: HarnessRunner, terminalHost: TerminalSessionHost, runConfigs: RunConfigService, aiTimers: AiTimerService, schedules: ScheduleService, remoteTransfers: RemoteTransferService, rootWorkspace: string, request: Request, bridgeWorkspace = rootWorkspace): Promise<unknown> {
+async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStore, acp: AcpRegistry, usefulFiles: UsefulFilesStore, agents: AgentsStore, harnesses: HarnessStore, harnessRunner: HarnessRunner, workflowApps: WorkflowAppService, terminalHost: TerminalSessionHost, runConfigs: RunConfigService, aiTimers: AiTimerService, schedules: ScheduleService, remoteTransfers: RemoteTransferService, rootWorkspace: string, request: Request, bridgeWorkspace = rootWorkspace): Promise<unknown> {
   const { filesystem, search, git, java, jdt, workspaceState, workspacePath, checkpoints } = services;
   if (request.type !== "workspace.open") filesystem.getWorkspace();
   if (request.type === "filesystem.remoteTransferBegin") return remoteTransfers.begin(workspacePath, request.payload);
@@ -844,7 +848,7 @@ async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStor
     case "harnesses.validate": return validateHarness(request.payload.harness);
     case "harnesses.runs": return { runs: await harnesses.runs(request.payload.harnessId) };
     case "harnesses.runs.delete": await harnesses.deleteRun(request.payload.runId); return {};
-    case "harnesses.run": return { run: await startWorkflow(request.payload, { acp, tasks, agents, harnessRunner, aiTimers, rootWorkspace, bridgeWorkspace, workspacePath }) };
+    case "harnesses.run": return { run: await startWorkflow(request.payload, { acp, tasks, agents, harnessRunner, workflowApps, aiTimers, rootWorkspace, bridgeWorkspace, workspacePath }) };
     case "harnesses.append": return { run: await harnessRunner.appendInput(request.payload.runId, request.payload.input) };
     case "harnesses.permission.resolve": return { run: await harnessRunner.resolvePermission(request.payload.runId, request.payload.blockId, request.payload.sessionId, request.payload.pauseId, request.payload.requestId, request.payload.optionId, async (provider, target, requestId, optionId) => acp.get(provider).resolvePermission(target, requestId, optionId)) };
     case "harnesses.answer": return { run: await harnessRunner.answerQuestion(request.payload.runId, request.payload.blockId, request.payload.sessionId, request.payload.pauseId, request.payload.input, async (provider, target, input) => acp.get(provider).steer(target, input)) };
@@ -1102,12 +1106,13 @@ async function resolveWorkflowCommit(workspace: string, reference: string): Prom
 function boundedWorkflowOutput(value: string, limit = 200_000): string { return value.length <= limit ? value : `${value.slice(0, limit)}\n… output truncated by Core`; }
 
 async function startWorkflow(input: ProtocolOperations["harnesses.run"]["payload"], context: {
-  acp: AcpRegistry; tasks: WorkspaceTaskStore; agents: AgentsStore; harnessRunner: HarnessRunner;
+  acp: AcpRegistry; tasks: WorkspaceTaskStore; agents: AgentsStore; harnessRunner: HarnessRunner; workflowApps: WorkflowAppService;
   aiTimers: AiTimerService; rootWorkspace: string; bridgeWorkspace: string; workspacePath: string;
 }): Promise<import("@remote-ide/protocol").HarnessRun> {
-  const { acp, tasks, agents, harnessRunner, aiTimers, rootWorkspace, bridgeWorkspace, workspacePath } = context;
+  const { acp, tasks, agents, harnessRunner, workflowApps, aiTimers, rootWorkspace, bridgeWorkspace, workspacePath } = context;
   return harnessRunner.start(input.harnessId, input.input, async (block, prompt, runtime) => providerOperation(async () => {
       if (block.type === "script") return executeFlowScript(block, prompt, workspacePath, runtime.assertActive);
+      if (block.type === "run_app") return workflowApps.execute(block, prompt, workspacePath, runtime.assertActive);
       if (block.type === "verification") return runWorkflowVerification(block, workspacePath, harnessRunner, runtime);
       if (block.type === "review") {
         const evidence = await collectWorkflowReviewEvidence(block, workspacePath, harnessRunner, runtime);

@@ -575,7 +575,7 @@ export class HarnessRunner {
     const state = execution.run.blocks.find((item) => item.blockId === blockId);
     if (state?.status !== "running" || execution.blocks.find((block) => block.id === blockId)?.type !== "ai") throw new Error("Only an active AI Agent can use flow tools");
     const edges = execution.edges.filter((edge) => edge.from === blockId);
-    if (name === "workflow_connections") return edges.map((edge) => ({ blockId: edge.to, name: execution.blocks.find((block) => block.id === edge.to)?.label, blockType: execution.blocks.find((block) => block.id === edge.to)?.type, description: execution.blocks.find((block) => block.id === edge.to)?.prompt, seconds: execution.blocks.find((block) => block.id === edge.to)?.seconds, type: edge.type ?? "follow", path: edge.label }));
+    if (name === "workflow_connections") return edges.map((edge) => ({ blockId: edge.to, name: execution.blocks.find((block) => block.id === edge.to)?.label, blockType: execution.blocks.find((block) => block.id === edge.to)?.type, description: execution.blocks.find((block) => block.id === edge.to)?.prompt, seconds: execution.blocks.find((block) => block.id === edge.to)?.seconds, app: execution.blocks.find((block) => block.id === edge.to)?.app, type: edge.type ?? "follow", path: edge.label }));
     if (name === "workflow_choose_path") {
       const edge = edges.find((edge) => edge.type === "path" && edge.label === args.path);
       if (!edge) throw new Error("Choose a connected path by its label");
@@ -625,7 +625,7 @@ export class HarnessRunner {
         const prompt = renderHarnessPrompt(block.prompt, input, execution.outputs);
         if (block.type !== "ai") { state.prompt = prompt; state.structuredInput = parseHarnessData(input, block.inputSchema, `${block.label} input`); this.log(state, "prompt", input); }
         if (block.type === "ai" || ["prompt", "task", "review", "verification"].includes(block.type)) {
-          const tools = edges.filter((edge) => edge.from === id && edge.type === "use").map((edge) => ({ block_id: edge.to, name: blocks.find((item) => item.id === edge.to)?.label, type: blocks.find((item) => item.id === edge.to)?.type, description: blocks.find((item) => item.id === edge.to)?.prompt, seconds: blocks.find((item) => item.id === edge.to)?.seconds }));
+          const tools = edges.filter((edge) => edge.from === id && edge.type === "use").map((edge) => ({ block_id: edge.to, name: blocks.find((item) => item.id === edge.to)?.label, type: blocks.find((item) => item.id === edge.to)?.type, description: blocks.find((item) => item.id === edge.to)?.prompt, seconds: blocks.find((item) => item.id === edge.to)?.seconds, app: blocks.find((item) => item.id === edge.to)?.app }));
           const paths = edges.filter((edge) => edge.from === id && edge.type === "path").map((edge) => edge.label);
           const instructions = `${block.prompt}\n\nInput:\n{{input}}\n\nConnected tools: ${JSON.stringify(tools)}. Call workflow_use_block with block_id and input to use one. Timer blocks arm immediately and return without waiting, so you can continue your work. When a Timer fires, its follow connections receive the input you supplied to it. Reusing a waiting Timer replaces its countdown. Each AI block keeps its own context. Available paths: ${JSON.stringify(paths)}. ${paths.length ? "Call workflow_choose_path before finishing to choose one path." : ""}`;
           await this.executeBlock(run, { ...block, prompt: instructions }, blocks, [], execution.outputs, execution.dispatch, execution.defaultProvider, [input]);
@@ -647,7 +647,7 @@ export class HarnessRunner {
           timers.set(id, input);
           this.log(state, "lifecycle", `Timer armed for ${state.waitingUntil}`);
           return `Timer armed for ${state.waitingUntil}`;
-        } else if (block.type === "script") {
+        } else if (block.type === "script" || block.type === "run_app") {
           const session = await execution.dispatch(block, input, { runId: run.id, blockId: id, attemptId: crypto.randomUUID(), iteration: 1, started: async () => {}, activity: async () => {}, assertActive: () => this.assertActive(run.id) });
           state.tokens = session.tokens; this.assertTokenBudget(run);
           output = session.messages.filter((message) => message.role === "assistant").at(-1)?.text ?? "";

@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { AiSession, HarnessBlock, HarnessEdge } from "@remote-ide/protocol";
 import { HarnessRunner } from "./harness-runner.js";
 import { HarnessStore } from "./harnesses.js";
+import { WorkflowAppService } from "./workflow-app.js";
 import { executeFlowScript } from "./workflow-script.js";
 import { validateHarness } from "./harness-graph.js";
 
@@ -22,6 +23,25 @@ async function setup(blocks: HarnessBlock[], edges: HarnessEdge[], concurrency =
 }
 
 describe("typed workflows", () => {
+  it("runs app actions as connected tools without waiting for app exit", async () => {
+    const apps = new WorkflowAppService();
+    const { runner, definition, store, finished } = await setup([
+      block("start", "start_input"),
+      block("launch", "run_app", { prompt: "", command: "exec sleep 300", app: { action: "start", name: "server" } }),
+      block("status", "run_app", { prompt: "", app: { action: "status", name: "server" } }),
+      block("stop", "run_app", { prompt: "", app: { action: "kill", name: "server" } }),
+    ], [edge("start", "launch"), edge("launch", "status"), edge("status", "stop")]);
+    try {
+      expect(validateHarness(definition).valid).toBe(true);
+      expect((await store.read(definition.id)).blocks[1]?.app).toEqual({ action: "start", name: "server" });
+      await runner.start(definition.id, "input", (block, input, runtime) => apps.execute(block, input, os.tmpdir(), runtime.assertActive), "missing-provider");
+      const run = await finished();
+      expect(run.status).toBe("succeeded");
+      expect(JSON.parse(run.blocks.find((block) => block.blockId === "status")!.output!)).toMatchObject({ status: "running" });
+      expect(JSON.parse(run.blocks.find((block) => block.blockId === "stop")!.output!)).toMatchObject({ status: "exited" });
+    } finally { apps.closeAll(); }
+  });
+
   it("passes each output to followers and only starts the selected entry", async () => {
     const { runner, definition, finished } = await setup([block("button", "start_button", { prompt: "Configured prompt" }), block("textStart", "start_input"), block("text", "text", { prompt: "Text: {{input}}" }), block("timer", "timer", { seconds: 0 }), block("agent", "ai")], [edge("button", "text"), edge("text", "timer"), edge("timer", "agent")]);
     const dispatch = vi.fn(async (_block, prompt) => { expect(prompt).toContain("Text: Configured prompt"); return session("result"); });
