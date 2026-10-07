@@ -3,10 +3,11 @@ import os from "node:os";
 import path from "node:path";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import type { AiProvider } from "@remote-ide/acp";
+import type { AiContinuationTimer as TimerSummary } from "@remote-ide/protocol";
 import type { AcpRegistry } from "./ai/index.js";
 import { appToolServer } from "./app-tools.js";
 
-export type AiContinuationTimer = { id: string; workspace: string; provider: AiProvider; prompt: string; dueAt: string; createdAt: string; workflowRunId?: string; workflowBlockId?: string; workflowOperationKey?: string; workflowFlow?: boolean };
+export type AiContinuationTimer = TimerSummary & { workflowOperationKey?: string };
 type TimerFile = { timers: AiContinuationTimer[] };
 
 export class AiTimerStore {
@@ -81,6 +82,7 @@ export class AiTimerStore {
 export class AiTimerService {
   private readonly handles = new Map<string, NodeJS.Timeout>();
   private readonly delivering = new Set<string>();
+  private readonly timerCancellationEpochs = new Map<string, number>();
   private readonly cancellationEpochs = new Map<string, number>();
 
   constructor(private readonly store: AiTimerStore, private readonly acp: AcpRegistry, private readonly rootWorkspace: string, private readonly onChanged: (workspace: string) => void, private readonly workflowOperation?: <T>(timer: AiContinuationTimer, effect: () => Promise<T>, reconcile: () => Promise<T | null | undefined>) => Promise<T>) {}
@@ -109,15 +111,40 @@ export class AiTimerService {
 
   next(workspace: string, provider?: AiProvider): Promise<AiContinuationTimer | undefined> { return this.store.next(workspace, provider); }
 
-  async cancelNext(workspace: string): Promise<boolean> {
-    const timer = await this.store.next(workspace);
+  list(): Promise<AiContinuationTimer[]> { return this.store.list().then((timers) => timers.sort((a, b) => a.dueAt.localeCompare(b.dueAt))); }
+
+  async cancel(id: string): Promise<boolean> {
+    const timer = (await this.store.list()).find((item) => item.id === id);
     if (!timer) return false;
-    await this.store.remove(timer.id);
-    const handle = this.handles.get(timer.id);
+    this.timerCancellationEpochs.set(id, (this.timerCancellationEpochs.get(id) ?? 0) + 1);
+    await this.store.remove(id);
+    const handle = this.handles.get(id);
     if (handle) clearTimeout(handle);
-    this.handles.delete(timer.id);
+    this.handles.delete(id);
     this.onChanged(timer.workspace);
     return true;
+  }
+
+  async fireById(id: string): Promise<boolean> {
+    const timer = (await this.store.list()).find((item) => item.id === id);
+    if (!timer) return false;
+    await this.fire(timer, true);
+    return true;
+  }
+
+  async cancelAll(): Promise<number> {
+    let cancelled = 0;
+    for (const timer of await this.list()) if (await this.cancel(timer.id)) cancelled += 1;
+    return cancelled;
+  }
+
+  async cancelProvider(workspace: string, provider: AiProvider): Promise<void> {
+    for (const timer of await this.list()) if (timer.workspace === path.resolve(workspace) && timer.provider === provider) await this.cancel(timer.id);
+  }
+
+  async cancelNext(workspace: string): Promise<boolean> {
+    const timer = await this.store.next(workspace);
+    return timer ? this.cancel(timer.id) : false;
   }
 
   async fireNext(workspace: string, provider?: AiProvider): Promise<boolean> {
@@ -157,7 +184,8 @@ export class AiTimerService {
     if (this.delivering.has(timer.id)) return { delivered: false };
     this.delivering.add(timer.id);
     const epoch = this.cancellationEpochs.get(timer.workspace) ?? 0;
-    const cancelled = () => (this.cancellationEpochs.get(timer.workspace) ?? 0) !== epoch;
+    const timerEpoch = this.timerCancellationEpochs.get(timer.id) ?? 0;
+    const cancelled = () => (this.cancellationEpochs.get(timer.workspace) ?? 0) !== epoch || (this.timerCancellationEpochs.get(timer.id) ?? 0) !== timerEpoch;
     try {
     const handle = this.handles.get(timer.id);
     if (immediately && handle) clearTimeout(handle);
