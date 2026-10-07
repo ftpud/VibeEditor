@@ -14,7 +14,7 @@ export type AiMessage = { id: string; role: "user" | "assistant" | "activity" | 
 export type AiCommand = { name: string; description: string; inputHint?: string };
 export type AiPermissionOption = { optionId: string; name: string; kind: "allow_once" | "allow_always" | "reject_once" | "reject_always" };
 export type AiPermissionRequest = { id: string; title: string; toolCallId: string; details?: string; options: AiPermissionOption[] };
-export type AiSession = { id?: string; createdAt?: string; updatedAt?: string; threadId?: string; model: string; reasoning: string; configuration?: AiConfiguration; /** One-shot model/reasoning override consumed by the next new turn. */ nextConfiguration?: AiConfiguration; availableOptions?: AiOption[]; availableCommands?: AiCommand[]; pendingPermission?: AiPermissionRequest; status: AiStatus; failure?: AiFailure; messages: AiMessage[]; contextUsed?: number; contextLimit?: number; tokens?: AiTokenUsage; steering?: boolean; agent?: { name: string; fingerprint: string }; agentPreset?: AiAgentPreset };
+export type AiSession = { id?: string; createdAt?: string; updatedAt?: string; threadId?: string; model: string; reasoning: string; configuration?: AiConfiguration; /** One-shot model/reasoning override consumed by the next new turn. */ nextConfiguration?: AiConfiguration; availableOptions?: AiOption[]; availableCommands?: AiCommand[]; pendingPermission?: AiPermissionRequest; skillIds?: string[]; /** Whether prior turns received Vibe skill instructions. */ skillContext?: boolean; status: AiStatus; failure?: AiFailure; messages: AiMessage[]; contextUsed?: number; contextLimit?: number; tokens?: AiTokenUsage; steering?: boolean; agent?: { name: string; fingerprint: string }; agentPreset?: AiAgentPreset };
 export type AiTokenUsage = { total: number; input: number; output: number; thought?: number; cachedRead?: number; cachedWrite?: number };
 /**
  * Optional catalogue metadata. Everything here is advertised by the agent (ACP
@@ -45,7 +45,7 @@ export type AiOption = { id: string; name: string; description: string; section?
 export type AiAutopilotOption = { option: AiOption; on: string | boolean; off: string | boolean };
 export type AiSettingsSection = { id: string; name: string; description?: string };
 export type AiSettingsLayout = { title: string; description: string; sections: AiSettingsSection[] };
-export type AiProviderCapabilities = { models: boolean; usage: boolean; mcp: boolean; agents: boolean; contextWindow: boolean };
+export type AiProviderCapabilities = { models: boolean; usage: boolean; mcp: boolean; agents: boolean; contextWindow: boolean; skills?: boolean };
 export type AiProviderDescriptor = { id: AiProvider; name: string; description: string; settings: AiSettingsLayout; options: AiOption[]; capabilities: AiProviderCapabilities };
 export type AiQuotaWindow = { usedPercent: number; remainingPercent: number; windowMinutes?: number; resetsAt?: string };
 export type AiAccountQuota = {
@@ -63,7 +63,7 @@ export type AiMcpServer =
 export type AiAgent = { name: string; description?: string; instructions: string; mcpServers?: string[] };
 export type AiAgentPreset = { scope: "global" | "local" | "workspace"; name: string };
 export type AiTaskSummary = { status: AiStatus; preview: string; additions: number; deletions: number; pendingPermission: boolean; waitingUntil?: string };
-export type AcpSendRequest = { prompt: string; content?: AiContentBlock[]; configuration: AiConfiguration; mcpServers?: AiMcpServer[]; agent?: AiAgent; agentPreset?: AiAgentPreset };
+export type AcpSendRequest = { prompt: string; content?: AiContentBlock[]; configuration: AiConfiguration; mcpServers?: AiMcpServer[]; agent?: AiAgent; agentPreset?: AiAgentPreset; skillIds?: string[] };
 
 /** Shared provider contract. Each provider owns its settings UI metadata. */
 export abstract class AcpProvider {
@@ -73,6 +73,7 @@ export abstract class AcpProvider {
   abstract configure(workspace: string, configuration: AiConfiguration): Promise<AiSession>;
   /** Queues a one-shot configuration override for the next new turn, including while a turn is running. */
   abstract configureNext(workspace: string, configuration: AiConfiguration): Promise<AiSession>;
+  async setSkills(_workspace: string, _ids: string[], _sessionId?: string, _agentPreset?: AiAgentPreset | null): Promise<AiSession> { throw new Error("This provider does not support skills"); }
   abstract send(workspace: string, request: AcpSendRequest): Promise<AiSession>;
   abstract interrupt(workspace: string): Promise<AiSession>;
   abstract resolvePermission(workspace: string, requestId: string, optionId?: string): Promise<AiSession>;

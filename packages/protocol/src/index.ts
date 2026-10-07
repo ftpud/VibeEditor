@@ -16,7 +16,7 @@ export type FileRevision = { identity: string; version: string };
  * Desktop can prove it is safe to talk to a newly deployed Core.
  */
 export type ProtocolCompatibility = { minimum: number; maximum: number };
-export const protocolCompatibility: ProtocolCompatibility = { minimum: 12, maximum: 12 };
+export const protocolCompatibility: ProtocolCompatibility = { minimum: 13, maximum: 13 };
 
 export function protocolRangeIsValid(range: ProtocolCompatibility): boolean {
   return Number.isInteger(range.minimum) && Number.isInteger(range.maximum) && range.minimum > 0 && range.minimum <= range.maximum;
@@ -161,6 +161,15 @@ export type UsefulFile = { scope: UsefulFileScope; name: string };
 export type RunConfigScope = "global" | "local";
 export type RunConfigStatus = "idle" | "starting" | "running" | "stopping" | "succeeded" | "failed";
 export type RunConfig = { scope: RunConfigScope; name: string; commands: string; status: RunConfigStatus; terminalId?: string; exitCode?: number };
+export type SkillScope = "global" | "local";
+export type SkillFile = { id: string; scope: SkillScope; name: string; title: string; description?: string; path: string };
+export type SkillPolicy = { allowed: string[]; defaults: string[]; /** Missing skill entries allow any agent; null permits chats with no preset. */ agents?: Record<string, (AiAgentPreset | null)[]> };
+export function skillAllowedForAgent(policy: SkillPolicy, id: string, agent?: AiAgentPreset | null): boolean {
+  if (!policy.allowed.includes(id)) return false;
+  const choices = policy.agents?.[id];
+  return choices === undefined || choices.some((choice) => choice === null ? !agent : !!agent && choice.scope === agent.scope && choice.name === agent.name);
+}
+export type SkillCatalog = { skills: SkillFile[]; policy: SkillPolicy };
 export type AgentFileScope = "global" | "local" | "workspace";
 export type AgentFileReference = { scope: AgentFileScope; name: string };
 export type AgentFile = { scope: AgentFileScope; name: string; agent: AiAgent };
@@ -303,7 +312,7 @@ export type ProtocolOperations = {
   };
   "tasks.list": { payload: Record<string, never>; result: { tasks: WorkspaceTask[]; selectedTaskId?: string } };
   "tasks.create": { payload: { branch: string; existing?: boolean; remote?: boolean }; result: { task: WorkspaceTask } };
-  "tasks.createFromPrompt": { payload: { provider?: AiProvider; prompt: string; content?: AiContentBlock[]; configuration: AiConfiguration; mcpServers?: AiMcpServer[]; agent?: AiAgent; agentPreset?: AiAgentPreset }; result: { task: WorkspaceTask } };
+  "tasks.createFromPrompt": { payload: { provider?: AiProvider; prompt: string; content?: AiContentBlock[]; configuration: AiConfiguration; mcpServers?: AiMcpServer[]; agent?: AiAgent; agentPreset?: AiAgentPreset; skillIds?: string[] }; result: { task: WorkspaceTask } };
   "tasks.merge": { payload: { taskId: string; strategy?: "merge" | "smart" }; result: { targetBranch: string } };
   "schedules.agents": { payload: { taskId?: string }; result: { agents: AgentFile[] } };
   "schedules.list": { payload: Record<string, never>; result: { schedules: WorkspaceSchedule[] } };
@@ -326,6 +335,12 @@ export type ProtocolOperations = {
   "ai.get": { payload: { provider?: AiProvider }; result: { session: AiSession } };
   "ai.models": { payload: { provider?: AiProvider }; result: { models: AiModel[] } };
   "ai.configure": { payload: { provider?: AiProvider; model?: string; reasoning?: string; configuration?: AiConfiguration }; result: { session: AiSession } };
+  "skills.list": { payload: Record<string, never>; result: SkillCatalog };
+  "skills.read": { payload: { id: string }; result: { content: string } };
+  "skills.write": { payload: { id: string; content: string }; result: Record<string, never> };
+  "skills.delete": { payload: { id: string }; result: Record<string, never> };
+  "skills.policy": { payload: SkillPolicy; result: Record<string, never> };
+  "ai.skills": { payload: { provider?: AiProvider; ids: string[]; sessionId: string; agentPreset?: AiAgentPreset | null }; result: { session: AiSession } };
   "ai.send": { payload: { provider?: AiProvider; prompt: string; content?: AiContentBlock[]; model?: string; reasoning?: string; configuration?: AiConfiguration; mcpServers?: AiMcpServer[]; agent?: AiAgent; agentPreset?: AiAgentPreset }; result: { session: AiSession } };
   "ai.permission.resolve": { payload: { provider?: AiProvider; requestId: string; optionId?: string; target?: { taskId?: string; sessionId?: string } }; result: { session: AiSession } };
   "ai.interrupt": { payload: { provider?: AiProvider }; result: { session: AiSession } };
@@ -727,6 +742,12 @@ const requestTypeRegistry: Record<RequestType, true> = {
   "ai.get": true,
   "ai.models": true,
   "ai.configure": true,
+  "skills.list": true,
+  "skills.read": true,
+  "skills.write": true,
+  "skills.delete": true,
+  "skills.policy": true,
+  "ai.skills": true,
   "ai.send": true,
   "ai.permission.resolve": true,
   "ai.interrupt": true,

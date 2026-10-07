@@ -15,7 +15,7 @@ export class CodexSessionManager extends StdioAcpProvider {
   readonly descriptor: AiProviderDescriptor = {
     id: "codex", name: "Codex ACP", description: "Codex through the standard Agent Client Protocol.",
     settings: { title: "Codex settings", description: "These settings are applied through ACP session modes and configuration options.", sections: [{ id: "tools", name: "Tools & access", description: "Capabilities available while Codex works." }] },
-    capabilities: { models: true, usage: true, mcp: true, agents: true, contextWindow: true },
+    capabilities: { models: true, usage: true, mcp: true, agents: true, contextWindow: true, skills: true },
     options: [
       { id: "mode", name: "Agent mode", description: "Choose read-only analysis, normal workspace editing, or full access when advertised by the ACP server.", section: "tools", type: "select", defaultValue: "agent", choices: [{ value: "read-only", name: "Read only" }, { value: "agent", name: "Workspace agent" }, { value: "agent-full-access", name: "Full access" }] },
       { id: "webSearch", name: "Web search", description: "Codex searches the web by default. Choose a different source, or disable it entirely.", section: "tools", type: "select", defaultValue: "default", choices: [{ value: "default", name: "Codex default" }, { value: "live", name: "Live" }, { value: "indexed", name: "Indexed" }, { value: "cached", name: "Cached" }, { value: "disabled", name: "Disabled" }] }

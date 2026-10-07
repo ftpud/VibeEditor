@@ -8,6 +8,7 @@ import type { AiConfiguration, AiModel, AiProviderDescriptor, AiSession } from "
 import { CodexSessionManager } from "./codex.js";
 import { CopilotSessionManager } from "./copilot.js";
 import { StdioAcpProvider } from "../stdio-provider.js";
+import { SkillsStore } from "../../skills.js";
 import { AcpRegistry } from "../acp.js";
 
 const FAKE_AGENT = fileURLToPath(new URL("./fake-acp-agent.py", import.meta.url));
@@ -425,4 +426,82 @@ describe("ACP integration", () => {
     const content = provider["withAgent"]([{ type: "text", text: "Fix the bug" }], { name: "Reviewer", description: "Checks correctness", instructions: "Review every change." });
     expect(content).toEqual([{ type: "text", text: "Selected agent: Reviewer\nAgent description: Checks correctness\n\n<agent_instructions>\nReview every change.\n</agent_instructions>\n\n<user_request>\nFix the bug\n</user_request>" }]);
   });
+});
+
+
+describe("chat skills", () => {
+  it("persists per-chat selection across restarts and restore, while new chats use project defaults", async () => {
+    const state = await mkdtemp(path.join(os.tmpdir(), "skills-provider-state-"));
+    const workspace = await mkdtemp(path.join(os.tmpdir(), "skills-provider-workspace-"));
+    const skills = new SkillsStore(state);
+    await skills.write("local/review", workspace, "Inspect regressions.");
+    await skills.write("global/style", workspace, "Follow the style guide.");
+    await skills.writePolicy(workspace, { allowed: ["local/review", "global/style"], defaults: ["local/review"] });
+    const provider = new FakeProvider(() => undefined, state, { FAKE_ECHO_PROMPT: "on" });
+    const first = await provider.get(workspace);
+    expect(first.skillIds).toEqual(["local/review"]);
+    await provider.setSkills(workspace, ["global/style"], first.id);
+    const restarted = new FakeProvider(() => undefined, state);
+    expect((await restarted.get(workspace)).skillIds).toEqual(["global/style"]);
+    await provider.send(workspace, { prompt: "First turn", configuration: { model: "model-a" } });
+    const done = await settle(provider, workspace);
+    const echo = done.messages.find((message) => message.text.startsWith("PROMPT:"))!.text;
+    expect(echo).toContain("Follow the style guide.");
+    expect(echo).not.toContain("Inspect regressions.");
+    expect(done.messages.find((message) => message.role === "user")!.text).toBe("First turn");
+    await provider.clear(workspace);
+    expect((await provider.get(workspace)).skillIds).toEqual(["local/review"]);
+    await expect(provider.setSkills(workspace, [], first.id)).rejects.toThrow("different conversation");
+    expect((await provider.restore(workspace, first.id!)).skillIds).toEqual(["global/style"]);
+    await provider.clear(workspace);
+  });
+
+  it("delivers only skills assigned to the effective agent and supports a chat with no agent", async () => {
+    const state = await mkdtemp(path.join(os.tmpdir(), "skills-agent-state-"));
+    const workspace = await mkdtemp(path.join(os.tmpdir(), "skills-agent-workspace-"));
+    const skills = new SkillsStore(state);
+    const preset = { scope: "workspace" as const, name: "reviewer.md" };
+    await skills.write("local/review", workspace, "Reviewer-only instructions");
+    await skills.write("local/general", workspace, "No-agent instructions");
+    await skills.writePolicy(workspace, { allowed: ["local/review", "local/general"], defaults: ["local/review", "local/general"], agents: { "local/review": [preset], "local/general": [null] } });
+    const provider = new FakeProvider(() => undefined, state, { FAKE_ECHO_PROMPT: "on" });
+    const session = await provider.get(workspace);
+    await expect(provider.setSkills(workspace, ["local/review"], session.id, null)).rejects.toThrow("selected agent");
+    await provider.send(workspace, { prompt: "Review", configuration: { model: "model-a" }, agent: { name: "Reviewer", instructions: "Review changes" }, agentPreset: preset });
+    const reviewed = await settle(provider, workspace);
+    const reviewEcho = reviewed.messages.find((message) => message.text.startsWith("PROMPT:"))!.text;
+    expect(reviewEcho).toContain("Reviewer-only instructions");
+    expect(reviewEcho).not.toContain("No-agent instructions");
+    await provider.send(workspace, { prompt: "General", configuration: { model: "model-a" } });
+    const general = await settle(provider, workspace);
+    const generalEcho = general.messages.filter((message) => message.text.startsWith("PROMPT:")).at(-1)!.text;
+    expect(generalEcho).toContain("No-agent instructions");
+    expect(generalEcho).not.toContain("Reviewer-only instructions");
+    await provider.clear(workspace);
+  });
+
+  it("applies mid-turn changes only to a queued follow-up and honors project revocation", async () => {
+    const state = await mkdtemp(path.join(os.tmpdir(), "skills-queue-state-"));
+    const workspace = await mkdtemp(path.join(os.tmpdir(), "skills-queue-workspace-"));
+    const skills = new SkillsStore(state);
+    await skills.write("local/review", workspace, "Inspect regressions.");
+    const provider = new FakeProvider(() => undefined, state, { FAKE_ECHO_PROMPT: "on", FAKE_SLOW: "on" });
+    const first = await provider.get(workspace);
+    await provider.setSkills(workspace, ["local/review"], first.id);
+    await provider.send(workspace, { prompt: "First turn", configuration: { model: "model-a" } });
+    await provider.setSkills(workspace, [], first.id);
+    await provider.steer(workspace, "Follow-up", { queue: true });
+    const done = await settle(provider, workspace);
+    const echoes = done.messages.filter((message) => message.text.startsWith("PROMPT:"));
+    expect(echoes).toHaveLength(2);
+    expect(echoes[0]!.text).toContain("Inspect regressions.");
+    expect(echoes[1]!.text).not.toContain("Inspect regressions.");
+    expect(echoes[1]!.text).toContain("No Vibe skills are enabled.");
+    await provider.setSkills(workspace, ["local/review"], first.id);
+    await skills.writePolicy(workspace, { allowed: [], defaults: [] });
+    await provider.send(workspace, { prompt: "After revocation", configuration: { model: "model-a" } });
+    const revoked = await settle(provider, workspace);
+    expect(revoked.messages.filter((message) => message.text.startsWith("PROMPT:")).at(-1)!.text).not.toContain("Inspect regressions.");
+    await provider.clear(workspace);
+  }, 15_000);
 });

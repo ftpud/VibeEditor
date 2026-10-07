@@ -1,8 +1,8 @@
-import { javaConfigurationPath } from "@remote-ide/protocol";
+import { javaConfigurationPath, skillAllowedForAgent } from "@remote-ide/protocol";
 import { DiffEditor, type Monaco } from "@monaco-editor/react";
 import { Archive, ArrowDown, ArrowUp, ArrowUpRight, Bot, Bug, Check, ChevronDown, ChevronRight, CircleAlert, Clock, ClipboardCopy, Coffee, Columns2, Eye, EyeOff, File, FileCode2, FileDiff, FileText, Folder, FolderOpen, GitBranch, GitCompareArrows, GitMerge, Library, ListTodo, ListTree, LoaderCircle, LogOut, MoreVertical, Package, Palette, Pencil, Pin, PinOff, Play, Plus, RefreshCw, Save, Search, Settings, ShieldAlert, Square, SquareTerminal, Trash2, Workflow, X } from "lucide-react";
 import { Children, isValidElement, useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
-import type { AgentFile, AgentFileScope, AiContinuationTimer, AiConfiguration, AiModel, AiProvider, AiProviderDescriptor, AiSession, AiStatus, AiTaskSummary, AiUsage, FileColor, FileRevision, FileTreeNode, GitBranch as GitBranchInfo, GitDiffHunk, GitHistoryRewritePreview, GitStatusEntry, GitUpstreamStatus, HarnessDefinition, HarnessRun, HarnessStateDiagnostic, HttpResponse, JavaBreakpoint, JavaDebugState, JavaProjectNode, JavaProjectOptions, JavaTypeSuggestion, ProtocolOperations, RootedJavaDiagnostic, RootedJavaLspLocation, RootedWorkspaceSymbol, RunConfig, RunConfigScope, SearchResult, TaskCheckpoint, TaskCheckpointFile, UsefulFile, UsefulFileScope, WorkspaceSchedule, WorkspaceOptions, WorkspaceRoot, WorkspaceSearchQueries, WorkspaceTask } from "@remote-ide/protocol";
+import type { SkillCatalog, AgentFile, AgentFileScope, AiContinuationTimer, AiConfiguration, AiModel, AiProvider, AiProviderDescriptor, AiSession, AiStatus, AiTaskSummary, AiUsage, FileColor, FileRevision, FileTreeNode, GitBranch as GitBranchInfo, GitDiffHunk, GitHistoryRewritePreview, GitStatusEntry, GitUpstreamStatus, HarnessDefinition, HarnessRun, HarnessStateDiagnostic, HttpResponse, JavaBreakpoint, JavaDebugState, JavaProjectNode, JavaProjectOptions, JavaTypeSuggestion, ProtocolOperations, RootedJavaDiagnostic, RootedJavaLspLocation, RootedWorkspaceSymbol, RunConfig, RunConfigScope, SearchResult, TaskCheckpoint, TaskCheckpointFile, UsefulFile, UsefulFileScope, WorkspaceSchedule, WorkspaceOptions, WorkspaceRoot, WorkspaceSearchQueries, WorkspaceTask } from "@remote-ide/protocol";
 import type { editor } from "monaco-editor";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -28,6 +28,7 @@ import { GitPullDialog } from "./GitPullDialog";
 import { GitRebaseDialog } from "./GitRebaseDialog";
 import { GitChangesView as KeyboardGitChangesView } from "./GitChangesView";
 import { GitConflictWorkspaceDialog } from "./GitConflictWorkspace";
+import { SkillsPanel, type SkillsActions } from "./SkillsPanel";
 import { AiPanel, type AiAttachment } from "./AiPanel";
 import { TimersPanel } from "./TimersPanel";
 import { WorkflowRunPanel } from "./WorkflowRunPanel";
@@ -163,7 +164,7 @@ export function App() {
   const [rightSidebarWidth, setRightSidebarWidth] = useState(360);
   const [workflowPanelMode, setWorkflowPanelMode] = useState<"design" | "run">("run");
   const [leftPanels, setLeftPanels] = useState({ tasks: true, ai: true, harness: false, timers: false });
-  const [rightPanels, setRightPanels] = useState({ project: true, git: true, taskGit: false, promptHistory: false, java: false, useful: false, agents: false });
+  const [rightPanels, setRightPanels] = useState({ project: true, git: true, taskGit: false, promptHistory: false, java: false, useful: false, agents: false, skills: false });
   const [classicSideView, setClassicSideView] = useState<ClassicTaskPanel>("project");
   const [classicLeftWidth, setClassicLeftWidth] = useState(260);
   const [classicRightWidth, setClassicRightWidth] = useState(300);
@@ -220,6 +221,7 @@ export function App() {
   const selectedRootIdRef = useRef("");
   const selectWorkspaceRootRef = useRef<(rootId: string) => Promise<void>>(async () => undefined);
   const [aiSession, setAiSession] = useState<AiSession>({ model: "gpt-5.6-sol", reasoning: "low", status: "idle", messages: [] });
+  const [skillCatalog, setSkillCatalog] = useState<SkillCatalog>({ skills: [], policy: { allowed: [], defaults: [] } });
   const [aiSessions, setAiSessions] = useState<AiSession[]>([]);
   const [aiProvider, setAiProvider] = useState<AiProvider>(() => readSetting("aiProvider") === "copilot" ? "copilot" : "codex");
   const [aiModels, setAiModels] = useState<AiModel[]>([]);
@@ -540,15 +542,37 @@ export function App() {
   }, []);
   const refreshUsefulFiles = useCallback(async (client = clientRef.current) => { if (!client) return; const rootId = client.getRoot(); const files = (await client.request("useful.list", {})).files; if (client.getRoot() === rootId) setUsefulFiles(files); }, []);
   const refreshRunConfigs = useCallback(async (client = clientRef.current) => { if (!client) return; const rootId = client.getRoot(); const configs = (await client.request("runConfig.list", {})).configs; if (client.getRoot() === rootId) setRunConfigs(configs); }, []);
+  const refreshSkills = useCallback(async (client = clientRef.current) => {
+    if (!client) return;
+    const workspace = activeWorkspaceRef.current;
+    const root = client.getRoot();
+    const taskId = selectedTaskIdRef.current;
+    const catalog = await client.request("skills.list", {});
+    if (client.getRoot() === root && workspace === activeWorkspaceRef.current && taskId === selectedTaskIdRef.current) setSkillCatalog(catalog);
+  }, []);
+  const selectSkills = useCallback(async (ids: string[]) => {
+    const client = clientRef.current; if (!client || !aiSession.id) return;
+    const token = aiToken();
+    const preset = agents.find((file) => agentKey(file) === selectedAgentKey);
+    const { session } = await client.request("ai.skills", { provider: token.provider, ids, sessionId: aiSession.id, agentPreset: preset ? { scope: preset.scope, name: preset.name } : null });
+    applyAiSession(session, token);
+  }, [agents, selectedAgentKey, aiSession.id, aiToken, applyAiSession]);
+  const skillActions: SkillsActions = {
+    read: async (id) => { if (!clientRef.current) throw new Error("Backend is disconnected"); return (await clientRef.current.request("skills.read", { id })).content; },
+    write: async (id, content) => { if (!clientRef.current) throw new Error("Backend is disconnected"); await clientRef.current.request("skills.write", { id, content }); await refreshSkills(); },
+    delete: async (id) => { if (!clientRef.current) throw new Error("Backend is disconnected"); await clientRef.current.request("skills.delete", { id }); await refreshSkills(); },
+    policy: async (policy) => { if (!clientRef.current) throw new Error("Backend is disconnected"); await clientRef.current.request("skills.policy", policy); await refreshSkills(); }
+  };
   const refreshAgents = useCallback(async (client = clientRef.current, taskId = selectedTaskIdRef.current) => {
     if (!client) return;
     const rootId = client.getRoot();
+    await refreshSkills(client);
     const next = (await client.request("agents.list", {})).agents;
     if (client.getRoot() !== rootId) return;
     setAgents(next);
     const saved = workspaceKeyRef.current ? readSetting(workspaceSettingKey(workspaceKeyRef.current, aiAgentTaskKey(taskId))) ?? "" : "";
     setSelectedAgentKey(next.some((agent) => agentKey(agent) === saved) ? saved : "");
-  }, []);
+  }, [refreshSkills]);
   const refreshHarnesses = useCallback(async (client = clientRef.current) => {
     if (!client) return; const rootId = client.getRoot(); const result = await client.request("harnesses.list", {});
     if (client.getRoot() === rootId) { setHarnesses(result.harnesses); setHarnessDiagnostics(result.diagnostics); }
@@ -1299,6 +1323,7 @@ export function App() {
         updateGroup((tabs, active) => ({ tabs: tabs.map((tab) => tab.id === current.id ? { ...tab, dirty: tab.content !== content, savedContent: content, revision: saved.revision, error: undefined } : tab), activeTabId: active }));
       }
       if (current.type !== "file") updateGroup((tabs, active) => ({ tabs: tabs.map((tab) => tab.id === current.id ? { ...tab, dirty: tab.content !== content, savedContent: content, error: undefined } : tab), activeTabId: active }));
+      if (current.type === "file" && /^\.agents\/(skills\/|skills\.json$)/.test(current.path)) await refreshSkills();
       if (current.type === "agent" || (current.type === "file" && /^\.agents\/[^/]+\.md$/i.test(current.path))) await refreshAgents();
       if (current.type === "file" && /\.java$/i.test(current.path)) scheduleJavaCheck();
       return true;
@@ -1307,7 +1332,7 @@ export function App() {
       updateGroup((tabs, active) => ({ tabs: tabs.map((tab) => tab.id === current.id ? { ...tab, error: error instanceof Error ? error.message : "Save failed" } : tab), activeTabId: active }));
       return false;
     }
-  }, [refreshAgents, scheduleJavaCheck, updateGroup]);
+  }, [refreshAgents, refreshSkills, scheduleJavaCheck, updateGroup]);
 
   const saveActive = useCallback(async () => {
     const current = layout.editorGroups[0]?.tabs.find((tab) => tab.id === layout.editorGroups[0]?.activeTabId);
@@ -1426,6 +1451,8 @@ export function App() {
   const currentAiAttachments = aiAttachments[currentAiAttachmentKey] ?? [];
   const currentAiDraft = readAiPromptDraft(workspaceKeyRef.current, selectedTaskId, aiProvider, aiSession.id);
   const selectedAgent = useMemo(() => agents.find((agent) => agentKey(agent) === selectedAgentKey), [agents, selectedAgentKey]);
+  const selectedAgentReference = selectedAgent ? { scope: selectedAgent.scope, name: selectedAgent.name } : null;
+  const availableChatSkills = skillCatalog.skills.filter((skill) => skillAllowedForAgent(skillCatalog.policy, skill.id, selectedAgentReference));
   const selectAgent = useCallback((key: string) => {
     setSelectedAgentKey(key);
     if (workspaceKeyRef.current) writeWorkspaceSetting(workspaceKeyRef.current, aiAgentTaskKey(selectedTaskIdRef.current), key);
@@ -1462,7 +1489,7 @@ export function App() {
         ? { type: "image" as const, data: attachment.data, mimeType: attachment.mimeType, name: attachment.name }
         : { type: "resource" as const, uri: `attachment:${encodeURIComponent(attachment.name)}`, mimeType: attachment.mimeType, text: attachment.content ?? "", name: attachment.name });
     try {
-      const { task } = await clientRef.current.request("tasks.createFromPrompt", { provider: aiProviderRef.current, prompt, content, configuration, ...(selectedAgent ? { agent: selectedAgent.agent, agentPreset: { scope: selectedAgent.scope, name: selectedAgent.name } } : {}) });
+      const { task } = await clientRef.current.request("tasks.createFromPrompt", { provider: aiProviderRef.current, prompt, content, configuration, skillIds: (aiSession.skillIds ?? []).filter((id) => availableChatSkills.some((skill) => skill.id === id)), ...(selectedAgent ? { agent: selectedAgent.agent, agentPreset: { scope: selectedAgent.scope, name: selectedAgent.name } } : {}) });
       setTasks((current) => [...current, task]);
       await refreshAiStatuses();
       showStatus(`Started ${task.branch}`, "success");
@@ -1470,7 +1497,7 @@ export function App() {
       setStatusMessage(error instanceof Error ? error.message : "Could not start a new task");
       throw error;
     }
-  }, [refreshAiStatuses, selectedAgent, showStatus]);
+  }, [aiSession.skillIds, availableChatSkills, refreshAiStatuses, selectedAgent, showStatus]);
   const resolveAiPermission = useCallback(async (owner: PermissionRequestOwner, requestId: string, optionId?: string) => {
     if (!clientRef.current) return;
     const isActiveOwner = owner.taskId === selectedTaskIdRef.current && owner.provider === aiProviderRef.current;
@@ -2551,7 +2578,7 @@ export function App() {
     try { const result = await client.request("workspace.removeRoot", { rootId: root.id }); setWorkspaceRoots(result.roots); }
     catch (error) { setStatusMessage(error instanceof Error ? error.message : "Could not remove workspace root"); }
   };
-  const rightSidebarOpen = rightPanels.project || rightPanels.git || rightPanels.useful || rightPanels.agents || ((rightPanels.taskGit || rightPanels.promptHistory) && Boolean(selectedTaskId)) || (rightPanels.java && Boolean(javaOptions));
+  const rightSidebarOpen = rightPanels.project || rightPanels.git || rightPanels.useful || rightPanels.agents || rightPanels.skills || ((rightPanels.taskGit || rightPanels.promptHistory) && Boolean(selectedTaskId)) || (rightPanels.java && Boolean(javaOptions));
   const commandContext: CommandContext = { connected: status === "connected", hasActiveEditor: Boolean(activeTab), activeEditorDirty: Boolean(activeTab?.dirty), gitBusy: gitOperationRunning, taskSwitching, aiBusy: aiSession.status === "in_progress" };
   const commands: Command[] = [
     { id: "project.commandPalette", label: "Show Command Palette", category: "Project", when: (context) => context.connected, execute: () => setCommandPaletteOpen(true) },
@@ -2631,7 +2658,7 @@ export function App() {
           {filteredTasks.map((task) => { const summary = aiStatuses.tasks[task.id] ?? emptyAiSummary; return <TaskRow key={task.id} icon={<ListTodo size={15} />} name={task.name} branch={task.branch} summary={summary} finished={task.status === "finished"} archived={task.archived} selected={selectedTaskId === task.id} disabled={taskSwitching} onClick={() => openTask(task.id, summary.pendingPermission)} onSetFinished={() => void setTaskStatus(task, task.status === "finished" ? "active" : "finished")} onRename={() => void renameTask(task)} onSetArchived={() => void setTaskArchived(task, !task.archived)} onMerge={() => setMergeDialog(task)} onDelete={() => void deleteTask(task)} onCancelTimer={() => void timerAction(task, "cancel")} onFireTimer={() => void timerAction(task, "fire")} />; })}
           {!showRootTask && filteredTasks.length === 0 && <div className="filter-empty">No matching tasks</div>}
         </div></section>}
-        {leftPanels.ai && <section key="ai" className="stacked-panel"><header className="panel-header"><span>AI</span><AgentPicker agents={agents} value={selectedAgentKey} disabled={aiSession.status === "in_progress"} onChange={selectAgent} /><span className={`ai-status ${aiSession.status}`}>{formatAiStatus(aiSession.status)}</span></header><AiPanel key={`${activeWorkspace}:${selectedTaskId ?? "root"}:${aiProvider}:${aiSession.id ?? "legacy"}`} provider={aiProvider} providers={aiProviders} session={aiSession} sessions={aiSessions} models={aiModels} usage={aiUsage} attachments={currentAiAttachments} draft={currentAiDraft} workspacePath={activeWorkspace} permissionOwner={{ provider: aiProvider, ...(selectedTaskId ? { taskId: selectedTaskId } : {}), ...(aiSession.id ? { sessionId: aiSession.id } : {}) }} permissionActionsDisabled={taskSwitching} sessionChangesDisabled={selectedTaskTimerActive} onProviderChange={(provider) => void switchAiProvider(provider)} onConfigurationChange={configureAi} onAttachmentsChange={updateAiAttachments} onDraftChange={updateAiDraft} onSend={sendAiPrompt} onSendAsTask={selectedTaskId ? undefined : sendAiPromptAsTask} onSteer={steerAiPrompt} onInterrupt={() => void interruptAi()} onNewSession={() => void newAiSession()} onSwitchSession={(session) => void switchAiSession(session)} onRemoveSession={(session) => void removeAiSession(session)} onResolvePermission={resolveAiPermission} onOpenFile={(path, line, column) => void openAiFile(path, line, column)} onOpenExternal={(url) => void window.desktop?.openExternal(url)} /></section>}
+        {leftPanels.ai && <section key="ai" className="stacked-panel"><header className="panel-header"><span>AI</span><AgentPicker agents={agents} value={selectedAgentKey} disabled={aiSession.status === "in_progress"} onChange={selectAgent} /><span className={`ai-status ${aiSession.status}`}>{formatAiStatus(aiSession.status)}</span></header><AiPanel key={`${activeWorkspace}:${selectedTaskId ?? "root"}:${aiProvider}:${aiSession.id ?? "legacy"}`} provider={aiProvider} providers={aiProviders} session={aiSession} sessions={aiSessions} models={aiModels} usage={aiUsage} attachments={currentAiAttachments} draft={currentAiDraft} workspacePath={activeWorkspace} permissionOwner={{ provider: aiProvider, ...(selectedTaskId ? { taskId: selectedTaskId } : {}), ...(aiSession.id ? { sessionId: aiSession.id } : {}) }} skills={availableChatSkills} onSkillsChange={selectSkills} onOpenSkills={() => { setRightPanels((current) => ({ ...current, skills: true })); void refreshSkills(); }} permissionActionsDisabled={taskSwitching} sessionChangesDisabled={selectedTaskTimerActive} onProviderChange={(provider) => void switchAiProvider(provider)} onConfigurationChange={configureAi} onAttachmentsChange={updateAiAttachments} onDraftChange={updateAiDraft} onSend={sendAiPrompt} onSendAsTask={selectedTaskId ? undefined : sendAiPromptAsTask} onSteer={steerAiPrompt} onInterrupt={() => void interruptAi()} onNewSession={() => void newAiSession()} onSwitchSession={(session) => void switchAiSession(session)} onRemoveSession={(session) => void removeAiSession(session)} onResolvePermission={resolveAiPermission} onOpenFile={(path, line, column) => void openAiFile(path, line, column)} onOpenExternal={(url) => void window.desktop?.openExternal(url)} /></section>}
         {leftPanels.harness && <section key="harness" className="stacked-panel"><header className="panel-header"><span>{workflowPanelMode === "design" ? "Workflow design" : "Workflows"}</span><button title="Refresh workflows" onClick={() => void Promise.all([refreshHarnesses(), refreshHarnessRuns()])}><RefreshCw size={14} /></button></header>{workflowPanels}</section>}
         {leftPanels.timers && <section key="timers" className="stacked-panel">{timersPanel}</section>}
       </ResizablePanelStack></aside><div className="resize-handle" role="separator" aria-label="Resize left sidebar" aria-orientation="vertical" aria-valuemin={280} aria-valuemax={Math.round(Math.min(900, window.innerWidth * .65))} aria-valuenow={Math.round(leftSidebarWidth)} tabIndex={0} onKeyDown={(event) => keyboardResize(event, leftSidebarWidth, setLeftSidebarWidth, 280, Math.min(900, window.innerWidth * .65))} onPointerDown={beginLeftSidebarResize} /></>}
@@ -2707,7 +2734,7 @@ export function App() {
       </main>
       {sideLayout === "ai-focused" ? <>
       {rightSidebarOpen && <><div className="right-resize-handle" role="separator" aria-label="Resize right sidebar" aria-orientation="vertical" aria-valuemin={180} aria-valuemax={Math.round(Math.min(700, window.innerWidth * .55))} aria-valuenow={Math.round(rightSidebarWidth)} tabIndex={0} onKeyDown={(event) => keyboardResize(event, rightSidebarWidth, setRightSidebarWidth, 180, Math.min(700, window.innerWidth * .55), true)} onPointerDown={beginRightSidebarResize} />
-      <aside className="side-panel side-panel-right" style={{ width: rightSidebarWidth }}><ResizablePanelStack workspace={activeWorkspace} setting="focused.rightSizes" ids={[...(rightPanels.project ? ["project"] : []), ...(rightPanels.git ? ["git"] : []), ...(rightPanels.taskGit && selectedTaskId ? ["taskGit"] : []), ...(rightPanels.promptHistory && selectedTaskId ? ["promptHistory"] : []), ...(rightPanels.java && javaOptions ? ["java"] : []), ...(rightPanels.useful ? ["useful"] : []), ...(rightPanels.agents ? ["agents"] : [])]}>
+      <aside className="side-panel side-panel-right" style={{ width: rightSidebarWidth }}><ResizablePanelStack workspace={activeWorkspace} setting="focused.rightSizes" ids={[...(rightPanels.project ? ["project"] : []), ...(rightPanels.git ? ["git"] : []), ...(rightPanels.taskGit && selectedTaskId ? ["taskGit"] : []), ...(rightPanels.promptHistory && selectedTaskId ? ["promptHistory"] : []), ...(rightPanels.java && javaOptions ? ["java"] : []), ...(rightPanels.useful ? ["useful"] : []), ...(rightPanels.agents ? ["agents"] : []), ...(rightPanels.skills ? ["skills"] : [])]}>
         {rightPanels.project && <section key="project" className="stacked-panel">
           <header className="panel-header"><span>Project</span><div className="panel-header-actions"><button title={showIgnored ? "Hide ignored files" : "Show all files (including Git-ignored)"} className={showIgnored ? "active" : ""} onClick={toggleShowIgnored}>{showIgnored ? <Eye size={14} /> : <EyeOff size={14} />}</button><button title="Synchronize files" onClick={() => void refreshTree()}><RefreshCw size={14} /></button></div></header>
           <QuickFilter value={projectFilter} placeholder={projectContentFilter ? "Filter by file contents" : "Filter files"} label={projectContentFilter ? "Filter files by contents" : "Filter project files"} onChange={setProjectFilter} contentSearch={projectContentFilter} contentSearchLoading={projectContentFilterLoading} onContentSearchChange={setProjectContentFilter} />
@@ -2725,6 +2752,7 @@ export function App() {
         {rightPanels.java && javaOptions && <section key="java" className="stacked-panel"><header className="panel-header"><span>Java Project</span><button title="Refresh Java project" onClick={() => void refreshJavaTree()}><RefreshCw size={14} /></button></header><div className="java-project-meta"><Coffee size={13} /><span>{javaOptions.pomPath}</span></div><div className="tree java-tree"><JavaProjectTree nodes={javaTree} activePath={activeTab?.path} onOpen={openFile} /></div></section>}
         {rightPanels.useful && <section key="useful" className="stacked-panel"><header className="panel-header"><span>Useful Files</span><button title="Refresh useful files" onClick={() => void refreshUsefulFiles()}><RefreshCw size={14} /></button></header><div className="useful-files-list"><UsefulFileSection title="Global" scope="global" files={usefulFiles} activeTab={activeTab} onOpen={openUsefulFile} onCreate={(scope) => setUsefulDialog({ mode: "create", scope })} onRename={(file) => setUsefulDialog({ mode: "rename", scope: file.scope, file })} onDelete={(file) => void deleteUsefulFile(file)} /><UsefulFileSection title="Local" scope="local" files={usefulFiles} activeTab={activeTab} onOpen={openUsefulFile} onCreate={(scope) => setUsefulDialog({ mode: "create", scope })} onRename={(file) => setUsefulDialog({ mode: "rename", scope: file.scope, file })} onDelete={(file) => void deleteUsefulFile(file)} /></div></section>}
         {rightPanels.agents && <section key="agents" className="stacked-panel"><AgentsPanel agents={agents} activeTab={activeTab} onRefresh={() => void refreshAgents()} onOpen={(file) => void openAgentFile(file)} onCreate={(scope) => setAgentDialog({ mode: "create", scope })} onRename={(file) => { if (file.scope !== "workspace") setAgentDialog({ mode: "rename", scope: file.scope, file }); }} onDelete={(file) => void deleteAgent(file)} /></section>}
+        {rightPanels.skills && <section key="skills" className="stacked-panel"><SkillsPanel key={activeWorkspace} catalog={skillCatalog} agents={agents} agentPreset={selectedAgentReference} selected={aiSession.skillIds ?? []} running={aiSession.status === "in_progress"} disabled={taskSwitching} onRefresh={() => refreshSkills()} onSelection={selectSkills} actions={skillActions} /></section>}
       </ResizablePanelStack></aside></>}
       <nav className="right-tool-stripe" aria-label="Right tool windows">
         <button className={`tool-stripe-button right ${rightPanels.project ? "active" : ""}`} title={rightPanels.project ? "Hide Project" : "Show Project"} onClick={() => setRightPanels((current) => ({ ...current, project: !current.project }))}><Folder size={15} /><span>Project</span></button>
@@ -2734,19 +2762,21 @@ export function App() {
         {javaOptions && <button className={`tool-stripe-button right ${rightPanels.java ? "active" : ""}`} title={rightPanels.java ? "Hide Java project" : "Show Java project"} onClick={() => setRightPanels((current) => { if (!current.java) void refreshJavaTree(); return { ...current, java: !current.java }; })}><Coffee size={15} /><span>Java</span></button>}
         <button className={`tool-stripe-button right ${rightPanels.useful ? "active" : ""}`} title={rightPanels.useful ? "Hide Useful Files" : "Show Useful Files"} onClick={() => setRightPanels((current) => { if (!current.useful) void refreshUsefulFiles(); return { ...current, useful: !current.useful }; })}><Library size={15} /><span>Useful</span></button>
         <button className={`tool-stripe-button right ${rightPanels.agents ? "active" : ""}`} title={rightPanels.agents ? "Hide Agents" : "Show Agents"} onClick={() => setRightPanels((current) => { if (!current.agents) void refreshAgents(); return { ...current, agents: !current.agents }; })}><Bot size={15} /><span>Agents</span></button>
+        <button className={`tool-stripe-button right ${rightPanels.skills ? "active" : ""}`} title={rightPanels.skills ? "Hide Skills" : "Show Skills"} onClick={() => setRightPanels((current) => { if (!current.skills) void refreshSkills(); return { ...current, skills: !current.skills }; })}><Library size={15} /><span>Skills</span></button>
       </nav>
       </> : <>
-      {(classicTasksOpen || classicAiOpen || (rightPanels.promptHistory && selectedTaskId)) && <><div className="right-resize-handle" role="separator" aria-label="Resize right sidebar" aria-orientation="vertical" aria-valuemin={240} aria-valuemax={Math.round(Math.min(960, window.innerWidth * .72))} aria-valuenow={Math.round(classicRightWidth)} tabIndex={0} onKeyDown={(event) => keyboardResize(event, classicRightWidth, setClassicRightWidth, 240, Math.min(960, window.innerWidth * .72), true)} onPointerDown={beginClassicRightResize} /><aside className="side-panel classic-right-panel" style={{ width: classicRightWidth }}>
+      {(classicTasksOpen || classicAiOpen || rightPanels.skills || (rightPanels.promptHistory && selectedTaskId)) && <><div className="right-resize-handle" role="separator" aria-label="Resize right sidebar" aria-orientation="vertical" aria-valuemin={240} aria-valuemax={Math.round(Math.min(960, window.innerWidth * .72))} aria-valuenow={Math.round(classicRightWidth)} tabIndex={0} onKeyDown={(event) => keyboardResize(event, classicRightWidth, setClassicRightWidth, 240, Math.min(960, window.innerWidth * .72), true)} onPointerDown={beginClassicRightResize} /><aside className="side-panel classic-right-panel" style={{ width: classicRightWidth }}>
         {classicTasksOpen && <section className="stacked-panel" style={classicAiOpen ? { flex: `0 0 ${classicSplit}%` } : undefined}><header className="panel-header"><span>Tasks</span><button title="Create task" disabled={taskSwitching} onClick={() => setShowCreateTaskDialog(true)}><Plus size={15} /></button></header><div className="task-filters"><QuickFilter value={taskFilter} placeholder="Filter tasks" label="Filter tasks" onChange={setTaskFilter} /><select aria-label="Task lifecycle filter" value={taskLifecycleFilter} onChange={(event) => setTaskLifecycleFilter(event.target.value as typeof taskLifecycleFilter)}><option value="active">Active</option><option value="finished">Finished</option><option value="archived">Archived</option><option value="all">All</option></select></div><div className="tasks-list">
           {showRootTask && <TaskRow icon={<Folder size={15} />} name="Root workspace" summary={aiStatuses.root} selected={selectedTaskId === undefined} disabled={taskSwitching} onClick={() => openTask(undefined, aiStatuses.root.pendingPermission)} onCancelTimer={() => void timerAction(undefined, "cancel")} onFireTimer={() => void timerAction(undefined, "fire")} />}
           {filteredTasks.map((task) => { const summary = aiStatuses.tasks[task.id] ?? emptyAiSummary; return <TaskRow key={task.id} icon={<ListTodo size={15} />} name={task.name} branch={task.branch} summary={summary} finished={task.status === "finished"} archived={task.archived} selected={selectedTaskId === task.id} disabled={taskSwitching} onClick={() => openTask(task.id, summary.pendingPermission)} onSetFinished={() => void setTaskStatus(task, task.status === "finished" ? "active" : "finished")} onRename={() => void renameTask(task)} onSetArchived={() => void setTaskArchived(task, !task.archived)} onMerge={() => setMergeDialog(task)} onDelete={() => void deleteTask(task)} onCancelTimer={() => void timerAction(task, "cancel")} onFireTimer={() => void timerAction(task, "fire")} />; })}
           {!showRootTask && filteredTasks.length === 0 && <div className="filter-empty">No matching tasks</div>}
         </div></section>}
         {classicTasksOpen && classicAiOpen && <div className="classic-panel-divider" onPointerDown={beginClassicSplitResize} />}
-        {classicAiOpen && <section className="stacked-panel"><header className="panel-header"><span>AI</span><AgentPicker agents={agents} value={selectedAgentKey} disabled={aiSession.status === "in_progress"} onChange={selectAgent} /><span className={`ai-status ${aiSession.status}`}>{formatAiStatus(aiSession.status)}</span></header><AiPanel key={`classic:${activeWorkspace}:${selectedTaskId ?? "root"}:${aiProvider}:${aiSession.id ?? "legacy"}`} provider={aiProvider} providers={aiProviders} session={aiSession} sessions={aiSessions} models={aiModels} usage={aiUsage} attachments={currentAiAttachments} draft={currentAiDraft} workspacePath={activeWorkspace} permissionOwner={{ provider: aiProvider, ...(selectedTaskId ? { taskId: selectedTaskId } : {}), ...(aiSession.id ? { sessionId: aiSession.id } : {}) }} permissionActionsDisabled={taskSwitching} sessionChangesDisabled={selectedTaskTimerActive} onProviderChange={(provider) => void switchAiProvider(provider)} onConfigurationChange={configureAi} onAttachmentsChange={updateAiAttachments} onDraftChange={updateAiDraft} onSend={sendAiPrompt} onSendAsTask={selectedTaskId ? undefined : sendAiPromptAsTask} onSteer={steerAiPrompt} onInterrupt={() => void interruptAi()} onNewSession={() => void newAiSession()} onSwitchSession={(session) => void switchAiSession(session)} onRemoveSession={(session) => void removeAiSession(session)} onResolvePermission={resolveAiPermission} onOpenFile={(path, line, column) => void openAiFile(path, line, column)} onOpenExternal={(url) => void window.desktop?.openExternal(url)} /></section>}
+        {classicAiOpen && <section className="stacked-panel"><header className="panel-header"><span>AI</span><AgentPicker agents={agents} value={selectedAgentKey} disabled={aiSession.status === "in_progress"} onChange={selectAgent} /><span className={`ai-status ${aiSession.status}`}>{formatAiStatus(aiSession.status)}</span></header><AiPanel key={`classic:${activeWorkspace}:${selectedTaskId ?? "root"}:${aiProvider}:${aiSession.id ?? "legacy"}`} provider={aiProvider} providers={aiProviders} session={aiSession} sessions={aiSessions} models={aiModels} usage={aiUsage} attachments={currentAiAttachments} draft={currentAiDraft} workspacePath={activeWorkspace} permissionOwner={{ provider: aiProvider, ...(selectedTaskId ? { taskId: selectedTaskId } : {}), ...(aiSession.id ? { sessionId: aiSession.id } : {}) }} skills={availableChatSkills} onSkillsChange={selectSkills} onOpenSkills={() => { setRightPanels((current) => ({ ...current, skills: true })); void refreshSkills(); }} permissionActionsDisabled={taskSwitching} sessionChangesDisabled={selectedTaskTimerActive} onProviderChange={(provider) => void switchAiProvider(provider)} onConfigurationChange={configureAi} onAttachmentsChange={updateAiAttachments} onDraftChange={updateAiDraft} onSend={sendAiPrompt} onSendAsTask={selectedTaskId ? undefined : sendAiPromptAsTask} onSteer={steerAiPrompt} onInterrupt={() => void interruptAi()} onNewSession={() => void newAiSession()} onSwitchSession={(session) => void switchAiSession(session)} onRemoveSession={(session) => void removeAiSession(session)} onResolvePermission={resolveAiPermission} onOpenFile={(path, line, column) => void openAiFile(path, line, column)} onOpenExternal={(url) => void window.desktop?.openExternal(url)} /></section>}
+        {rightPanels.skills && <section className="stacked-panel"><SkillsPanel key={activeWorkspace} catalog={skillCatalog} agents={agents} agentPreset={selectedAgentReference} selected={aiSession.skillIds ?? []} running={aiSession.status === "in_progress"} disabled={taskSwitching} onRefresh={() => refreshSkills()} onSelection={selectSkills} actions={skillActions} /></section>}
         {rightPanels.promptHistory && selectedTaskId && <TaskCheckpointHistory checkpoints={taskCheckpoints} onOpen={openCheckpointDiff} onReview={reviewCheckpointFile} onRestore={restoreCheckpoint} onFollowUp={followUpCheckpoint} onClose={() => setRightPanels((current) => ({ ...current, promptHistory: false }))} />}
       </aside></>}
-      <nav className="right-tool-stripe" aria-label="Right tool windows"><button className={`tool-stripe-button right ${classicTasksOpen ? "active" : ""}`} title={classicTasksOpen ? "Hide Tasks" : "Show Tasks"} onClick={() => setClassicTasksOpen((open) => !open)}><ListTodo size={15} /><span>Tasks</span>{tasks.length > 0 && <span className="tool-badge">{tasks.length > 99 ? "99+" : tasks.length}</span>}</button><button className={`tool-stripe-button right ${classicAiOpen ? "active" : ""}`} title={classicAiOpen ? "Hide AI" : "Show AI"} onClick={() => { setClassicAiOpen((open) => { if (!open) void refreshAi(); return !open; }); }}><Bot size={15} /><span>AI</span>{aiSession.status === "in_progress" && <span className="tool-badge">...</span>}</button></nav>
+      <nav className="right-tool-stripe" aria-label="Right tool windows"><button className={`tool-stripe-button right ${classicTasksOpen ? "active" : ""}`} title={classicTasksOpen ? "Hide Tasks" : "Show Tasks"} onClick={() => setClassicTasksOpen((open) => !open)}><ListTodo size={15} /><span>Tasks</span>{tasks.length > 0 && <span className="tool-badge">{tasks.length > 99 ? "99+" : tasks.length}</span>}</button><button className={`tool-stripe-button right ${classicAiOpen ? "active" : ""}`} title={classicAiOpen ? "Hide AI" : "Show AI"} onClick={() => { setClassicAiOpen((open) => { if (!open) void refreshAi(); return !open; }); }}><Bot size={15} /><span>AI</span>{aiSession.status === "in_progress" && <span className="tool-badge">...</span>}</button><button className={`tool-stripe-button right ${rightPanels.skills ? "active" : ""}`} title={rightPanels.skills ? "Hide Skills" : "Show Skills"} onClick={() => { setRightPanels((current) => ({ ...current, skills: !current.skills })); void refreshSkills(); }}><Library size={15} /><span>Skills</span></button></nav>
       </>}
     </div>
     {layout.panels.some((panel) => panel.type === "terminal") && <TerminalPanel theme={theme} fontFamily={terminalFontFamily} fontSize={uiFontSize} lineHeight={uiLineHeight} client={clientRef.current!} group={layout.terminalGroup} height={terminalHeight} highlightedTerminalIds={new Set(runConfigs.filter((config) => ["starting", "running", "stopping"].includes(config.status)).flatMap((config) => config.terminalId ? [config.terminalId] : []))} onActivate={activateTerminalTab} onCreate={() => void createTerminal()} onClose={closeTerminal} onRename={renameTerminal} onDuplicate={(tab) => void duplicateTerminal(tab)} onMove={moveTerminal} onRecoveryShown={(tabId) => updateTerminalGroup((group) => ({ ...group, tabs: group.tabs.map((tab) => tab.id === tabId ? { ...tab, recovery: undefined } : tab) }))} onResizeStart={beginTerminalResize} registerWriter={registerTerminalWriter} />}
