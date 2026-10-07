@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { Play, Square, Workflow, RotateCcw } from "lucide-react";
 import type { HarnessBlock, HarnessDefinition, HarnessRun } from "@remote-ide/protocol";
-import { BlockRunDetails, PauseResolution, type HarnessPanelProps } from "./HarnessPanel";
+import { BlockRunDetails, PauseResolution, WorkflowMessage, type HarnessPanelProps } from "./HarnessPanel";
 import { useWorkflowTraces } from "./workflow-tracing";
 
 type Props = Pick<HarnessPanelProps, "harnesses" | "runs" | "diagnostics" | "onRun" | "onValidate" | "onCancelRun" | "onResolvePermission" | "onAnswerQuestion" | "onResumePause" | "onRetryPause" | "onCancelPause" | "onError">;
@@ -60,7 +60,8 @@ function WorkflowCard({ workflow, ...props }: Props & { workflow: HarnessDefinit
     const value = block?.type === "start_button" ? block.prompt : inputs[key] ?? "";
     const label = block?.label ?? "Run workflow";
     return <form key={key} className="workflow-start-control" onSubmit={(event) => { event.preventDefault(); void start(block); }}>
-      <label>{label}{block?.type !== "start_button" && <input aria-label={`Input for ${label}`} placeholder="Describe the task…" value={value} onChange={(event) => setInputs((current) => ({ ...current, [key]: event.target.value }))} />}</label>
+      <label>{label}{block?.type !== "start_button" && <textarea rows={3} aria-label={`Input for ${label}`} placeholder="Describe the task…" value={value} onChange={(event) => setInputs((current) => ({ ...current, [key]: event.target.value }))} />}</label>
+      {block?.type === "start_button" && <WorkflowMessage title="Prompt" value={value} />}
       <button type="submit" disabled={starting || !value.trim() || !workflow.blocks.length} aria-label={`Start ${label}`}><Play size={13} />{starting ? "Starting…" : "Start"}</button>
     </form>;
   };
@@ -68,9 +69,10 @@ function WorkflowCard({ workflow, ...props }: Props & { workflow: HarnessDefinit
     <header><Workflow size={16} /><strong>{workflow.name}</strong><span className={`workflow-overall-status ${run?.status ?? "idle"}`} role="status" aria-label={statusLabel(run?.status ?? "Ready")} title={statusLabel(run?.status ?? "Ready")}><i className={`harness-status ${run?.status ?? "idle"}`} /></span></header>
     {run ? <>
       <div className="workflow-run-meta"><select aria-label={`Run for ${workflow.name}`} value={run.id} onChange={(event) => { setSelectedRunId(event.target.value); setSelectedBlockId(undefined); }}>{runs.map((item) => <option key={item.id} value={item.id}>{statusLabel(item.status)} · {new Date(item.createdAt).toLocaleString()}</option>)}</select><span>{completed}/{definition.blocks.length} complete</span></div>
-      <CompactWorkflowPreview definition={definition} run={run} onSelect={setSelectedBlockId} />
+      <details className="workflow-run-input"><summary>Run prompt</summary><WorkflowMessage key={run.id} title="Prompt" value={run.input} /></details>
+      <CompactWorkflowPreview definition={definition} run={run} selectedBlockId={selectedBlockId} onSelect={setSelectedBlockId} />
       <div className="workflow-card-actions"><button aria-expanded={showStarts} onClick={() => setShowStarts((value) => !value)}><Play size={13} /> New run</button>{!activeStatuses.has(run.status) && run.definition && <button disabled={starting} onClick={() => void start(undefined, run)}><RotateCcw size={13} /> Rerun</button>}{activeRuns.map((active) => <button key={active.id} aria-label={`Stop run ${active.id}`} onClick={() => void act(() => props.onCancelRun(active.id))}><Square size={12} /> Stop{activeRuns.length > 1 ? ` · ${active.id.slice(0, 6)}` : ""}</button>)}</div>
-      {selectedBlock && <BlockRunDetails block={selectedBlock} run={run} state={run.blocks.find((block) => block.blockId === selectedBlock.id)} tasks={run.children?.filter((child) => child.blockId === selectedBlock.id)} onClose={() => setSelectedBlockId(undefined)} />}
+      {selectedBlock && <BlockRunDetails key={`${run.id}:${selectedBlock.id}`} block={selectedBlock} run={run} state={run.blocks.find((block) => block.blockId === selectedBlock.id)} tasks={run.children?.filter((child) => child.blockId === selectedBlock.id)} onClose={() => setSelectedBlockId(undefined)} />}
       {run.blocks.filter((block) => pauseStatuses.has(block.status)).map((block) => <PauseResolution key={`${run.id}:${block.blockId}:${block.pauseId}`} {...props} run={run} block={block} label={definition.blocks.find((item) => item.id === block.blockId)?.label ?? block.blockId} yesNo={definition.blocks.find((item) => item.id === block.blockId)?.type === "yes_no_prompt"} />)}
       {run.error && <p className="workflow-card-error">{run.error}</p>}{!!run.cleanupErrors?.length && <p className="workflow-card-error">{run.cleanupErrors.join("; ")}</p>}
     </> : <p className="workflow-card-hint">{workflow.blocks.length} blocks · Choose a starting point</p>}
@@ -79,7 +81,7 @@ function WorkflowCard({ workflow, ...props }: Props & { workflow: HarnessDefinit
   </article>;
 }
 
-function CompactWorkflowPreview({ definition, run, onSelect }: { definition: HarnessDefinition; run: HarnessRun; onSelect(id: string): void }) {
+function CompactWorkflowPreview({ definition, run, selectedBlockId, onSelect }: { definition: HarnessDefinition; run: HarnessRun; selectedBlockId?: string; onSelect(id: string): void }) {
   const traces = useWorkflowTraces(run);
   const blocks = useMemo(() => {
     const source = definition.blocks;
@@ -129,7 +131,7 @@ function CompactWorkflowPreview({ definition, run, onSelect }: { definition: Har
     {blocks.map((block) => {
       const state = run.blocks.find((item) => item.blockId === block.id);
       const status = state?.status ?? "idle";
-      return <g key={block.id} className={`workflow-compact-block ${status}`} transform={`translate(${block.position.x}, ${block.position.y})`} role="button" tabIndex={0} aria-label={`${block.label}: ${statusLabel(status)}`} onClick={() => onSelect(block.id)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); onSelect(block.id); } }}><title>{block.label} · {statusLabel(status)}{state?.error ? ` · ${state.error}` : ""}</title><rect width={120} height={24} rx={5} /><circle cx={10} cy={12} r={3} /><text x={18} y={16}>{block.label.length > 15 ? `${block.label.slice(0, 14)}…` : block.label}</text></g>;
+      return <g key={block.id} className={`workflow-compact-block ${status}${selectedBlockId === block.id ? " selected" : ""}`} transform={`translate(${block.position.x}, ${block.position.y})`} role="button" tabIndex={0} aria-pressed={selectedBlockId === block.id} aria-label={`${block.label}: ${statusLabel(status)}`} onClick={() => onSelect(block.id)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); onSelect(block.id); } }}><title>{block.label} · {statusLabel(status)}{state?.error ? ` · ${state.error}` : ""}</title><rect width={120} height={24} rx={5} /><circle cx={10} cy={12} r={3} /><text x={18} y={16}>{block.label.length > 15 ? `${block.label.slice(0, 14)}…` : block.label}</text></g>;
     })}
   </svg></div>;
 }

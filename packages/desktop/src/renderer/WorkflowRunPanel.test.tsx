@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { HarnessDefinition, HarnessRun } from "@remote-ide/protocol";
 import { HarnessPanel } from "./HarnessPanel";
@@ -63,6 +63,33 @@ describe("Workflow run library", () => {
     fireEvent.change(screen.getByLabelText("Input for Run workflow"), { target: { value: "Plan" } });
     fireEvent.click(screen.getByRole("button", { name: "Start Run workflow" }));
     await waitFor(() => expect(callbacks.onRun).toHaveBeenCalledWith("flow", "Plan", undefined, undefined));
+  });
+
+  it("formats block conversations and keeps runtime context and diagnostics expandable", () => {
+    const prompt = "# Review plan\n\n- Check tests\n- Check `types`\n\nConnected tools: []";
+    const answer = "## Result\n\n**All checks passed**\n\n```ts\nconst ready = true;\n```";
+    render(<WorkflowRunPanel {...props()} runs={[{ ...run, blocks: [{ blockId: "agent", status: "succeeded", prompt, output: answer }] }]} />);
+    fireEvent.click(screen.getByRole("button", { name: "Inspect: succeeded" }));
+    const details = screen.getByLabelText("Inspect run details");
+    expect(within(details).getByRole("heading", { name: "Review plan" })).toBeTruthy();
+    expect(within(details).getByRole("heading", { name: "Result" })).toBeTruthy();
+    expect(details.querySelector(".workflow-message-markdown code")?.textContent).toBe("types");
+    expect(details.querySelector(".harness-detail-diagnostics")?.hasAttribute("open")).toBe(false);
+    expect(details.querySelector(".workflow-runtime-context")?.hasAttribute("open")).toBe(false);
+    expect(screen.getByRole("button", { name: "Inspect: succeeded" }).getAttribute("aria-pressed")).toBe("true");
+    fireEvent.click(within(details).getByRole("button", { name: "Show raw prompt" }));
+    expect(details.querySelector(".workflow-message-raw")?.textContent).toBe(prompt);
+    fireEvent.click(within(details).getByRole("button", { name: "Close run details" }));
+    expect(screen.queryByLabelText("Inspect run details")).toBeNull();
+  });
+
+  it("previews the start prompt without launching when its raw view is toggled", () => {
+    const callbacks = props();
+    render(<WorkflowRunPanel {...callbacks} />);
+    expect(screen.getByLabelText("Prompt").textContent).toContain("Check workspace");
+    fireEvent.click(screen.getByRole("button", { name: "Show raw prompt" }));
+    expect(document.querySelector(".workflow-message-raw")?.textContent).toBe("Check workspace");
+    expect(callbacks.onRun).not.toHaveBeenCalled();
   });
 
   it("locks Workflow design to editing and hides launch controls", () => {
