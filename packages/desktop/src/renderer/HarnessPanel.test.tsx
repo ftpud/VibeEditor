@@ -1,7 +1,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { HarnessDefinition, HarnessRun } from "@remote-ide/protocol";
-import { autoLayoutBlocks, dragPosition, edgePath, fitCanvasViewport, HarnessPanel, minimapScrollPosition, minimapViewport, responsePreview } from "./HarnessPanel";
+import { alignBlocks, autoLayoutBlocks, dragPosition, edgePath, fitCanvasViewport, HarnessPanel, minimapScrollPosition, minimapViewport, responsePreview } from "./HarnessPanel";
 
 afterEach(cleanup);
 
@@ -126,9 +126,22 @@ describe("HarnessPanel", () => {
     expect(parseFloat(first.style.top)).toBeCloseTo(240);
     expect(parseFloat(second.style.left)).toBeCloseTo(560);
     expect(parseFloat(second.style.top)).toBeCloseTo(240);
+    fireEvent.click(screen.getByRole("button", { name: "Align selected blocks left" }));
+    expect(parseFloat(first.style.left)).toBeCloseTo(260);
+    expect(parseFloat(second.style.left)).toBeCloseTo(260);
     fireEvent.click(screen.getByRole("button", { name: "Clear selected workflow blocks" }));
     expect(first.classList.contains("selected")).toBe(false);
     expect(second.classList.contains("selected")).toBe(false);
+  });
+
+  it("aligns only selected blocks to the requested outer edge or center", () => {
+    const blocks = [
+      { id: "first", type: "text" as const, label: "First", prompt: "", position: { x: 20, y: 40 } },
+      { id: "second", type: "text" as const, label: "Second", prompt: "", position: { x: 400, y: 300 } },
+      { id: "other", type: "text" as const, label: "Other", prompt: "", position: { x: 800, y: 600 } },
+    ];
+    expect(alignBlocks(blocks, ["first", "second"], "center").map((block) => block.position)).toEqual([{ x: 210, y: 40 }, { x: 210, y: 300 }, { x: 800, y: 600 }]);
+    expect(alignBlocks(blocks, ["first", "second"], "bottom").map((block) => block.position)).toEqual([{ x: 20, y: 300 }, { x: 400, y: 300 }, { x: 800, y: 600 }]);
   });
 
   it("drags and updates connection geometry after zoom, but leaves View mode fixed", () => {

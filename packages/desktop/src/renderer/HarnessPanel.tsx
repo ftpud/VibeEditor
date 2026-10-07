@@ -122,6 +122,10 @@ export function HarnessPanel({ harnesses, runs, diagnostics = [], providers, age
     setDraft({ ...draft, blocks: autoLayoutBlocks(draft.blocks, draft.edges) });
     setSelectedEdgeId(undefined);
   };
+  const alignSelectedBlocks = (alignment: WorkflowBlockAlignment) => {
+    if (!draft || selectedBlockIds.length < 2) return;
+    setDraft({ ...draft, blocks: alignBlocks(draft.blocks, selectedBlockIds, alignment) });
+  };
   const block = draft?.blocks.find((item) => item.id === selectedBlockId);
   const blockProvider = block && ["ai", "prompt", "task", "review"].includes(block.type) ? block.provider ?? defaultProvider : undefined;
   const blockModels = blockProvider ? modelsByProvider[blockProvider] ?? [] : [];
@@ -293,6 +297,7 @@ export function HarnessPanel({ harnesses, runs, diagnostics = [], providers, age
         <button aria-label="Zoom in" disabled={zoom >= 2} onClick={() => changeZoom(zoomRef.current * 1.2)}>+</button>
         <button aria-label="Fit workflow to canvas" title="Fit all blocks in the canvas" disabled={!draft.blocks.length} onClick={fitCanvasToBlocks}>Fit</button>
         {mode === "edit" && <button aria-label="Automatically lay out workflow" title="Arrange blocks by workflow connections" disabled={draft.blocks.length < 2} onClick={autoLayout}>Layout</button>}
+        {mode === "edit" && selectedBlockIds.length > 1 && <span className="harness-alignment" role="group" aria-label="Align selected workflow blocks"><button aria-label="Align selected blocks left" title="Align left" onClick={() => alignSelectedBlocks("left")}>Left</button><button aria-label="Align selected blocks center" title="Align horizontal centers" onClick={() => alignSelectedBlocks("center")}>Center</button><button aria-label="Align selected blocks right" title="Align right" onClick={() => alignSelectedBlocks("right")}>Right</button><button aria-label="Align selected blocks top" title="Align top" onClick={() => alignSelectedBlocks("top")}>Top</button><button aria-label="Align selected blocks middle" title="Align vertical centers" onClick={() => alignSelectedBlocks("middle")}>Middle</button><button aria-label="Align selected blocks bottom" title="Align bottom" onClick={() => alignSelectedBlocks("bottom")}>Bottom</button></span>}
         {mode === "edit" && selectedBlockIds.length > 0 && <button aria-label="Clear selected workflow blocks" title="Clear block selection" onClick={() => { setSelectedBlockIds([]); setSelectedBlockId(undefined); }}>Clear selection</button>}
         <small>Pinch or Shift+scroll to zoom</small>
       </div>
@@ -466,6 +471,28 @@ export function minimapScrollPosition(x: number, y: number, minimapWidth: number
     left: Math.max(0, Math.min(contentWidth - viewportWidth, x / minimapWidth * contentWidth - viewportWidth / 2)),
     top: Math.max(0, Math.min(contentHeight - viewportHeight, y / minimapHeight * contentHeight - viewportHeight / 2)),
   };
+}
+
+export type WorkflowBlockAlignment = "left" | "center" | "right" | "top" | "middle" | "bottom";
+
+export function alignBlocks(blocks: HarnessBlock[], selectedIds: string[], alignment: WorkflowBlockAlignment): HarnessBlock[] {
+  const selected = blocks.filter((block) => selectedIds.includes(block.id));
+  if (selected.length < 2) return blocks;
+  const left = Math.min(...selected.map((block) => block.position.x));
+  const right = Math.max(...selected.map((block) => block.position.x + BLOCK_WIDTH));
+  const top = Math.min(...selected.map((block) => block.position.y));
+  const bottom = Math.max(...selected.map((block) => block.position.y + BLOCK_HEIGHT));
+  return blocks.map((block) => {
+    if (!selectedIds.includes(block.id)) return block;
+    const position = { ...block.position };
+    if (alignment === "left") position.x = left;
+    if (alignment === "center") position.x = (left + right - BLOCK_WIDTH) / 2;
+    if (alignment === "right") position.x = right - BLOCK_WIDTH;
+    if (alignment === "top") position.y = top;
+    if (alignment === "middle") position.y = (top + bottom - BLOCK_HEIGHT) / 2;
+    if (alignment === "bottom") position.y = bottom - BLOCK_HEIGHT;
+    return { ...block, position };
+  });
 }
 
 /** Arrange executable connections from left to right while retaining a stable order for cycles and disconnected blocks. */
