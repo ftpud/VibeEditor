@@ -27,7 +27,7 @@ import { RunConfigService } from "./run-configs.js";
 import { executeHttpRequest } from "./http.js";
 import { summarizeAiSessions } from "./ai/summary.js";
 import { createAcpRegistry, type AcpRegistry } from "./ai/index.js";
-import { AppEventBridge } from "./app-events.js";
+import { AppEventBridge, appBridgeInstanceId } from "./app-events.js";
 import { ScheduleService, validateSchedule } from "./schedules.js";
 import { AiTimerService, AiTimerStore } from "./ai-timers.js";
 import { AppToolService, appToolServer, withAppTools } from "./app-tools.js";
@@ -208,7 +208,7 @@ export async function createServer(host: string, port: number, workspacePath: st
       void runConfigs.list(changedWorkspace).then((configs) => { const encoded = JSON.stringify({ type: "runConfig.changed", payload: { rootId, configs } } satisfies ServerEvent); for (const socket of activeSessions) sendWebSocketData(socket, encoded); });
     }
   });
-  const appEvents = new AppEventBridge(rootWorkspace);
+  const appEvents = new AppEventBridge(rootWorkspace, undefined, appBridgeInstanceId);
   await appEvents.ready();
   const appEventWatcher = chokidar.watch(appEvents.directory, { ignoreInitial: true, depth: 0 });
   await new Promise<void>((resolve, reject) => { appEventWatcher.once("ready", resolve); appEventWatcher.once("error", reject); });
@@ -333,7 +333,9 @@ export async function createServer(host: string, port: number, workspacePath: st
   await new Promise<void>((resolve, reject) => { appCommandWatcher.once("ready", resolve); appCommandWatcher.once("error", reject); });
   appCommandWatcher.on("add", (file) => {
     void appEvents.consumeCommand(file, async (command) => {
-      const currentWorkspace = command.currentWorkspace ?? rootWorkspace; const rootId = await ownerRootId(currentWorkspace) ?? roots.primary().id; const root = roots.get(rootId); const context = contextFor(rootId);
+      const currentWorkspace = command.currentWorkspace ?? rootWorkspace;
+      const workflowRootId = command.workflowRunId ? [...harnessRunners].find(([, runner]) => runner.isActive(command.workflowRunId!))?.[0] : undefined;
+      const rootId = workflowRootId ?? await ownerRootId(currentWorkspace) ?? roots.primary().id; const root = roots.get(rootId); const context = contextFor(rootId);
       const changed = async () => { const encoded = JSON.stringify({ type: "tasks.changed", payload: { rootId } } satisfies ServerEvent); for (const socket of activeSessions) sendWebSocketData(socket, encoded); };
       if (command.workflowRunId && command.workflowBlockId && ["workflow_connections", "workflow_use_block", "workflow_choose_path"].includes(command.name)) return harnessRunner(rootId).flowTool(command.workflowRunId, command.workflowBlockId, command.name, command.args);
       const workflow = command.workflowRunId && command.workflowBlockId ? { runId: command.workflowRunId, blockId: command.workflowBlockId, resumeFailed: () => harnessRunner(rootId).resumeFailed(command.workflowRunId!, command.workflowBlockId!), runStack: (inputs: string[], path?: string) => harnessRunner(rootId).runStack(command.workflowRunId!, command.workflowBlockId!, inputs, path) } : undefined;
