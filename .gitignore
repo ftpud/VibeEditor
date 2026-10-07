@@ -14,3 +14,5 @@ coverage/
 .tools/*.tar.gz
 .tools/*.zip
 .electron-runtime/
+TODO.md
+DONE.md
