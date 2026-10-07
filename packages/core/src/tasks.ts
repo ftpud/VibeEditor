@@ -113,6 +113,17 @@ export class WorkspaceTaskStore {
     return updated;
   }
 
+  async updateMetadata(taskId: string, metadata: Pick<WorkspaceTask, "name" | "status" | "archived">): Promise<WorkspaceTask> {
+    const name = metadata.name.trim();
+    if (!name || name.length > 200 || name.includes("\0") || !["active", "finished"].includes(metadata.status) || typeof metadata.archived !== "boolean") throw new CoreError("INVALID_REQUEST", "Invalid task metadata");
+    return serializedRootMutation(this.rootWorkspace, async () => {
+      const registry = await this.list(); const task = registry.tasks.find((item) => item.id === taskId);
+      if (!task) throw new CoreError("FILE_NOT_FOUND", "Task does not exist");
+      const updated = { ...task, name, status: metadata.status, archived: metadata.archived };
+      await this.save({ ...registry, tasks: registry.tasks.map((item) => item.id === taskId ? updated : item) }); return updated;
+    });
+  }
+
   async rename(taskId: string, name: string): Promise<WorkspaceTask> {
     const normalized = name.trim();
     if (!normalized || normalized.length > 200 || normalized.includes("\0")) throw new CoreError("INVALID_REQUEST", "Task name must contain between 1 and 200 non-NUL characters");

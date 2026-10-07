@@ -694,6 +694,11 @@ export function App() {
       })();
     };
     client.onServerEvent = (event) => {
+      if (event.type === "configuration.changed") {
+        if (!event.payload.global && event.payload.rootId !== client.getRoot()) return;
+        void Promise.all([refreshAgents(client), refreshUsefulFiles(client), refreshHarnesses(client), refreshTasks(client)]).catch((error) => setStatusMessage(error instanceof Error ? error.message : "Could not refresh configuration"));
+        return;
+      }
       if (event.type === "timers.changed") { backgroundAiRefresh.current!.trigger(); return; }
       if (event.payload.rootId !== client.getRoot() && event.type === "filesystem.changed") {
         const changed = new Set(event.payload.paths); updateGroup((tabs, active) => ({ tabs: tabs.map((tab) => tab.rootId === event.payload.rootId && tab.type === "file" && (event.payload.overflow || changed.has(tab.path)) ? { ...tab, error: "Changed in its remote root; activate this tab to reconcile" } : tab), activeTabId: active })); return;

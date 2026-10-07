@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Plus, RefreshCw, X } from "lucide-react";
+import { BookOpen, Pencil, Plus, RefreshCw, Settings2, Trash2, X } from "lucide-react";
 import { skillAllowedForAgent } from "@remote-ide/protocol";
 import type { AgentFile, AiAgentPreset, SkillCatalog, SkillPolicy, SkillScope } from "@remote-ide/protocol";
 
@@ -12,7 +12,7 @@ export type SkillsActions = {
 const template = "---\nname: New Skill\ndescription: Describe when to use this skill.\n---\n\nDescribe the workflow and instructions here.\n";
 
 export function SkillsPanel({ agents = [], agentPreset, catalog, selected, running, disabled, onRefresh, onSelection, actions }: { agents?: AgentFile[]; agentPreset?: AiAgentPreset | null; catalog: SkillCatalog; selected: string[]; running: boolean; disabled?: boolean; onRefresh(): Promise<void>; onSelection(ids: string[]): Promise<void>; actions: SkillsActions }) {
-  const [filter, setFilter] = useState("");
+  const [settingsId, setSettingsId] = useState<string>();
   const [editor, setEditor] = useState<{ id: string; content: string; creating: boolean }>();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -30,20 +30,27 @@ export function SkillsPanel({ agents = [], agentPreset, catalog, selected, runni
   });
   return <>
     <header className="panel-header"><span>Skills</span><button title="Refresh skills" disabled={busy || disabled} onClick={() => void perform(onRefresh)}><RefreshCw size={14} /></button></header>
-    <div className="skills-panel">
-      <input aria-label="Filter skills" placeholder="Filter skills" value={filter} onChange={(event) => setFilter(event.target.value)} />
-      <p>{running ? "Changes apply to the next turn." : "Enable skills for this chat."} Defaults apply to new chats.</p>
+    <div className="useful-files-list skills-list">
       {error && <div role="alert" className="inline-error">{error}</div>}
-      {(["global", "local"] as SkillScope[]).map((scope) => <section key={scope}>
-        <header><strong>{scope === "global" ? "Global" : "Local"}</strong><button title={`Create ${scope} skill`} disabled={busy || disabled} onClick={() => setEditor({ id: `${scope}/`, content: template, creating: true })}><Plus size={13} /></button></header>
-        {catalog.skills.filter((skill) => skill.scope === scope && `${skill.title} ${skill.id} ${skill.description ?? ""}`.toLowerCase().includes(filter.toLowerCase())).map((skill) => {
+      {(["global", "local"] as SkillScope[]).map((scope) => <section key={scope} className="useful-section">
+        <header><span>{scope === "global" ? "Global" : "Local"}</span><button title={`Create ${scope} skill`} disabled={busy || disabled} onClick={() => setEditor({ id: `${scope}/`, content: template, creating: true })}><Plus size={14} /></button></header>
+        {catalog.skills.filter((skill) => skill.scope === scope).map((skill) => {
           const allowed = catalog.policy.allowed.includes(skill.id);
           const usable = skillAllowedForAgent(catalog.policy, skill.id, agentPreset);
           const assignments = catalog.policy.agents?.[skill.id];
-          return <div className="skill-row" key={skill.id}>
+          const edit = () => perform(async () => setEditor({ id: skill.id, content: await actions.read(skill.id), creating: false }));
+          return <div key={skill.id}>
+            <div className={`useful-row ${editor?.id === skill.id || settingsId === skill.id ? "selected" : ""}`}>
+              <button className="useful-open" title={skill.description ?? skill.title} disabled={busy || disabled} onClick={() => void edit()}><BookOpen className="agent-kind-icon" size={14} /><span>{skill.title}</span></button>
+              <button title={`Settings for ${skill.title}`} aria-expanded={settingsId === skill.id} disabled={busy || disabled} onClick={() => setSettingsId(settingsId === skill.id ? undefined : skill.id)}><Settings2 size={12} /></button>
+              <button title={`Edit ${skill.title}`} disabled={busy || disabled} onClick={() => void edit()}><Pencil size={12} /></button>
+              <button title={`Delete ${skill.title}`} disabled={busy || disabled} onClick={() => void perform(async () => { await actions.delete(skill.id); if (settingsId === skill.id) setSettingsId(undefined); })}><Trash2 size={12} /></button>
+            </div>
+            {settingsId === skill.id && <div className="skill-settings">
+            <p>{running ? "Changes apply to the next turn." : "Enable skills for this chat."} Defaults apply to new chats.</p>
             <label><input type="checkbox" aria-label={`Enable ${skill.title}`} checked={usable && selected.includes(skill.id)} disabled={!usable || busy || disabled} onChange={(event) => void perform(() => onSelection((event.target.checked ? [...selected, skill.id] : selected.filter((id) => id !== skill.id)).filter((id) => skillAllowedForAgent(catalog.policy, id, agentPreset) && catalog.skills.some((item) => item.id === id))))} /><strong>{skill.title}</strong></label>
-            <small>{skill.description ?? skill.id}</small>
-            <div className="skill-controls"><label><input type="checkbox" aria-label={`Allow ${skill.title} in project`} checked={allowed} disabled={busy || disabled} onChange={(event) => void changePolicy(skill.id, "allowed", event.target.checked)} /> Allowed</label><label><input type="checkbox" aria-label={`Use ${skill.title} by default`} checked={catalog.policy.defaults.includes(skill.id)} disabled={!allowed || busy || disabled} onChange={(event) => void changePolicy(skill.id, "defaults", event.target.checked)} /> Default</label><button disabled={busy || disabled} onClick={() => void perform(async () => setEditor({ id: skill.id, content: await actions.read(skill.id), creating: false }))}>Edit</button></div>
+            {skill.description && <small>{skill.description}</small>}
+            <div className="skill-controls"><label><input type="checkbox" aria-label={`Allow ${skill.title} in project`} checked={allowed} disabled={busy || disabled} onChange={(event) => void changePolicy(skill.id, "allowed", event.target.checked)} /> Allowed</label><label><input type="checkbox" aria-label={`Use ${skill.title} by default`} checked={catalog.policy.defaults.includes(skill.id)} disabled={!allowed || busy || disabled} onChange={(event) => void changePolicy(skill.id, "defaults", event.target.checked)} /> Default</label></div>
             <details className="skill-agent-access"><summary aria-label={`Agent access for ${skill.title}`}>Agents: {assignments === undefined ? "Any agent" : assignments.length === 0 ? "None allowed" : `${assignments.length} selected`}</summary>
               <label><input type="checkbox" aria-label={`Any agent for ${skill.title}`} checked={assignments === undefined} disabled={busy || disabled} onChange={(event) => void changeAgents(skill.id, event.target.checked ? undefined : [])} /> Any agent</label>
               <label><input type="checkbox" aria-label={`No agent for ${skill.title}`} checked={assignments === undefined || assignments.includes(null)} disabled={busy || disabled} onChange={(event) => {
@@ -60,19 +67,25 @@ export function SkillsPanel({ agents = [], agentPreset, catalog, selected, runni
               })}
             </details>
             {!usable && allowed && <small>Unavailable for the current agent.</small>}
+            </div>}
           </div>;
         })}
-        {!catalog.skills.some((skill) => skill.scope === scope) && <small>No {scope} skills. Create one to get started.</small>}
+        {!catalog.skills.some((skill) => skill.scope === scope) && <div className="useful-empty">No skills</div>}
       </section>)}
-      {editor && <section className="skill-editor"><header><strong>{editor.creating ? "Create skill" : editor.id}</strong><button title="Close skill editor" disabled={busy} onClick={() => setEditor(undefined)}><X size={13} /></button></header>
-        {editor.creating && <input aria-label="Skill ID" placeholder="local/reviewer" value={editor.id} onChange={(event) => setEditor({ ...editor, id: event.target.value })} />}
-        <textarea aria-label="Skill instructions" value={editor.content} onChange={(event) => setEditor({ ...editor, content: event.target.value })} />
-        <button disabled={busy || disabled} onClick={() => void perform(async () => {
+    </div>
+    {editor && <div className="dialog-overlay" onMouseDown={() => { if (!busy) setEditor(undefined); }}>
+      <section className="run-config-dialog useful-file-dialog" role="dialog" aria-modal="true" aria-label={editor.creating ? "Create skill" : "Edit skill"} onMouseDown={(event) => event.stopPropagation()}>
+        <header><div><h2>{editor.creating ? "Create" : "Edit"} Skill</h2><span>{editor.id.startsWith("global/") ? "Global" : "Local"}</span></div><button title="Close skill editor" disabled={busy} onClick={() => setEditor(undefined)}><X size={15} /></button></header>
+        <form onSubmit={(event) => { event.preventDefault(); void perform(async () => {
           if (editor.creating && catalog.skills.some((skill) => skill.id === editor.id)) throw new Error("A skill with this ID already exists");
           await actions.write(editor.id, editor.content); setEditor(undefined);
-        })}>Save</button>
-        {!editor.creating && <button disabled={busy || disabled} onClick={() => void perform(async () => { await actions.delete(editor.id); setEditor(undefined); })}>Delete instructions</button>}
-      </section>}
-    </div>
+        }); }}>
+          {editor.creating && <label>Skill ID<input autoFocus aria-label="Skill ID" placeholder="local/reviewer" disabled={busy} value={editor.id} onChange={(event) => setEditor({ ...editor, id: event.target.value })} /></label>}
+          <label>Instructions<textarea className="skill-instructions" aria-label="Skill instructions" rows={10} disabled={busy} value={editor.content} onChange={(event) => setEditor({ ...editor, content: event.target.value })} /></label>
+          {error && <div className="find-error">{error}</div>}
+          <footer><button type="button" disabled={busy} onClick={() => setEditor(undefined)}>Cancel</button><button className="primary" disabled={busy || disabled}>Save</button></footer>
+        </form>
+      </section>
+    </div>}
   </>;
 }

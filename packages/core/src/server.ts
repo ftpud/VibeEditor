@@ -18,6 +18,8 @@ import { JavaProjectService } from "./java.js";
 import { JdtLanguageService } from "./jdtls.js";
 import { WorkspaceTaskStore } from "./tasks.js";
 import { UsefulFilesStore } from "./useful-files.js";
+import { ConfigurationService } from "./configuration.js";
+import { ensureSelfConfiguration } from "./self-configuration.js";
 import { SkillsStore } from "./skills.js";
 import { AgentsStore } from "./agents.js";
 import { HarnessStore } from "./harnesses.js";
@@ -137,6 +139,7 @@ export function protocolHandshake(compatibility: { minimum: number; maximum: num
 }
 
 export async function createServer(host: string, port: number, workspacePath: string): Promise<WebSocketServer> {
+  await ensureSelfConfiguration();
   const rootWorkspace = workspacePath;
   const roots = await WorkspaceRootRegistry.open(rootWorkspace);
   const tasks = new WorkspaceTaskStore(rootWorkspace);
@@ -352,7 +355,12 @@ export async function createServer(host: string, port: number, workspacePath: st
         operation: <T>(kind: "timer_create" | "task_create" | "prompt_delivery" | "merge", key: string, input: unknown, effect: () => Promise<T>, reconcile?: () => Promise<T | null | undefined>) => harnessRunner(rootId).runOperation(workflow.runId, workflow.blockId, kind, key, input, effect, reconcile),
         recordTool: (name: string, args: Record<string, unknown>, result?: unknown, error?: unknown) => harnessRunner(rootId).recordTool(workflow.runId, workflow.blockId, name, args, result, error)
       } : undefined;
-      return new AppToolService(context.tasks, acp, currentWorkspace, changed, onCommitMessageChanged, command.currentProvider, context.agents, root.path, aiTimers, rootWorkspace, ownedWorkflow).call(command.name, command.args);
+      const configuration = new ConfigurationService(root.path, currentWorkspace, { agents: context.agents, skills: new SkillsStore(), useful: context.usefulFiles, workflows: context.harnesses, tasks: context.tasks }, acp, async (resource, global) => {
+        const encoded = JSON.stringify({ type: "configuration.changed", payload: { rootId, resource, global } } satisfies ServerEvent);
+        for (const socket of activeSessions) sendWebSocketData(socket, encoded);
+        if (resource.startsWith("tasks/")) await changed();
+      });
+      return new AppToolService(context.tasks, acp, currentWorkspace, changed, onCommitMessageChanged, command.currentProvider, context.agents, root.path, aiTimers, rootWorkspace, ownedWorkflow, configuration).call(command.name, command.args);
     });
   });
   const gitIndexWatcher = chokidar.watch(await gitIndexPath(workspace), { ignoreInitial: true });
