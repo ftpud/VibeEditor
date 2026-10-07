@@ -617,6 +617,25 @@ describe("HarnessPanel", () => {
     expect(copied.id).not.toBe("plan");
   });
 
+  it("copies and pastes a block with an independent identity", async () => {
+    const harness: HarnessDefinition = { id: "harness-1", name: "Flow", version: 1, createdAt: "now", updatedAt: "now", blocks: [{ id: "plan", type: "prompt", label: "Plan", prompt: "{{input}}", position: { x: 20, y: 30 } }], edges: [] };
+    const onSave = vi.fn().mockImplementation(async (value) => value);
+    render(<HarnessPanel harnesses={[harness]} runs={[]} providers={[]} agents={[]} onCreate={vi.fn()} onSave={onSave} onDelete={vi.fn()} onRun={vi.fn()} onCancelRun={vi.fn()} onError={vi.fn()} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "List" }));
+    fireEvent.click(screen.getByRole("button", { name: "Edit block Plan" }));
+    fireEvent.click(screen.getByRole("button", { name: "Copy selected block" }));
+    await waitFor(() => expect((screen.getByRole("button", { name: "Paste workflow block" }) as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(screen.getByRole("button", { name: "Paste workflow block" }));
+    await waitFor(() => expect((screen.getByRole("button", { name: "Save" }) as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() => expect(onSave).toHaveBeenCalled());
+    const pasted = onSave.mock.calls.at(0)?.[0].blocks.find((item: HarnessBlock) => item.id !== "plan");
+    expect(pasted).toMatchObject({ label: "Plan copy", prompt: "{{input}}", position: { x: 52, y: 62 } });
+    expect(pasted.id).not.toBe("plan");
+  });
+
   it("offers reload, comparison, and save-as-copy when a concurrent save conflicts", async () => {
     const harness: HarnessDefinition = { id: "harness-1", name: "Flow", version: 1, createdAt: "now", updatedAt: "now", blocks: [], edges: [] };
     const remote = { ...harness, name: "Remote change", version: 2 };
