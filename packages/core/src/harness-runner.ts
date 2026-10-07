@@ -711,6 +711,7 @@ export class HarnessRunner {
           let output = settled.messages.filter((message) => message.role === "assistant").at(-1)?.text ?? "";
           const structuredOutput = parseHarnessData(output, block.outputSchema, `${block.label} output`);
           if (structuredOutput !== undefined) state.structuredOutput = structuredOutput;
+          output = this.output(run, output);
           collected.push(output); attempt.status = "succeeded"; attempt.completedAt = new Date().toISOString(); await this.finishOperation(run, attemptOperation, "succeeded", { sessionId: settled.id, workspace: state.workspace, output: output.slice(-20_000) }); if (iteration) { iteration.output = output.slice(-200_000); iteration.status = "succeeded"; iteration.completedAt = new Date().toISOString(); } await this.update(run);
         } catch (error) {
           this.log(state, "error", error instanceof Error ? error.message : String(error));
@@ -728,7 +729,7 @@ export class HarnessRunner {
       }
       this.assertActive(run.id);
       const execution = this.executions.get(run.id); if (!execution || execution.turnClaims.get(block.id) !== latestAttemptId) return;
-      outputs.set(block.id, output); state.output = output.slice(-200_000); state.status = "succeeded"; state.completedAt = new Date().toISOString(); state.failureReason = undefined; state.retryAt = undefined; state.retryStartedAt = undefined; state.waitingUntil = undefined; state.pendingPermission = undefined; state.question = undefined; state.pauseId = undefined; this.log(state, "lifecycle", "Completed successfully"); await this.update(run);
+      const boundedOutput = this.output(run, output); outputs.set(block.id, boundedOutput); state.output = boundedOutput; state.status = "succeeded"; state.completedAt = new Date().toISOString(); state.failureReason = undefined; state.retryAt = undefined; state.retryStartedAt = undefined; state.waitingUntil = undefined; state.pendingPermission = undefined; state.question = undefined; state.pauseId = undefined; this.log(state, "lifecycle", "Completed successfully"); await this.update(run);
     } finally { const active = this.activeProviders.get(run.id); if (state.provider) active?.delete(state.provider); }
   }
 
@@ -927,6 +928,8 @@ export class HarnessRunner {
   private assertActive(runId: string): void { if (!this.isActive(runId)) throw new Cancelled(); }
 
   private policy(run: HarnessRun): ResolvedRecoveryPolicy { return { ...this.recovery, maxAttempts: run.definition?.settings?.retry?.maxAttempts ?? this.recovery.maxAttempts }; }
+
+  private output(run: HarnessRun, value: string): string { return value.slice(-(run.definition?.settings?.outputLimitChars ?? 200_000)); }
 }
 
 function blockReadiness(blockId: string, blocks: HarnessBlock[], edges: HarnessEdge[], states: HarnessRun["blocks"]): "ready" | "wait" | "skip" {

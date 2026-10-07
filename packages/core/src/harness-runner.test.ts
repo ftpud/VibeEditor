@@ -182,6 +182,18 @@ describe("HarnessRunner", () => {
     } finally { await runner.cancel(run.id, async () => release()); release(); }
   });
 
+  it("bounds persisted and downstream workflow output to its configured limit", async () => {
+    const state = await mkdtemp(path.join(os.tmpdir(), "workflow-output-limit-")); const store = new HarnessStore("/workspace", state); const definition = await store.create("Output limit");
+    await store.update({ ...definition, settings: { outputLimitChars: 1_000 }, blocks: [
+      { id: "first", type: "prompt", label: "first", prompt: "work", position: { x: 0, y: 0 } },
+      { id: "second", type: "prompt", label: "second", prompt: "{{input}}", position: { x: 0, y: 0 } }
+    ], edges: [{ id: "next", from: "first", to: "second" }] });
+    const longOutput = "x".repeat(1_500); const dispatch = vi.fn(async (block: HarnessBlock, prompt: string) => session(block.id === "first" ? longOutput : prompt));
+    const runner = new HarnessRunner(store, () => undefined); await runner.start(definition.id, "request", dispatch);
+    await vi.waitFor(async () => expect((await store.runs())[0]?.status).toBe("succeeded"));
+    const run = (await store.runs())[0]!; expect(run.blocks.find((block) => block.blockId === "first")?.output).toHaveLength(1_000); expect(dispatch.mock.calls.find((call) => call[0].id === "second")?.[1]).toHaveLength(1_000);
+  });
+
   it("stops retries whose next backoff exceeds the elapsed retry budget", async () => {
     const state = await mkdtemp(path.join(os.tmpdir(), "workflow-retry-budget-")); const store = new HarnessStore("/workspace", state);
     const definition = await store.create("Retry budget");
