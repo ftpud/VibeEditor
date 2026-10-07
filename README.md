@@ -6,7 +6,8 @@ VibeEditor is a place to explore what a remote-first, AI-first development envir
 
 The experiment is built around a simple idea from [WHY.md](WHY.md): **the development machine is the server, and the local app is the control surface**.
 
-<img width="1469" height="925" alt="screenshot" src="https://github.com/user-attachments/assets/5cef4748-aab8-4869-9cc6-a98c6fc1e81d" />
+<img width="2940" height="1912" alt="image" src="https://github.com/user-attachments/assets/1a1cfd39-f127-4e07-b843-e4b8a8c71d90" />
+
 
 
 The repository, terminals, language servers, agents, builds, tests, and task state stay close to the compute. A lightweight React/Monaco desktop client provides the interaction layer over WebSockets. Tasks become durable workspaces—with their own Git worktree, editor state, terminals, AI sessions, notes, and Git state—rather than branches whose context must be reconstructed every time.
@@ -179,7 +180,7 @@ Gateway deploys committed code from the repository and branch saved in its setti
 - **Git:** status and diffs, selective commits, push, checkout and branch rename, searchable graph/history, file/selection history, compare-with-ref, cherry-pick, and file or hunk rollback.
 - **Task workspaces:** isolated Git worktrees on new, existing, or remote branches. A new task copies the root's staged, unstaged, untracked, ignored, and deleted-file state but excludes `node_modules`. Tasks can be compared with their recorded base and merged back with normal or smart merge.
 - **AI:** a shared AI Capability Provider layer with Codex ACP and Copilot ACP adapters, model/configuration discovery, resumable sessions, permission prompts, usage data, attachments, steering, MCP servers, and global/local/workspace agent presets. See [docs/ACP.md](docs/ACP.md).
-- **Vibe MCP tools:** an agent preset may opt into the built-in `vibe-editor` MCP server to create/list/delete task worktrees, start provider/model sessions with an inherited, configured, or explicitly absent agent preset and validated reasoning effort, select a validated model/reasoning pair for its next turn, append prompts, inspect recent responses, set the current task's commit-message draft, and safely update the latest unpushed commit message for an explicit task ID. It is not enabled when `mcpServers` is empty or omitted; task-start examples are in [docs/ACP.md](docs/ACP.md#starting-tasks-through-the-vibe-editor-mcp-server).
+- **Vibe MCP tools:** agents can manage task worktrees, merge completed work, inspect usage, schedule continuations, hand off to a fresh session, and call connected workflow blocks. Enable the built-in `vibe-editor` server through an agent preset. See the [tool reference and examples](docs/MCP.md).
 - **Java/Maven:** Maven project loading, source roots, JDT LS completion/navigation/diagnostics/semantic tokens, editable launch profiles and tool settings, `jdb` debugging with object/array inspection, and paused-session HotSwap. See [Java debugging](docs/JAVA_DEBUGGING.md).
 - **HTTP and notes:** executable requests in `.http` files, executable shell blocks in Markdown, and global or workspace-local Useful Files.
 - **Multiple roots:** register remote project directories with aliases in one Core connection, retaining root-owned editor and terminal tabs. See [Multi-root protocol boundary](docs/MULTI_ROOT.md).
