@@ -206,11 +206,15 @@ export class HarnessRunner {
     const harness = source?.definition ?? await this.store.read(harnessId); const validation = validateHarness(harness);
     if (!validation.valid) throw new CoreError("INVALID_REQUEST", validation.issues.map((issue) => issue.message).join("; "));
     const starts = harness.blocks.filter((block) => block.type === "start_button" || block.type === "start_input");
-    if (starts.length) {
-      const selected = starts.find((block) => block.id === startBlockId) ?? (!startBlockId && starts.length === 1 ? starts[0] : undefined);
-      if (!selected) throw new CoreError("INVALID_REQUEST", "Select a flow start block");
-      startBlockId = selected.id;
+    if (startBlockId) {
+      const selected = harness.blocks.find((block) => block.id === startBlockId);
+      if (!selected) throw new CoreError("INVALID_REQUEST", "Selected workflow block does not exist");
       if (selected.type === "start_button") input = selected.prompt;
+      if (!input.trim()) throw new CoreError("INVALID_REQUEST", "Enter text to start the flow");
+    } else if (starts.length) {
+      if (starts.length !== 1) throw new CoreError("INVALID_REQUEST", "Select a flow start block");
+      startBlockId = starts[0]!.id;
+      if (starts[0]!.type === "start_button") input = starts[0]!.prompt;
       if (!input.trim()) throw new CoreError("INVALID_REQUEST", "Enter text to start the flow");
     }
     const createdAt = new Date().toISOString();
