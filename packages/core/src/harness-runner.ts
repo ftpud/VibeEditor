@@ -472,7 +472,8 @@ export class HarnessRunner {
 
   private async execute(run: HarnessRun, blocks: HarnessBlock[], edges: HarnessEdge[], order: string[], dispatch: Dispatch, defaultProvider: string, append: Append, recovering = false, startBlockId?: string): Promise<void> {
     const outputs = new Map(run.blocks.flatMap((state) => state.status === "succeeded" && state.output !== undefined ? [[state.blockId, state.output] as const] : []));
-    run.status = this.runActivityStatus(run); run.startedAt ??= new Date().toISOString(); const background = new Set<Promise<void>>(); this.executions.set(run.id, { run, blocks, edges, outputs, dispatch, append, defaultProvider, background, stackInvocations: new Map(), turnClaims: new Map(), scheduler: new ExecutionScheduler(this.concurrency, () => this.assertActive(run.id)) });
+    const concurrency = run.definition?.settings?.concurrency ?? this.concurrency;
+    run.status = this.runActivityStatus(run); run.startedAt ??= new Date().toISOString(); const background = new Set<Promise<void>>(); this.executions.set(run.id, { run, blocks, edges, outputs, dispatch, append, defaultProvider, background, stackInvocations: new Map(), turnClaims: new Map(), scheduler: new ExecutionScheduler(concurrency, () => this.assertActive(run.id)) });
     if (recovering) for (const state of run.blocks) if (isActiveStatus(state.status)) this.log(state, "lifecycle", "Core restarted and reconciled this workflow stage");
     await this.update(run);
     const running = new Map<string, Promise<{ blockId: string; error?: unknown }>>();
@@ -485,7 +486,7 @@ export class HarnessRunner {
         if (this.cancelled.has(run.id)) throw new Cancelled();
         let changed = false;
         for (const blockId of order) {
-          if (running.size >= this.concurrency) break;
+          if (running.size >= concurrency) break;
           const state = run.blocks.find((item) => item.blockId === blockId)!;
           if (!["queued", "waiting"].includes(state.status)) continue;
           const readiness = blockReadiness(blockId, blocks, edges, run.blocks);

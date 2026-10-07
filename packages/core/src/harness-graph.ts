@@ -2,6 +2,7 @@ import type { HarnessDataSchema, HarnessDefinition, HarnessValidationIssue } fro
 
 export function validateHarness(harness: HarnessDefinition): { valid: boolean; issues: HarnessValidationIssue[]; order: string[] } {
   const issues: HarnessValidationIssue[] = [];
+  if (harness.settings?.concurrency !== undefined && (!Number.isInteger(harness.settings.concurrency) || harness.settings.concurrency < 1 || harness.settings.concurrency > 32)) issues.push({ code: "invalid-settings", message: "Workflow concurrency must be an integer from 1 to 32" });
   if (!harness.blocks.length) issues.push({ code: "empty", message: "Add at least one block before running this harness" });
   const ids = new Set<string>();
   const watchdogs = harness.blocks.filter((block) => block.watchdog);

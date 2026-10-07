@@ -63,6 +63,14 @@ describe("HarnessPanel", () => {
     expect(canvas.scrollTop).toBeCloseTo(fitted.scrollTop);
   });
 
+  it("persists the configured workflow concurrency", async () => {
+    const { onSave } = renderZoomHarness();
+    fireEvent.click(screen.getByText("Execution settings"));
+    fireEvent.change(screen.getByLabelText("Workflow concurrency"), { target: { value: "2" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(onSave.mock.calls.at(0)?.[0].settings).toEqual({ concurrency: 2 }));
+  });
+
   it("shows the current canvas viewport in a minimap and moves it on click", () => {
     const { canvas } = renderZoomHarness();
     canvas.scrollLeft = 300; canvas.scrollTop = 200;
