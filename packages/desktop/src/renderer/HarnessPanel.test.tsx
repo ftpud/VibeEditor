@@ -70,8 +70,9 @@ describe("HarnessPanel", () => {
     fireEvent.change(screen.getByLabelText("Workflow retry attempts"), { target: { value: "5" } });
     fireEvent.change(screen.getByLabelText("Workflow output limit"), { target: { value: "5000" } });
     fireEvent.change(screen.getByLabelText("Workflow log limit"), { target: { value: "25" } });
+    fireEvent.change(screen.getByLabelText("Workflow run duration"), { target: { value: "15" } });
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
-    await waitFor(() => expect(onSave.mock.calls.at(0)?.[0].settings).toEqual({ concurrency: 2, retry: { maxAttempts: 5 }, outputLimitChars: 5000, logLimitEntries: 25 }));
+    await waitFor(() => expect(onSave.mock.calls.at(0)?.[0].settings).toEqual({ concurrency: 2, retry: { maxAttempts: 5 }, outputLimitChars: 5000, logLimitEntries: 25, maxRunDurationMs: 900_000 }));
   });
 
   it("shows the current canvas viewport in a minimap and moves it on click", () => {

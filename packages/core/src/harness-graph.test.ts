@@ -22,11 +22,12 @@ describe("harness graph", () => {
   });
   it("returns a stable dependency order", () => expect(validateHarness(harness([{ id: "e", from: "plan", to: "build" }]))).toMatchObject({ valid: true, order: ["plan", "build"] }));
   it("validates the configured workflow concurrency", () => {
-    expect(validateHarness({ ...harness([]), settings: { concurrency: 2, retry: { maxAttempts: 5 }, outputLimitChars: 5_000, logLimitEntries: 25 } }).issues).toEqual([]);
+    expect(validateHarness({ ...harness([]), settings: { concurrency: 2, retry: { maxAttempts: 5 }, outputLimitChars: 5_000, logLimitEntries: 25, maxRunDurationMs: 15 * 60_000 } }).issues).toEqual([]);
     expect(validateHarness({ ...harness([]), settings: { concurrency: 0 } }).issues).toMatchObject([{ code: "invalid-settings" }]);
     expect(validateHarness({ ...harness([]), settings: { retry: { maxAttempts: 11 } } }).issues).toMatchObject([{ code: "invalid-settings" }]);
     expect(validateHarness({ ...harness([]), settings: { outputLimitChars: 999 } }).issues).toMatchObject([{ code: "invalid-settings" }]);
     expect(validateHarness({ ...harness([]), settings: { logLimitEntries: 9 } }).issues).toMatchObject([{ code: "invalid-settings" }]);
+    expect(validateHarness({ ...harness([]), settings: { maxRunDurationMs: 59_999 } }).issues).toMatchObject([{ code: "invalid-settings" }]);
   });
   it("rejects cycles and missing endpoints", () => {
     expect(validateHarness(harness([{ id: "a", from: "plan", to: "build" }, { id: "b", from: "build", to: "plan" }])).issues.some((issue) => issue.code === "cycle")).toBe(true);
