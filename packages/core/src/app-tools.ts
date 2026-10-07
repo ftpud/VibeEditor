@@ -253,6 +253,11 @@ export const appToolDefinitions = [
     description: "Create or replace a configuration document through validated Core stores. Use the read revision; null creates a new document. Returns the saved document, revision and workflow validation. Does not run workflows, commands or tasks.",
     inputSchema: { type: "object", additionalProperties: false, properties: { resource: { type: "string", minLength: 1 }, content: { type: "string", maxLength: 2097152, description: "Full document text. JSON for workflows, skill policy and task metadata; Markdown/text for agents, skills and useful files." }, expected_revision: { type: ["string", "null"], description: "Revision returned by configuration_read; null for a new resource. Stale revisions are rejected." } }, required: ["resource", "content", "expected_revision"] }
   },
+  {
+    name: "skill_load",
+    description: "Load a skill from the current turn's Vibe catalogue when its description matches the task. Returns SKILL.md, revision and base directory for supporting files. Unselected or disallowed skills cannot be loaded.",
+    inputSchema: { type: "object", additionalProperties: false, properties: { id: { type: "string", minLength: 1 } }, required: ["id"] }
+  },
 ] as const;
 
 export class AppToolService {
@@ -268,7 +273,8 @@ export class AppToolService {
     private readonly timers?: Pick<AiTimerService, "schedule" | "scheduleAt" | "next" | "cancelWorkspace">,
     private readonly bridgeWorkspace?: string,
     private readonly workflow?: { runId: string; blockId: string; flow?: boolean; runStack(inputs: string[], path?: string): Promise<unknown>; resumeFailed?(): Promise<unknown>; planFeatures?(features: Array<{ id: string; prompt: string; prerequisites?: string[] }>): Promise<unknown>; assertFeatureReady?(featureId: string): Promise<void>; dispatchFeature?(featureId: string, taskId: string): Promise<unknown>; completeFeature?(taskId: string, commit: string): Promise<unknown>; registerChild?(taskId: string, provider: AiProvider, workspace: string): Promise<void>; operation?<T>(kind: "timer_create" | "task_create" | "prompt_delivery" | "merge", key: string, input: unknown, effect: () => Promise<T>, reconcile?: () => Promise<T | null | undefined>): Promise<T>; recordTool?(name: string, args: Record<string, unknown>, result?: unknown, error?: unknown): Promise<void>; assertActive?(): void },
-    private readonly configuration?: Pick<ConfigurationService, "list" | "read" | "write">
+    private readonly configuration?: Pick<ConfigurationService, "list" | "read" | "write">,
+    private readonly loadSkill?: (id: string) => Promise<unknown>
   ) {}
 
   async call(name: string, args: Record<string, unknown>): Promise<unknown> {
@@ -282,6 +288,7 @@ export class AppToolService {
   }
 
   private async callActive(name: string, args: Record<string, unknown>): Promise<unknown> {
+    if (name === "skill_load") { if (!this.loadSkill) throw new Error("Skill loading is unavailable"); return this.loadSkill(requiredString(args, "id")); }
     if (["configuration_list", "configuration_read", "configuration_write"].includes(name)) {
       if (!this.configuration) throw new Error("Configuration interface is unavailable");
       if (name === "configuration_list") {
@@ -640,9 +647,10 @@ async function main() {
       let result: unknown;
       if (request.method === "initialize") result = { protocolVersion: "2025-06-18", capabilities: { tools: {} }, serverInfo: { name: "vibe-editor", version: "0.1.0" } };
       else if (request.method === "ping") result = {};
-      else if (request.method === "tools/list") result = { tools: process.env.VIBE_EDITOR_FLOW_TOOLS ? [...flowToolDefinitions, ...appToolDefinitions.filter((tool) => !["workflow_run_stack", "workflow_resume_failed", "workflow_plan_features"].includes(tool.name))] : appToolDefinitions };
+      else if (request.method === "tools/list") result = { tools: process.env.VIBE_EDITOR_SKILLS_ONLY ? appToolDefinitions.filter((tool) => tool.name === "skill_load") : process.env.VIBE_EDITOR_FLOW_TOOLS ? [...flowToolDefinitions, ...appToolDefinitions.filter((tool) => !["workflow_run_stack", "workflow_resume_failed", "workflow_plan_features"].includes(tool.name))] : appToolDefinitions };
       else if (request.method === "tools/call") {
         const params = request.params ?? {};
+        if (process.env.VIBE_EDITOR_SKILLS_ONLY && params.name !== "skill_load") throw new Error("Only skill_load is available on this server");
         const workflowRunId = process.env.VIBE_EDITOR_WORKFLOW_RUN_ID; const workflowBlockId = process.env.VIBE_EDITOR_WORKFLOW_BLOCK_ID;
         const value = await bridge.call({ name: requiredString(params, "name"), args: (params.arguments && typeof params.arguments === "object" ? params.arguments : {}) as Record<string, unknown>, currentWorkspace, ...(currentProvider ? { currentProvider } : {}), ...(workflowRunId ? { workflowRunId } : {}), ...(workflowBlockId ? { workflowBlockId } : {}) }, 3_600_000);
         result = toolResult(value);
@@ -675,6 +683,12 @@ export function withAppTools(rootWorkspace: string, currentWorkspace: string, se
   const appServer = appToolServer(rootWorkspace, currentWorkspace, currentProvider, bridgeWorkspace);
   const filtered = (servers ?? []).filter((server) => server.name !== appServer.name);
   return { servers: [...filtered, appServer], agent };
+}
+
+export function skillToolServer(rootWorkspace: string, workspace: string, provider: AiProvider, bridgeWorkspace = rootWorkspace): AiMcpServer {
+  const server = appToolServer(rootWorkspace, workspace, provider, bridgeWorkspace);
+  if (server.transport !== "stdio") throw new Error("Skills require the Core stdio tool server");
+  return { ...server, name: "vibe-skills", env: { ...server.env, VIBE_EDITOR_SKILLS_ONLY: "1" } };
 }
 
 export function appToolServer(rootWorkspace: string, currentWorkspace: string, currentProvider?: AiProvider, bridgeWorkspace = rootWorkspace, workflow?: { runId: string; blockId: string; flow?: boolean }): AiMcpServer {

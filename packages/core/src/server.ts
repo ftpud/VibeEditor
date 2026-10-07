@@ -237,7 +237,7 @@ export async function createServer(host: string, port: number, workspacePath: st
   const acp = createAcpRegistry(aiChanged, {
     begin: async (target, provider, prompt, sessionId, provenance) => { const id = await checkpointStore(target).begin(provider as AiProvider, prompt, sessionId, undefined, provenance); taskGitChanged(target); return id; },
     complete: async (target, ids, status, provenance) => { await Promise.all(ids.map((id) => checkpointStore(target).complete(id, status, provenance))); taskGitChanged(target); }
-  }, async (target) => { const rootId = await ownerRootId(target); return rootId ? roots.get(rootId).path : rootWorkspace; });
+  }, async (target) => { const rootId = await ownerRootId(target); return rootId ? roots.get(rootId).path : rootWorkspace; }, rootWorkspace);
   const harnessRunners = new Map<string, HarnessRunner>();
   const harnessRunner = (rootId: string) => {
     let runner = harnessRunners.get(rootId);
@@ -360,7 +360,11 @@ export async function createServer(host: string, port: number, workspacePath: st
         for (const socket of activeSessions) sendWebSocketData(socket, encoded);
         if (resource.startsWith("tasks/")) await changed();
       });
-      return new AppToolService(context.tasks, acp, currentWorkspace, changed, onCommitMessageChanged, command.currentProvider, context.agents, root.path, aiTimers, rootWorkspace, ownedWorkflow, configuration).call(command.name, command.args);
+      return new AppToolService(context.tasks, acp, currentWorkspace, changed, onCommitMessageChanged, command.currentProvider, context.agents, root.path, aiTimers, rootWorkspace, ownedWorkflow, configuration, async (id) => {
+        if (!command.currentProvider) throw new CoreError("INVALID_REQUEST", "Skill loading requires a provider conversation");
+        const session = await acp.get(command.currentProvider).get(currentWorkspace);
+        return new SkillsStore(undefined, root.path).load(currentWorkspace, id, session);
+      }).call(command.name, command.args);
     });
   });
   const gitIndexWatcher = chokidar.watch(await gitIndexPath(workspace), { ignoreInitial: true });
