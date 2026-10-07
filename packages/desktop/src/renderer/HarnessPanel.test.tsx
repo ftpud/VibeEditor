@@ -1,6 +1,6 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { HarnessDefinition, HarnessRun } from "@remote-ide/protocol";
+import type { HarnessBlock, HarnessDefinition, HarnessRun } from "@remote-ide/protocol";
 import { alignBlocks, autoLayoutBlocks, dragPosition, edgePath, fitCanvasViewport, HarnessPanel, minimapScrollPosition, minimapViewport, responsePreview, workflowRunExport } from "./HarnessPanel";
 
 afterEach(cleanup);
@@ -599,6 +599,22 @@ describe("HarnessPanel", () => {
     fireEvent.click(screen.getByRole("button", { name: "Duplicate workflow" }));
     await waitFor(() => expect(onCreate).toHaveBeenCalledWith("Flow copy"));
     expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ id: "copy", name: "Flow copy", version: 1, blocks: harness.blocks }));
+  });
+
+  it("duplicates the selected block with a new identity and offset", async () => {
+    const harness: HarnessDefinition = { id: "harness-1", name: "Flow", version: 1, createdAt: "now", updatedAt: "now", blocks: [{ id: "plan", type: "prompt", label: "Plan", prompt: "{{input}}", position: { x: 20, y: 30 }, inputSchema: { type: "object", required: ["featureId"] } }], edges: [] };
+    const onSave = vi.fn().mockImplementation(async (value) => value);
+    render(<HarnessPanel harnesses={[harness]} runs={[]} providers={[]} agents={[]} onCreate={vi.fn()} onSave={onSave} onDelete={vi.fn()} onRun={vi.fn()} onCancelRun={vi.fn()} onError={vi.fn()} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "List" }));
+    fireEvent.click(screen.getByRole("button", { name: "Edit block Plan" }));
+    fireEvent.click(screen.getByRole("button", { name: "Duplicate selected block" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() => expect(onSave).toHaveBeenCalled());
+    const copied = onSave.mock.calls.at(0)?.[0].blocks.find((item: HarnessBlock) => item.id !== "plan");
+    expect(copied).toMatchObject({ label: "Plan copy", type: "prompt", prompt: "{{input}}", inputSchema: { type: "object", required: ["featureId"] }, position: { x: 52, y: 62 } });
+    expect(copied.id).not.toBe("plan");
   });
 
   it("offers reload, comparison, and save-as-copy when a concurrent save conflicts", async () => {
