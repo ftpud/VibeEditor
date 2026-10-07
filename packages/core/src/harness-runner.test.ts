@@ -53,6 +53,17 @@ describe("HarnessRunner", () => {
     release(); await vi.waitFor(async () => expect((await store.runs())[0]?.status).toBe("succeeded"));
   });
 
+  it("does not dispatch a block after its persisted attempt limit is reached", async () => {
+    const state = await mkdtemp(path.join(os.tmpdir(), "workflow-attempt-limit-")); const store = new HarnessStore("/workspace", state); const created = await store.create("Limited attempts");
+    const definition = await store.update({ ...created, settings: { maxBlockAttempts: 1 }, blocks: [{ id: "worker", type: "review", label: "Worker", prompt: "Review", review: { revision: "abc1234" }, position: { x: 0, y: 0 } }], edges: [] });
+    await store.saveRun({ id: "attempt-limit", harnessId: definition.id, harnessVersion: definition.version, definition, executionPlan: { version: 1, createdAt: "now", definitionVersion: definition.version, order: ["worker"], blocks: [{ blockId: "worker", incoming: [], outgoing: [] }] }, input: "work", status: "running", createdAt: "now", startedAt: "now", blocks: [{ blockId: "worker", status: "queued", attempts: [{ id: "first", index: 1, status: "failed", startedAt: "now", completedAt: "now", operationId: "first-operation" }] }] });
+    const dispatch = vi.fn(async () => session("done")); const runner = new HarnessRunner(store, () => undefined);
+    await runner.recover(dispatch);
+    await vi.waitFor(async () => expect((await store.runs())[0]?.status).toBe("failed"));
+    expect(dispatch).not.toHaveBeenCalled();
+    expect((await store.runs())[0]?.error).toContain("limit of 1 attempts");
+  });
+
   it("deduplicates a concurrent external operation by its stable key", async () => {
     const state = await mkdtemp(path.join(os.tmpdir(), "workflow-operation-")); const store = new HarnessStore("/workspace", state); const definition = await store.create("Operation");
     await store.update({ ...definition, blocks: [{ id: "worker", type: "prompt", label: "Worker", prompt: "work", position: { x: 0, y: 0 } }], edges: [] });
