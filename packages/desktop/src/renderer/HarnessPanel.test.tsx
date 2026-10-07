@@ -1,7 +1,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { HarnessDefinition, HarnessRun } from "@remote-ide/protocol";
-import { dragPosition, edgePath, fitCanvasViewport, HarnessPanel, responsePreview } from "./HarnessPanel";
+import { autoLayoutBlocks, dragPosition, edgePath, fitCanvasViewport, HarnessPanel, responsePreview } from "./HarnessPanel";
 
 afterEach(cleanup);
 
@@ -61,6 +61,33 @@ describe("HarnessPanel", () => {
     expect(screen.getByRole("button", { name: "Reset workflow zoom" }).textContent).toBe(`${Math.round(fitted.zoom * 100)}%`);
     expect(canvas.scrollLeft).toBeCloseTo(fitted.scrollLeft);
     expect(canvas.scrollTop).toBeCloseTo(fitted.scrollTop);
+  });
+
+  it("arranges connected blocks into stable workflow columns", () => {
+    const blocks = [
+      { id: "build", type: "text" as const, label: "Build", prompt: "", position: { x: 900, y: 400 } },
+      { id: "plan", type: "text" as const, label: "Plan", prompt: "", position: { x: 500, y: 300 } },
+      { id: "test", type: "text" as const, label: "Test", prompt: "", position: { x: 100, y: 200 } },
+      { id: "notes", type: "text" as const, label: "Notes", prompt: "", position: { x: 20, y: 20 } },
+    ];
+    const edges = [{ id: "plan-build", from: "plan", to: "build" }, { id: "build-test", from: "build", to: "test" }, { id: "tool", from: "test", to: "plan", type: "use" as const }];
+    expect(autoLayoutBlocks(blocks, edges).map(({ id, position }) => ({ id, position }))).toEqual([
+      { id: "build", position: { x: 292, y: 32 } },
+      { id: "plan", position: { x: 32, y: 32 } },
+      { id: "test", position: { x: 552, y: 32 } },
+      { id: "notes", position: { x: 32, y: 192 } },
+    ]);
+  });
+
+  it("lays out the draft through the canvas control without saving it", () => {
+    const { onSave } = renderZoomHarness();
+    fireEvent.click(screen.getByRole("button", { name: "Automatically lay out workflow" }));
+    const first = screen.getByLabelText("First response preview").closest(".harness-block") as HTMLElement;
+    const second = screen.getByLabelText("Second response preview").closest(".harness-block") as HTMLElement;
+    expect(first.style.left).toBe("32px");
+    expect(second.style.left).toBe("292px");
+    expect(screen.getByRole("button", { name: "Save" }).hasAttribute("disabled")).toBe(false);
+    expect(onSave).not.toHaveBeenCalled();
   });
 
   it("drags and updates connection geometry after zoom, but leaves View mode fixed", () => {
