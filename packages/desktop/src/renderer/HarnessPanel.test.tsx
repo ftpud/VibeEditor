@@ -72,13 +72,14 @@ describe("HarnessPanel", () => {
     fireEvent.change(screen.getByLabelText("Workflow stack size limit"), { target: { value: "10" } });
     fireEvent.change(screen.getByLabelText("Workflow loop limit"), { target: { value: "5" } });
     fireEvent.change(screen.getByLabelText("Workflow child task limit"), { target: { value: "8" } });
+    fireEvent.change(screen.getByLabelText("Workflow prompt limit"), { target: { value: "5000" } });
     fireEvent.change(screen.getByLabelText("Workflow retry attempts"), { target: { value: "5" } });
     fireEvent.change(screen.getByLabelText("Workflow output limit"), { target: { value: "5000" } });
     fireEvent.change(screen.getByLabelText("Workflow log limit"), { target: { value: "25" } });
     fireEvent.change(screen.getByLabelText("Workflow run duration"), { target: { value: "15" } });
     fireEvent.change(screen.getByLabelText("Workflow token budget"), { target: { value: "50000" } });
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
-    await waitFor(() => expect(onSave.mock.calls.at(0)?.[0].settings).toEqual({ concurrency: 2, maxActiveRuns: 3, maxBlockAttempts: 20, maxStackSize: 10, maxLoopCount: 5, maxChildTasks: 8, retry: { maxAttempts: 5 }, outputLimitChars: 5000, logLimitEntries: 25, maxRunDurationMs: 900_000, tokenBudget: 50_000 }));
+    await waitFor(() => expect(onSave.mock.calls.at(0)?.[0].settings).toEqual({ concurrency: 2, maxActiveRuns: 3, maxBlockAttempts: 20, maxStackSize: 10, maxLoopCount: 5, maxChildTasks: 8, promptLimitChars: 5000, retry: { maxAttempts: 5 }, outputLimitChars: 5000, logLimitEntries: 25, maxRunDurationMs: 900_000, tokenBudget: 50_000 }));
   });
 
   it("shows the current canvas viewport in a minimap and moves it on click", () => {
