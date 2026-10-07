@@ -18,6 +18,7 @@ import { JavaProjectService } from "./java.js";
 import { JdtLanguageService } from "./jdtls.js";
 import { WorkspaceTaskStore } from "./tasks.js";
 import { UsefulFilesStore } from "./useful-files.js";
+import { SkillsStore } from "./skills.js";
 import { AgentsStore } from "./agents.js";
 import { HarnessStore } from "./harnesses.js";
 import { executeFlowScript } from "./workflow-script.js";
@@ -669,7 +670,8 @@ async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStor
           configuration: request.payload.configuration,
           mcpServers: appTools.servers,
           agent: appTools.agent,
-          agentPreset: request.payload.agentPreset
+          agentPreset: request.payload.agentPreset,
+          skillIds: request.payload.skillIds
         });
         return { task };
       } catch (error) {
@@ -734,6 +736,12 @@ async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStor
       const registry = await tasks.list();
       return { workspace: workspacePath, projectName: path.basename(path.resolve(rootWorkspace)), tree: await filesystem.listTree(request.payload.includeIgnored === true), options: await workspaceState.load(), ...registry };
     }
+    case "skills.list": return new SkillsStore().list(workspacePath);
+    case "skills.read": return { content: await new SkillsStore().read(request.payload.id, workspacePath) };
+    case "skills.write": await new SkillsStore().write(request.payload.id, workspacePath, request.payload.content); return {};
+    case "skills.delete": await new SkillsStore().delete(request.payload.id, workspacePath); return {};
+    case "skills.policy": await new SkillsStore().writePolicy(workspacePath, request.payload); return {};
+    case "ai.skills": return { session: await acp.get(request.payload.provider).setSkills(workspacePath, request.payload.ids, request.payload.sessionId, request.payload.agentPreset) };
     case "ai.providers": return { providers: acp.list() };
     case "ai.get": return { session: await acp.get(request.payload.provider).get(workspacePath) };
     case "ai.models": return { models: await acp.get(request.payload.provider).models() };
