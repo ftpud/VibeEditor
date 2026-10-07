@@ -23,6 +23,57 @@ async function setup(blocks: HarnessBlock[], edges: HarnessEdge[], concurrency =
 }
 
 describe("typed workflows", () => {
+  it("keeps Chatbox conversations and sessions across turns and exposes every connected block", async () => {
+    const { runner, definition, store, finished } = await setup([
+      block("chat", "chatbox", { prompt: "" }), block("tool", "text", { prompt: "Tool: {{input}}" }), block("unused", "text", { prompt: "Never called" }),
+    ], [edge("chat", "tool"), edge("chat", "unused", "use")]);
+    let activeRunner = runner;
+    const useTool = async (runId: string) => {
+      expect(activeRunner.isFlowBlock(runId, "chat")).toBe(true);
+      await expect(activeRunner.flowTool(runId, "chat", "workflow_use_block", { block_id: "unconnected", input: "unsafe" })).rejects.toThrow("connected block");
+      return activeRunner.flowTool(runId, "chat", "workflow_use_block", { block_id: "tool", input: "requested" });
+    };
+    const dispatch = vi.fn(async (_block: HarnessBlock, _prompt: string, runtime: Parameters<Parameters<HarnessRunner["start"]>[2]>[2]) => {
+      await runtime.started("/chat/session");
+      expect(await useTool(runtime.runId)).toMatchObject({ output: "Tool: requested" });
+      return session("First reply");
+    });
+    const append = vi.fn(async (_block: HarnessBlock, _prompt: string, runtime: Parameters<NonNullable<Parameters<HarnessRunner["start"]>[4]>>[2]) => {
+      expect(runtime.workspace).toBe("/chat/session");
+      expect(await useTool(runtime.runId)).toMatchObject({ output: "Tool: requested" });
+      await runtime.activity?.(session("Streaming reply"));
+      expect((await store.runs())[0]?.blocks.find((block) => block.blockId === "chat")?.chatMessages?.at(-1)?.text).toBe("Streaming reply");
+      return session("Second reply");
+    });
+    const run = await runner.start(definition.id, "Hello", dispatch, "provider", append, "chat");
+    expect((await finished()).blocks.find((block) => block.blockId === "unused")?.status).toBe("skipped");
+    // A new runner proves that the conversation can resume from persisted state.
+    activeRunner = new HarnessRunner(store, () => {}, 1);
+    await activeRunner.continueChat(run.id, "chat", "Follow up", dispatch, "different-default", append);
+    const final = await finished();
+    expect(final.status).toBe("succeeded");
+    expect(dispatch).toHaveBeenCalledOnce(); expect(append).toHaveBeenCalledOnce();
+    const chat = final.blocks.find((block) => block.blockId === "chat")!;
+    expect(chat.provider).toBe("provider");
+    expect(chat.chatMessages?.map((message) => [message.role, message.text])).toEqual([["user", "Hello"], ["assistant", "First reply"], ["user", "Follow up"], ["assistant", "Second reply"]]);
+    expect(final.blocks.find((block) => block.blockId === "tool")?.log?.filter((entry) => entry.kind === "response")).toHaveLength(2);
+  });
+
+  it("rejects overlapping Chatbox turns and permits a stopped conversation to resume", async () => {
+    const { runner, definition, store, finished } = await setup([block("chat", "chatbox", { prompt: "" })], []);
+    let release!: () => void;
+    const pending = new Promise<void>((resolve) => { release = resolve; });
+    const dispatch = vi.fn(async (_block: HarnessBlock, _prompt: string, runtime: Parameters<Parameters<HarnessRunner["start"]>[2]>[2]) => { await runtime.started("/chat/session"); await pending; runtime.assertActive(); return session("reply"); });
+    const append = vi.fn(async () => session("Resumed"));
+    const run = await runner.start(definition.id, "Hello", dispatch, "provider", append, "chat");
+    await vi.waitFor(async () => expect((await store.runs())[0]?.blocks[0]?.workspace).toBe("/chat/session"));
+    await expect(runner.continueChat(run.id, "chat", "Too soon", dispatch, "provider", append)).rejects.toThrow("current workflow turn");
+    await runner.cancel(run.id, async () => {}); release();
+    await finished(); await vi.waitFor(() => expect(runner.isActive(run.id)).toBe(false));
+    await vi.waitFor(() => runner.continueChat(run.id, "chat", "Try again", dispatch, "provider", append));
+    expect((await finished()).blocks[0]?.chatMessages?.at(-1)?.text).toBe("Resumed");
+  });
+
   it("runs app actions as connected tools without waiting for app exit", async () => {
     const apps = new WorkflowAppService();
     const { runner, definition, store, finished } = await setup([

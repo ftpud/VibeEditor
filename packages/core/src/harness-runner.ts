@@ -7,7 +7,7 @@ import type { HarnessStore } from "./harnesses.js";
 import type { AiUsage } from "@remote-ide/acp";
 
 type Dispatch = (block: HarnessBlock, prompt: string, context: { runId: string; blockId: string; attemptId: string; iteration: number; started(workspace: string): Promise<void>; activity(session: AiSession, waitingUntil?: string): Promise<void>; assertActive(): void }) => Promise<AiSession>;
-type Append = (block: HarnessBlock, prompt: string, context: { runId: string; blockId: string; workspace: string }) => Promise<AiSession>;
+type Append = (block: HarnessBlock, prompt: string, context: { runId: string; blockId: string; workspace: string; activity?(session: AiSession, waitingUntil?: string): Promise<void> }) => Promise<AiSession>;
 type Interrupt = (provider: string, context: { runId: string; blockId: string; workspace?: string }) => Promise<void>;
 type ResolvePermission = (provider: string, workspace: string, requestId: string, optionId?: string) => Promise<AiSession>;
 type AnswerQuestion = (provider: string, workspace: string, input: string) => Promise<AiSession>;
@@ -23,6 +23,7 @@ export type HarnessRecoveryInspector = {
 
 export class HarnessRunner {
   private readonly flowInvocations = new Map<string, (id: string, input: string, ancestors?: string[]) => Promise<string>>();
+  private readonly resumingChats = new Set<string>();
   private readonly flowAnswers = new Map<string, (answer: string) => void>();
   private readonly cancelled = new Set<string>();
   private readonly activeRuns = new Set<string>();
@@ -36,7 +37,7 @@ export class HarnessRunner {
     this.recovery = { maxElapsedMs: 15 * 60_000, jitterRatio: 0.2, random: Math.random, ...recovery };
   }
 
-  isFlowBlock(runId: string, blockId: string): boolean { return this.executions.get(runId)?.blocks.some((block) => block.id === blockId && block.type === "ai") ?? false; }
+  isFlowBlock(runId: string, blockId: string): boolean { return this.executions.get(runId)?.blocks.some((block) => block.id === blockId && ["ai", "chatbox"].includes(block.type)) ?? false; }
 
   isActive(runId: string): boolean { return this.activeRuns.has(runId) && !this.cancelled.has(runId); }
 
@@ -226,6 +227,28 @@ export class HarnessRunner {
     return run;
   }
 
+  async continueChat(runId: string, blockId: string, input: string, dispatch: Dispatch, defaultProvider: string, append: Append): Promise<HarnessRun> {
+    if (this.activeRuns.has(runId) || this.resumingChats.has(runId)) throw new CoreError("INVALID_REQUEST", "Wait for the current workflow turn to finish before sending another message");
+    this.resumingChats.add(runId);
+    try {
+      if (typeof input !== "string" || !input.trim() || input.length > 100_000) throw new CoreError("INVALID_REQUEST", "Chat input must contain 1–100,000 characters");
+      const run = (await this.store.runs()).find((item) => item.id === runId);
+      const definition = run?.definition;
+      const block = definition?.blocks.find((item) => item.id === blockId);
+      if (!run || !definition || block?.type !== "chatbox") throw new CoreError("INVALID_REQUEST", "Select a Chatbox in an existing workflow run");
+      const validation = validateHarness(definition);
+      if (!validation.valid) throw new CoreError("INVALID_REQUEST", "This saved workflow definition is invalid");
+      const state = run.blocks.find((item) => item.blockId === blockId)!;
+      if (isActiveStatus(run.status)) throw new CoreError("INVALID_REQUEST", "The previous workflow turn is still active");
+      run.input = input.trim(); run.status = "queued"; run.error = undefined; run.completedAt = undefined; run.startedAt = undefined;
+      state.status = "queued"; state.error = undefined; state.pendingPermission = undefined; state.question = undefined; state.pauseId = undefined; state.waitingUntil = undefined;
+      await this.store.createRun(run, definition.settings?.maxActiveRuns ?? 4);
+      this.changed(run.id); this.activeRuns.add(run.id);
+      void this.execute(run, definition.blocks, definition.edges, validation.order, dispatch, state.provider ?? defaultProvider, append, false, blockId);
+      return structuredClone(run);
+    } finally { this.resumingChats.delete(runId); }
+  }
+
   async recover(dispatch: Dispatch, defaultProvider = "codex", append?: Append, inspector?: HarnessRecoveryInspector): Promise<HarnessRun[]> {
     const recovered: HarnessRun[] = [];
     for (const run of await this.store.runs()) {
@@ -409,7 +432,7 @@ export class HarnessRunner {
 
   async runStack(runId: string, blockId: string, inputs: string[], path?: string): Promise<{ blocks: Array<{ blockId: string; output: string }> }> {
     const execution = this.executions.get(runId); if (!execution || !this.isActive(runId)) throw new Error("Workflow execution is no longer active");
-    if (execution.blocks.find((block) => block.id === blockId)?.type === "ai") throw new Error("Use workflow_use_block and workflow_choose_path for typed flow connections");
+    if (["ai", "chatbox"].includes(execution.blocks.find((block) => block.id === blockId)?.type ?? "")) throw new Error("Use workflow_use_block and workflow_choose_path for typed flow connections");
     if (!inputs.length || !inputs.every((input) => typeof input === "string" && input.trim())) throw new Error("inputs must be a non-empty array of strings");
     const maxStackSize = execution.run.definition?.settings?.maxStackSize ?? 100;
     if (inputs.length > maxStackSize) throw new CoreError("INVALID_REQUEST", `Workflow stack accepts at most ${maxStackSize} input${maxStackSize === 1 ? "" : "s"} per invocation`);
@@ -573,7 +596,7 @@ export class HarnessRunner {
   async flowTool(runId: string, blockId: string, name: string, args: Record<string, unknown>): Promise<unknown> {
     const execution = this.activeExecution(runId);
     const state = execution.run.blocks.find((item) => item.blockId === blockId);
-    if (state?.status !== "running" || execution.blocks.find((block) => block.id === blockId)?.type !== "ai") throw new Error("Only an active AI Agent can use flow tools");
+    if (state?.status !== "running" || !["ai", "chatbox"].includes(execution.blocks.find((block) => block.id === blockId)?.type ?? "")) throw new Error("Only an active AI Agent or Chatbox can use flow tools");
     const edges = execution.edges.filter((edge) => edge.from === blockId);
     if (name === "workflow_connections") return edges.map((edge) => ({ blockId: edge.to, name: execution.blocks.find((block) => block.id === edge.to)?.label, blockType: execution.blocks.find((block) => block.id === edge.to)?.type, description: execution.blocks.find((block) => block.id === edge.to)?.prompt, seconds: execution.blocks.find((block) => block.id === edge.to)?.seconds, app: execution.blocks.find((block) => block.id === edge.to)?.app, type: edge.type ?? "follow", path: edge.label }));
     if (name === "workflow_choose_path") {
@@ -582,7 +605,7 @@ export class HarnessRunner {
       state.selectedRoute = edge.label; await this.update(execution.run); return { path: edge.label };
     }
     if (name !== "workflow_use_block") throw new Error("Unknown flow tool");
-    const edge = edges.find((edge) => edge.type === "use" && edge.to === args.block_id);
+    const edge = edges.find((edge) => (edge.type === "use" || execution.blocks.find((block) => block.id === blockId)?.type === "chatbox") && edge.to === args.block_id);
     if (!edge || typeof args.input !== "string" || args.input.length > 100_000) throw new Error("Use a connected block ID and a text input");
     const invoke = this.flowInvocations.get(runId);
     if (!invoke) throw new Error("Flow is unavailable");
@@ -619,18 +642,22 @@ export class HarnessRunner {
       const block = blocks.find((item) => item.id === id)!;
       const state = run.blocks.find((item) => item.blockId === id)!;
       busy.add(id); state.error = undefined; state.status = "running"; state.startedAt = new Date().toISOString(); state.completedAt = undefined; state.selectedRoute = undefined;
+      if (block.type === "chatbox") {
+        const timestamp = new Date().toISOString();
+        state.chatMessages = [...state.chatMessages ?? [], { id: crypto.randomUUID(), role: "user", text: input, timestamp }, { id: crypto.randomUUID(), role: "assistant", text: "", timestamp }].slice(-200) as NonNullable<typeof state.chatMessages>;
+      }
       run.status = this.runActivityStatus(run); await this.update(run);
       let output = input;
       try {
         const prompt = renderHarnessPrompt(block.prompt, input, execution.outputs);
-        if (block.type !== "ai") { state.prompt = prompt; state.structuredInput = parseHarnessData(input, block.inputSchema, `${block.label} input`); this.log(state, "prompt", input); }
-        if (block.type === "ai" || ["prompt", "task", "review", "verification"].includes(block.type)) {
-          const tools = edges.filter((edge) => edge.from === id && edge.type === "use").map((edge) => ({ block_id: edge.to, name: blocks.find((item) => item.id === edge.to)?.label, type: blocks.find((item) => item.id === edge.to)?.type, description: blocks.find((item) => item.id === edge.to)?.prompt, seconds: blocks.find((item) => item.id === edge.to)?.seconds, app: blocks.find((item) => item.id === edge.to)?.app }));
-          const paths = edges.filter((edge) => edge.from === id && edge.type === "path").map((edge) => edge.label);
+        if (!["ai", "chatbox"].includes(block.type)) { state.prompt = prompt; state.structuredInput = parseHarnessData(input, block.inputSchema, `${block.label} input`); this.log(state, "prompt", input); }
+        if (["ai", "chatbox"].includes(block.type) || ["prompt", "task", "review", "verification"].includes(block.type)) {
+          const tools = edges.filter((edge) => edge.from === id && (edge.type === "use" || block.type === "chatbox")).map((edge) => ({ block_id: edge.to, name: blocks.find((item) => item.id === edge.to)?.label, type: blocks.find((item) => item.id === edge.to)?.type, description: blocks.find((item) => item.id === edge.to)?.prompt, seconds: blocks.find((item) => item.id === edge.to)?.seconds, app: blocks.find((item) => item.id === edge.to)?.app }));
+          const paths = block.type === "chatbox" ? [] : edges.filter((edge) => edge.from === id && edge.type === "path").map((edge) => edge.label);
           const instructions = `${block.prompt}\n\nInput:\n{{input}}\n\nConnected tools: ${JSON.stringify(tools)}. Call workflow_use_block with block_id and input to use one. Timer blocks arm immediately and return without waiting, so you can continue your work. When a Timer fires, its follow connections receive the input you supplied to it. Reusing a waiting Timer replaces its countdown. Each AI block keeps its own context. Available paths: ${JSON.stringify(paths)}. ${paths.length ? "Call workflow_choose_path before finishing to choose one path." : ""}`;
           await this.executeBlock(run, { ...block, prompt: instructions }, blocks, [], execution.outputs, execution.dispatch, execution.defaultProvider, [input]);
           output = state.output ?? "";
-          if (paths.length && !state.selectedRoute) throw new Error(`${block.label} finished without choosing a path`);
+          if (block.type !== "chatbox" && paths.length && !state.selectedRoute) throw new Error(`${block.label} finished without choosing a path`);
         } else if (block.type === "text" || block.type === "start_button") output = prompt;
         else if (block.type === "markdown") output = block.prompt.trim() ? prompt : input;
         else if (block.type === "user_prompt" || block.type === "yes_no_prompt") {
@@ -652,13 +679,13 @@ export class HarnessRunner {
           state.tokens = session.tokens; this.assertTokenBudget(run);
           output = session.messages.filter((message) => message.role === "assistant").at(-1)?.text ?? "";
         }
-        if (block.type !== "ai") state.structuredOutput = parseHarnessData(output, block.outputSchema, `${block.label} output`);
+        if (!["ai", "chatbox"].includes(block.type)) state.structuredOutput = parseHarnessData(output, block.outputSchema, `${block.label} output`);
         this.assertActive(run.id); this.log(state, "response", output); state.output = output.slice(-200_000); execution.outputs.set(id, output); state.status = "succeeded"; state.completedAt = new Date().toISOString(); run.status = this.runActivityStatus(run); await this.update(run);
       } catch (error) {
         state.status = this.isActive(run.id) ? "failed" : "cancelled"; state.error = error instanceof Error ? error.message : String(error); state.completedAt = new Date().toISOString(); this.log(state, "error", state.error); await this.update(run); throw error;
       } finally { busy.delete(id); }
       if (block.type === "markdown") this.openDocument?.({ runId: run.id, blockId: id, title: block.label.endsWith(".md") ? block.label : `${block.label}.md`, content: output });
-      for (const edge of edges.filter((edge) => edge.from === id && (edge.type === "follow" || !edge.type || (edge.type === "path" && edge.label === state.selectedRoute)))) {
+      for (const edge of edges.filter((edge) => block.type !== "chatbox" && edge.from === id && (edge.type === "follow" || !edge.type || (edge.type === "path" && edge.label === state.selectedRoute)))) {
         if (ancestors.includes(edge.to) || edge.to === id) {
           const count = (execution.loopInvocations.get(edge.id) ?? 0) + 1;
           const limit = run.definition?.settings?.maxLoopCount ?? 100;
@@ -703,7 +730,7 @@ export class HarnessRunner {
         const structuredInput = parseHarnessData(input, block.inputSchema, `${block.label} input`);
         if (structuredInput !== undefined) state.structuredInput = structuredInput;
         let prompt = renderHarnessPrompt(block.prompt, input, outputs).replace(/\{\{\s*iteration\s*\}\}/g, String(index + 1));
-        if (index === 0 && state.workspace && block.type !== "ai") prompt = `Continue your interrupted work from this session. Inspect prior tool results and preserve recorded task IDs and completed merges; do not duplicate previously completed operations. Original stage instructions:\n\n${prompt}`;
+        if (index === 0 && state.workspace && !["ai", "chatbox"].includes(block.type)) prompt = `Continue your interrupted work from this session. Inspect prior tool results and preserve recorded task IDs and completed merges; do not duplicate previously completed operations. Original stage instructions:\n\n${prompt}`;
         if (outgoing.length) prompt += `\n\nWorkflow runtime capability: Use workflow_run_stack to send prompts to directly connected blocks and wait for their replies. If a connected block already has a session, the prompt is appended to that same session. Use timer_set to pause yourself and resume this same session later.`;
         if (loopOutgoing.length) prompt += `\nLoop paths return to earlier workflow blocks for another cycle. Use one only when another pass is needed: ${loopOutgoing.map((edge) => edge.label ?? blocks.find((item) => item.id === edge.to)?.label ?? edge.to).join(", ")}.`;
         if (block.routing === "ai" && outgoing.length) prompt += `\nChoose a named path when calling workflow_run_stack. Available paths: ${outgoing.map((edge) => edge.label).join(", ")}.`;
@@ -731,10 +758,11 @@ export class HarnessRunner {
           const settled = await execution.scheduler.turn(block.id, () => {
             execution.turnClaims.set(block.id, attemptId);
             return state.workspace && block.type !== "review"
-              ? execution.append(block, prompt, { runId: run.id, blockId: block.id, workspace: state.workspace! })
+              ? execution.append(block, prompt, { runId: run.id, blockId: block.id, workspace: state.workspace!, activity })
               : dispatch(this.effectiveBlock(run, block), prompt, { runId: run.id, blockId: block.id, attemptId, iteration: index + 1, started, activity, assertActive: () => this.assertActive(run.id) });
           });
           this.assertActive(run.id);
+          if (block.type === "chatbox") state.chatMessages!.at(-1)!.text = chatResponse(settled);
           state.sessionId = settled.id; attempt.sessionId = settled.id; if (iteration) iteration.sessionId = settled.id;
           state.tokens = settled.tokens;
           this.assertTokenBudget(run);
@@ -862,9 +890,13 @@ export class HarnessRunner {
     const question = status === "awaiting_user_input" ? session.messages.filter((message) => message.role === "assistant").at(-1)?.text : undefined;
     const permission = status === "awaiting_permission" ? session.pendingPermission : undefined;
     const response = waitingUntil ? session.messages.filter((message) => message.role === "assistant").at(-1)?.text.slice(-200_000) : undefined;
+    const chatReply = state.chatMessages?.at(-1);
+    const chatText = chatReply?.role === "assistant" ? chatResponse(session) : undefined;
+    const chatChanged = chatText !== undefined && chatText !== chatReply?.text;
+    if (chatChanged) chatReply!.text = chatText!;
     const responseChanged = response !== undefined && response !== state.output;
     const pauseId = status === "running" ? undefined : state.status === status ? state.pauseId ?? crypto.randomUUID() : crypto.randomUUID();
-    if (state.status === status && state.waitingUntil === waitingUntil && state.question === question && JSON.stringify(state.pendingPermission) === JSON.stringify(permission) && state.sessionId === session.id && state.pauseId === pauseId && !responseChanged) return;
+    if (state.status === status && state.waitingUntil === waitingUntil && state.question === question && JSON.stringify(state.pendingPermission) === JSON.stringify(permission) && state.sessionId === session.id && state.pauseId === pauseId && !responseChanged && !chatChanged) return;
     if (responseChanged) { state.output = response; this.log(state, "response", response!); }
     const previous = state.status; state.status = status; state.sessionId = session.id; state.waitingUntil = waitingUntil; state.question = question; state.pendingPermission = permission;
     const attempt = state.attempts?.at(-1); if (attempt && session.id) { attempt.sessionId = session.id; await this.recordCompletedOperation(run, "session_binding", `session:${attempt.id}`, state.blockId, { sessionId: session.id, workspace: state.workspace }, attempt.id); }
@@ -1198,4 +1230,9 @@ export function nextWatchdogReset(usage?: AiUsage, now = Date.now()): string {
   const topLevel = Date.parse(usage?.resetsAt ?? "");
   if (!windows.length && topLevel > now) candidates.push(topLevel);
   return new Date(candidates.length ? (exhausted.length ? Math.max(...candidates) : Math.min(...candidates)) : now + 300_000).toISOString();
+}
+
+function chatResponse(session: AiSession): string {
+  const lastUser = session.messages.map((message) => message.role).lastIndexOf("user");
+  return session.messages.slice(lastUser + 1).filter((message) => message.role === "assistant").map((message) => message.text).join("\n\n").slice(-200_000);
 }

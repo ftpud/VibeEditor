@@ -4,7 +4,7 @@ import type { HarnessBlock, HarnessDefinition, HarnessRun } from "@remote-ide/pr
 import { BlockRunDetails, PauseResolution, WorkflowMessage, type HarnessPanelProps } from "./HarnessPanel";
 import { useWorkflowTraces } from "./workflow-tracing";
 
-type Props = Pick<HarnessPanelProps, "harnesses" | "runs" | "diagnostics" | "onRun" | "onValidate" | "onCancelRun" | "onResolvePermission" | "onAnswerQuestion" | "onResumePause" | "onRetryPause" | "onCancelPause" | "onError">;
+type Props = Pick<HarnessPanelProps, "harnesses" | "runs" | "diagnostics" | "onRun" | "onChat" | "onValidate" | "onCancelRun" | "onResolvePermission" | "onAnswerQuestion" | "onResumePause" | "onRetryPause" | "onCancelPause" | "onError">;
 const activeStatuses = new Set(["queued", "running", "waiting", "awaiting_permission", "awaiting_user_input", "waiting_timer", "retry_scheduled"]);
 const pauseStatuses = new Set(["awaiting_permission", "awaiting_user_input", "waiting_timer", "retry_scheduled"]);
 const statusLabel = (status: string) => status.replaceAll("_", " ");
@@ -72,16 +72,17 @@ function WorkflowCard({ workflow, ...props }: Props & { workflow: HarnessDefinit
       <details className="workflow-run-input"><summary>Run prompt</summary><WorkflowMessage key={run.id} title="Prompt" value={run.input} /></details>
       <CompactWorkflowPreview definition={definition} run={run} selectedBlockId={selectedBlockId} onSelect={setSelectedBlockId} />
       <div className="workflow-card-actions"><button aria-expanded={showStarts} onClick={() => setShowStarts((value) => !value)}><Play size={13} /> New run</button>{!activeStatuses.has(run.status) && run.definition && <button disabled={starting} onClick={() => void start(undefined, run)}><RotateCcw size={13} /> Rerun</button>}{activeRuns.map((active) => <button key={active.id} aria-label={`Stop run ${active.id}`} onClick={() => void act(() => props.onCancelRun(active.id))}><Square size={12} /> Stop{activeRuns.length > 1 ? ` · ${active.id.slice(0, 6)}` : ""}</button>)}</div>
-      {selectedBlock && <BlockRunDetails key={`${run.id}:${selectedBlock.id}`} block={selectedBlock} run={run} state={run.blocks.find((block) => block.blockId === selectedBlock.id)} tasks={run.children?.filter((child) => child.blockId === selectedBlock.id)} onClose={() => setSelectedBlockId(undefined)} />}
+
       {run.blocks.filter((block) => pauseStatuses.has(block.status)).map((block) => <PauseResolution key={`${run.id}:${block.blockId}:${block.pauseId}`} {...props} run={run} block={block} label={definition.blocks.find((item) => item.id === block.blockId)?.label ?? block.blockId} yesNo={definition.blocks.find((item) => item.id === block.blockId)?.type === "yes_no_prompt"} />)}
       {run.error && <p className="workflow-card-error">{run.error}</p>}{!!run.cleanupErrors?.length && <p className="workflow-card-error">{run.cleanupErrors.join("; ")}</p>}
-    </> : <p className="workflow-card-hint">{workflow.blocks.length} blocks · Choose a starting point</p>}
+    </> : <><p className="workflow-card-hint">{workflow.blocks.length} blocks · {workflow.blocks.some((block) => block.type === "chatbox") ? "Open a Chatbox or choose a starting point" : "Choose a starting point"}</p><CompactWorkflowPreview definition={definition} selectedBlockId={selectedBlockId} onSelect={setSelectedBlockId} /></>}
+    {selectedBlock && <BlockRunDetails key={`${run?.id ?? workflow.id}:${selectedBlock.id}`} block={selectedBlock} run={run} state={run?.blocks.find((block) => block.blockId === selectedBlock.id)} tasks={run?.children?.filter((child) => child.blockId === selectedBlock.id)} onClose={() => setSelectedBlockId(undefined)} onChat={props.onChat ? async (message) => { const next = await props.onChat!(workflow.id, selectedBlock.id, message, run?.id); setStartedRun(next); setSelectedRunId(next.id); } : undefined} onCancelChat={run ? () => props.onCancelRun(run.id) : undefined} definition={definition} />}
     {(!run || showStarts) && <div className="workflow-starts">{starts.length ? starts.map((block) => renderStart(block)) : renderStart()}</div>}
     {error && <p role="alert" className="workflow-card-error">{error}</p>}
   </article>;
 }
 
-function CompactWorkflowPreview({ definition, run, selectedBlockId, onSelect }: { definition: HarnessDefinition; run: HarnessRun; selectedBlockId?: string; onSelect(id: string): void }) {
+function CompactWorkflowPreview({ definition, run, selectedBlockId, onSelect }: { definition: HarnessDefinition; run?: HarnessRun; selectedBlockId?: string; onSelect(id: string): void }) {
   const traces = useWorkflowTraces(run);
   const blocks = useMemo(() => {
     const source = definition.blocks;
@@ -129,7 +130,7 @@ function CompactWorkflowPreview({ definition, run, selectedBlockId, onSelect }: 
       return <g key={edge.id}><path className={`workflow-compact-edge ${edge.type ?? "follow"}`} d={path}><title>{from.label} → {to.label} · {edge.type ?? "follow"}{edge.label ? `: ${edge.label}` : ""}</title></path>{traces.filter((trace) => trace.edgeId === edge.id).map((trace) => <path key={trace.id} className={`harness-transfer ${edge.type ?? "follow"} ${trace.direction} ${trace.status}`} d={path} pathLength={100} style={{ animationDelay: `${trace.delayMs}ms` }} />)}</g>;
     })}
     {blocks.map((block) => {
-      const state = run.blocks.find((item) => item.blockId === block.id);
+      const state = run?.blocks.find((item) => item.blockId === block.id);
       const status = state?.status ?? "idle";
       return <g key={block.id} className={`workflow-compact-block ${status}${selectedBlockId === block.id ? " selected" : ""}`} transform={`translate(${block.position.x}, ${block.position.y})`} role="button" tabIndex={0} aria-pressed={selectedBlockId === block.id} aria-label={`${block.label}: ${statusLabel(status)}`} onClick={() => onSelect(block.id)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); onSelect(block.id); } }}><title>{block.label} · {statusLabel(status)}{state?.error ? ` · ${state.error}` : ""}</title><rect width={120} height={24} rx={5} /><circle cx={10} cy={12} r={3} /><text x={18} y={16}>{block.label.length > 15 ? `${block.label.slice(0, 14)}…` : block.label}</text></g>;
     })}

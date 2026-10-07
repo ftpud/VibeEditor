@@ -20,7 +20,7 @@ export function validateHarness(harness: HarnessDefinition): { valid: boolean; i
   for (const block of harness.blocks) {
     if (ids.has(block.id)) issues.push({ code: "duplicate-id", blockId: block.id, message: `Block ID '${block.id}' is duplicated` }); ids.add(block.id);
     if (!block.label.trim()) issues.push({ code: "empty-label", blockId: block.id, message: "Every block needs a name" });
-    if (!["text", "timer", "script", "run_app", "markdown", "start_input"].includes(block.type) && !block.watchdog && !block.prompt.trim()) issues.push({ code: "empty-prompt", blockId: block.id, message: `Block '${block.label || block.id}' needs a prompt` });
+    if (!["chatbox", "text", "timer", "script", "run_app", "markdown", "start_input"].includes(block.type) && !block.watchdog && !block.prompt.trim()) issues.push({ code: "empty-prompt", blockId: block.id, message: `Block '${block.label || block.id}' needs a prompt` });
     if (block.type === "review" && (!block.review || !isCommit(block.review.revision) || (block.review.baseRevision !== undefined && !isCommit(block.review.baseRevision)))) issues.push({ code: "invalid-gate", blockId: block.id, message: `Review block '${block.label || block.id}' needs an exact commit SHA and optional base SHA` });
     if (block.review?.correction && (!harness.blocks.some((item) => item.id === block.review!.correction!.ownerBlockId) || block.review.correction.ownerBlockId === block.id || (block.review.correction.maxCycles !== undefined && (!Number.isInteger(block.review.correction.maxCycles) || block.review.correction.maxCycles < 1 || block.review.correction.maxCycles > 20)) || (block.review.correction.verificationBlockId !== undefined && !harness.blocks.some((item) => item.id === block.review!.correction!.verificationBlockId)))) issues.push({ code: "invalid-gate", blockId: block.id, message: `Review correction settings need an existing owner block, optional verification block, and a cycle limit from 1 to 20` });
     if (block.type === "verification" && (!block.verification || !block.verification.command.trim() || (block.verification.revision !== undefined && !isCommit(block.verification.revision)) || (block.verification.timeoutMs !== undefined && (!Number.isInteger(block.verification.timeoutMs) || block.verification.timeoutMs < 1 || block.verification.timeoutMs > 30 * 60_000)) || (block.verification.workingDirectory !== undefined && (!block.verification.workingDirectory.trim() || block.verification.workingDirectory.includes("\\0"))))) issues.push({ code: "invalid-gate", blockId: block.id, message: `Verification block '${block.label || block.id}' needs a command, valid optional revision, working directory, and timeout` });
@@ -49,7 +49,7 @@ export function validateHarness(harness: HarnessDefinition): { valid: boolean; i
     if (harness.blocks.find((block) => block.id === edge.from)?.watchdog || harness.blocks.find((block) => block.id === edge.to)?.watchdog) issues.push({ code: "invalid-watchdog", edgeId: edge.id, message: "A Core watchdog runs independently and cannot have workflow connections" });
     if (edge.from === edge.to) issues.push({ code: "self-edge", edgeId: edge.id, blockId: edge.from, message: "A block cannot connect to itself" });
     if (edge.type === "use" || edge.type === "path") {
-      if (harness.blocks.find((block) => block.id === edge.from)?.type !== "ai") issues.push({ code: "invalid-gate", edgeId: edge.id, message: "Use and path connections must start at an AI Agent" });
+      if (!["ai", "chatbox"].includes(harness.blocks.find((block) => block.id === edge.from)?.type ?? "")) issues.push({ code: "invalid-gate", edgeId: edge.id, message: "Use and path connections must start at an AI Agent or Chatbox" });
     }
     const key = `${edge.from}\0${edge.to}\0${edge.type ?? "follow"}`; if (edgeKeys.has(key)) issues.push({ code: "duplicate-edge", edgeId: edge.id, message: "This connection already exists" }); edgeKeys.add(key);
     if (edge.type && edge.loop) issues.push({ code: "invalid-loop", edgeId: edge.id, message: "Typed connections cannot be legacy loop edges" });
@@ -57,7 +57,7 @@ export function validateHarness(harness: HarnessDefinition): { valid: boolean; i
     if (!edge.loop && edge.type !== "use" && harness.blocks.find((block) => block.id === edge.from)?.type !== "timer") { outgoing.set(edge.from, [...outgoing.get(edge.from) ?? [], edge.to]); indegree.set(edge.to, (indegree.get(edge.to) ?? 0) + 1); }
   }
   for (const block of harness.blocks.filter((item) => item.routing === "ai" || harness.edges.some((edge) => edge.from === item.id && edge.type === "path"))) {
-    const outgoingEdges = harness.edges.filter((edge) => edge.from === block.id && (block.type !== "ai" || edge.type === "path")); const labels = new Set<string>();
+    const outgoingEdges = harness.edges.filter((edge) => edge.from === block.id && (!["ai", "chatbox"].includes(block.type) || edge.type === "path")); const labels = new Set<string>();
     for (const edge of outgoingEdges) { const label = edge.label?.trim(); if (!label || labels.has(label)) issues.push({ code: "route-label", blockId: block.id, edgeId: edge.id, message: `AI-routed block '${block.label}' needs a unique label on every outgoing path` }); else labels.add(label); }
   }
   const queue = harness.blocks.filter((block) => (indegree.get(block.id) ?? 0) === 0).map((block) => block.id); const order: string[] = []; const pending = new Map(indegree);
@@ -68,7 +68,7 @@ export function validateHarness(harness: HarnessDefinition): { valid: boolean; i
 }
 
 export function isHarnessFlow(harness: Pick<HarnessDefinition, "blocks" | "edges">): boolean {
-  return harness.edges.some((edge) => edge.type !== undefined) || harness.blocks.some((block) => ["ai", "text", "timer", "script", "run_app", "user_prompt", "yes_no_prompt", "markdown", "start_button", "start_input"].includes(block.type));
+  return harness.edges.some((edge) => edge.type !== undefined) || harness.blocks.some((block) => ["ai", "chatbox", "text", "timer", "script", "run_app", "user_prompt", "yes_no_prompt", "markdown", "start_button", "start_input"].includes(block.type));
 }
 
 /** Legacy dependency workflows treat implicit back connections as loop paths. */

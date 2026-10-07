@@ -8,6 +8,11 @@ const harness = (edges: HarnessDefinition["edges"]): HarnessDefinition => ({ id:
 ], edges });
 
 describe("harness graph", () => {
+  it("allows Chatboxes with optional instructions and connected use/path blocks", () => {
+    const definition: HarnessDefinition = { ...harness([]), blocks: [{ id: "chat", type: "chatbox", label: "Chat", prompt: "", position: { x: 0, y: 0 } }, ...harness([]).blocks], edges: [{ id: "use", from: "chat", to: "plan", type: "use" }, { id: "path", from: "chat", to: "build", type: "path", label: "build" }] };
+    expect(validateHarness(definition).valid).toBe(true);
+  });
+
   it("validates Run App action settings without requiring AI instructions", () => {
     const app: HarnessBlock = { id: "app", type: "run_app", label: "App", prompt: "", position: { x: 0, y: 0 }, command: "npm run dev", app: { action: "start", name: "server" } };
     const validate = (changes: Partial<HarnessBlock>) => validateHarness({ ...harness([]), blocks: [{ ...app, ...changes }] });

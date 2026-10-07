@@ -12,6 +12,18 @@ function renderEditor(ui: Parameters<typeof render>[0]) {
 }
 
 describe("HarnessPanel", () => {
+  it("adds a Chatbox with AI settings and optional instructions", async () => {
+    const harness: HarnessDefinition = { id: "chat-flow", name: "Chat flow", version: 1, createdAt: "now", updatedAt: "now", blocks: [], edges: [] };
+    const onSave = vi.fn(async (definition) => definition);
+    renderEditor(<HarnessPanel harnesses={[harness]} runs={[]} providers={[]} agents={[]} onCreate={vi.fn()} onSave={onSave} onDelete={vi.fn()} onRun={vi.fn()} onCancelRun={vi.fn()} onError={vi.fn()} />);
+    fireEvent.change(screen.getByLabelText("Add block type"), { target: { value: "chatbox" } });
+    expect(screen.getByLabelText("AI model")).toBeTruthy();
+    expect(screen.getByLabelText("Block prompt")).toHaveProperty("value", "");
+    fireEvent.click(screen.getByTitle("Save workflow"));
+    await waitFor(() => expect(onSave).toHaveBeenCalled());
+    expect(onSave.mock.calls[0]?.[0].blocks[0]).toMatchObject({ type: "chatbox", prompt: "" });
+  });
+
   it("configures and saves a long-lived app block", async () => {
     const harness: HarnessDefinition = { id: "flow", name: "Apps", version: 1, createdAt: "now", updatedAt: "now", blocks: [], edges: [] };
     const onSave = vi.fn(async (definition) => definition);

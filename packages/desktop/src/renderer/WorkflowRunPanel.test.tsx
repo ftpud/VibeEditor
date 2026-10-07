@@ -14,6 +14,40 @@ const run: HarnessRun = { id: "run", harnessId: workflow.id, harnessVersion: 1, 
 const props = () => ({ harnesses: [workflow], runs: [], onRun: vi.fn().mockResolvedValue(run), onCancelRun: vi.fn().mockResolvedValue(undefined), onError: vi.fn() });
 
 describe("Workflow run library", () => {
+  it("opens a Chatbox before a run and sends follow-up messages to the same conversation", async () => {
+    const chatWorkflow: HarnessDefinition = { ...workflow, blocks: [{ id: "chat", type: "chatbox", label: "Assistant", prompt: "", position: { x: 0, y: 0 } }, workflow.blocks[2]!], edges: [{ id: "tool", from: "chat", to: "agent", type: "use" }] };
+    const chatRun: HarnessRun = { ...run, definition: chatWorkflow, status: "succeeded", blocks: [{ blockId: "chat", status: "succeeded", chatMessages: [{ id: "user", role: "user", text: "Hello", timestamp: "now" }, { id: "reply", role: "assistant", text: "**Hello back**", timestamp: "now" }] }] };
+    const onChat = vi.fn().mockResolvedValue(chatRun);
+    const callbacks = { ...props(), harnesses: [chatWorkflow], onChat };
+    const view = render(<WorkflowRunPanel {...callbacks} />);
+    fireEvent.click(screen.getByRole("button", { name: "Assistant: idle" }));
+    expect(screen.getByLabelText("Connected chat tools").textContent).toContain("Inspect");
+    const input = screen.getByLabelText("Message Assistant");
+    fireEvent.change(input, { target: { value: "Hello" } });
+    fireEvent.keyDown(input, { key: "Enter", shiftKey: true });
+    expect(onChat).not.toHaveBeenCalled();
+    fireEvent.keyDown(input, { key: "Enter" });
+    await waitFor(() => expect(onChat).toHaveBeenCalledWith("flow", "chat", "Hello", undefined));
+    expect(await screen.findByText("Hello back", { selector: "strong" })).toBeTruthy();
+    fireEvent.change(screen.getByLabelText("Message Assistant"), { target: { value: "Next message" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send chat message" }));
+    await waitFor(() => expect(onChat).toHaveBeenLastCalledWith("flow", "chat", "Next message", "run"));
+    view.rerender(<WorkflowRunPanel {...callbacks} runs={[{ ...chatRun, status: "running", blocks: [{ ...chatRun.blocks[0]!, status: "running" }] }]} />);
+    fireEvent.click(screen.getByRole("button", { name: "Stop chat response" }));
+    await waitFor(() => expect(callbacks.onCancelRun).toHaveBeenCalledWith("run"));
+  });
+
+  it("keeps a failed Chatbox message in the composer for retry", async () => {
+    const chatWorkflow: HarnessDefinition = { ...workflow, blocks: [{ id: "chat", type: "chatbox", label: "Assistant", prompt: "", position: { x: 0, y: 0 } }], edges: [] };
+    const onChat = vi.fn().mockRejectedValue(new Error("Provider offline"));
+    render(<WorkflowRunPanel {...props()} harnesses={[chatWorkflow]} onChat={onChat} />);
+    fireEvent.click(screen.getByRole("button", { name: "Assistant: idle" }));
+    fireEvent.change(screen.getByLabelText("Message Assistant"), { target: { value: "Keep this message" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send chat message" }));
+    expect(await screen.findByRole("alert")).toHaveProperty("textContent", "Provider offline");
+    expect(screen.getByLabelText("Message Assistant")).toHaveProperty("value", "Keep this message");
+  });
+
   it("offers every start and replaces launch controls with a live preview after starting", async () => {
     const callbacks = props();
     const view = render(<WorkflowRunPanel {...callbacks} />);
