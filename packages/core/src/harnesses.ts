@@ -146,7 +146,7 @@ export class HarnessStore {
 
   private async writeJson(name: string, value: unknown): Promise<void> {
     await mkdir(this.directory, { recursive: true }); const target = path.join(this.directory, name); const temporary = path.join(this.directory, `${name}.${crypto.randomUUID()}.tmp`);
-    try { await writeFile(temporary, `${JSON.stringify(value, null, 2)}\n`, "utf8"); await copyFile(target, `${target}.bak`).catch((error) => { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }); await rename(temporary, target); }
+    try { await writeFile(temporary, `${JSON.stringify(value, redactWorkflowValue, 2)}\n`, "utf8"); await copyFile(target, `${target}.bak`).catch((error) => { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }); await rename(temporary, target); }
     catch (error) { await rm(temporary, { force: true }).catch(() => undefined); throw new CoreError("WRITE_FAILED", `Could not save workflows: ${message(error)}`); }
   }
 
@@ -159,6 +159,10 @@ export class HarnessStore {
 }
 
 function validName(name: string): string { const value = name.trim(); if (!value || value.length > 120) throw new CoreError("INVALID_REQUEST", "Harness name must contain 1–120 characters"); return value; }
+function redactWorkflowValue(key: string, value: unknown): unknown {
+  if (/^(authorization|token|password|secret|api[_-]?key)$/i.test(key)) return "[REDACTED]";
+  return typeof value === "string" ? value.replace(/\b(?:sk|api|ghp|github_pat)_[A-Za-z0-9_-]{12,}\b/gi, "[REDACTED]").replace(/\b(authorization|token|password|secret|api[_-]?key)\s*[:=]\s*([^\s,;]+)/gi, "$1=[REDACTED]") : value;
+}
 const activeRunStatuses = new Set<HarnessRun["status"]>(["queued", "running", "waiting", "awaiting_permission", "awaiting_user_input", "waiting_timer", "retry_scheduled"]);
 const activeBlockStatuses = new Set<HarnessRun["blocks"][number]["status"]>(["queued", "running", "waiting", "awaiting_permission", "awaiting_user_input", "waiting_timer", "retry_scheduled"]);
 function isRecord(value: unknown): value is Record<string, unknown> { return Boolean(value) && typeof value === "object"; }
