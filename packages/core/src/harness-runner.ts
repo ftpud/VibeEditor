@@ -132,6 +132,7 @@ export class HarnessRunner {
   async recoverChildren(runId: string, inspect: (child: HarnessChildTask) => Promise<AiSession | undefined>, resume: (child: HarnessChildTask, session: AiSession) => Promise<unknown>): Promise<void> {
     const execution = this.executions.get(runId);
     if (!execution || !this.isActive(runId)) return;
+    const policy = this.policy(execution.run);
     for (const child of execution.run.children ?? []) {
       if (!this.isActive(runId)) return;
       const state = execution.run.blocks.find((block) => block.blockId === child.blockId)!;
@@ -139,13 +140,13 @@ export class HarnessRunner {
         this.assertActive(runId);
         const session = await inspect(child);
         this.assertActive(runId);
-        if (!session || session.status !== "error" || child.recoveryAttempts >= this.recovery.maxAttempts) continue;
+        if (!session || session.status !== "error" || child.recoveryAttempts >= policy.maxAttempts) continue;
         const fallback = session.messages.filter((message) => message.role === "error" || message.role === "assistant").slice(-2).map((message) => message.text).join("\n");
         child.failureReason = classifyWorkflowFailure(session.failure ?? fallback);
         child.retryStartedAt ??= new Date().toISOString();
-        if (!isRetryableFailure(child.failureReason) || !retryDue(child.retryAt) || retryBudgetExhausted(child.retryStartedAt, this.recovery) || !this.isActive(runId)) continue;
+        if (!isRetryableFailure(child.failureReason) || !retryDue(child.retryAt) || retryBudgetExhausted(child.retryStartedAt, policy) || !this.isActive(runId)) continue;
         child.recoveryAttempts += 1; child.recoveryError = undefined; child.retryAt = undefined;
-        this.log(state, "lifecycle", `Resuming child ${child.taskId} after ${child.failureReason}, attempt ${child.recoveryAttempts}/${this.recovery.maxAttempts}`);
+        this.log(state, "lifecycle", `Resuming child ${child.taskId} after ${child.failureReason}, attempt ${child.recoveryAttempts}/${policy.maxAttempts}`);
         await this.update(execution.run);
         this.assertActive(runId);
         await resume(child, session);
@@ -154,7 +155,7 @@ export class HarnessRunner {
         if (error instanceof Cancelled) return;
         child.recoveryError = error instanceof Error ? error.message : String(error);
         child.failureReason = classifyWorkflowFailure(error);
-        child.retryAt = nextRetryAt(child.failureReason, child.recoveryAttempts, this.recovery, child.retryStartedAt);
+        child.retryAt = nextRetryAt(child.failureReason, child.recoveryAttempts, policy, child.retryStartedAt);
         this.log(state, "error", `Child ${child.taskId} recovery: ${child.recoveryError}`);
       }
       await this.update(execution.run);
@@ -355,7 +356,8 @@ export class HarnessRunner {
 
   async retryPause(runId: string, blockId: string, pauseId: string): Promise<HarnessRun> {
     const { execution, state } = this.pausedAttempt(runId, blockId, pauseId, "retry_scheduled", undefined, false);
-    if ((state.recoveryAttempts ?? 0) >= this.recovery.maxAttempts || retryBudgetExhausted(state.retryStartedAt, this.recovery)) throw new CoreError("INVALID_REQUEST", "The automatic retry budget is exhausted");
+    const policy = this.policy(execution.run);
+    if ((state.recoveryAttempts ?? 0) >= policy.maxAttempts || retryBudgetExhausted(state.retryStartedAt, policy)) throw new CoreError("INVALID_REQUEST", "The automatic retry budget is exhausted");
     state.recoveryAttempts = (state.recoveryAttempts ?? 0) + 1;
     state.status = "queued"; state.error = undefined; state.completedAt = undefined; state.retryAt = undefined; state.pauseId = undefined; execution.run.status = "running";
     this.log(state, "lifecycle", "Retry requested by user"); await this.update(execution.run);
@@ -377,8 +379,9 @@ export class HarnessRunner {
     for (const state of execution.run.blocks) {
       if (!["failed", "retry_scheduled"].includes(state.status) || state.blockId === callerId) continue;
       state.failureReason ??= classifyWorkflowFailure(state.error ?? "");
-      if (!isRetryableFailure(state.failureReason) || !retryDue(state.retryAt) || (state.recoveryAttempts ?? 0) >= this.recovery.maxAttempts) continue;
-      if (retryBudgetExhausted(state.retryStartedAt, this.recovery)) {
+      const policy = this.policy(execution.run);
+      if (!isRetryableFailure(state.failureReason) || !retryDue(state.retryAt) || (state.recoveryAttempts ?? 0) >= policy.maxAttempts) continue;
+      if (retryBudgetExhausted(state.retryStartedAt, policy)) {
         state.status = "failed"; state.retryAt = undefined; state.pauseId = undefined;
         state.error = `${state.error ?? "Provider attempt failed"} Automatic retry budget exhausted; retry this block manually after resolving the provider issue.`;
         this.log(state, "error", "Automatic retry budget exhausted");
@@ -386,7 +389,7 @@ export class HarnessRunner {
       }
       state.recoveryAttempts = (state.recoveryAttempts ?? 0) + 1;
       state.status = "queued"; state.error = undefined; state.completedAt = undefined; state.retryAt = undefined; state.pauseId = undefined; execution.run.status = "running";
-      this.log(state, "lifecycle", `Watchdog requested continuation after ${state.failureReason} (${state.recoveryAttempts}/${this.recovery.maxAttempts})`); resumed.push(state.blockId);
+      this.log(state, "lifecycle", `Watchdog requested continuation after ${state.failureReason} (${state.recoveryAttempts}/${policy.maxAttempts})`); resumed.push(state.blockId);
     }
     await this.update(execution.run);
     return { resumed };
@@ -500,9 +503,10 @@ export class HarnessRunner {
             let message = failure.message;
             state.error = message; state.failureReason = reason;
             if (isRetryableFailure(reason)) state.retryStartedAt ??= new Date().toISOString();
-            state.retryAt = nextRetryAt(reason, state.recoveryAttempts ?? 0, this.recovery, state.retryStartedAt, failure.retryAfter);
+            const policy = this.policy(run);
+            state.retryAt = nextRetryAt(reason, state.recoveryAttempts ?? 0, policy, state.retryStartedAt, failure.retryAfter);
             const cannotSchedule = reason === "transient_transport" && state.retryAt === undefined;
-            const exhausted = cannotSchedule || retryBudgetExhausted(state.retryStartedAt, this.recovery) || (state.recoveryAttempts ?? 0) >= this.recovery.maxAttempts;
+            const exhausted = cannotSchedule || retryBudgetExhausted(state.retryStartedAt, policy) || (state.recoveryAttempts ?? 0) >= policy.maxAttempts;
             state.status = (isRetryableFailure(reason) && !exhausted) || reason === "schema_validation" ? "retry_scheduled" : "failed";
             if (exhausted && isRetryableFailure(reason)) { message += " Automatic retry budget exhausted; retry this block manually after resolving the provider issue."; state.error = message; }
             state.pauseId = state.status === "retry_scheduled" ? crypto.randomUUID() : undefined;
@@ -914,13 +918,15 @@ export class HarnessRunner {
       if (state.status !== "failed") return false;
       const reason = state.failureReason ?? classifyWorkflowFailure(state.error ?? "");
       return !isRetryableFailure(reason)
-        || (state.recoveryAttempts ?? 0) >= this.recovery.maxAttempts
-        || retryBudgetExhausted(state.retryStartedAt, this.recovery)
+        || (state.recoveryAttempts ?? 0) >= this.policy(execution.run).maxAttempts
+        || retryBudgetExhausted(state.retryStartedAt, this.policy(execution.run))
         || (reason === "transient_transport" && state.retryAt === undefined);
     });
   }
 
   private assertActive(runId: string): void { if (!this.isActive(runId)) throw new Cancelled(); }
+
+  private policy(run: HarnessRun): ResolvedRecoveryPolicy { return { ...this.recovery, maxAttempts: run.definition?.settings?.retry?.maxAttempts ?? this.recovery.maxAttempts }; }
 }
 
 function blockReadiness(blockId: string, blocks: HarnessBlock[], edges: HarnessEdge[], states: HarnessRun["blocks"]): "ready" | "wait" | "skip" {
