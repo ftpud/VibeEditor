@@ -419,15 +419,17 @@ describe("HarnessPanel", () => {
   it("selects a block model from the provider catalogue", async () => {
     const harness: HarnessDefinition = { id: "harness-1", name: "Flow", version: 1, createdAt: "now", updatedAt: "now", blocks: [{ id: "a", type: "prompt", label: "Plan", prompt: "{{input}}", position: { x: 20, y: 20 } }], edges: [] };
     const onSave = vi.fn().mockImplementation(async (value) => value);
-    const onLoadModels = vi.fn().mockResolvedValue([{ id: "gpt-test", name: "GPT Test", defaultReasoning: "medium", reasoningLevels: ["medium"] }]);
+    const onLoadModels = vi.fn().mockResolvedValue([{ id: "gpt-test", name: "GPT Test", defaultReasoning: "medium", reasoningLevels: ["low", "medium", "high"] }]);
     render(<HarnessPanel harnesses={[harness]} runs={[]} providers={[]} agents={[]} defaultProvider="codex" onLoadModels={onLoadModels} onCreate={vi.fn()} onSave={onSave} onDelete={vi.fn()} onRun={vi.fn()} onCancelRun={vi.fn()} onError={vi.fn()} />);
 
     fireEvent.click(await screen.findByText("Plan"));
     fireEvent.click(await screen.findByRole("button", { name: "AI model" }));
     fireEvent.click(screen.getByRole("option", { name: /GPT Test/ }));
+    fireEvent.change(await screen.findByLabelText("Workflow reasoning effort"), { target: { value: "high" } });
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
 
     await waitFor(() => expect(onSave.mock.calls.at(0)?.[0].blocks[0].model).toBe("gpt-test"));
+    expect(onSave.mock.calls.at(0)?.[0].blocks[0].reasoning).toBe("high");
   });
 
   it("saves declared JSON schemas and shows the validated run data", async () => {
