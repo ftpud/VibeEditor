@@ -6,6 +6,18 @@ import { alignBlocks, autoLayoutBlocks, dragPosition, edgePath, fitCanvasViewpor
 afterEach(cleanup);
 
 describe("HarnessPanel", () => {
+  it("retries a selected failed block from its frozen snapshot", async () => {
+    const harness: HarnessDefinition = { id: "flow", name: "Flow", version: 1, createdAt: "now", updatedAt: "now", blocks: [{ id: "failed", type: "prompt", label: "Failed", prompt: "{{input}}", position: { x: 20, y: 20 } }], edges: [] };
+    const run: HarnessRun = { id: "old-run", harnessId: "flow", harnessVersion: 1, definition: harness, input: "retry this", status: "failed", createdAt: "now", blocks: [{ blockId: "failed", status: "failed", error: "provider failed" }] };
+    const onRun = vi.fn().mockResolvedValue({ ...run, id: "new-run", status: "queued" });
+    render(<HarnessPanel harnesses={[harness]} runs={[run]} providers={[]} agents={[]} onCreate={vi.fn()} onSave={vi.fn()} onDelete={vi.fn()} onRun={onRun} onCancelRun={vi.fn()} onError={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: "List" }));
+    fireEvent.click(screen.getByRole("button", { name: "Edit block Failed" }));
+    fireEvent.click(screen.getByRole("button", { name: "View" }));
+    fireEvent.click(screen.getByRole("button", { name: "Retry failed workflow block" }));
+    await waitFor(() => expect(onRun).toHaveBeenCalledWith("flow", "retry this", "failed", "old-run"));
+  });
+
   it("reruns a completed workflow from its frozen snapshot", async () => {
     const harness: HarnessDefinition = { id: "flow", name: "Flow", version: 2, createdAt: "now", updatedAt: "now", blocks: [], edges: [] };
     const run: HarnessRun = { id: "old-run", harnessId: "flow", harnessVersion: 1, definition: { ...harness, version: 1 }, input: "repeat this", status: "succeeded", createdAt: "now", blocks: [] };
