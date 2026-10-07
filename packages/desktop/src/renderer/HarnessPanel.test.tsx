@@ -225,6 +225,23 @@ describe("HarnessPanel", () => {
     expect(edge?.textContent).toContain("Plan then Build");
   });
 
+  it("connects blocks with Enter and Space from focused ports", async () => {
+    const harness: HarnessDefinition = { id: "keyboard-flow", name: "Keyboard flow", version: 1, createdAt: "now", updatedAt: "now", blocks: [
+      { id: "source", type: "prompt", label: "Source", prompt: "", position: { x: 20, y: 20 } },
+      { id: "target", type: "prompt", label: "Target", prompt: "", position: { x: 260, y: 20 } },
+    ], edges: [] };
+    const onSave = vi.fn().mockImplementation(async (value) => value);
+    render(<HarnessPanel harnesses={[harness]} runs={[]} providers={[]} agents={[]} onCreate={vi.fn()} onSave={onSave} onDelete={vi.fn()} onRun={vi.fn()} onCancelRun={vi.fn()} onError={vi.fn()} />);
+    const output = await screen.findByRole("button", { name: "Connect from Source" });
+    const input = screen.getByRole("button", { name: "Connect into Target" });
+    expect(output.getAttribute("aria-keyshortcuts")).toBe("Enter Space");
+    fireEvent.keyDown(output, { key: "Enter" });
+    expect(input.hasAttribute("disabled")).toBe(false);
+    fireEvent.keyDown(input, { key: " " });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(onSave.mock.calls.at(0)?.[0].edges).toMatchObject([{ from: "source", to: "target", type: "follow" }]));
+  });
+
   it("connects an AI to another AI as a tool", async () => {
     const harness: HarnessDefinition = { id: "harness-1", name: "Cycle", version: 1, createdAt: "now", updatedAt: "now", blocks: [
       { id: "a", type: "ai", label: "Build", prompt: "", position: { x: 20, y: 20 } },
