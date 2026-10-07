@@ -700,6 +700,8 @@ export class HarnessRunner {
           });
           this.assertActive(run.id);
           state.sessionId = settled.id; attempt.sessionId = settled.id; if (iteration) iteration.sessionId = settled.id;
+          state.tokens = settled.tokens;
+          this.assertTokenBudget(run);
           await this.finishOperation(run, promptOperation, "succeeded", { sessionId: settled.id, workspace: state.workspace, status: settled.status });
           await this.recordCompletedOperation(run, "session_binding", `session:${attemptId}`, block.id, { sessionId: settled.id, workspace: state.workspace }, attemptId);
           this.log(state, "response", settled.messages.filter((message) => message.role === "assistant").at(-1)?.text ?? "Provider turn completed without an assistant response");
@@ -937,6 +939,12 @@ export class HarnessRunner {
   private policy(run: HarnessRun): ResolvedRecoveryPolicy { return { ...this.recovery, maxAttempts: run.definition?.settings?.retry?.maxAttempts ?? this.recovery.maxAttempts }; }
 
   private output(run: HarnessRun, value: string): string { return value.slice(-(run.definition?.settings?.outputLimitChars ?? 200_000)); }
+
+  private assertTokenBudget(run: HarnessRun): void {
+    const budget = run.definition?.settings?.tokenBudget;
+    const used = run.blocks.reduce((total, block) => total + (block.tokens?.total ?? 0), 0);
+    if (budget !== undefined && used > budget) throw new CoreError("INVALID_REQUEST", `Workflow token budget of ${budget.toLocaleString()} was exceeded (${used.toLocaleString()} used)`);
+  }
 }
 
 function blockReadiness(blockId: string, blocks: HarnessBlock[], edges: HarnessEdge[], states: HarnessRun["blocks"]): "ready" | "wait" | "skip" {
