@@ -4,6 +4,7 @@ import path from "node:path";
 import { mkdir, readFile, readdir, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
 import { resolveSkillIds, skillAllowedForAgent } from "@remote-ide/protocol";
 import type { AiAgentPreset, SkillCatalog, SkillFile, SkillPolicy, SkillScope } from "@remote-ide/protocol";
+import type { AiSession, AiSkillSummary } from "@remote-ide/acp";
 import { parseAgent } from "./agents.js";
 import { CoreError } from "./errors.js";
 
@@ -161,13 +162,20 @@ export class SkillsStore {
     return policy.defaults.filter((id) => skills.some((skill) => skill.id === id));
   }
 
-  async instructions(workspace: string, ids: string[], agent?: AiAgentPreset | null): Promise<string> {
+  async available(workspace: string, ids: string[], agent?: AiAgentPreset | null): Promise<AiSkillSummary[]> {
     const catalog = await this.list(workspace);
-    const { skills, policy } = catalog;
-    ids = resolveSkillIds(catalog, ids);
-    const enabled = skills.filter((skill) => ids.includes(skill.id) && skillAllowedForAgent(policy, skill.id, agent));
-    const blocks = await Promise.all(enabled.map(async (skill) => `Skill: ${skill.id}\nBase directory: ${path.dirname(skill.path)}\n${await this.read(skill.id, workspace)}`));
-    if (blocks.join("\n").length > 100_000) throw new CoreError("FILE_TOO_LARGE", "Enabled skills exceed the 100,000 character instruction limit");
-    return ["For this turn, use only these Vibe-selected skills. Previously selected skills are inactive unless listed below. Follow supporting file references relative to each skill's base directory.", ...(blocks.length ? blocks : ["No Vibe skills are enabled."])].join("\n\n");
+    const selected = resolveSkillIds(catalog, ids);
+    const enabled = catalog.skills.filter((skill) => selected.includes(skill.id) && skillAllowedForAgent(catalog.policy, skill.id, agent));
+    return Promise.all(enabled.map(async (skill) => ({ id: skill.id, name: skill.title.slice(0, 200), ...(skill.description ? { description: skill.description.slice(0, 1000) } : {}), revision: crypto.createHash("sha256").update(`${skill.path}\0${await this.read(skill.id, workspace)}`).digest("hex") })));
+  }
+
+  async load(workspace: string, id: string, session: AiSession): Promise<{ id: string; revision: string; baseDirectory: string; content: string }> {
+    const catalogue = session.skillCatalogue;
+    if (!catalogue || catalogue.threadId !== session.threadId || !catalogue.entries.some((skill) => skill.id === id)) throw new CoreError("INVALID_REQUEST", "Skill is not available in this conversation's current turn");
+    const catalog = await this.list(workspace);
+    const skill = catalog.skills.find((skill) => skill.id === id);
+    if (!skill || !skillAllowedForAgent(catalog.policy, id, session.agentPreset)) throw new CoreError("INVALID_REQUEST", "Skill is missing or no longer allowed for this agent");
+    const content = await this.read(id, workspace);
+    return { id, revision: crypto.createHash("sha256").update(`${skill.path}\0${content}`).digest("hex"), baseDirectory: path.dirname(skill.path), content };
   }
 }

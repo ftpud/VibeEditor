@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
+import type { AiAgentPreset } from "@remote-ide/protocol";
 import { SkillsStore } from "./skills.js";
 
 const roots: string[] = [];
@@ -13,6 +14,13 @@ async function setup() {
   return { root, workspace, store: new SkillsStore(path.join(root, "state"), workspace) };
 }
 const review = "---\nname: Reviewer\ndescription: Review changes\n---\n\nCheck regressions and tests.\n";
+
+async function loadedInstructions(store: SkillsStore, workspace: string, ids: string[], agentPreset?: AiAgentPreset | null) {
+  const entries = await store.available(workspace, ids, agentPreset);
+  const session = { model: "test", reasoning: "", status: "in_progress" as const, messages: [], threadId: "thread", skillCatalogue: { threadId: "thread", entries }, ...(agentPreset ? { agentPreset } : {}) };
+  const loaded = await Promise.all(entries.map((entry) => store.load(workspace, entry.id, session)));
+  return loaded.length ? loaded.map((skill) => skill.content).join("\n") : "No Vibe skills are enabled";
+}
 
 describe("project skills", () => {
   it("discovers separate global/local skills and persists a project allowlist with defaults", async () => {
@@ -33,11 +41,11 @@ describe("project skills", () => {
   it("reloads edited instructions and enforces revoked policy on every turn", async () => {
     const { workspace, store } = await setup();
     await store.write("local/review", workspace, review);
-    expect(await store.instructions(workspace, ["local/review"])).toContain("Check regressions");
+    expect(await loadedInstructions(store, workspace, ["local/review"])).toContain("Check regressions");
     await store.write("local/review", workspace, "Updated workflow");
-    expect(await store.instructions(workspace, ["local/review"])).toContain("Updated workflow");
+    expect(await loadedInstructions(store, workspace, ["local/review"])).toContain("Updated workflow");
     await store.writePolicy(workspace, { allowed: [], defaults: [] });
-    const instructions = await store.instructions(workspace, ["local/review"]);
+    const instructions = await loadedInstructions(store, workspace, ["local/review"]);
     expect(instructions).not.toContain("Updated workflow");
     expect(instructions).toContain("No Vibe skills are enabled");
   });
@@ -77,14 +85,14 @@ describe("project skills", () => {
     const catalog = await store.list(workspace);
     expect(catalog.policy).toEqual({ allowed: ["workspace/review"], defaults: ["workspace/review"], agents: { "workspace/review": [null] } });
     expect(await store.validateSelection(workspace, ["local/review"])).toEqual(["workspace/review"]);
-    expect(await store.instructions(workspace, ["local/review"])).toContain("Check regressions");
+    expect(await loadedInstructions(store, workspace, ["local/review"])).toContain("Check regressions");
     await store.writePolicy(workspace, catalog.policy);
     expect((await store.list(workspace)).policy).toEqual(catalog.policy);
     await store.write("local/review", workspace, "New project-local instructions");
     await store.writePolicy(workspace, { allowed: ["local/review", "workspace/review"], defaults: ["local/review"] });
     expect(await store.validateSelection(workspace, ["local/review"])).toEqual(["local/review"]);
-    expect(await store.instructions(workspace, ["local/review"])).toContain("New project-local instructions");
-    expect(await store.instructions(workspace, ["local/review"])).not.toContain("Check regressions");
+    expect(await loadedInstructions(store, workspace, ["local/review"])).toContain("New project-local instructions");
+    expect(await loadedInstructions(store, workspace, ["local/review"])).not.toContain("Check regressions");
   });
 
   it("moves legacy policy outside Git, shares it with tasks and gives local policy precedence", async () => {
@@ -131,6 +139,27 @@ describe("project skills", () => {
     await expect(store.writePolicy(workspace, { allowed: [], defaults: [] })).rejects.toThrow("escapes");
   });
 
+  it("loads only advertised skills and rechecks policy, agent scope and conversation identity", async () => {
+    const { workspace, store } = await setup();
+    await store.write("local/review", workspace, review);
+    await store.write("local/other", workspace, "Hidden instructions");
+    const entries = await store.available(workspace, ["local/review"]);
+    expect(entries[0]).toMatchObject({ id: "local/review", name: "Reviewer", description: "Review changes" });
+    expect(JSON.stringify(entries)).not.toContain("Check regressions");
+    const session = { model: "test", reasoning: "", status: "in_progress" as const, messages: [], threadId: "thread", skillCatalogue: { threadId: "thread", entries } };
+    expect(await store.load(workspace, "local/review", session)).toMatchObject({ content: review, revision: entries[0]!.revision });
+    await expect(store.load(workspace, "local/other", session)).rejects.toThrow("not available");
+    await expect(store.load(workspace, "local/review", { ...session, threadId: "other" })).rejects.toThrow("not available");
+    await store.write("local/review", workspace, "Updated instructions");
+    const loaded = await store.load(workspace, "local/review", session);
+    expect(loaded.content).toBe("Updated instructions");
+    expect(loaded.revision).not.toBe(entries[0]!.revision);
+    await store.writePolicy(workspace, { allowed: ["local/review"], defaults: [], agents: { "local/review": [{ scope: "global", name: "reviewer.md" }] } });
+    await expect(store.load(workspace, "local/review", session)).rejects.toThrow("no longer allowed");
+    await store.writePolicy(workspace, { allowed: [], defaults: [] });
+    await expect(store.load(workspace, "local/review", session)).rejects.toThrow("no longer allowed");
+  });
+
   it("enforces exact agent scopes and explicit no-agent access, retaining restrictions when saved", async () => {
     const { workspace, store } = await setup();
     await store.write("local/review", workspace, review);
@@ -139,8 +168,8 @@ describe("project skills", () => {
     await expect(store.validateSelection(workspace, ["local/review"])).rejects.toThrow("selected agent");
     await expect(store.validateSelection(workspace, ["local/review"], { ...reviewer, scope: "global" })).rejects.toThrow("selected agent");
     expect(await store.validateSelection(workspace, ["local/review"], reviewer)).toEqual(["local/review"]);
-    expect(await store.instructions(workspace, ["local/review"], reviewer)).toContain("Check regressions");
-    expect(await store.instructions(workspace, ["local/review"], null)).not.toContain("Check regressions");
+    expect(await loadedInstructions(store, workspace, ["local/review"], reviewer)).toContain("Check regressions");
+    expect(await loadedInstructions(store, workspace, ["local/review"], null)).not.toContain("Check regressions");
     await store.writePolicy(workspace, { allowed: ["local/review"], defaults: [], agents: { "local/review": [null] } });
     expect(await store.validateSelection(workspace, ["local/review"], null)).toEqual(["local/review"]);
     await expect(store.validateSelection(workspace, ["local/review"], reviewer)).rejects.toThrow("selected agent");

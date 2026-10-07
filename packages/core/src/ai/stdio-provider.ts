@@ -8,6 +8,7 @@ import { Readable, Writable } from "node:stream";
 import { ClientSideConnection, PROTOCOL_VERSION, ndJsonStream, type Client, type ContentBlock, type McpServer, type RequestPermissionRequest, type RequestPermissionResponse, type SessionConfigOption, type SessionNotification } from "@agentclientprotocol/sdk";
 import { AcpProvider, applyConfiguration, normalizeAiFailure, type AcpSendRequest, type AiConfiguration, type AiContentBlock, type AiMessage, type AiModel, type AiModelDetails, type AiOption, type AiProviderDescriptor, type AiSession, type AiUsage } from "@remote-ide/acp";
 import type { TaskCheckpointProvenance } from "@remote-ide/protocol";
+import { skillToolServer } from "../app-tools.js";
 import { SkillsStore } from "../skills.js";
 import { CoreError } from "../errors.js";
 import { agentFingerprint } from "../agent-profile.js";
@@ -89,7 +90,7 @@ export abstract class StdioAcpProvider extends AcpProvider {
   private readonly blankSessions = new Map<string, AiSession>();
   private readonly archiveIndex = new Map<string, { at: number; sessions: AiSession[] }>();
 
-  constructor(private readonly onChanged: (workspace: string) => void, private readonly stateDirectory = process.env.REMOTE_IDE_STATE_DIR ?? path.join(os.homedir(), ".remote-ide", "workspaces"), private readonly turns?: AcpTurnObserver, private readonly projectRoot: (workspace: string) => Promise<string> = async (workspace) => workspace) { super(); }
+  constructor(private readonly onChanged: (workspace: string) => void, private readonly stateDirectory = process.env.REMOTE_IDE_STATE_DIR ?? path.join(os.homedir(), ".remote-ide", "workspaces"), private readonly turns?: AcpTurnObserver, private readonly projectRoot: (workspace: string) => Promise<string> = async (workspace) => workspace, private readonly bridgeWorkspace?: string) { super(); }
 
   private async skillsFor(workspace: string): Promise<SkillsStore> { return new SkillsStore(this.stateDirectory, await this.projectRoot(workspace)); }
 
@@ -185,14 +186,15 @@ export abstract class StdioAcpProvider extends AcpProvider {
     // The override belongs to exactly one newly started turn. Steering an active
     // turn never consumes it; a failed runtime/prompt start leaves it queued.
     const allowedServers = request.agent?.mcpServers ? request.mcpServers?.filter((server) => request.agent!.mcpServers!.includes(server.name)) : request.mcpServers;
-    const skillInstructions = session.skillIds?.length || session.skillContext ? await (await this.skillsFor(workspace)).instructions(workspace, session.skillIds ?? [], request.agentPreset) : undefined;
-    const runtime = await this.ensureRuntime(workspace, session, allowedServers);
+    const servers = this.descriptor.capabilities.skills ? [...(allowedServers ?? []).filter((server) => server.name !== "vibe-skills"), skillToolServer(await this.projectRoot(workspace), workspace, this.descriptor.id, this.bridgeWorkspace)] : allowedServers;
+    const runtime = await this.ensureRuntime(workspace, session, servers);
     if (nextConfiguration) runtime.session.nextConfiguration = undefined;
+    const agentContent = this.withSessionAgent(content, request.agent, request.agentPreset, runtime.session);
+    const turnContent = await this.withSkillCatalogue(workspace, runtime.session, agentContent);
     const visible = [prompt, ...(request.content ?? []).map(contentLabel)].filter(Boolean).join("\n");
     runtime.session.messages.push({ ...this.message("user", visible), content: request.content });
     if (this.turns) try { runtime.checkpointIds.push(await this.turns.begin(workspace, this.descriptor.id, visible, runtime.session.id, checkpointProvenance(runtime.session, request.content, request.agent))); } catch (error) { runtime.session.messages.push(this.message("activity", `Prompt checkpoint could not be created: ${error instanceof Error ? error.message : String(error)}`)); }
-    if (skillInstructions) runtime.session.skillContext = true;
-    this.runPrompt(workspace, runtime, [...(skillInstructions ? [{ type: "text" as const, text: skillInstructions }] : []), ...this.withSessionAgent(content, request.agent, request.agentPreset, runtime.session)]);
+    this.runPrompt(workspace, runtime, turnContent);
     await this.save(workspace, runtime.session); this.onChanged(workspace);
     return this.get(workspace);
   }
@@ -267,9 +269,7 @@ export abstract class StdioAcpProvider extends AcpProvider {
           const warnings = await this.applyAcpConfiguration(runtime, runtime.configOptions, runtime.modes);
           if (warnings.length > 0) runtime.session.messages.push(this.message("activity", `Session configuration\n${warnings.join("\n")}`));
         }
-        const instructions = runtime.session.skillIds?.length || runtime.session.skillContext ? await (await this.skillsFor(workspace)).instructions(workspace, runtime.session.skillIds ?? [], runtime.session.agentPreset) : undefined;
-        if (instructions) runtime.session.skillContext = true;
-        this.runPrompt(workspace, runtime, [...(instructions ? [{ type: "text" as const, text: instructions }] : []), { type: "text", text: queued.prompt }]);
+        this.runPrompt(workspace, runtime, await this.withSkillCatalogue(workspace, runtime.session, [{ type: "text", text: queued.prompt }]));
       }
       else {
         runtime.session.status = result.stopReason === "cancelled" ? "idle" : result.stopReason === "end_turn" ? "done" : result.stopReason === "refusal" ? "error" : "user_prompt";
@@ -283,6 +283,7 @@ export abstract class StdioAcpProvider extends AcpProvider {
     })).catch((error: unknown) => this.queue(workspace, async () => {
       if (runtime.generation !== generation) return;
       runtime.running = false; runtime.anchors = {}; runtime.pending = [];
+      runtime.session.skillCatalogue = undefined;
       this.freshSessions.delete(workspace);
       const message = this.describe(error, runtime);
       runtime.session.status = "error"; runtime.session.failure = normalizeAiFailure(error); runtime.session.failure.message = message; runtime.session.messages.push(this.message("error", message));
@@ -321,6 +322,26 @@ export abstract class StdioAcpProvider extends AcpProvider {
     }
     if (result.length === 0) throw new CoreError("INVALID_REQUEST", "Prompt or attachment is required");
     return result;
+  }
+
+  /** Synchronize only changed skill summaries with the provider conversation. */
+  private async withSkillCatalogue(workspace: string, session: AiSession, content: ContentBlock[]): Promise<ContentBlock[]> {
+    if (!this.descriptor.capabilities.skills) return content;
+    const entries = await (await this.skillsFor(workspace)).available(workspace, session.skillIds ?? [], session.agentPreset);
+    const catalogue = session.skillCatalogue;
+    const previous = catalogue?.threadId === session.threadId ? catalogue?.entries : undefined;
+    const added = entries.filter((entry) => !previous?.some((old) => old.id === entry.id));
+    const updated = entries.filter((entry) => previous?.some((old) => old.id === entry.id && JSON.stringify(old) !== JSON.stringify(entry)));
+    const removed = previous?.filter((old) => !entries.some((entry) => entry.id === old.id)).map((entry) => entry.id) ?? [];
+    if (previous && !added.length && !updated.length && !removed.length) return content;
+    const text = previous
+      ? `Vibe skill catalogue changes: ${JSON.stringify({ added, updated, removed })}. Remove disabled skills from use. Reload updated skills with skill_load before applying them.`
+      : `Vibe skill catalogue: ${JSON.stringify({ available: entries })}. Use skill_load(id) on the vibe-skills MCP server to load instructions only when relevant, before following a skill. Supporting files are relative to the returned base directory. Reuse loaded instructions until that skill is updated or removed. Only catalogue skills are enabled; ignore earlier Vibe skill instructions for skills outside this catalogue. Changes will be sent as additions, updates and removals.`;
+    session.skillCatalogue = { threadId: session.threadId!, entries };
+    session.skillContext = true;
+    const first = content.findIndex((block) => block.type === "text");
+    if (first < 0) return [{ type: "text", text }, ...content];
+    return content.map((block, index) => index === first && block.type === "text" ? { ...block, text: `${text}\n\n${block.text}` } : block);
   }
 
   /**
@@ -504,7 +525,7 @@ export abstract class StdioAcpProvider extends AcpProvider {
     const connected = await this.connect(workspace, session.configuration ?? {}, servers, session.threadId);
     // A fresh provider session has no prior prompt context, even when the local
     // transcript still records which preset the previous session received.
-    if (!connected.resumed) session.agent = undefined;
+    if (!connected.resumed) { session.agent = undefined; session.skillCatalogue = undefined; }
     if (connected.resumeFailed) session.messages.push(this.message("activity", "The saved ACP session could not be resumed; a new agent session was started."));
     const runtime: Runtime = { child: connected.child, connection: connected.connection, sessionId: connected.sessionId, running: false, stderr: connected.stderr(), session, tools: new Map(), anchors: {}, generation: 0, steering: connected.steering, pending: [], checkpointIds: [], configOptions: connected.configOptions, modes: connected.modes, mcpKey };
     connected.bind(runtime);

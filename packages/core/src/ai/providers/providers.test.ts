@@ -15,7 +15,7 @@ const FAKE_AGENT = fileURLToPath(new URL("./fake-acp-agent.py", import.meta.url)
 
 class FakeProvider extends StdioAcpProvider {
   constructor(onChanged: (workspace: string) => void, state: string, private readonly env: NodeJS.ProcessEnv = {}, projectRoot?: (workspace: string) => Promise<string>) { super(onChanged, state, undefined, projectRoot); }
-  readonly descriptor: AiProviderDescriptor = { id: "fake", name: "Fake ACP", description: "test", settings: { title: "t", description: "d", sections: [] }, options: [], capabilities: { models: true, usage: true, mcp: true, agents: true, contextWindow: true } };
+  readonly descriptor: AiProviderDescriptor = { id: "fake", name: "Fake ACP", description: "test", settings: { title: "t", description: "d", sections: [] }, options: [], capabilities: { models: true, usage: true, mcp: true, agents: true, contextWindow: true, skills: true } };
   protected command(_configuration: AiConfiguration) { return { command: "python3", args: [FAKE_AGENT], env: this.env }; }
   protected async fallbackModels(): Promise<AiModel[]> { return [{ id: "fallback", name: "Fallback", defaultReasoning: "medium", reasoningLevels: ["medium"] }]; }
 }
@@ -440,7 +440,9 @@ describe("chat skills", () => {
     await provider.send(task, { prompt: "Review this task", skillIds: ["local/shared"], configuration: { model: "model-a" } });
     const done = await settle(provider, task);
     expect(done.skillIds).toEqual(["local/shared"]);
-    expect(done.messages.find((message) => message.text.startsWith("PROMPT:"))!.text).toContain("Project-wide review workflow.");
+    expect(done.messages.find((message) => message.text.startsWith("PROMPT:"))!.text).toContain("local/shared");
+    expect(done.messages.find((message) => message.text.startsWith("PROMPT:"))!.text).not.toContain("Project-wide review workflow.");
+    expect(await skills.load(task, "local/shared", done)).toMatchObject({ content: "Project-wide review workflow." });
     await provider.clear(task);
   });
 
@@ -460,7 +462,8 @@ describe("chat skills", () => {
     await provider.send(workspace, { prompt: "First turn", configuration: { model: "model-a" } });
     const done = await settle(provider, workspace);
     const echo = done.messages.find((message) => message.text.startsWith("PROMPT:"))!.text;
-    expect(echo).toContain("Follow the style guide.");
+    expect(echo).toContain("global/style");
+    expect(echo).not.toContain("Follow the style guide.");
     expect(echo).not.toContain("Inspect regressions.");
     expect(done.messages.find((message) => message.role === "user")!.text).toBe("First turn");
     await provider.clear(workspace);
@@ -484,13 +487,48 @@ describe("chat skills", () => {
     await provider.send(workspace, { prompt: "Review", configuration: { model: "model-a" }, agent: { name: "Reviewer", instructions: "Review changes" }, agentPreset: preset });
     const reviewed = await settle(provider, workspace);
     const reviewEcho = reviewed.messages.find((message) => message.text.startsWith("PROMPT:"))!.text;
-    expect(reviewEcho).toContain("Reviewer-only instructions");
+    expect(reviewEcho).toContain("local/review");
+    expect(reviewEcho).not.toContain("Reviewer-only instructions");
     expect(reviewEcho).not.toContain("No-agent instructions");
     await provider.send(workspace, { prompt: "General", configuration: { model: "model-a" } });
     const general = await settle(provider, workspace);
     const generalEcho = general.messages.filter((message) => message.text.startsWith("PROMPT:")).at(-1)!.text;
-    expect(generalEcho).toContain("No-agent instructions");
+    expect(generalEcho).toContain("local/general");
+    expect(generalEcho).not.toContain("No-agent instructions");
     expect(generalEcho).not.toContain("Reviewer-only instructions");
+    await provider.clear(workspace);
+  });
+
+  it("sends a catalogue once and only changed entries afterwards, including resumed and new threads", async () => {
+    const state = await mkdtemp(path.join(os.tmpdir(), "skills-delta-state-"));
+    const workspace = await mkdtemp(path.join(os.tmpdir(), "skills-delta-workspace-"));
+    const skills = new SkillsStore(state);
+    await skills.write("local/review", workspace, "---\nname: Reviewer\ndescription: Review changes\n---\n\nSecret long workflow");
+    await skills.write("local/testing", workspace, "Test workflow body");
+    const provider = new FakeProvider(() => undefined, state, { FAKE_ECHO_PROMPT: "on", FAKE_LOAD: "on" });
+    const initial = await provider.get(workspace);
+    await provider.setSkills(workspace, ["local/review"], initial.id);
+    const send = async (prompt: string) => { await provider.send(workspace, { prompt, configuration: { model: "model-a" } }); const session = await settle(provider, workspace); return JSON.parse(session.messages.filter((message) => message.text.startsWith("PROMPT:")).at(-1)!.text.slice(7)).map((block: { text?: string }) => block.text ?? "").join("\n") as string; };
+    const first = await send("First");
+    expect(first).toContain("Vibe skill catalogue:"); expect(first).toContain("Review changes"); expect(first).not.toContain("Secret long workflow");
+    expect(await send("Unchanged")).toBe("Unchanged");
+    await provider.configure(workspace, { maxAiCredits: 1 });
+    expect(await send("Resumed")).toBe("Resumed");
+    await skills.write("local/review", workspace, "---\nname: Reviewer\ndescription: Better review\n---\n\nUpdated secret workflow");
+    const edited = await send("Edited");
+    expect(edited).toContain('"updated":[{"id":"local/review"'); expect(edited).toContain("Better review"); expect(edited).not.toContain("Updated secret workflow");
+    await skills.write("local/review", workspace, "---\nname: Reviewer\ndescription: Better review\n---\n\nChanged body only");
+    const bodyEdited = await send("Body edited"); expect(bodyEdited).toContain('"updated":[{"id":"local/review"'); expect(bodyEdited).not.toContain("Changed body only");
+    await provider.setSkills(workspace, ["local/review", "local/testing"], initial.id);
+    const added = await send("Added");
+    expect(added).toContain('"added":[{"id":"local/testing"'); expect(added).not.toContain('"id":"local/review"');
+    await provider.setSkills(workspace, ["local/testing"], initial.id);
+    const removed = await send("Removed"); expect(removed).toContain('"removed":["local/review"]'); expect(removed).not.toContain('"id":"local/testing"');
+    await skills.writePolicy(workspace, { allowed: [], defaults: [] });
+    expect(await send("Revoked")).toContain('"removed":["local/testing"]');
+    expect(await send("Still unchanged")).toBe("Still unchanged");
+    await provider.clear(workspace);
+    expect(await send("Fresh")).toContain("Vibe skill catalogue:");
     await provider.clear(workspace);
   });
 
@@ -508,9 +546,11 @@ describe("chat skills", () => {
     const done = await settle(provider, workspace);
     const echoes = done.messages.filter((message) => message.text.startsWith("PROMPT:"));
     expect(echoes).toHaveLength(2);
-    expect(echoes[0]!.text).toContain("Inspect regressions.");
+    expect(echoes[0]!.text).toContain("local/review");
+    expect(echoes[0]!.text).not.toContain("Inspect regressions.");
     expect(echoes[1]!.text).not.toContain("Inspect regressions.");
-    expect(echoes[1]!.text).toContain("No Vibe skills are enabled.");
+    expect(echoes[1]!.text).toContain("removed");
+    expect(echoes[1]!.text).toContain("local/review");
     await provider.setSkills(workspace, ["local/review"], first.id);
     await skills.writePolicy(workspace, { allowed: [], defaults: [] });
     await provider.send(workspace, { prompt: "After revocation", configuration: { model: "model-a" } });

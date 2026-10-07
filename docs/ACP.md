@@ -163,20 +163,29 @@ use the current defaults. Creating a task from the chat copies its selection;
 local skills are shared from Core state; workspace skills must exist in the task
 worktree (commit them first).
 
-Changes made while a response is running apply to the next new turn, including a
-queued follow-up. Steering text delivered to the running turn retains that turn's
-skill instructions. Core reloads selected instructions and checks project policy
-for every new turn, so edited skills take effect and revoked/deleted skills are
-omitted. Disabled instructions can remain in earlier conversation context; start
-a new chat for a clean reset. Availability controls Vibe's instruction delivery,
-not the provider's independent filesystem access or native skill discovery.
+Selected skills are available on demand. The first turn in a provider conversation
+receives a compact catalogue of IDs, names, descriptions and revisions, without
+skill bodies. The agent calls **skill_load** on the dedicated **vibe-skills** MCP
+server when a skill is relevant. Core returns the current `SKILL.md`, its revision
+and base directory for supporting files. This server exposes only skill loading,
+so enabling skills does not grant other app tools.
 
-The provider-neutral `skills.*` protocol operations handle the catalogue,
-instruction editing and project policy. `ai.skills` sets the current session's
-selection with a session ID guard. Providers advertise the optional `skills`
-capability; both current stdio adapters implement instruction delivery through
-the shared ACP transport. This does not install provider plugins or automatically
-execute scripts bundled with a skill.
+Unchanged prompts include no skill data. When selections, content, metadata or
+policy change, the next turn receives only additions, updates and removed IDs.
+Updates tell the agent to reload a previously loaded skill before applying it;
+removals tell it to stop using that skill. Queued turns use the latest catalogue;
+steering an active turn does not send catalogue changes. Core persists the sent
+catalogue per provider conversation, so a successfully resumed session receives
+only subsequent changes. Fresh or failed-to-resume conversations receive an
+initial catalogue. Skill-load requests check the turn's advertised catalogue and
+current project/agent policy; deleted, revoked and unadvertised skills are rejected.
+Previously loaded text can remain in history; start a new chat for a clean reset.
+Availability controls Vibe's skill interface, not independent filesystem access.
+
+The provider-neutral `skills.*` operations handle catalogue editing and project
+policy. `ai.skills` sets the selection with a session ID guard. Both current stdio
+adapters share catalogue synchronization and on-demand loading. This does not
+install provider plugins or automatically execute scripts bundled with a skill.
 
 Each skill's **Agents** section controls which presets may use it. **Any agent**
 keeps it available with every preset and with no preset. Clear that option to
