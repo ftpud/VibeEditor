@@ -4,7 +4,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { findAutopilotOption } from "@remote-ide/acp";
 import type { SkillFile, AiConfiguration, AiContentBlock, AiModel, AiProvider, AiProviderDescriptor, AiSession, AiUsage } from "@remote-ide/protocol";
-import { SkillChatControls } from "./SkillChatControls";
+import { SkillChatChips, SkillChatControls } from "./SkillChatControls";
 import { ModelPicker } from "./ModelPicker";
 import { PermissionRequestActions, type PermissionRequestOwner } from "./PermissionRequestActions";
 
@@ -103,6 +103,7 @@ export function AiPanel({ skills = [], onSkillsChange, onOpenSkills, provider, p
   const effectiveOptions = useMemo(() => { const advertised = session.availableOptions ?? []; return [...(descriptor?.options ?? []).filter((option) => !advertised.some((candidate) => candidate.id === option.id)), ...advertised]; }, [descriptor, session.availableOptions]);
   const matchingCommands = useMemo(() => { const token = prompt.split(/\s/, 1)[0] ?? ""; return prompt.startsWith("/") ? (session.availableCommands ?? []).filter((command) => `/${command.name.replace(/^\//, "")}`.startsWith(token)).slice(0, 8) : []; }, [prompt, session.availableCommands]);
   const providerName = descriptor?.name ?? provider;
+  const skillsAvailable = Boolean(descriptor?.capabilities.skills && onSkillsChange && onOpenSkills);
   // Agents express "approve everything" differently: some advertise a dedicated boolean, others only
   // offer it as one choice of a broader mode option, so both shapes are folded into one switch.
   const autopilot = useMemo(() => findAutopilotOption(effectiveOptions), [effectiveOptions]);
@@ -151,14 +152,15 @@ export function AiPanel({ skills = [], onSkillsChange, onOpenSkills, provider, p
     window.addEventListener("pointerup", end);
   };
   return <div className="ai-panel">
-    <div className={`ai-toolbar${autopilot ? " with-autopilot" : ""}`}>
+    <div className={`ai-toolbar${autopilot ? " with-autopilot" : ""}${skillsAvailable ? " with-skills" : ""}`}>
       <div className="ai-provider-picker"><span>Provider</span><select aria-label="AI provider" value={provider} disabled={busy} onChange={(event) => { setSettingsOpen(false); onProviderChange(event.target.value as AiProvider); }}>{providers.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></div>
       <ModelPicker models={models} value={model} label={`${providerName} model`} disabled={busy} onChange={changeModel} />
       {autopilot && <div className="ai-autopilot" title={`${autopilot.option.name}: approve every action without asking.`}><span>Auto</span><label className="ai-switch"><input type="checkbox" aria-label="Autopilot" disabled={busy} checked={autopilotOn} onChange={(event) => updateConfiguration({ [autopilot.option.id]: event.target.checked ? autopilot.on : autopilot.off })} /><span /></label></div>}
+      {skillsAvailable && onSkillsChange && onOpenSkills && <SkillChatControls skills={skills} selected={session.skillIds ?? []} running={running} disabled={submitting || permissionActionsDisabled} onChange={onSkillsChange} onOpen={onOpenSkills} />}
       <button className={settingsOpen ? "active" : ""} title={`${providerName} settings`} aria-expanded={settingsOpen} disabled={submitting} onClick={() => setSettingsOpen((open) => !open)}><Settings2 size={14} /><ChevronDown className="ai-settings-chevron" size={12} /></button>
       <div className="ai-session-control">{running ? <button className="ai-interrupt" title={`Stop ${providerName}`} onClick={onInterrupt}><Square size={12} fill="currentColor" /></button> : <button className={sessionsOpen ? "active" : ""} title="Manage sessions" aria-expanded={sessionsOpen} disabled={submitting} onClick={() => { setSettingsOpen(false); setSessionsOpen((open) => !open); }}><MessageSquare size={14} /></button>}<ContextUsageIndicator session={session} /></div>
     </div>
-    {descriptor?.capabilities.skills && onSkillsChange && onOpenSkills && <SkillChatControls skills={skills} selected={session.skillIds ?? []} running={running} disabled={submitting || permissionActionsDisabled} onChange={onSkillsChange} onOpen={onOpenSkills} />}
+    {skillsAvailable && onSkillsChange && <SkillChatChips skills={skills} selected={session.skillIds ?? []} disabled={submitting || permissionActionsDisabled} onChange={onSkillsChange} />}
     {sessionsOpen && <section className="ai-sessions">
       <header><strong>Sessions</strong><button disabled={sessionControlsDisabled} title={sessionChangesDisabled ? "Cancel or run the active task timer before changing sessions" : undefined} onClick={() => { setSessionsOpen(false); onNewSession(); }}><Plus size={13} /> New</button></header>
       <div>{sessions.filter((item) => item.id).map((item, index) => <div className="ai-session-row" key={item.id ?? index}><button className="ai-session-select" disabled={sessionControlsDisabled} title={sessionChangesDisabled ? "Cancel or run the active task timer before changing sessions" : undefined} onClick={() => { setSessionsOpen(false); onSwitchSession(item); }}>{item.id === session.id && <Check size={13} />}<span><strong>{sessionTitle(item)}</strong><small>{modelName(models, item.model)} · {sessionDate(item)}</small></span></button><button className="ai-session-remove" title={sessionChangesDisabled ? "Cancel or run the active task timer before changing sessions" : "Remove session"} disabled={sessionControlsDisabled || sessions.length === 1} onClick={() => onRemoveSession(item)}><Trash2 size={13} /></button></div>)}</div>

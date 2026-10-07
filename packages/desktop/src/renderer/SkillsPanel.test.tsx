@@ -1,7 +1,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SkillsPanel } from "./SkillsPanel";
-import { SkillChatControls } from "./SkillChatControls";
+import { SkillChatChips, SkillChatControls as SkillChatPicker } from "./SkillChatControls";
 import { skillAllowedForAgent } from "@remote-ide/protocol";
 import type { SkillCatalog } from "@remote-ide/protocol";
 
@@ -66,11 +66,16 @@ describe("skills panel", () => {
   });
 });
 
+function SkillChatControls(props: React.ComponentProps<typeof SkillChatPicker>) {
+  return <><SkillChatPicker {...props} /><SkillChatChips {...props} /></>;
+}
+
 describe("chat skills", () => {
   it("shows active chips and allows changing skills while a turn is running", async () => {
     const onChange = vi.fn(async () => undefined); const onOpen = vi.fn();
     render(<SkillChatControls skills={catalog.skills} selected={["local/style"]} running onChange={onChange} onOpen={onOpen} />);
-    fireEvent.click(screen.getByText("Skills · 1 active"));
+    expect(screen.getByRole("group", { name: "Enabled chat skills" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Skills · 1 active" }));
     expect(screen.getByText(/Applies next turn/)).toBeTruthy();
     fireEvent.click(screen.getByLabelText("Enable Reviewer for chat"));
     await waitFor(() => expect(onChange).toHaveBeenCalledWith(["local/style", "global/review"]));
@@ -85,7 +90,7 @@ describe("chat skills", () => {
     const policy = { ...catalog.policy, agents: { "global/review": [preset], "local/style": [null] } };
     const visible = (agent: typeof preset | null) => catalog.skills.filter((skill) => skillAllowedForAgent(policy, skill.id, agent));
     const { rerender } = render(<SkillChatControls skills={visible(preset)} selected={["global/review", "local/style"]} running={false} onChange={vi.fn()} onOpen={vi.fn()} />);
-    fireEvent.click(screen.getByText("Skills · 1 active"));
+    fireEvent.click(screen.getByRole("button", { name: "Skills · 1 active" }));
     expect(screen.getByLabelText("Enable Reviewer for chat")).toBeTruthy();
     expect(screen.queryByLabelText("Enable Style for chat")).toBeNull();
     rerender(<SkillChatControls skills={visible(null)} selected={["global/review", "local/style"]} running={false} onChange={vi.fn()} onOpen={vi.fn()} />);
@@ -96,9 +101,11 @@ describe("chat skills", () => {
 
   it("surfaces failed selection updates without displaying an optimistic active skill", async () => {
     render(<SkillChatControls skills={catalog.skills} selected={[]} running={false} onChange={async () => { throw new Error("Project disallowed this skill"); }} onOpen={vi.fn()} />);
-    fireEvent.click(screen.getByText("Skills · 0 active"));
+    expect(screen.queryByRole("group", { name: "Enabled chat skills" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Skills · 0 active" }));
     fireEvent.click(screen.getByLabelText("Enable Reviewer for chat"));
     await waitFor(() => expect(screen.getByRole("alert").textContent).toBe("Project disallowed this skill"));
-    expect(screen.getByText("Skills · 0 active")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Skills · 0 active" })).toBeTruthy();
+    expect(screen.queryByRole("group", { name: "Enabled chat skills" })).toBeNull();
   });
 });
