@@ -440,7 +440,7 @@ describe("HarnessPanel", () => {
   it("saves declared JSON schemas and shows the validated run data", async () => {
     const harness: HarnessDefinition = { id: "harness-1", name: "Flow", version: 1, createdAt: "now", updatedAt: "now", blocks: [{ id: "a", type: "prompt", label: "Plan", prompt: "{{input}}", position: { x: 20, y: 20 } }], edges: [] };
     const onSave = vi.fn().mockImplementation(async (value) => value);
-    const runs = [{ id: "run-1", harnessId: harness.id, harnessVersion: 1, input: '{"featureId":"F-1"}', status: "succeeded" as const, createdAt: "now", blocks: [{ blockId: "a", status: "succeeded" as const, structuredInput: { featureId: "F-1" }, structuredOutput: { commitSha: "abc123" } }] }];
+    const runs = [{ id: "run-1", harnessId: harness.id, harnessVersion: 1, input: '{"featureId":"F-1"}', status: "succeeded" as const, createdAt: "now", blocks: [{ blockId: "a", status: "succeeded" as const, tokens: { total: 12_345, input: 8_000, output: 4_345 }, structuredInput: { featureId: "F-1" }, structuredOutput: { commitSha: "abc123" } }] }];
     render(<HarnessPanel harnesses={[harness]} runs={runs} providers={[]} agents={[]} onCreate={vi.fn()} onSave={onSave} onDelete={vi.fn()} onRun={vi.fn()} onCancelRun={vi.fn()} onError={vi.fn()} />);
 
     fireEvent.click(await screen.findByText("Plan"));
@@ -454,6 +454,7 @@ describe("HarnessPanel", () => {
     expect(details.textContent).toContain("Validated input");
     expect(details.textContent).toContain("featureId");
     expect(details.textContent).toContain("commitSha");
+    expect(details.textContent).toContain("Tokens: 12,345");
   });
 
   it("shows prompts, answers, and stack runs when a block is selected in view mode", async () => {
