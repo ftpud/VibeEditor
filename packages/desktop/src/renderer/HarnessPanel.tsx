@@ -86,6 +86,9 @@ export function HarnessPanel({ designOnly = false, harnesses, runs, diagnostics 
   const [minimapCorner, setMinimapCorner] = useState<MinimapCorner>("bottom-right");
   const [minimapPosition, setMinimapPosition] = useState<{ left: number; top: number }>();
   const minimapDrag = useRef<{ grabX: number; grabY: number }>();
+  const canvasPan = useRef<{ pointerId: number; x: number; y: number; left: number; top: number }>();
+  const [canvasPanning, setCanvasPanning] = useState(false);
+  const spacePan = useRef(false);
   const canvasFrameRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLDivElement>(null);
   const importInputRef = useRef<HTMLInputElement>(null);
@@ -139,6 +142,20 @@ export function HarnessPanel({ designOnly = false, harnesses, runs, diagnostics 
     canvas.addEventListener("wheel", wheel, { passive: false });
     return () => canvas.removeEventListener("wheel", wheel);
   }, [Boolean(draft), editorSurface, mode, changeZoom]);
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.code !== "Space" || event.repeat) return;
+      const target = event.target;
+      if (target instanceof HTMLElement && (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT|BUTTON)$/.test(target.tagName))) return;
+      spacePan.current = true;
+    };
+    const onKeyUp = (event: KeyboardEvent) => { if (event.code === "Space") spacePan.current = false; };
+    const onBlur = () => { spacePan.current = false; canvasPan.current = undefined; setCanvasPanning(false); };
+    window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("keyup", onKeyUp);
+    window.addEventListener("blur", onBlur);
+    return () => { window.removeEventListener("keydown", onKeyDown); window.removeEventListener("keyup", onKeyUp); window.removeEventListener("blur", onBlur); };
+  }, []);
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -397,6 +414,29 @@ export function HarnessPanel({ designOnly = false, harnesses, runs, diagnostics 
     canvas.scrollTop = next.top;
     updateCanvasViewport();
   };
+  const beginCanvasPan = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (event.button !== 1 && !(event.button === 0 && spacePan.current)) return;
+    if (canvasPan.current) return;
+    event.stopPropagation();
+    drag.current = undefined;
+    event.preventDefault();
+    canvasPan.current = { pointerId: event.pointerId, x: event.clientX, y: event.clientY, left: event.currentTarget.scrollLeft, top: event.currentTarget.scrollTop };
+    event.currentTarget.setPointerCapture(event.pointerId);
+    setCanvasPanning(true);
+  };
+  const moveCanvasPan = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const pan = canvasPan.current;
+    if (!pan || pan.pointerId !== event.pointerId) return;
+    event.currentTarget.scrollLeft = pan.left - (event.clientX - pan.x);
+    event.currentTarget.scrollTop = pan.top - (event.clientY - pan.y);
+    updateCanvasViewport();
+  };
+  const endCanvasPan = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (canvasPan.current?.pointerId !== event.pointerId) return;
+    canvasPan.current = undefined;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+    setCanvasPanning(false);
+  };
   const minimap = minimapViewport(canvasWidth, canvasHeight, zoom, canvasViewport);
   const showMinimap = minimapVisible && (draft?.blocks.length ?? 0) > 0;
   const dragMinimap = (event: ReactPointerEvent<HTMLButtonElement>) => {
@@ -440,10 +480,10 @@ export function HarnessPanel({ designOnly = false, harnesses, runs, diagnostics 
         {mode === "edit" && selectedBlockIds.length > 0 && <button aria-label="Clear selected workflow blocks" title="Clear block selection" onClick={() => { setSelectedBlockIds([]); setSelectedBlockId(undefined); }}><X size={14} aria-hidden="true" /> Clear selection</button>}
         <button aria-label={minimapVisible ? "Hide workflow minimap" : "Show workflow minimap"} title={minimapVisible ? "Hide minimap" : "Show minimap"} aria-pressed={minimapVisible} onClick={() => setMinimapVisible((visible) => !visible)}><MapIcon size={15} aria-hidden="true" /></button>
         {minimapVisible && <select aria-label="Workflow minimap corner" value={minimapCorner} onChange={(event) => { setMinimapCorner(event.target.value as MinimapCorner); setMinimapPosition(undefined); }}><option value="bottom-right">Map: bottom right</option><option value="bottom-left">Map: bottom left</option><option value="top-right">Map: top right</option><option value="top-left">Map: top left</option></select>}
-        <small>Pinch or Shift+scroll to zoom</small>
+        <small>Middle-drag or Space+drag to pan · Pinch or Shift+scroll to zoom</small>
       </div>
       <div ref={canvasFrameRef} className="harness-canvas-frame">
-      <div ref={canvasRef} aria-label="Workflow canvas" className={`harness-canvas ${mode}`} onScroll={updateCanvasViewport} onClick={(event) => { if (event.target === event.currentTarget) { setSelectedEdgeId(undefined); setSelectedBlockId(undefined); setSelectedBlockIds([]); } }} onPointerMove={pointerMove} onPointerUp={() => { drag.current = undefined; }} onPointerCancel={() => { drag.current = undefined; }}>
+      <div ref={canvasRef} aria-label="Workflow canvas" className={`harness-canvas ${mode}${canvasPanning ? " panning" : ""}`} onScroll={updateCanvasViewport} onPointerDownCapture={beginCanvasPan} onLostPointerCapture={endCanvasPan} onAuxClick={(event) => { if (event.button === 1) event.preventDefault(); }} onClick={(event) => { if (event.target === event.currentTarget) { setSelectedEdgeId(undefined); setSelectedBlockId(undefined); setSelectedBlockIds([]); } }} onPointerMove={(event) => { moveCanvasPan(event); if (!canvasPan.current) pointerMove(event); }} onPointerUp={(event) => { endCanvasPan(event); drag.current = undefined; }} onPointerCancel={(event) => { endCanvasPan(event); drag.current = undefined; }}>
         <div className="harness-canvas-extent" style={{ width: canvasWidth * zoom, height: canvasHeight * zoom }}>
         <div className="harness-canvas-content" style={{ width: canvasWidth, height: canvasHeight, transform: `scale(${zoom})` }}>
         <svg aria-label="Workflow connections" style={{ width: canvasWidth, height: canvasHeight }}><defs><marker id={arrowMarkerId} markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto" markerUnits="strokeWidth"><path d="M 0 0 L 8 4 L 0 8 z" /></marker></defs>{draft.edges.map((edge) => { const from = blockById.get(edge.from); const to = blockById.get(edge.to); if (!from || !to) return null; const lane = draft.edges.filter((item) => item.from === edge.from && item.to === edge.to).findIndex((item) => item.id === edge.id) * 16; const labelX = (from.position.x + to.position.x) / 2 + BLOCK_WIDTH / 2; const labelY = (from.position.y + to.position.y) / 2 + BLOCK_HEIGHT / 2 - 7 + lane + (edge.loop ? 45 : 0); const title = edge.loop ? `${from.label} loops to ${to.label}` : `${from.label} then ${to.label}`; const traces = animatedTraces.filter((trace) => trace.edgeId === edge.id); const path = edgePath(from, to, edge.loop, lane); return <g key={edge.id}><path className={`harness-edge ${edge.type ?? "follow"}${edge.loop ? " loop" : ""}${selectedEdgeId === edge.id ? " selected" : ""}`} d={path} markerEnd={`url(#${arrowMarkerId})`} role={mode === "edit" ? "button" : undefined} aria-label={mode === "edit" ? `Select connection: ${title}` : undefined} tabIndex={mode === "edit" ? 0 : undefined} onClick={mode === "edit" ? (event) => { event.stopPropagation(); setSelectedEdgeId(edge.id); setSelectedBlockId(undefined); setSelectedBlockIds([]); } : undefined}><title>{title}</title></path>{traces.map((trace) => <path key={trace.id} className={`harness-transfer ${edge.type ?? "follow"} ${trace.direction} ${trace.status}`} d={path} pathLength={100} style={{ animationDelay: `${trace.delayMs}ms` }} aria-label={`${trace.direction === "return" ? "Output" : "Input"}: ${trace.direction === "return" ? to.label : from.label} → ${trace.direction === "return" ? from.label : to.label}`} />)}{edge.label && <text className="harness-edge-label" x={labelX} y={labelY} textAnchor="middle">{`${edge.type ?? "follow"}${edge.type === "path" ? `: ${edge.label}` : ""}`}</text>}</g>; })}</svg>

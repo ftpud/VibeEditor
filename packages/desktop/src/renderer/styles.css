@@ -323,6 +323,8 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .harness-settings label { display: flex; align-items: center; gap: 6px; }
 .harness-settings input { width: 62px; padding: 3px 5px; border: 1px solid #4b4d52; border-radius: 3px; background: #2b2d31; color: #d7d9dc; font: inherit; }
 .harness-canvas { min-height: 0; height: 100%; width: 100%; position: relative; overflow: auto; touch-action: none; background-color: #202226; background-image: radial-gradient(#3b3e43 1px, transparent 1px); background-size: 18px 18px; }
+.harness-canvas.edit { cursor: grab; }
+.harness-canvas.edit.panning { cursor: grabbing; user-select: none; }
 .harness-panel.view .harness-canvas-frame { min-height: 180px; }
 .harness-canvas.view .harness-block { cursor: pointer; }
 .harness-canvas.view .harness-port, .harness-canvas.view .harness-block > footer, .harness-canvas.view .harness-canvas-empty { display: none; }

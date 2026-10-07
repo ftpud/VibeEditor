@@ -63,6 +63,57 @@ describe("HarnessPanel", () => {
     return { canvas, onSave };
   }
 
+  it.each(["middle", "space"])("pans over blocks with %s drag without editing their positions", (gesture) => {
+    const { canvas } = renderZoomHarness();
+    canvas.setPointerCapture = vi.fn();
+    canvas.hasPointerCapture = vi.fn().mockReturnValue(true);
+    canvas.releasePointerCapture = vi.fn();
+    const block = screen.getByLabelText("First response preview").closest<HTMLElement>(".harness-block")!;
+    block.setPointerCapture = vi.fn();
+    if (gesture === "space") fireEvent.keyDown(window, { code: "Space" });
+    fireEvent.pointerDown(block, { button: gesture === "middle" ? 1 : 0, pointerId: 7, clientX: 300, clientY: 200 });
+    expect(canvas.classList.contains("panning")).toBe(true);
+    expect(block.setPointerCapture).not.toHaveBeenCalled();
+    fireEvent.pointerMove(canvas, { pointerId: 8, clientX: 350, clientY: 230 });
+    expect(canvas.scrollLeft).toBe(300);
+    fireEvent.pointerMove(canvas, { pointerId: 7, clientX: 350, clientY: 230 });
+    expect(canvas.scrollLeft).toBe(250);
+    expect(canvas.scrollTop).toBe(170);
+    expect(block.style.left).toBe("200px");
+    expect(block.style.top).toBe("200px");
+    expect(screen.getByRole("button", { name: "Save" }).hasAttribute("disabled")).toBe(true);
+    fireEvent.pointerUp(canvas, { pointerId: 7 });
+    expect(canvas.classList.contains("panning")).toBe(false);
+    expect(canvas.releasePointerCapture).toHaveBeenCalledWith(7);
+    fireEvent.keyUp(window, { code: "Space" });
+    fireEvent.pointerMove(canvas, { pointerId: 7, clientX: 400, clientY: 250 });
+    expect(canvas.scrollLeft).toBe(250);
+  });
+
+  it.each(["pointerCancel", "lostPointerCapture", "blur"])("ends canvas panning on %s", (eventName) => {
+    const { canvas } = renderZoomHarness();
+    canvas.setPointerCapture = vi.fn();
+    canvas.hasPointerCapture = vi.fn().mockReturnValue(false);
+    fireEvent.keyDown(window, { code: "Space" });
+    fireEvent.pointerDown(canvas, { button: 0, pointerId: 1, clientX: 100, clientY: 100 });
+    if (eventName === "blur") fireEvent.blur(window);
+    else if (eventName === "pointerCancel") fireEvent.pointerCancel(canvas, { pointerId: 1 });
+    else fireEvent.lostPointerCapture(canvas, { pointerId: 1 });
+    expect(canvas.classList.contains("panning")).toBe(false);
+    fireEvent.pointerMove(canvas, { pointerId: 1, clientX: 200, clientY: 200 });
+    expect(canvas.scrollLeft).toBe(300);
+    fireEvent.keyUp(window, { code: "Space" });
+  });
+
+  it("does not arm space panning while editing a form field", () => {
+    const { canvas } = renderZoomHarness();
+    canvas.setPointerCapture = vi.fn();
+    fireEvent.keyDown(screen.getByLabelText("Workflow name"), { code: "Space" });
+    fireEvent.pointerDown(canvas, { button: 0, pointerId: 1 });
+    expect(canvas.setPointerCapture).not.toHaveBeenCalled();
+    expect(canvas.classList.contains("panning")).toBe(false);
+  });
+
   it.each([{ ctrlKey: true, deltaY: -80 }, { shiftKey: true, deltaY: -80 }, { shiftKey: true, deltaX: -80 }])("anchors modified wheel zoom and prevents page zoom: %j", (gesture) => {
     const { canvas } = renderZoomHarness();
     const event = new WheelEvent("wheel", { ...gesture, clientX: 300, clientY: 180, bubbles: true, cancelable: true });

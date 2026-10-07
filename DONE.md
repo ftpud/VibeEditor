@@ -1,5 +1,18 @@
 # Completed
 
+Implemented workflow canvas panning.
+
+- Finished the existing draft implementation recovered during roadmap continuation.
+- Captures pan gestures before block handlers, preventing accidental block movement.
+- Ends panning on pointer release, cancellation, lost capture, and window blur.
+- Added interaction coverage for middle-drag, Space-drag, form fields, and cleanup.
+- Validation passed: full Desktop suite — 332 renderer tests and 6 Electron tests.
+
+- Added middle-button drag and Space+left-drag to pan the workflow canvas.
+- Shows grab/grabbing cursor feedback while editing.
+- Preserved normal block drag behavior and prevented the browser's middle-click autoscroll.
+- Validation passed: `npm run typecheck -w @remote-ide/desktop`.
+
 Implemented and committed workflow canvas auto-layout.
 
 - Added an Edit-mode “Layout” control that arranges workflow paths left-to-right.
@@ -419,3 +432,11 @@ Added focused coverage for failed-block retry.
 - Verifies the selected failed block reruns with its frozen snapshot and original input.
 - Validation passed: Desktop typecheck and 63 `HarnessPanel.test.tsx` tests.
 - Commit: `cdd5eea Test failed workflow block retry`.
+
+# Workflow continuation check
+
+Input: Start the workflow.
+
+`TODO.md` is absent from the current checkout and from `HEAD` (removed in commit `a2054ab`, “Remove workflow planning notes”). The previous roadmap is recoverable from its parent commit and still has unchecked items, including run history details, a chronological timeline, deterministic appended input, resource/data limits, audit fields, product hardening, documentation, and broader acceptance tests. A coder job remains; continue the workflow.
+
+No implementation was performed in this continuation check.
