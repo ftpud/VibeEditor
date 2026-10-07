@@ -5,8 +5,9 @@ import { assertRequestRoot, assertRootRemovalAllowed, assertSessionChangeAllowed
 
 describe("protocol handshake", () => {
   it("rejects workflow models that are no longer available", async () => {
-    await expect(assertWorkflowModelAvailable({ models: async () => [{ id: "available", available: true }, { id: "retired", available: false }] }, "retired")).rejects.toThrow("unavailable");
-    await expect(assertWorkflowModelAvailable({ models: async () => [{ id: "available", available: true }] }, "available")).resolves.toBeUndefined();
+    await expect(assertWorkflowModelAvailable({ models: async () => [{ id: "available", available: true, reasoningLevels: ["low"] }, { id: "retired", available: false, reasoningLevels: [] }] }, "retired")).rejects.toThrow("unavailable");
+    await expect(assertWorkflowModelAvailable({ models: async () => [{ id: "available", available: true, reasoningLevels: ["low"] }] }, "available", "high")).rejects.toThrow("reasoning effort");
+    await expect(assertWorkflowModelAvailable({ models: async () => [{ id: "available", available: true, reasoningLevels: ["low"] }] }, "available", "low")).resolves.toBeUndefined();
   });
   it("arms watchdog recovery at the provider reset even when its AI turn has failed", async () => {
     let active = true;
