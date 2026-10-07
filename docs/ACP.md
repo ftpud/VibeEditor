@@ -113,10 +113,12 @@ The same window supports user-created one-time and recurring schedules. A schedu
 Skills are reusable instruction folders that can be combined with an agent preset.
 Open **Skills** on the right tool stripe, beneath **Agents**, to create and edit
 skills, allow them in the current project, or enable them by default for new chats.
-The panel separates **Global** skills (Core's state directory at
-`~/.remote-ide/workspaces/skills/global/<name>/SKILL.md`) and **Local** skills
-(`.agents/skills/<name>/SKILL.md` in the current checkout). `REMOTE_IDE_STATE_DIR`
-relocates global storage. Supporting files can live alongside `SKILL.md`; each
+The panel separates **Global** skills (`$REMOTE_IDE_STATE_DIR/skills/global/<name>/SKILL.md`),
+**Local** skills (`$REMOTE_IDE_STATE_DIR/skills/local/<root-project-hash>/<name>/SKILL.md`)
+and **Workspace** skills (`.agents/skills/<name>/SKILL.md` in the current checkout).
+Local skills use the same root-project scope as local agents and are shared by all
+tasks of that project. Other projects have their own local skills. When unset,
+`REMOTE_IDE_STATE_DIR` defaults to `~/.remote-ide/workspaces`. Supporting files can live alongside `SKILL.md`; each
 turn supplies the skill's base directory so the agent can resolve references.
 Deleting a skill in the panel removes its instructions and retains supporting files.
 
@@ -131,27 +133,31 @@ description: Review changes for regressions and missing tests.
 Inspect the diff, check behavior at boundaries, and run focused tests.
 ```
 
-Project availability and defaults are stored in `.agents/skills.json`:
+Project availability and defaults are stored in `.agents/skills.json`. New policies
+use `scopeVersion: 2`; older checkout skill IDs and selections remain compatible
+with the Workspace scope until a matching project-local skill is created:
 
 ```json
 {
+  "scopeVersion": 2,
   "allowed": ["global/reviewer", "local/testing"],
   "defaults": ["local/testing"]
 }
 ```
 
-IDs include their scope, so global and local skills with the same folder name
+IDs include their scope, so global, local and workspace skills with the same folder name
 remain distinct. Without a policy file, all discovered skills are available and
 none are enabled by default. Once a policy exists, new skills must be explicitly
-allowed. Commit local skill folders and the policy to share them with the team
-and task worktrees. Global skill contents stay on Core and are not committed;
+allowed. Commit workspace skill folders and the policy to share them with the team
+and task worktrees. Global and local skill contents stay on Core and are not committed;
 each Core host needs its own copy of global skills referenced by the policy.
 
 The chatbox's **Skills** checklist and removable chips change the current chat's
 selection. Core persists this selection with the session, including archived
 sessions; changing project defaults does not modify existing chats. New chats
 use the current defaults. Creating a task from the chat copies its selection;
-local skills must exist in the task worktree (commit them first).
+local skills are shared from Core state; workspace skills must exist in the task
+worktree (commit them first).
 
 Changes made while a response is running apply to the next new turn, including a
 queued follow-up. Steering text delivered to the running turn retains that turn's
@@ -182,6 +188,7 @@ Assignments use exact preset scope/file references and persist in the optional
 
 ```json
 {
+  "scopeVersion": 2,
   "allowed": ["global/reviewer", "local/testing"],
   "defaults": ["local/testing"],
   "agents": {
@@ -224,7 +231,8 @@ registry paths:
 | `agents/local/developer.md` | Root-project agent preset in Core state, Markdown |
 | `agents/workspace/reviewer.md` | Invoking checkout's `.agents/reviewer.md`, Markdown |
 | `skills/global/review/SKILL.md` | Shared Core skill instructions, Markdown |
-| `skills/local/testing/SKILL.md` | Invoking checkout's `.agents/skills/testing/SKILL.md` |
+| `skills/local/testing/SKILL.md` | Core state for the root project, shared across its tasks |
+| `skills/workspace/testing/SKILL.md` | Invoking checkout's `.agents/skills/testing/SKILL.md` |
 | `skills/policy.json` | Invoking checkout's skill availability/defaults/agent assignments |
 | `useful/global/reference.md` | Shared Core useful file, text |
 | `useful/local/notes.md` | Root-project useful file in Core state, text |

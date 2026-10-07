@@ -9,7 +9,7 @@ afterEach(cleanup);
 const catalog: SkillCatalog = {
   skills: [
     { id: "global/review", scope: "global", name: "review", title: "Reviewer", description: "Review changes", path: "/state/skills/global/review/SKILL.md" },
-    { id: "local/style", scope: "local", name: "style", title: "Style", description: "Project conventions", path: "/project/.agents/skills/style/SKILL.md" }
+    { id: "local/style", scope: "local", name: "style", title: "Style", description: "Project conventions", path: "/state/skills/local/project-hash/style/SKILL.md" }
   ],
   policy: { allowed: ["global/review", "local/style"], defaults: ["local/style"] }
 };
@@ -19,7 +19,7 @@ describe("skills panel", () => {
   it("separates scopes and updates project defaults independently of chat selections", async () => {
     const handlers = actions(); const onSelection = vi.fn(async () => undefined);
     render(<SkillsPanel catalog={catalog} selected={[]} running onRefresh={vi.fn()} onSelection={onSelection} onOpen={vi.fn()} actions={handlers} />);
-    expect(screen.getByText("Global")).toBeTruthy(); expect(screen.getByText("Local")).toBeTruthy();
+    expect(screen.getByText("Global")).toBeTruthy(); expect(screen.getByText("Local")).toBeTruthy(); expect(screen.getByText("Workspace")).toBeTruthy();
     fireEvent.click(screen.getByTitle("Settings for Reviewer"));
     expect(screen.getByText(/Changes apply to the next turn/)).toBeTruthy();
     fireEvent.click(screen.getByLabelText("Use Reviewer by default"));

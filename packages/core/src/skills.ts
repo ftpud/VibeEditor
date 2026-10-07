@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import { mkdir, readFile, readdir, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
-import { skillAllowedForAgent } from "@remote-ide/protocol";
+import { resolveSkillIds, skillAllowedForAgent } from "@remote-ide/protocol";
 import type { AiAgentPreset, SkillCatalog, SkillFile, SkillPolicy, SkillScope } from "@remote-ide/protocol";
 import { parseAgent } from "./agents.js";
 import { CoreError } from "./errors.js";
@@ -12,21 +12,26 @@ export const SKILL_TEMPLATE = "---\nname: New Skill\ndescription: Describe when 
 
 /** Core owns discovery, project policy and instruction loading for all providers. */
 export class SkillsStore {
-  constructor(private readonly stateDirectory = process.env.REMOTE_IDE_STATE_DIR ?? path.join(os.homedir(), ".remote-ide", "workspaces")) {}
+  constructor(private readonly stateDirectory = process.env.REMOTE_IDE_STATE_DIR ?? path.join(os.homedir(), ".remote-ide", "workspaces"), private readonly rootWorkspace?: string) {}
 
   private directory(scope: SkillScope, workspace: string): string {
-    return scope === "global" ? path.join(this.stateDirectory, "skills", "global") : path.join(workspace, ".agents", "skills");
+    if (scope === "global") return path.join(this.stateDirectory, "skills", "global");
+    if (scope === "local") {
+      const key = crypto.createHash("sha256").update(this.rootWorkspace ?? workspace).digest("hex");
+      return path.join(this.stateDirectory, "skills", "local", key);
+    }
+    return path.join(workspace, ".agents", "skills");
   }
 
   private target(id: string, workspace: string): string {
-    if (typeof id !== "string" || !/^(global|local)\/[a-zA-Z0-9][a-zA-Z0-9_-]{0,79}$/.test(id)) throw new CoreError("INVALID_REQUEST", "Skill ID must be global/name or local/name using letters, numbers, underscores or hyphens");
+    if (typeof id !== "string" || !/^(global|local|workspace)\/[a-zA-Z0-9][a-zA-Z0-9_-]{0,79}$/.test(id)) throw new CoreError("INVALID_REQUEST", "Skill ID must be global/name, local/name or workspace/name using letters, numbers, underscores or hyphens");
     const [scope, name] = id.split("/");
     return path.join(this.directory(scope as SkillScope, workspace), name!, "SKILL.md");
   }
 
   /** Reject symlink escapes, including paths used for new files. */
   private async checked(target: string, workspace: string, scope: SkillScope): Promise<string> {
-    const boundary = scope === "local" ? path.resolve(workspace) : path.resolve(this.stateDirectory);
+    const boundary = scope === "workspace" ? path.resolve(workspace) : path.resolve(this.stateDirectory);
     const root = await realpath(boundary).catch((error: NodeJS.ErrnoException) => { if (error.code === "ENOENT") return boundary; throw error; });
     let ancestor = target;
     while (true) {
@@ -45,14 +50,14 @@ export class SkillsStore {
   }
 
   async read(id: string, workspace: string): Promise<string> {
-    const target = await this.checked(this.target(id, workspace), workspace, id.startsWith("global/") ? "global" : "local");
+    const target = await this.checked(this.target(id, workspace), workspace, id.split("/", 1)[0] as SkillScope);
     if ((await stat(target)).size > MAX_BYTES) throw new CoreError("FILE_TOO_LARGE", "Skill exceeds 256 KB");
     return readFile(target, "utf8");
   }
 
   async list(workspace: string): Promise<SkillCatalog> {
     const skills: SkillFile[] = [];
-    for (const scope of ["global", "local"] as const) {
+    for (const scope of ["global", "local", "workspace"] as const) {
       const directory = await this.checked(this.directory(scope, workspace), workspace, scope);
       const entries = await readdir(directory, { withFileTypes: true }).catch((error: NodeJS.ErrnoException) => { if (error.code === "ENOENT") return []; throw error; });
       for (const entry of entries) {
@@ -65,18 +70,27 @@ export class SkillsStore {
       }
     }
     skills.sort((a, b) => a.scope.localeCompare(b.scope) || a.title.localeCompare(b.title));
-    const policyFile = await this.checked(path.join(workspace, ".agents", "skills.json"), workspace, "local");
+    const policyFile = await this.checked(path.join(workspace, ".agents", "skills.json"), workspace, "workspace");
+    const checkoutIds = Object.fromEntries(skills.filter((skill) => skill.scope === "workspace").map((skill) => [`local/${skill.name}`, skill.id]));
+    const legacyIds = Object.fromEntries(Object.entries(checkoutIds).filter(([id]) => !skills.some((skill) => skill.id === id)));
     let policy: SkillPolicy;
-    try { policy = this.validatePolicy(JSON.parse(await readFile(policyFile, "utf8"))); }
+    try {
+      const stored = JSON.parse(await readFile(policyFile, "utf8"));
+      policy = this.validatePolicy(stored);
+      if (stored.scopeVersion !== 2) {
+        const resolve = (id: string) => checkoutIds[id] ?? id;
+        policy = { allowed: [...new Set(policy.allowed.map(resolve))], defaults: [...new Set(policy.defaults.map(resolve))], ...(policy.agents ? { agents: Object.fromEntries(Object.entries(policy.agents).map(([id, choices]) => [resolve(id), choices])) } : {}) };
+      }
+    }
     catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw new CoreError("INVALID_REQUEST", `Invalid .agents/skills.json: ${error instanceof Error ? error.message : String(error)}`);
       policy = { allowed: skills.map((skill) => skill.id), defaults: [] };
     }
-    return { skills, policy };
+    return { skills, policy, ...(Object.keys(legacyIds).length ? { legacyIds } : {}) };
   }
 
   private validatePolicy(value: SkillPolicy): SkillPolicy {
-    if (!value || !Array.isArray(value.allowed) || !Array.isArray(value.defaults) || [...value.allowed, ...value.defaults].some((id) => typeof id !== "string" || !/^(global|local)\/[a-zA-Z0-9][a-zA-Z0-9_-]{0,79}$/.test(id)) || value.defaults.some((id) => !value.allowed.includes(id))) throw new CoreError("INVALID_REQUEST", "Skill policy needs allowed/defaults arrays; defaults must be allowed");
+    if (!value || !Array.isArray(value.allowed) || !Array.isArray(value.defaults) || [...value.allowed, ...value.defaults].some((id) => typeof id !== "string" || !/^(global|local|workspace)\/[a-zA-Z0-9][a-zA-Z0-9_-]{0,79}$/.test(id)) || value.defaults.some((id) => !value.allowed.includes(id))) throw new CoreError("INVALID_REQUEST", "Skill policy needs allowed/defaults arrays; defaults must be allowed");
     if (value.agents !== undefined) {
       if (!value.agents || typeof value.agents !== "object" || Array.isArray(value.agents)) throw new CoreError("INVALID_REQUEST", "Skill agents must be a map of skill IDs to agent choices");
       for (const [id, choices] of Object.entries(value.agents)) {
@@ -89,14 +103,14 @@ export class SkillsStore {
 
   async writePolicy(workspace: string, policy: SkillPolicy): Promise<void> {
     const validated = this.validatePolicy(policy);
-    const target = await this.checked(path.join(workspace, ".agents", "skills.json"), workspace, "local");
+    const target = await this.checked(path.join(workspace, ".agents", "skills.json"), workspace, "workspace");
     await mkdir(path.dirname(target), { recursive: true });
-    await this.replace(target, `${JSON.stringify(validated, null, 2)}\n`);
+    await this.replace(target, `${JSON.stringify({ ...validated, scopeVersion: 2 }, null, 2)}\n`);
   }
 
   async write(id: string, workspace: string, content: string): Promise<void> {
     if (typeof content !== "string" || Buffer.byteLength(content) > MAX_BYTES) throw new CoreError("FILE_TOO_LARGE", "Skill exceeds 256 KB");
-    const target = await this.checked(this.target(id, workspace), workspace, id.startsWith("global/") ? "global" : "local");
+    const target = await this.checked(this.target(id, workspace), workspace, id.split("/", 1)[0] as SkillScope);
     await mkdir(path.dirname(target), { recursive: true });
     await this.replace(target, content);
   }
@@ -108,14 +122,16 @@ export class SkillsStore {
   }
 
   async delete(id: string, workspace: string): Promise<void> {
-    const target = await this.checked(this.target(id, workspace), workspace, id.startsWith("global/") ? "global" : "local");
+    const target = await this.checked(this.target(id, workspace), workspace, id.split("/", 1)[0] as SkillScope);
     // Supporting files are retained; only the instruction file is removed.
     await rm(target);
   }
 
   async validateSelection(workspace: string, ids: string[], agent?: AiAgentPreset | null): Promise<string[]> {
     const catalog = await this.list(workspace);
-    if (!Array.isArray(ids) || ids.some((id) => !skillAllowedForAgent(catalog.policy, id, agent) || !catalog.skills.some((skill) => skill.id === id))) throw new CoreError("INVALID_REQUEST", "Selected skill is missing or not allowed by this project for the selected agent");
+    if (!Array.isArray(ids)) throw new CoreError("INVALID_REQUEST", "Selected skills must be an array");
+    ids = resolveSkillIds(catalog, ids);
+    if (ids.some((id) => !skillAllowedForAgent(catalog.policy, id, agent) || !catalog.skills.some((skill) => skill.id === id))) throw new CoreError("INVALID_REQUEST", "Selected skill is missing or not allowed by this project for the selected agent");
     return [...new Set(ids)];
   }
 
@@ -125,7 +141,9 @@ export class SkillsStore {
   }
 
   async instructions(workspace: string, ids: string[], agent?: AiAgentPreset | null): Promise<string> {
-    const { skills, policy } = await this.list(workspace);
+    const catalog = await this.list(workspace);
+    const { skills, policy } = catalog;
+    ids = resolveSkillIds(catalog, ids);
     const enabled = skills.filter((skill) => ids.includes(skill.id) && skillAllowedForAgent(policy, skill.id, agent));
     const blocks = await Promise.all(enabled.map(async (skill) => `Skill: ${skill.id}\nBase directory: ${path.dirname(skill.path)}\n${await this.read(skill.id, workspace)}`));
     if (blocks.join("\n").length > 100_000) throw new CoreError("FILE_TOO_LARGE", "Enabled skills exceed the 100,000 character instruction limit");

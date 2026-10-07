@@ -1,6 +1,7 @@
+import crypto from "node:crypto";
 import os from "node:os";
 import path from "node:path";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 
 export const CONFIGURATION_AGENT_NAME = "vibe-configurator.md";
 export const CONFIGURATION_SKILL_ID = "global/vibe-self-configuration";
@@ -26,9 +27,9 @@ description: Create or edit Vibe Editor workflows, agent presets, skills, task m
 ---
 
 Use configuration_list to discover documents and their formats. The workspace
-reported by that tool is the invoking chat's workspace; local agents, useful files
-and workflows belong to its root project, while workspace agents, local skills
-and skill policy belong to the invoking checkout. Global documents are shared by
+reported by that tool is the invoking chat's workspace; local agents, local skills, useful
+files and workflows belong to its root project and are shared by every task, while
+workspace agents, workspace skills and skill policy belong to the invoking checkout. Global documents are shared by
 all projects on this Core host. Honor an explicit scope; use project-local scope
 for project-specific instructions and global scope for reusable configuration.
 
@@ -40,6 +41,10 @@ returns its actual resource ID. To retry, read that returned resource instead of
 creating another workflow. Do not replace private registry files or durable runs.
 On a revision conflict, reload and reconcile the requested change; stop if it
 conflicts with another user's edits instead of repeatedly overwriting their work.
+
+Use skills/local/{name}/SKILL.md for skills shared by all tasks in this project,
+skills/workspace/{name}/SKILL.md for checkout files and skills/global/{name}/SKILL.md
+for host-wide skills. All three scopes can be created and edited through the tools.
 
 Agent and skill documents are Markdown with name/description frontmatter. Include
 mcpServers: [vibe-editor] in agents that need app tools. Skill policy is JSON with
@@ -63,6 +68,9 @@ project-only request into global changes. Existing chats keep their skill select
 agent or skill instruction changes take effect on a subsequent turn.
 `;
 
+// Exact fingerprint of the shipped skill before local/workspace scopes were separated.
+const PREVIOUS_CONFIGURATION_SKILL_SHA256 = "22c077677a7c43786df14bc1fd7126b31a3901508aae14b3b7727229c61f5155";
+
 /** Install shipped global defaults on every Core host, preserving user edits. */
 export async function ensureSelfConfiguration(stateDirectory = process.env.REMOTE_IDE_STATE_DIR ?? path.join(os.homedir(), ".remote-ide", "workspaces")): Promise<void> {
   for (const [target, content] of [
@@ -71,6 +79,12 @@ export async function ensureSelfConfiguration(stateDirectory = process.env.REMOT
   ] as const) {
     await mkdir(path.dirname(target), { recursive: true });
     try { await writeFile(target, content, { encoding: "utf8", flag: "wx" }); }
-    catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      if (content === CONFIGURATION_SKILL) {
+        const current = await readFile(target, "utf8");
+        if (crypto.createHash("sha256").update(current).digest("hex") === PREVIOUS_CONFIGURATION_SKILL_SHA256) await writeFile(target, content, "utf8");
+      }
+    }
   }
 }
