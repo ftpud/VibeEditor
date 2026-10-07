@@ -226,6 +226,16 @@ describe("HarnessRunner", () => {
     const run = (await store.runs())[0]!; expect(run.blocks.find((block) => block.blockId === "first")?.output).toHaveLength(1_000); expect(dispatch.mock.calls.find((call) => call[0].id === "second")?.[1]).toHaveLength(1_000);
   });
 
+  it("does not dispatch an oversized rendered workflow prompt", async () => {
+    const state = await mkdtemp(path.join(os.tmpdir(), "workflow-prompt-limit-")); const store = new HarnessStore("/workspace", state); const definition = await store.create("Prompt limit");
+    await store.update({ ...definition, settings: { promptLimitChars: 1_000 }, blocks: [{ id: "worker", type: "prompt", label: "Worker", prompt: "{{input}}", position: { x: 0, y: 0 } }], edges: [] });
+    const dispatch = vi.fn(async () => session("done")); const runner = new HarnessRunner(store, () => undefined);
+    await runner.start(definition.id, "x".repeat(1_001), dispatch);
+    await vi.waitFor(async () => expect((await store.runs())[0]?.status).toBe("failed"));
+    expect(dispatch).not.toHaveBeenCalled();
+    expect((await store.runs())[0]?.error).toContain("exceeding its 1,000 character limit");
+  });
+
   it("fails a workflow when provider-reported usage exceeds its token budget", async () => {
     const state = await mkdtemp(path.join(os.tmpdir(), "workflow-token-budget-")); const store = new HarnessStore("/workspace", state); const definition = await store.create("Token budget");
     await store.update({ ...definition, settings: { tokenBudget: 1_000 }, blocks: [{ id: "worker", type: "prompt", label: "worker", prompt: "work", position: { x: 0, y: 0 } }], edges: [] });
