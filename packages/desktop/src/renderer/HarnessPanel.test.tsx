@@ -627,6 +627,22 @@ describe("HarnessPanel", () => {
     expect((await screen.findByLabelText("Plan run details")).textContent).toContain("old answer");
   });
 
+  it("compares the selected run with another run's block outcomes", async () => {
+    const harness: HarnessDefinition = { id: "harness-1", name: "Flow", version: 1, createdAt: "now", updatedAt: "now", blocks: [{ id: "a", type: "prompt", label: "Plan", prompt: "{{input}}", position: { x: 20, y: 20 } }], edges: [] };
+    const runs: HarnessRun[] = [
+      { id: "old", harnessId: harness.id, harnessVersion: 1, input: "old input", status: "failed", createdAt: "2026-01-01T00:00:00Z", blocks: [{ blockId: "a", status: "failed", tokens: { total: 100, input: 60, output: 40 } }] },
+      { id: "current", harnessId: harness.id, harnessVersion: 1, input: "new input", status: "succeeded", createdAt: "2026-01-02T00:00:00Z", blocks: [{ blockId: "a", status: "succeeded", tokens: { total: 125, input: 75, output: 50 } }] },
+    ];
+    render(<HarnessPanel harnesses={[harness]} runs={runs} providers={[]} agents={[]} onCreate={vi.fn()} onSave={vi.fn()} onDelete={vi.fn()} onRun={vi.fn()} onCancelRun={vi.fn()} onError={vi.fn()} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "View" }));
+    fireEvent.change(await screen.findByRole("combobox", { name: "Compare workflow run" }), { target: { value: "old" } });
+    const comparison = await screen.findByLabelText("Workflow run comparison");
+    expect(comparison.textContent).toContain("current (succeeded, 125 tokens) compared with old (failed, 100 tokens)");
+    expect(comparison.textContent).toContain("current: succeeded · 125 tokens");
+    expect(comparison.textContent).toContain("old: failed · 100 tokens");
+  });
+
   it("shows and resolves a workflow-owned permission request", async () => {
     const harness: HarnessDefinition = { id: "harness-1", name: "Flow", version: 1, createdAt: "now", updatedAt: "now", blocks: [{ id: "a", type: "prompt", label: "Deploy", prompt: "{{input}}", position: { x: 20, y: 20 } }], edges: [] };
     const permission = { id: "permission-1", title: "Run deployment", toolCallId: "tool-1", options: [{ optionId: "yes", name: "Allow once", kind: "allow_once" as const }] };
