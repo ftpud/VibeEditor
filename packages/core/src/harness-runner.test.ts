@@ -455,11 +455,11 @@ describe("HarnessRunner", () => {
     expect(maxActive).toBe(2); expect(completed.at(-1)).toBe("join");
   });
 
-  it("shares one concurrency limit between graph dispatch and asynchronous stack launches", async () => {
+  it("uses the workflow concurrency limit for graph dispatch and asynchronous stack launches", async () => {
     const state = await mkdtemp(path.join(os.tmpdir(), "workflow-shared-scheduler-")); const store = new HarnessStore("/workspace", state); const definition = await store.create("Shared scheduler");
     const blocks: HarnessBlock[] = ["root", "left", "right"].map((id) => ({ id, type: "prompt", label: id, prompt: "{{input}}", position: { x: 0, y: 0 } }));
-    await store.update({ ...definition, blocks, edges: [{ id: "left", from: "root", to: "left", execution: "async" }, { id: "right", from: "root", to: "right", execution: "async" }] });
-    const runner = new HarnessRunner(store, () => undefined, 1); let active = 0; let maxActive = 0;
+    await store.update({ ...definition, settings: { concurrency: 1 }, blocks, edges: [{ id: "left", from: "root", to: "left", execution: "async" }, { id: "right", from: "root", to: "right", execution: "async" }] });
+    const runner = new HarnessRunner(store, () => undefined, 4); let active = 0; let maxActive = 0;
     const dispatch = vi.fn(async (block: HarnessBlock, _prompt: string, runtime: { runId: string; blockId: string }) => {
       active += 1; maxActive = Math.max(maxActive, active);
       if (block.id === "root") await runner.runStack(runtime.runId, runtime.blockId, ["downstream"]);
