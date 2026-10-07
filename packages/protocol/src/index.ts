@@ -349,7 +349,7 @@ export type ProtocolOperations = {
   "harnesses.validate": { payload: { harness: HarnessDefinition }; result: { valid: boolean; issues: HarnessValidationIssue[]; order: string[] } };
   "harnesses.runs": { payload: { harnessId?: string }; result: { runs: HarnessRun[] } };
   "harnesses.runs.delete": { payload: { runId: string }; result: Record<string, never> };
-  "harnesses.run": { payload: { harnessId: string; input: string; startBlockId?: string; provider?: AiProvider }; result: { run: HarnessRun } };
+  "harnesses.run": { payload: { harnessId: string; input: string; startBlockId?: string; rerunRunId?: string; provider?: AiProvider }; result: { run: HarnessRun } };
   "harnesses.append": { payload: { runId: string; input: string }; result: { run: HarnessRun } };
   "harnesses.permission.resolve": { payload: { runId: string; blockId: string; sessionId: string; pauseId: string; requestId: string; optionId?: string }; result: { run: HarnessRun } };
   "harnesses.answer": { payload: { runId: string; blockId: string; sessionId: string; pauseId: string; input: string }; result: { run: HarnessRun } };

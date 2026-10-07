@@ -197,9 +197,13 @@ export class HarnessRunner {
     throw new Cancelled();
   }
 
-  async start(harnessId: string, input: string, dispatch: Dispatch, defaultProvider = "codex", append?: Append, startBlockId?: string): Promise<HarnessRun> {
+  async start(harnessId: string, input: string, dispatch: Dispatch, defaultProvider = "codex", append?: Append, startBlockId?: string, rerunRunId?: string): Promise<HarnessRun> {
+    const source = rerunRunId ? (await this.store.runs()).find((run) => run.id === rerunRunId) : undefined;
+    if (rerunRunId && !source) throw new CoreError("FILE_NOT_FOUND", "Workflow run does not exist");
+    if (rerunRunId && !source?.definition) throw new CoreError("INVALID_REQUEST", "This workflow run has no frozen definition to rerun");
+    input = source?.input ?? input;
     if (input.length > 100_000) throw new CoreError("INVALID_REQUEST", "Harness input must contain 1–100,000 characters");
-    const harness = await this.store.read(harnessId); const validation = validateHarness(harness);
+    const harness = source?.definition ?? await this.store.read(harnessId); const validation = validateHarness(harness);
     if (!validation.valid) throw new CoreError("INVALID_REQUEST", validation.issues.map((issue) => issue.message).join("; "));
     const starts = harness.blocks.filter((block) => block.type === "start_button" || block.type === "start_input");
     if (starts.length) {

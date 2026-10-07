@@ -6,6 +6,16 @@ import { alignBlocks, autoLayoutBlocks, dragPosition, edgePath, fitCanvasViewpor
 afterEach(cleanup);
 
 describe("HarnessPanel", () => {
+  it("reruns a completed workflow from its frozen snapshot", async () => {
+    const harness: HarnessDefinition = { id: "flow", name: "Flow", version: 2, createdAt: "now", updatedAt: "now", blocks: [], edges: [] };
+    const run: HarnessRun = { id: "old-run", harnessId: "flow", harnessVersion: 1, definition: { ...harness, version: 1 }, input: "repeat this", status: "succeeded", createdAt: "now", blocks: [] };
+    const onRun = vi.fn().mockResolvedValue({ ...run, id: "new-run", status: "queued" });
+    render(<HarnessPanel harnesses={[harness]} runs={[run]} providers={[]} agents={[]} onCreate={vi.fn()} onSave={vi.fn()} onDelete={vi.fn()} onRun={onRun} onCancelRun={vi.fn()} onError={vi.fn()} />);
+    fireEvent.click(await screen.findByRole("button", { name: "View" }));
+    fireEvent.click(screen.getByRole("button", { name: "Rerun selected workflow snapshot" }));
+    await waitFor(() => expect(onRun).toHaveBeenCalledWith("flow", "repeat this", undefined, "old-run"));
+  });
+
   it("exports redacted workflow definitions and imports current or legacy envelopes", () => {
     const definition: HarnessDefinition = { id: "flow", name: "Secret flow", version: 2, createdAt: "now", updatedAt: "now", blocks: [{ id: "plan", type: "prompt", label: "Plan", prompt: "token=super-secret-value", position: { x: 20, y: 20 } }], edges: [], settings: { tokenBudget: 5000 } };
     const exported = workflowDefinitionExport(definition);
