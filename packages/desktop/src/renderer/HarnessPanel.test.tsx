@@ -488,6 +488,19 @@ describe("HarnessPanel", () => {
     expect(log?.open).toBe(true);
   });
 
+  it("shows persisted run operations and block logs in chronological order", async () => {
+    const harness: HarnessDefinition = { id: "harness-1", name: "Flow", version: 1, createdAt: "now", updatedAt: "now", blocks: [{ id: "a", type: "prompt", label: "Review", prompt: "{{input}}", position: { x: 20, y: 20 } }], edges: [] };
+    const runs: HarnessRun[] = [{ id: "run-1", harnessId: harness.id, harnessVersion: 1, input: "task", status: "succeeded", createdAt: "2026-09-18T00:00:00Z", operations: [{ id: "attempt", idempotencyKey: "attempt", kind: "block_attempt", status: "succeeded", blockId: "a", createdAt: "2026-09-18T00:00:02Z", updatedAt: "2026-09-18T00:00:03Z" }], blocks: [{ blockId: "a", status: "succeeded", log: [{ timestamp: "2026-09-18T00:00:01Z", kind: "prompt", message: "Sent prompt" }, { timestamp: "2026-09-18T00:00:04Z", kind: "response", message: "Received answer" }] }] }];
+    render(<HarnessPanel harnesses={[harness]} runs={runs} providers={[]} agents={[]} onCreate={vi.fn()} onSave={vi.fn()} onDelete={vi.fn()} onRun={vi.fn()} onCancelRun={vi.fn()} onError={vi.fn()} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "View" }));
+    const timeline = await screen.findByLabelText("Workflow execution timeline");
+    expect(timeline.textContent).toContain("Execution timeline (3)");
+    const content = timeline.textContent ?? "";
+    expect(content.indexOf("Sent prompt")).toBeLessThan(content.indexOf("block attempt"));
+    expect(content.indexOf("block attempt")).toBeLessThan(content.indexOf("Received answer"));
+  });
+
   it("shows validation issues and blocks an invalid save", async () => {
     const harness: HarnessDefinition = { id: "harness-1", name: "Flow", version: 1, createdAt: "now", updatedAt: "now", blocks: [{ id: "a", type: "prompt", label: "Plan", prompt: "", position: { x: 20, y: 20 } }], edges: [] };
     const onValidate = vi.fn().mockResolvedValue({ valid: false, issues: [{ code: "empty-prompt", blockId: "a", message: "Plan needs a prompt" }] });
