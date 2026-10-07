@@ -43,6 +43,16 @@ describe("HarnessRunner", () => {
     expect(run.operations?.find((operation) => operation.id === attempt.operationId)?.attemptId).toBe(attempt.id);
   });
 
+  it("refuses a new run when the persisted active-run limit is reached", async () => {
+    const state = await mkdtemp(path.join(os.tmpdir(), "workflow-active-run-limit-")); const store = new HarnessStore("/workspace", state); const created = await store.create("Limited runs");
+    const definition = await store.update({ ...created, settings: { maxActiveRuns: 1 }, blocks: [{ id: "worker", type: "prompt", label: "Worker", prompt: "{{input}}", position: { x: 0, y: 0 } }], edges: [] });
+    let release!: () => void; const waiting = new Promise<void>((resolve) => { release = resolve; }); const runner = new HarnessRunner(store, () => undefined);
+    await runner.start(definition.id, "first", async () => { await waiting; return session("done"); });
+    await vi.waitFor(async () => expect((await store.runs())[0]?.status).toBe("running"));
+    await expect(runner.start(definition.id, "second", async () => session("done"))).rejects.toThrow("limit is 1");
+    release(); await vi.waitFor(async () => expect((await store.runs())[0]?.status).toBe("succeeded"));
+  });
+
   it("deduplicates a concurrent external operation by its stable key", async () => {
     const state = await mkdtemp(path.join(os.tmpdir(), "workflow-operation-")); const store = new HarnessStore("/workspace", state); const definition = await store.create("Operation");
     await store.update({ ...definition, blocks: [{ id: "worker", type: "prompt", label: "Worker", prompt: "work", position: { x: 0, y: 0 } }], edges: [] });
