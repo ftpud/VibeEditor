@@ -131,7 +131,7 @@ describe("HarnessRunner", () => {
   it("recovers owned children with bounded retries and includes children in cancellation", async () => {
     const state = await mkdtemp(path.join(os.tmpdir(), "workflow-children-")); const store = new HarnessStore("/workspace", state);
     const definition = await store.create("Children");
-    await store.update({ ...definition, blocks: [{ id: "owner", type: "task", label: "Owner", prompt: "work", position: { x: 0, y: 0 } }], edges: [] });
+    await store.update({ ...definition, settings: { maxChildTasks: 1 }, blocks: [{ id: "owner", type: "task", label: "Owner", prompt: "work", position: { x: 0, y: 0 } }], edges: [] });
     let release!: () => void; const waiting = new Promise<void>((resolve) => { release = resolve; });
     const runner = new HarnessRunner(store, () => undefined);
     const run = await runner.start(definition.id, "work", async () => { await waiting; return session("done"); });
@@ -140,6 +140,7 @@ describe("HarnessRunner", () => {
     try {
       await runner.registerChild(run.id, child); await runner.registerChild(run.id, child);
       expect((await store.runs())[0]?.children).toHaveLength(1);
+      await expect(runner.registerChild(run.id, { ...child, taskId: "another-child", workspace: "/another-child" })).rejects.toThrow("limit of 1 child task");
       const resume = vi.fn();
       await runner.recoverChildren(run.id, async () => session("healthy"), resume);
       expect(resume).not.toHaveBeenCalled();
