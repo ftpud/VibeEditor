@@ -501,6 +501,22 @@ describe("HarnessPanel", () => {
     expect(content.indexOf("block attempt")).toBeLessThan(content.indexOf("Received answer"));
   });
 
+  it("paginates a long selected-run execution timeline", async () => {
+    const harness: HarnessDefinition = { id: "harness-1", name: "Flow", version: 1, createdAt: "now", updatedAt: "now", blocks: [{ id: "a", type: "prompt", label: "Review", prompt: "{{input}}", position: { x: 20, y: 20 } }], edges: [] };
+    const operations = Array.from({ length: 51 }, (_, index) => ({ id: `operation-${index}`, idempotencyKey: `operation-${index}`, kind: "dependency_decision" as const, status: "succeeded" as const, blockId: "a", createdAt: `2026-09-18T00:00:${String(index).padStart(2, "0")}Z`, updatedAt: `2026-09-18T00:00:${String(index).padStart(2, "0")}Z`, error: `Event number ${index + 1}.` }));
+    const runs: HarnessRun[] = [{ id: "run-1", harnessId: harness.id, harnessVersion: 1, input: "task", status: "succeeded", createdAt: "2026-09-18T00:00:00Z", operations, blocks: [{ blockId: "a", status: "succeeded" }] }];
+    render(<HarnessPanel harnesses={[harness]} runs={runs} providers={[]} agents={[]} onCreate={vi.fn()} onSave={vi.fn()} onDelete={vi.fn()} onRun={vi.fn()} onCancelRun={vi.fn()} onError={vi.fn()} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "View" }));
+    const timeline = await screen.findByLabelText("Workflow execution timeline");
+    expect(timeline.textContent).toContain("Showing 1–50 of 51");
+    expect(timeline.textContent).toContain("Event number 1.");
+    expect(timeline.textContent).not.toContain("Event number 51.");
+    fireEvent.click(screen.getByRole("button", { name: "Next timeline events" }));
+    expect(timeline.textContent).toContain("Showing 51–51 of 51");
+    expect(timeline.textContent).toContain("Event number 51.");
+  });
+
   it("shows validation issues and blocks an invalid save", async () => {
     const harness: HarnessDefinition = { id: "harness-1", name: "Flow", version: 1, createdAt: "now", updatedAt: "now", blocks: [{ id: "a", type: "prompt", label: "Plan", prompt: "", position: { x: 20, y: 20 } }], edges: [] };
     const onValidate = vi.fn().mockResolvedValue({ valid: false, issues: [{ code: "empty-prompt", blockId: "a", message: "Plan needs a prompt" }] });

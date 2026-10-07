@@ -421,13 +421,20 @@ function BlockRunDetails({ block, run, state, tasks, onClose }: { block: Harness
 }
 
 function WorkflowTimeline({ run, blocks }: { run: HarnessRun; blocks: HarnessBlock[] }) {
+  const [page, setPage] = useState(0);
   const labels = new Map(blocks.map((block) => [block.id, block.label]));
   const entries = [
     ...(run.operations ?? []).map((operation) => ({ timestamp: operation.updatedAt, kind: operation.kind.replaceAll("_", " "), message: `${operation.blockId ? `${labels.get(operation.blockId) ?? operation.blockId} · ` : ""}${operation.status}${operation.error ? ` · ${operation.error}` : ""}` })),
     ...run.blocks.flatMap((state) => (state.log ?? []).map((entry) => ({ ...entry, message: `${labels.get(state.blockId) ?? state.blockId} · ${entry.message}` }))),
   ].sort((left, right) => left.timestamp.localeCompare(right.timestamp));
+  useEffect(() => setPage(0), [run.id]);
   if (!entries.length) return null;
-  return <details className="harness-execution-log" aria-label="Workflow execution timeline"><summary>Execution timeline ({entries.length})</summary><div className="harness-execution-log-entries">{entries.map((entry, index) => <details key={`${entry.timestamp}-${index}`} className="harness-log-entry"><summary><time>{new Date(entry.timestamp).toLocaleTimeString()}</time><span>{entry.kind}</span></summary><pre>{entry.message}</pre></details>)}</div></details>;
+  const pageSize = 50;
+  const lastPage = Math.ceil(entries.length / pageSize) - 1;
+  const currentPage = Math.min(page, lastPage);
+  const start = currentPage * pageSize;
+  const visibleEntries = entries.slice(start, start + pageSize);
+  return <details className="harness-execution-log" aria-label="Workflow execution timeline"><summary>Execution timeline ({entries.length})</summary><div className="harness-execution-log-entries">{visibleEntries.map((entry, index) => <details key={`${entry.timestamp}-${start + index}`} className="harness-log-entry"><summary><time>{new Date(entry.timestamp).toLocaleTimeString()}</time><span>{entry.kind}</span></summary><pre>{entry.message}</pre></details>)}</div>{entries.length > pageSize && <div className="harness-timeline-pagination"><span>Showing {start + 1}–{start + visibleEntries.length} of {entries.length}</span><button aria-label="Previous timeline events" disabled={currentPage === 0} onClick={() => setPage(currentPage - 1)}>Previous</button><button aria-label="Next timeline events" disabled={currentPage === lastPage} onClick={() => setPage(currentPage + 1)}>Next</button></div>}</details>;
 }
 
 function LogSection({ title, value, error }: { title: string; value: string; error?: boolean }) {
