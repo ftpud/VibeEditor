@@ -1,4 +1,4 @@
-import type { HarnessDataSchema, HarnessDefinition, HarnessValidationIssue } from "@remote-ide/protocol";
+import type { HarnessDataSchema, HarnessDefinition, HarnessEdge, HarnessValidationIssue } from "@remote-ide/protocol";
 
 export function validateHarness(harness: HarnessDefinition): { valid: boolean; issues: HarnessValidationIssue[]; order: string[] } {
   const issues: HarnessValidationIssue[] = [];
@@ -37,7 +37,7 @@ export function validateHarness(harness: HarnessDefinition): { valid: boolean; i
   if (watchdogs.length > 1) for (const block of watchdogs.slice(1)) issues.push({ code: "invalid-watchdog", blockId: block.id, message: "A workflow can have only one Core watchdog" });
   if (watchdogs.length && watchdogs.length === harness.blocks.length) for (const block of watchdogs) issues.push({ code: "invalid-watchdog", blockId: block.id, message: "A Core watchdog needs at least one delivery block to supervise" });
   const edgeIds = new Set<string>(); const edgeKeys = new Set<string>(); const outgoing = new Map<string, string[]>(); const indegree = new Map(harness.blocks.map((block) => [block.id, 0]));
-  for (const edge of harness.edges) {
+  for (const edge of harnessExecutionEdges(harness)) {
     if (edgeIds.has(edge.id)) issues.push({ code: "duplicate-edge-id", edgeId: edge.id, message: `Connection ID '${edge.id}' is duplicated` }); edgeIds.add(edge.id);
     if (!ids.has(edge.from) || !ids.has(edge.to)) { issues.push({ code: "missing-endpoint", edgeId: edge.id, message: "Connection refers to a block that no longer exists" }); continue; }
     if (harness.blocks.find((block) => block.id === edge.from)?.watchdog || harness.blocks.find((block) => block.id === edge.to)?.watchdog) issues.push({ code: "invalid-watchdog", edgeId: edge.id, message: "A Core watchdog runs independently and cannot have workflow connections" });
@@ -56,8 +56,30 @@ export function validateHarness(harness: HarnessDefinition): { valid: boolean; i
   }
   const queue = harness.blocks.filter((block) => (indegree.get(block.id) ?? 0) === 0).map((block) => block.id); const order: string[] = []; const pending = new Map(indegree);
   while (queue.length) { const id = queue.shift()!; order.push(id); for (const next of outgoing.get(id) ?? []) { const count = (pending.get(next) ?? 0) - 1; pending.set(next, count); if (count === 0) queue.push(next); } }
-  if (order.length !== harness.blocks.length && harness.blocks.length) issues.push({ code: "cycle", message: "Harness connections contain a cycle" });
-  return { valid: issues.length === 0, issues, order: issues.some((issue) => issue.code === "cycle") ? [] : order };
+  // Cyclic flows have no topological order; retain every block in stable definition order.
+  for (const block of harness.blocks) if (!order.includes(block.id)) order.push(block.id);
+  return { valid: issues.length === 0, issues, order };
+}
+
+export function isHarnessFlow(harness: Pick<HarnessDefinition, "blocks" | "edges">): boolean {
+  return harness.edges.some((edge) => edge.type !== undefined) || harness.blocks.some((block) => ["ai", "text", "timer", "script", "user_prompt", "yes_no_prompt", "markdown", "start_button", "start_input"].includes(block.type));
+}
+
+/** Legacy dependency workflows treat implicit back connections as loop paths. */
+export function harnessExecutionEdges(harness: Pick<HarnessDefinition, "blocks" | "edges">): HarnessEdge[] {
+  if (isHarnessFlow(harness)) return harness.edges;
+  const visited = new Set<string>(); const active = new Set<string>(); const backEdges = new Set<string>();
+  const visit = (id: string): void => {
+    if (visited.has(id)) return;
+    visited.add(id); active.add(id);
+    for (const edge of harness.edges.filter((edge) => edge.from === id && !edge.loop && !edge.type)) {
+      if (active.has(edge.to) && edge.to !== id) backEdges.add(edge.id);
+      else visit(edge.to);
+    }
+    active.delete(id);
+  };
+  for (const block of harness.blocks) visit(block.id);
+  return harness.edges.map((edge) => backEdges.has(edge.id) ? { ...edge, loop: true } : edge);
 }
 
 function isCommit(value: string): boolean { return /^[0-9a-f]{7,64}$/i.test(value); }

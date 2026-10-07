@@ -104,11 +104,48 @@ describe("typed workflows", () => {
     await runner.cancel(run.id, vi.fn()); await finished(); expect(dispatch).not.toHaveBeenCalled();
   });
 
-  it("allows reciprocal use connections but rejects automatic execution cycles", async () => {
+  it("allows reciprocal use and follow connections", async () => {
     const { definition } = await setup([block("a", "ai"), block("b", "ai")], [edge("a", "b", "use"), edge("b", "a", "use")]);
     expect(validateHarness(definition).valid).toBe(true);
-    expect(validateHarness({ ...definition, edges: [edge("a", "b"), edge("b", "a")] }).issues).toEqual(expect.arrayContaining([expect.objectContaining({ code: "cycle" })]));
+    expect(validateHarness({ ...definition, edges: [edge("a", "b"), edge("b", "a")] })).toMatchObject({ valid: true, order: ["a", "b"] });
   });
+  it("returns through a chosen path, reuses the AI session, and exits the cycle", async () => {
+    const { runner, definition, finished } = await setup([block("start", "start_input"), block("agent", "ai"), block("revise", "text"), block("done", "text")], [edge("start", "agent"), edge("agent", "revise", "path", "again"), edge("revise", "agent"), edge("agent", "done", "path", "done")]);
+    const dispatch = vi.fn(async (_target, _prompt, runtime) => {
+      await runtime.started("/sessions/agent");
+      await runner.flowTool(runtime.runId, "agent", "workflow_choose_path", { path: "again" });
+      return session("first pass");
+    });
+    const append = vi.fn(async (_target: HarnessBlock, prompt: string, runtime: { runId: string; workspace: string }) => {
+      expect(runtime.workspace).toBe("/sessions/agent"); expect(prompt).toContain("first pass");
+      await runner.flowTool(runtime.runId, "agent", "workflow_choose_path", { path: "done" });
+      return session("finished");
+    });
+    await runner.start(definition.id, "input", dispatch, "provider", append);
+    const run = await finished(); expect(run.status).toBe("succeeded");
+    expect(dispatch).toHaveBeenCalledOnce(); expect(append).toHaveBeenCalledOnce();
+    expect(run.blocks.find((state) => state.blockId === "done")?.output).toBe("finished");
+  });
+
+  it("starts a cycle without a root and stops at the configured loop limit", async () => {
+    const { runner, store, definition, finished } = await setup([block("a", "text"), block("b", "text")], [edge("a", "b"), edge("b", "a")]);
+    await store.update({ ...definition, settings: { maxLoopCount: 2 } });
+    await runner.start(definition.id, "input", vi.fn());
+    const run = await finished(); expect(run.status).toBe("failed");
+    expect(run.error).toContain("limit of 2 iterations");
+    expect(run.blocks.map((state) => state.blockId)).toEqual(["a", "b"]);
+  });
+
+  it("rejects recursive tool calls to an AI block that is still active", async () => {
+    const { runner, definition, finished } = await setup([block("start", "start_input"), block("a", "ai"), block("b", "ai")], [edge("start", "a"), edge("a", "b", "use"), edge("b", "a", "use")]);
+    await runner.start(definition.id, "input", async (target, _prompt, runtime) => {
+      if (target.id === "a") await runner.flowTool(runtime.runId, "a", "workflow_use_block", { block_id: "b", input: "work" });
+      else await expect(runner.flowTool(runtime.runId, "b", "workflow_use_block", { block_id: "a", input: "recurse" })).rejects.toThrow("already active");
+      return session("done");
+    });
+    expect((await finished()).status).toBe("succeeded");
+  });
+
   it("executes a script through MCP and passes stdout to its follower", async () => {
     const { runner, definition, finished } = await setup([block("start", "start_input"), block("agent", "ai"), block("script", "script", { command: 'printf "result:%s" "$VIBE_WORKFLOW_INPUT"' }), block("after", "text")], [edge("start", "agent"), edge("agent", "script", "use"), edge("script", "after")]);
     await runner.start(definition.id, "input", async (target, input, runtime) => {
@@ -186,7 +223,7 @@ describe("typed workflows", () => {
     const result = await finished(); expect(result.status).toBe("succeeded"); expect(result.blocks.find((state) => state.blockId === "after")?.output).toBe("latest input");
   });
 
-  it("allows a follow cycle through a Timer while rejecting cycles without a Timer", async () => {
+  it("allows a follow cycle through a Timer", async () => {
     const { definition } = await setup([block("start", "start_input"), block("agent", "ai"), block("timer", "timer", { seconds: 300 })], [edge("start", "agent"), edge("agent", "timer"), edge("timer", "agent")]);
     expect(validateHarness(definition).valid).toBe(true);
   });

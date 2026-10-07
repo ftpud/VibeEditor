@@ -33,8 +33,8 @@ describe("harness graph", () => {
     expect(validateHarness({ ...harness([]), settings: { maxRunDurationMs: 59_999 } }).issues).toMatchObject([{ code: "invalid-settings" }]);
     expect(validateHarness({ ...harness([]), settings: { tokenBudget: 999 } }).issues).toMatchObject([{ code: "invalid-settings" }]);
   });
-  it("rejects cycles and missing endpoints", () => {
-    expect(validateHarness(harness([{ id: "a", from: "plan", to: "build" }, { id: "b", from: "build", to: "plan" }])).issues.some((issue) => issue.code === "cycle")).toBe(true);
+  it("allows cycles and rejects missing endpoints", () => {
+    expect(validateHarness(harness([{ id: "a", from: "plan", to: "build" }, { id: "b", from: "build", to: "plan" }]))).toMatchObject({ valid: true, order: ["plan", "build"] });
     expect(validateHarness(harness([{ id: "a", from: "missing", to: "build" }])).issues.some((issue) => issue.code === "missing-endpoint")).toBe(true);
   });
   it("allows an explicit loop edge without adding it to dependency order", () => {

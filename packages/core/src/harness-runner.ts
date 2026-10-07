@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import type { HarnessBlock, HarnessConnectionTrace, HarnessBlockAttempt, HarnessBlockIteration, HarnessEdge, HarnessRun, HarnessLogEntry, HarnessChildTask, HarnessFailureReason, HarnessPauseStatus, HarnessOperation, HarnessOperationKind, HarnessFeature, HarnessReviewFinding, HarnessCorrectionCycle, AiSession } from "@remote-ide/protocol";
 import { AiProviderError, normalizeAiFailure, type AiFailure } from "@remote-ide/acp";
 import { CoreError } from "./errors.js";
-import { HarnessSchemaError, parseHarnessData, validateHarness, renderHarnessPrompt } from "./harness-graph.js";
+import { harnessExecutionEdges, isHarnessFlow, HarnessSchemaError, parseHarnessData, validateHarness, renderHarnessPrompt } from "./harness-graph.js";
 import type { HarnessStore } from "./harnesses.js";
 import type { AiUsage } from "@remote-ide/acp";
 
@@ -241,7 +241,7 @@ export class HarnessRunner {
         await this.failRecovery(run, "The persisted workflow execution plan does not match its frozen definition. Start a new run; completed sessions and task workspaces were preserved.");
         recovered.push(structuredClone(run)); continue;
       }
-      if (definition.blocks.some((block) => ["ai", "text", "timer", "script", "user_prompt", "yes_no_prompt", "markdown", "start_button", "start_input"].includes(block.type))) {
+      if (isHarnessFlow(definition)) {
         await this.failRecovery(run, "Core restarted during this flow. Start a new run; existing AI sessions and block outputs are preserved, and scripts will not be replayed automatically.");
         recovered.push(structuredClone(run)); continue;
       }
@@ -494,6 +494,7 @@ export class HarnessRunner {
   }
 
   private async execute(run: HarnessRun, blocks: HarnessBlock[], edges: HarnessEdge[], order: string[], dispatch: Dispatch, defaultProvider: string, append: Append, recovering = false, startBlockId?: string): Promise<void> {
+    edges = harnessExecutionEdges({ blocks, edges });
     const outputs = new Map(run.blocks.flatMap((state) => state.status === "succeeded" && state.output !== undefined ? [[state.blockId, state.output] as const] : []));
     const concurrency = run.definition?.settings?.concurrency ?? this.concurrency;
     run.status = this.runActivityStatus(run); run.startedAt ??= new Date().toISOString(); const background = new Set<Promise<void>>(); this.executions.set(run.id, { run, blocks, edges, outputs, dispatch, append, defaultProvider, background, stackInvocations: new Map(), loopInvocations: new Map(), turnClaims: new Map(), scheduler: new ExecutionScheduler(concurrency, () => this.assertActive(run.id)) });
@@ -501,7 +502,7 @@ export class HarnessRunner {
     await this.update(run);
     const running = new Map<string, Promise<{ blockId: string; error?: unknown }>>();
     try {
-      if (blocks.some((block) => ["ai", "text", "timer", "script", "user_prompt", "yes_no_prompt", "markdown", "start_button", "start_input"].includes(block.type))) {
+      if (isHarnessFlow({ blocks, edges })) {
         await this.executeFlow(this.executions.get(run.id)!, startBlockId);
         run.status = "succeeded"; run.completedAt = new Date().toISOString(); await this.recordCompletedOperation(run, "terminal_outcome", "terminal:succeeded", undefined, { status: "succeeded" }); await this.update(run); return;
       }
@@ -613,7 +614,7 @@ export class HarnessRunner {
     let steps = 0;
     const invoke = async (id: string, input: string, ancestors: string[] = []): Promise<string> => {
       this.assertActive(run.id);
-      if (ancestors.includes(id) || busy.has(id)) throw new Error("This block is already active; recursive tool calls are not allowed");
+      if (busy.has(id)) throw new Error("This block is already active; recursive tool calls are not allowed");
       if (++steps > 1000) throw new Error("Flow exceeded 1000 block executions");
       const block = blocks.find((item) => item.id === id)!;
       const state = run.blocks.find((item) => item.blockId === id)!;
@@ -657,12 +658,21 @@ export class HarnessRunner {
         state.status = this.isActive(run.id) ? "failed" : "cancelled"; state.error = error instanceof Error ? error.message : String(error); state.completedAt = new Date().toISOString(); this.log(state, "error", state.error); await this.update(run); throw error;
       } finally { busy.delete(id); }
       if (block.type === "markdown") this.openDocument?.({ runId: run.id, blockId: id, title: block.label.endsWith(".md") ? block.label : `${block.label}.md`, content: output });
-      for (const edge of edges.filter((edge) => edge.from === id && (edge.type === "follow" || !edge.type || (edge.type === "path" && edge.label === state.selectedRoute)))) { await this.traceConnection(run, edge, "forward", "succeeded"); await invoke(edge.to, output, [...ancestors, id]); }
+      for (const edge of edges.filter((edge) => edge.from === id && (edge.type === "follow" || !edge.type || (edge.type === "path" && edge.label === state.selectedRoute)))) {
+        if (ancestors.includes(edge.to) || edge.to === id) {
+          const count = (execution.loopInvocations.get(edge.id) ?? 0) + 1;
+          const limit = run.definition?.settings?.maxLoopCount ?? 100;
+          if (count > limit) throw new CoreError("INVALID_REQUEST", `Workflow loop '${edge.label ?? edge.id}' reached its limit of ${limit} iterations`);
+          execution.loopInvocations.set(edge.id, count);
+        }
+        await this.traceConnection(run, edge, "forward", "succeeded");
+        await invoke(edge.to, output, [...ancestors, id]);
+      }
       return output;
     };
     this.flowInvocations.set(run.id, invoke);
     const roots = startBlockId ? [startBlockId] : blocks.filter((block) => !edges.some((edge) => edge.to === block.id)).map((block) => block.id);
-    if (!roots.length) throw new Error("Add a start block to enter this flow");
+    if (!roots.length && blocks.length) roots.push(blocks[0]!.id);
     for (const id of roots) await invoke(id, run.input);
     while (timers.size) {
       this.assertActive(run.id);

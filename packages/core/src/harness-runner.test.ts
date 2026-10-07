@@ -362,10 +362,10 @@ describe("HarnessRunner", () => {
     expect(completed.status).toBe("succeeded"); expect(dispatch.mock.calls.map((call) => call[1].split("\n\nWorkflow runtime")[0])).toEqual(["Plan feature", "Build the plan"]); expect(completed.id).toBe(started.id);
   });
 
-  it("cycles through an explicit loop edge without rescheduling the initial graph", async () => {
+  it.each([true, undefined])("cycles through a loop edge (explicit: %s) without rescheduling the initial graph", async (loop) => {
     const state = await mkdtemp(path.join(os.tmpdir(), "workflow-cycle-")); const store = new HarnessStore("/workspace", state); const definition = await store.create("Cycle");
     const blocks: HarnessBlock[] = [{ id: "draft", type: "task", label: "Draft", prompt: "Draft {{input}}", position: { x: 0, y: 0 } }, { id: "review", type: "prompt", label: "Review", prompt: "Review {{input}}", position: { x: 200, y: 0 } }];
-    await store.update({ ...definition, blocks, edges: [{ id: "forward", from: "draft", to: "review" }, { id: "loop", from: "review", to: "draft", label: "revise", loop: true }] });
+    await store.update({ ...definition, blocks, edges: [{ id: "forward", from: "draft", to: "review" }, { id: "loop", from: "review", to: "draft", label: "revise", loop }] });
     const runner = new HarnessRunner(store, () => undefined); const append = vi.fn(async (_block: HarnessBlock, prompt: string) => session(`revised:${prompt}`));
     const dispatch = vi.fn(async (block: HarnessBlock, prompt: string, runtime: { runId: string; blockId: string; started(workspace: string): Promise<void> }) => {
       await runtime.started(`/sessions/${block.id}`);
