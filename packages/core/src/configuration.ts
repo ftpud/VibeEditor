@@ -49,7 +49,7 @@ export class ConfigurationService {
       agents: "agents/{global|local|workspace}/{file.md}: Markdown with name, description and optional mcpServers frontmatter. Global/local are Core state; workspace is the invoking checkout's .agents directory.",
       skills: "skills/{global|local|workspace}/{name}/SKILL.md: Markdown instructions. Global is shared across projects on Core; local is Core state shared by all tasks of the root project; workspace is the invoking checkout's .agents/skills directory.",
       useful: "useful/{global|local}/{filename}: arbitrary text. Local belongs to the root project, global is shared across projects on Core.",
-      policy: "skills/policy.json: JSON {allowed: [global/name, local/name or workspace/name], defaults: [...], agents?: {skillId: [{scope, name}, null]}}. Defaults must be allowed; null means no agent; absent assignment means any agent.",
+      policy: "skills/policy.json: Core state shared by all tasks of the root project, outside the Git repository. Writing imports and removes a legacy checkout policy. JSON {allowed: [global/name, local/name or workspace/name], defaults: [...], agents?: {skillId: [{scope, name}, null]}}. Defaults must be allowed; null means no agent; absent assignment means any agent.",
       workflows: "workflows/{id}.json: full JSON workflow definition; read workflows/new.json for a starter. Core owns id, version and timestamps. Saving never starts a run. Workflow graph validation is returned separately so drafts can be edited.",
       tasks: "tasks/{id}.json: JSON {name, status: active|finished, archived: boolean}. Existing task tools create/delete worktrees, start sessions and merge. Branches, paths and runtime state are not editable documents."
     } };

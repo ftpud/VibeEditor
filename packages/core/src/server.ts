@@ -748,6 +748,7 @@ async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStor
     case "skills.read": return { content: await new SkillsStore(undefined, rootWorkspace).read(request.payload.id, workspacePath) };
     case "skills.write": await new SkillsStore(undefined, rootWorkspace).write(request.payload.id, workspacePath, request.payload.content); return {};
     case "skills.delete": await new SkillsStore(undefined, rootWorkspace).delete(request.payload.id, workspacePath); return {};
+    case "skills.policy.moveToLocal": await new SkillsStore(undefined, rootWorkspace).movePolicyToLocal(workspacePath); return {};
     case "skills.policy": await new SkillsStore(undefined, rootWorkspace).writePolicy(workspacePath, request.payload); return {};
     case "ai.skills": return { session: await acp.get(request.payload.provider).setSkills(workspacePath, request.payload.ids, request.payload.sessionId, request.payload.agentPreset) };
     case "ai.providers": return { providers: acp.list() };

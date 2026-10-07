@@ -558,6 +558,7 @@ export function App() {
     applyAiSession(session, token);
   }, [agents, selectedAgentKey, aiSession.id, aiToken, applyAiSession]);
   const skillActions: SkillsActions = {
+    movePolicyToLocal: async () => { if (!clientRef.current) throw new Error("Backend is disconnected"); await clientRef.current.request("skills.policy.moveToLocal", {}); await refreshSkills(); },
     write: async (id, content) => { if (!clientRef.current) throw new Error("Backend is disconnected"); await clientRef.current.request("skills.write", { id, content }); await refreshSkills(); },
     delete: async (id) => { if (!clientRef.current) throw new Error("Backend is disconnected"); await clientRef.current.request("skills.delete", { id });
       updateGroup((tabs, active) => { const next = tabs.filter((tab) => tab.type !== "skill" || tab.skillId !== id); return { tabs: next, activeTabId: next.some((tab) => tab.id === active) ? active : next.at(-1)?.id }; });

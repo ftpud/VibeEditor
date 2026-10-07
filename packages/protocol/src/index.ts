@@ -169,7 +169,7 @@ export function skillAllowedForAgent(policy: SkillPolicy, id: string, agent?: Ai
   const choices = policy.agents?.[id];
   return choices === undefined || choices.some((choice) => choice === null ? !agent : !!agent && choice.scope === agent.scope && choice.name === agent.name);
 }
-export type SkillCatalog = { skills: SkillFile[]; policy: SkillPolicy; /** Compatibility for checkout skills formerly named local/name. */ legacyIds?: Record<string, string> };
+export type SkillCatalog = { skills: SkillFile[]; policy: SkillPolicy; policyStorage?: "local" | "workspace"; /** Compatibility for checkout skills formerly named local/name. */ legacyIds?: Record<string, string> };
 export function resolveSkillIds(catalog: SkillCatalog, ids: string[]): string[] {
   return [...new Set(ids.map((id) => catalog.legacyIds?.[id] ?? id))];
 }
@@ -343,6 +343,7 @@ export type ProtocolOperations = {
   "skills.write": { payload: { id: string; content: string }; result: Record<string, never> };
   "skills.delete": { payload: { id: string }; result: Record<string, never> };
   "skills.policy": { payload: SkillPolicy; result: Record<string, never> };
+  "skills.policy.moveToLocal": { payload: Record<string, never>; result: Record<string, never> };
   "ai.skills": { payload: { provider?: AiProvider; ids: string[]; sessionId: string; agentPreset?: AiAgentPreset | null }; result: { session: AiSession } };
   "ai.send": { payload: { provider?: AiProvider; prompt: string; content?: AiContentBlock[]; model?: string; reasoning?: string; configuration?: AiConfiguration; mcpServers?: AiMcpServer[]; agent?: AiAgent; agentPreset?: AiAgentPreset }; result: { session: AiSession } };
   "ai.permission.resolve": { payload: { provider?: AiProvider; requestId: string; optionId?: string; target?: { taskId?: string; sessionId?: string } }; result: { session: AiSession } };
@@ -751,6 +752,7 @@ const requestTypeRegistry: Record<RequestType, true> = {
   "skills.write": true,
   "skills.delete": true,
   "skills.policy": true,
+  "skills.policy.moveToLocal": true,
   "ai.skills": true,
   "ai.send": true,
   "ai.permission.resolve": true,

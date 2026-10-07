@@ -117,7 +117,7 @@ describe("global configuration defaults", () => {
   it("upgrades the unedited shipped skill when project-local scopes change", async () => {
     const { state, stores, workspace } = await fixture();
     const previous = CONFIGURATION_SKILL
-      .replace("local agents, local skills, useful\nfiles and workflows belong to its root project and are shared by every task, while\nworkspace agents, workspace skills and skill policy belong to the invoking checkout.", "local agents, useful files\nand workflows belong to its root project, while workspace agents, local skills\nand skill policy belong to the invoking checkout.")
+      .replace("local agents, local skills, skill policy,\nuseful files and workflows belong to its root project and are shared by every task, while\nworkspace agents and workspace skills belong to the invoking checkout.", "local agents, useful files\nand workflows belong to its root project, while workspace agents, local skills\nand skill policy belong to the invoking checkout.")
       .replace("Use skills/local/{name}/SKILL.md for skills shared by all tasks in this project,\nskills/workspace/{name}/SKILL.md for checkout files and skills/global/{name}/SKILL.md\nfor host-wide skills. All three scopes can be created and edited through the tools.\n\n", "");
     const directory = path.join(state, "skills/global/vibe-self-configuration");
     await mkdir(directory, { recursive: true });
