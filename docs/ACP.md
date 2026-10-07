@@ -1,6 +1,9 @@
-# AI Capability Provider layer
+# ACP: the AI provider abstraction
 
-The core talks to AI tools only through `AcpProvider` from `packages/acp/src/index.ts` and `AcpRegistry` in `packages/core/src/ai/acp.ts`. Provider adapters live under `packages/core/src/ai/providers/`. Codex and Copilot are plugins registered at server startup; request routing and the desktop UI do not branch on their ids.
+Vibe Editor uses one interface for Codex and GitHub Copilot. Core handles each
+provider through `AcpProvider`; Desktop reads the provider's capabilities and
+settings to build the AI controls. Adding a provider should not require special
+cases in the UI or shared protocol.
 
 ## Provider contract
 
