@@ -205,6 +205,18 @@ describe("HarnessPanel", () => {
     expect(screen.getByRole("alert").textContent).toContain("runs.json: Unexpected end of JSON input");
   });
 
+  it("announces validation and selected run-state changes", async () => {
+    const issue = { code: "missing-prompt", blockId: "a", message: "First needs instructions" };
+    const props = { harnesses: [zoomHarness], providers: [], agents: [], onCreate: vi.fn(), onSave: vi.fn(), onDelete: vi.fn(), onRun: vi.fn(), onCancelRun: vi.fn(), onError: vi.fn() };
+    const view = render(<HarnessPanel {...props} runs={[]} onValidate={vi.fn().mockResolvedValue({ valid: false, issues: [issue] })} />);
+    await waitFor(() => expect(screen.getByRole("status", { name: "Workflow validation status" }).textContent).toContain("1 workflow validation issue"));
+    const running: HarnessRun = { id: "run-1", harnessId: "zoom", harnessVersion: 1, input: "work", status: "running", createdAt: "now", blocks: [] };
+    view.rerender(<HarnessPanel {...props} runs={[running]} />);
+    await waitFor(() => expect(screen.getByRole("status", { name: "Workflow run status" }).textContent).toContain("Workflow run run-1 is running"));
+    view.rerender(<HarnessPanel {...props} runs={[{ ...running, status: "succeeded", completedAt: "later" }]} />);
+    await waitFor(() => expect(screen.getByRole("status", { name: "Workflow run status" }).textContent).toContain("Workflow run run-1 is succeeded"));
+  });
+
   it("connects output to input and renders a directional edge", async () => {
     const harness: HarnessDefinition = { id: "harness-1", name: "Flow", version: 1, createdAt: "now", updatedAt: "now", blocks: [
       { id: "a", type: "prompt", label: "Plan", prompt: "", position: { x: 20, y: 20 } },

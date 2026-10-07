@@ -323,6 +323,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .harness-edge { fill: none; stroke: #78a8f5; stroke-width: 2; }
 .harness-edge.loop { stroke: #b99aec; stroke-dasharray: 6 4; }
 .harness-canvas.edit .harness-edge { pointer-events: stroke; cursor: pointer; }
+.harness-canvas.edit .harness-edge:focus-visible { stroke: #ffd166; stroke-width: 4; outline: none; }
 .harness-edge.selected { stroke: #ffd166; stroke-width: 4; }
 .harness-edge-label { fill: #b9c9df; stroke: #202226; stroke-width: 3px; paint-order: stroke; font-size: 10px; }
 .harness-canvas marker path { fill: #78a8f5; }
@@ -369,7 +370,8 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .harness-list-editor li { display: flex; align-items: center; gap: 7px; padding: 5px; border-bottom: 1px solid #393b40; }
 .harness-list-editor li.selected { background: rgba(87,157,255,.15); }
 .harness-list-editor li > button:first-child { min-width: 0; flex: 1; display: flex; align-items: baseline; justify-content: space-between; gap: 8px; border: 0; background: transparent; color: #d7d9dc; text-align: left; cursor: pointer; }
-.harness-list-editor li > button:first-child:hover, .harness-list-editor li > button:first-child:focus-visible { color: #b9d4ff; outline: none; }
+.harness-list-editor li > button:first-child:hover { color: #b9d4ff; }
+.harness-list-editor li > button:first-child:focus-visible { color: #b9d4ff; outline: 2px solid #79a7ff; outline-offset: 2px; }
 .harness-list-editor li small { color: #92969d; }
 .harness-list-editor li > button:last-child, .harness-list-connections > div > button { padding: 4px 7px; border: 1px solid #555a62; border-radius: 3px; background: #30343a; color: #d6d8dc; cursor: pointer; }
 .harness-list-connections { margin-top: 12px; padding-top: 10px; border-top: 1px solid #4b4d52; }

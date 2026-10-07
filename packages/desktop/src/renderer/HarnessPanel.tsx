@@ -50,6 +50,8 @@ export function HarnessPanel({ harnesses, runs, diagnostics = [], providers, age
   const [modelsByProvider, setModelsByProvider] = useState<Record<string, AiModel[]>>({});
   const [remoteValidationIssues, setRemoteValidationIssues] = useState<HarnessValidationIssue[]>([]);
   const [saveConflict, setSaveConflict] = useState<{ local: HarnessDefinition; remote: HarnessDefinition; comparing: boolean }>();
+  const [validationAnnouncement, setValidationAnnouncement] = useState("");
+  const [runAnnouncement, setRunAnnouncement] = useState("");
   const canvasRef = useRef<HTMLDivElement>(null);
   const [zoom, setZoom] = useState(1);
   const zoomRef = useRef(1);
@@ -154,6 +156,14 @@ export function HarnessPanel({ harnesses, runs, diagnostics = [], providers, age
     return () => { active = false; window.clearTimeout(timer); };
   }, [draft, onError, onValidate]);
   const validationIssues = useMemo(() => [...remoteValidationIssues, ...availabilityIssues(draft, providers, agents, defaultProvider, modelsByProvider)], [agents, defaultProvider, draft, modelsByProvider, providers, remoteValidationIssues]);
+  const validationAnnouncementKey = validationIssues.map((issue) => `${issue.code}:${issue.blockId ?? issue.edgeId ?? "workflow"}`).join("|");
+  useEffect(() => {
+    if (!draft) return;
+    setValidationAnnouncement(validationIssues.length ? `${validationIssues.length} workflow validation issue${validationIssues.length === 1 ? "" : "s"}. ${validationIssues[0]?.message ?? ""}` : "Workflow validation has no issues.");
+  }, [draft?.id, validationAnnouncementKey]);
+  useEffect(() => {
+    if (run) setRunAnnouncement(`Workflow run ${run.id} is ${run.status.replaceAll("_", " ")}.`);
+  }, [run?.id, run?.status]);
   useEffect(() => {
     const warnBeforeClosing = (event: BeforeUnloadEvent) => {
       if (!dirty) return;
@@ -293,6 +303,8 @@ export function HarnessPanel({ harnesses, runs, diagnostics = [], providers, age
   const showMinimap = (draft?.blocks.length ?? 0) > 1 && canvasViewport.width > 0 && (canvasWidth * zoom > canvasViewport.width || canvasHeight * zoom > canvasViewport.height);
 
   return <div className={`harness-panel ${mode}`}>
+    <div className="visually-hidden" role="status" aria-label="Workflow validation status" aria-live="polite" aria-atomic="true">{validationAnnouncement}</div>
+    <div className="visually-hidden" role="status" aria-label="Workflow run status" aria-live="polite" aria-atomic="true">{runAnnouncement}</div>
     {diagnostics.length > 0 && <div className="harness-connect-hint" role="alert"><strong>Workflow state recovered from backup</strong><ul>{diagnostics.map((diagnostic, index) => <li key={`${diagnostic.source}:${diagnostic.detectedAt}:${index}`}>{diagnostic.source}: {diagnostic.reason}</li>)}</ul></div>}
     {createName !== undefined ? <form className="harness-create" onSubmit={(event) => { event.preventDefault(); void create(); }}><input autoFocus aria-label="Workflow name" value={createName} onChange={(event) => setCreateName(event.target.value)} placeholder="New Workflow" /><select aria-label="Workflow template" value={createTemplate} onChange={(event) => { const template = event.target.value as typeof createTemplate; setCreateTemplate(template); if (template && createName === "New Workflow") setCreateName(template === "git-review-commit" ? "Review, commit & ask to push" : "Five-minute workspace check-in"); }}><option value="">Blank workflow</option><option value="five-minute-check-in">Five-minute workspace check-in · all blocks</option><option value="git-review-commit">Review, commit & ask to push · Git command blocks</option></select><button type="submit" disabled={!createName.trim()}>Create</button><button type="button" title="Cancel workflow creation" onClick={() => setCreateName(undefined)}><X size={14} /></button></form> : <div className="harness-picker"><select aria-label="Selected workflow" value={selectedId ?? ""} onChange={(event) => { const nextId = event.target.value || undefined; if (nextId !== selectedId && discardDraft()) setSelectedId(nextId); }}><option value="">Select a workflow</option>{harnesses.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select>{mode === "edit" && <><button title="Create workflow" onClick={() => { if (discardDraft()) setCreateName("New Workflow"); }}><Plus size={14} /></button><button title="Delete workflow" disabled={!draft} onClick={() => void remove()}><Trash2 size={14} /></button></>}<div className="harness-mode" role="group" aria-label="Workflow mode"><button className={mode === "view" ? "active" : ""} onClick={() => { if (mode !== "view" && !discardDraft()) return; setMode("view"); setConnectFrom(undefined); }}>View</button><button className={mode === "edit" ? "active" : ""} onClick={() => setMode("edit")}>Edit</button></div>{mode === "edit" && <div className="harness-mode" role="group" aria-label="Workflow editor surface"><button className={editorSurface === "canvas" ? "active" : ""} onClick={() => setEditorSurface("canvas")}>Canvas</button><button className={editorSurface === "list" ? "active" : ""} onClick={() => setEditorSurface("list")}>List</button></div>}</div>}
     {!draft ? <div className="harness-empty"><strong>Build an AI workflow</strong><span>Add a start block, connect followers, and give AI Agents tools and paths.</span><button onClick={() => setCreateName("New Workflow")}><Plus size={14} /> Create workflow</button></div> : <>
