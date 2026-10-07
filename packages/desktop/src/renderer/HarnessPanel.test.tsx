@@ -110,6 +110,27 @@ describe("HarnessPanel", () => {
     expect(onSave).not.toHaveBeenCalled();
   });
 
+  it("multi-selects blocks with a modifier and moves the selected group together", () => {
+    const { canvas } = renderZoomHarness();
+    const first = screen.getByLabelText("First response preview").closest(".harness-block") as HTMLElement;
+    const second = screen.getByLabelText("Second response preview").closest(".harness-block") as HTMLElement;
+    first.setPointerCapture = vi.fn(); second.setPointerCapture = vi.fn();
+    vi.spyOn(first, "getBoundingClientRect").mockReturnValue({ left: 0, top: 80 } as DOMRect);
+    vi.spyOn(second, "getBoundingClientRect").mockReturnValue({ left: 300, top: 80 } as DOMRect);
+    fireEvent.pointerDown(first, { pointerId: 1, button: 0, clientX: 0, clientY: 80 });
+    fireEvent.pointerDown(second, { pointerId: 2, button: 0, ctrlKey: true, clientX: 330, clientY: 100 });
+    expect(first.classList.contains("selected")).toBe(true);
+    expect(second.classList.contains("selected")).toBe(true);
+    fireEvent.pointerMove(canvas, { pointerId: 2, clientX: 390, clientY: 140 });
+    expect(parseFloat(first.style.left)).toBeCloseTo(260);
+    expect(parseFloat(first.style.top)).toBeCloseTo(240);
+    expect(parseFloat(second.style.left)).toBeCloseTo(560);
+    expect(parseFloat(second.style.top)).toBeCloseTo(240);
+    fireEvent.click(screen.getByRole("button", { name: "Clear selected workflow blocks" }));
+    expect(first.classList.contains("selected")).toBe(false);
+    expect(second.classList.contains("selected")).toBe(false);
+  });
+
   it("drags and updates connection geometry after zoom, but leaves View mode fixed", () => {
     const { canvas } = renderZoomHarness();
     fireEvent.click(screen.getByRole("button", { name: "Zoom in" }));
