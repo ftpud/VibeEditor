@@ -1,7 +1,7 @@
 # Multi-root protocol boundary
 
 Core assigns each registered canonical remote directory a stable `WorkspaceRootId`.
-Desktop never derives an identity from a local path. The current protocol compatibility range is version 11 (see `protocolCompatibility` in `packages/protocol/src/index.ts`). It applies these rules:
+Desktop never derives an identity from a local path. The current protocol compatibility range is version 12 (see `protocolCompatibility` in `packages/protocol/src/index.ts`). It applies these rules:
 
 - Every root-owned request except handshake, root listing, and root registration carries `Request.rootId`.
   Core validates it against the connection's selected root before dispatch, and root

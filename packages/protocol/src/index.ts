@@ -16,7 +16,7 @@ export type FileRevision = { identity: string; version: string };
  * Desktop can prove it is safe to talk to a newly deployed Core.
  */
 export type ProtocolCompatibility = { minimum: number; maximum: number };
-export const protocolCompatibility: ProtocolCompatibility = { minimum: 11, maximum: 11 };
+export const protocolCompatibility: ProtocolCompatibility = { minimum: 12, maximum: 12 };
 
 export function protocolRangeIsValid(range: ProtocolCompatibility): boolean {
   return Number.isInteger(range.minimum) && Number.isInteger(range.maximum) && range.minimum > 0 && range.minimum <= range.maximum;
@@ -171,6 +171,13 @@ export type HarnessCorrection = { ownerBlockId: string; maxCycles?: number; veri
 export type HarnessReviewFinding = { id: string; message: string; ownerBlockId: string; revision: string };
 export type HarnessCorrectionCycle = { reviewBlockId: string; ownerBlockId: string; verificationBlockId?: string; cycle: number; revision: string; findings: HarnessReviewFinding[]; status: "requested" | "corrected" | "blocked"; correctedRevision?: string; requestedAt: string; completedAt?: string; error?: string };
 export type HarnessVerification = { command: string; revision?: string; workingDirectory?: string; timeoutMs?: number };
+export type ScheduledAction =
+  | { type: "prompt"; provider: AiProvider; prompt: string; agent?: AgentFileReference }
+  | { type: "workflow"; provider: AiProvider; harnessId: string; input: string; startBlockId?: string };
+export type ScheduleInput = { name: string; dueAt: string; intervalSeconds?: number; taskId?: string; action: ScheduledAction };
+export type WorkspaceSchedule = ScheduleInput & { id: string; rootId: WorkspaceRootId; createdAt: string; enabled: boolean; lastRunAt?: string; lastError?: string; lastWorkflowRunId?: string };
+export type AiContinuationTimer = { id: string; workspace: string; provider: AiProvider; prompt: string; dueAt: string; createdAt: string; workflowRunId?: string; workflowBlockId?: string; workflowFlow?: boolean };
+
 export type HarnessBlock = { id: string; type: "ai" | "text" | "timer" | "user_prompt" | "yes_no_prompt" | "markdown" | "script" | "start_button" | "start_input" | "prompt" | "task" | "review" | "verification"; seconds?: number; command?: string; label: string; prompt: string; inputSchema?: HarnessDataSchema; outputSchema?: HarnessDataSchema; provider?: AiProvider; model?: string; reasoning?: string; agent?: AgentFileReference; watchdog?: boolean; review?: HarnessReview; verification?: HarnessVerification; join?: "all" | "any"; routing?: "all" | "ai"; position: { x: number; y: number } };
 export type HarnessEdge = { type?: "use" | "follow" | "path"; id: string; from: string; to: string; label?: string; loop?: boolean; execution?: "sync" | "async" };
 export type HarnessRetryPolicy = { maxAttempts?: number };
@@ -298,6 +305,16 @@ export type ProtocolOperations = {
   "tasks.create": { payload: { branch: string; existing?: boolean; remote?: boolean }; result: { task: WorkspaceTask } };
   "tasks.createFromPrompt": { payload: { provider?: AiProvider; prompt: string; content?: AiContentBlock[]; configuration: AiConfiguration; mcpServers?: AiMcpServer[]; agent?: AiAgent; agentPreset?: AiAgentPreset }; result: { task: WorkspaceTask } };
   "tasks.merge": { payload: { taskId: string; strategy?: "merge" | "smart" }; result: { targetBranch: string } };
+  "schedules.agents": { payload: { taskId?: string }; result: { agents: AgentFile[] } };
+  "schedules.list": { payload: Record<string, never>; result: { schedules: WorkspaceSchedule[] } };
+  "schedules.create": { payload: ScheduleInput; result: { schedule: WorkspaceSchedule } };
+  "schedules.enabled": { payload: { scheduleId: string; enabled: boolean }; result: { schedule: WorkspaceSchedule } };
+  "schedules.delete": { payload: { scheduleId: string }; result: { deleted: boolean } };
+  "schedules.fire": { payload: { scheduleId: string }; result: { fired: boolean } };
+  "timers.list": { payload: Record<string, never>; result: { timers: AiContinuationTimer[] } };
+  "timers.cancel": { payload: { timerId: string }; result: { cancelled: boolean } };
+  "timers.fire": { payload: { timerId: string }; result: { fired: boolean } };
+  "timers.cancelAll": { payload: Record<string, never>; result: { cancelled: number; pausedSchedules: number } };
   "tasks.timer.cancel": { payload: { taskId?: string }; result: { cancelled: boolean } };
   "tasks.timer.fire": { payload: { taskId?: string }; result: { fired: boolean } };
   "tasks.status": { payload: { taskId: string; status: "active" | "finished" }; result: { task: WorkspaceTask } };
@@ -661,6 +678,8 @@ export type JavaSemanticChangedEvent = { type: "java.semantic.changed"; payload:
 export type JavaOutputEvent = { type: "java.output"; payload: { rootId: WorkspaceRootId; data: string } };
 export type JavaExitEvent = { type: "java.exit"; payload: { rootId: WorkspaceRootId; exitCode: number | null; signal: string | null } };
 export type JavaDebugStateEvent = { type: "java.debug.state"; payload: JavaDebugState & { rootId: WorkspaceRootId } };
+/** Timers belong to the whole Core workspace group, including internal workflow sessions. */
+export type TimersChangedEvent = { type: "timers.changed"; payload: { rootId?: WorkspaceRootId } };
 export type AiChangedEvent = { type: "ai.changed"; payload: { rootId: WorkspaceRootId } };
 export type TasksChangedEvent = { type: "tasks.changed"; payload: { rootId: WorkspaceRootId } };
 export type CommitMessageChangedEvent = { type: "commit-message.changed"; payload: { rootId: WorkspaceRootId; message: string } };
@@ -668,7 +687,7 @@ export type RunConfigChangedEvent = { type: "runConfig.changed"; payload: { root
 
 export type HarnessChangedEvent = { type: "harness.changed"; payload: { rootId: WorkspaceRootId; runId: string } };
 export type WorkflowDocumentEvent = { type: "workflow.document"; payload: { rootId: WorkspaceRootId; runId: string; blockId: string; title: string; content: string } };
-export type ServerEvent = WorkflowDocumentEvent | FilesystemChangedEvent | TerminalOutputEvent | TerminalExitEvent | GitChangedEvent | TaskGitChangedEvent | JavaSemanticChangedEvent | JavaOutputEvent | JavaExitEvent | JavaDebugStateEvent | AiChangedEvent | TasksChangedEvent | CommitMessageChangedEvent | RunConfigChangedEvent | HarnessChangedEvent;
+export type ServerEvent = TimersChangedEvent | WorkflowDocumentEvent | FilesystemChangedEvent | TerminalOutputEvent | TerminalExitEvent | GitChangedEvent | TaskGitChangedEvent | JavaSemanticChangedEvent | JavaOutputEvent | JavaExitEvent | JavaDebugStateEvent | AiChangedEvent | TasksChangedEvent | CommitMessageChangedEvent | RunConfigChangedEvent | HarnessChangedEvent;
 
 /**
  * Every request the core accepts. Declaring it as a fully keyed record makes TypeScript
@@ -687,6 +706,16 @@ const requestTypeRegistry: Record<RequestType, true> = {
   "tasks.create": true,
   "tasks.createFromPrompt": true,
   "tasks.merge": true,
+  "schedules.agents": true,
+  "schedules.list": true,
+  "schedules.create": true,
+  "schedules.enabled": true,
+  "schedules.delete": true,
+  "schedules.fire": true,
+  "timers.list": true,
+  "timers.cancel": true,
+  "timers.fire": true,
+  "timers.cancelAll": true,
   "tasks.timer.cancel": true,
   "tasks.timer.fire": true,
   "tasks.status": true,

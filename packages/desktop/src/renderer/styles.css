@@ -2005,3 +2005,21 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .harness-zoom button { color: inherit; background: transparent; border: 1px solid #555a62; border-radius: 3px; min-width: 28px; cursor: pointer; }
 .harness-zoom button:disabled { opacity: .4; cursor: default; }
 .harness-zoom small { opacity: .7; }
+
+.timers-panel { flex: 1; min-height: 0; overflow: auto; padding: 10px; }
+.timers-help { margin: 0 0 12px; color: var(--muted, #9a9da3); font-size: 12px; line-height: 1.5; }
+.timer-card { border: 1px solid var(--border, #45474c); border-radius: 6px; padding: 12px; margin-bottom: 10px; }
+.timer-title { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.timer-title span, .timer-card time { color: var(--muted, #9a9da3); font-size: 12px; }
+.timer-countdown { margin: 8px 0 3px; font-variant-numeric: tabular-nums; }
+.timer-prompt { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.5; }
+.timer-card details { color: var(--muted, #9a9da3); font-size: 12px; overflow-wrap: anywhere; }
+.timer-card details div { margin-top: 6px; }
+.timer-actions { display: flex; gap: 8px; margin-top: 12px; }
+.timer-actions button { display: flex; align-items: center; gap: 5px; padding: 5px 8px; }
+.schedule-form { display: flex; flex-direction: column; gap: 10px; padding: 12px; margin-bottom: 12px; border: 1px solid #45474c; border-radius: 6px; }
+.schedule-form label { display: flex; flex-direction: column; gap: 5px; font-size: 12px; }
+.schedule-form input, .schedule-form select, .schedule-form textarea { width: 100%; min-width: 0; padding: 6px; }
+.schedule-interval { display: flex; gap: 8px; }
+.schedule-interval label { flex: 1; min-width: 0; }
+.schedule-error, .schedule-form [role="alert"] { color: #f1948a; overflow-wrap: anywhere; }

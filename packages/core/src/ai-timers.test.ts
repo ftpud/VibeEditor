@@ -21,6 +21,49 @@ describe("AI continuation timers", () => {
     expect(provider.send).not.toHaveBeenCalled();
     expect(provider.steer).not.toHaveBeenCalled();
   });
+  it("lists hidden sessions and controls the exact timer without cancelling another provider", async () => {
+    const state = await mkdtemp(path.join(os.tmpdir(), "vibe-timer-ids-"));
+    const store = new AiTimerStore("/workspace", state);
+    const provider = { get: vi.fn(async () => ({ status: "done", model: "test", messages: [] })), send: vi.fn(), steer: vi.fn() };
+    const service = new AiTimerService(store, { get: () => provider } as never, "/workspace", vi.fn());
+    const first = await service.schedule("/hidden/workflow", "codex", "First", 60);
+    const second = await service.schedule("/hidden/workflow", "copilot", "Second", 90);
+    try {
+      expect(await service.list()).toEqual([first, second]);
+      expect(await service.cancel(second.id)).toBe(true);
+      expect(await service.list()).toEqual([first]);
+      expect(await service.fireById(first.id)).toBe(true);
+      expect(provider.send).toHaveBeenCalledWith("/hidden/workflow", expect.objectContaining({ prompt: "First" }));
+      expect(await service.list()).toEqual([]);
+      expect(await service.fireById(first.id)).toBe(false);
+    } finally { await service.cancelAll(); }
+  });
+
+  it("cancels a stopped provider's timers while retaining another provider's schedule", async () => {
+    const state = await mkdtemp(path.join(os.tmpdir(), "vibe-timer-provider-stop-"));
+    const service = new AiTimerService(new AiTimerStore("/workspace", state), {} as never, "/workspace", vi.fn());
+    await service.schedule("/task", "codex", "Stopped", 60);
+    const other = await service.schedule("/task", "copilot", "Keep", 60);
+    try {
+      await service.cancelProvider("/task", "codex");
+      expect(await service.list()).toEqual([other]);
+    } finally { await service.cancelAll(); }
+  });
+
+  it("cancelling an exact timer prevents delivery racing session lookup", async () => {
+    const state = await mkdtemp(path.join(os.tmpdir(), "vibe-timer-id-race-"));
+    const store = new AiTimerStore("/workspace", state);
+    let release!: () => void; const gate = new Promise<void>((resolve) => { release = resolve; });
+    const provider = { get: vi.fn(async () => { await gate; return { status: "done", messages: [] }; }), send: vi.fn(), steer: vi.fn() };
+    const service = new AiTimerService(store, { get: () => provider } as never, "/workspace", vi.fn());
+    const timer = await service.schedule("/hidden/workflow", "codex", "Resume", 60);
+    const firing = service.fireById(timer.id);
+    await vi.waitFor(() => expect(provider.get).toHaveBeenCalled());
+    await service.cancel(timer.id); release(); await firing;
+    expect(provider.send).not.toHaveBeenCalled();
+    await service.cancelAll();
+  });
+
   it("preserves concurrent timers and cancellation across store instances", async () => {
     const state = await mkdtemp(path.join(os.tmpdir(), "vibe-concurrent-timers-"));
     const first = new AiTimerStore("/workspace", state); const second = new AiTimerStore("/workspace", state);
