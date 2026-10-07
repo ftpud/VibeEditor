@@ -2,9 +2,37 @@ import os from "node:os";
 import path from "node:path";
 import { mkdtemp, readdir } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
-import { AppEventBridge } from "./app-events.js";
+import { AppEventBridge, appBridgeInstanceId } from "./app-events.js";
+import { appToolServer } from "./app-tools.js";
 
 describe("AppEventBridge", () => {
+  it("isolates workflow commands from other Core processes for the same workspace", async () => {
+    const state = await mkdtemp(path.join(os.tmpdir(), "vibe-editor-command-owners-"));
+    const server = appToolServer("/workspace", "/workflow/session", "codex", "/workspace", { runId: "run", blockId: "agent", flow: true });
+    if (!("command" in server)) throw new Error("Expected a stdio MCP server");
+    expect(server.env?.VIBE_EDITOR_BRIDGE_INSTANCE_ID).toBe(appBridgeInstanceId);
+    const caller = new AppEventBridge("/workspace", state, server.env?.VIBE_EDITOR_BRIDGE_INSTANCE_ID);
+    const owner = new AppEventBridge("/workspace", state, appBridgeInstanceId);
+    const other = new AppEventBridge("/workspace", state, "other-core");
+    const legacy = new AppEventBridge("/workspace", state, "");
+    await Promise.all([owner.ready(), other.ready(), legacy.ready()]);
+    const command = { name: "workflow_use_block", args: { block_id: "git-status", input: "" }, workflowRunId: "run", workflowBlockId: "agent" };
+    const pending = caller.call(command);
+    let files: string[] = [];
+    for (let attempt = 0; files.length === 0 && attempt < 100; attempt += 1) {
+      files = await readdir(owner.commandsDirectory);
+      if (!files.length) await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    expect(files).toHaveLength(1);
+    expect(await readdir(other.commandsDirectory)).toEqual([]);
+    expect(await readdir(legacy.commandsDirectory)).toEqual([]);
+    await owner.consumeCommand(path.join(owner.commandsDirectory, files[0]!), async (received) => {
+      expect(received).toEqual(command);
+      return { blockId: "git-status", output: "main" };
+    });
+    await expect(pending).resolves.toEqual({ blockId: "git-status", output: "main" });
+  });
+
   it("passes an event between processes and consumes its marker", async () => {
     const state = await mkdtemp(path.join(os.tmpdir(), "vibe-editor-events-"));
     const writer = new AppEventBridge("/workspace", state);

@@ -9,13 +9,16 @@ export type AppEvent =
   | { type: "commit-message.changed"; workspace: string; message: string };
 export type AppCommand = { name: string; args: Record<string, unknown>; currentWorkspace?: string; currentProvider?: string; workflowRunId?: string; workflowBlockId?: string };
 
+// Live commands must reach the Core process that created their MCP server.
+export const appBridgeInstanceId = crypto.randomUUID();
+
 export class AppEventBridge {
   readonly directory: string;
   readonly commandsDirectory: string;
   readonly responsesDirectory: string;
 
-  constructor(rootWorkspace: string, stateDirectory = process.env.REMOTE_IDE_STATE_DIR ?? path.join(os.homedir(), ".remote-ide", "workspaces")) {
-    const key = crypto.createHash("sha256").update(rootWorkspace).digest("hex");
+  constructor(rootWorkspace: string, stateDirectory = process.env.REMOTE_IDE_STATE_DIR ?? path.join(os.homedir(), ".remote-ide", "workspaces"), instanceId = process.env.VIBE_EDITOR_BRIDGE_INSTANCE_ID) {
+    const key = crypto.createHash("sha256").update(instanceId ? JSON.stringify([rootWorkspace, instanceId]) : rootWorkspace).digest("hex");
     this.directory = path.join(stateDirectory, `${key}-events`);
     this.commandsDirectory = path.join(stateDirectory, `${key}-commands`);
     this.responsesDirectory = path.join(stateDirectory, `${key}-responses`);

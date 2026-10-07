@@ -6,7 +6,7 @@ import type { AgentFileReference } from "@remote-ide/protocol";
 import { WorkspaceTaskStore, type WorkspaceTask } from "./tasks.js";
 import type { AcpRegistry } from "./ai/index.js";
 import { summarizeAiSessions } from "./ai/summary.js";
-import { AppEventBridge } from "./app-events.js";
+import { AppEventBridge, appBridgeInstanceId } from "./app-events.js";
 import type { AgentsStore } from "./agents.js";
 import { agentFingerprint } from "./agent-profile.js";
 import type { AiTimerService } from "./ai-timers.js";
@@ -654,8 +654,8 @@ export function appToolServer(rootWorkspace: string, currentWorkspace: string, c
   const source = fileURLToPath(new URL("app-tools.ts", import.meta.url));
   const runningFromSource = import.meta.url.endsWith("/src/app-tools.ts");
   return runningFromSource
-    ? { transport: "stdio", name: "vibe-editor", command: process.execPath, args: ["--import", "tsx", source], env: { VIBE_EDITOR_ROOT_WORKSPACE: rootWorkspace, VIBE_EDITOR_CURRENT_WORKSPACE: currentWorkspace, VIBE_EDITOR_BRIDGE_WORKSPACE: bridgeWorkspace, ...(currentProvider ? { VIBE_EDITOR_CURRENT_PROVIDER: currentProvider } : {}), ...(workflow ? { VIBE_EDITOR_WORKFLOW_RUN_ID: workflow.runId, VIBE_EDITOR_WORKFLOW_BLOCK_ID: workflow.blockId, ...(workflow.flow ? { VIBE_EDITOR_FLOW_TOOLS: "1" } : {}) } : {}) } }
-    : { transport: "stdio", name: "vibe-editor", command: process.execPath, args: [compiled], env: { VIBE_EDITOR_ROOT_WORKSPACE: rootWorkspace, VIBE_EDITOR_CURRENT_WORKSPACE: currentWorkspace, VIBE_EDITOR_BRIDGE_WORKSPACE: bridgeWorkspace, ...(currentProvider ? { VIBE_EDITOR_CURRENT_PROVIDER: currentProvider } : {}), ...(workflow ? { VIBE_EDITOR_WORKFLOW_RUN_ID: workflow.runId, VIBE_EDITOR_WORKFLOW_BLOCK_ID: workflow.blockId, ...(workflow.flow ? { VIBE_EDITOR_FLOW_TOOLS: "1" } : {}) } : {}) } };
+    ? { transport: "stdio", name: "vibe-editor", command: process.execPath, args: ["--import", "tsx", source], env: { VIBE_EDITOR_BRIDGE_INSTANCE_ID: appBridgeInstanceId, VIBE_EDITOR_ROOT_WORKSPACE: rootWorkspace, VIBE_EDITOR_CURRENT_WORKSPACE: currentWorkspace, VIBE_EDITOR_BRIDGE_WORKSPACE: bridgeWorkspace, ...(currentProvider ? { VIBE_EDITOR_CURRENT_PROVIDER: currentProvider } : {}), ...(workflow ? { VIBE_EDITOR_WORKFLOW_RUN_ID: workflow.runId, VIBE_EDITOR_WORKFLOW_BLOCK_ID: workflow.blockId, ...(workflow.flow ? { VIBE_EDITOR_FLOW_TOOLS: "1" } : {}) } : {}) } }
+    : { transport: "stdio", name: "vibe-editor", command: process.execPath, args: [compiled], env: { VIBE_EDITOR_BRIDGE_INSTANCE_ID: appBridgeInstanceId, VIBE_EDITOR_ROOT_WORKSPACE: rootWorkspace, VIBE_EDITOR_CURRENT_WORKSPACE: currentWorkspace, VIBE_EDITOR_BRIDGE_WORKSPACE: bridgeWorkspace, ...(currentProvider ? { VIBE_EDITOR_CURRENT_PROVIDER: currentProvider } : {}), ...(workflow ? { VIBE_EDITOR_WORKFLOW_RUN_ID: workflow.runId, VIBE_EDITOR_WORKFLOW_BLOCK_ID: workflow.blockId, ...(workflow.flow ? { VIBE_EDITOR_FLOW_TOOLS: "1" } : {}) } : {}) } };
 }
 
 function workflowOperationKind(name: string): "timer_create" | "task_create" | "prompt_delivery" | "merge" | undefined {
