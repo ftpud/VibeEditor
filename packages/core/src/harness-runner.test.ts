@@ -194,6 +194,14 @@ describe("HarnessRunner", () => {
     const run = (await store.runs())[0]!; expect(run.blocks.find((block) => block.blockId === "first")?.output).toHaveLength(1_000); expect(dispatch.mock.calls.find((call) => call[0].id === "second")?.[1]).toHaveLength(1_000);
   });
 
+  it("fails a workflow when provider-reported usage exceeds its token budget", async () => {
+    const state = await mkdtemp(path.join(os.tmpdir(), "workflow-token-budget-")); const store = new HarnessStore("/workspace", state); const definition = await store.create("Token budget");
+    await store.update({ ...definition, settings: { tokenBudget: 1_000 }, blocks: [{ id: "worker", type: "prompt", label: "worker", prompt: "work", position: { x: 0, y: 0 } }], edges: [] });
+    const runner = new HarnessRunner(store, () => undefined); await runner.start(definition.id, "work", async () => ({ ...session("done"), tokens: { total: 1_001, input: 500, output: 501 } }));
+    await vi.waitFor(async () => expect((await store.runs())[0]?.status).toBe("failed"));
+    const run = (await store.runs())[0]!; expect(run.error).toContain("token budget"); expect(run.blocks[0]?.tokens?.total).toBe(1_001);
+  });
+
   it("stops retries whose next backoff exceeds the elapsed retry budget", async () => {
     const state = await mkdtemp(path.join(os.tmpdir(), "workflow-retry-budget-")); const store = new HarnessStore("/workspace", state);
     const definition = await store.create("Retry budget");
