@@ -13,12 +13,12 @@ const catalog: SkillCatalog = {
   ],
   policy: { allowed: ["global/review", "local/style"], defaults: ["local/style"] }
 };
-const actions = () => ({ read: vi.fn(async () => "Review carefully"), write: vi.fn(async () => undefined), delete: vi.fn(async () => undefined), policy: vi.fn(async () => undefined) });
+const actions = () => ({ write: vi.fn(async () => undefined), delete: vi.fn(async () => undefined), policy: vi.fn(async () => undefined) });
 
 describe("skills panel", () => {
   it("separates scopes and updates project defaults independently of chat selections", async () => {
     const handlers = actions(); const onSelection = vi.fn(async () => undefined);
-    render(<SkillsPanel catalog={catalog} selected={[]} running onRefresh={vi.fn()} onSelection={onSelection} actions={handlers} />);
+    render(<SkillsPanel catalog={catalog} selected={[]} running onRefresh={vi.fn()} onSelection={onSelection} onOpen={vi.fn()} actions={handlers} />);
     expect(screen.getByText("Global")).toBeTruthy(); expect(screen.getByText("Local")).toBeTruthy();
     fireEvent.click(screen.getByTitle("Settings for Reviewer"));
     expect(screen.getByText(/Changes apply to the next turn/)).toBeTruthy();
@@ -32,7 +32,7 @@ describe("skills panel", () => {
 
   it("removing project availability also removes the default without changing existing chats", async () => {
     const handlers = actions();
-    render(<SkillsPanel catalog={catalog} selected={["local/style"]} running={false} onRefresh={vi.fn()} onSelection={vi.fn()} actions={handlers} />);
+    render(<SkillsPanel catalog={catalog} selected={["local/style"]} running={false} onRefresh={vi.fn()} onSelection={vi.fn()} onOpen={vi.fn()} actions={handlers} />);
     fireEvent.click(screen.getByTitle("Settings for Style"));
     fireEvent.click(screen.getByLabelText("Allow Style in project"));
     await waitFor(() => expect(handlers.policy).toHaveBeenCalledWith({ allowed: ["global/review"], defaults: [] }));
@@ -42,7 +42,7 @@ describe("skills panel", () => {
     const handlers = actions();
     const preset = { scope: "workspace" as const, name: "reviewer.md" };
     const restricted = { ...catalog, policy: { ...catalog.policy, agents: { "global/review": [preset] } } };
-    render(<SkillsPanel catalog={restricted} selected={[]} agentPreset={null} agents={[{ ...preset, agent: { name: "Code Reviewer", instructions: "Review" } }]} running={false} onRefresh={vi.fn()} onSelection={vi.fn()} actions={handlers} />);
+    render(<SkillsPanel catalog={restricted} selected={[]} agentPreset={null} agents={[{ ...preset, agent: { name: "Code Reviewer", instructions: "Review" } }]} running={false} onRefresh={vi.fn()} onSelection={vi.fn()} onOpen={vi.fn()} actions={handlers} />);
     fireEvent.click(screen.getByTitle("Settings for Reviewer"));
     expect((screen.getByLabelText("Enable Reviewer") as HTMLInputElement).disabled).toBe(true);
     fireEvent.click(screen.getByLabelText("No agent for Reviewer"));
@@ -52,17 +52,25 @@ describe("skills panel", () => {
     await waitFor(() => expect(handlers.policy).toHaveBeenLastCalledWith({ ...restricted.policy, defaults: ["local/style", "global/review"] }));
   });
 
-  it("creates and edits SKILL.md instructions through Core actions", async () => {
+  it("opens skills in the shared editor and creates a template before opening edit mode", async () => {
     const handlers = actions();
-    render(<SkillsPanel catalog={catalog} selected={[]} running={false} onRefresh={vi.fn()} onSelection={vi.fn()} actions={handlers} />);
+    const onOpen = vi.fn(async () => undefined);
+    render(<SkillsPanel catalog={catalog} selected={[]} running={false} onRefresh={vi.fn()} onSelection={vi.fn()} onOpen={onOpen} actions={handlers} />);
+    fireEvent.click(screen.getByTitle("Review changes"));
+    await waitFor(() => expect(onOpen).toHaveBeenCalledWith("global/review", "preview"));
+    await waitFor(() => expect((screen.getByTitle("Edit Reviewer") as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(screen.getByTitle("Edit Reviewer"));
+    await waitFor(() => expect(onOpen).toHaveBeenCalledWith("global/review", "edit"));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    await waitFor(() => expect((screen.getByTitle("Create local skill") as HTMLButtonElement).disabled).toBe(false));
     fireEvent.click(screen.getByTitle("Create local skill"));
     fireEvent.change(screen.getByLabelText("Skill ID"), { target: { value: "local/testing" } });
-    fireEvent.change(screen.getByLabelText("Skill instructions"), { target: { value: "Run focused tests" } });
-    fireEvent.click(screen.getByText("Save"));
-    await waitFor(() => expect(handlers.write).toHaveBeenCalledWith("local/testing", "Run focused tests"));
-    await waitFor(() => expect(screen.queryByLabelText("Skill instructions")).toBeNull());
-    fireEvent.click(screen.getByTitle("Edit Reviewer"));
-    await waitFor(() => expect((screen.getByLabelText("Skill instructions") as HTMLTextAreaElement).value).toBe("Review carefully"));
+    expect(screen.queryByLabelText("Skill instructions")).toBeNull();
+    fireEvent.click(screen.getByText("Create"));
+    await waitFor(() => expect(handlers.write).toHaveBeenCalledWith("local/testing", expect.stringContaining("name: New Skill")));
+    await waitFor(() => expect(onOpen).toHaveBeenCalledWith("local/testing", "edit"));
+    expect(handlers.write.mock.invocationCallOrder[0]).toBeLessThan(onOpen.mock.invocationCallOrder[2]!);
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
   });
 });
 

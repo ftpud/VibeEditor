@@ -1,7 +1,7 @@
 export type Panel = { id: string; type: "explorer" | "editor" | "terminal" | "java" | "problems" | "gitlog" };
 export type EditorTab = {
   id: string;
-  type: "file" | "diff" | "useful" | "agent" | "runConfig" | "workflowDocument";
+  type: "file" | "diff" | "useful" | "agent" | "skill" | "runConfig" | "workflowDocument";
   title: string;
   path: string;
   /** Stable owner for every workspace-relative path held by this tab. */
@@ -20,6 +20,7 @@ export type EditorTab = {
   diffOriginalPath?: string;
   markdownMode?: "edit" | "preview";
   usefulScope?: "global" | "local";
+  skillId?: string;
   agentScope?: "global" | "local";
   runConfigScope?: "global" | "local";
 };

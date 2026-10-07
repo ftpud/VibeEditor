@@ -1,7 +1,7 @@
 import type { EditorTab } from "./model";
 
 export type CursorPosition = { lineNumber: number; column: number };
-type CursorDocument = Pick<EditorTab, "type" | "path" | "diffRef" | "diffPath" | "usefulScope" | "agentScope">;
+type CursorDocument = Pick<EditorTab, "type" | "path" | "diffRef" | "diffPath" | "usefulScope" | "agentScope" | "skillId">;
 type CursorModel = { getLineCount(): number; getLineMaxColumn(lineNumber: number): number };
 type CursorPersistence = { read(workspace: string): string | null; write(workspace: string, value: string): void };
 
@@ -10,6 +10,7 @@ export const CURSOR_POSITIONS_SETTING = "editor.cursorPositions";
 /** A document identity that survives tab closure and the random tab IDs assigned on reopen. */
 export function cursorDocumentIdentity(document: CursorDocument): string {
   const scope = document.type === "useful" ? document.usefulScope ?? "global"
+    : document.type === "skill" ? document.skillId ?? "local"
     : document.type === "agent" ? document.agentScope ?? "global"
       : document.type === "diff" ? `${document.diffRef ?? "working"}:${document.diffPath ?? document.path}`
         : "workspace";

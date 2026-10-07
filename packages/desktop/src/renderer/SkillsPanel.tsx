@@ -4,16 +4,15 @@ import { skillAllowedForAgent } from "@remote-ide/protocol";
 import type { AgentFile, AiAgentPreset, SkillCatalog, SkillPolicy, SkillScope } from "@remote-ide/protocol";
 
 export type SkillsActions = {
-  read(id: string): Promise<string>;
   write(id: string, content: string): Promise<void>;
   delete(id: string): Promise<void>;
   policy(policy: SkillPolicy): Promise<void>;
 };
 const template = "---\nname: New Skill\ndescription: Describe when to use this skill.\n---\n\nDescribe the workflow and instructions here.\n";
 
-export function SkillsPanel({ agents = [], agentPreset, catalog, selected, running, disabled, onRefresh, onSelection, actions }: { agents?: AgentFile[]; agentPreset?: AiAgentPreset | null; catalog: SkillCatalog; selected: string[]; running: boolean; disabled?: boolean; onRefresh(): Promise<void>; onSelection(ids: string[]): Promise<void>; actions: SkillsActions }) {
+export function SkillsPanel({ agents = [], agentPreset, catalog, selected, running, disabled, onRefresh, onSelection, onOpen, activeSkillId, actions }: { agents?: AgentFile[]; agentPreset?: AiAgentPreset | null; catalog: SkillCatalog; selected: string[]; running: boolean; disabled?: boolean; onRefresh(): Promise<void>; onSelection(ids: string[]): Promise<void>; onOpen(id: string, mode: "edit" | "preview"): Promise<void>; activeSkillId?: string; actions: SkillsActions }) {
   const [settingsId, setSettingsId] = useState<string>();
-  const [editor, setEditor] = useState<{ id: string; content: string; creating: boolean }>();
+  const [creation, setCreation] = useState<{ id: string }>();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const perform = async (action: () => Promise<void>) => { setBusy(true); setError(""); try { await action(); } catch (cause) { setError(cause instanceof Error ? cause.message : "Could not update skills"); } finally { setBusy(false); } };
@@ -33,17 +32,17 @@ export function SkillsPanel({ agents = [], agentPreset, catalog, selected, runni
     <div className="useful-files-list skills-list">
       {error && <div role="alert" className="inline-error">{error}</div>}
       {(["global", "local"] as SkillScope[]).map((scope) => <section key={scope} className="useful-section">
-        <header><span>{scope === "global" ? "Global" : "Local"}</span><button title={`Create ${scope} skill`} disabled={busy || disabled} onClick={() => setEditor({ id: `${scope}/`, content: template, creating: true })}><Plus size={14} /></button></header>
+        <header><span>{scope === "global" ? "Global" : "Local"}</span><button title={`Create ${scope} skill`} disabled={busy || disabled} onClick={() => setCreation({ id: `${scope}/` })}><Plus size={14} /></button></header>
         {catalog.skills.filter((skill) => skill.scope === scope).map((skill) => {
           const allowed = catalog.policy.allowed.includes(skill.id);
           const usable = skillAllowedForAgent(catalog.policy, skill.id, agentPreset);
           const assignments = catalog.policy.agents?.[skill.id];
-          const edit = () => perform(async () => setEditor({ id: skill.id, content: await actions.read(skill.id), creating: false }));
+          const open = (mode: "edit" | "preview") => perform(() => onOpen(skill.id, mode));
           return <div key={skill.id}>
-            <div className={`useful-row ${editor?.id === skill.id || settingsId === skill.id ? "selected" : ""}`}>
-              <button className="useful-open" title={skill.description ?? skill.title} disabled={busy || disabled} onClick={() => void edit()}><BookOpen className="agent-kind-icon" size={14} /><span>{skill.title}</span></button>
+            <div className={`useful-row ${activeSkillId === skill.id || settingsId === skill.id ? "selected" : ""}`}>
+              <button className="useful-open" title={skill.description ?? skill.title} disabled={busy || disabled} onClick={() => void open("preview")}><BookOpen className="agent-kind-icon" size={14} /><span>{skill.title}</span></button>
               <button title={`Settings for ${skill.title}`} aria-expanded={settingsId === skill.id} disabled={busy || disabled} onClick={() => setSettingsId(settingsId === skill.id ? undefined : skill.id)}><Settings2 size={12} /></button>
-              <button title={`Edit ${skill.title}`} disabled={busy || disabled} onClick={() => void edit()}><Pencil size={12} /></button>
+              <button title={`Edit ${skill.title}`} disabled={busy || disabled} onClick={() => void open("edit")}><Pencil size={12} /></button>
               <button title={`Delete ${skill.title}`} disabled={busy || disabled} onClick={() => void perform(async () => { await actions.delete(skill.id); if (settingsId === skill.id) setSettingsId(undefined); })}><Trash2 size={12} /></button>
             </div>
             {settingsId === skill.id && <div className="skill-settings">
@@ -73,17 +72,19 @@ export function SkillsPanel({ agents = [], agentPreset, catalog, selected, runni
         {!catalog.skills.some((skill) => skill.scope === scope) && <div className="useful-empty">No skills</div>}
       </section>)}
     </div>
-    {editor && <div className="dialog-overlay" onMouseDown={() => { if (!busy) setEditor(undefined); }}>
-      <section className="run-config-dialog useful-file-dialog" role="dialog" aria-modal="true" aria-label={editor.creating ? "Create skill" : "Edit skill"} onMouseDown={(event) => event.stopPropagation()}>
-        <header><div><h2>{editor.creating ? "Create" : "Edit"} Skill</h2><span>{editor.id.startsWith("global/") ? "Global" : "Local"}</span></div><button title="Close skill editor" disabled={busy} onClick={() => setEditor(undefined)}><X size={15} /></button></header>
+    {creation && <div className="dialog-overlay" onMouseDown={() => { if (!busy) setCreation(undefined); }}>
+      <section className="run-config-dialog useful-file-dialog" role="dialog" aria-modal="true" aria-label="Create skill" onMouseDown={(event) => event.stopPropagation()}>
+        <header><div><h2>Create Skill</h2><span>{creation.id.startsWith("global/") ? "Global" : "Local"}</span></div><button title="Close skill creation" disabled={busy} onClick={() => setCreation(undefined)}><X size={15} /></button></header>
         <form onSubmit={(event) => { event.preventDefault(); void perform(async () => {
-          if (editor.creating && catalog.skills.some((skill) => skill.id === editor.id)) throw new Error("A skill with this ID already exists");
-          await actions.write(editor.id, editor.content); setEditor(undefined);
+          if (catalog.skills.some((skill) => skill.id === creation.id)) throw new Error("A skill with this ID already exists");
+          await actions.write(creation.id, template);
+          setCreation(undefined);
+          await onOpen(creation.id, "edit");
         }); }}>
-          {editor.creating && <label>Skill ID<input autoFocus aria-label="Skill ID" placeholder="local/reviewer" disabled={busy} value={editor.id} onChange={(event) => setEditor({ ...editor, id: event.target.value })} /></label>}
-          <label>Instructions<textarea className="skill-instructions" aria-label="Skill instructions" rows={10} disabled={busy} value={editor.content} onChange={(event) => setEditor({ ...editor, content: event.target.value })} /></label>
+          <label>Skill ID<input autoFocus aria-label="Skill ID" placeholder="local/reviewer" disabled={busy} value={creation.id} onChange={(event) => setCreation({ id: event.target.value })} /></label>
+          <small>A Markdown skill template will be created and opened in the editor.</small>
           {error && <div className="find-error">{error}</div>}
-          <footer><button type="button" disabled={busy} onClick={() => setEditor(undefined)}>Cancel</button><button className="primary" disabled={busy || disabled}>Save</button></footer>
+          <footer><button type="button" disabled={busy} onClick={() => setCreation(undefined)}>Cancel</button><button className="primary" disabled={busy || disabled || !/^(global|local)\/.+/.test(creation.id)}>Create</button></footer>
         </form>
       </section>
     </div>}
