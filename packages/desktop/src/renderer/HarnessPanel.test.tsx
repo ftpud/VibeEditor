@@ -591,6 +591,17 @@ describe("HarnessPanel", () => {
     confirm.mockRestore();
   });
 
+  it("undoes and redoes workflow edits", async () => {
+    const harness: HarnessDefinition = { id: "harness-1", name: "Flow", version: 1, createdAt: "now", updatedAt: "now", blocks: [], edges: [] };
+    render(<HarnessPanel harnesses={[harness]} runs={[]} providers={[]} agents={[]} onCreate={vi.fn()} onSave={vi.fn()} onDelete={vi.fn()} onRun={vi.fn()} onCancelRun={vi.fn()} onError={vi.fn()} />);
+
+    fireEvent.change(await screen.findByLabelText("Workflow name"), { target: { value: "Changed" } });
+    fireEvent.click(screen.getByRole("button", { name: "Undo workflow edit" }));
+    expect((screen.getByLabelText("Workflow name") as HTMLInputElement).value).toBe("Flow");
+    fireEvent.click(screen.getByRole("button", { name: "Redo workflow edit" }));
+    expect((screen.getByLabelText("Workflow name") as HTMLInputElement).value).toBe("Changed");
+  });
+
   it("duplicates a workflow using a new workflow identity", async () => {
     const harness: HarnessDefinition = { id: "harness-1", name: "Flow", version: 2, createdAt: "old", updatedAt: "old", blocks: [{ id: "a", type: "prompt", label: "Plan", prompt: "{{input}}", position: { x: 20, y: 20 } }], edges: [] };
     const copy = { ...harness, id: "copy", name: "Flow copy", version: 1, createdAt: "new", updatedAt: "new", blocks: [] };
