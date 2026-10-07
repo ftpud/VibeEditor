@@ -31,8 +31,8 @@ export function SkillsPanel({ agents = [], agentPreset, catalog, selected, runni
     <header className="panel-header"><span>Skills</span><button title="Refresh skills" disabled={busy || disabled} onClick={() => void perform(onRefresh)}><RefreshCw size={14} /></button></header>
     <div className="useful-files-list skills-list">
       {error && <div role="alert" className="inline-error">{error}</div>}
-      {(["global", "local"] as SkillScope[]).map((scope) => <section key={scope} className="useful-section">
-        <header><span>{scope === "global" ? "Global" : "Local"}</span><button title={`Create ${scope} skill`} disabled={busy || disabled} onClick={() => setCreation({ id: `${scope}/` })}><Plus size={14} /></button></header>
+      {(["global", "local", "workspace"] as SkillScope[]).map((scope) => <section key={scope} className="useful-section">
+        <header><span>{scope === "global" ? "Global" : scope === "local" ? "Local" : "Workspace"}</span><button title={`Create ${scope} skill`} disabled={busy || disabled} onClick={() => setCreation({ id: `${scope}/` })}><Plus size={14} /></button></header>
         {catalog.skills.filter((skill) => skill.scope === scope).map((skill) => {
           const allowed = catalog.policy.allowed.includes(skill.id);
           const usable = skillAllowedForAgent(catalog.policy, skill.id, agentPreset);
@@ -74,7 +74,7 @@ export function SkillsPanel({ agents = [], agentPreset, catalog, selected, runni
     </div>
     {creation && <div className="dialog-overlay" onMouseDown={() => { if (!busy) setCreation(undefined); }}>
       <section className="run-config-dialog useful-file-dialog" role="dialog" aria-modal="true" aria-label="Create skill" onMouseDown={(event) => event.stopPropagation()}>
-        <header><div><h2>Create Skill</h2><span>{creation.id.startsWith("global/") ? "Global" : "Local"}</span></div><button title="Close skill creation" disabled={busy} onClick={() => setCreation(undefined)}><X size={15} /></button></header>
+        <header><div><h2>Create Skill</h2><span>{creation.id.startsWith("global/") ? "Global" : creation.id.startsWith("local/") ? "Local" : "Workspace"}</span></div><button title="Close skill creation" disabled={busy} onClick={() => setCreation(undefined)}><X size={15} /></button></header>
         <form onSubmit={(event) => { event.preventDefault(); void perform(async () => {
           if (catalog.skills.some((skill) => skill.id === creation.id)) throw new Error("A skill with this ID already exists");
           await actions.write(creation.id, template);
@@ -84,7 +84,7 @@ export function SkillsPanel({ agents = [], agentPreset, catalog, selected, runni
           <label>Skill ID<input autoFocus aria-label="Skill ID" placeholder="local/reviewer" disabled={busy} value={creation.id} onChange={(event) => setCreation({ id: event.target.value })} /></label>
           <small>A Markdown skill template will be created and opened in the editor.</small>
           {error && <div className="find-error">{error}</div>}
-          <footer><button type="button" disabled={busy} onClick={() => setCreation(undefined)}>Cancel</button><button className="primary" disabled={busy || disabled || !/^(global|local)\/.+/.test(creation.id)}>Create</button></footer>
+          <footer><button type="button" disabled={busy} onClick={() => setCreation(undefined)}>Cancel</button><button className="primary" disabled={busy || disabled || !/^(global|local|workspace)\/.+/.test(creation.id)}>Create</button></footer>
         </form>
       </section>
     </div>}

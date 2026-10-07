@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import type { AcpRegistry } from "./ai/acp.js";
-import type { AgentFileScope, HarnessDefinition, SkillPolicy } from "@remote-ide/protocol";
+import type { AgentFileScope, HarnessDefinition, SkillPolicy, SkillScope } from "@remote-ide/protocol";
 import { AgentsStore } from "./agents.js";
 import { SkillsStore } from "./skills.js";
 import { UsefulFilesStore } from "./useful-files.js";
@@ -10,7 +10,7 @@ import type { WorkspaceTaskStore } from "./tasks.js";
 import { CoreError } from "./errors.js";
 
 export type ConfigurationDocument = { resource: string; exists: boolean; content: string; revision: string | null };
-type Resource = { kind: "agents"; scope: AgentFileScope; name: string } | { kind: "skills"; scope: "global" | "local"; name: string } | { kind: "useful"; scope: "global" | "local"; name: string } | { kind: "policy" } | { kind: "workflows"; id: string } | { kind: "tasks"; id: string };
+type Resource = { kind: "agents"; scope: AgentFileScope; name: string } | { kind: "skills"; scope: SkillScope; name: string } | { kind: "useful"; scope: "global" | "local"; name: string } | { kind: "policy" } | { kind: "workflows"; id: string } | { kind: "tasks"; id: string };
 const queues = new Map<string, Promise<unknown>>();
 const json = (value: unknown) => `${JSON.stringify(value, null, 2)}\n`;
 const starterWorkflow = { name: "New Workflow", blocks: [
@@ -24,7 +24,7 @@ function parseResource(resource: string): Resource {
   const parts = resource.split("/");
   const [kind, scope, name] = parts;
   if (kind === "agents" && parts.length === 3 && ["global", "local", "workspace"].includes(scope!) && name!.length <= 180 && /\.md$/i.test(name!)) return { kind, scope: scope as AgentFileScope, name: name! };
-  if (kind === "skills" && parts.length === 4 && ["global", "local"].includes(scope!) && /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,79}$/.test(name!) && parts[3] === "SKILL.md") return { kind, scope: scope as "global" | "local", name: name! };
+  if (kind === "skills" && parts.length === 4 && ["global", "local", "workspace"].includes(scope!) && /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,79}$/.test(name!) && parts[3] === "SKILL.md") return { kind, scope: scope as SkillScope, name: name! };
   if (kind === "useful" && parts.length === 3 && ["global", "local"].includes(scope!) && name!.length <= 180) return { kind, scope: scope as "global" | "local", name: name! };
   if ((kind === "workflows" || kind === "tasks") && parts.length === 2 && /^[a-zA-Z0-9_-]+\.json$/.test(scope!)) return { kind, id: scope!.slice(0, -5) };
   throw new CoreError("INVALID_REQUEST", "Unknown configuration resource. Use configuration_list for supported names and formats.");
@@ -47,9 +47,9 @@ export class ConfigurationService {
     const providers = await Promise.all(this.acp.list().map(async (provider) => ({ ...provider, ...(includeModels ? { models: await this.acp.get(provider.id).models() } : {}) })));
     return { rootWorkspace: this.rootWorkspace, workspace: this.workspace, resources, providers, formats: {
       agents: "agents/{global|local|workspace}/{file.md}: Markdown with name, description and optional mcpServers frontmatter. Global/local are Core state; workspace is the invoking checkout's .agents directory.",
-      skills: "skills/{global|local}/{name}/SKILL.md: Markdown instructions. Local is the invoking checkout's .agents/skills directory.",
+      skills: "skills/{global|local|workspace}/{name}/SKILL.md: Markdown instructions. Global is shared across projects on Core; local is Core state shared by all tasks of the root project; workspace is the invoking checkout's .agents/skills directory.",
       useful: "useful/{global|local}/{filename}: arbitrary text. Local belongs to the root project, global is shared across projects on Core.",
-      policy: "skills/policy.json: JSON {allowed: [global/name or local/name], defaults: [...], agents?: {skillId: [{scope, name}, null]}}. Defaults must be allowed; null means no agent; absent assignment means any agent.",
+      policy: "skills/policy.json: JSON {allowed: [global/name, local/name or workspace/name], defaults: [...], agents?: {skillId: [{scope, name}, null]}}. Defaults must be allowed; null means no agent; absent assignment means any agent.",
       workflows: "workflows/{id}.json: full JSON workflow definition; read workflows/new.json for a starter. Core owns id, version and timestamps. Saving never starts a run. Workflow graph validation is returned separately so drafts can be edited.",
       tasks: "tasks/{id}.json: JSON {name, status: active|finished, archived: boolean}. Existing task tools create/delete worktrees, start sessions and merge. Branches, paths and runtime state are not editable documents."
     } };

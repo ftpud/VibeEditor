@@ -14,7 +14,7 @@ import { AcpRegistry } from "../acp.js";
 const FAKE_AGENT = fileURLToPath(new URL("./fake-acp-agent.py", import.meta.url));
 
 class FakeProvider extends StdioAcpProvider {
-  constructor(onChanged: (workspace: string) => void, state: string, private readonly env: NodeJS.ProcessEnv = {}) { super(onChanged, state); }
+  constructor(onChanged: (workspace: string) => void, state: string, private readonly env: NodeJS.ProcessEnv = {}, projectRoot?: (workspace: string) => Promise<string>) { super(onChanged, state, undefined, projectRoot); }
   readonly descriptor: AiProviderDescriptor = { id: "fake", name: "Fake ACP", description: "test", settings: { title: "t", description: "d", sections: [] }, options: [], capabilities: { models: true, usage: true, mcp: true, agents: true, contextWindow: true } };
   protected command(_configuration: AiConfiguration) { return { command: "python3", args: [FAKE_AGENT], env: this.env }; }
   protected async fallbackModels(): Promise<AiModel[]> { return [{ id: "fallback", name: "Fallback", defaultReasoning: "medium", reasoningLevels: ["medium"] }]; }
@@ -430,6 +430,20 @@ describe("ACP integration", () => {
 
 
 describe("chat skills", () => {
+  it("delivers root-project local skills in every task workspace", async () => {
+    const state = await mkdtemp(path.join(os.tmpdir(), "skills-shared-state-"));
+    const root = await mkdtemp(path.join(os.tmpdir(), "skills-shared-project-"));
+    const task = await mkdtemp(path.join(os.tmpdir(), "skills-shared-task-"));
+    const skills = new SkillsStore(state, root);
+    await skills.write("local/shared", root, "Project-wide review workflow.");
+    const provider = new FakeProvider(() => undefined, state, { FAKE_ECHO_PROMPT: "on" }, async () => root);
+    await provider.send(task, { prompt: "Review this task", skillIds: ["local/shared"], configuration: { model: "model-a" } });
+    const done = await settle(provider, task);
+    expect(done.skillIds).toEqual(["local/shared"]);
+    expect(done.messages.find((message) => message.text.startsWith("PROMPT:"))!.text).toContain("Project-wide review workflow.");
+    await provider.clear(task);
+  });
+
   it("persists per-chat selection across restarts and restore, while new chats use project defaults", async () => {
     const state = await mkdtemp(path.join(os.tmpdir(), "skills-provider-state-"));
     const workspace = await mkdtemp(path.join(os.tmpdir(), "skills-provider-workspace-"));

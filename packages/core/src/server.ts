@@ -237,7 +237,7 @@ export async function createServer(host: string, port: number, workspacePath: st
   const acp = createAcpRegistry(aiChanged, {
     begin: async (target, provider, prompt, sessionId, provenance) => { const id = await checkpointStore(target).begin(provider as AiProvider, prompt, sessionId, undefined, provenance); taskGitChanged(target); return id; },
     complete: async (target, ids, status, provenance) => { await Promise.all(ids.map((id) => checkpointStore(target).complete(id, status, provenance))); taskGitChanged(target); }
-  });
+  }, async (target) => { const rootId = await ownerRootId(target); return rootId ? roots.get(rootId).path : rootWorkspace; });
   const harnessRunners = new Map<string, HarnessRunner>();
   const harnessRunner = (rootId: string) => {
     let runner = harnessRunners.get(rootId);
@@ -355,7 +355,7 @@ export async function createServer(host: string, port: number, workspacePath: st
         operation: <T>(kind: "timer_create" | "task_create" | "prompt_delivery" | "merge", key: string, input: unknown, effect: () => Promise<T>, reconcile?: () => Promise<T | null | undefined>) => harnessRunner(rootId).runOperation(workflow.runId, workflow.blockId, kind, key, input, effect, reconcile),
         recordTool: (name: string, args: Record<string, unknown>, result?: unknown, error?: unknown) => harnessRunner(rootId).recordTool(workflow.runId, workflow.blockId, name, args, result, error)
       } : undefined;
-      const configuration = new ConfigurationService(root.path, currentWorkspace, { agents: context.agents, skills: new SkillsStore(), useful: context.usefulFiles, workflows: context.harnesses, tasks: context.tasks }, acp, async (resource, global) => {
+      const configuration = new ConfigurationService(root.path, currentWorkspace, { agents: context.agents, skills: new SkillsStore(undefined, root.path), useful: context.usefulFiles, workflows: context.harnesses, tasks: context.tasks }, acp, async (resource, global) => {
         const encoded = JSON.stringify({ type: "configuration.changed", payload: { rootId, resource, global } } satisfies ServerEvent);
         for (const socket of activeSessions) sendWebSocketData(socket, encoded);
         if (resource.startsWith("tasks/")) await changed();
@@ -744,11 +744,11 @@ async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStor
       const registry = await tasks.list();
       return { workspace: workspacePath, projectName: path.basename(path.resolve(rootWorkspace)), tree: await filesystem.listTree(request.payload.includeIgnored === true), options: await workspaceState.load(), ...registry };
     }
-    case "skills.list": return new SkillsStore().list(workspacePath);
-    case "skills.read": return { content: await new SkillsStore().read(request.payload.id, workspacePath) };
-    case "skills.write": await new SkillsStore().write(request.payload.id, workspacePath, request.payload.content); return {};
-    case "skills.delete": await new SkillsStore().delete(request.payload.id, workspacePath); return {};
-    case "skills.policy": await new SkillsStore().writePolicy(workspacePath, request.payload); return {};
+    case "skills.list": return new SkillsStore(undefined, rootWorkspace).list(workspacePath);
+    case "skills.read": return { content: await new SkillsStore(undefined, rootWorkspace).read(request.payload.id, workspacePath) };
+    case "skills.write": await new SkillsStore(undefined, rootWorkspace).write(request.payload.id, workspacePath, request.payload.content); return {};
+    case "skills.delete": await new SkillsStore(undefined, rootWorkspace).delete(request.payload.id, workspacePath); return {};
+    case "skills.policy": await new SkillsStore(undefined, rootWorkspace).writePolicy(workspacePath, request.payload); return {};
     case "ai.skills": return { session: await acp.get(request.payload.provider).setSkills(workspacePath, request.payload.ids, request.payload.sessionId, request.payload.agentPreset) };
     case "ai.providers": return { providers: acp.list() };
     case "ai.get": return { session: await acp.get(request.payload.provider).get(workspacePath) };

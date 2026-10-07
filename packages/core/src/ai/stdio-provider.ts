@@ -89,13 +89,13 @@ export abstract class StdioAcpProvider extends AcpProvider {
   private readonly blankSessions = new Map<string, AiSession>();
   private readonly archiveIndex = new Map<string, { at: number; sessions: AiSession[] }>();
 
-  constructor(private readonly onChanged: (workspace: string) => void, private readonly stateDirectory = process.env.REMOTE_IDE_STATE_DIR ?? path.join(os.homedir(), ".remote-ide", "workspaces"), private readonly turns?: AcpTurnObserver) { super(); }
+  constructor(private readonly onChanged: (workspace: string) => void, private readonly stateDirectory = process.env.REMOTE_IDE_STATE_DIR ?? path.join(os.homedir(), ".remote-ide", "workspaces"), private readonly turns?: AcpTurnObserver, private readonly projectRoot: (workspace: string) => Promise<string> = async (workspace) => workspace) { super(); }
 
-  private get skills(): SkillsStore { return new SkillsStore(this.stateDirectory); }
+  private async skillsFor(workspace: string): Promise<SkillsStore> { return new SkillsStore(this.stateDirectory, await this.projectRoot(workspace)); }
 
   async setSkills(workspace: string, ids: string[], sessionId?: string, agentPreset?: AcpSendRequest["agentPreset"] | null): Promise<AiSession> {
     const current = await this.get(workspace);
-    const selection = await this.skills.validateSelection(workspace, ids, agentPreset === undefined ? current.agentPreset : agentPreset);
+    const selection = await (await this.skillsFor(workspace)).validateSelection(workspace, ids, agentPreset === undefined ? current.agentPreset : agentPreset);
     const session = this.runtimes.get(workspace)?.session ?? await this.get(workspace);
     if (sessionId && session.id !== sessionId) throw new CoreError("INVALID_REQUEST", "Skills belong to a different conversation");
     session.skillIds = selection;
@@ -117,7 +117,7 @@ export abstract class StdioAcpProvider extends AcpProvider {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") {
         const pending = this.blankSessions.get(workspace) ?? this.emptySession();
         this.blankSessions.set(workspace, pending);
-        pending.skillIds ??= await this.skills.defaults(workspace);
+        pending.skillIds ??= await (await this.skillsFor(workspace)).defaults(workspace);
         return { ...pending, messages: [] };
       }
       throw new CoreError("READ_FAILED", `Could not load ${this.descriptor.name} session: ${error instanceof Error ? error.message : String(error)}`);
@@ -174,7 +174,7 @@ export abstract class StdioAcpProvider extends AcpProvider {
     const command = prompt.split(/\s/, 1)[0]?.toLowerCase();
     if (command && TERMINAL_ONLY_COMMANDS.has(command)) throw new CoreError("INVALID_REQUEST", `${command} is a terminal-only command. Use Vibe Editor's native controls instead.`);
     const content = this.promptContent(workspace, prompt, request.content);
-    const skillIds = request.skillIds === undefined ? undefined : await this.skills.validateSelection(workspace, request.skillIds, request.agentPreset);
+    const skillIds = request.skillIds === undefined ? undefined : await (await this.skillsFor(workspace)).validateSelection(workspace, request.skillIds, request.agentPreset);
     if (this.runtimes.get(workspace)?.running) throw new CoreError("INVALID_REQUEST", `${this.descriptor.name} is already working`);
     const session = await this.get(workspace);
     if (skillIds) session.skillIds = skillIds;
@@ -185,7 +185,7 @@ export abstract class StdioAcpProvider extends AcpProvider {
     // The override belongs to exactly one newly started turn. Steering an active
     // turn never consumes it; a failed runtime/prompt start leaves it queued.
     const allowedServers = request.agent?.mcpServers ? request.mcpServers?.filter((server) => request.agent!.mcpServers!.includes(server.name)) : request.mcpServers;
-    const skillInstructions = session.skillIds?.length || session.skillContext ? await this.skills.instructions(workspace, session.skillIds ?? [], request.agentPreset) : undefined;
+    const skillInstructions = session.skillIds?.length || session.skillContext ? await (await this.skillsFor(workspace)).instructions(workspace, session.skillIds ?? [], request.agentPreset) : undefined;
     const runtime = await this.ensureRuntime(workspace, session, allowedServers);
     if (nextConfiguration) runtime.session.nextConfiguration = undefined;
     const visible = [prompt, ...(request.content ?? []).map(contentLabel)].filter(Boolean).join("\n");
@@ -267,7 +267,7 @@ export abstract class StdioAcpProvider extends AcpProvider {
           const warnings = await this.applyAcpConfiguration(runtime, runtime.configOptions, runtime.modes);
           if (warnings.length > 0) runtime.session.messages.push(this.message("activity", `Session configuration\n${warnings.join("\n")}`));
         }
-        const instructions = runtime.session.skillIds?.length || runtime.session.skillContext ? await this.skills.instructions(workspace, runtime.session.skillIds ?? [], runtime.session.agentPreset) : undefined;
+        const instructions = runtime.session.skillIds?.length || runtime.session.skillContext ? await (await this.skillsFor(workspace)).instructions(workspace, runtime.session.skillIds ?? [], runtime.session.agentPreset) : undefined;
         if (instructions) runtime.session.skillContext = true;
         this.runPrompt(workspace, runtime, [...(instructions ? [{ type: "text" as const, text: instructions }] : []), { type: "text", text: queued.prompt }]);
       }
@@ -366,7 +366,7 @@ export abstract class StdioAcpProvider extends AcpProvider {
     await this.closeRuntime(workspace);
     const current = await this.get(workspace);
     await this.archive(workspace, current);
-    const session: AiSession = { ...this.emptySession(), skillIds: await this.skills.defaults(workspace), model: current.model, reasoning: current.reasoning, configuration: current.configuration, availableOptions: current.availableOptions };
+    const session: AiSession = { ...this.emptySession(), skillIds: await (await this.skillsFor(workspace)).defaults(workspace), model: current.model, reasoning: current.reasoning, configuration: current.configuration, availableOptions: current.availableOptions };
     this.blankSessions.delete(workspace);
     await this.save(workspace, session); this.onChanged(workspace); return session;
   }

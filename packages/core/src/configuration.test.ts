@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
 import { AgentsStore } from "./agents.js";
@@ -8,7 +8,7 @@ import { UsefulFilesStore } from "./useful-files.js";
 import { HarnessStore } from "./harnesses.js";
 import { WorkspaceTaskStore } from "./tasks.js";
 import { ConfigurationService } from "./configuration.js";
-import { ensureSelfConfiguration } from "./self-configuration.js";
+import { CONFIGURATION_SKILL, ensureSelfConfiguration } from "./self-configuration.js";
 import { AppToolService, appToolDefinitions } from "./app-tools.js";
 import type { AcpRegistry } from "./ai/acp.js";
 
@@ -18,7 +18,7 @@ async function fixture() {
   const root = await mkdtemp(path.join(os.tmpdir(), "vibe-configuration-")); temporary.push(root);
   const workspace = path.join(root, "project"); const taskWorkspace = path.join(root, "checkout"); const state = path.join(root, "state");
   await Promise.all([mkdir(workspace), mkdir(taskWorkspace)]);
-  const stores = { agents: new AgentsStore(workspace, state), skills: new SkillsStore(state), useful: new UsefulFilesStore(workspace, state), workflows: new HarnessStore(workspace, state), tasks: new WorkspaceTaskStore(workspace, state) };
+  const stores = { agents: new AgentsStore(workspace, state), skills: new SkillsStore(state, workspace), useful: new UsefulFilesStore(workspace, state), workflows: new HarnessStore(workspace, state), tasks: new WorkspaceTaskStore(workspace, state) };
   const acp = { list: () => [], get: vi.fn() } as unknown as AcpRegistry;
   const changed = vi.fn(async () => undefined);
   const service = new ConfigurationService(workspace, taskWorkspace, stores, acp, changed);
@@ -47,10 +47,18 @@ describe("logical configuration documents", () => {
     await service.write("agents/local/developer.md", "Project-local agent", null);
     await service.write("agents/workspace/reviewer.md", "Workspace agent", null);
     await service.write("skills/local/testing/SKILL.md", "Testing instructions", null);
+    await service.write("skills/workspace/testing/SKILL.md", "Checkout instructions", null);
     await service.write("useful/local/notes.md", "Project notes", null);
     await service.write("useful/global/reference.md", "Shared reference", null);
     expect(await readFile(path.join(taskWorkspace, ".agents/reviewer.md"), "utf8")).toBe("Workspace agent");
-    expect(await readFile(path.join(taskWorkspace, ".agents/skills/testing/SKILL.md"), "utf8")).toBe("Testing instructions");
+    expect(await readFile(path.join(taskWorkspace, ".agents/skills/testing/SKILL.md"), "utf8")).toBe("Checkout instructions");
+    expect(await stores.skills.read("local/testing", workspace)).toBe("Testing instructions");
+    expect((await stores.skills.list(workspace)).skills.map((file) => file.id)).toEqual(["local/testing"]);
+    const fromRoot = new ConfigurationService(workspace, workspace, stores, { list: () => [] } as unknown as AcpRegistry);
+    const local = await fromRoot.read("skills/local/testing/SKILL.md");
+    await fromRoot.write(local.resource, "Updated shared instructions", local.revision);
+    expect((await service.read(local.resource)).content).toBe("Updated shared instructions");
+    expect((await service.list()).formats.skills).toContain("all tasks");
     expect((await stores.agents.list(workspace)).some((agent) => agent.scope === "local" && agent.name === "developer.md")).toBe(true);
     expect((await stores.agents.list(workspace)).some((agent) => agent.scope === "workspace")).toBe(false);
     expect(await stores.useful.read("local", "notes.md")).toBe("Project notes");
@@ -106,6 +114,18 @@ describe("logical configuration documents", () => {
 });
 
 describe("global configuration defaults", () => {
+  it("upgrades the unedited shipped skill when project-local scopes change", async () => {
+    const { state, stores, workspace } = await fixture();
+    const previous = CONFIGURATION_SKILL
+      .replace("local agents, local skills, useful\nfiles and workflows belong to its root project and are shared by every task, while\nworkspace agents, workspace skills and skill policy belong to the invoking checkout.", "local agents, useful files\nand workflows belong to its root project, while workspace agents, local skills\nand skill policy belong to the invoking checkout.")
+      .replace("Use skills/local/{name}/SKILL.md for skills shared by all tasks in this project,\nskills/workspace/{name}/SKILL.md for checkout files and skills/global/{name}/SKILL.md\nfor host-wide skills. All three scopes can be created and edited through the tools.\n\n", "");
+    const directory = path.join(state, "skills/global/vibe-self-configuration");
+    await mkdir(directory, { recursive: true });
+    await writeFile(path.join(directory, "SKILL.md"), previous);
+    await ensureSelfConfiguration(state);
+    expect(await stores.skills.read("global/vibe-self-configuration", workspace)).toBe(CONFIGURATION_SKILL);
+  });
+
   it("installs the agent and skill for every project and retains custom versions on startup", async () => {
     const { stores, state, workspace, taskWorkspace } = await fixture();
     await ensureSelfConfiguration(state);
