@@ -285,7 +285,7 @@ export class HarnessRunner {
       this.assertActive(runId);
       if (execution.turnClaims.get(block.id) !== claim) return;
       const output = session.messages.filter((message) => message.role === "assistant").at(-1)?.text ?? "";
-      state.sessionId = session.id; state.output = output.slice(-200_000); state.status = "succeeded"; state.completedAt = new Date().toISOString(); execution.outputs.set(block.id, output);
+      state.sessionId = session.id; state.tokens = session.tokens; this.assertTokenBudget(execution.run); state.output = output.slice(-200_000); state.status = "succeeded"; state.completedAt = new Date().toISOString(); execution.outputs.set(block.id, output);
       await this.update(execution.run);
     }))).then(() => undefined).catch(async (error) => { if (error instanceof Cancelled || this.cancelled.has(runId)) return; execution.run.status = "failed"; execution.run.error = error instanceof Error ? error.message : String(error); execution.run.completedAt = new Date().toISOString(); await this.update(execution.run); }).finally(() => execution.background.delete(task));
     execution.background.add(task);
@@ -429,7 +429,7 @@ export class HarnessRunner {
         const claim = crypto.randomUUID(); execution.turnClaims.set(target.id, claim);
         this.assertActive(runId); state.status = "running"; state.completedAt = undefined; await this.update(execution.run);
         const replies: string[] = [];
-        for (const input of inputs) { this.assertActive(runId); const session = await execution.append(target, input, { runId, blockId: target.id, workspace: state.workspace! }); this.assertActive(runId); replies.push(session.messages.filter((message) => message.role === "assistant").at(-1)?.text ?? ""); state.sessionId = session.id; }
+        for (const input of inputs) { this.assertActive(runId); const session = await execution.append(target, input, { runId, blockId: target.id, workspace: state.workspace! }); this.assertActive(runId); replies.push(session.messages.filter((message) => message.role === "assistant").at(-1)?.text ?? ""); state.sessionId = session.id; state.tokens = session.tokens; this.assertTokenBudget(execution.run); }
         const value = replies.length === 1 ? replies[0]! : replies.map((reply, index) => `## Appended prompt ${index + 1}\n${reply}`).join("\n\n");
         if (execution.turnClaims.get(target.id) === claim) { state.output = value.slice(-200_000); state.status = "succeeded"; state.completedAt = new Date().toISOString(); execution.outputs.set(target.id, value); await this.update(execution.run); }
         return value;
@@ -628,6 +628,7 @@ export class HarnessRunner {
           return `Timer armed for ${state.waitingUntil}`;
         } else if (block.type === "script") {
           const session = await execution.dispatch(block, input, { runId: run.id, blockId: id, attemptId: crypto.randomUUID(), iteration: 1, started: async () => {}, activity: async () => {}, assertActive: () => this.assertActive(run.id) });
+          state.tokens = session.tokens; this.assertTokenBudget(run);
           output = session.messages.filter((message) => message.role === "assistant").at(-1)?.text ?? "";
         }
         if (block.type !== "ai") state.structuredOutput = parseHarnessData(output, block.outputSchema, `${block.label} output`);
