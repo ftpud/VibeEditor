@@ -455,6 +455,7 @@ describe("HarnessPanel", () => {
     expect(details.textContent).toContain("featureId");
     expect(details.textContent).toContain("commitSha");
     expect(details.textContent).toContain("Tokens: 12,345");
+    expect(details.textContent).toContain("Run run-1 · definition v1");
   });
 
   it("shows prompts, answers, and stack runs when a block is selected in view mode", async () => {
