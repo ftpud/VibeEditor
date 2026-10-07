@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { Play, Square, Workflow, RotateCcw } from "lucide-react";
 import type { HarnessBlock, HarnessDefinition, HarnessRun } from "@remote-ide/protocol";
-import { autoLayoutBlocks, BlockRunDetails, PauseResolution, type HarnessPanelProps } from "./HarnessPanel";
+import { BlockRunDetails, PauseResolution, type HarnessPanelProps } from "./HarnessPanel";
 import { useWorkflowTraces } from "./workflow-tracing";
 
 type Props = Pick<HarnessPanelProps, "harnesses" | "runs" | "diagnostics" | "onRun" | "onValidate" | "onCancelRun" | "onResolvePermission" | "onAnswerQuestion" | "onResumePause" | "onRetryPause" | "onCancelPause" | "onError">;
@@ -65,7 +65,7 @@ function WorkflowCard({ workflow, ...props }: Props & { workflow: HarnessDefinit
     </form>;
   };
   return <article className={`workflow-card ${run && activeStatuses.has(run.status) ? "live" : ""}`} aria-label={workflow.name}>
-    <header><Workflow size={16} /><strong>{workflow.name}</strong><span className={`workflow-overall-status ${run?.status ?? "idle"}`} role="status"><i className={`harness-status ${run?.status ?? "idle"}`} />{statusLabel(run?.status ?? "Ready")}</span></header>
+    <header><Workflow size={16} /><strong>{workflow.name}</strong><span className={`workflow-overall-status ${run?.status ?? "idle"}`} role="status" aria-label={statusLabel(run?.status ?? "Ready")} title={statusLabel(run?.status ?? "Ready")}><i className={`harness-status ${run?.status ?? "idle"}`} /></span></header>
     {run ? <>
       <div className="workflow-run-meta"><select aria-label={`Run for ${workflow.name}`} value={run.id} onChange={(event) => { setSelectedRunId(event.target.value); setSelectedBlockId(undefined); }}>{runs.map((item) => <option key={item.id} value={item.id}>{statusLabel(item.status)} · {new Date(item.createdAt).toLocaleString()}</option>)}</select><span>{completed}/{definition.blocks.length} complete</span></div>
       <CompactWorkflowPreview definition={definition} run={run} onSelect={setSelectedBlockId} />
@@ -81,22 +81,26 @@ function WorkflowCard({ workflow, ...props }: Props & { workflow: HarnessDefinit
 
 function CompactWorkflowPreview({ definition, run, onSelect }: { definition: HarnessDefinition; run: HarnessRun; onSelect(id: string): void }) {
   const traces = useWorkflowTraces(run);
-  const blocks = useMemo(() => autoLayoutBlocks(definition.blocks, definition.edges).map((block) => ({ ...block, position: { x: 12 + (block.position.x - 32) / 260 * 142, y: 12 + (block.position.y - 32) / 160 * 52 } })), [definition]);
+  const blocks = useMemo(() => {
+    const minX = Math.min(0, ...definition.blocks.map((block) => block.position.x));
+    const minY = Math.min(0, ...definition.blocks.map((block) => block.position.y));
+    return definition.blocks.map((block) => ({ ...block, position: { x: 12 + (block.position.x - minX) * 0.6, y: 12 + (block.position.y - minY) * 0.6 } }));
+  }, [definition]);
   const byId = new Map(blocks.map((block) => [block.id, block]));
   const width = Math.max(280, ...blocks.map((block) => block.position.x + 132));
-  const height = Math.max(70, ...blocks.map((block) => block.position.y + 50));
+  const height = Math.max(70, ...blocks.map((block) => block.position.y + 36));
   return <div className="workflow-compact-preview" aria-label="Live workflow tree"><svg width={width} height={height} viewBox={`0 0 ${width} ${height}`}>
     {definition.edges.map((edge) => {
       const from = byId.get(edge.from), to = byId.get(edge.to);
       if (!from || !to) return null;
-      const x = from.position.x + 120, y = from.position.y + 20, tx = to.position.x, ty = to.position.y + 20;
+      const x = from.position.x + 120, y = from.position.y + 12, tx = to.position.x, ty = to.position.y + 12;
       const path = edge.loop || tx <= x ? `M ${x} ${y} C ${x + 24} ${y + 32}, ${tx - 24} ${ty + 32}, ${tx} ${ty}` : `M ${x} ${y} C ${(x + tx) / 2} ${y}, ${(x + tx) / 2} ${ty}, ${tx} ${ty}`;
       return <g key={edge.id}><path className={`workflow-compact-edge ${edge.type ?? "follow"}`} d={path}><title>{from.label} → {to.label} · {edge.type ?? "follow"}{edge.label ? `: ${edge.label}` : ""}</title></path>{traces.filter((trace) => trace.edgeId === edge.id).map((trace) => <path key={trace.id} className={`harness-transfer ${edge.type ?? "follow"} ${trace.direction} ${trace.status}`} d={path} pathLength={100} style={{ animationDelay: `${trace.delayMs}ms` }} />)}</g>;
     })}
     {blocks.map((block) => {
       const state = run.blocks.find((item) => item.blockId === block.id);
       const status = state?.status ?? "idle";
-      return <g key={block.id} className={`workflow-compact-block ${status}`} transform={`translate(${block.position.x}, ${block.position.y})`} role="button" tabIndex={0} aria-label={`${block.label}: ${statusLabel(status)}`} onClick={() => onSelect(block.id)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); onSelect(block.id); } }}><title>{block.label} · {statusLabel(status)}{state?.error ? ` · ${state.error}` : ""}</title><rect width={120} height={40} rx={7} /><circle cx={10} cy={13} r={3} /><text x={18} y={16}>{block.label.length > 15 ? `${block.label.slice(0, 14)}…` : block.label}</text><text className="workflow-compact-block-status" x={10} y={31}>{statusLabel(status)}</text></g>;
+      return <g key={block.id} className={`workflow-compact-block ${status}`} transform={`translate(${block.position.x}, ${block.position.y})`} role="button" tabIndex={0} aria-label={`${block.label}: ${statusLabel(status)}`} onClick={() => onSelect(block.id)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); onSelect(block.id); } }}><title>{block.label} · {statusLabel(status)}{state?.error ? ` · ${state.error}` : ""}</title><rect width={120} height={24} rx={5} /><circle cx={10} cy={12} r={3} /><text x={18} y={16}>{block.label.length > 15 ? `${block.label.slice(0, 14)}…` : block.label}</text></g>;
     })}
   </svg></div>;
 }
