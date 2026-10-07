@@ -82,9 +82,38 @@ function WorkflowCard({ workflow, ...props }: Props & { workflow: HarnessDefinit
 function CompactWorkflowPreview({ definition, run, onSelect }: { definition: HarnessDefinition; run: HarnessRun; onSelect(id: string): void }) {
   const traces = useWorkflowTraces(run);
   const blocks = useMemo(() => {
-    const minX = Math.min(0, ...definition.blocks.map((block) => block.position.x));
-    const minY = Math.min(0, ...definition.blocks.map((block) => block.position.y));
-    return definition.blocks.map((block) => ({ ...block, position: { x: 12 + (block.position.x - minX) * 0.6, y: 12 + (block.position.y - minY) * 0.6 } }));
+    const source = definition.blocks;
+    const minX = source.length ? Math.min(...source.map((block) => block.position.x)) : 0;
+    const minY = source.length ? Math.min(...source.map((block) => block.position.y)) : 0;
+    const spanY = Math.max(0, ...source.map((block) => block.position.y - minY));
+    // Preserve the saved arrangement, removing vertical space until cards
+    // with overlapping horizontal bounds have only an 8px gap.
+    let scaleY = spanY ? 32 / spanY : 0.2;
+    for (let index = 0; index < source.length; index++) {
+      const block = source[index]!;
+      for (const other of source.slice(index + 1)) {
+        const gapY = Math.abs(block.position.y - other.position.y);
+        if (gapY && Math.abs(block.position.x - other.position.x) * 0.6 < 120) {
+          scaleY = Math.max(scaleY, 32 / gapY);
+        }
+      }
+    }
+    scaleY = Math.min(0.6, scaleY);
+    const spanX = Math.max(0, ...source.map((block) => block.position.x - minX));
+    let scaleX = spanX ? 136 / spanX : 0.6;
+    // Apply one scale per axis to keep the original branch arrangement.
+    // Leave room for cards and their connections wherever rows overlap.
+    for (let index = 0; index < source.length; index++) {
+      const block = source[index]!;
+      for (const other of source.slice(index + 1)) {
+        const gapX = Math.abs(block.position.x - other.position.x);
+        if (gapX && Math.abs(block.position.y - other.position.y) * scaleY < 32) {
+          scaleX = Math.max(scaleX, 136 / gapX);
+        }
+      }
+    }
+    scaleX = Math.min(0.6, scaleX);
+    return source.map((block) => ({ ...block, position: { x: 12 + (block.position.x - minX) * scaleX, y: 12 + (block.position.y - minY) * scaleY } }));
   }, [definition]);
   const byId = new Map(blocks.map((block) => [block.id, block]));
   const width = Math.max(280, ...blocks.map((block) => block.position.x + 132));
