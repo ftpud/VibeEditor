@@ -166,6 +166,22 @@ describe("HarnessRunner", () => {
     } finally { await runner.cancel(run.id, async () => release()); release(); }
   });
 
+  it("uses the workflow retry policy instead of the runner default", async () => {
+    const state = await mkdtemp(path.join(os.tmpdir(), "workflow-saved-retry-policy-")); const store = new HarnessStore("/workspace", state); const definition = await store.create("Saved retry policy");
+    await store.update({ ...definition, settings: { retry: { maxAttempts: 1 } }, blocks: [
+      { id: "watchdog", type: "prompt", label: "watchdog", prompt: "watch", watchdog: true, position: { x: 0, y: 0 } },
+      { id: "worker", type: "prompt", label: "worker", prompt: "work", position: { x: 0, y: 0 } }
+    ], edges: [] });
+    let release!: () => void; const sleeping = new Promise<void>((resolve) => { release = resolve; }); const runner = new HarnessRunner(store, () => undefined, 4, { maxAttempts: 3, transportBackoffMs: 0, jitterRatio: 0 });
+    const run = await runner.start(definition.id, "work", async (block) => { if (block.id === "watchdog") await sleeping; if (block.id === "worker") throw new Error("ETIMEDOUT"); return session("done"); });
+    try {
+      await vi.waitFor(async () => expect((await store.runs())[0]?.blocks.find((block) => block.blockId === "worker")?.status).toBe("retry_scheduled"));
+      expect(await runner.resumeFailed(run.id, "watchdog")).toEqual({ resumed: ["worker"] });
+      await vi.waitFor(async () => expect((await store.runs())[0]?.blocks.find((block) => block.blockId === "worker")?.attempts).toHaveLength(2));
+      expect(await runner.resumeFailed(run.id, "watchdog")).toEqual({ resumed: [] });
+    } finally { await runner.cancel(run.id, async () => release()); release(); }
+  });
+
   it("stops retries whose next backoff exceeds the elapsed retry budget", async () => {
     const state = await mkdtemp(path.join(os.tmpdir(), "workflow-retry-budget-")); const store = new HarnessStore("/workspace", state);
     const definition = await store.create("Retry budget");
