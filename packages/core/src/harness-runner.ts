@@ -44,7 +44,11 @@ export class HarnessRunner {
     const execution = this.executions.get(runId);
     if (!execution || !this.isActive(runId)) throw new Error("Workflow is no longer active");
     execution.run.children ??= [];
-    if (!execution.run.children.some((item) => item.taskId === child.taskId && item.provider === child.provider)) execution.run.children.push({ ...child, recoveryAttempts: 0 });
+    if (!execution.run.children.some((item) => item.taskId === child.taskId && item.provider === child.provider)) {
+      const limit = execution.run.definition?.settings?.maxChildTasks ?? 100;
+      if (execution.run.children.length >= limit) throw new CoreError("INVALID_REQUEST", `Workflow reached its limit of ${limit} child task${limit === 1 ? "" : "s"}`);
+      execution.run.children.push({ ...child, recoveryAttempts: 0 });
+    }
     await this.recordCompletedOperation(execution.run, "child_registration", `child:${child.taskId}:${child.provider}`, child.blockId, { taskId: child.taskId, provider: child.provider, workspace: child.workspace });
     await this.update(execution.run);
   }
