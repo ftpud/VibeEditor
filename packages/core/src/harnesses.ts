@@ -89,6 +89,15 @@ export class HarnessStore {
     });
   }
 
+  async deleteRun(id: string): Promise<void> {
+    await this.mutate(async () => {
+      const runs = await this.runs(); const run = runs.find((item) => item.id === id);
+      if (!run) throw new CoreError("FILE_NOT_FOUND", "Workflow run does not exist");
+      if (activeRunStatuses.has(run.status)) throw new CoreError("INVALID_REQUEST", "Cancel an active workflow run before deleting it");
+      await this.writeJson("runs.json", { schemaVersion: SCHEMA_VERSION, runs: runs.filter((item) => item.id !== id) } satisfies RunFile);
+    });
+  }
+
   async recoverInterruptedRuns(): Promise<HarnessRun[]> {
     return this.mutate(async () => {
       const runs = await this.runs(); const recovered: HarnessRun[] = []; const now = new Date().toISOString();

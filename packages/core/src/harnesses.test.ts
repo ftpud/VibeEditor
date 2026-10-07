@@ -61,6 +61,15 @@ describe("HarnessStore", () => {
     expect(JSON.stringify(run)).toContain("[REDACTED]");
   });
 
+  it("deletes completed runs but retains active run history", async () => {
+    const state = await mkdtemp(path.join(os.tmpdir(), "workflow-delete-run-")); const store = new HarnessStore("/workspace", state); const definition = await store.create("Flow");
+    await store.saveRun({ id: "completed", harnessId: definition.id, harnessVersion: 1, input: "work", status: "succeeded", createdAt: "now", blocks: [] });
+    await store.saveRun({ id: "active", harnessId: definition.id, harnessVersion: 1, input: "work", status: "running", createdAt: "now", blocks: [] });
+    await store.deleteRun("completed");
+    expect((await store.runs()).map((run) => run.id)).toEqual(["active"]);
+    await expect(store.deleteRun("active")).rejects.toThrow("Cancel an active");
+  });
+
   it("serializes concurrent creates without losing definitions", async () => {
     const state = await mkdtemp(path.join(os.tmpdir(), "remote-ide-harness-state-"));
     const store = new HarnessStore("/workspace", state); const secondInstance = new HarnessStore("/workspace", state);

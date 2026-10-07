@@ -741,6 +741,7 @@ async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStor
     case "harnesses.delete": await harnesses.delete(request.payload.id); return {};
     case "harnesses.validate": return validateHarness(request.payload.harness);
     case "harnesses.runs": return { runs: await harnesses.runs(request.payload.harnessId) };
+    case "harnesses.runs.delete": await harnesses.deleteRun(request.payload.runId); return {};
     case "harnesses.run": return { run: await harnessRunner.start(request.payload.harnessId, request.payload.input, async (block, prompt, runtime) => providerOperation(async () => {
       if (block.type === "script") return executeFlowScript(block, prompt, workspacePath, runtime.assertActive);
       if (block.type === "verification") return runWorkflowVerification(block, workspacePath, harnessRunner, runtime);
