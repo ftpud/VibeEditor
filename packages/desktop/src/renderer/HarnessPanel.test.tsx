@@ -475,6 +475,16 @@ describe("HarnessPanel", () => {
     expect(details.textContent).toContain("answer two");
   });
 
+  it("explains why a selected block is waiting and its next action", async () => {
+    const harness: HarnessDefinition = { id: "harness-1", name: "Flow", version: 1, createdAt: "now", updatedAt: "now", blocks: [{ id: "a", type: "prompt", label: "Review", prompt: "{{input}}", join: "all", position: { x: 20, y: 20 } }], edges: [] };
+    const runs: HarnessRun[] = [{ id: "run-1", harnessId: harness.id, harnessVersion: 1, input: "task", status: "waiting", createdAt: "now", blocks: [{ blockId: "a", status: "waiting" }] }];
+    render(<HarnessPanel harnesses={[harness]} runs={runs} providers={[]} agents={[]} onCreate={vi.fn()} onSave={vi.fn()} onDelete={vi.fn()} onRun={vi.fn()} onCancelRun={vi.fn()} onError={vi.fn()} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "View" }));
+    fireEvent.click(await screen.findByText("Review"));
+    expect((await screen.findByLabelText("Block waiting status")).textContent).toContain("Waiting for every incoming synchronous connection to finish.");
+  });
+
   it("keeps the execution log collapsed until requested", async () => {
     const harness: HarnessDefinition = { id: "harness-1", name: "Flow", version: 1, createdAt: "now", updatedAt: "now", blocks: [{ id: "a", type: "prompt", label: "Review", prompt: "{{input}}", position: { x: 20, y: 20 } }], edges: [] };
     const runs = [{ id: "run-1", harnessId: harness.id, harnessVersion: 1, input: "task", status: "succeeded" as const, createdAt: "now", blocks: [{ blockId: "a", status: "succeeded" as const, output: "answer", log: [{ timestamp: "2026-09-18T00:00:00Z", kind: "lifecycle" as const, message: "Started" }] }] }];
