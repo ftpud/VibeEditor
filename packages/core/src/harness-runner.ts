@@ -927,7 +927,12 @@ export class HarnessRunner {
     });
   }
 
-  private assertActive(runId: string): void { if (!this.isActive(runId)) throw new Cancelled(); }
+  private assertActive(runId: string): void {
+    if (!this.isActive(runId)) throw new Cancelled();
+    const run = this.executions.get(runId)?.run;
+    const duration = run?.definition?.settings?.maxRunDurationMs;
+    if (run?.startedAt && duration !== undefined && Date.now() - Date.parse(run.startedAt) >= duration) throw new RunDurationExceeded(duration);
+  }
 
   private policy(run: HarnessRun): ResolvedRecoveryPolicy { return { ...this.recovery, maxAttempts: run.definition?.settings?.retry?.maxAttempts ?? this.recovery.maxAttempts }; }
 
@@ -1036,6 +1041,7 @@ class ExecutionScheduler {
 }
 
 class Cancelled extends Error {}
+class RunDurationExceeded extends Error { constructor(duration: number) { super(`Workflow run duration of ${Math.round(duration / 60_000)} minute(s) was exceeded`); } }
 class BlockedCorrection extends Error {}
 
 function blocksById(blocks: HarnessBlock[], id: string): HarnessBlock {
