@@ -257,6 +257,7 @@ export async function createServer(host: string, port: number, workspacePath: st
   const recoveryDispatch = async (block: HarnessBlock, prompt: string, runtime: Parameters<Parameters<HarnessRunner["start"]>[2]>[2]) => providerOperation(async () => {
     if (block.type === "script") return executeFlowScript(block, prompt, rootWorkspace, runtime.assertActive);
     const provider = acp.get(block.provider ?? "codex");
+    await assertWorkflowModelAvailable(provider, block.model);
     if (block.watchdog) return recoveryRunner.watch(runtime.runId, runtime.blockId, () => provider.usage());
     const sessionWorkspace = await workflowSessionWorkspace(rootWorkspace, runtime.runId, runtime.blockId); await runtime.started(sessionWorkspace);
     const agentFile = block.agent ? (await agents.list(rootWorkspace)).find((item) => item.scope === block.agent!.scope && item.name === block.agent!.name) : undefined;
@@ -749,6 +750,7 @@ async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStor
         if (block.review?.correction) prompt += `\n\nThis review drives a Core correction loop. Reply with JSON only: {"revision":"${evidence.revision}","findings":[{"id":"stable-finding-id","message":"actionable finding","ownerBlockId":"${block.review.correction.ownerBlockId}"}]}. Use an empty findings array when the revision is approved.`;
       }
       const provider = acp.get(block.provider ?? request.payload.provider);
+      await assertWorkflowModelAvailable(provider, block.model);
       if (block.watchdog) return harnessRunner.watch(runtime.runId, runtime.blockId, () => provider.usage(), () => harnessRunner.recoverChildren(runtime.runId, async (child) => {
         const task = (await tasks.list()).tasks.find((item) => item.id === child.taskId);
         if (!task || task.status === "finished" || task.archived || await aiTimers.next(child.workspace, child.provider)) return undefined;
@@ -1088,6 +1090,12 @@ export async function permissionTargetWorkspace(tasks: Pick<WorkspaceTaskStore, 
   if (!taskId) return rootWorkspace;
   if (!(await tasks.list()).tasks.some((task) => task.id === taskId)) throw new CoreError("INVALID_REQUEST", "Task does not exist");
   return tasks.taskPath(taskId);
+}
+
+export async function assertWorkflowModelAvailable(provider: { models(): Promise<Array<{ id: string; available?: boolean }>> }, model?: string): Promise<void> {
+  if (!model) return;
+  const selected = (await provider.models()).find((item) => item.id === model);
+  if (!selected || selected.available === false) throw new CoreError("INVALID_REQUEST", `Workflow model '${model}' is unavailable. Select an available model before running this workflow.`);
 }
 
 export async function assertSessionChangeAllowed(timers: Pick<AiTimerService, "next">, workspace: string, provider: AiProvider): Promise<void> {

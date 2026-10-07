@@ -1,9 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
-import { settleWorkflowSession } from "./server.js";
+import { assertWorkflowModelAvailable, settleWorkflowSession } from "./server.js";
 import { WebSocket } from "ws";
 import { assertRequestRoot, assertRootRemovalAllowed, assertSessionChangeAllowed, LiveRootSelections, permissionTargetWorkspace, protocolHandshake, renameWorkspacePaths, rootRemovalBlocker, selectRootWorkspace, sendWebSocketData, transactionalRootSelection, WorkspaceWatchBatcher } from "./server.js";
 
 describe("protocol handshake", () => {
+  it("rejects workflow models that are no longer available", async () => {
+    await expect(assertWorkflowModelAvailable({ models: async () => [{ id: "available", available: true }, { id: "retired", available: false }] }, "retired")).rejects.toThrow("unavailable");
+    await expect(assertWorkflowModelAvailable({ models: async () => [{ id: "available", available: true }] }, "available")).resolves.toBeUndefined();
+  });
   it("arms watchdog recovery at the provider reset even when its AI turn has failed", async () => {
     let active = true;
     const dueAt = new Date(Date.now() + 60_000).toISOString();
