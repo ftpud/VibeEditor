@@ -779,6 +779,8 @@ export class HarnessRunner {
   }
 
   private async update(run: HarnessRun): Promise<void> {
+    const limit = run.definition?.settings?.logLimitEntries ?? 500;
+    for (const block of run.blocks) if (block.log && block.log.length > limit) block.log = block.log.slice(-limit);
     const snapshot = structuredClone(run); const next = this.updateQueue.then(async () => { await this.store.saveRun(snapshot); this.changed(run.id); });
     this.updateQueue = next.catch(() => undefined); await next;
   }
