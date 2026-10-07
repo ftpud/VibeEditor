@@ -1,11 +1,20 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { HarnessBlock, HarnessDefinition, HarnessRun } from "@remote-ide/protocol";
-import { alignBlocks, autoLayoutBlocks, dragPosition, edgePath, fitCanvasViewport, HarnessPanel, minimapScrollPosition, minimapViewport, responsePreview, workflowRunExport } from "./HarnessPanel";
+import { alignBlocks, autoLayoutBlocks, dragPosition, edgePath, fitCanvasViewport, HarnessPanel, minimapScrollPosition, minimapViewport, responsePreview, parseWorkflowDefinitionImport, workflowDefinitionExport, workflowRunExport } from "./HarnessPanel";
 
 afterEach(cleanup);
 
 describe("HarnessPanel", () => {
+  it("exports redacted workflow definitions and imports current or legacy envelopes", () => {
+    const definition: HarnessDefinition = { id: "flow", name: "Secret flow", version: 2, createdAt: "now", updatedAt: "now", blocks: [{ id: "plan", type: "prompt", label: "Plan", prompt: "token=super-secret-value", position: { x: 20, y: 20 } }], edges: [], settings: { tokenBudget: 5000 } };
+    const exported = workflowDefinitionExport(definition);
+    expect(exported).toContain("token=[REDACTED]");
+    expect(exported).toContain('"tokenBudget": 5000');
+    expect(parseWorkflowDefinitionImport(exported)).toMatchObject({ id: "flow", blocks: [{ prompt: "token=[REDACTED]" }] });
+    expect(parseWorkflowDefinitionImport(JSON.stringify({ format: "vibe-workflow", version: 0, harness: definition }))).toEqual(definition);
+  });
+
   it("serializes a selected workflow run for export", () => {
     const run: HarnessRun = { id: "run-1", harnessId: "flow", harnessVersion: 1, input: "work", status: "succeeded", createdAt: "now", blocks: [] };
     expect(JSON.parse(workflowRunExport(run))).toEqual(run);
