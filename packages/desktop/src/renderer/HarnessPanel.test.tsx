@@ -242,6 +242,26 @@ describe("HarnessPanel", () => {
     await waitFor(() => expect(onSave.mock.calls.at(0)?.[0].edges).toMatchObject([{ from: "source", to: "target", type: "follow" }]));
   });
 
+  it("edits blocks and connections from the ordered list without the canvas", async () => {
+    const harness: HarnessDefinition = { id: "list-flow", name: "List flow", version: 1, createdAt: "now", updatedAt: "now", blocks: [
+      { id: "source", type: "prompt", label: "Source", prompt: "", position: { x: 20, y: 20 } },
+      { id: "target", type: "prompt", label: "Target", prompt: "", position: { x: 260, y: 20 } },
+    ], edges: [] };
+    const onSave = vi.fn().mockImplementation(async (value) => value);
+    render(<HarnessPanel harnesses={[harness]} runs={[]} providers={[]} agents={[]} onCreate={vi.fn()} onSave={onSave} onDelete={vi.fn()} onRun={vi.fn()} onCancelRun={vi.fn()} onError={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: "List" }));
+    expect(screen.getByLabelText("Workflow list editor")).toBeTruthy();
+    expect(screen.queryByLabelText("Workflow canvas")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Edit block Source" }));
+    expect((screen.getByLabelText("Block prompt") as HTMLTextAreaElement).value).toBe("");
+    fireEvent.change(screen.getByLabelText("List connection source"), { target: { value: "source" } });
+    fireEvent.change(screen.getByLabelText("List connection target"), { target: { value: "target" } });
+    fireEvent.click(screen.getByRole("button", { name: "Add connection" }));
+    expect(screen.getByRole("button", { name: "Edit connection Source then Target" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(onSave.mock.calls.at(0)?.[0].edges).toMatchObject([{ from: "source", to: "target", type: "follow" }]));
+  });
+
   it("connects an AI to another AI as a tool", async () => {
     const harness: HarnessDefinition = { id: "harness-1", name: "Cycle", version: 1, createdAt: "now", updatedAt: "now", blocks: [
       { id: "a", type: "ai", label: "Build", prompt: "", position: { x: 20, y: 20 } },
