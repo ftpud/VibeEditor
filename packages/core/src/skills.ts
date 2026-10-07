@@ -23,6 +23,19 @@ export class SkillsStore {
     return path.join(workspace, ".agents", "skills");
   }
 
+  private async storedPolicy(workspace: string): Promise<{ content: string; path: string; storage: "local" | "workspace" } | undefined> {
+    const candidates = [
+      { path: path.join(this.directory("local", workspace), "skills.json"), workspace, storage: "local" as const },
+      ...[...new Set([this.rootWorkspace ?? workspace, workspace])].map((root) => ({ path: path.join(root, ".agents", "skills.json"), workspace: root, storage: "workspace" as const }))
+    ];
+    for (const candidate of candidates) {
+      const target = await this.checked(candidate.path, candidate.workspace, candidate.storage);
+      try { return { content: await readFile(target, "utf8"), path: target, storage: candidate.storage }; }
+      catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+    }
+    return undefined;
+  }
+
   private target(id: string, workspace: string): string {
     if (typeof id !== "string" || !/^(global|local|workspace)\/[a-zA-Z0-9][a-zA-Z0-9_-]{0,79}$/.test(id)) throw new CoreError("INVALID_REQUEST", "Skill ID must be global/name, local/name or workspace/name using letters, numbers, underscores or hyphens");
     const [scope, name] = id.split("/");
@@ -70,12 +83,12 @@ export class SkillsStore {
       }
     }
     skills.sort((a, b) => a.scope.localeCompare(b.scope) || a.title.localeCompare(b.title));
-    const policyFile = await this.checked(path.join(workspace, ".agents", "skills.json"), workspace, "workspace");
+    const storedPolicy = await this.storedPolicy(workspace);
     const checkoutIds = Object.fromEntries(skills.filter((skill) => skill.scope === "workspace").map((skill) => [`local/${skill.name}`, skill.id]));
     const legacyIds = Object.fromEntries(Object.entries(checkoutIds).filter(([id]) => !skills.some((skill) => skill.id === id)));
     let policy: SkillPolicy;
     try {
-      const stored = JSON.parse(await readFile(policyFile, "utf8"));
+      const stored = storedPolicy ? JSON.parse(storedPolicy.content) : { allowed: skills.map((skill) => skill.id), defaults: [], scopeVersion: 2 };
       policy = this.validatePolicy(stored);
       if (stored.scopeVersion !== 2) {
         const resolve = (id: string) => checkoutIds[id] ?? id;
@@ -83,10 +96,9 @@ export class SkillsStore {
       }
     }
     catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw new CoreError("INVALID_REQUEST", `Invalid .agents/skills.json: ${error instanceof Error ? error.message : String(error)}`);
-      policy = { allowed: skills.map((skill) => skill.id), defaults: [] };
+      throw new CoreError("INVALID_REQUEST", `Invalid skill policy (${storedPolicy?.path}): ${error instanceof Error ? error.message : String(error)}`);
     }
-    return { skills, policy, ...(Object.keys(legacyIds).length ? { legacyIds } : {}) };
+    return { skills, policy, policyStorage: storedPolicy?.storage ?? "local", ...(Object.keys(legacyIds).length ? { legacyIds } : {}) };
   }
 
   private validatePolicy(value: SkillPolicy): SkillPolicy {
@@ -103,9 +115,18 @@ export class SkillsStore {
 
   async writePolicy(workspace: string, policy: SkillPolicy): Promise<void> {
     const validated = this.validatePolicy(policy);
-    const target = await this.checked(path.join(workspace, ".agents", "skills.json"), workspace, "workspace");
+    const previous = await this.storedPolicy(workspace);
+    const target = await this.checked(path.join(this.directory("local", workspace), "skills.json"), workspace, "local");
     await mkdir(path.dirname(target), { recursive: true });
     await this.replace(target, `${JSON.stringify({ ...validated, scopeVersion: 2 }, null, 2)}\n`);
+    // Remove an imported checkout policy only after persisting its settings outside Git.
+    // Retain the source if another editor changed it during the write.
+    if (previous?.storage === "workspace" && await readFile(previous.path, "utf8").catch((error: NodeJS.ErrnoException) => { if (error.code === "ENOENT") return undefined; throw error; }) === previous.content) await rm(previous.path, { force: true });
+  }
+
+  async movePolicyToLocal(workspace: string): Promise<void> {
+    const catalog = await this.list(workspace);
+    if (catalog.policyStorage === "workspace") await this.writePolicy(workspace, catalog.policy);
   }
 
   async write(id: string, workspace: string, content: string): Promise<void> {

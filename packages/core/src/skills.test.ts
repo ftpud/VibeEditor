@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import { afterEach, describe, expect, it } from "vitest";
 import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -15,8 +16,8 @@ const review = "---\nname: Reviewer\ndescription: Review changes\n---\n\nCheck r
 
 describe("project skills", () => {
   it("discovers separate global/local skills and persists a project allowlist with defaults", async () => {
-    const { workspace, store } = await setup();
-    expect(await store.list(workspace)).toEqual({ skills: [], policy: { allowed: [], defaults: [] } });
+    const { root, workspace, store } = await setup();
+    expect(await store.list(workspace)).toEqual({ skills: [], policy: { allowed: [], defaults: [] }, policyStorage: "local" });
     await store.write("global/review", workspace, review);
     await store.write("local/review", workspace, "Local instructions");
     const catalog = await store.list(workspace);
@@ -26,7 +27,7 @@ describe("project skills", () => {
     expect(await store.defaults(workspace)).toEqual(["local/review"]);
     await expect(store.validateSelection(workspace, ["global/review"])).rejects.toThrow("not allowed");
     expect(await store.validateSelection(workspace, ["local/review", "local/review"])).toEqual(["local/review"]);
-    expect(JSON.parse(await readFile(path.join(workspace, ".agents/skills.json"), "utf8"))).toEqual({ allowed: ["local/review"], defaults: ["local/review"], scopeVersion: 2 });
+    expect(JSON.parse(await readFile(path.join(root, "state/skills/local", crypto.createHash("sha256").update(workspace).digest("hex"), "skills.json"), "utf8"))).toEqual({ allowed: ["local/review"], defaults: ["local/review"], scopeVersion: 2 });
   });
 
   it("reloads edited instructions and enforces revoked policy on every turn", async () => {
@@ -86,6 +87,39 @@ describe("project skills", () => {
     expect(await store.instructions(workspace, ["local/review"])).not.toContain("Check regressions");
   });
 
+  it("moves legacy policy outside Git, shares it with tasks and gives local policy precedence", async () => {
+    const { root, workspace, store } = await setup();
+    const task = path.join(root, "task"); await mkdir(task);
+    await store.write("local/review", workspace, review);
+    const policy = { allowed: ["local/review"], defaults: ["local/review"], agents: { "local/review": [null] }, scopeVersion: 2 };
+    await mkdir(path.join(workspace, ".agents"));
+    const legacy = path.join(workspace, ".agents/skills.json");
+    await writeFile(legacy, JSON.stringify(policy));
+    expect((await store.list(task)).policyStorage).toBe("workspace");
+    await store.movePolicyToLocal(task);
+    await expect(readFile(legacy)).rejects.toMatchObject({ code: "ENOENT" });
+    expect((await store.list(workspace)).policyStorage).toBe("local");
+    expect(await store.defaults(task)).toEqual(["local/review"]);
+    expect((await store.list(task)).policy.agents).toEqual(policy.agents);
+    await expect(store.validateSelection(task, ["local/review"], { scope: "global", name: "review.md" })).rejects.toThrow("selected agent");
+    await mkdir(path.join(task, ".agents"));
+    await writeFile(path.join(task, ".agents/skills.json"), "{broken");
+    expect(await store.defaults(task)).toEqual(["local/review"]);
+    await store.writePolicy(task, { allowed: [], defaults: [] });
+    expect(await store.defaults(workspace)).toEqual([]);
+    await store.movePolicyToLocal(task);
+    expect(await readFile(path.join(task, ".agents/skills.json"), "utf8")).toBe("{broken");
+  });
+
+  it("saves new policies outside the checkout without creating a .agents directory", async () => {
+    const { root, workspace, store } = await setup();
+    await store.writePolicy(workspace, { allowed: [], defaults: [] });
+    await expect(readFile(path.join(workspace, ".agents/skills.json"))).rejects.toMatchObject({ code: "ENOENT" });
+    const other = path.join(root, "other"); await mkdir(other);
+    expect((await new SkillsStore(path.join(root, "state"), other).list(other)).policy).toEqual({ allowed: [], defaults: [] });
+    expect((await store.list(workspace)).policyStorage).toBe("local");
+  });
+
   it("rejects invalid policies, traversal, oversized instructions and symlink escapes", async () => {
     const { root, workspace, store } = await setup();
     await expect(store.writePolicy(workspace, { allowed: [], defaults: ["local/review"] })).rejects.toThrow("defaults must be allowed");
@@ -122,6 +156,6 @@ describe("project skills", () => {
     expect(await readFile(supporting, "utf8")).toBe("Keep me");
     expect((await store.list(workspace)).skills).toEqual([]);
     await writeFile(path.join(workspace, ".agents/skills.json"), "{broken");
-    await expect(store.list(workspace)).rejects.toThrow("Invalid .agents/skills.json");
+    await expect(store.list(workspace)).rejects.toThrow("Invalid skill policy");
   });
 });

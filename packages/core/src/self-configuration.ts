@@ -27,9 +27,9 @@ description: Create or edit Vibe Editor workflows, agent presets, skills, task m
 ---
 
 Use configuration_list to discover documents and their formats. The workspace
-reported by that tool is the invoking chat's workspace; local agents, local skills, useful
-files and workflows belong to its root project and are shared by every task, while
-workspace agents, workspace skills and skill policy belong to the invoking checkout. Global documents are shared by
+reported by that tool is the invoking chat's workspace; local agents, local skills, skill policy,
+useful files and workflows belong to its root project and are shared by every task, while
+workspace agents and workspace skills belong to the invoking checkout. Global documents are shared by
 all projects on this Core host. Honor an explicit scope; use project-local scope
 for project-specific instructions and global scope for reusable configuration.
 
@@ -69,7 +69,7 @@ agent or skill instruction changes take effect on a subsequent turn.
 `;
 
 // Exact fingerprint of the shipped skill before local/workspace scopes were separated.
-const PREVIOUS_CONFIGURATION_SKILL_SHA256 = "22c077677a7c43786df14bc1fd7126b31a3901508aae14b3b7727229c61f5155";
+const PREVIOUS_CONFIGURATION_SKILL_HASHES = new Set(["22c077677a7c43786df14bc1fd7126b31a3901508aae14b3b7727229c61f5155", "497f968c35f9f855f3dcacab9aa0aafd0524567701ef97e2a1c5f88da87a457b"]);
 
 /** Install shipped global defaults on every Core host, preserving user edits. */
 export async function ensureSelfConfiguration(stateDirectory = process.env.REMOTE_IDE_STATE_DIR ?? path.join(os.homedir(), ".remote-ide", "workspaces")): Promise<void> {
@@ -83,7 +83,7 @@ export async function ensureSelfConfiguration(stateDirectory = process.env.REMOT
       if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
       if (content === CONFIGURATION_SKILL) {
         const current = await readFile(target, "utf8");
-        if (crypto.createHash("sha256").update(current).digest("hex") === PREVIOUS_CONFIGURATION_SKILL_SHA256) await writeFile(target, content, "utf8");
+        if (PREVIOUS_CONFIGURATION_SKILL_HASHES.has(crypto.createHash("sha256").update(current).digest("hex"))) await writeFile(target, content, "utf8");
       }
     }
   }

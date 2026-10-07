@@ -133,7 +133,11 @@ description: Review changes for regressions and missing tests.
 Inspect the diff, check behavior at boundaries, and run focused tests.
 ```
 
-Project availability and defaults are stored in `.agents/skills.json`. New policies
+Project availability, defaults and agent assignments are stored outside Git in
+`$REMOTE_IDE_STATE_DIR/skills/local/<root-project-hash>/skills.json`, shared by all tasks.
+Existing `.agents/skills.json` files remain readable until you use **Move settings
+out of Git repo** in the Skills panel or save policy changes. Core saves the settings
+in its state directory before removing the imported checkout file. New policies
 use `scopeVersion: 2`; older checkout skill IDs and selections remain compatible
 with the Workspace scope until a matching project-local skill is created:
 
@@ -148,8 +152,8 @@ with the Workspace scope until a matching project-local skill is created:
 IDs include their scope, so global, local and workspace skills with the same folder name
 remain distinct. Without a policy file, all discovered skills are available and
 none are enabled by default. Once a policy exists, new skills must be explicitly
-allowed. Commit workspace skill folders and the policy to share them with the team
-and task worktrees. Global and local skill contents stay on Core and are not committed;
+allowed. Commit workspace skill folders to share them with the team and task worktrees.
+Policy stays on Core; edits apply to every task of the root project. Global and local skill contents stay on Core and are not committed;
 each Core host needs its own copy of global skills referenced by the policy.
 
 The chatbox's **Skills** checklist and removable chips change the current chat's
@@ -184,7 +188,7 @@ for the currently selected preset. Hidden selections remain stored but their
 instructions are omitted; switching back can make them active again.
 
 Assignments use exact preset scope/file references and persist in the optional
-`agents` map in `.agents/skills.json`. `null` permits a chat without a preset:
+`agents` map in the project-local skill policy. `null` permits a chat without a preset:
 
 ```json
 {
@@ -199,7 +203,7 @@ Assignments use exact preset scope/file references and persist in the optional
 ```
 
 A skill omitted from the `agents` map retains **Any agent** access. Renaming a
-preset does not rewrite committed skill policy; update its assignment to the new
+preset does not rewrite skill policy; update its assignment to the new
 preset name. Core checks these assignments on selection and on every new turn,
 including queued follow-ups.
 
@@ -233,7 +237,7 @@ registry paths:
 | `skills/global/review/SKILL.md` | Shared Core skill instructions, Markdown |
 | `skills/local/testing/SKILL.md` | Core state for the root project, shared across its tasks |
 | `skills/workspace/testing/SKILL.md` | Invoking checkout's `.agents/skills/testing/SKILL.md` |
-| `skills/policy.json` | Invoking checkout's skill availability/defaults/agent assignments |
+| `skills/policy.json` | Core project-local availability/defaults/agent assignments, shared by all tasks |
 | `useful/global/reference.md` | Shared Core useful file, text |
 | `useful/local/notes.md` | Root-project useful file in Core state, text |
 | `workflows/<id>.json` | Root-project workflow definition, JSON |

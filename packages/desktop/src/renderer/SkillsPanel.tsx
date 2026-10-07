@@ -6,6 +6,7 @@ import type { AgentFile, AiAgentPreset, SkillCatalog, SkillPolicy, SkillScope } 
 export type SkillsActions = {
   write(id: string, content: string): Promise<void>;
   delete(id: string): Promise<void>;
+  movePolicyToLocal(): Promise<void>;
   policy(policy: SkillPolicy): Promise<void>;
 };
 const template = "---\nname: New Skill\ndescription: Describe when to use this skill.\n---\n\nDescribe the workflow and instructions here.\n";
@@ -30,6 +31,7 @@ export function SkillsPanel({ agents = [], agentPreset, catalog, selected, runni
   return <>
     <header className="panel-header"><span>Skills</span><button title="Refresh skills" disabled={busy || disabled} onClick={() => void perform(onRefresh)}><RefreshCw size={14} /></button></header>
     <div className="useful-files-list skills-list">
+      {catalog.policyStorage === "workspace" && <div className="skill-settings"><p>Skill settings are stored in the Git checkout.</p><button disabled={busy || disabled} onClick={() => void perform(actions.movePolicyToLocal)}>Move settings out of Git repo</button></div>}
       {error && <div role="alert" className="inline-error">{error}</div>}
       {(["global", "local", "workspace"] as SkillScope[]).map((scope) => <section key={scope} className="useful-section">
         <header><span>{scope === "global" ? "Global" : scope === "local" ? "Local" : "Workspace"}</span><button title={`Create ${scope} skill`} disabled={busy || disabled} onClick={() => setCreation({ id: `${scope}/` })}><Plus size={14} /></button></header>

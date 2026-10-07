@@ -13,7 +13,7 @@ const catalog: SkillCatalog = {
   ],
   policy: { allowed: ["global/review", "local/style"], defaults: ["local/style"] }
 };
-const actions = () => ({ write: vi.fn(async () => undefined), delete: vi.fn(async () => undefined), policy: vi.fn(async () => undefined) });
+const actions = () => ({ movePolicyToLocal: vi.fn(async () => undefined), write: vi.fn(async () => undefined), delete: vi.fn(async () => undefined), policy: vi.fn(async () => undefined) });
 
 describe("skills panel", () => {
   it("separates scopes and updates project defaults independently of chat selections", async () => {
@@ -28,6 +28,13 @@ describe("skills panel", () => {
     await waitFor(() => expect((screen.getByLabelText("Enable Reviewer") as HTMLInputElement).disabled).toBe(false));
     fireEvent.click(screen.getByLabelText("Enable Reviewer"));
     await waitFor(() => expect(onSelection).toHaveBeenCalledWith(["global/review"]));
+  });
+
+  it("offers moving a checkout policy out of the Git repo", async () => {
+    const handlers = actions();
+    render(<SkillsPanel catalog={{ ...catalog, policyStorage: "workspace" }} selected={[]} running={false} onRefresh={vi.fn()} onSelection={vi.fn()} onOpen={vi.fn()} actions={handlers} />);
+    fireEvent.click(screen.getByText("Move settings out of Git repo"));
+    await waitFor(() => expect(handlers.movePolicyToLocal).toHaveBeenCalledOnce());
   });
 
   it("removing project availability also removes the default without changing existing chats", async () => {
