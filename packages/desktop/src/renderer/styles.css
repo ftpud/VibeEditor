@@ -364,6 +364,18 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .harness-status.waiting_timer, .harness-status.retry_scheduled { background: #b99aec; }
 .harness-status.skipped { background: #555960; }
 .harness-canvas-empty { position: absolute; inset: 30% auto auto 50%; transform: translateX(-50%); padding: 9px 12px; display: flex; gap: 6px; border: 1px dashed #555a62; border-radius: 5px; background: #292c31; color: #aeb2b8; }
+.harness-list-editor { min-height: 220px; flex: 1; padding: 10px; overflow: auto; background: #202226; }
+.harness-list-editor ol, .harness-list-editor ul { margin: 0; padding: 0; list-style: none; }
+.harness-list-editor li { display: flex; align-items: center; gap: 7px; padding: 5px; border-bottom: 1px solid #393b40; }
+.harness-list-editor li.selected { background: rgba(87,157,255,.15); }
+.harness-list-editor li > button:first-child { min-width: 0; flex: 1; display: flex; align-items: baseline; justify-content: space-between; gap: 8px; border: 0; background: transparent; color: #d7d9dc; text-align: left; cursor: pointer; }
+.harness-list-editor li > button:first-child:hover, .harness-list-editor li > button:first-child:focus-visible { color: #b9d4ff; outline: none; }
+.harness-list-editor li small { color: #92969d; }
+.harness-list-editor li > button:last-child, .harness-list-connections > div > button { padding: 4px 7px; border: 1px solid #555a62; border-radius: 3px; background: #30343a; color: #d6d8dc; cursor: pointer; }
+.harness-list-connections { margin-top: 12px; padding-top: 10px; border-top: 1px solid #4b4d52; }
+.harness-list-connections > div { margin: 7px 0; display: flex; flex-wrap: wrap; align-items: end; gap: 7px; }
+.harness-list-connections label { display: grid; gap: 3px; color: #969aa1; font-size: .7692rem; }
+.harness-list-connections select { min-width: 100px; padding: 4px; border: 1px solid #4b4d52; border-radius: 3px; background: #2b2d31; color: #d7d9dc; font: inherit; }
 .harness-inspector { max-height: min(420px, 50%); padding: 8px; display: grid; gap: 7px; overflow: auto; border-top: 1px solid #393b40; background: #282a2e; }
 .harness-panel.view .harness-inspector { display: none; }
 .harness-inspector > header { display: flex; align-items: center; justify-content: space-between; }
