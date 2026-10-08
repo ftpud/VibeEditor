@@ -23,6 +23,64 @@ async function setup(blocks: HarnessBlock[], edges: HarnessEdge[], concurrency =
 }
 
 describe("typed workflows", () => {
+  it("returns child messages on a Use timeout and lets the parent monitor the ongoing child", async () => {
+    const { runner, definition, store, finished } = await setup([block("parent", "chatbox"), block("child", "chatbox"), block("unconnected", "chatbox")], [{ ...edge("parent", "child", "use"), timeoutMs: 100 }]);
+    let release!: () => void;
+    const waiting = new Promise<void>((resolve) => { release = resolve; });
+    let parentFinished = false;
+    const dispatch = async (item: HarnessBlock, _input: string, runtime: Parameters<Parameters<HarnessRunner["start"]>[2]>[2]) => {
+      if (item.id === "child") {
+        await runtime.activity(session("Still working"));
+        await waiting;
+        return session("Completed child");
+      }
+      const result = await runner.flowTool(runtime.runId, "parent", "workflow_use_block", { block_id: "child", input: "Do the work" });
+      expect(result).toMatchObject({ status: "timed_out", timeout_seconds: 0.1, block_status: "running", messages: [{ role: "user", text: "Do the work" }, { role: "assistant", text: "Still working" }] });
+      await expect(runner.flowTool(runtime.runId, "parent", "workflow_block_messages", { block_id: "unconnected" })).rejects.toThrow("connected block");
+      await expect(runner.flowTool(runtime.runId, "parent", "workflow_block_messages", { block_id: "child", count: 0 })).rejects.toThrow("message count");
+      expect(await runner.flowTool(runtime.runId, "parent", "workflow_block_messages", { block_id: "child", count: 1 })).toMatchObject({ block_status: "running", messages: [{ text: "Still working" }] });
+      parentFinished = true;
+      return session("Parent can continue");
+    };
+    try {
+      await runner.start(definition.id, "hello", dispatch, "provider", undefined, "parent");
+      await vi.waitFor(() => expect(parentFinished).toBe(true));
+      expect((await store.runs())[0]?.status).not.toBe("succeeded");
+      expect((await store.runs())[0]?.blocks.find((item) => item.blockId === "child")?.status).toBe("running");
+    } finally { release(); }
+    const run = await finished();
+    expect(run.status).toBe("succeeded");
+    expect(run.blocks.find((item) => item.blockId === "child")?.output).toBe("Completed child");
+    expect(run.connectionTraces?.map((trace) => trace.status)).toEqual(["succeeded", "succeeded"]);
+    expect((await store.list()).find((item) => item.id === definition.id)?.edges[0]?.timeoutMs).toBe(100);
+  });
+
+  it("reports a child's failure after its parent has received a timeout", async () => {
+    const { runner, definition, finished } = await setup([block("parent", "chatbox"), block("child", "chatbox")], [{ ...edge("parent", "child", "use"), timeoutMs: 30 }]);
+    let release!: () => void;
+    const waiting = new Promise<void>((resolve) => { release = resolve; });
+    const dispatch = async (item: HarnessBlock, _input: string, runtime: Parameters<Parameters<HarnessRunner["start"]>[2]>[2]) => {
+      if (item.id === "child") { await waiting; throw new Error("Child failed later"); }
+      try {
+        expect(await runner.flowTool(runtime.runId, "parent", "workflow_use_block", { block_id: "child" })).toMatchObject({ status: "timed_out" });
+        return session("Parent finished");
+      } finally { release(); }
+    };
+    await runner.start(definition.id, "hello", dispatch, "provider", undefined, "parent");
+    expect(await finished()).toMatchObject({ status: "failed", error: "Child failed later" });
+  });
+
+  it("accepts Use timeouts longer than 300 seconds and per-call overrides", async () => {
+    const { runner, definition, finished } = await setup([block("parent", "chatbox"), block("child", "text")], [{ ...edge("parent", "child", "use"), timeoutMs: 1 }]);
+    const dispatch = async (_item: HarnessBlock, _input: string, runtime: Parameters<Parameters<HarnessRunner["start"]>[2]>[2]) => {
+      await expect(runner.flowTool(runtime.runId, "parent", "workflow_use_block", { block_id: "child", timeout_seconds: 86401 })).rejects.toThrow("timeout_seconds");
+      expect(await runner.flowTool(runtime.runId, "parent", "workflow_use_block", { block_id: "child", input: "result", timeout_seconds: 1800 })).toMatchObject({ output: "result" });
+      return session("done");
+    };
+    await runner.start(definition.id, "hello", dispatch, "provider", undefined, "parent");
+    expect((await finished()).status).toBe("succeeded");
+  });
+
   it("tests an unsaved draft block without running followers or changing the saved definition", async () => {
     const { runner, definition, store, finished } = await setup([block("script", "script", { command: "saved" }), block("next", "text")], [edge("script", "next")]);
     const draft = { ...definition, blocks: definition.blocks.map((item) => item.id === "script" ? { ...item, command: "unsaved" } : item) };

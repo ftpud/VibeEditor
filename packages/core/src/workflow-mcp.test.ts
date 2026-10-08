@@ -16,7 +16,7 @@ it("advertises typed workflow tools over the real MCP transport", async () => {
   const messages = replies.trim().split("\n").map((line) => JSON.parse(line));
   expect(messages[0].result.capabilities).toEqual({ tools: {} });
   const tools = messages[1].result.tools as Array<{ name: string; inputSchema: { required?: string[] } }>;
-  expect(tools.map((tool) => tool.name)).toEqual(expect.arrayContaining(["workflow_connections", "workflow_use_block", "workflow_choose_path"]));
-  expect(tools.find((tool) => tool.name === "workflow_use_block")?.inputSchema.required).toEqual(["block_id", "input"]);
+  expect(tools.map((tool) => tool.name)).toEqual(expect.arrayContaining(["workflow_connections", "workflow_use_block", "workflow_block_messages", "workflow_choose_path"]));
+  expect(tools.find((tool) => tool.name === "workflow_use_block")?.inputSchema.required).toEqual(["block_id"]);
   expect(tools.map((tool) => tool.name)).not.toContain("workflow_run_stack");
 });

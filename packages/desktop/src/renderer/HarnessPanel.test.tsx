@@ -12,6 +12,20 @@ function renderEditor(ui: Parameters<typeof render>[0]) {
 }
 
 describe("HarnessPanel", () => {
+  it("saves a configurable Use connection timeout in seconds", async () => {
+    const harness: HarnessDefinition = { id: "flow", name: "Flow", version: 1, createdAt: "now", updatedAt: "now", blocks: [
+      { id: "parent", type: "chatbox", label: "Parent", prompt: "", position: { x: 20, y: 20 } },
+      { id: "child", type: "chatbox", label: "Child", prompt: "", position: { x: 260, y: 20 } },
+    ], edges: [{ id: "use", from: "parent", to: "child", type: "use" }] };
+    const onSave = vi.fn(async (value) => value);
+    renderEditor(<HarnessPanel harnesses={[harness]} runs={[]} providers={[]} agents={[]} onCreate={vi.fn()} onSave={onSave} onDelete={vi.fn()} onRun={vi.fn()} onCancelRun={vi.fn()} onError={vi.fn()} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Select connection: Parent then Child" }));
+    expect(screen.getByLabelText("Use timeout (seconds)")).toHaveProperty("placeholder", "300");
+    fireEvent.change(screen.getByLabelText("Use timeout (seconds)"), { target: { value: "1800" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(onSave.mock.calls[0]?.[0].edges[0]).toMatchObject({ type: "use", timeoutMs: 1_800_000 }));
+  });
+
   it("tests an unsaved app draft without an App/Script switch", async () => {
     const harness: HarnessDefinition = { id: "flow", name: "Flow", version: 1, createdAt: "now", updatedAt: "now", blocks: [{ id: "app", type: "run_app", label: "Server", prompt: "", command: "npm run dev", app: { name: "server", actions: ["start"] }, position: { x: 0, y: 0 } }], edges: [] };
     const onTestBlock = vi.fn().mockResolvedValue({ id: "test", harnessId: "flow", status: "queued", blocks: [] });

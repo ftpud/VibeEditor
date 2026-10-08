@@ -609,17 +609,25 @@ export class HarnessRunner {
     const state = execution.run.blocks.find((item) => item.blockId === blockId);
     if (state?.status !== "running" || !["ai", "chatbox"].includes(execution.blocks.find((block) => block.id === blockId)?.type ?? "")) throw new Error("Only an active AI Agent or Chatbox can use flow tools");
     const edges = execution.edges.filter((edge) => edge.from === blockId);
-    if (name === "workflow_connections") return edges.map((edge) => ({ blockId: edge.to, block_id: edge.to, name: execution.blocks.find((block) => block.id === edge.to)?.label, blockType: execution.blocks.find((block) => block.id === edge.to)?.type, description: execution.blocks.find((block) => block.id === edge.to)?.prompt, seconds: execution.blocks.find((block) => block.id === edge.to)?.seconds, app: execution.blocks.find((block) => block.id === edge.to)?.app, type: edge.type ?? "follow", path: edge.label }));
+    if (name === "workflow_connections") return edges.map((edge) => ({ blockId: edge.to, block_id: edge.to, name: execution.blocks.find((block) => block.id === edge.to)?.label, blockType: execution.blocks.find((block) => block.id === edge.to)?.type, description: execution.blocks.find((block) => block.id === edge.to)?.prompt, seconds: execution.blocks.find((block) => block.id === edge.to)?.seconds, app: execution.blocks.find((block) => block.id === edge.to)?.app, timeout_seconds: (edge.timeoutMs ?? 300_000) / 1000, type: edge.type ?? "follow", path: edge.label }));
     if (name === "workflow_choose_path") {
       const edge = edges.find((edge) => edge.type === "path" && edge.label === args.path);
       if (!edge) throw new Error("Choose a connected path by its label");
       state.selectedRoute = edge.label; await this.update(execution.run); return { path: edge.label };
     }
-    if (name !== "workflow_use_block") throw new Error("Unknown flow tool");
+    if (name !== "workflow_use_block" && name !== "workflow_block_messages") throw new Error("Unknown flow tool");
     const edge = edges.find((edge) => (edge.type === "use" || execution.blocks.find((block) => block.id === blockId)?.type === "chatbox") && edge.to === args.block_id);
     const textInput = args.input ?? "";
     if (!edge || typeof textInput !== "string" || textInput.length > 100_000) throw new Error("Use a connected block ID and a text input of at most 100000 characters");
     const target = execution.blocks.find((block) => block.id === edge.to)!;
+    if (name === "workflow_block_messages") {
+      if (!["ai", "chatbox"].includes(target.type)) throw new Error("Messages are only available for connected AI Agents and Chatboxes");
+      const count = args.count ?? 6;
+      if (typeof count !== "number" || !Number.isInteger(count) || count < 1 || count > 50) throw new Error("Use a message count from 1 to 50");
+      return this.flowBlockMessages(execution.run, target.id, count);
+    }
+    const timeoutMs = args.timeout_seconds === undefined ? edge.timeoutMs ?? 300_000 : typeof args.timeout_seconds === "number" ? Math.round(args.timeout_seconds * 1000) : NaN;
+    if (!Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 86_400_000) throw new Error("Use timeout_seconds greater than zero and at most 86400");
     if (target.type === "run_app") {
       const allowed = target.app?.actions ?? (target.app?.action ? [target.app.action] : []);
       if (args.action !== undefined && !allowed.includes(args.action as typeof allowed[number])) throw new Error(`App '${target.label}' does not allow '${String(args.action)}'. Allowed actions for workflow v${execution.run.harnessVersion}: ${allowed.join(", ") || "none"}. If you changed the design, save it and start a new conversation to apply the new allowed actions.`);
@@ -641,13 +649,32 @@ export class HarnessRunner {
         return { blockId: edge.to, output, ...(app ? { app } : {}), ...(target?.type === "timer" ? { status: "waiting", due_at: timer?.waitingUntil } : {}) };
       } catch (error) { transfer.status = "failed"; transfer.completedAt = new Date().toISOString(); await this.update(execution.run); throw error; }
     });
-    if (target.type !== "run_app") return call();
+    const waitForResult = async (result: Promise<unknown>) => {
+      // Keep the real invocation alive after the caller's wait expires. The parent
+      // can inspect progress without sending a duplicate prompt to the child.
+      const pending = result.then(() => {}, () => {}).finally(() => execution.background.delete(pending));
+      execution.background.add(pending);
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        return await Promise.race([result, new Promise<unknown>((resolve) => {
+          timer = setTimeout(() => resolve({ ...this.flowBlockMessages(execution.run, target.id, 6), status: "timed_out", timeout_seconds: timeoutMs / 1000, message: "The block is still running. Call workflow_block_messages to check progress without sending another prompt." }), timeoutMs);
+        })]);
+      } finally { if (timer) clearTimeout(timer); }
+    };
+    if (target.type !== "run_app") return waitForResult(call());
     const key = `${runId}:${target.id}`;
     const pending = this.appToolCalls.get(key) ?? Promise.resolve();
     const result = pending.then(call, call);
     this.appToolCalls.set(key, result);
-    try { return await result; }
-    finally { if (this.appToolCalls.get(key) === result) this.appToolCalls.delete(key); }
+    const cleanup = () => { if (this.appToolCalls.get(key) === result) this.appToolCalls.delete(key); };
+    void result.then(cleanup, cleanup);
+    return waitForResult(result);
+  }
+
+  private flowBlockMessages(run: HarnessRun, blockId: string, count: number): Record<string, unknown> {
+    const state = run.blocks.find((block) => block.blockId === blockId)!;
+    const messages = state.chatMessages ?? (state.output ? [{ role: "assistant", text: state.output }] : []);
+    return { blockId, block_status: state.status, output: state.output ?? "", messages: messages.slice(-count).map((message) => ({ ...message, text: message.text.slice(-8000) })), activity: (state.agentActivity ?? []).slice(-count), ...(state.error ? { error: state.error } : {}) };
   }
 
   private async traceConnection(run: HarnessRun, edge: HarnessEdge, direction: HarnessConnectionTrace["direction"], status: HarnessConnectionTrace["status"]): Promise<HarnessConnectionTrace> {
@@ -681,9 +708,9 @@ export class HarnessRunner {
         const prompt = renderHarnessPrompt(block.prompt, input, execution.outputs);
         if (!["ai", "chatbox"].includes(block.type)) { state.prompt = prompt; state.structuredInput = parseHarnessData(input, block.inputSchema, `${block.label} input`); this.log(state, "prompt", input); }
         if (["ai", "chatbox"].includes(block.type) || ["prompt", "task", "review", "verification"].includes(block.type)) {
-          const tools = edges.filter((edge) => edge.from === id && (edge.type === "use" || block.type === "chatbox")).map((edge) => ({ block_id: edge.to, name: blocks.find((item) => item.id === edge.to)?.label, type: blocks.find((item) => item.id === edge.to)?.type, description: blocks.find((item) => item.id === edge.to)?.prompt, seconds: blocks.find((item) => item.id === edge.to)?.seconds, app: blocks.find((item) => item.id === edge.to)?.app }));
+          const tools = edges.filter((edge) => edge.from === id && (edge.type === "use" || block.type === "chatbox")).map((edge) => ({ block_id: edge.to, name: blocks.find((item) => item.id === edge.to)?.label, type: blocks.find((item) => item.id === edge.to)?.type, description: blocks.find((item) => item.id === edge.to)?.prompt, seconds: blocks.find((item) => item.id === edge.to)?.seconds, app: blocks.find((item) => item.id === edge.to)?.app, timeout_seconds: (edge.timeoutMs ?? 300_000) / 1000 }));
           const paths = block.type === "chatbox" ? [] : edges.filter((edge) => edge.from === id && edge.type === "path").map((edge) => edge.label);
-          const instructions = `${block.prompt}\n\nInput:\n{{input}}\n\nConnected tools: ${JSON.stringify(tools)}. Call workflow_use_block with block_id and input to use one. For Run App blocks, pass action (start, status, kill, or tail) from the configured allowed actions. Status and tail do not need input; tail optionally accepts lines (1–10000). Read the structured app result: app.status is process status and app.output is log text for tail. For example: workflow_use_block({"block_id":"APP_BLOCK_ID","action":"status"}) or workflow_use_block({"block_id":"APP_BLOCK_ID","action":"tail","lines":100}). Timer blocks arm immediately and return without waiting, so you can continue your work. When a Timer fires, its follow connections receive the input you supplied to it. Reusing a waiting Timer replaces its countdown. Each AI block keeps its own context. Available paths: ${JSON.stringify(paths)}. ${paths.length ? "Call workflow_choose_path before finishing to choose one path." : ""}`;
+          const instructions = `${block.prompt}\n\nInput:\n{{input}}\n\nConnected tools: ${JSON.stringify(tools)}. Call workflow_use_block with block_id and input to use one; timeout_seconds optionally overrides its connection timeout. On a timed_out result the child keeps working. Read the returned messages and activity, then call workflow_block_messages with block_id and optional count (default 6, maximum 50) to check progress without starting another turn. For Run App blocks, pass action (start, status, kill, or tail) from the configured allowed actions. Status and tail do not need input; tail optionally accepts lines (1–10000). Read the structured app result: app.status is process status and app.output is log text for tail. For example: workflow_use_block({"block_id":"APP_BLOCK_ID","action":"status"}) or workflow_use_block({"block_id":"APP_BLOCK_ID","action":"tail","lines":100}). Timer blocks arm immediately and return without waiting, so you can continue your work. When a Timer fires, its follow connections receive the input you supplied to it. Reusing a waiting Timer replaces its countdown. Each AI block keeps its own context. Available paths: ${JSON.stringify(paths)}. ${paths.length ? "Call workflow_choose_path before finishing to choose one path." : ""}`;
           await this.executeBlock(run, { ...block, prompt: instructions }, blocks, [], execution.outputs, execution.dispatch, execution.defaultProvider, [input]);
           output = state.output ?? "";
           if (block.type !== "chatbox" && paths.length && !state.selectedRoute) throw new Error(`${block.label} finished without choosing a path`);
@@ -736,7 +763,8 @@ export class HarnessRunner {
     const roots = startBlockId ? [startBlockId] : blocks.filter((block) => !edges.some((edge) => edge.to === block.id)).map((block) => block.id);
     if (!roots.length && blocks.length) roots.push(blocks[0]!.id);
     for (const id of roots) await invoke(id, run.input);
-    while (timers.size) {
+    while (timers.size || execution.background.size) {
+      if (!timers.size) { await Promise.allSettled([...execution.background]); continue; }
       this.assertActive(run.id);
       const due = [...timers].find(([id]) => Date.now() >= Date.parse(run.blocks.find((state) => state.blockId === id)!.waitingUntil!));
       if (!due) { await new Promise((resolve) => setTimeout(resolve, 100)); continue; }
@@ -749,6 +777,9 @@ export class HarnessRunner {
       this.log(state, "response", input); this.log(state, "lifecycle", "Timer fired; starting followers"); run.status = this.runActivityStatus(run); await this.update(run);
       for (const edge of edges.filter((edge) => edge.from === id && (edge.type === "follow" || !edge.type))) { await this.traceConnection(run, edge, "forward", "succeeded"); await invoke(edge.to, input); }
     }
+    this.assertActive(run.id);
+    const failed = run.blocks.find((state) => state.status === "failed");
+    if (failed) throw new Error(failed.error ?? "A connected workflow block failed");
     for (const state of run.blocks) if (state.status === "queued") state.status = "skipped";
   }
 
@@ -1114,9 +1145,13 @@ class ExecutionScheduler {
     this.release();
     try { return await work(); }
     finally {
-      await this.acquire();
-      owner.permit = true;
-      this.assertActive();
+      // A timed-out caller may have finished its turn while the child continued.
+      if (this.owners.get(blockId) === owner) {
+        await this.acquire();
+        if (this.owners.get(blockId) === owner) owner.permit = true;
+        else this.release();
+        this.assertActive();
+      }
     }
   }
 

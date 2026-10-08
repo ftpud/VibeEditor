@@ -45,6 +45,7 @@ export function validateHarness(harness: HarnessDefinition): { valid: boolean; i
   if (watchdogs.length && watchdogs.length === harness.blocks.length) for (const block of watchdogs) issues.push({ code: "invalid-watchdog", blockId: block.id, message: "A Core watchdog needs at least one delivery block to supervise" });
   const edgeIds = new Set<string>(); const edgeKeys = new Set<string>(); const outgoing = new Map<string, string[]>(); const indegree = new Map(harness.blocks.map((block) => [block.id, 0]));
   for (const edge of harnessExecutionEdges(harness)) {
+    if (edge.timeoutMs !== undefined && (!Number.isInteger(edge.timeoutMs) || edge.timeoutMs < 1 || edge.timeoutMs > 86_400_000 || (edge.type !== "use" && harness.blocks.find((block) => block.id === edge.from)?.type !== "chatbox"))) issues.push({ code: "invalid-gate", edgeId: edge.id, message: "Use connection timeout must be between 1 millisecond and 24 hours" });
     if (edgeIds.has(edge.id)) issues.push({ code: "duplicate-edge-id", edgeId: edge.id, message: `Connection ID '${edge.id}' is duplicated` }); edgeIds.add(edge.id);
     if (!ids.has(edge.from) || !ids.has(edge.to)) { issues.push({ code: "missing-endpoint", edgeId: edge.id, message: "Connection refers to a block that no longer exists" }); continue; }
     if (harness.blocks.find((block) => block.id === edge.from)?.watchdog || harness.blocks.find((block) => block.id === edge.to)?.watchdog) issues.push({ code: "invalid-watchdog", edgeId: edge.id, message: "A Core watchdog runs independently and cannot have workflow connections" });

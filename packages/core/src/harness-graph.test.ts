@@ -8,6 +8,15 @@ const harness = (edges: HarnessDefinition["edges"]): HarnessDefinition => ({ id:
 ], edges });
 
 describe("harness graph", () => {
+  it("validates timeouts for Use connections and Chatbox tool connections", () => {
+    const definition: HarnessDefinition = { ...harness([]), blocks: [{ id: "chat", type: "chatbox", label: "Chat", prompt: "", position: { x: 0, y: 0 } }, ...harness([]).blocks], edges: [] };
+    const validate = (timeoutMs: number, from = "chat", type: "use" | "follow" = "use") => validateHarness({ ...definition, edges: [{ id: "use", from, to: "build", type, timeoutMs }] });
+    expect(validate(1_800_000).valid).toBe(true);
+    expect(validate(86_400_000, "chat", "follow").valid).toBe(true);
+    for (const timeoutMs of [0, -1, 1.5, NaN, 86_400_001]) expect(validate(timeoutMs).valid).toBe(false);
+    expect(validate(1000, "plan", "follow").valid).toBe(false);
+  });
+
   it("allows Chatboxes with optional instructions and connected use/path blocks", () => {
     const definition: HarnessDefinition = { ...harness([]), blocks: [{ id: "chat", type: "chatbox", label: "Chat", prompt: "", position: { x: 0, y: 0 } }, ...harness([]).blocks], edges: [{ id: "use", from: "chat", to: "plan", type: "use" }, { id: "path", from: "chat", to: "build", type: "path", label: "build" }] };
     expect(validateHarness(definition).valid).toBe(true);
