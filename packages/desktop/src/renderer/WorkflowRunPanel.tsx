@@ -1,7 +1,7 @@
-import { useId, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { ArrowLeftRight, ArrowUpDown, Play, Square, Workflow, RotateCcw, ChevronDown, ChevronUp, Maximize2, Minimize2 } from "lucide-react";
 import type { HarnessBlock, HarnessDefinition, HarnessRun } from "@remote-ide/protocol";
-import { BlockRunDetails, PauseResolution, WorkflowMessage, type HarnessPanelProps } from "./HarnessPanel";
+import { BlockRunDetails, PauseResolution, WorkflowMessage, WorkflowAgentOverview, type HarnessPanelProps } from "./HarnessPanel";
 import { useWorkflowTraces } from "./workflow-tracing";
 
 type Props = Pick<HarnessPanelProps, "harnesses" | "runs" | "diagnostics" | "onRun" | "onChat" | "onValidate" | "onCancelRun" | "onKillApp" | "onReadApp" | "onResolvePermission" | "onAnswerQuestion" | "onResumePause" | "onRetryPause" | "onCancelPause" | "onError">;
@@ -42,6 +42,9 @@ function WorkflowCard({ workflow, expanded, hidden, onToggleExpanded, ...props }
   const starts = workflow.blocks.filter((block) => block.type === "start_button" || block.type === "start_input");
   const activeRuns = runs.filter((item) => activeStatuses.has(item.status));
   const completed = run?.blocks.filter((block) => block.status === "succeeded").length ?? 0;
+  const requests = run?.blocks.filter((block) => ["awaiting_user_input", "awaiting_permission"].includes(block.status)) ?? [];
+  const requestKey = requests.map((block) => `${run?.id}:${block.blockId}:${block.pauseId}`).join(",");
+  useEffect(() => { if (requestKey) setCollapsed(false); }, [requestKey]);
   const act = async (action: () => Promise<unknown>) => {
     setError("");
     try { await action(); } catch (cause) { const message = cause instanceof Error ? cause.message : "Workflow operation failed"; setError(message); props.onError(message); }
@@ -76,11 +79,13 @@ function WorkflowCard({ workflow, expanded, hidden, onToggleExpanded, ...props }
       <button type="button" aria-label={`${collapsed ? "Show" : "Collapse"} ${workflow.name}`} title={collapsed ? "Show workflow content" : "Collapse workflow"} aria-expanded={!collapsed} aria-controls={bodyId} onClick={() => { setCollapsed((current) => !current); if (expanded) onToggleExpanded(); }}>{collapsed ? <ChevronDown size={15} aria-hidden="true" /> : <ChevronUp size={15} aria-hidden="true" />}</button>
       <button type="button" aria-label={`${expanded ? "Restore" : "Expand"} ${workflow.name}`} title={expanded ? "Restore item size" : "Expand to panel"} aria-pressed={expanded} onClick={() => { setCollapsed(false); onToggleExpanded(); }}>{expanded ? <Minimize2 size={15} aria-hidden="true" /> : <Maximize2 size={15} aria-hidden="true" />}</button>
     </div></header>
+    {!!requests.length && <span className="workflow-request-alert" role="status">{requests.length} request{requests.length === 1 ? "" : "s"} need your input</span>}
     <div id={bodyId} className="workflow-card-body" hidden={collapsed}>
     {run ? <>
       <div className="workflow-run-meta"><select aria-label={`Run for ${workflow.name}`} value={run.id} onChange={(event) => { setSelectedRunId(event.target.value); setSelectedBlockId(undefined); }}>{runs.map((item) => <option key={item.id} value={item.id}>{statusLabel(item.status)} · {new Date(item.createdAt).toLocaleString()}</option>)}</select><span>{completed}/{definition.blocks.length} complete</span></div>
       <details className="workflow-run-input"><summary>Run prompt</summary><WorkflowMessage key={run.id} title="Prompt" value={run.input} /></details>
       <CompactWorkflowPreview definition={definition} run={run} selectedBlockId={selectedBlockId} onSelect={setSelectedBlockId} />
+      <WorkflowAgentOverview definition={definition} run={run} selectedBlockId={selectedBlockId} onSelect={setSelectedBlockId} />
       <div className="workflow-card-actions"><button aria-expanded={showStarts} onClick={() => setShowStarts((value) => !value)}><Play size={13} /> New run</button>{!activeStatuses.has(run.status) && run.definition && <button disabled={starting} onClick={() => void start(undefined, run)}><RotateCcw size={13} /> Rerun</button>}{activeRuns.map((active) => <button key={active.id} aria-label={`Stop run ${active.id}`} onClick={() => void act(() => props.onCancelRun(active.id))}><Square size={12} /> Stop{activeRuns.length > 1 ? ` · ${active.id.slice(0, 6)}` : ""}</button>)}</div>
 
       {run.blocks.filter((block) => pauseStatuses.has(block.status)).map((block) => <PauseResolution key={`${run.id}:${block.blockId}:${block.pauseId}`} {...props} run={run} block={block} label={definition.blocks.find((item) => item.id === block.blockId)?.label ?? block.blockId} yesNo={definition.blocks.find((item) => item.id === block.blockId)?.type === "yes_no_prompt"} />)}

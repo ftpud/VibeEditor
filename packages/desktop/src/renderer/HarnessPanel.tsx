@@ -689,26 +689,49 @@ function WorkflowAppOutput({ onRead, refresh }: { onRead(): Promise<HarnessAppSt
   return <section className="harness-app-output" aria-label="App output"><header><strong>App output</strong><span>{app ? app.status === "not_found" ? "Not started" : app.status === "exited" ? `Exited${app.exitCode != null ? ` · ${app.exitCode}` : app.signal ? ` · ${app.signal}` : ""}` : app.status === "running" ? "Running" : "Starting" : "Loading…"}</span></header>{error && <p role="alert">{error}</p>}<pre ref={outputRef} tabIndex={0} aria-label="App stdout and stderr" onScroll={() => { const element = outputRef.current; if (element) followOutput.current = element.scrollHeight - element.scrollTop - element.clientHeight < 30; }}>{app?.output || (app?.status === "not_found" ? "Start the app to see its output." : "Waiting for output…")}</pre></section>;
 }
 
+export function WorkflowAgentOverview({ definition, run, selectedBlockId, onSelect }: { definition: HarnessDefinition; run: HarnessRun; selectedBlockId?: string; onSelect(id: string): void }) {
+  const agents = definition.blocks.filter((block) => ["ai", "chatbox"].includes(block.type));
+  if (!agents.length) return null;
+  return <section className="workflow-agent-overview" aria-label="Workflow agent overview"><strong>Agents</strong><div>{agents.map((block) => {
+    const state = run.blocks.find((item) => item.blockId === block.id);
+    const started = !!state?.startedAt || !!state?.chatMessages?.length;
+    const status = state?.status ?? "idle";
+    const label = status === "queued" && !started ? "Not started" : status.replaceAll("_", " ");
+    const reply = state?.chatMessages?.filter((item) => item.role === "assistant").at(-1)?.text || state?.output;
+    const sent = run.operations?.filter((item) => {
+      const input = item.input as { name?: string; args?: { block_id?: string; action?: string; input?: string } } | undefined;
+      return item.kind === "tool_command" && input?.name === "workflow_use_block" && input.args?.block_id === block.id && [undefined, "start", "push"].includes(input.args.action) && typeof input.args.input === "string";
+    }).at(-1)?.input as { args?: { input?: string } } | undefined;
+    const prompt = sent?.args?.input || state?.chatMessages?.filter((item) => item.role === "user").at(-1)?.text;
+    const pending = run.operations?.filter((item) => item.blockId === block.id && item.kind === "tool_command" && item.status === "intent").at(-1);
+    const input = pending?.input as { name?: string; args?: { block_id?: string; action?: string } } | undefined;
+    const target = definition.blocks.find((item) => item.id === input?.args?.block_id);
+    const activity = state?.error || (state && started ? waitingStatus(block, state) : undefined) || (pending ? `Using ${target?.label ?? input?.name ?? "tool"}${input?.args?.action ? ` · ${input.args.action}` : ""}` : state?.agentActivity?.at(-1)?.text.split("\n")[0]) || (status === "running" ? "Agent working…" : undefined);
+    return <article key={block.id} className={`workflow-agent-card ${status}${selectedBlockId === block.id ? " selected" : ""}`} aria-label={`${block.label} overview`}><button type="button" aria-label={`Open ${block.label} details`} aria-pressed={selectedBlockId === block.id} onClick={() => onSelect(block.id)}><span className={`harness-status ${status}`} aria-hidden="true" /><strong>{block.label}</strong><small>{label}</small></button>{activity && <p className="workflow-agent-current" title={activity}>{activity}</p>}{prompt && <details className="workflow-agent-prompt"><summary>Prompt</summary><pre aria-label={`${block.label} latest prompt`}>{prompt}</pre></details>}{reply ? <pre className="workflow-agent-reply" aria-label={`${block.label} latest response`}>{reply.slice(-4000)}</pre> : started && <p className="workflow-agent-empty">{status === "queued" ? "Waiting to start…" : status === "running" ? "Waiting for response…" : "No response yet"}</p>}</article>;
+  })}</div></section>;
+}
+
 function WorkflowChatbox({ block, run, state, onClose, onSend, onStop, definition }: { block: HarnessBlock; run?: HarnessRun; state?: HarnessRun["blocks"][number]; onClose(): void; onSend?(input: string): Promise<void>; onStop?(): Promise<void>; definition?: HarnessDefinition }) {
   const [message, setMessage] = useState("");
   const [sending, setSending] = useState(false);
   const [error, setError] = useState("");
   const transcript = useRef<HTMLDivElement>(null);
   const followMessages = useRef(true);
-  const messages = state?.chatMessages ?? [];
-  const busy = sending || !!run && activeRunStatuses.has(run.status);
+  const messages = state?.chatMessages?.length ? state.chatMessages : state?.output ? [{ id: "output", role: "assistant" as const, text: state.output, timestamp: state.completedAt ?? state.startedAt ?? run?.createdAt ?? "" }] : [];
+  const busy = sending || !!state && activeBlockStatuses.has(state.status) && (state.status !== "queued" || !!state.startedAt);
+  const locked = sending || !!run && activeRunStatuses.has(run.status);
   const graph = run?.definition ?? definition;
-  const connected = (graph?.edges ?? []).filter((edge) => edge.from === block.id).map((edge) => graph?.blocks.find((item) => item.id === edge.to)?.label).filter(Boolean);
+  const connected = [...new Set((graph?.edges ?? []).filter((edge) => edge.from === block.id).map((edge) => edge.to))].map((id) => ({ block: graph?.blocks.find((item) => item.id === id), state: run?.blocks.find((item) => item.blockId === id) })).filter((item) => item.block);
   useLayoutEffect(() => { if (followMessages.current && transcript.current) transcript.current.scrollTop = transcript.current.scrollHeight; }, [messages.length, messages.at(-1)?.text, busy]);
   const send = async () => {
-    if (!onSend || busy || !message.trim()) return;
+    if (!onSend || locked || !message.trim()) return;
     const input = message;
     setSending(true); setError(""); followMessages.current = true;
     try { await onSend(input); setMessage(""); } catch (reason) { setError(reason instanceof Error ? reason.message : "Could not send message"); } finally { setSending(false); }
   };
   return <section className="harness-run-details workflow-chatbox" aria-label={`${block.label} run details`}>
-    <header><div><span className="harness-detail-icon"><MessageSquare size={16} aria-hidden="true" /></span><div className="harness-detail-title"><strong>{block.label}</strong><small>Chatbox · {busy ? "Working" : "Ready"}</small></div></div><button title="Close run details" aria-label="Close run details" onClick={onClose}><X size={16} /></button></header>
-    {!!connected.length && <div className="workflow-chat-tools" aria-label="Connected chat tools"><span>Connected</span>{connected.map((label, index) => <span className="workflow-chat-tool" key={`${label}:${index}`}>{label}</span>)}</div>}
+    <header><div><span className="harness-detail-icon"><MessageSquare size={16} aria-hidden="true" /></span><span className={`harness-status ${sending ? "running" : state?.status ?? "idle"}`} aria-hidden="true" /><div className="harness-detail-title"><strong>{block.label}</strong><small>Chatbox · {sending ? "Working" : state?.startedAt ? state.status.replaceAll("_", " ") : "Ready"}</small></div></div><button title="Close run details" aria-label="Close run details" onClick={onClose}><X size={16} /></button></header>
+    {!!connected.length && <div className="workflow-chat-tools" aria-label="Connected chat tools"><span>Connected</span>{connected.map((item) => <span className="workflow-chat-tool" key={item.block!.id}><span className={`harness-status ${item.state?.status ?? "idle"}`} aria-hidden="true" />{item.block!.label}{item.state?.startedAt && <small>{item.state.status.replaceAll("_", " ")}</small>}</span>)}</div>}
     <div className="workflow-chat-messages" ref={transcript} role="log" aria-label={`${block.label} conversation`} aria-live="off" onScroll={() => { const element = transcript.current; if (element) followMessages.current = element.scrollHeight - element.scrollTop - element.clientHeight < 60; }}>
       {!messages.length && <div className="workflow-chat-empty"><MessageSquare size={28} aria-hidden="true" /><strong>Start a conversation</strong><p>Ask a question or put the connected blocks to work.</p></div>}
       {messages.map((item) => <article key={item.id} className={`workflow-chat-message ${item.role}`}><strong>{item.role === "user" ? "You" : block.label}</strong>{item.text ? item.role === "assistant" ? <WorkflowMarkdown>{item.text}</WorkflowMarkdown> : <p>{item.text}</p> : <span className="workflow-chat-thinking">{busy ? "Thinking…" : "No response"}</span>}</article>)}
@@ -717,7 +740,7 @@ function WorkflowChatbox({ block, run, state, onClose, onSend, onStop, definitio
     <WorkflowChatActivity block={block} run={run} state={state} busy={busy} />
     <form className="workflow-chat-composer" onSubmit={(event) => { event.preventDefault(); void send(); }}>
       <textarea aria-label={`Message ${block.label}`} placeholder="Message this Chatbox…" rows={3} value={message} disabled={!onSend} onChange={(event) => setMessage(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void send(); } }} />
-      <div><span role="status">{busy ? "Working with your workflow…" : "Enter to send · Shift+Enter for a new line"}</span>{busy && onStop ? <button type="button" aria-label="Stop chat response" onClick={() => { setError(""); void onStop().catch((reason) => setError(reason instanceof Error ? reason.message : "Could not stop response")); }}><Square size={13} aria-hidden="true" /> Stop</button> : <button type="submit" aria-label="Send chat message" disabled={!onSend || busy || !message.trim()}><Send size={14} aria-hidden="true" /> Send</button>}</div>
+      <div><span role="status">{busy ? "Working with your workflow…" : locked ? "Other workflow blocks are active" : "Enter to send · Shift+Enter for a new line"}</span>{busy && onStop ? <button type="button" aria-label="Stop chat response" onClick={() => { setError(""); void onStop().catch((reason) => setError(reason instanceof Error ? reason.message : "Could not stop response")); }}><Square size={13} aria-hidden="true" /> Stop</button> : <button type="submit" aria-label="Send chat message" disabled={!onSend || locked || !message.trim()}><Send size={14} aria-hidden="true" /> Send</button>}</div>
       {error && <p className="workflow-chat-error" role="alert">{error}</p>}
     </form>
   </section>;
@@ -822,6 +845,7 @@ function LogEntry({ entry }: { entry: HarnessLogEntry }) {
 const BLOCK_WIDTH = 176;
 const BLOCK_HEIGHT = 116;
 const activeRunStatuses = new Set<HarnessRun["status"]>(["queued", "running", "waiting", "awaiting_permission", "awaiting_user_input", "waiting_timer", "retry_scheduled"]);
+const activeBlockStatuses = new Set<HarnessRun["blocks"][number]["status"]>(activeRunStatuses);
 
 function availabilityIssues(draft: HarnessDefinition | undefined, providers: AiProviderDescriptor[], agents: AgentFile[], defaultProvider: AiProvider | undefined, modelsByProvider: Record<string, AiModel[]>): HarnessValidationIssue[] {
   if (!draft) return [];

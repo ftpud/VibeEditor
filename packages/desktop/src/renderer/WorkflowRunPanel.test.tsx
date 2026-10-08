@@ -14,6 +14,58 @@ const run: HarnessRun = { id: "run", harnessId: workflow.id, harnessVersion: 1, 
 const props = () => ({ harnesses: [workflow], runs: [], onRun: vi.fn().mockResolvedValue(run), onCancelRun: vi.fn().mockResolvedValue(undefined), onError: vi.fn() });
 
 describe("Workflow run library", () => {
+  it("shows separate downstream prompts, live replies and per-block activity", () => {
+    const timestamp = "2026-10-08T12:00:00Z";
+    const definition: HarnessDefinition = { ...workflow, blocks: [
+      { id: "parent", type: "chatbox", label: "Coordinator", prompt: "", position: { x: 0, y: 0 } },
+      { id: "first", type: "chatbox", label: "Builder", prompt: "", position: { x: 200, y: 0 } },
+      { id: "second", type: "chatbox", label: "Reviewer", prompt: "", position: { x: 200, y: 100 } },
+    ], edges: [{ id: "one", from: "parent", to: "first", type: "use" }, { id: "two", from: "parent", to: "second", type: "use" }] };
+    const active: HarnessRun = { ...run, definition, blocks: [
+      { blockId: "parent", status: "succeeded", startedAt: timestamp, output: "Assigned work" },
+      { blockId: "first", status: "running", startedAt: timestamp, output: "Building the first part", agentActivity: [{ id: "tool", timestamp, text: "Running tests" }], chatMessages: [{ id: "input", role: "user", text: "Implement the feature", timestamp }, { id: "reply", role: "assistant", text: "Building the first part", timestamp }] },
+      { blockId: "second", status: "queued", startedAt: timestamp, chatMessages: [{ id: "review-input", role: "user", text: "Review the changes", timestamp }] },
+    ] };
+    const view = render(<WorkflowRunPanel {...props()} harnesses={[definition]} runs={[active]} />);
+    fireEvent.click(screen.getByRole("button", { name: "Show Workspace check" }));
+    const builder = screen.getByLabelText("Builder overview");
+    expect(builder.querySelector(".harness-status.running")).toBeTruthy();
+    expect(within(builder).getByText("Running tests")).toBeTruthy();
+    expect(within(builder).getByLabelText("Builder latest response").textContent).toBe("Building the first part");
+    fireEvent.click(within(builder).getByText("Prompt"));
+    expect(within(builder).getByLabelText("Builder latest prompt").textContent).toBe("Implement the feature");
+    expect(within(screen.getByLabelText("Reviewer overview")).getByText("queued")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Open Coordinator details" }));
+    const coordinator = screen.getByLabelText("Coordinator run details");
+    expect(within(coordinator).getByText("Chatbox · succeeded")).toBeTruthy();
+    expect(within(coordinator).queryByText("Thinking…")).toBeNull();
+    expect(within(coordinator).getByLabelText("Connected chat tools").querySelector(".harness-status.running")).toBeTruthy();
+    view.rerender(<WorkflowRunPanel {...props()} harnesses={[definition]} runs={[{ ...active, blocks: active.blocks.map((state) => state.blockId === "first" ? { ...state, output: "Finished", status: "succeeded", chatMessages: state.chatMessages!.map((message) => message.role === "assistant" ? { ...message, text: "Finished" } : message) } : state) }]} />);
+    expect(screen.getByLabelText("Builder latest response").textContent).toBe("Finished");
+    expect(screen.getByLabelText("Builder overview").querySelector(".harness-status.running")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Open Builder details" }));
+    expect(within(screen.getByLabelText("Builder conversation")).getByText("Finished")).toBeTruthy();
+  });
+
+  it.each(["user_prompt", "yes_no_prompt"] as const)("reveals a downstream %s and routes the answer to its own block", async (type) => {
+    const definition: HarnessDefinition = { ...workflow, blocks: [
+      { id: "child", type: "chatbox", label: "Worker", prompt: "", position: { x: 0, y: 0 } },
+      { id: "question", type, label: "Worker question", prompt: "Continue?", position: { x: 200, y: 0 } },
+    ], edges: [{ id: "ask", from: "child", to: "question", type: "use" }] };
+    const paused: HarnessRun = { ...run, definition, status: "awaiting_user_input", blocks: [{ blockId: "child", status: "running" }, { blockId: "question", status: "awaiting_user_input", sessionId: "flow:question", pauseId: "pause", question: "Should I continue the downstream work?" }] };
+    const onAnswerQuestion = vi.fn().mockResolvedValue(undefined);
+    render(<WorkflowRunPanel {...props()} harnesses={[definition]} runs={[paused]} onAnswerQuestion={onAnswerQuestion} />);
+    expect(screen.getByRole("button", { name: "Collapse Workspace check" })).toBeTruthy();
+    const request = screen.getByLabelText("Worker question question");
+    expect(within(request).getByText("Should I continue the downstream work?")).toBeTruthy();
+    if (type === "yes_no_prompt") fireEvent.click(within(request).getByRole("button", { name: "Yes" }));
+    else {
+      fireEvent.change(within(request).getByLabelText("Answer Worker question"), { target: { value: "yes" } });
+      fireEvent.click(within(request).getByRole("button", { name: "Answer and resume" }));
+    }
+    await waitFor(() => expect(onAnswerQuestion).toHaveBeenCalledWith("run", "question", "flow:question", "pause", "yes"));
+  });
+
   it("fits each axis and kills an app from a completed run", async () => {
     const appWorkflow: HarnessDefinition = { ...workflow, blocks: [{ id: "app", type: "run_app", label: "Server", prompt: "", command: "npm run dev", app: { name: "server", actions: ["start"] }, position: { x: 0, y: 0 } }] };
     const appRun: HarnessRun = { ...run, status: "succeeded", definition: appWorkflow, blocks: [{ blockId: "app", status: "succeeded" }] };
