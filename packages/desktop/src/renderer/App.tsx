@@ -580,8 +580,6 @@ export function App() {
     if (client.getRoot() === rootId) { setHarnesses(result.harnesses); setHarnessDiagnostics(result.diagnostics); }
   }, []);
   const refreshHarnessRuns = useCallback(async (client = clientRef.current) => { if (!client) return; const rootId = client.getRoot(); const runs = (await client.request("harnesses.runs", {})).runs; if (client.getRoot() === rootId) setHarnessRuns(runs); }, []);
-  const streamedHarnessRefresh = useRef<CoalescedAsyncAction>();
-  streamedHarnessRefresh.current ??= new CoalescedAsyncAction(async () => { await refreshHarnessRuns(clientRef.current); });
   const createHarness = useCallback(async (name: string, template?: "five-minute-check-in" | "git-review-commit") => {
     const result = await clientRef.current!.request("harnesses.create", { name, template }); setHarnesses((current) => [result.harness, ...current]); return result.harness;
   }, []);
@@ -752,7 +750,7 @@ export function App() {
         updateGroup((tabs) => ({ tabs: [...tabs.filter((tab) => tab.id !== id), { id, type: "workflowDocument", rootId, title, path: title, content, savedContent: content, dirty: false, loading: false, markdownMode: "preview" }], activeTabId: id }));
         return;
       }
-      if (event.type === "harness.changed") { streamedHarnessRefresh.current!.trigger(); return; }
+      if (event.type === "harness.changed") { void refreshHarnessRuns(client); return; }
       if (event.type === "tasks.changed") {
         void Promise.all([refreshTasks(client), refreshAiStatuses(client)]).catch(() => undefined);
         return;

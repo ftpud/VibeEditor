@@ -777,7 +777,7 @@ export class HarnessRunner {
       const block = blocks.find((item) => item.id === id)!;
       const state = run.blocks.find((item) => item.blockId === id)!;
       if (this.stoppedBlocks.has(`${run.id}:${id}`)) return state.output ?? "";
-      busy.add(id); if (["ai", "chatbox"].includes(block.type)) state.output = undefined; state.error = undefined; state.status = this.flowBlockTasks.has(`${run.id}:${id}`) ? "queued" : "running"; state.startedAt = new Date().toISOString(); state.completedAt = undefined; state.selectedRoute = undefined;
+      busy.add(id); if (["ai", "chatbox"].includes(block.type)) state.output = undefined; state.error = undefined; state.status = "running"; state.startedAt = new Date().toISOString(); state.completedAt = undefined; state.selectedRoute = undefined;
       if (block.type === "chatbox") {
         const timestamp = new Date().toISOString();
         state.agentActivity = [];
@@ -910,9 +910,7 @@ export class HarnessRunner {
           const execution = this.executions.get(run.id);
           this.assertBlockActive(run.id, block.id);
           if (!execution) throw new Error("Workflow execution is no longer active");
-          const settled = await execution.scheduler.turn(block.id, async () => {
-            this.assertBlockActive(run.id, block.id);
-            if (state.status === "queued") { state.status = "running"; run.status = this.runActivityStatus(run); await this.update(run); }
+          const settled = await execution.scheduler.turn(block.id, () => {
             execution.turnClaims.set(block.id, attemptId);
             return state.workspace && block.type !== "review"
               ? execution.append(block, prompt, { runId: run.id, blockId: block.id, workspace: state.workspace!, activity })

@@ -265,16 +265,11 @@ describe("typed workflows", () => {
   });
 
   it("can stop a queued child without starting or cancelling its parent", async () => {
-    const { runner, definition, store, finished } = await setup([block("parent", "chatbox", { prompt: "" }), block("child", "chatbox", { prompt: "" })], [edge("parent", "child", "use")], 1);
+    const { runner, definition, finished } = await setup([block("parent", "chatbox", { prompt: "" }), block("child", "chatbox", { prompt: "" })], [edge("parent", "child", "use")], 1);
     const kill = vi.fn();
     await runner.start(definition.id, "Start", async (target, _prompt, runtime) => {
       expect(target.id).toBe("parent");
       await runner.flowTool(runtime.runId, "parent", "workflow_use_block", { block_id: "child", action: "start", input: "Work" });
-      await vi.waitFor(async () => {
-        const child = (await store.runs())[0]!.blocks.find((item) => item.blockId === "child");
-        expect(child?.chatMessages?.at(-2)?.text).toBe("Work");
-        expect(child?.status).toBe("queued");
-      });
       await runner.flowTool(runtime.runId, "parent", "workflow_use_block", { block_id: "child", action: "kill" }, { push: vi.fn(), kill });
       return session("Parent done");
     }, "provider", undefined, "parent");
