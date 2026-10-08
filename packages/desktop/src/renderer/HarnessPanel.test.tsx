@@ -32,15 +32,18 @@ describe("HarnessPanel", () => {
     fireEvent.change(screen.getByLabelText("Run App name"), { target: { value: "dev-server" } });
     fireEvent.change(screen.getByLabelText("Run App script"), { target: { value: "npm run dev" } });
     expect(screen.queryByLabelText("AI model")).toBeNull();
-    fireEvent.change(screen.getByLabelText("Run App action"), { target: { value: "status" } });
+    fireEvent.click(screen.getByRole("checkbox", { name: "Run App allow start" }));
     expect(screen.queryByLabelText("Run App script")).toBeNull();
-    fireEvent.change(screen.getByLabelText("Run App action"), { target: { value: "kill" } });
+    fireEvent.click(screen.getByRole("checkbox", { name: "Run App allow status" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "Run App allow kill" }));
     expect(screen.queryByLabelText("Run App tail lines")).toBeNull();
-    fireEvent.change(screen.getByLabelText("Run App action"), { target: { value: "tail" } });
+    fireEvent.click(screen.getByRole("checkbox", { name: "Run App allow tail" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "Run App allow start" }));
+    expect(screen.getByLabelText("Run App script")).toHaveProperty("value", "npm run dev");
     fireEvent.change(screen.getByLabelText("Run App tail lines"), { target: { value: "25" } });
     fireEvent.click(screen.getByTitle("Save workflow"));
     await waitFor(() => expect(onSave).toHaveBeenCalled());
-    expect(onSave.mock.calls[0]?.[0].blocks[0]).toMatchObject({ type: "run_app", command: "npm run dev", app: { name: "dev-server", action: "tail", lines: 25 } });
+    expect(onSave.mock.calls[0]?.[0].blocks[0]).toMatchObject({ type: "run_app", command: "npm run dev", app: { name: "dev-server", actions: ["status", "kill", "tail", "start"], lines: 25 } });
   });
 
   it("retries a selected failed block from its frozen snapshot", async () => {

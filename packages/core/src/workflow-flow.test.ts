@@ -93,6 +93,30 @@ describe("typed workflows", () => {
     } finally { apps.closeAll(); }
   });
 
+  it("lets an agent choose different actions on one persisted Run App block", async () => {
+    const apps = new WorkflowAppService();
+    const { runner, definition, store, finished } = await setup([
+      block("agent", "ai"),
+      block("app", "run_app", { prompt: "", command: "printf 'ready\\n'; exec sleep 300", app: { actions: ["start", "status", "tail", "kill"], name: "server" } }),
+    ], [edge("agent", "app", "use")]);
+    expect((await store.read(definition.id)).blocks[1]?.app?.actions).toEqual(["start", "status", "tail", "kill"]);
+    try {
+      await runner.start(definition.id, "Manage the app", async (target, input, runtime) => {
+        if (target.type === "run_app") return apps.execute(target, input, os.tmpdir(), runtime.assertActive);
+        const use = async (action: string) => {
+          const result = await runner.flowTool(runtime.runId, target.id, "workflow_use_block", { block_id: "app", input: "", action }) as { output: string };
+          return JSON.parse(result.output);
+        };
+        expect(await use("start")).toMatchObject({ status: "running" });
+        expect(await use("status")).toMatchObject({ status: "running" });
+        await vi.waitFor(async () => expect(await use("tail")).toMatchObject({ output: "ready" }));
+        expect(await use("kill")).toMatchObject({ status: "exited" });
+        return session("Managed app");
+      }, "provider");
+      expect((await finished()).status).toBe("succeeded");
+    } finally { apps.closeAll(); }
+  });
+
   it("passes each output to followers and only starts the selected entry", async () => {
     const { runner, definition, finished } = await setup([block("button", "start_button", { prompt: "Configured prompt" }), block("textStart", "start_input"), block("text", "text", { prompt: "Text: {{input}}" }), block("timer", "timer", { seconds: 0 }), block("agent", "ai")], [edge("button", "text"), edge("text", "timer"), edge("timer", "agent")]);
     const dispatch = vi.fn(async (_block, prompt) => { expect(prompt).toContain("Text: Configured prompt"); return session("result"); });

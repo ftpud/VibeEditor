@@ -27,8 +27,9 @@ export function validateHarness(harness: HarnessDefinition): { valid: boolean; i
     if (block.type === "timer" && (!Number.isFinite(block.seconds) || block.seconds! < 0 || block.seconds! > 86400)) issues.push({ code: "invalid-gate", blockId: block.id, message: "Timer duration must be between 0 and 86400 seconds" });
     if (block.type === "run_app") {
       const app = block.app;
-      if (!app || !["start", "status", "kill", "tail"].includes(app.action) || !app.name?.trim() || app.name.length > 120 || app.name.includes("\0")) issues.push({ code: "invalid-gate", blockId: block.id, message: "Run App needs an action and an app name of 1 to 120 characters" });
-      if (app?.action === "start" && !block.command?.trim()) issues.push({ code: "invalid-gate", blockId: block.id, message: "Run App start needs a shell script" });
+      const actions = app?.actions ?? (app?.action ? [app.action] : []);
+      if (!app || !actions.length || actions.some((action) => !["start", "status", "kill", "tail"].includes(action)) || !app.name?.trim() || app.name.length > 120 || app.name.includes("\0")) issues.push({ code: "invalid-gate", blockId: block.id, message: "Run App needs at least one allowed action and an app name of 1 to 120 characters" });
+      if (actions.includes("start") && !block.command?.trim()) issues.push({ code: "invalid-gate", blockId: block.id, message: "Run App start needs a shell script" });
       if (app?.lines !== undefined && (!Number.isInteger(app.lines) || app.lines < 1 || app.lines > 10_000)) issues.push({ code: "invalid-gate", blockId: block.id, message: "Run App tail lines must be an integer from 1 to 10000" });
     }
     if (block.type === "script" && !block.command?.trim()) issues.push({ code: "invalid-gate", blockId: block.id, message: "Script execution needs a command" });

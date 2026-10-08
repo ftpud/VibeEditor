@@ -2384,3 +2384,8 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 :root[data-theme="light"] .skill-chat-picker > input { background: #fff; color: #202124; border-color: #bfc2c7; }
 :root[data-theme="light"] .skill-chat-picker small { color: #62666e; }
 :root[data-theme="light"] .skill-agent-access summary { color: #62666e; }
+
+.harness-app-actions { display: flex; flex-wrap: wrap; gap: 10px; margin: 0; padding: 8px; border: 1px solid #4b4d52; border-radius: 4px; }
+.harness-app-actions legend { color: inherit; font-size: .7692rem; }
+.harness-inspector .harness-app-actions label { display: flex; align-items: center; gap: 5px; }
+.harness-inspector .harness-app-actions input { flex: none; width: auto; margin: 0; }

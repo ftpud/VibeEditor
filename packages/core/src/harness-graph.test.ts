@@ -17,6 +17,9 @@ describe("harness graph", () => {
     const app: HarnessBlock = { id: "app", type: "run_app", label: "App", prompt: "", position: { x: 0, y: 0 }, command: "npm run dev", app: { action: "start", name: "server" } };
     const validate = (changes: Partial<HarnessBlock>) => validateHarness({ ...harness([]), blocks: [{ ...app, ...changes }] });
     expect(validate({}).valid).toBe(true);
+    expect(validate({ app: { actions: ["start", "kill", "status", "tail"], name: "server" } }).valid).toBe(true);
+    expect(validate({ app: { actions: [], name: "server" } }).valid).toBe(false);
+    expect(validate({ command: "", app: { actions: ["start", "status"], name: "server" } }).valid).toBe(false);
     expect(validate({ command: "" }).issues).toMatchObject([{ code: "invalid-gate" }]);
     expect(validate({ app: undefined }).valid).toBe(false);
     expect(validate({ app: { action: "status", name: " " } }).valid).toBe(false);

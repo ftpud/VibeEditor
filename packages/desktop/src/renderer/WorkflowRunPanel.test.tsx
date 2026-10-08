@@ -14,12 +14,23 @@ const run: HarnessRun = { id: "run", harnessId: workflow.id, harnessVersion: 1, 
 const props = () => ({ harnesses: [workflow], runs: [], onRun: vi.fn().mockResolvedValue(run), onCancelRun: vi.fn().mockResolvedValue(undefined), onError: vi.fn() });
 
 describe("Workflow run library", () => {
+  it("collapses workflow list items by default and opens them on demand", () => {
+    render(<WorkflowRunPanel {...props()} />);
+    expect(screen.getByRole("button", { name: "Show Workspace check" }).getAttribute("aria-expanded")).toBe("false");
+    expect(screen.queryByRole("button", { name: "Start Quick check" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Expand Workspace check" }));
+    expect(screen.getByRole("button", { name: "Start Quick check" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Collapse Workspace check" }));
+    expect(screen.queryByRole("button", { name: "Start Quick check" })).toBeNull();
+  });
+
   it("opens a Chatbox before a run and sends follow-up messages to the same conversation", async () => {
     const chatWorkflow: HarnessDefinition = { ...workflow, blocks: [{ id: "chat", type: "chatbox", label: "Assistant", prompt: "", position: { x: 0, y: 0 } }, workflow.blocks[2]!], edges: [{ id: "tool", from: "chat", to: "agent", type: "use" }] };
     const chatRun: HarnessRun = { ...run, definition: chatWorkflow, status: "succeeded", blocks: [{ blockId: "chat", status: "succeeded", chatMessages: [{ id: "user", role: "user", text: "Hello", timestamp: "now" }, { id: "reply", role: "assistant", text: "**Hello back**", timestamp: "now" }] }] };
     const onChat = vi.fn().mockResolvedValue(chatRun);
     const callbacks = { ...props(), harnesses: [chatWorkflow], onChat };
     const view = render(<WorkflowRunPanel {...callbacks} />);
+    fireEvent.click(screen.getByRole("button", { name: "Show Workspace check" }));
     fireEvent.click(screen.getByRole("button", { name: "Assistant: idle" }));
     expect(screen.getByLabelText("Connected chat tools").textContent).toContain("Inspect");
     const input = screen.getByLabelText("Message Assistant");
@@ -41,6 +52,7 @@ describe("Workflow run library", () => {
     const chatWorkflow: HarnessDefinition = { ...workflow, blocks: [{ id: "chat", type: "chatbox", label: "Assistant", prompt: "", position: { x: 0, y: 0 } }], edges: [] };
     const onChat = vi.fn().mockRejectedValue(new Error("Provider offline"));
     render(<WorkflowRunPanel {...props()} harnesses={[chatWorkflow]} onChat={onChat} />);
+    fireEvent.click(screen.getByRole("button", { name: "Show Workspace check" }));
     fireEvent.click(screen.getByRole("button", { name: "Assistant: idle" }));
     fireEvent.change(screen.getByLabelText("Message Assistant"), { target: { value: "Keep this message" } });
     fireEvent.click(screen.getByRole("button", { name: "Send chat message" }));
@@ -51,6 +63,7 @@ describe("Workflow run library", () => {
   it("offers every start and replaces launch controls with a live preview after starting", async () => {
     const callbacks = props();
     const view = render(<WorkflowRunPanel {...callbacks} />);
+    fireEvent.click(screen.getByRole("button", { name: "Show Workspace check" }));
     expect(screen.getByRole("button", { name: "Start Quick check" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Start Custom goal" }).hasAttribute("disabled")).toBe(true);
     fireEvent.click(screen.getByRole("button", { name: "Start Quick check" }));
@@ -68,6 +81,7 @@ describe("Workflow run library", () => {
   it("sends custom input to the chosen start", async () => {
     const callbacks = props();
     render(<WorkflowRunPanel {...callbacks} />);
+    fireEvent.click(screen.getByRole("button", { name: "Show Workspace check" }));
     fireEvent.change(screen.getByLabelText("Input for Custom goal"), { target: { value: "Review tests" } });
     fireEvent.click(screen.getByRole("button", { name: "Start Custom goal" }));
     await waitFor(() => expect(callbacks.onRun).toHaveBeenCalledWith("flow", "Review tests", "input", undefined));
@@ -76,6 +90,7 @@ describe("Workflow run library", () => {
   it("keeps failed validation on the launch card", async () => {
     const callbacks = props();
     render(<WorkflowRunPanel {...callbacks} onValidate={vi.fn().mockResolvedValue({ valid: false, issues: [{ code: "empty", message: "Fix the workflow" }] })} />);
+    fireEvent.click(screen.getByRole("button", { name: "Show Workspace check" }));
     fireEvent.click(screen.getByRole("button", { name: "Start Quick check" }));
     expect(await screen.findByRole("alert")).toHaveProperty("textContent", "Fix the workflow");
     expect(callbacks.onRun).not.toHaveBeenCalled();
@@ -85,6 +100,7 @@ describe("Workflow run library", () => {
     const callbacks = props();
     const snapshot = { ...workflow, blocks: workflow.blocks.map((block) => block.id === "agent" ? { ...block, label: "Original agent" } : block) };
     render(<WorkflowRunPanel {...callbacks} runs={[{ ...run, definition: snapshot, connectionTraces: [{ id: "trace", edgeId: "edge", direction: "forward", status: "active", startedAt: "now" }] }]} />);
+    fireEvent.click(screen.getByRole("button", { name: "Show Workspace check" }));
     expect(screen.getByRole("button", { name: "Original agent: running" })).toBeTruthy();
     await waitFor(() => expect(document.querySelector(".harness-transfer.active")).not.toBeNull());
     fireEvent.click(screen.getByRole("button", { name: "Stop run run" }));
@@ -94,6 +110,7 @@ describe("Workflow run library", () => {
   it("provides a generic launch input for workflows without start blocks", async () => {
     const callbacks = props();
     render(<WorkflowRunPanel {...callbacks} harnesses={[{ ...workflow, blocks: [workflow.blocks[2]!] }]} />);
+    fireEvent.click(screen.getByRole("button", { name: "Show Workspace check" }));
     fireEvent.change(screen.getByLabelText("Input for Run workflow"), { target: { value: "Plan" } });
     fireEvent.click(screen.getByRole("button", { name: "Start Run workflow" }));
     await waitFor(() => expect(callbacks.onRun).toHaveBeenCalledWith("flow", "Plan", undefined, undefined));
@@ -103,6 +120,7 @@ describe("Workflow run library", () => {
     const prompt = "# Review plan\n\n- Check tests\n- Check `types`\n\nConnected tools: []";
     const answer = "## Result\n\n**All checks passed**\n\n```ts\nconst ready = true;\n```";
     render(<WorkflowRunPanel {...props()} runs={[{ ...run, blocks: [{ blockId: "agent", status: "succeeded", prompt, output: answer }] }]} />);
+    fireEvent.click(screen.getByRole("button", { name: "Show Workspace check" }));
     fireEvent.click(screen.getByRole("button", { name: "Inspect: succeeded" }));
     const details = screen.getByLabelText("Inspect run details");
     expect(within(details).getByRole("heading", { name: "Review plan" })).toBeTruthy();
@@ -120,6 +138,7 @@ describe("Workflow run library", () => {
   it("previews the start prompt without launching when its raw view is toggled", () => {
     const callbacks = props();
     render(<WorkflowRunPanel {...callbacks} />);
+    fireEvent.click(screen.getByRole("button", { name: "Show Workspace check" }));
     expect(screen.getByLabelText("Prompt").textContent).toContain("Check workspace");
     fireEvent.click(screen.getByRole("button", { name: "Show raw prompt" }));
     expect(document.querySelector(".workflow-message-raw")?.textContent).toBe("Check workspace");

@@ -26,7 +26,7 @@ export function WorkflowRunPanel(props: Props) {
 }
 
 function WorkflowCard({ workflow, expanded, hidden, onToggleExpanded, ...props }: Props & { workflow: HarnessDefinition; expanded: boolean; hidden: boolean; onToggleExpanded(): void }) {
-  const [collapsed, setCollapsed] = useState(false);
+  const [collapsed, setCollapsed] = useState(true);
   const bodyId = useId();
   const [selectedRunId, setSelectedRunId] = useState<string>();
   const [startedRun, setStartedRun] = useState<HarnessRun>();

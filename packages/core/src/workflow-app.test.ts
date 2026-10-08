@@ -11,7 +11,7 @@ afterEach(async () => { services.splice(0).forEach((service) => service.closeAll
 async function setup() {
   const workspace = await mkdtemp(path.join(os.tmpdir(), "workflow-app-")); directories.push(workspace);
   const service = new WorkflowAppService(); services.push(service);
-  const execute = async (action: HarnessAppOptions["action"], extra: Partial<HarnessBlock> = {}, input = "", target = workspace) => {
+  const execute = async (action: NonNullable<HarnessAppOptions["action"]>, extra: Partial<HarnessBlock> = {}, input = "", target = workspace) => {
     const block: HarnessBlock = { id: action, type: "run_app", label: action, prompt: "", position: { x: 0, y: 0 }, app: { action, name: "server", lines: 2 }, ...extra };
     const result = await service.execute(block, input, target, () => {});
     return JSON.parse(result.messages[0]!.text) as { status: string; pid: number; output: string; exitCode: number | null; signal: string | null };
@@ -37,6 +37,18 @@ describe("workflow apps", () => {
     expect((await execute("kill")).status).toBe("exited");
     const restarted = await execute("start", { command: "exec sleep 300" });
     expect(restarted.pid).not.toBe(started.pid);
+  });
+
+  it("uses one block for allowed actions and rejects disabled actions", async () => {
+    const { execute } = await setup();
+    const appBlock = { command: "printf 'ready\\n'; exec sleep 300", app: { name: "server", actions: ["start", "status", "tail", "kill"] as const, lines: 2 } };
+    const configured = { ...appBlock, app: { ...appBlock.app, actions: [...appBlock.app.actions] } };
+    expect((await execute("start", configured)).status).toBe("running");
+    expect((await execute("start", configured, JSON.stringify({ action: "status" }))).status).toBe("running");
+    await vi.waitFor(async () => expect((await execute("start", configured, JSON.stringify({ action: "tail" }))).output).toBe("ready"));
+    await expect(execute("start", { app: { name: "server", actions: ["status"] } }, JSON.stringify({ action: "kill" }))).rejects.toThrow("allowed");
+    expect((await execute("start", configured, JSON.stringify({ action: "kill" }))).status).toBe("exited");
+    await expect(execute("start", { app: { name: "server", actions: [] } })).rejects.toThrow("allowed");
   });
 
   it("records natural exits and scopes app names to a workspace", async () => {
