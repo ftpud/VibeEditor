@@ -39,6 +39,22 @@ describe("workflow apps", () => {
     expect(restarted.pid).not.toBe(started.pid);
   });
 
+  it("reads live output from both streams without starting a process and retains it after exit", async () => {
+    const { execute, workspace, service } = await setup();
+    expect(service.read("server", workspace)).toEqual({ name: "server", status: "not_found", output: "" });
+    await execute("start", { command: "printf 'stdout\\n'; printf 'stderr\\n' >&2; exec sleep 300" });
+    await vi.waitFor(() => {
+      const app = service.read("server", workspace);
+      expect(app.status).toBe("running");
+      expect(app.output).toContain("stdout");
+      expect(app.output).toContain("stderr");
+    });
+    expect(service.read("server", "/another-workspace").status).toBe("not_found");
+    const output = service.read("server", workspace).output;
+    await execute("kill");
+    expect(service.read("server", workspace)).toMatchObject({ status: "exited", signal: "SIGKILL", output });
+  });
+
   it("uses one block for allowed actions and rejects disabled actions", async () => {
     const { execute } = await setup();
     const appBlock = { command: "printf 'ready\\n'; exec sleep 300", app: { name: "server", actions: ["start", "status", "tail", "kill"] as const, lines: 2 } };

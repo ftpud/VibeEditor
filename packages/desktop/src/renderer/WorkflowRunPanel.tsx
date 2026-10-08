@@ -1,10 +1,10 @@
 import { useId, useMemo, useRef, useState } from "react";
-import { Play, Square, Workflow, RotateCcw, ChevronDown, ChevronUp, Maximize2, Minimize2 } from "lucide-react";
+import { ArrowLeftRight, ArrowUpDown, Play, Square, Workflow, RotateCcw, ChevronDown, ChevronUp, Maximize2, Minimize2 } from "lucide-react";
 import type { HarnessBlock, HarnessDefinition, HarnessRun } from "@remote-ide/protocol";
 import { BlockRunDetails, PauseResolution, WorkflowMessage, type HarnessPanelProps } from "./HarnessPanel";
 import { useWorkflowTraces } from "./workflow-tracing";
 
-type Props = Pick<HarnessPanelProps, "harnesses" | "runs" | "diagnostics" | "onRun" | "onChat" | "onValidate" | "onCancelRun" | "onKillApp" | "onResolvePermission" | "onAnswerQuestion" | "onResumePause" | "onRetryPause" | "onCancelPause" | "onError">;
+type Props = Pick<HarnessPanelProps, "harnesses" | "runs" | "diagnostics" | "onRun" | "onChat" | "onValidate" | "onCancelRun" | "onKillApp" | "onReadApp" | "onResolvePermission" | "onAnswerQuestion" | "onResumePause" | "onRetryPause" | "onCancelPause" | "onError">;
 const activeStatuses = new Set(["queued", "running", "waiting", "awaiting_permission", "awaiting_user_input", "waiting_timer", "retry_scheduled"]);
 const pauseStatuses = new Set(["awaiting_permission", "awaiting_user_input", "waiting_timer", "retry_scheduled"]);
 const statusLabel = (status: string) => status.replaceAll("_", " ");
@@ -86,7 +86,7 @@ function WorkflowCard({ workflow, expanded, hidden, onToggleExpanded, ...props }
       {run.blocks.filter((block) => pauseStatuses.has(block.status)).map((block) => <PauseResolution key={`${run.id}:${block.blockId}:${block.pauseId}`} {...props} run={run} block={block} label={definition.blocks.find((item) => item.id === block.blockId)?.label ?? block.blockId} yesNo={definition.blocks.find((item) => item.id === block.blockId)?.type === "yes_no_prompt"} />)}
       {run.error && <p className="workflow-card-error">{run.error}</p>}{!!run.cleanupErrors?.length && <p className="workflow-card-error">{run.cleanupErrors.join("; ")}</p>}
     </> : <><p className="workflow-card-hint">{workflow.blocks.length} blocks · {workflow.blocks.some((block) => block.type === "chatbox") ? "Open a Chatbox or choose a starting point" : "Choose a starting point"}</p><CompactWorkflowPreview definition={definition} selectedBlockId={selectedBlockId} onSelect={setSelectedBlockId} /></>}
-    {selectedBlock && <BlockRunDetails key={`${run?.id ?? workflow.id}:${selectedBlock.id}`} block={selectedBlock} run={run} state={run?.blocks.find((block) => block.blockId === selectedBlock.id)} tasks={run?.children?.filter((child) => child.blockId === selectedBlock.id)} onClose={() => setSelectedBlockId(undefined)} onChat={props.onChat ? async (message) => { const next = await props.onChat!(workflow.id, selectedBlock.id, message, run?.id); setStartedRun(next); setSelectedRunId(next.id); } : undefined} onCancelChat={run ? () => props.onCancelRun(run.id) : undefined} onKillApp={props.onKillApp && selectedBlock.type === "run_app" ? () => props.onKillApp!(workflow.id, selectedBlock.id, run?.id) : undefined} definition={definition} />}
+    {selectedBlock && <BlockRunDetails key={`${run?.id ?? workflow.id}:${selectedBlock.id}`} block={selectedBlock} run={run} state={run?.blocks.find((block) => block.blockId === selectedBlock.id)} tasks={run?.children?.filter((child) => child.blockId === selectedBlock.id)} onClose={() => setSelectedBlockId(undefined)} onChat={props.onChat ? async (message) => { const next = await props.onChat!(workflow.id, selectedBlock.id, message, run?.id); setStartedRun(next); setSelectedRunId(next.id); } : undefined} onCancelChat={run ? () => props.onCancelRun(run.id) : undefined} onReadApp={props.onReadApp && selectedBlock.type === "run_app" ? () => props.onReadApp!(workflow.id, selectedBlock.id, run?.id) : undefined} onKillApp={props.onKillApp && selectedBlock.type === "run_app" ? () => props.onKillApp!(workflow.id, selectedBlock.id, run?.id) : undefined} definition={definition} />}
     {(!run || showStarts) && <div className="workflow-starts">{starts.length ? starts.map((block) => renderStart(block)) : renderStart()}</div>}
     {error && <p role="alert" className="workflow-card-error">{error}</p>}
     </div>
@@ -143,7 +143,7 @@ function CompactWorkflowPreview({ definition, run, selectedBlockId, onSelect }: 
   const byId = new Map(blocks.map((block) => [block.id, block]));
   const width = Math.max(280, ...blocks.map((block) => block.position.x + 132));
   const height = Math.max(70, ...blocks.map((block) => block.position.y + 36));
-  return <><div className="workflow-preview-controls"><button aria-label="Fit workflow horizontally" onClick={() => fit("horizontal")}>Fit horizontally</button><button aria-label="Fit workflow vertically" onClick={() => fit("vertical")}>Fit vertically</button></div><div ref={viewportRef} style={{ height: fitHeight ? 220 : undefined }} className="workflow-compact-preview" aria-label="Live workflow tree"><svg style={{ minWidth: 0 }} width={width * scale} height={height * scale} viewBox={`0 0 ${width} ${height}`}>
+  return <><div className="workflow-preview-controls"><button aria-label="Fit workflow horizontally" title="Fit horizontally" onClick={() => fit("horizontal")}><ArrowLeftRight size={14} aria-hidden="true" /></button><button aria-label="Fit workflow vertically" title="Fit vertically" onClick={() => fit("vertical")}><ArrowUpDown size={14} aria-hidden="true" /></button></div><div ref={viewportRef} style={{ height: fitHeight ? 220 : undefined }} className="workflow-compact-preview" aria-label="Live workflow tree"><svg style={{ minWidth: 0 }} width={width * scale} height={height * scale} viewBox={`0 0 ${width} ${height}`}>
     {definition.edges.map((edge) => {
       const from = byId.get(edge.from), to = byId.get(edge.to);
       if (!from || !to) return null;

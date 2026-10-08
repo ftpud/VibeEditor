@@ -852,6 +852,7 @@ async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStor
       const { definition, blockId, input, provider } = request.payload;
       return { run: await startWorkflow({ harnessId: definition.id, input, provider, startBlockId: blockId, testDefinition: definition }, { acp, tasks, agents, harnessRunner, workflowApps, aiTimers, rootWorkspace, bridgeWorkspace, workspacePath }) };
     }
+    case "harnesses.app.read":
     case "harnesses.app.kill": {
       const { harnessId, blockId, runId } = request.payload;
       const run = runId ? (await harnesses.runs(harnessId)).find((run) => run.id === runId) : undefined;
@@ -859,6 +860,7 @@ async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStor
       const definition = run?.definition ?? await harnesses.read(harnessId);
       const block = definition.blocks.find((block) => block.id === blockId);
       if (block?.type !== "run_app" || !block.app) throw new CoreError("INVALID_REQUEST", "Selected block is not a Run App");
+      if (request.type === "harnesses.app.read") return { app: workflowApps.read(block.app.name, workspacePath) };
       await workflowApps.execute({ ...block, app: { ...block.app, actions: ["kill"] } }, '{"action":"kill"}', workspacePath, () => {});
       return {};
     }

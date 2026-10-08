@@ -192,6 +192,7 @@ export type AiContinuationTimer = { id: string; workspace: string; provider: AiP
 
 /** Named long-lived shell apps are owned by Core and scoped to the execution workspace. */
 export type HarnessAppAction = "start" | "status" | "kill" | "tail";
+export type HarnessAppState = { name: string; status: "not_found" | "starting" | "running" | "exited"; output: string; pid?: number; exitCode?: number | null; signal?: string | null };
 export type HarnessAppOptions = { action?: HarnessAppAction; actions?: HarnessAppAction[]; name: string; lines?: number };
 export type HarnessBlock = { id: string; type: "ai" | "chatbox" | "text" | "timer" | "user_prompt" | "yes_no_prompt" | "markdown" | "script" | "run_app" | "start_button" | "start_input" | "prompt" | "task" | "review" | "verification"; seconds?: number; command?: string; app?: HarnessAppOptions; label: string; prompt: string; inputSchema?: HarnessDataSchema; outputSchema?: HarnessDataSchema; provider?: AiProvider; model?: string; reasoning?: string; agent?: AgentFileReference; watchdog?: boolean; review?: HarnessReview; verification?: HarnessVerification; join?: "all" | "any"; routing?: "all" | "ai"; position: { x: number; y: number } };
 export type HarnessEdge = { type?: "use" | "follow" | "path"; id: string; from: string; to: string; label?: string; loop?: boolean; execution?: "sync" | "async" };
@@ -390,6 +391,7 @@ export type ProtocolOperations = {
   "harnesses.runs": { payload: { harnessId?: string }; result: { runs: HarnessRun[] } };
   "harnesses.runs.delete": { payload: { runId: string }; result: Record<string, never> };
   "harnesses.test": { payload: { definition: HarnessDefinition; blockId: string; input: string; provider?: AiProvider }; result: { run: HarnessRun } };
+  "harnesses.app.read": { payload: { harnessId: string; blockId: string; runId?: string }; result: { app: HarnessAppState } };
   "harnesses.app.kill": { payload: { harnessId: string; blockId: string; runId?: string }; result: Record<string, never> };
   "harnesses.run": { payload: { harnessId: string; input: string; startBlockId?: string; rerunRunId?: string; provider?: AiProvider }; result: { run: HarnessRun } };
   "harnesses.chat": { payload: { harnessId: string; blockId: string; input: string; runId?: string; provider?: AiProvider }; result: { run: HarnessRun } };
@@ -802,6 +804,7 @@ const requestTypeRegistry: Record<RequestType, true> = {
   "harnesses.runs": true,
   "harnesses.runs.delete": true,
   "harnesses.test": true,
+  "harnesses.app.read": true,
   "harnesses.app.kill": true,
   "harnesses.run": true,
   "harnesses.chat": true,

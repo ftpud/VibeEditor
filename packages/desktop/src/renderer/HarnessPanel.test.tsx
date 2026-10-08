@@ -12,21 +12,20 @@ function renderEditor(ui: Parameters<typeof render>[0]) {
 }
 
 describe("HarnessPanel", () => {
-  it("switches between app and script while preserving the command and tests the unsaved draft", async () => {
+  it("tests an unsaved app draft without an App/Script switch", async () => {
     const harness: HarnessDefinition = { id: "flow", name: "Flow", version: 1, createdAt: "now", updatedAt: "now", blocks: [{ id: "app", type: "run_app", label: "Server", prompt: "", command: "npm run dev", app: { name: "server", actions: ["start"] }, position: { x: 0, y: 0 } }], edges: [] };
     const onTestBlock = vi.fn().mockResolvedValue({ id: "test", harnessId: "flow", status: "queued", blocks: [] });
     const onSave = vi.fn();
     render(<HarnessPanel designOnly harnesses={[harness]} runs={[]} providers={[]} agents={[]} onCreate={vi.fn()} onSave={onSave} onDelete={vi.fn()} onRun={vi.fn()} onTestBlock={onTestBlock} onCancelRun={vi.fn()} onError={vi.fn()} />);
     fireEvent.click(screen.getByRole("button", { name: "List" }));
     fireEvent.click(screen.getByRole("button", { name: "Edit block Server" }));
-    fireEvent.click(screen.getByRole("switch", { name: "Run as app" }));
-    expect(screen.getByLabelText("Shell script")).toHaveProperty("value", "npm run dev");
-    fireEvent.change(screen.getByLabelText("Shell script"), { target: { value: "printf test" } });
+    expect(screen.queryByRole("switch", { name: "Run as app" })).toBeNull();
+    expect(screen.getByLabelText("Run App script")).toHaveProperty("value", "npm run dev");
+    fireEvent.change(screen.getByLabelText("Run App script"), { target: { value: "printf test" } });
     fireEvent.change(screen.getByLabelText("Block test input"), { target: { value: "hello" } });
     fireEvent.click(screen.getByRole("button", { name: "Test Server" }));
-    await waitFor(() => expect(onTestBlock).toHaveBeenCalledWith(expect.objectContaining({ blocks: [expect.objectContaining({ type: "script", command: "printf test" })] }), "app", "hello"));
+    await waitFor(() => expect(onTestBlock).toHaveBeenCalledWith(expect.objectContaining({ blocks: [expect.objectContaining({ type: "run_app", command: "printf test" })] }), "app", "hello"));
     expect(onSave).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole("switch", { name: "Run as app" }));
     expect(screen.getByLabelText("Run App script")).toHaveProperty("value", "printf test");
   });
 

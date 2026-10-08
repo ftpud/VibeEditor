@@ -17,8 +17,9 @@ describe("Workflow run library", () => {
   it("fits each axis and kills an app from a completed run", async () => {
     const appWorkflow: HarnessDefinition = { ...workflow, blocks: [{ id: "app", type: "run_app", label: "Server", prompt: "", command: "npm run dev", app: { name: "server", actions: ["start"] }, position: { x: 0, y: 0 } }] };
     const appRun: HarnessRun = { ...run, status: "succeeded", definition: appWorkflow, blocks: [{ blockId: "app", status: "succeeded" }] };
-    const onKillApp = vi.fn().mockResolvedValue(undefined);
-    render(<WorkflowRunPanel {...props()} harnesses={[appWorkflow]} runs={[appRun]} onKillApp={onKillApp} />);
+    const onReadApp = vi.fn().mockResolvedValue({ name: "server", status: "running", output: "Listening on port 3000\nerror stream", pid: 123 });
+    const onKillApp = vi.fn(async () => { onReadApp.mockResolvedValue({ name: "server", status: "exited", output: "Listening on port 3000\nerror stream", pid: 123, signal: "SIGKILL" }); });
+    render(<WorkflowRunPanel {...props()} harnesses={[appWorkflow]} runs={[appRun]} onKillApp={onKillApp} onReadApp={onReadApp} />);
     fireEvent.click(screen.getByRole("button", { name: "Show Workspace check" }));
     const preview = screen.getByLabelText("Live workflow tree");
     Object.defineProperties(preview, { clientWidth: { value: 400 }, clientHeight: { value: 220 } });
@@ -27,8 +28,24 @@ describe("Workflow run library", () => {
     fireEvent.click(screen.getByRole("button", { name: "Fit workflow vertically" }));
     expect(Number(preview.querySelector("svg")!.getAttribute("height"))).toBe(212);
     fireEvent.click(screen.getByRole("button", { name: "Server: succeeded" }));
-    fireEvent.click(screen.getByRole("button", { name: "Kill process" }));
+    expect(await screen.findByText(/Listening on port 3000/)).toBeTruthy();
+    expect(onReadApp).toHaveBeenCalledWith("flow", "app", "run");
+    const kill = screen.getByRole("button", { name: "Kill process" });
+    expect(kill.closest("header")).toBeTruthy();
+    expect(kill.textContent).toBe("");
+    fireEvent.click(kill);
     await waitFor(() => expect(onKillApp).toHaveBeenCalledWith("flow", "app", "run"));
+    expect(await screen.findByText("Exited · SIGKILL")).toBeTruthy();
+  });
+
+  it("refreshes app output while details are open", async () => {
+    const appWorkflow: HarnessDefinition = { ...workflow, blocks: [{ id: "app", type: "run_app", label: "Server", prompt: "", app: { name: "server", actions: ["start"] }, position: { x: 0, y: 0 } }], edges: [] };
+    const onReadApp = vi.fn().mockResolvedValueOnce({ name: "server", status: "running", output: "first line" }).mockResolvedValue({ name: "server", status: "running", output: "first line\nsecond line" });
+    render(<WorkflowRunPanel {...props()} harnesses={[appWorkflow]} onReadApp={onReadApp} />);
+    fireEvent.click(screen.getByRole("button", { name: "Show Workspace check" }));
+    fireEvent.click(screen.getByRole("button", { name: "Server: idle" }));
+    expect(await screen.findByText("first line")).toBeTruthy();
+    await waitFor(() => expect(screen.getByLabelText("App stdout and stderr").textContent).toContain("second line"), { timeout: 2500 });
   });
 
   it("collapses workflow list items by default and opens them on demand", () => {

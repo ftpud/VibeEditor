@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import path from "node:path";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import type { AiSession, HarnessAppAction, HarnessBlock } from "@remote-ide/protocol";
+import type { AiSession, HarnessAppState, HarnessAppAction, HarnessBlock } from "@remote-ide/protocol";
 
 type App = { child: ChildProcessWithoutNullStreams; output: string; status: "starting" | "running" | "exited"; exitCode: number | null; signal: string | null; ready: Promise<void>; closed: Promise<void> };
 
@@ -61,6 +61,11 @@ export class WorkflowAppService {
     // Keep even heavily escaped log text below the workflow's output limit as JSON.
     const result = { name, status: app?.status ?? "not_found", ...(app ? { pid: app.child.pid, exitCode: app.exitCode, signal: app.signal } : {}), ...(tail !== undefined ? { output: tail.slice(-30_000), truncated: tail.length > 30_000 } : {}) };
     return { id: crypto.randomUUID(), status: "idle", messages: [{ id: crypto.randomUUID(), role: "assistant", text: JSON.stringify(result), timestamp: new Date().toISOString() }] } as AiSession;
+  }
+
+  read(name: string, workspace: string): HarnessAppState {
+    const app = this.apps.get(`${path.resolve(workspace)}\0${name.trim()}`);
+    return { name: name.trim(), status: app?.status ?? "not_found", output: app?.output ?? "", ...(app ? { pid: app.child.pid, exitCode: app.exitCode, signal: app.signal } : {}) };
   }
 
   closeAll(): void {

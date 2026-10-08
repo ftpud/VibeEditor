@@ -2391,7 +2391,21 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .harness-inspector .harness-app-actions input { flex: none; width: auto; margin: 0; }
 
 .workflow-preview-controls { display: flex; gap: 6px; margin-bottom: 6px; }
-.workflow-preview-controls button, .harness-inspector button[role="switch"], .harness-list-editor li > button:nth-child(2) { padding: 4px 7px; border: 1px solid #555a62; border-radius: 4px; background: #30343a; color: #d6d8dc; cursor: pointer; }
-.harness-inspector button[role="switch"][aria-checked="true"] { background: #315e96; }
+.harness-list-editor li > button:nth-child(2) { padding: 4px 7px; border: 1px solid #555a62; border-radius: 4px; background: #30343a; color: #d6d8dc; cursor: pointer; }
 .workflow-compact-preview { box-sizing: border-box; }
 .harness-block > footer button.harness-block-test { width: auto; padding: 0 6px; display: flex; align-items: center; gap: 4px; margin-right: auto; }
+
+.workflow-preview-controls button { width: 26px; height: 26px; padding: 0; display: grid; place-items: center; border: 1px solid transparent; border-radius: 4px; background: transparent; color: #92969d; cursor: pointer; }
+.workflow-preview-controls button:hover { color: #d7d9dc; background: #ffffff0a; border-color: #ffffff12; }
+.harness-run-details > header .harness-detail-actions { display: flex; flex: 0 0 auto; gap: 4px; }
+.harness-run-details > header .harness-kill-process:hover:not(:disabled) { color: #ef8585; background: #ef858512; }
+.harness-app-output { min-width: 0; border: 1px solid #ffffff12; border-radius: 5px; overflow: hidden; }
+.harness-app-output > header { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 6px 8px; font-size: .7692rem; }
+.harness-app-output > header span { color: #92969d; }
+.harness-app-output pre { max-height: 240px; overflow: auto; margin: 0; padding: 8px; background: #202226; color: #d7d9dc; font: .7692rem/1.5 var(--ui-font-family), monospace; white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
+
+.harness-run-details > header .harness-detail-actions button { width: 24px; height: 24px; padding: 0; display: grid; place-items: center; border-radius: 4px; }
+:root[data-theme="light"] .workflow-preview-controls button, :root[data-theme="light"] .harness-app-output > header span { color: #657082; }
+:root[data-theme="light"] .workflow-preview-controls button:hover { color: #283345; background: #00000008; border-color: #00000012; }
+:root[data-theme="light"] .harness-app-output { border-color: #d2dbe8; }
+:root[data-theme="light"] .harness-app-output pre { background: #eaf0f8; color: #283345; }
