@@ -344,7 +344,10 @@ export async function createServer(host: string, port: number, workspacePath: st
       const workflowRootId = command.workflowRunId ? [...harnessRunners].find(([, runner]) => runner.isActive(command.workflowRunId!))?.[0] : undefined;
       const rootId = workflowRootId ?? await ownerRootId(currentWorkspace) ?? roots.primary().id; const root = roots.get(rootId); const context = contextFor(rootId);
       const changed = async () => { const encoded = JSON.stringify({ type: "tasks.changed", payload: { rootId } } satisfies ServerEvent); for (const socket of activeSessions) sendWebSocketData(socket, encoded); };
-      if (command.workflowRunId && command.workflowBlockId && ["workflow_connections", "workflow_use_block", "workflow_choose_path"].includes(command.name)) return harnessRunner(rootId).flowTool(command.workflowRunId, command.workflowBlockId, command.name, command.args);
+      if (command.workflowRunId && command.workflowBlockId && ["workflow_connections", "workflow_use_block", "workflow_choose_path"].includes(command.name)) return harnessRunner(rootId).flowTool(command.workflowRunId, command.workflowBlockId, command.name, command.args, {
+        push: (provider, workspace, input) => acp.get(provider).steer(workspace, input),
+        kill: async (provider, runtime) => { if (runtime.workspace) { await aiTimers.cancelWorkspace(runtime.workspace); await acp.get(provider).interrupt(runtime.workspace); } }
+      });
       const workflow = command.workflowRunId && command.workflowBlockId ? { runId: command.workflowRunId, blockId: command.workflowBlockId, resumeFailed: () => harnessRunner(rootId).resumeFailed(command.workflowRunId!, command.workflowBlockId!), runStack: (inputs: string[], path?: string) => harnessRunner(rootId).runStack(command.workflowRunId!, command.workflowBlockId!, inputs, path) } : undefined;
       const ownedWorkflow = workflow ? {
         ...workflow,
@@ -1170,7 +1173,11 @@ async function startWorkflow(input: ProtocolOperations["harnesses.run"]["payload
       const configuration = { ...(block.model ? { model: block.model } : {}), ...(block.reasoning ? { reasoning: block.reasoning } : {}), ...(autopilot ? { [autopilot.option.id]: autopilot.on } : {}) };
       runtime.assertActive();
       try { await provider.startFreshSession(sessionWorkspace, { prompt, configuration, mcpServers, agent: workflowAgent, ...(block.agent ? { agentPreset: block.agent } : {}) }); runtime.assertActive(); }
-      catch (error) { runtime.assertActive(); if (!block.watchdog) throw error; console.error("[core] Watchdog startup failed; scheduling recovery", error); }
+      catch (error) {
+        try { runtime.assertActive(); }
+        catch (stopped) { await provider.interrupt(sessionWorkspace).catch(() => {}); throw stopped; }
+        if (!block.watchdog) throw error; console.error("[core] Watchdog startup failed; scheduling recovery", error);
+      }
       return settleWorkflowSession(provider, sessionWorkspace, aiTimers, block.watchdog ? runtime : undefined, () => harnessRunner.isActive(runtime.runId), runtime.activity);
     });
   const append: NonNullable<Parameters<HarnessRunner["start"]>[4]> = async (block, prompt, runtime) => providerOperation(async () => {

@@ -2399,10 +2399,10 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .workflow-preview-controls button:hover { color: #d7d9dc; background: #ffffff0a; border-color: #ffffff12; }
 .harness-run-details > header .harness-detail-actions { display: flex; flex: 0 0 auto; gap: 4px; }
 .harness-run-details > header .harness-kill-process:hover:not(:disabled) { color: #ef8585; background: #ef858512; }
-.harness-app-output { min-width: 0; border: 1px solid #ffffff12; border-radius: 5px; overflow: hidden; }
-.harness-app-output > header { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 6px 8px; font-size: .7692rem; }
+.harness-app-output { min-width: 0; min-height: 0; display: flex; flex-direction: column; border: 1px solid #ffffff12; border-radius: 5px; overflow: hidden; }
+.harness-app-output > header { flex-shrink: 0; display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 6px 8px; font-size: .7692rem; }
 .harness-app-output > header span { color: #92969d; }
-.harness-app-output pre { max-height: 240px; overflow: auto; margin: 0; padding: 8px; background: #202226; color: #d7d9dc; font: .7692rem/1.5 var(--ui-font-family), monospace; white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
+.harness-app-output pre { min-height: 0; flex: 1 1 auto; overscroll-behavior: contain; max-height: 240px; overflow: auto; margin: 0; padding: 8px; background: #202226; color: #d7d9dc; font: .7692rem/1.5 var(--ui-font-family), monospace; white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
 
 .harness-run-details > header .harness-detail-actions button { width: 24px; height: 24px; padding: 0; display: grid; place-items: center; border-radius: 4px; }
 :root[data-theme="light"] .workflow-preview-controls button, :root[data-theme="light"] .harness-app-output > header span { color: #657082; }
@@ -2426,3 +2426,10 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 
 .workflow-chat-activity > summary::before { content: "›"; display: inline-block; transition: transform .1s; }
 .workflow-chat-activity[open] > summary::before { transform: rotate(90deg); }
+
+.harness-run-details.harness-app-run-details { min-height: 0; flex-shrink: 1; }
+.workflow-card .harness-app-run-details { height: min(420px, 60dvh); }
+.harness-app-run-details .harness-run-details-body { display: flex; flex-direction: column; overflow: hidden; }
+.harness-app-run-details .harness-app-output { flex: 1 1 auto; }
+.harness-app-run-details .harness-detail-diagnostics { min-height: 0; flex: 0 1 auto; max-height: 40%; overflow: auto; }
+.harness-app-run-details .harness-run-details-body > p { flex: 0 0 auto; margin: 0; }

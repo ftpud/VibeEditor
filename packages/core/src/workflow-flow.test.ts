@@ -18,7 +18,7 @@ async function setup(blocks: HarnessBlock[], edges: HarnessEdge[], concurrency =
   const created = await store.create("Flow");
   const definition = await store.update({ ...created, blocks, edges });
   const runner = new HarnessRunner(store, () => {}, concurrency);
-  const finished = async () => { await vi.waitFor(async () => expect((await store.runs())[0]?.status).toMatch(/^(succeeded|failed|cancelled)$/)); return (await store.runs())[0]!; };
+  const finished = async (timeout = 1000) => { await vi.waitFor(async () => expect((await store.runs())[0]?.status).toMatch(/^(succeeded|failed|cancelled)$/), { timeout }); return (await store.runs())[0]!; };
   return { store, definition, runner, finished };
 }
 
@@ -182,6 +182,121 @@ describe("typed workflows", () => {
     expect((await finished()).status).toBe("succeeded");
   });
 
+  it("lets one parent launch multiple children, push prompts, tail output and kill only one child", async () => {
+    const { runner, definition, store, finished } = await setup([block("parent", "chatbox", { prompt: "" }), block("first", "chatbox", { prompt: "" }), block("second", "ai")], [edge("parent", "first", "use"), edge("parent", "second", "use")], 3);
+    const releases = new Map<string, () => void>();
+    const gates = new Map(["first", "second"].map((id) => [id, new Promise<void>((resolve) => releases.set(id, resolve))]));
+    const push = vi.fn(async () => {});
+    const kill = vi.fn(async (_provider: string, runtime: { blockId: string }) => { releases.get(runtime.blockId)!(); });
+    const controls = { push, kill };
+    const dispatch = vi.fn(async (target: HarnessBlock, _prompt: string, runtime: Parameters<Parameters<HarnessRunner["start"]>[2]>[2]) => {
+      await runtime.started(`/sessions/${target.id}`);
+      if (target.id !== "parent") {
+        await runtime.activity({ ...session(`${target.id} partial output`), status: "in_progress" });
+        await gates.get(target.id);
+        // Provider adapters wrap cancellation errors before returning to the runner.
+        try { runtime.assertActive(); } catch (error) { throw new Error(`Provider: ${String(error)}`); }
+        return session(`${target.id} finished`);
+      }
+      const use = (id: string, action: string, extra: Record<string, unknown> = {}) => runner.flowTool(runtime.runId, "parent", "workflow_use_block", { block_id: id, action, ...extra }, controls);
+      expect(await use("first", "start", { input: "Build feature" })).toMatchObject({ completed: false });
+      expect(await use("first", "push", { input: "Include tests" })).toMatchObject({ delivery: "queued" });
+      expect(await use("second", "start", { input: "Review code" })).toMatchObject({ completed: false });
+      await vi.waitFor(async () => {
+        const blocks = (await store.runs())[0]!.blocks;
+        expect(blocks.find((item) => item.blockId === "first")?.workspace).toBe("/sessions/first");
+        expect(blocks.find((item) => item.blockId === "second")?.output).toContain("partial output");
+        expect(push).toHaveBeenCalledWith("provider", "/sessions/first", "Include tests");
+      });
+      expect(await use("first", "tail")).toMatchObject({ completed: false, output: "first partial output" });
+      expect(await use("first", "push", { input: "Also check lint" })).toMatchObject({ delivery: "sent" });
+      expect(push).toHaveBeenCalledWith("provider", "/sessions/first", "Also check lint");
+      expect(await use("second", "kill")).toMatchObject({ status: "cancelled", completed: true });
+      expect(await use("first", "status")).toMatchObject({ status: "running", completed: false });
+      releases.get("first")!();
+      expect(await use("first", "wait", { wait_seconds: 1 })).toMatchObject({ completed: true, output: "first finished" });
+      return session("Parent finished");
+    });
+    await runner.start(definition.id, "Manage children", dispatch, "provider", undefined, "parent");
+    const run = await finished();
+    expect(run.status).toBe("succeeded");
+    expect(run.blocks.find((item) => item.blockId === "second")?.status).toBe("cancelled");
+    expect(kill).toHaveBeenCalledOnce();
+    expect(dispatch.mock.calls.filter(([target]) => target.id === "first")).toHaveLength(1);
+  });
+
+  it("returns progress after a bounded wait and polls without restarting the child", async () => {
+    const { runner, definition, finished } = await setup([block("parent", "chatbox", { prompt: "" }), block("child", "chatbox", { prompt: "" })], [edge("parent", "child", "use")], 2);
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    let starts = 0;
+    await runner.start(definition.id, "Start", async (target, _prompt, runtime) => {
+      if (target.id === "child") { starts++; await runtime.activity({ ...session("Still working"), status: "in_progress" }); await gate; return session("Done"); }
+      const use = (action: string, extra: Record<string, unknown> = {}) => runner.flowTool(runtime.runId, "parent", "workflow_use_block", { block_id: "child", action, ...extra });
+      await use("start", { input: "Long task" });
+      expect(await use("wait", { wait_seconds: 1 })).toMatchObject({ completed: false });
+      expect(await use("tail")).toMatchObject({ output: "Still working", completed: false });
+      expect(await use("start", { input: "Long task" })).toMatchObject({ alreadyRunning: true });
+      release();
+      expect(await use("wait", { wait_seconds: 1 })).toMatchObject({ output: "Done", completed: true });
+      return session("Parent done");
+    }, "provider", undefined, "parent");
+    expect((await finished(3000)).status).toBe("succeeded");
+    expect(starts).toBe(1);
+  });
+
+  it("keeps launched children alive after the parent finishes its turn", async () => {
+    const { runner, definition, store, finished } = await setup([block("parent", "chatbox"), block("child", "chatbox")], [edge("parent", "child", "use")], 1);
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    await runner.start(definition.id, "Start", async (target, _prompt, runtime) => {
+      if (target.id === "child") { await runtime.activity({ ...session("Working"), status: "in_progress" }); await gate; return session("Child done"); }
+      await runner.flowTool(runtime.runId, "parent", "workflow_use_block", { block_id: "child", input: "Work" });
+      return session("Parent done");
+    }, "provider", undefined, "parent");
+    await vi.waitFor(async () => {
+      const run = (await store.runs())[0]!;
+      expect(run.blocks.find((item) => item.blockId === "parent")?.status).toBe("succeeded");
+      expect(run.blocks.find((item) => item.blockId === "child")?.output).toBe("Working");
+      expect(run.status).toBe("running");
+    });
+    release();
+    expect((await finished()).status).toBe("succeeded");
+  });
+
+  it("can stop a queued child without starting or cancelling its parent", async () => {
+    const { runner, definition, finished } = await setup([block("parent", "chatbox", { prompt: "" }), block("child", "chatbox", { prompt: "" })], [edge("parent", "child", "use")], 1);
+    const kill = vi.fn();
+    await runner.start(definition.id, "Start", async (target, _prompt, runtime) => {
+      expect(target.id).toBe("parent");
+      await runner.flowTool(runtime.runId, "parent", "workflow_use_block", { block_id: "child", action: "start", input: "Work" });
+      await runner.flowTool(runtime.runId, "parent", "workflow_use_block", { block_id: "child", action: "kill" }, { push: vi.fn(), kill });
+      return session("Parent done");
+    }, "provider", undefined, "parent");
+    const run = await finished();
+    expect(run.status).toBe("succeeded");
+    expect(run.blocks.find((item) => item.blockId === "child")?.status).toBe("cancelled");
+    expect(kill).not.toHaveBeenCalled();
+  });
+
+  it("stops a child's pending user prompt without leaving the workflow waiting", async () => {
+    const { runner, definition, store, finished } = await setup([block("parent", "chatbox"), block("child", "chatbox"), block("question", "user_prompt")], [edge("parent", "child", "use"), edge("child", "question", "use")], 2);
+    await runner.start(definition.id, "Start", async (target, _prompt, runtime) => {
+      if (target.id === "child") {
+        await runner.flowTool(runtime.runId, "child", "workflow_use_block", { block_id: "question", input: "Choose an option" });
+        runtime.assertActive(); return session("Child done");
+      }
+      await runner.flowTool(runtime.runId, "parent", "workflow_use_block", { block_id: "child", action: "start", input: "Work" });
+      await vi.waitFor(async () => expect((await store.runs())[0]!.blocks.find((item) => item.blockId === "question")?.status).toBe("awaiting_user_input"));
+      await runner.flowTool(runtime.runId, "parent", "workflow_use_block", { block_id: "child", action: "kill" }, { push: vi.fn(), kill: vi.fn() });
+      return session("Parent done");
+    }, "provider", undefined, "parent");
+    const run = await finished();
+    expect(run.status).toBe("succeeded");
+    expect(run.blocks.find((item) => item.blockId === "question")?.status).toBe("cancelled");
+    expect(run.blocks.find((item) => item.blockId === "question")?.question).toBeUndefined();
+  });
+
   it("passes each output to followers and only starts the selected entry", async () => {
     const { runner, definition, finished } = await setup([block("button", "start_button", { prompt: "Configured prompt" }), block("textStart", "start_input"), block("text", "text", { prompt: "Text: {{input}}" }), block("timer", "timer", { seconds: 0 }), block("agent", "ai")], [edge("button", "text"), edge("text", "timer"), edge("timer", "agent")]);
     const dispatch = vi.fn(async (_block, prompt) => { expect(prompt).toContain("Text: Configured prompt"); return session("result"); });
@@ -192,15 +307,17 @@ describe("typed workflows", () => {
     expect(run.blocks.find((state) => state.blockId === "timer")?.output).toBe("Text: Configured prompt");
   });
 
-  it("lets an AI use text and another AI repeatedly with a single context even at concurrency one", async () => {
-    const { runner, definition, finished } = await setup([block("start", "start_input"), block("agent", "ai"), block("instructions", "text", { prompt: "Tool: {{input}}" }), block("worker", "ai"), block("after", "text")], [edge("start", "agent"), edge("agent", "instructions", "use"), edge("agent", "worker", "use"), edge("worker", "after")]);
+  it("lets an AI use text and another AI repeatedly with a single context using nonblocking starts and explicit waits", async () => {
+    const { runner, definition, finished } = await setup([block("start", "start_input"), block("agent", "ai"), block("instructions", "text", { prompt: "Tool: {{input}}" }), block("worker", "ai"), block("after", "text")], [edge("start", "agent"), edge("agent", "instructions", "use"), edge("agent", "worker", "use"), edge("worker", "after")], 2);
     const append = vi.fn(async (_block: HarnessBlock, prompt: string, _runtime: { workspace: string }) => session(`appended:${prompt}`));
     const dispatch = vi.fn(async (target, _prompt, runtime) => {
       await runtime.started(`/sessions/${target.id}`);
       if (target.id === "worker") return session("worker first");
       expect(await runner.flowTool(runtime.runId, target.id, "workflow_use_block", { block_id: "instructions", input: "hello" })).toMatchObject({ output: "Tool: hello" });
-      expect(await runner.flowTool(runtime.runId, target.id, "workflow_use_block", { block_id: "worker", input: "first" })).toMatchObject({ output: "worker first" });
-      expect(await runner.flowTool(runtime.runId, target.id, "workflow_use_block", { block_id: "worker", input: "second" })).toMatchObject({ output: expect.stringContaining("appended:") });
+      await runner.flowTool(runtime.runId, target.id, "workflow_use_block", { block_id: "worker", input: "first" });
+      expect(await runner.flowTool(runtime.runId, target.id, "workflow_use_block", { block_id: "worker", action: "wait" })).toMatchObject({ output: "worker first", completed: true });
+      await runner.flowTool(runtime.runId, target.id, "workflow_use_block", { block_id: "worker", input: "second" });
+      expect(await runner.flowTool(runtime.runId, target.id, "workflow_use_block", { block_id: "worker", action: "wait" })).toMatchObject({ output: expect.stringContaining("appended:"), completed: true });
       await expect(runner.flowTool(runtime.runId, target.id, "workflow_use_block", { block_id: "after", input: "bad" })).rejects.toThrow("connected");
       return session("caller finished");
     });

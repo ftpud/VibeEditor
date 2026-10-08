@@ -14,6 +14,8 @@ type AnswerQuestion = (provider: string, workspace: string, input: string) => Pr
 type FireTimer = (provider: string, workspace: string) => Promise<boolean>;
 type ActiveExecution = { run: HarnessRun; blocks: HarnessBlock[]; edges: HarnessEdge[]; outputs: Map<string, string>; dispatch: Dispatch; append: Append; defaultProvider: string; background: Set<Promise<void>>; stackInvocations: Map<string, number>; loopInvocations: Map<string, number>; turnClaims: Map<string, string>; scheduler: ExecutionScheduler };
 type RecoveryPolicy = { maxAttempts: number; transportBackoffMs: number; maxElapsedMs?: number; jitterRatio?: number; random?: () => number };
+type FlowControls = { push(provider: string, workspace: string, input: string): Promise<unknown>; kill: Interrupt };
+type FlowBlockTask = { owner: string; input: string; promise: Promise<string>; pendingInputs: string[]; controls?: FlowControls; steering?: boolean };
 type ResolvedRecoveryPolicy = Required<RecoveryPolicy>;
 export type HarnessRecoveryInspector = {
   session(provider: string, workspace: string): Promise<AiSession | undefined>;
@@ -23,6 +25,8 @@ export type HarnessRecoveryInspector = {
 
 export class HarnessRunner {
   private readonly flowInvocations = new Map<string, (id: string, input: string, ancestors?: string[]) => Promise<string>>();
+  private readonly stoppedBlocks = new Set<string>();
+  private readonly flowBlockTasks = new Map<string, FlowBlockTask>();
   private readonly appToolCalls = new Map<string, Promise<unknown>>();
   private readonly resumingChats = new Set<string>();
   private readonly flowAnswers = new Map<string, (answer: string) => void>();
@@ -590,21 +594,23 @@ export class HarnessRunner {
         for (const block of run.blocks) if (isActiveStatus(block.status)) { block.status = "cancelled"; block.completedAt = completedAt; block.error = undefined; }
         await this.update(run);
       }
+      for (const key of this.stoppedBlocks) if (key.startsWith(`${run.id}:`)) this.stoppedBlocks.delete(key);
+      for (const key of this.flowBlockTasks.keys()) if (key.startsWith(`${run.id}:`)) this.flowBlockTasks.delete(key);
       this.flowInvocations.delete(run.id); this.cancelled.delete(run.id); this.activeRuns.delete(run.id); this.activeProviders.delete(run.id); this.executions.delete(run.id);
     }
   }
 
-  async flowTool(runId: string, blockId: string, name: string, args: Record<string, unknown>): Promise<unknown> {
+  async flowTool(runId: string, blockId: string, name: string, args: Record<string, unknown>, controls?: FlowControls): Promise<unknown> {
     const { run } = this.activeExecution(runId);
     const operation = await this.beginOperation(run, "tool_command", `flow-tool:${crypto.randomUUID()}`, blockId, { name, args });
     try {
-      const result = await this.callFlowTool(runId, blockId, name, args);
+      const result = await this.callFlowTool(runId, blockId, name, args, controls);
       await this.finishOperation(run, operation, "succeeded", result);
       return result;
     } catch (error) { await this.finishOperation(run, operation, "failed", undefined, error); throw error; }
   }
 
-  private async callFlowTool(runId: string, blockId: string, name: string, args: Record<string, unknown>): Promise<unknown> {
+  private async callFlowTool(runId: string, blockId: string, name: string, args: Record<string, unknown>, controls?: FlowControls): Promise<unknown> {
     const execution = this.activeExecution(runId);
     const state = execution.run.blocks.find((item) => item.blockId === blockId);
     if (state?.status !== "running" || !["ai", "chatbox"].includes(execution.blocks.find((block) => block.id === blockId)?.type ?? "")) throw new Error("Only an active AI Agent or Chatbox can use flow tools");
@@ -620,6 +626,8 @@ export class HarnessRunner {
     const textInput = args.input ?? "";
     if (!edge || typeof textInput !== "string" || textInput.length > 100_000) throw new Error("Use a connected block ID and a text input of at most 100000 characters");
     const target = execution.blocks.find((block) => block.id === edge.to)!;
+    if (["ai", "chatbox"].includes(target.type)) return this.useAgentBlock(execution, blockId, edge, target, textInput, args, controls);
+    if (args.wait_seconds !== undefined) throw new Error("wait_seconds is only available for AI Agent and Chatbox targets");
     if (target.type === "run_app") {
       const allowed = target.app?.actions ?? (target.app?.action ? [target.app.action] : []);
       if (args.action !== undefined && !allowed.includes(args.action as typeof allowed[number])) throw new Error(`App '${target.label}' does not allow '${String(args.action)}'. Allowed actions for workflow v${execution.run.harnessVersion}: ${allowed.join(", ") || "none"}. If you changed the design, save it and start a new conversation to apply the new allowed actions.`);
@@ -650,6 +658,105 @@ export class HarnessRunner {
     finally { if (this.appToolCalls.get(key) === result) this.appToolCalls.delete(key); }
   }
 
+  private async useAgentBlock(execution: ActiveExecution, callerId: string, edge: HarnessEdge, target: HarnessBlock, input: string, args: Record<string, unknown>, controls?: FlowControls): Promise<unknown> {
+    const { run } = execution;
+    const key = `${run.id}:${target.id}`;
+    const state = run.blocks.find((item) => item.blockId === target.id)!;
+    const waitSeconds = args.wait_seconds ?? run.definition?.settings?.blockWaitSeconds ?? 30;
+    if (waitSeconds !== undefined && (typeof waitSeconds !== "number" || !Number.isInteger(waitSeconds) || waitSeconds < 0 || waitSeconds > 120)) throw new Error("wait_seconds must be an integer from 0 to 120");
+    if (args.lines !== undefined && (args.action !== "tail" || typeof args.lines !== "number" || !Number.isInteger(args.lines) || args.lines < 1 || args.lines > 10000)) throw new Error("Use lines from 1 to 10000 with action 'tail'");
+    if (args.action !== undefined && !["start", "push", "kill", "status", "tail", "wait"].includes(String(args.action))) throw new Error("AI Agent and Chatbox actions are start, push, status, tail, wait, and kill");
+    const snapshot = (finished?: boolean, output?: string) => {
+      const completed = finished ?? (state.status === "cancelled" || !this.flowBlockTasks.has(key) && ["succeeded", "failed", "cancelled", "blocked", "skipped"].includes(state.status));
+      const lines = args.lines as number | undefined;
+      const tail = (text: string) => lines ? text.split("\n").slice(-lines).join("\n") : text;
+      return { blockId: target.id, status: state.status, completed, output: tail(output ?? (state.status === "queued" ? "" : state.chatMessages?.at(-1)?.text ?? state.output ?? "")), ...(args.action === "tail" ? { activity: tail((state.agentActivity ?? []).map((item) => item.text).join("\n")) } : {}), ...(state.error ? { error: state.error } : {}), ...(state.question ? { question: state.question } : {}), ...(state.waitingUntil ? { waitingUntil: state.waitingUntil } : {}) };
+    };
+    if (args.action === "status" || args.action === "tail") return snapshot();
+    let task = this.flowBlockTasks.get(key);
+    if (args.action === "kill") {
+      if (!task) return snapshot();
+      if (task.owner !== callerId) throw new Error("Only the parent that started this block can stop it");
+      if (!controls) throw new Error("This runtime cannot stop a downstream agent");
+      this.stoppedBlocks.add(key);
+      state.status = "cancelled"; state.completedAt = new Date().toISOString(); state.error = undefined;
+      state.pendingPermission = undefined; state.question = undefined; state.pauseId = undefined; state.waitingUntil = undefined;
+      run.status = this.runActivityStatus(run); await this.update(run);
+      if (state.workspace) await controls.kill(state.provider ?? target.provider ?? execution.defaultProvider, { runId: run.id, blockId: target.id, workspace: state.workspace });
+      return { ...snapshot(), status: "cancelled", completed: true };
+    }
+    if (args.action === "push" && task) {
+      if (task.owner !== callerId) throw new Error("Only the parent that started this block can push instructions");
+      if (!input.trim()) throw new Error("Push needs a nonempty prompt");
+      if (!controls) throw new Error("This runtime cannot steer a downstream agent");
+      task.controls = controls; task.pendingInputs.push(input);
+      const delivered = await this.deliverChildInputs(run, state, task);
+      return { ...snapshot(), delivery: delivered ? "sent" : "queued" };
+    }
+    if (task && args.action !== "wait") return { ...snapshot(), alreadyRunning: true };
+    if (!task && args.action === "wait") return snapshot();
+    let ancestor = callerId;
+    const visited = new Set<string>();
+    while (!visited.has(ancestor)) {
+      visited.add(ancestor);
+      const parent = this.flowBlockTasks.get(`${run.id}:${ancestor}`)?.owner;
+      if (!parent) break;
+      if (parent === target.id) throw new Error("This block is already active; recursive tool calls to an upstream parent are not allowed");
+      ancestor = parent;
+    }
+    if (!task && state.status === "running") throw new Error("This block is already active; recursive tool calls are not allowed");
+    if (args.action === "wait" && (run.definition?.settings?.concurrency ?? this.concurrency) < 2) throw new Error("Waiting on downstream agents needs at least 2 concurrent blocks; use status/tail or increase workflow concurrency");
+    if (args.action === "push" && !input.trim()) throw new Error("Push needs a nonempty prompt");
+    if (!task) {
+      const invoke = this.flowInvocations.get(run.id);
+      if (!invoke) throw new Error("Flow is unavailable");
+      this.stoppedBlocks.delete(key); state.status = "queued"; state.output = undefined; state.agentActivity = []; state.completedAt = undefined;
+      const promise = (async () => {
+        const transfer = await this.traceConnection(run, edge, "forward", "active");
+        try {
+          const output = await invoke(target.id, input, [callerId]);
+          transfer.status = "succeeded"; transfer.completedAt = new Date().toISOString();
+          await this.traceConnection(run, edge, "return", "succeeded");
+          return output;
+        } catch (error) { transfer.status = "failed"; transfer.completedAt = new Date().toISOString(); await this.update(run); throw error; }
+      })();
+      task = { owner: callerId, input, promise, pendingInputs: [], controls }; this.flowBlockTasks.set(key, task);
+      const tracked = promise.then(() => {}, () => {}).finally(() => {
+        execution.background.delete(tracked);
+        if (this.flowBlockTasks.get(key)?.promise === promise) this.flowBlockTasks.delete(key);
+      });
+      execution.background.add(tracked);
+    }
+    // Starting or pushing a turn returns immediately. Only an explicit wait blocks.
+    if (args.action !== "wait" || waitSeconds === 0) return snapshot();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const result = await Promise.race([task.promise.then((output) => ({ output })), new Promise<undefined>((resolve) => { timer = setTimeout(() => resolve(undefined), waitSeconds * 1000); })]);
+      this.assertActive(run.id);
+      return result ? snapshot(true, result.output) : snapshot();
+    } finally { clearTimeout(timer); }
+  }
+
+  private assertBlockActive(runId: string, blockId: string): void {
+    this.assertActive(runId);
+    if (this.stoppedBlocks.has(`${runId}:${blockId}`)) throw new BlockStopped("Stopped by parent agent");
+  }
+
+  private async deliverChildInputs(run: HarnessRun, state: HarnessRun["blocks"][number], task: FlowBlockTask): Promise<boolean> {
+    if (!state.workspace || !state.sessionId || !task.controls || task.steering || !task.pendingInputs.length) return false;
+    task.steering = true;
+    try {
+      while (task.pendingInputs.length) {
+        this.assertBlockActive(run.id, state.blockId);
+        const input = task.pendingInputs[0]!;
+        await task.controls.push(state.provider!, state.workspace, input);
+        task.pendingInputs.shift(); this.log(state, "prompt", `Parent prompt: ${input}`);
+        if (state.chatMessages) state.chatMessages.push({ id: crypto.randomUUID(), role: "user", text: input, timestamp: new Date().toISOString() }, { id: crypto.randomUUID(), role: "assistant", text: "", timestamp: new Date().toISOString() });
+      }
+      await this.update(run); return true;
+    } finally { task.steering = false; }
+  }
+
   private async traceConnection(run: HarnessRun, edge: HarnessEdge, direction: HarnessConnectionTrace["direction"], status: HarnessConnectionTrace["status"]): Promise<HarnessConnectionTrace> {
     this.assertActive(run.id);
     const now = new Date().toISOString();
@@ -669,21 +776,27 @@ export class HarnessRunner {
       if (++steps > 1000) throw new Error("Flow exceeded 1000 block executions");
       const block = blocks.find((item) => item.id === id)!;
       const state = run.blocks.find((item) => item.blockId === id)!;
-      busy.add(id); state.error = undefined; state.status = "running"; state.startedAt = new Date().toISOString(); state.completedAt = undefined; state.selectedRoute = undefined;
+      if (this.stoppedBlocks.has(`${run.id}:${id}`)) return state.output ?? "";
+      busy.add(id); if (["ai", "chatbox"].includes(block.type)) state.output = undefined; state.error = undefined; state.status = "running"; state.startedAt = new Date().toISOString(); state.completedAt = undefined; state.selectedRoute = undefined;
       if (block.type === "chatbox") {
         const timestamp = new Date().toISOString();
         state.agentActivity = [];
         state.chatMessages = [...state.chatMessages ?? [], { id: crypto.randomUUID(), role: "user", text: input, timestamp }, { id: crypto.randomUUID(), role: "assistant", text: "", timestamp }].slice(-200) as NonNullable<typeof state.chatMessages>;
       }
       run.status = this.runActivityStatus(run); await this.update(run);
+      const assertInvocationActive = () => {
+        this.assertBlockActive(run.id, id);
+        for (const ancestor of ancestors) this.assertBlockActive(run.id, ancestor);
+      };
       let output = input;
       try {
+        assertInvocationActive();
         const prompt = renderHarnessPrompt(block.prompt, input, execution.outputs);
         if (!["ai", "chatbox"].includes(block.type)) { state.prompt = prompt; state.structuredInput = parseHarnessData(input, block.inputSchema, `${block.label} input`); this.log(state, "prompt", input); }
         if (["ai", "chatbox"].includes(block.type) || ["prompt", "task", "review", "verification"].includes(block.type)) {
           const tools = edges.filter((edge) => edge.from === id && (edge.type === "use" || block.type === "chatbox")).map((edge) => ({ block_id: edge.to, name: blocks.find((item) => item.id === edge.to)?.label, type: blocks.find((item) => item.id === edge.to)?.type, description: blocks.find((item) => item.id === edge.to)?.prompt, seconds: blocks.find((item) => item.id === edge.to)?.seconds, app: blocks.find((item) => item.id === edge.to)?.app }));
           const paths = block.type === "chatbox" ? [] : edges.filter((edge) => edge.from === id && edge.type === "path").map((edge) => edge.label);
-          const instructions = `${block.prompt}\n\nInput:\n{{input}}\n\nConnected tools: ${JSON.stringify(tools)}. Call workflow_use_block with block_id and input to use one. For Run App blocks, pass action (start, status, kill, or tail) from the configured allowed actions. Status and tail do not need input; tail optionally accepts lines (1–10000). Read the structured app result: app.status is process status and app.output is log text for tail. For example: workflow_use_block({"block_id":"APP_BLOCK_ID","action":"status"}) or workflow_use_block({"block_id":"APP_BLOCK_ID","action":"tail","lines":100}). Timer blocks arm immediately and return without waiting, so you can continue your work. When a Timer fires, its follow connections receive the input you supplied to it. Reusing a waiting Timer replaces its countdown. Each AI block keeps its own context. Available paths: ${JSON.stringify(paths)}. ${paths.length ? "Call workflow_choose_path before finishing to choose one path." : ""}`;
+          const instructions = `${block.prompt}\n\nInput:\n{{input}}\n\nConnected tools: ${JSON.stringify(tools)}. Call workflow_use_block with block_id and input to use one. For Run App blocks, pass action (start, status, kill, or tail) from the configured allowed actions. Status and tail do not need input; tail optionally accepts lines (1–10000). Read the structured app result: app.status is process status and app.output is log text for tail. For example: workflow_use_block({"block_id":"APP_BLOCK_ID","action":"status"}) or workflow_use_block({"block_id":"APP_BLOCK_ID","action":"tail","lines":100}). For connected AI Agents and Chatboxes, action start (or omitted action) sends input and returns immediately; start several downstream agents before checking them. Use action push with input to send more instructions to a running child (queued until ready), status to read progress, tail to read partial output and activity, and kill to stop only that child. Use action wait with wait_seconds:30 (0–120) for a bounded wait without sending another prompt; waiting needs at least 2 concurrent blocks. If completed is false, keep monitoring instead of restarting the child. Timer blocks arm immediately and return without waiting, so you can continue your work. When a Timer fires, its follow connections receive the input you supplied to it. Reusing a waiting Timer replaces its countdown. Each AI block keeps its own context. Available paths: ${JSON.stringify(paths)}. ${paths.length ? "Call workflow_choose_path before finishing to choose one path." : ""}`;
           await this.executeBlock(run, { ...block, prompt: instructions }, blocks, [], execution.outputs, execution.dispatch, execution.defaultProvider, [input]);
           output = state.output ?? "";
           if (block.type !== "chatbox" && paths.length && !state.selectedRoute) throw new Error(`${block.label} finished without choosing a path`);
@@ -695,7 +808,7 @@ export class HarnessRunner {
           try {
             const answer = new Promise<string>((resolve) => this.flowAnswers.set(key, resolve));
             run.status = this.runActivityStatus(run); await this.update(run);
-            output = await Promise.race([answer, (async () => { while (this.isActive(run.id) && this.flowAnswers.has(key)) await new Promise((resolve) => setTimeout(resolve, 100)); this.assertActive(run.id); return ""; })()]);
+            output = await Promise.race([answer, (async () => { while (this.isActive(run.id) && this.flowAnswers.has(key) && !ancestors.some((ancestor) => this.stoppedBlocks.has(`${run.id}:${ancestor}`))) await new Promise((resolve) => setTimeout(resolve, 100)); assertInvocationActive(); return ""; })()]);
           } finally { this.flowAnswers.delete(key); }
           state.question = undefined; state.pauseId = undefined;
         } else if (block.type === "timer") {
@@ -704,13 +817,18 @@ export class HarnessRunner {
           this.log(state, "lifecycle", `Timer armed for ${state.waitingUntil}`);
           return `Timer armed for ${state.waitingUntil}`;
         } else if (block.type === "script" || block.type === "run_app") {
-          const session = await execution.dispatch(block, input, { runId: run.id, blockId: id, attemptId: crypto.randomUUID(), iteration: 1, started: async () => {}, activity: async () => {}, assertActive: () => this.assertActive(run.id) });
+          const session = await execution.dispatch(block, input, { runId: run.id, blockId: id, attemptId: crypto.randomUUID(), iteration: 1, started: async () => {}, activity: async () => {}, assertActive: assertInvocationActive });
           state.tokens = session.tokens; this.assertTokenBudget(run);
           output = session.messages.filter((message) => message.role === "assistant").at(-1)?.text ?? "";
         }
         if (!["ai", "chatbox"].includes(block.type)) state.structuredOutput = parseHarnessData(output, block.outputSchema, `${block.label} output`);
-        this.assertActive(run.id); this.log(state, "response", output); state.output = output.slice(-200_000); execution.outputs.set(id, output); state.status = "succeeded"; state.completedAt = new Date().toISOString(); run.status = this.runActivityStatus(run); await this.update(run);
+        assertInvocationActive(); this.log(state, "response", output); state.output = output.slice(-200_000); execution.outputs.set(id, output); state.status = "succeeded"; state.completedAt = new Date().toISOString(); run.status = this.runActivityStatus(run); await this.update(run);
       } catch (error) {
+        if (error instanceof BlockStopped || this.stoppedBlocks.has(`${run.id}:${id}`) || ancestors.some((ancestor) => this.stoppedBlocks.has(`${run.id}:${ancestor}`))) {
+          state.status = "cancelled"; state.error = undefined; state.completedAt = new Date().toISOString();
+          state.question = undefined; state.pauseId = undefined; state.pendingPermission = undefined; state.waitingUntil = undefined;
+          await this.update(run); return state.output ?? "";
+        }
         state.status = this.isActive(run.id) ? "failed" : "cancelled"; state.error = error instanceof Error ? error.message : String(error); state.completedAt = new Date().toISOString(); this.log(state, "error", state.error); await this.update(run); throw error;
       } finally { busy.delete(id); }
       if (block.type === "markdown") this.openDocument?.({ runId: run.id, blockId: id, title: block.label.endsWith(".md") ? block.label : `${block.label}.md`, content: output });
@@ -736,7 +854,7 @@ export class HarnessRunner {
     const roots = startBlockId ? [startBlockId] : blocks.filter((block) => !edges.some((edge) => edge.to === block.id)).map((block) => block.id);
     if (!roots.length && blocks.length) roots.push(blocks[0]!.id);
     for (const id of roots) await invoke(id, run.input);
-    while (timers.size) {
+    while (timers.size || execution.background.size) {
       this.assertActive(run.id);
       const due = [...timers].find(([id]) => Date.now() >= Date.parse(run.blocks.find((state) => state.blockId === id)!.waitingUntil!));
       if (!due) { await new Promise((resolve) => setTimeout(resolve, 100)); continue; }
@@ -749,6 +867,8 @@ export class HarnessRunner {
       this.log(state, "response", input); this.log(state, "lifecycle", "Timer fired; starting followers"); run.status = this.runActivityStatus(run); await this.update(run);
       for (const edge of edges.filter((edge) => edge.from === id && (edge.type === "follow" || !edge.type))) { await this.traceConnection(run, edge, "forward", "succeeded"); await invoke(edge.to, input); }
     }
+    const failed = run.blocks.find((state) => state.status === "failed");
+    if (failed) throw new Error(failed.error ?? "A connected block failed");
     for (const state of run.blocks) if (state.status === "queued") state.status = "skipped";
   }
 
@@ -760,7 +880,7 @@ export class HarnessRunner {
     const providers = this.activeProviders.get(run.id) ?? new Set<string>(); if (state.provider) providers.add(state.provider); this.activeProviders.set(run.id, providers); await this.update(run);
     try {
       for (let index = 0; index < count; index += 1) {
-        this.assertActive(run.id);
+        this.assertBlockActive(run.id, block.id);
         const input = stack?.[index] ?? blockInput;
         const structuredInput = parseHarnessData(input, block.inputSchema, `${block.label} input`);
         if (structuredInput !== undefined) state.structuredInput = structuredInput;
@@ -785,18 +905,18 @@ export class HarnessRunner {
         const promptOperation = await this.beginOperation(run, "prompt_delivery", `prompt:${block.id}:${attemptId}`, block.id, { provider: state.provider, prompt }, attemptId);
         const iteration: HarnessBlockIteration | undefined = state.iterations ? { index: index + 1, status: "running", startedAt: new Date().toISOString(), prompt } : undefined; if (iteration) state.iterations!.push(iteration); await this.update(run);
         try {
-          const started = async (workspace: string) => { this.assertActive(run.id); state.workspace = workspace; attempt.workspace = workspace; if (iteration) iteration.workspace = workspace; await this.recordCompletedOperation(run, "session_binding", `session-workspace:${attemptId}`, block.id, { workspace }, attemptId); await this.update(run); this.assertActive(run.id); };
+          const started = async (workspace: string) => { this.assertBlockActive(run.id, block.id); state.workspace = workspace; attempt.workspace = workspace; if (iteration) iteration.workspace = workspace; await this.recordCompletedOperation(run, "session_binding", `session-workspace:${attemptId}`, block.id, { workspace }, attemptId); await this.update(run); this.assertBlockActive(run.id, block.id); };
           const activity = async (session: AiSession, waitingUntil?: string) => this.recordActivity(run, state, session, waitingUntil);
           const execution = this.executions.get(run.id);
-          this.assertActive(run.id);
+          this.assertBlockActive(run.id, block.id);
           if (!execution) throw new Error("Workflow execution is no longer active");
           const settled = await execution.scheduler.turn(block.id, () => {
             execution.turnClaims.set(block.id, attemptId);
             return state.workspace && block.type !== "review"
               ? execution.append(block, prompt, { runId: run.id, blockId: block.id, workspace: state.workspace!, activity })
-              : dispatch(this.effectiveBlock(run, block), prompt, { runId: run.id, blockId: block.id, attemptId, iteration: index + 1, started, activity, assertActive: () => this.assertActive(run.id) });
+              : dispatch(this.effectiveBlock(run, block), prompt, { runId: run.id, blockId: block.id, attemptId, iteration: index + 1, started, activity, assertActive: () => this.assertBlockActive(run.id, block.id) });
           });
-          this.assertActive(run.id);
+          this.assertBlockActive(run.id, block.id);
           if (block.type === "chatbox") state.chatMessages!.at(-1)!.text = chatResponse(settled);
           state.sessionId = settled.id; attempt.sessionId = settled.id; if (iteration) iteration.sessionId = settled.id;
           state.tokens = settled.tokens;
@@ -815,6 +935,7 @@ export class HarnessRunner {
           output = this.output(run, output);
           collected.push(output); attempt.status = "succeeded"; attempt.completedAt = new Date().toISOString(); await this.finishOperation(run, attemptOperation, "succeeded", { sessionId: settled.id, workspace: state.workspace, output: output.slice(-20_000) }); if (iteration) { iteration.output = output.slice(-200_000); iteration.status = "succeeded"; iteration.completedAt = new Date().toISOString(); } await this.update(run);
         } catch (error) {
+          if (this.stoppedBlocks.has(`${run.id}:${block.id}`)) error = new BlockStopped("Stopped by parent agent");
           this.log(state, "error", error instanceof Error ? error.message : String(error));
           const message = error instanceof Error ? error.message : String(error); attempt.status = error instanceof Cancelled ? "cancelled" : "failed"; attempt.error = message; attempt.completedAt = new Date().toISOString();
           if (promptOperation.status === "intent") await this.finishOperation(run, promptOperation, "failed", undefined, error);
@@ -828,7 +949,7 @@ export class HarnessRunner {
         if (corrected === "blocked") return;
         if (corrected === "corrected") return this.executeBlock(run, block, blocks, edges, outputs, dispatch, defaultProvider, stack);
       }
-      this.assertActive(run.id);
+      this.assertBlockActive(run.id, block.id);
       const execution = this.executions.get(run.id); if (!execution || execution.turnClaims.get(block.id) !== latestAttemptId) return;
       const boundedOutput = this.output(run, output); outputs.set(block.id, boundedOutput); state.output = boundedOutput; state.status = "succeeded"; state.completedAt = new Date().toISOString(); state.failureReason = undefined; state.retryAt = undefined; state.retryStartedAt = undefined; state.waitingUntil = undefined; state.pendingPermission = undefined; state.question = undefined; state.pauseId = undefined; this.log(state, "lifecycle", "Completed successfully"); await this.update(run);
     } finally { const active = this.activeProviders.get(run.id); if (state.provider) active?.delete(state.provider); }
@@ -920,11 +1041,15 @@ export class HarnessRunner {
   }
 
   private async recordActivity(run: HarnessRun, state: HarnessRun["blocks"][number], session: AiSession, waitingUntil?: string): Promise<void> {
-    this.assertActive(run.id);
+    this.assertBlockActive(run.id, state.blockId);
+    const sessionChanged = state.sessionId !== session.id;
+    state.sessionId = session.id;
+    const task = this.flowBlockTasks.get(`${run.id}:${state.blockId}`);
+    if (task?.pendingInputs.length) await this.deliverChildInputs(run, state, task);
     const status: "running" | HarnessPauseStatus = session.pendingPermission ? "awaiting_permission" : waitingUntil ? "waiting_timer" : session.status === "user_prompt" ? "awaiting_user_input" : "running";
     const question = status === "awaiting_user_input" ? session.messages.filter((message) => message.role === "assistant").at(-1)?.text : undefined;
     const permission = status === "awaiting_permission" ? session.pendingPermission : undefined;
-    const response = waitingUntil ? session.messages.filter((message) => message.role === "assistant").at(-1)?.text.slice(-200_000) : undefined;
+    const response = waitingUntil || ["ai", "chatbox"].includes(run.definition?.blocks.find((block) => block.id === state.blockId)?.type ?? "") ? chatResponse(session) : undefined;
     const chatReply = state.chatMessages?.at(-1);
     const chatText = chatReply?.role === "assistant" ? chatResponse(session) : undefined;
     const chatChanged = chatText !== undefined && chatText !== chatReply?.text;
@@ -935,8 +1060,8 @@ export class HarnessRunner {
     if (chatChanged) chatReply!.text = chatText!;
     const responseChanged = response !== undefined && response !== state.output;
     const pauseId = status === "running" ? undefined : state.status === status ? state.pauseId ?? crypto.randomUUID() : crypto.randomUUID();
-    if (state.status === status && state.waitingUntil === waitingUntil && state.question === question && JSON.stringify(state.pendingPermission) === JSON.stringify(permission) && state.sessionId === session.id && state.pauseId === pauseId && !responseChanged && !chatChanged && !activityChanged) return;
-    if (responseChanged) { state.output = response; this.log(state, "response", response!); }
+    if (state.status === status && state.waitingUntil === waitingUntil && state.question === question && JSON.stringify(state.pendingPermission) === JSON.stringify(permission) && state.sessionId === session.id && state.pauseId === pauseId && !responseChanged && !chatChanged && !activityChanged && !sessionChanged) return;
+    if (responseChanged) { state.output = response; if (waitingUntil) this.log(state, "response", response!); }
     const previous = state.status; state.status = status; state.sessionId = session.id; state.waitingUntil = waitingUntil; state.question = question; state.pendingPermission = permission;
     const attempt = state.attempts?.at(-1); if (attempt && session.id) { attempt.sessionId = session.id; await this.recordCompletedOperation(run, "session_binding", `session:${attempt.id}`, state.blockId, { sessionId: session.id, workspace: state.workspace }, attempt.id); }
     state.pauseId = pauseId;
@@ -1156,6 +1281,7 @@ class ExecutionScheduler {
 }
 
 class Cancelled extends Error {}
+class BlockStopped extends Cancelled {}
 class RunDurationExceeded extends Error { constructor(duration: number) { super(`Workflow run duration of ${Math.round(duration / 60_000)} minute(s) was exceeded`); } }
 class BlockedCorrection extends Error {}
 
