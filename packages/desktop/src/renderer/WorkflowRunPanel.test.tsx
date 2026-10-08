@@ -1,10 +1,10 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { HarnessDefinition, HarnessRun } from "@remote-ide/protocol";
-import { HarnessPanel } from "./HarnessPanel";
+import { BlockRunDetails, HarnessPanel } from "./HarnessPanel";
 import { WorkflowRunPanel } from "./WorkflowRunPanel";
 
-afterEach(cleanup);
+afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 const workflow: HarnessDefinition = { id: "flow", name: "Workspace check", version: 1, createdAt: "now", updatedAt: "now", blocks: [
   { id: "button", type: "start_button", label: "Quick check", prompt: "Check workspace", position: { x: 0, y: 0 } },
   { id: "input", type: "start_input", label: "Custom goal", prompt: "", position: { x: 0, y: 100 } },
@@ -185,5 +185,48 @@ describe("Workflow run library", () => {
     expect(screen.queryByRole("group", { name: "Workflow mode" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Start" })).toBeNull();
     expect(screen.queryByLabelText("Workflow input")).toBeNull();
+  });
+});
+
+
+describe("workflow chat links", () => {
+  const chat = { id: "chat", type: "chatbox" as const, label: "Assistant", prompt: "", position: { x: 0, y: 0 } };
+  const renderChat = (text: string) => render(<BlockRunDetails block={chat} onClose={vi.fn()} state={{ blockId: "chat", status: "succeeded", chatMessages: [{ id: "reply", role: "assistant", text, timestamp: "now" }] }} />);
+
+  it("opens Markdown links and bare URLs externally without navigating the workflow UI", async () => {
+    const openExternal = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal("desktop", { openExternal });
+    renderChat("[Preview](http://localhost:3000/page?foo=bar#result) https://example.com/docs");
+    const preview = screen.getByRole("link", { name: "Preview" });
+    expect(fireEvent.click(preview)).toBe(false);
+    await waitFor(() => expect(openExternal).toHaveBeenCalledWith("http://localhost:3000/page?foo=bar#result"));
+    expect(preview.getAttribute("target")).toBe("_blank");
+    fireEvent.click(screen.getByRole("link", { name: "https://example.com/docs" }));
+    await waitFor(() => expect(openExternal).toHaveBeenLastCalledWith("https://example.com/docs"));
+    const middleClick = new MouseEvent("auxclick", { button: 1, bubbles: true, cancelable: true });
+    fireEvent(preview, middleClick);
+    expect(middleClick.defaultPrevented).toBe(true);
+    await waitFor(() => expect(openExternal).toHaveBeenCalledTimes(3));
+    expect(screen.getByLabelText("Message Assistant")).toBeTruthy();
+  });
+
+  it("keeps malformed, unsafe and relative links from replacing the UI", () => {
+    const openExternal = vi.fn();
+    vi.stubGlobal("desktop", { openExternal });
+    renderChat("[Bad](http://[broken) [Unsafe](javascript:alert) [Relative](docs/readme.md) [File](file:///tmp/test.md)");
+    expect(screen.queryAllByRole("link")).toHaveLength(0);
+    expect(screen.getByText("Bad")).toBeTruthy();
+    expect(screen.getByText("Unsafe")).toBeTruthy();
+    expect(openExternal).not.toHaveBeenCalled();
+    expect(screen.getByLabelText("Message Assistant")).toBeTruthy();
+  });
+
+  it("handles external opening failures without crashing the chat", async () => {
+    const openExternal = vi.fn().mockRejectedValue(new Error("Browser could not open link"));
+    vi.stubGlobal("desktop", { openExternal });
+    renderChat("[Docs](https://example.com/docs)");
+    fireEvent.click(screen.getByRole("link", { name: "Docs" }));
+    expect(await screen.findByRole("alert")).toHaveProperty("textContent", "Browser could not open link");
+    expect(screen.getByLabelText("Message Assistant")).toBeTruthy();
   });
 });

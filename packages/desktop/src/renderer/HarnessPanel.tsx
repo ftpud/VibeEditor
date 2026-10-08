@@ -594,7 +594,7 @@ export function PauseResolution({ run, block, yesNo, label, onResolvePermission,
       <div><span className="workflow-request-eyebrow">Your input is needed</span><strong>{label}</strong></div>
       <span className="workflow-request-badge">Paused</span>
     </header>
-    {block.question && <div className="workflow-request-question workflow-message-markdown"><ReactMarkdown remarkPlugins={[remarkGfm]}>{block.question}</ReactMarkdown></div>}
+    {block.question && <div className="workflow-request-question"><WorkflowMarkdown>{block.question}</WorkflowMarkdown></div>}
     {!yesNo && <label className="workflow-request-response">Your response<textarea placeholder="Share your answer to continue…" aria-label={`Answer ${label}`} rows={4} disabled={submitting} value={answer} onChange={(event) => setAnswer(event.target.value)} /></label>}
     <footer className="workflow-request-footer">
       <span className="workflow-request-hint">{submitting ? "Resuming workflow…" : "The workflow will continue after your reply."}</span>
@@ -711,7 +711,7 @@ function WorkflowChatbox({ block, run, state, onClose, onSend, onStop, definitio
     {!!connected.length && <div className="workflow-chat-tools" aria-label="Connected chat tools"><span>Connected</span>{connected.map((label, index) => <span className="workflow-chat-tool" key={`${label}:${index}`}>{label}</span>)}</div>}
     <div className="workflow-chat-messages" ref={transcript} role="log" aria-label={`${block.label} conversation`} aria-live="off" onScroll={() => { const element = transcript.current; if (element) followMessages.current = element.scrollHeight - element.scrollTop - element.clientHeight < 60; }}>
       {!messages.length && <div className="workflow-chat-empty"><MessageSquare size={28} aria-hidden="true" /><strong>Start a conversation</strong><p>Ask a question or put the connected blocks to work.</p></div>}
-      {messages.map((item) => <article key={item.id} className={`workflow-chat-message ${item.role}`}><strong>{item.role === "user" ? "You" : block.label}</strong>{item.text ? item.role === "assistant" ? <div className="workflow-message-markdown"><ReactMarkdown remarkPlugins={[remarkGfm]}>{item.text}</ReactMarkdown></div> : <p>{item.text}</p> : <span className="workflow-chat-thinking">{busy ? "Thinking…" : "No response"}</span>}</article>)}
+      {messages.map((item) => <article key={item.id} className={`workflow-chat-message ${item.role}`}><strong>{item.role === "user" ? "You" : block.label}</strong>{item.text ? item.role === "assistant" ? <WorkflowMarkdown>{item.text}</WorkflowMarkdown> : <p>{item.text}</p> : <span className="workflow-chat-thinking">{busy ? "Thinking…" : "No response"}</span>}</article>)}
       {state?.error && <p className="workflow-chat-error" role="alert">{state.error}</p>}
     </div>
     <form className="workflow-chat-composer" onSubmit={(event) => { event.preventDefault(); void send(); }}>
@@ -758,14 +758,35 @@ function RunComparison({ selected, compared, blocks }: { selected: HarnessRun; c
   return <section className="harness-execution-log" aria-label="Workflow run comparison"><strong>Run comparison</strong><p className="harness-detail-empty">{selected.id} ({selected.status}, {total(selected).toLocaleString()} tokens) compared with {compared.id} ({compared.status}, {total(compared).toLocaleString()} tokens)</p>{blockIds.map((id) => { const current = selectedStates.get(id); const previous = comparedStates.get(id); const changed = current?.status !== previous?.status || current?.tokens?.total !== previous?.tokens?.total; return <div key={id} className={changed ? "harness-log error" : "harness-log"}><strong>{labels.get(id) ?? id}</strong><pre>{selected.id}: {current?.status ?? "not run"}{current?.tokens ? ` · ${current.tokens.total.toLocaleString()} tokens` : ""}{"\n"}{compared.id}: {previous?.status ?? "not run"}{previous?.tokens ? ` · ${previous.tokens.total.toLocaleString()} tokens` : ""}</pre></div>; })}</section>;
 }
 
+function WorkflowMarkdown({ children }: { children: string }) {
+  const [linkError, setLinkError] = useState("");
+  const openLink = async (href: string) => {
+    setLinkError("");
+    try {
+      if (window.desktop) await window.desktop.openExternal(href);
+      else window.open(href, "_blank", "noopener,noreferrer");
+    } catch (cause) { setLinkError(cause instanceof Error ? cause.message : "Could not open link"); }
+  };
+  return <div className="workflow-message-markdown"><ReactMarkdown remarkPlugins={[remarkGfm]} components={{
+    a: ({ href, children: label, title }) => {
+      let url: string | undefined;
+      try {
+        const parsed = new URL(href?.startsWith("//") ? `https:${href}` : href ?? "");
+        if (parsed.protocol === "http:" || parsed.protocol === "https:") url = parsed.href;
+      } catch { /* Incomplete and non-web links remain readable without navigating the app. */ }
+      if (!url) return <span title={title}>{label}</span>;
+      const followLink = (event: ReactMouseEvent<HTMLAnchorElement>) => { event.preventDefault(); event.stopPropagation(); void openLink(url); };
+      return <a href={url} title={title} target="_blank" rel="noopener noreferrer" onClick={followLink} onAuxClick={(event) => { if (event.button === 1) followLink(event); }}>{label}</a>;
+    },
+  }}>{children}</ReactMarkdown>{linkError && <p className="workflow-chat-error" role="alert">{linkError}</p>}</div>;
+}
+
 export function WorkflowMessage({ title, value }: { title: string; value: string }) {
   const [raw, setRaw] = useState(false);
   const markers = title === "Prompt" ? ["\n\nConnected tools:", "\n\nWorkflow runtime capability:"] : [];
   const boundary = markers.map((marker) => value.indexOf(marker)).filter((index) => index >= 0).sort((a, b) => a - b)[0];
   const content = boundary === undefined ? value : value.slice(0, boundary);
-  const markdown = (text: string) => <div className="workflow-message-markdown"><ReactMarkdown remarkPlugins={[remarkGfm]} components={{
-    a: ({ href, children }) => <a href={href} onClick={(event) => { event.preventDefault(); if (href && /^https?:\/\//i.test(href)) void window.desktop?.openExternal(href); }}>{children}</a>,
-  }}>{text}</ReactMarkdown></div>;
+  const markdown = (text: string) => <WorkflowMarkdown>{text}</WorkflowMarkdown>;
   return <section className={`workflow-message ${title.toLowerCase()}`} aria-label={title}>
     <header><span>{title === "Answer" ? <Bot size={14} /> : <MessageSquare size={14} />}<strong>{title}</strong></span><button type="button" aria-label={`${raw ? "Format" : "Show raw"} ${title.toLowerCase()}`} aria-pressed={raw} onClick={() => setRaw((value) => !value)}>{raw ? "Formatted" : "Raw"}</button></header>
     {raw ? <pre className="workflow-message-raw">{value}</pre> : <>{markdown(content)}{boundary !== undefined && <details className="workflow-runtime-context"><summary>Runtime context</summary>{markdown(value.slice(boundary).trim())}</details>}</>}
