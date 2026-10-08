@@ -234,6 +234,31 @@ describe("typed workflows", () => {
     const result = await finished(); expect(result.status).toBe("succeeded"); expect(result.blocks.find((state) => state.blockId === "after")?.output).toBe("build");
   });
 
+  it.each([
+    ["user_prompt", false, "Please build the preview"],
+    ["user_prompt", true, "Please build the preview"],
+    ["yes_no_prompt", false, "yes"],
+    ["yes_no_prompt", true, "no"],
+  ] as const)("returns a %s answer to the calling Chatbox (return edge: %s)", async (type, returnEdge, answer) => {
+    const { runner, definition, store, finished } = await setup([block("chat", "chatbox", { prompt: "" }), block("question", type, { prompt: "What should I do?" }), block("after", "text")], [edge("chat", "question", "use"), ...(returnEdge ? [edge("question", "chat")] : []), edge("question", "after")]);
+    const providerAnswer = vi.fn();
+    const dispatch = vi.fn(async (_target: HarnessBlock, _prompt: string, runtime: Parameters<Parameters<HarnessRunner["start"]>[2]>[2]) => {
+      const response = await runner.flowTool(runtime.runId, "chat", "workflow_use_block", { block_id: "question", input: "" });
+      expect(response).toMatchObject({ blockId: "question", output: answer });
+      return session(`User said: ${answer}`);
+    });
+    const run = await runner.start(definition.id, "Ask the user", dispatch, "provider", undefined, "chat");
+    await vi.waitFor(async () => expect((await store.runs())[0]?.blocks.find((item) => item.blockId === "question")?.status).toBe("awaiting_user_input"));
+    const paused = (await store.runs())[0]!.blocks.find((item) => item.blockId === "question")!;
+    await runner.answerQuestion(run.id, "question", paused.sessionId!, paused.pauseId!, answer, providerAnswer);
+    const result = await finished();
+    expect(result.status).toBe("succeeded");
+    expect(result.blocks.find((item) => item.blockId === "chat")?.chatMessages?.at(-1)?.text).toBe(`User said: ${answer}`);
+    expect(dispatch).toHaveBeenCalledOnce();
+    expect(providerAnswer).not.toHaveBeenCalled();
+    expect(result.blocks.find((item) => item.blockId === "after")?.output).toBe(answer);
+  });
+
   it.each(["yes", "no"])("validates a Yes/No answer and passes %s to followers", async (answer) => {
     const { runner, definition, store, finished } = await setup([block("start", "start_input"), block("question", "yes_no_prompt"), block("after", "text")], [edge("start", "question"), edge("question", "after")]);
     const run = await runner.start(definition.id, "Push?", vi.fn(), "provider", undefined, "start");

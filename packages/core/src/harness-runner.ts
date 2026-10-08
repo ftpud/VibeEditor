@@ -715,6 +715,12 @@ export class HarnessRunner {
       } finally { busy.delete(id); }
       if (block.type === "markdown") this.openDocument?.({ runId: run.id, blockId: id, title: block.label.endsWith(".md") ? block.label : `${block.label}.md`, content: output });
       for (const edge of edges.filter((edge) => block.type !== "chatbox" && edge.from === id && (edge.type === "follow" || !edge.type || (edge.type === "path" && edge.label === state.selectedRoute)))) {
+        // A question used as a tool returns its answer to the waiting caller.
+        // A drawn return connection must not start a second turn in that active session.
+        if ((block.type === "user_prompt" || block.type === "yes_no_prompt") && edge.to === ancestors.at(-1) && busy.has(edge.to)) {
+          await this.traceConnection(run, edge, "forward", "succeeded");
+          continue;
+        }
         if (ancestors.includes(edge.to) || edge.to === id) {
           const count = (execution.loopInvocations.get(edge.id) ?? 0) + 1;
           const limit = run.definition?.settings?.maxLoopCount ?? 100;
