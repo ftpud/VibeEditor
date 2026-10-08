@@ -2409,3 +2409,20 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 :root[data-theme="light"] .workflow-preview-controls button:hover { color: #283345; background: #00000008; border-color: #00000012; }
 :root[data-theme="light"] .harness-app-output { border-color: #d2dbe8; }
 :root[data-theme="light"] .harness-app-output pre { background: #eaf0f8; color: #283345; }
+
+.workflow-chat-activity { flex: 0 0 auto; min-width: 0; border-top: 1px solid #ffffff12; font-size: .7692rem; }
+.workflow-chat-activity > summary { display: flex; align-items: center; gap: 7px; padding: 7px 10px; cursor: pointer; color: #92969d; }
+.workflow-chat-activity summary span { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.workflow-chat-activity summary small { flex: 0 0 auto; color: #92969d; }
+.workflow-chat-activity-list { max-height: 150px; overflow: auto; padding: 0 10px 7px; }
+.workflow-chat-activity-list details > summary { display: flex; align-items: center; gap: 8px; padding: 5px 0; cursor: pointer; }
+.workflow-chat-activity-list time { flex: 0 0 auto; color: #858990; }
+.workflow-chat-activity-list pre { margin: 3px 0 7px; padding: 7px; white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; background: #202226; border-radius: 4px; font: inherit; }
+.workflow-chat-activity-list .failed { color: #ef8585; }
+.workflow-chat-activity-list .running { color: #8db9f5; }
+:root[data-theme="light"] .workflow-chat-activity { border-color: #d2dbe8; }
+:root[data-theme="light"] .workflow-chat-activity > summary, :root[data-theme="light"] .workflow-chat-activity summary small { color: #657082; }
+:root[data-theme="light"] .workflow-chat-activity-list pre { background: #eaf0f8; }
+
+.workflow-chat-activity > summary::before { content: "›"; display: inline-block; transition: transform .1s; }
+.workflow-chat-activity[open] > summary::before { transform: rotate(90deg); }

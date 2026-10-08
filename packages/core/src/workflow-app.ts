@@ -15,16 +15,18 @@ export class WorkflowAppService {
     const options = block.app;
     if (!options || !options.name.trim() || options.name.length > 120 || options.name.includes("\0")) throw new Error("Run App needs an app name of 1 to 120 characters");
     const allowed = options.actions ?? (options.action ? [options.action] : []);
+    let lines: unknown = options.lines ?? 100;
     let action: unknown = allowed.includes("start") ? "start" : allowed.length === 1 ? allowed[0] : undefined;
     // Tool calls can choose an allowed action while keeping the app's stdin separate.
     try {
       const request: unknown = JSON.parse(input);
       if (request && typeof request === "object" && "action" in request) {
         action = request.action;
+        if ("lines" in request) lines = request.lines;
         input = "input" in request && typeof request.input === "string" ? request.input : "";
       }
     } catch { /* Plain text remains the start script's input. */ }
-    if (!allowed.includes(action as HarnessAppAction)) throw new Error("Choose an allowed Run App action");
+    if (!allowed.includes(action as HarnessAppAction)) throw new Error(`Choose an allowed Run App action${action !== undefined ? ` (received '${String(action)}')` : ""}. Allowed actions: ${allowed.join(", ") || "none"}`);
     const name = options.name.trim();
     const key = `${path.resolve(workspace)}\0${name}`;
     let app = this.apps.get(key);
@@ -53,11 +55,11 @@ export class WorkflowAppService {
         await app.closed;
       }
     } else if (action === "tail") {
-      if (!Number.isInteger(options.lines ?? 100) || (options.lines ?? 100) < 1 || (options.lines ?? 100) > 10_000) throw new Error("Tail lines must be an integer from 1 to 10000");
+      if (!Number.isInteger(lines) || typeof lines !== "number" || lines < 1 || lines > 10_000) throw new Error("Tail lines must be an integer from 1 to 10000");
       if (!app) throw new Error(`App '${name}' has not been started in this workspace`);
     } else if (action !== "status") throw new Error("Unknown Run App action");
     assertActive();
-    const tail = action === "tail" ? tailLines(app!.output, options.lines ?? 100) : undefined;
+    const tail = action === "tail" ? tailLines(app!.output, lines as number) : undefined;
     // Keep even heavily escaped log text below the workflow's output limit as JSON.
     const result = { name, status: app?.status ?? "not_found", ...(app ? { pid: app.child.pid, exitCode: app.exitCode, signal: app.signal } : {}), ...(tail !== undefined ? { output: tail.slice(-30_000), truncated: tail.length > 30_000 } : {}) };
     return { id: crypto.randomUUID(), status: "idle", messages: [{ id: crypto.randomUUID(), role: "assistant", text: JSON.stringify(result), timestamp: new Date().toISOString() }] } as AiSession;

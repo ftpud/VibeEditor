@@ -142,6 +142,46 @@ describe("typed workflows", () => {
     } finally { apps.closeAll(); }
   });
 
+  it("supports input-free concurrent app status and tail calls with a requested line count", async () => {
+    const apps = new WorkflowAppService();
+    const { runner, definition, store, finished } = await setup([block("chat", "chatbox", { prompt: "" }), block("app", "run_app", { prompt: "", command: "printf 'first\\nsecond\\nthird\\n'; exec sleep 300", app: { actions: ["start", "status", "tail", "kill"], name: "status-tail-test" } })], [edge("chat", "app")]);
+    try {
+      await runner.start(definition.id, "Inspect app", async (target, input, runtime) => {
+        if (target.type === "run_app") return apps.execute(target, input, os.tmpdir(), runtime.assertActive);
+        const use = (action: string, lines?: number) => runner.flowTool(runtime.runId, "chat", "workflow_use_block", { block_id: "app", action, ...(lines !== undefined ? { lines } : {}) }) as Promise<{ app: { status: string; output?: string } }>;
+        const connected = await runner.flowTool(runtime.runId, "chat", "workflow_connections", {}) as { block_id: string }[];
+        expect(connected[0]?.block_id).toBe("app");
+        await use("start");
+        await vi.waitFor(async () => expect((await use("tail", 2)).app.output).toBe("second\nthird"));
+        const [status, tail] = await Promise.all([use("status"), use("tail", 1)]);
+        expect(status.app.status).toBe("running");
+        expect(tail.app.output).toBe("third");
+        await expect(use("tail", 0)).rejects.toThrow("1 to 10000");
+        expect((await store.runs())[0]?.blocks.find((item) => item.blockId === "app")?.status).toBe("succeeded");
+        await use("kill");
+        return session("Inspected");
+      }, "provider", undefined, "chat");
+      const run = await finished();
+      expect(run.status).toBe("succeeded");
+      expect(run.operations?.filter((item) => item.kind === "tool_command").some((item) => item.status === "failed")).toBe(true);
+      expect(run.operations?.filter((item) => item.kind === "tool_command").some((item) => item.status === "succeeded")).toBe(true);
+    } finally { apps.closeAll(); }
+  });
+
+  it("persists provider activity during a chat turn even when the response has not changed", async () => {
+    const { runner, definition, store, finished } = await setup([block("chat", "chatbox", { prompt: "" })], []);
+    await runner.start(definition.id, "Inspect", async (_target, _input, runtime) => {
+      const current = { ...session(""), status: "in_progress" as const, messages: [{ id: "user", role: "user" as const, text: "Inspect", timestamp: "now" }, { id: "exec", role: "activity" as const, text: "Running npm test", timestamp: "now" }] };
+      await runtime.activity(current);
+      expect((await store.runs())[0]?.blocks[0]?.agentActivity).toEqual([{ id: "exec", timestamp: "now", text: "Running npm test" }]);
+      current.messages[1]!.text = "Tests completed";
+      await runtime.activity(current);
+      expect((await store.runs())[0]?.blocks[0]?.agentActivity?.[0]?.text).toBe("Tests completed");
+      return session("Done");
+    }, "provider", undefined, "chat");
+    expect((await finished()).status).toBe("succeeded");
+  });
+
   it("passes each output to followers and only starts the selected entry", async () => {
     const { runner, definition, finished } = await setup([block("button", "start_button", { prompt: "Configured prompt" }), block("textStart", "start_input"), block("text", "text", { prompt: "Text: {{input}}" }), block("timer", "timer", { seconds: 0 }), block("agent", "ai")], [edge("button", "text"), edge("text", "timer"), edge("timer", "agent")]);
     const dispatch = vi.fn(async (_block, prompt) => { expect(prompt).toContain("Text: Configured prompt"); return session("result"); });

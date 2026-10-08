@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useId, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type SetStateAction } from "react";
 import { ArrowLeftRight, ArrowUpDown, AlignStartHorizontal, AlignCenterHorizontal, AlignEndHorizontal, AlignStartVertical, AlignCenterVertical, AlignEndVertical, Bot, ClipboardPaste, Clock, Copy, Download, Eye, FileText, GripHorizontal, LayoutGrid, List, Map as MapIcon, Maximize, MessageSquare, Pencil, Play, Plus, Redo2, RotateCcw, Save, Send, Settings2, Square, Terminal, Trash2, Undo2, Upload, Workflow, X, ZoomIn, ZoomOut } from "lucide-react";
-import type { AgentFile, AiModel, AiProvider, AiProviderDescriptor, HarnessBlock, HarnessAppState, HarnessDataSchema, HarnessDefinition, HarnessRun, HarnessLogEntry, HarnessStateDiagnostic, HarnessValidationIssue } from "@remote-ide/protocol";
+import type { AgentFile, AiModel, AiProvider, AiProviderDescriptor, HarnessBlock, HarnessOperation, HarnessAppState, HarnessDataSchema, HarnessDefinition, HarnessRun, HarnessLogEntry, HarnessStateDiagnostic, HarnessValidationIssue } from "@remote-ide/protocol";
 import { useWorkflowTraces } from "./workflow-tracing";
 import { ModelPicker } from "./ModelPicker";
 import ReactMarkdown from "react-markdown";
@@ -714,12 +714,30 @@ function WorkflowChatbox({ block, run, state, onClose, onSend, onStop, definitio
       {messages.map((item) => <article key={item.id} className={`workflow-chat-message ${item.role}`}><strong>{item.role === "user" ? "You" : block.label}</strong>{item.text ? item.role === "assistant" ? <WorkflowMarkdown>{item.text}</WorkflowMarkdown> : <p>{item.text}</p> : <span className="workflow-chat-thinking">{busy ? "Thinking…" : "No response"}</span>}</article>)}
       {state?.error && <p className="workflow-chat-error" role="alert">{state.error}</p>}
     </div>
+    <WorkflowChatActivity block={block} run={run} state={state} busy={busy} />
     <form className="workflow-chat-composer" onSubmit={(event) => { event.preventDefault(); void send(); }}>
       <textarea aria-label={`Message ${block.label}`} placeholder="Message this Chatbox…" rows={3} value={message} disabled={!onSend} onChange={(event) => setMessage(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void send(); } }} />
       <div><span role="status">{busy ? "Working with your workflow…" : "Enter to send · Shift+Enter for a new line"}</span>{busy && onStop ? <button type="button" aria-label="Stop chat response" onClick={() => { setError(""); void onStop().catch((reason) => setError(reason instanceof Error ? reason.message : "Could not stop response")); }}><Square size={13} aria-hidden="true" /> Stop</button> : <button type="submit" aria-label="Send chat message" disabled={!onSend || busy || !message.trim()}><Send size={14} aria-hidden="true" /> Send</button>}</div>
       {error && <p className="workflow-chat-error" role="alert">{error}</p>}
     </form>
   </section>;
+}
+
+function WorkflowChatActivity({ block, run, state, busy }: { block: HarnessBlock; run?: HarnessRun; state?: HarnessRun["blocks"][number]; busy: boolean }) {
+  const operations = (run?.operations ?? []).filter((item) => item.blockId === block.id && item.kind === "tool_command" && (!state?.startedAt || Date.parse(item.createdAt) >= Date.parse(state.startedAt))).slice(-30);
+  const activities = state?.agentActivity ?? [];
+  const describe = (operation: HarnessOperation) => {
+    const input = operation.input as { name?: string; args?: { block_id?: string; action?: string; lines?: number } } | undefined;
+    const target = run?.definition?.blocks.find((item) => item.id === input?.args?.block_id);
+    return input?.name === "workflow_use_block" ? `${target?.label ?? input.args?.block_id ?? "Connected block"}${input.args?.action ? ` · ${input.args.action}` : ""}${input.args?.lines ? ` · ${input.args.lines} lines` : ""}` : input?.name ?? "Tool call";
+  };
+  const pending = [...operations].reverse().find((item) => item.status === "intent");
+  const latest = activities.at(-1);
+  const status = state && waitingStatus(block, state);
+  const summary = status ?? (pending ? `Running ${describe(pending)}` : busy ? latest?.text.split("\n")[0] || "Agent working…" : "Agent activity");
+  if (!busy && !activities.length && !operations.length) return null;
+  const entries = [...activities.map((item) => ({ id: `activity:${item.id}`, timestamp: item.timestamp, label: item.text.split("\n")[0] || "Agent activity", detail: item.text, status: "" })), ...operations.map((item) => ({ id: item.id, timestamp: item.createdAt, label: describe(item), detail: item.error ?? (item.result !== undefined ? JSON.stringify(item.result, null, 2) : JSON.stringify(item.input, null, 2)) ?? "", status: item.status === "intent" ? "Running" : item.status === "succeeded" ? "Completed" : "Failed" }))].sort((a, b) => Date.parse(a.timestamp) - Date.parse(b.timestamp));
+  return <details className="workflow-chat-activity" aria-label="Chatbox agent activity"><summary><Terminal size={13} aria-hidden="true" /><span role="status" aria-label="Agent current activity" title={summary}>{summary}</span><small>{entries.length || "Live"}</small></summary><div className="workflow-chat-activity-list">{!entries.length && <p>Waiting for agent activity…</p>}{entries.map((item) => <details key={item.id}><summary><time>{new Date(item.timestamp).toLocaleTimeString()}</time><span title={item.label}>{item.label}</span>{item.status && <small className={item.status.toLowerCase()}>{item.status}</small>}</summary><pre>{item.detail.slice(-12000)}</pre></details>)}</div></details>;
 }
 
 function waitingStatus(block: HarnessBlock, state: HarnessRun["blocks"][number]): string | undefined {

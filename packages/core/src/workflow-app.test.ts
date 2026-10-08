@@ -67,6 +67,16 @@ describe("workflow apps", () => {
     await expect(execute("start", { app: { name: "server", actions: [] } })).rejects.toThrow("allowed");
   });
 
+  it("uses a requested tail length without changing the saved app options", async () => {
+    const { execute } = await setup();
+    const app = { command: "printf 'first\\nsecond\\nthird\\n'; exec sleep 300", app: { name: "server", actions: ["start", "tail"] as ("start" | "tail")[], lines: 2 } };
+    await execute("start", app);
+    await vi.waitFor(async () => expect((await execute("tail", app, JSON.stringify({ action: "tail", lines: 1 }))).output).toBe("third"));
+    expect((await execute("tail", app, JSON.stringify({ action: "tail" }))).output).toBe("second\nthird");
+    await expect(execute("tail", app, JSON.stringify({ action: "tail", lines: 0 }))).rejects.toThrow("Tail lines");
+    expect(app.app.lines).toBe(2);
+  });
+
   it("records natural exits and scopes app names to a workspace", async () => {
     const { execute } = await setup();
     await execute("start", { command: "printf 'done\\n'; exit 7" });

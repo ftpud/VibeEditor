@@ -193,6 +193,24 @@ describe("workflow chat links", () => {
   const chat = { id: "chat", type: "chatbox" as const, label: "Assistant", prompt: "", position: { x: 0, y: 0 } };
   const renderChat = (text: string) => render(<BlockRunDetails block={chat} onClose={vi.fn()} state={{ blockId: "chat", status: "succeeded", chatMessages: [{ id: "reply", role: "assistant", text, timestamp: "now" }] }} />);
 
+  it("shows live provider activity, connected app calls and their results", () => {
+    const timestamp = "2026-10-08T12:00:00Z";
+    const state: HarnessRun["blocks"][number] = { blockId: "chat", status: "running", startedAt: timestamp, agentActivity: [{ id: "tool", timestamp, text: "Running npm test\nTest output" }] };
+    const appWorkflow: HarnessDefinition = { ...workflow, blocks: [chat, { id: "app", type: "run_app", label: "Server", prompt: "", app: { name: "server", actions: ["status", "tail"] }, position: { x: 0, y: 0 } }], edges: [] };
+    const activeRun: HarnessRun = { ...run, definition: appWorkflow, blocks: [state] };
+    const view = render(<BlockRunDetails block={chat} run={activeRun} state={state} onClose={vi.fn()} />);
+    expect(screen.getByRole("status", { name: "Agent current activity" }).textContent).toBe("Running npm test");
+    const operation = { id: "call", idempotencyKey: "call", kind: "tool_command" as const, blockId: "chat", status: "intent" as const, createdAt: timestamp, updatedAt: timestamp, input: { name: "workflow_use_block", args: { block_id: "app", action: "tail", lines: 20 } } };
+    view.rerender(<BlockRunDetails block={chat} run={{ ...activeRun, operations: [operation] }} state={state} onClose={vi.fn()} />);
+    expect(screen.getByRole("status", { name: "Agent current activity" }).textContent).toBe("Running Server · tail · 20 lines");
+    fireEvent.click(screen.getByRole("status", { name: "Agent current activity" }));
+    expect(screen.getByText("Server · tail · 20 lines")).toBeTruthy();
+    view.rerender(<BlockRunDetails block={chat} run={{ ...activeRun, status: "succeeded", operations: [{ ...operation, status: "succeeded", result: { app: { status: "running", output: "ready" } } }] }} state={{ ...state, status: "succeeded" }} onClose={vi.fn()} />);
+    expect(screen.getByText("Completed")).toBeTruthy();
+    fireEvent.click(screen.getByText("Server · tail · 20 lines"));
+    expect(screen.getByText(/"output": "ready"/)).toBeTruthy();
+  });
+
   it("opens Markdown links and bare URLs externally without navigating the workflow UI", async () => {
     const openExternal = vi.fn().mockResolvedValue(undefined);
     vi.stubGlobal("desktop", { openExternal });

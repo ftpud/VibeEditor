@@ -23,6 +23,7 @@ export type HarnessRecoveryInspector = {
 
 export class HarnessRunner {
   private readonly flowInvocations = new Map<string, (id: string, input: string, ancestors?: string[]) => Promise<string>>();
+  private readonly appToolCalls = new Map<string, Promise<unknown>>();
   private readonly resumingChats = new Set<string>();
   private readonly flowAnswers = new Map<string, (answer: string) => void>();
   private readonly cancelled = new Set<string>();
@@ -594,11 +595,21 @@ export class HarnessRunner {
   }
 
   async flowTool(runId: string, blockId: string, name: string, args: Record<string, unknown>): Promise<unknown> {
+    const { run } = this.activeExecution(runId);
+    const operation = await this.beginOperation(run, "tool_command", `flow-tool:${crypto.randomUUID()}`, blockId, { name, args });
+    try {
+      const result = await this.callFlowTool(runId, blockId, name, args);
+      await this.finishOperation(run, operation, "succeeded", result);
+      return result;
+    } catch (error) { await this.finishOperation(run, operation, "failed", undefined, error); throw error; }
+  }
+
+  private async callFlowTool(runId: string, blockId: string, name: string, args: Record<string, unknown>): Promise<unknown> {
     const execution = this.activeExecution(runId);
     const state = execution.run.blocks.find((item) => item.blockId === blockId);
     if (state?.status !== "running" || !["ai", "chatbox"].includes(execution.blocks.find((block) => block.id === blockId)?.type ?? "")) throw new Error("Only an active AI Agent or Chatbox can use flow tools");
     const edges = execution.edges.filter((edge) => edge.from === blockId);
-    if (name === "workflow_connections") return edges.map((edge) => ({ blockId: edge.to, name: execution.blocks.find((block) => block.id === edge.to)?.label, blockType: execution.blocks.find((block) => block.id === edge.to)?.type, description: execution.blocks.find((block) => block.id === edge.to)?.prompt, seconds: execution.blocks.find((block) => block.id === edge.to)?.seconds, app: execution.blocks.find((block) => block.id === edge.to)?.app, type: edge.type ?? "follow", path: edge.label }));
+    if (name === "workflow_connections") return edges.map((edge) => ({ blockId: edge.to, block_id: edge.to, name: execution.blocks.find((block) => block.id === edge.to)?.label, blockType: execution.blocks.find((block) => block.id === edge.to)?.type, description: execution.blocks.find((block) => block.id === edge.to)?.prompt, seconds: execution.blocks.find((block) => block.id === edge.to)?.seconds, app: execution.blocks.find((block) => block.id === edge.to)?.app, type: edge.type ?? "follow", path: edge.label }));
     if (name === "workflow_choose_path") {
       const edge = edges.find((edge) => edge.type === "path" && edge.label === args.path);
       if (!edge) throw new Error("Choose a connected path by its label");
@@ -606,22 +617,37 @@ export class HarnessRunner {
     }
     if (name !== "workflow_use_block") throw new Error("Unknown flow tool");
     const edge = edges.find((edge) => (edge.type === "use" || execution.blocks.find((block) => block.id === blockId)?.type === "chatbox") && edge.to === args.block_id);
-    if (!edge || typeof args.input !== "string" || args.input.length > 100_000) throw new Error("Use a connected block ID and a text input");
+    const textInput = args.input ?? "";
+    if (!edge || typeof textInput !== "string" || textInput.length > 100_000) throw new Error("Use a connected block ID and a text input of at most 100000 characters");
+    const target = execution.blocks.find((block) => block.id === edge.to)!;
+    if (target.type === "run_app") {
+      const allowed = target.app?.actions ?? (target.app?.action ? [target.app.action] : []);
+      if (args.action !== undefined && !allowed.includes(args.action as typeof allowed[number])) throw new Error(`App '${target.label}' does not allow '${String(args.action)}'. Allowed actions for workflow v${execution.run.harnessVersion}: ${allowed.join(", ") || "none"}. If you changed the design, save it and start a new conversation to apply the new allowed actions.`);
+      if (args.lines !== undefined && (args.action !== "tail" || !Number.isInteger(args.lines) || typeof args.lines !== "number" || args.lines < 1 || args.lines > 10000)) throw new Error("Use lines from 1 to 10000 with action 'tail'");
+    } else if (args.action !== undefined || args.lines !== undefined) throw new Error("Action and lines are only available for Run App blocks");
     const invoke = this.flowInvocations.get(runId);
     if (!invoke) throw new Error("Flow is unavailable");
-    return execution.scheduler.suspend(blockId, async () => {
+    const call = () => execution.scheduler.suspend(blockId, async () => {
       const transfer = await this.traceConnection(execution.run, edge, "forward", "active");
       try {
         const appTarget = execution.blocks.find((block) => block.id === edge.to);
-        const input = appTarget?.type === "run_app" && args.action !== undefined ? JSON.stringify({ action: args.action, input: args.input }) : args.input as string;
+        const input = appTarget?.type === "run_app" && args.action !== undefined ? JSON.stringify({ action: args.action, input: textInput, ...(args.lines !== undefined ? { lines: args.lines } : {}) }) : textInput;
         const output = await invoke(edge.to, input, [blockId]);
         transfer.status = "succeeded"; transfer.completedAt = new Date().toISOString();
         await this.traceConnection(execution.run, edge, "return", "succeeded");
         const target = execution.blocks.find((block) => block.id === edge.to);
         const timer = execution.run.blocks.find((block) => block.blockId === edge.to);
-        return { blockId: edge.to, output, ...(target?.type === "timer" ? { status: "waiting", due_at: timer?.waitingUntil } : {}) };
+        const app = target?.type === "run_app" ? JSON.parse(output) : undefined;
+        return { blockId: edge.to, output, ...(app ? { app } : {}), ...(target?.type === "timer" ? { status: "waiting", due_at: timer?.waitingUntil } : {}) };
       } catch (error) { transfer.status = "failed"; transfer.completedAt = new Date().toISOString(); await this.update(execution.run); throw error; }
     });
+    if (target.type !== "run_app") return call();
+    const key = `${runId}:${target.id}`;
+    const pending = this.appToolCalls.get(key) ?? Promise.resolve();
+    const result = pending.then(call, call);
+    this.appToolCalls.set(key, result);
+    try { return await result; }
+    finally { if (this.appToolCalls.get(key) === result) this.appToolCalls.delete(key); }
   }
 
   private async traceConnection(run: HarnessRun, edge: HarnessEdge, direction: HarnessConnectionTrace["direction"], status: HarnessConnectionTrace["status"]): Promise<HarnessConnectionTrace> {
@@ -646,6 +672,7 @@ export class HarnessRunner {
       busy.add(id); state.error = undefined; state.status = "running"; state.startedAt = new Date().toISOString(); state.completedAt = undefined; state.selectedRoute = undefined;
       if (block.type === "chatbox") {
         const timestamp = new Date().toISOString();
+        state.agentActivity = [];
         state.chatMessages = [...state.chatMessages ?? [], { id: crypto.randomUUID(), role: "user", text: input, timestamp }, { id: crypto.randomUUID(), role: "assistant", text: "", timestamp }].slice(-200) as NonNullable<typeof state.chatMessages>;
       }
       run.status = this.runActivityStatus(run); await this.update(run);
@@ -656,7 +683,7 @@ export class HarnessRunner {
         if (["ai", "chatbox"].includes(block.type) || ["prompt", "task", "review", "verification"].includes(block.type)) {
           const tools = edges.filter((edge) => edge.from === id && (edge.type === "use" || block.type === "chatbox")).map((edge) => ({ block_id: edge.to, name: blocks.find((item) => item.id === edge.to)?.label, type: blocks.find((item) => item.id === edge.to)?.type, description: blocks.find((item) => item.id === edge.to)?.prompt, seconds: blocks.find((item) => item.id === edge.to)?.seconds, app: blocks.find((item) => item.id === edge.to)?.app }));
           const paths = block.type === "chatbox" ? [] : edges.filter((edge) => edge.from === id && edge.type === "path").map((edge) => edge.label);
-          const instructions = `${block.prompt}\n\nInput:\n{{input}}\n\nConnected tools: ${JSON.stringify(tools)}. Call workflow_use_block with block_id and input to use one. For Run App blocks, also pass action (start, status, kill, or tail) from the configured allowed actions. Timer blocks arm immediately and return without waiting, so you can continue your work. When a Timer fires, its follow connections receive the input you supplied to it. Reusing a waiting Timer replaces its countdown. Each AI block keeps its own context. Available paths: ${JSON.stringify(paths)}. ${paths.length ? "Call workflow_choose_path before finishing to choose one path." : ""}`;
+          const instructions = `${block.prompt}\n\nInput:\n{{input}}\n\nConnected tools: ${JSON.stringify(tools)}. Call workflow_use_block with block_id and input to use one. For Run App blocks, pass action (start, status, kill, or tail) from the configured allowed actions. Status and tail do not need input; tail optionally accepts lines (1–10000). Read the structured app result: app.status is process status and app.output is log text for tail. For example: workflow_use_block({"block_id":"APP_BLOCK_ID","action":"status"}) or workflow_use_block({"block_id":"APP_BLOCK_ID","action":"tail","lines":100}). Timer blocks arm immediately and return without waiting, so you can continue your work. When a Timer fires, its follow connections receive the input you supplied to it. Reusing a waiting Timer replaces its countdown. Each AI block keeps its own context. Available paths: ${JSON.stringify(paths)}. ${paths.length ? "Call workflow_choose_path before finishing to choose one path." : ""}`;
           await this.executeBlock(run, { ...block, prompt: instructions }, blocks, [], execution.outputs, execution.dispatch, execution.defaultProvider, [input]);
           output = state.output ?? "";
           if (block.type !== "chatbox" && paths.length && !state.selectedRoute) throw new Error(`${block.label} finished without choosing a path`);
@@ -895,10 +922,14 @@ export class HarnessRunner {
     const chatReply = state.chatMessages?.at(-1);
     const chatText = chatReply?.role === "assistant" ? chatResponse(session) : undefined;
     const chatChanged = chatText !== undefined && chatText !== chatReply?.text;
+    const lastUser = session.messages.map((message) => message.role).lastIndexOf("user");
+    const agentActivity = session.messages.slice(lastUser + 1).filter((message) => message.role === "activity").slice(-50).map((message) => ({ id: message.id, timestamp: message.timestamp, text: (message.text || message.content?.filter((item) => item.type === "text").map((item) => item.text).join("\n") || "Agent activity").slice(-8000) }));
+    const activityChanged = JSON.stringify(state.agentActivity ?? []) !== JSON.stringify(agentActivity);
+    if (activityChanged) state.agentActivity = agentActivity;
     if (chatChanged) chatReply!.text = chatText!;
     const responseChanged = response !== undefined && response !== state.output;
     const pauseId = status === "running" ? undefined : state.status === status ? state.pauseId ?? crypto.randomUUID() : crypto.randomUUID();
-    if (state.status === status && state.waitingUntil === waitingUntil && state.question === question && JSON.stringify(state.pendingPermission) === JSON.stringify(permission) && state.sessionId === session.id && state.pauseId === pauseId && !responseChanged && !chatChanged) return;
+    if (state.status === status && state.waitingUntil === waitingUntil && state.question === question && JSON.stringify(state.pendingPermission) === JSON.stringify(permission) && state.sessionId === session.id && state.pauseId === pauseId && !responseChanged && !chatChanged && !activityChanged) return;
     if (responseChanged) { state.output = response; this.log(state, "response", response!); }
     const previous = state.status; state.status = status; state.sessionId = session.id; state.waitingUntil = waitingUntil; state.question = question; state.pendingPermission = permission;
     const attempt = state.attempts?.at(-1); if (attempt && session.id) { attempt.sessionId = session.id; await this.recordCompletedOperation(run, "session_binding", `session:${attempt.id}`, state.blockId, { sessionId: session.id, workspace: state.workspace }, attempt.id); }
