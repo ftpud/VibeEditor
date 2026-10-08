@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import os from "node:os";
 import path from "node:path";
-import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 
 export type AppEvent =
   | { type: "tasks.changed" }
@@ -29,7 +29,7 @@ export class AppEventBridge {
   async emit(event: AppEvent): Promise<void> {
     await this.ready();
     const file = path.join(this.directory, `${Date.now()}-${process.pid}-${crypto.randomUUID()}.json`);
-    await this.publish(file, event);
+    await writeFile(file, `${JSON.stringify(event)}\n`, "utf8");
   }
 
   async consume(file: string): Promise<AppEvent | undefined> {
@@ -46,7 +46,7 @@ export class AppEventBridge {
     await this.ready();
     const id = `${Date.now()}-${process.pid}-${crypto.randomUUID()}`;
     const responseFile = path.join(this.responsesDirectory, `${id}.json`);
-    await this.publish(path.join(this.commandsDirectory, `${id}.json`), command);
+    await writeFile(path.join(this.commandsDirectory, `${id}.json`), `${JSON.stringify(command)}\n`, "utf8");
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
       try {
@@ -72,14 +72,6 @@ export class AppEventBridge {
     } catch (error) {
       response = { ok: false, error: error instanceof Error ? error.message : String(error) };
     } finally { await rm(file, { force: true }).catch(() => undefined); }
-    await this.publish(path.join(this.responsesDirectory, `${id}.json`), response);
-  }
-
-  private async publish(file: string, value: unknown): Promise<void> {
-    const temporary = `${file}.${crypto.randomUUID()}.tmp`;
-    try {
-      await writeFile(temporary, `${JSON.stringify(value)}\n`, "utf8");
-      await rename(temporary, file);
-    } finally { await rm(temporary, { force: true }).catch(() => undefined); }
+    await writeFile(path.join(this.responsesDirectory, `${id}.json`), `${JSON.stringify(response)}\n`, "utf8");
   }
 }

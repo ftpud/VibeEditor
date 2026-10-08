@@ -1,62 +1,11 @@
 import os from "node:os";
 import path from "node:path";
-import { mkdtemp, readdir, writeFile } from "node:fs/promises";
-import { describe, expect, it, vi } from "vitest";
+import { mkdtemp, readdir } from "node:fs/promises";
+import { describe, expect, it } from "vitest";
 import { AppEventBridge, appBridgeInstanceId } from "./app-events.js";
 import { appToolServer } from "./app-tools.js";
 
-vi.mock("node:fs/promises", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("node:fs/promises")>();
-  return { ...actual, writeFile: vi.fn(actual.writeFile) };
-});
-
 describe("AppEventBridge", () => {
-  it("keeps partial status commands and responses hidden from readers", async () => {
-    const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
-    const state = await mkdtemp(path.join(os.tmpdir(), "vibe-editor-status-publication-"));
-    const bridge = new AppEventBridge("/workspace", state);
-    await bridge.ready();
-    let releaseCommand!: () => void, releaseResponse!: () => void;
-    let commandWritten!: () => void, responseWritten!: () => void;
-    const commandGate = new Promise<void>((resolve) => { releaseCommand = resolve; });
-    const responseGate = new Promise<void>((resolve) => { releaseResponse = resolve; });
-    const commandPartial = new Promise<void>((resolve) => { commandWritten = resolve; });
-    const responsePartial = new Promise<void>((resolve) => { responseWritten = resolve; });
-    const slowWrite = (written: () => void, gate: Promise<void>): typeof writeFile => async (file, data, options) => {
-      await actual.writeFile(file, String(data).slice(0, 10), options);
-      written(); await gate;
-      await actual.writeFile(file, data, options);
-    };
-    vi.mocked(writeFile).mockImplementationOnce(slowWrite(commandWritten, commandGate)).mockImplementationOnce(slowWrite(responseWritten, responseGate));
-    let settled = false;
-    const pending = bridge.call({ name: "workflow_use_block", args: { block_id: "child", action: "status" }, workflowRunId: "run", workflowBlockId: "parent" }, 2000);
-    void pending.then(() => { settled = true; }, () => { settled = true; });
-    let consumed: Promise<void> | undefined;
-    try {
-      await commandPartial;
-      expect((await readdir(bridge.commandsDirectory)).filter((file) => file.endsWith(".json"))).toEqual([]);
-      releaseCommand();
-      let files: string[] = [];
-      await vi.waitFor(async () => { files = (await readdir(bridge.commandsDirectory)).filter((file) => file.endsWith(".json")); expect(files).toHaveLength(1); });
-      const result = { blockId: "child", status: "running", completed: false, output: "" };
-      consumed = bridge.consumeCommand(path.join(bridge.commandsDirectory, files[0]!), async (command) => { expect(command.args.action).toBe("status"); return result; });
-      await responsePartial;
-      expect((await readdir(bridge.responsesDirectory)).filter((file) => file.endsWith(".json"))).toEqual([]);
-      // Let the caller poll several times while the response is incomplete.
-      await new Promise((resolve) => setTimeout(resolve, 75));
-      expect(settled).toBe(false);
-      releaseResponse();
-      await consumed;
-      await expect(pending).resolves.toEqual(result);
-      expect(await readdir(bridge.commandsDirectory)).toEqual([]);
-      expect(await readdir(bridge.responsesDirectory)).toEqual([]);
-    } finally {
-      releaseCommand(); releaseResponse();
-      await consumed?.catch(() => {}); await pending.catch(() => {});
-      vi.mocked(writeFile).mockImplementation(actual.writeFile);
-    }
-  });
-
   it("isolates workflow commands from other Core processes for the same workspace", async () => {
     const state = await mkdtemp(path.join(os.tmpdir(), "vibe-editor-command-owners-"));
     const server = appToolServer("/workspace", "/workflow/session", "codex", "/workspace", { runId: "run", blockId: "agent", flow: true });
