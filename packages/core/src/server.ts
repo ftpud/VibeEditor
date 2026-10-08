@@ -38,7 +38,7 @@ import { AppToolService, appToolServer, withAppTools } from "./app-tools.js";
 import { TaskCheckpointStore } from "./task-checkpoints.js";
 import { RemoteTransferService } from "./remote-transfer.js";
 import { WorkspaceRootRegistry } from "./workspace-roots.js";
-import type { AiProvider, AiSession, HarnessBlock } from "@remote-ide/protocol";
+import type { AiProvider, AiSession, HarnessBlock, HarnessDefinition } from "@remote-ide/protocol";
 import { AiProviderError, findAutopilotOption, normalizeAiFailure } from "@remote-ide/acp";
 
 const execFileAsync = promisify(execFile);
@@ -848,6 +848,20 @@ async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStor
     case "harnesses.validate": return validateHarness(request.payload.harness);
     case "harnesses.runs": return { runs: await harnesses.runs(request.payload.harnessId) };
     case "harnesses.runs.delete": await harnesses.deleteRun(request.payload.runId); return {};
+    case "harnesses.test": {
+      const { definition, blockId, input, provider } = request.payload;
+      return { run: await startWorkflow({ harnessId: definition.id, input, provider, startBlockId: blockId, testDefinition: definition }, { acp, tasks, agents, harnessRunner, workflowApps, aiTimers, rootWorkspace, bridgeWorkspace, workspacePath }) };
+    }
+    case "harnesses.app.kill": {
+      const { harnessId, blockId, runId } = request.payload;
+      const run = runId ? (await harnesses.runs(harnessId)).find((run) => run.id === runId) : undefined;
+      if (runId && !run) throw new CoreError("FILE_NOT_FOUND", "Workflow run does not exist");
+      const definition = run?.definition ?? await harnesses.read(harnessId);
+      const block = definition.blocks.find((block) => block.id === blockId);
+      if (block?.type !== "run_app" || !block.app) throw new CoreError("INVALID_REQUEST", "Selected block is not a Run App");
+      await workflowApps.execute({ ...block, app: { ...block.app, actions: ["kill"] } }, '{"action":"kill"}', workspacePath, () => {});
+      return {};
+    }
     case "harnesses.run": return { run: await startWorkflow(request.payload, { acp, tasks, agents, harnessRunner, workflowApps, aiTimers, rootWorkspace, bridgeWorkspace, workspacePath }) };
     case "harnesses.chat": {
       const payload = request.payload;
@@ -1114,7 +1128,7 @@ async function resolveWorkflowCommit(workspace: string, reference: string): Prom
 
 function boundedWorkflowOutput(value: string, limit = 200_000): string { return value.length <= limit ? value : `${value.slice(0, limit)}\n… output truncated by Core`; }
 
-async function startWorkflow(input: ProtocolOperations["harnesses.run"]["payload"] & { chatRunId?: string }, context: {
+async function startWorkflow(input: ProtocolOperations["harnesses.run"]["payload"] & { chatRunId?: string; testDefinition?: HarnessDefinition }, context: {
   acp: AcpRegistry; tasks: WorkspaceTaskStore; agents: AgentsStore; harnessRunner: HarnessRunner; workflowApps: WorkflowAppService;
   aiTimers: AiTimerService; rootWorkspace: string; bridgeWorkspace: string; workspacePath: string;
 }): Promise<import("@remote-ide/protocol").HarnessRun> {
@@ -1168,7 +1182,7 @@ async function startWorkflow(input: ProtocolOperations["harnesses.run"]["payload
     });
   return input.chatRunId
     ? harnessRunner.continueChat(input.chatRunId, input.startBlockId!, input.input, dispatch, input.provider ?? "codex", append)
-    : harnessRunner.start(input.harnessId, input.input, dispatch, input.provider, append, input.startBlockId, input.rerunRunId);
+    : harnessRunner.start(input.harnessId, input.input, dispatch, input.provider, append, input.startBlockId, input.rerunRunId, input.testDefinition);
 }
 
 async function workflowSessionWorkspace(workspace: string, runId: string, blockId: string): Promise<string> {

@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import type { HarnessBlock, HarnessConnectionTrace, HarnessBlockAttempt, HarnessBlockIteration, HarnessEdge, HarnessRun, HarnessLogEntry, HarnessChildTask, HarnessFailureReason, HarnessPauseStatus, HarnessOperation, HarnessOperationKind, HarnessFeature, HarnessReviewFinding, HarnessCorrectionCycle, AiSession } from "@remote-ide/protocol";
+import type { HarnessDefinition, HarnessBlock, HarnessConnectionTrace, HarnessBlockAttempt, HarnessBlockIteration, HarnessEdge, HarnessRun, HarnessLogEntry, HarnessChildTask, HarnessFailureReason, HarnessPauseStatus, HarnessOperation, HarnessOperationKind, HarnessFeature, HarnessReviewFinding, HarnessCorrectionCycle, AiSession } from "@remote-ide/protocol";
 import { AiProviderError, normalizeAiFailure, type AiFailure } from "@remote-ide/acp";
 import { CoreError } from "./errors.js";
 import { harnessExecutionEdges, isHarnessFlow, HarnessSchemaError, parseHarnessData, validateHarness, renderHarnessPrompt } from "./harness-graph.js";
@@ -198,20 +198,20 @@ export class HarnessRunner {
     throw new Cancelled();
   }
 
-  async start(harnessId: string, input: string, dispatch: Dispatch, defaultProvider = "codex", append?: Append, startBlockId?: string, rerunRunId?: string): Promise<HarnessRun> {
+  async start(harnessId: string, input: string, dispatch: Dispatch, defaultProvider = "codex", append?: Append, startBlockId?: string, rerunRunId?: string, testDefinition?: HarnessDefinition): Promise<HarnessRun> {
     const source = rerunRunId ? (await this.store.runs()).find((run) => run.id === rerunRunId) : undefined;
     if (rerunRunId && !source) throw new CoreError("FILE_NOT_FOUND", "Workflow run does not exist");
     if (rerunRunId && !source?.definition) throw new CoreError("INVALID_REQUEST", "This workflow run has no frozen definition to rerun");
     input = source?.input ?? input;
     if (input.length > 100_000) throw new CoreError("INVALID_REQUEST", "Harness input must contain 1–100,000 characters");
-    const harness = source?.definition ?? await this.store.read(harnessId); const validation = validateHarness(harness);
+    const harness = testDefinition ? isolatedBlockDefinition(testDefinition, startBlockId!) : source?.definition ?? await this.store.read(harnessId); const validation = validateHarness(harness);
     if (!validation.valid) throw new CoreError("INVALID_REQUEST", validation.issues.map((issue) => issue.message).join("; "));
     const starts = harness.blocks.filter((block) => block.type === "start_button" || block.type === "start_input");
     if (startBlockId) {
       const selected = harness.blocks.find((block) => block.id === startBlockId);
       if (!selected) throw new CoreError("INVALID_REQUEST", "Selected workflow block does not exist");
       if (selected.type === "start_button") input = selected.prompt;
-      if (!input.trim()) throw new CoreError("INVALID_REQUEST", "Enter text to start the flow");
+      if (!testDefinition && !input.trim()) throw new CoreError("INVALID_REQUEST", "Enter text to start the flow");
     } else if (starts.length) {
       if (starts.length !== 1) throw new CoreError("INVALID_REQUEST", "Select a flow start block");
       startBlockId = starts[0]!.id;
@@ -1237,4 +1237,16 @@ export function nextWatchdogReset(usage?: AiUsage, now = Date.now()): string {
 function chatResponse(session: AiSession): string {
   const lastUser = session.messages.map((message) => message.role).lastIndexOf("user");
   return session.messages.slice(lastUser + 1).filter((message) => message.role === "assistant").map((message) => message.text).join("\n\n").slice(-200_000);
+}
+
+/** Test a draft block with its connected tools, without advancing follow/path steps. */
+export function isolatedBlockDefinition(definition: HarnessDefinition, blockId: string): HarnessDefinition {
+  if (!definition.blocks.some((block) => block.id === blockId)) throw new CoreError("INVALID_REQUEST", "Selected workflow block does not exist");
+  const ids = new Set([blockId]);
+  const tools = definition.edges.filter((edge) => edge.type === "use" || definition.blocks.find((block) => block.id === edge.from)?.type === "chatbox");
+  for (let size = -1; size !== ids.size;) {
+    size = ids.size;
+    for (const edge of tools) if (ids.has(edge.from)) ids.add(edge.to);
+  }
+  return { ...structuredClone(definition), blocks: structuredClone(definition.blocks.filter((block) => ids.has(block.id))), edges: tools.filter((edge) => ids.has(edge.from) && ids.has(edge.to)).map((edge) => ({ ...edge, type: "use" })) };
 }

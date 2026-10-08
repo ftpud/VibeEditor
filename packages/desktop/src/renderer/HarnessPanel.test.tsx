@@ -12,6 +12,24 @@ function renderEditor(ui: Parameters<typeof render>[0]) {
 }
 
 describe("HarnessPanel", () => {
+  it("switches between app and script while preserving the command and tests the unsaved draft", async () => {
+    const harness: HarnessDefinition = { id: "flow", name: "Flow", version: 1, createdAt: "now", updatedAt: "now", blocks: [{ id: "app", type: "run_app", label: "Server", prompt: "", command: "npm run dev", app: { name: "server", actions: ["start"] }, position: { x: 0, y: 0 } }], edges: [] };
+    const onTestBlock = vi.fn().mockResolvedValue({ id: "test", harnessId: "flow", status: "queued", blocks: [] });
+    const onSave = vi.fn();
+    render(<HarnessPanel designOnly harnesses={[harness]} runs={[]} providers={[]} agents={[]} onCreate={vi.fn()} onSave={onSave} onDelete={vi.fn()} onRun={vi.fn()} onTestBlock={onTestBlock} onCancelRun={vi.fn()} onError={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: "List" }));
+    fireEvent.click(screen.getByRole("button", { name: "Edit block Server" }));
+    fireEvent.click(screen.getByRole("switch", { name: "Run as app" }));
+    expect(screen.getByLabelText("Shell script")).toHaveProperty("value", "npm run dev");
+    fireEvent.change(screen.getByLabelText("Shell script"), { target: { value: "printf test" } });
+    fireEvent.change(screen.getByLabelText("Block test input"), { target: { value: "hello" } });
+    fireEvent.click(screen.getByRole("button", { name: "Test Server" }));
+    await waitFor(() => expect(onTestBlock).toHaveBeenCalledWith(expect.objectContaining({ blocks: [expect.objectContaining({ type: "script", command: "printf test" })] }), "app", "hello"));
+    expect(onSave).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("switch", { name: "Run as app" }));
+    expect(screen.getByLabelText("Run App script")).toHaveProperty("value", "printf test");
+  });
+
   it("adds a Chatbox with AI settings and optional instructions", async () => {
     const harness: HarnessDefinition = { id: "chat-flow", name: "Chat flow", version: 1, createdAt: "now", updatedAt: "now", blocks: [], edges: [] };
     const onSave = vi.fn(async (definition) => definition);
@@ -180,6 +198,14 @@ describe("HarnessPanel", () => {
     expect(screen.getByRole("button", { name: "Reset workflow zoom" }).textContent).toBe("25%");
     fireEvent.click(screen.getByRole("button", { name: "Reset workflow zoom" }));
     expect(screen.getByRole("button", { name: "Reset workflow zoom" }).textContent).toBe("100%");
+  });
+
+  it("fits a single canvas axis independently of the other viewport dimension", () => {
+    const blocks: HarnessBlock[] = [{ id: "one", type: "text", label: "One", prompt: "", position: { x: 0, y: 0 } }, { id: "two", type: "text", label: "Two", prompt: "", position: { x: 900, y: 700 } }];
+    const horizontal = fitCanvasViewport(blocks, 600, 100, 48, "horizontal");
+    const vertical = fitCanvasViewport(blocks, 100, 600, 48, "vertical");
+    expect(horizontal.zoom).toBeCloseTo(600 / (900 + 176 + 96));
+    expect(vertical.zoom).toBeCloseTo(600 / (700 + 116 + 96));
   });
 
   it("fits every workflow block into the canvas and centers the resulting viewport", () => {

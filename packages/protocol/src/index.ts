@@ -389,6 +389,8 @@ export type ProtocolOperations = {
   "harnesses.validate": { payload: { harness: HarnessDefinition }; result: { valid: boolean; issues: HarnessValidationIssue[]; order: string[] } };
   "harnesses.runs": { payload: { harnessId?: string }; result: { runs: HarnessRun[] } };
   "harnesses.runs.delete": { payload: { runId: string }; result: Record<string, never> };
+  "harnesses.test": { payload: { definition: HarnessDefinition; blockId: string; input: string; provider?: AiProvider }; result: { run: HarnessRun } };
+  "harnesses.app.kill": { payload: { harnessId: string; blockId: string; runId?: string }; result: Record<string, never> };
   "harnesses.run": { payload: { harnessId: string; input: string; startBlockId?: string; rerunRunId?: string; provider?: AiProvider }; result: { run: HarnessRun } };
   "harnesses.chat": { payload: { harnessId: string; blockId: string; input: string; runId?: string; provider?: AiProvider }; result: { run: HarnessRun } };
   "harnesses.append": { payload: { runId: string; input: string }; result: { run: HarnessRun } };
@@ -799,6 +801,8 @@ const requestTypeRegistry: Record<RequestType, true> = {
   "harnesses.validate": true,
   "harnesses.runs": true,
   "harnesses.runs.delete": true,
+  "harnesses.test": true,
+  "harnesses.app.kill": true,
   "harnesses.run": true,
   "harnesses.chat": true,
   "harnesses.append": true,

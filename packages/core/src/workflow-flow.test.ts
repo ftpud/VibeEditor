@@ -23,6 +23,31 @@ async function setup(blocks: HarnessBlock[], edges: HarnessEdge[], concurrency =
 }
 
 describe("typed workflows", () => {
+  it("tests an unsaved draft block without running followers or changing the saved definition", async () => {
+    const { runner, definition, store, finished } = await setup([block("script", "script", { command: "saved" }), block("next", "text")], [edge("script", "next")]);
+    const draft = { ...definition, blocks: definition.blocks.map((item) => item.id === "script" ? { ...item, command: "unsaved" } : item) };
+    const dispatch = vi.fn(async (item: HarnessBlock) => { expect(item.command).toBe("unsaved"); return session("test output"); });
+    await runner.start(definition.id, "", dispatch, "codex", undefined, "script", undefined, draft);
+    const run = await finished();
+    expect(run.status).toBe("succeeded");
+    expect(run.blocks).toHaveLength(1);
+    expect(run.blocks[0]).toMatchObject({ blockId: "script", output: "test output" });
+    expect(dispatch).toHaveBeenCalledTimes(1);
+    expect((await store.read(definition.id)).blocks[0]?.command).toBe("saved");
+  });
+
+  it("retains connected tools when testing an AI block and skips follow steps", async () => {
+    const { runner, definition, finished } = await setup([block("ai", "ai"), block("tool", "text", { prompt: "Tool {{input}}" }), block("next", "text")], [edge("ai", "tool", "use"), edge("ai", "next")]);
+    const dispatch = vi.fn(async (_item: HarnessBlock, _input: string, runtime: Parameters<Parameters<HarnessRunner["start"]>[2]>[2]) => {
+      expect(await runner.flowTool(runtime.runId, "ai", "workflow_use_block", { block_id: "tool", input: "hello" })).toMatchObject({ output: "Tool hello" });
+      return session("done");
+    });
+    await runner.start(definition.id, "test", dispatch, "codex", undefined, "ai", undefined, definition);
+    const run = await finished();
+    expect(run.status).toBe("succeeded");
+    expect(run.blocks.map((item) => item.blockId)).toEqual(["ai", "tool"]);
+  });
+
   it("keeps Chatbox conversations and sessions across turns and exposes every connected block", async () => {
     const { runner, definition, store, finished } = await setup([
       block("chat", "chatbox", { prompt: "" }), block("tool", "text", { prompt: "Tool: {{input}}" }), block("unused", "text", { prompt: "Never called" }),
