@@ -192,7 +192,7 @@ describe("typed workflows", () => {
         };
         expect(await use("start")).toMatchObject({ status: "running" });
         expect(await use("status")).toMatchObject({ status: "running" });
-        await vi.waitFor(async () => expect(await use("tail")).toMatchObject({ output: "ready" }));
+        await vi.waitFor(async () => expect(await use("tail")).toMatchObject({ output: expect.stringContaining("ready") }));
         expect(await use("kill")).toMatchObject({ status: "exited" });
         return session("Managed app");
       }, "provider");

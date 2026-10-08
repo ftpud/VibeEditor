@@ -27,7 +27,9 @@ describe("Workflow run library", () => {
     expect(Number(preview.querySelector("svg")!.getAttribute("width"))).toBe(392);
     fireEvent.click(screen.getByRole("button", { name: "Fit workflow vertically" }));
     expect(Number(preview.querySelector("svg")!.getAttribute("height"))).toBe(212);
-    fireEvent.click(screen.getByRole("button", { name: "Server: succeeded" }));
+    const appBlock = await screen.findByRole("button", { name: "Server: succeeded · Running in background" });
+    expect(appBlock.classList.contains("background-running")).toBe(true);
+    fireEvent.click(appBlock);
     expect(await screen.findByText(/Listening on port 3000/)).toBeTruthy();
     expect(onReadApp).toHaveBeenCalledWith("flow", "app", "run");
     const kill = screen.getByRole("button", { name: "Kill process" });
@@ -36,6 +38,8 @@ describe("Workflow run library", () => {
     fireEvent.click(kill);
     await waitFor(() => expect(onKillApp).toHaveBeenCalledWith("flow", "app", "run"));
     expect(await screen.findByText("Exited · SIGKILL")).toBeTruthy();
+    await waitFor(() => expect(appBlock.classList.contains("background-running")).toBe(false), { timeout: 2500 });
+    expect(appBlock.getAttribute("aria-label")).toBe("Server: succeeded");
   });
 
   it("refreshes app output while details are open", async () => {
@@ -44,7 +48,7 @@ describe("Workflow run library", () => {
     render(<WorkflowRunPanel {...props()} harnesses={[appWorkflow]} onReadApp={onReadApp} />);
     fireEvent.click(screen.getByRole("button", { name: "Show Workspace check" }));
     fireEvent.click(screen.getByRole("button", { name: "Server: idle" }));
-    expect(await screen.findByText("first line")).toBeTruthy();
+    await waitFor(() => expect(screen.getByLabelText("App stdout and stderr").textContent).toContain("first line"));
     await waitFor(() => expect(screen.getByLabelText("App stdout and stderr").textContent).toContain("second line"), { timeout: 2500 });
   });
 

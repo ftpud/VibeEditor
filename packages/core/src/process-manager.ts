@@ -1,8 +1,8 @@
 import crypto from "node:crypto";
-import os from "node:os";
 import path from "node:path";
 import type { IPty } from "node-pty";
 import { spawn } from "node-pty";
+import { workspaceShell } from "./workspace-shell.js";
 import { CoreError } from "./errors.js";
 
 const MAX_REPLAY_LENGTH = 1_000_000;
@@ -119,6 +119,6 @@ export class TerminalSessionHost {
 }
 
 function defaultPtyFactory(cwd: string, cols: number, rows: number): TerminalPty {
-  const shell = process.env.SHELL || (os.platform() === "win32" ? "powershell.exe" : "/bin/sh");
+  const shell = workspaceShell();
   return spawn(shell, [], { name: "xterm-256color", cols, rows, cwd, env: { ...process.env, TERM: "xterm-256color", COLORTERM: "truecolor" } });
 }

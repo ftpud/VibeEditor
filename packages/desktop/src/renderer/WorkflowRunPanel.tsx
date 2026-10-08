@@ -1,6 +1,6 @@
-import { useId, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { ArrowLeftRight, ArrowUpDown, Play, Square, Workflow, RotateCcw, ChevronDown, ChevronUp, Maximize2, Minimize2 } from "lucide-react";
-import type { HarnessBlock, HarnessDefinition, HarnessRun } from "@remote-ide/protocol";
+import type { HarnessAppState, HarnessBlock, HarnessDefinition, HarnessRun } from "@remote-ide/protocol";
 import { BlockRunDetails, PauseResolution, WorkflowMessage, type HarnessPanelProps } from "./HarnessPanel";
 import { useWorkflowTraces } from "./workflow-tracing";
 
@@ -80,12 +80,12 @@ function WorkflowCard({ workflow, expanded, hidden, onToggleExpanded, ...props }
     {run ? <>
       <div className="workflow-run-meta"><select aria-label={`Run for ${workflow.name}`} value={run.id} onChange={(event) => { setSelectedRunId(event.target.value); setSelectedBlockId(undefined); }}>{runs.map((item) => <option key={item.id} value={item.id}>{statusLabel(item.status)} · {new Date(item.createdAt).toLocaleString()}</option>)}</select><span>{completed}/{definition.blocks.length} complete</span></div>
       <details className="workflow-run-input"><summary>Run prompt</summary><WorkflowMessage key={run.id} title="Prompt" value={run.input} /></details>
-      <CompactWorkflowPreview definition={definition} run={run} selectedBlockId={selectedBlockId} onSelect={setSelectedBlockId} />
+      <CompactWorkflowPreview onReadApp={props.onReadApp} pollApps={!collapsed && !hidden} definition={definition} run={run} selectedBlockId={selectedBlockId} onSelect={setSelectedBlockId} />
       <div className="workflow-card-actions"><button aria-expanded={showStarts} onClick={() => setShowStarts((value) => !value)}><Play size={13} /> New run</button>{!activeStatuses.has(run.status) && run.definition && <button disabled={starting} onClick={() => void start(undefined, run)}><RotateCcw size={13} /> Rerun</button>}{activeRuns.map((active) => <button key={active.id} aria-label={`Stop run ${active.id}`} onClick={() => void act(() => props.onCancelRun(active.id))}><Square size={12} /> Stop{activeRuns.length > 1 ? ` · ${active.id.slice(0, 6)}` : ""}</button>)}</div>
 
       {run.blocks.filter((block) => pauseStatuses.has(block.status)).map((block) => <PauseResolution key={`${run.id}:${block.blockId}:${block.pauseId}`} {...props} run={run} block={block} label={definition.blocks.find((item) => item.id === block.blockId)?.label ?? block.blockId} yesNo={definition.blocks.find((item) => item.id === block.blockId)?.type === "yes_no_prompt"} />)}
       {run.error && <p className="workflow-card-error">{run.error}</p>}{!!run.cleanupErrors?.length && <p className="workflow-card-error">{run.cleanupErrors.join("; ")}</p>}
-    </> : <><p className="workflow-card-hint">{workflow.blocks.length} blocks · {workflow.blocks.some((block) => block.type === "chatbox") ? "Open a Chatbox or choose a starting point" : "Choose a starting point"}</p><CompactWorkflowPreview definition={definition} selectedBlockId={selectedBlockId} onSelect={setSelectedBlockId} /></>}
+    </> : <><p className="workflow-card-hint">{workflow.blocks.length} blocks · {workflow.blocks.some((block) => block.type === "chatbox") ? "Open a Chatbox or choose a starting point" : "Choose a starting point"}</p><CompactWorkflowPreview onReadApp={props.onReadApp} pollApps={!collapsed && !hidden} definition={definition} selectedBlockId={selectedBlockId} onSelect={setSelectedBlockId} /></>}
     {selectedBlock && <BlockRunDetails key={`${run?.id ?? workflow.id}:${selectedBlock.id}`} block={selectedBlock} run={run} state={run?.blocks.find((block) => block.blockId === selectedBlock.id)} tasks={run?.children?.filter((child) => child.blockId === selectedBlock.id)} onClose={() => setSelectedBlockId(undefined)} onChat={props.onChat ? async (message) => { const next = await props.onChat!(workflow.id, selectedBlock.id, message, run?.id); setStartedRun(next); setSelectedRunId(next.id); } : undefined} onCancelChat={run ? () => props.onCancelRun(run.id) : undefined} onReadApp={props.onReadApp && selectedBlock.type === "run_app" ? () => props.onReadApp!(workflow.id, selectedBlock.id, run?.id) : undefined} onKillApp={props.onKillApp && selectedBlock.type === "run_app" ? () => props.onKillApp!(workflow.id, selectedBlock.id, run?.id) : undefined} definition={definition} />}
     {(!run || showStarts) && <div className="workflow-starts">{starts.length ? starts.map((block) => renderStart(block)) : renderStart()}</div>}
     {error && <p role="alert" className="workflow-card-error">{error}</p>}
@@ -93,7 +93,27 @@ function WorkflowCard({ workflow, expanded, hidden, onToggleExpanded, ...props }
   </article>;
 }
 
-function CompactWorkflowPreview({ definition, run, selectedBlockId, onSelect }: { definition: HarnessDefinition; run?: HarnessRun; selectedBlockId?: string; onSelect(id: string): void }) {
+function CompactWorkflowPreview({ definition, run, selectedBlockId, onSelect, onReadApp, pollApps }: { definition: HarnessDefinition; run?: HarnessRun; selectedBlockId?: string; onSelect(id: string): void; onReadApp?: Props["onReadApp"]; pollApps: boolean }) {
+  const [appStatuses, setAppStatuses] = useState<Record<string, HarnessAppState["status"]>>({});
+  const appBlockIds = JSON.stringify(definition.blocks.filter((block) => block.type === "run_app" && block.app).map((block) => block.id));
+  useEffect(() => {
+    setAppStatuses({});
+    const apps = JSON.parse(appBlockIds) as string[];
+    if (!pollApps || !onReadApp || !apps.length) return;
+    let disposed = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const read = async () => {
+      const statuses = await Promise.all(apps.map(async (blockId) => {
+        try { return [blockId, (await onReadApp(definition.id, blockId, run?.id)).status] as const; }
+        catch { return [blockId, "not_found"] as const; }
+      }));
+      if (disposed) return;
+      setAppStatuses(Object.fromEntries(statuses));
+      timer = setTimeout(() => void read(), 1000);
+    };
+    void read();
+    return () => { disposed = true; clearTimeout(timer); };
+  }, [appBlockIds, definition.id, run?.id, onReadApp, pollApps]);
   const traces = useWorkflowTraces(run);
   const viewportRef = useRef<HTMLDivElement>(null);
   const [scale, setScale] = useState(1);
@@ -154,7 +174,9 @@ function CompactWorkflowPreview({ definition, run, selectedBlockId, onSelect }: 
     {blocks.map((block) => {
       const state = run?.blocks.find((item) => item.blockId === block.id);
       const status = state?.status ?? "idle";
-      return <g key={block.id} className={`workflow-compact-block ${status}${selectedBlockId === block.id ? " selected" : ""}`} transform={`translate(${block.position.x}, ${block.position.y})`} role="button" tabIndex={0} aria-pressed={selectedBlockId === block.id} aria-label={`${block.label}: ${statusLabel(status)}`} onClick={() => onSelect(block.id)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); onSelect(block.id); } }}><title>{block.label} · {statusLabel(status)}{state?.error ? ` · ${state.error}` : ""}</title><rect width={120} height={24} rx={5} /><circle cx={10} cy={12} r={3} /><text x={18} y={16}>{block.label.length > 15 ? `${block.label.slice(0, 14)}…` : block.label}</text></g>;
+      const backgroundRunning = block.type === "run_app" && appStatuses[block.id] === "running";
+      const label = `${block.label}: ${statusLabel(status)}${backgroundRunning ? " · Running in background" : ""}`;
+      return <g key={block.id} className={`workflow-compact-block ${status}${backgroundRunning ? " background-running" : ""}${selectedBlockId === block.id ? " selected" : ""}`} transform={`translate(${block.position.x}, ${block.position.y})`} role="button" tabIndex={0} aria-pressed={selectedBlockId === block.id} aria-label={label} onClick={() => onSelect(block.id)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); onSelect(block.id); } }}><title>{label}{state?.error ? ` · ${state.error}` : ""}</title><rect width={120} height={24} rx={5} /><circle cx={10} cy={12} r={3} /><text x={18} y={16}>{block.label.length > 15 ? `${block.label.slice(0, 14)}…` : block.label}</text></g>;
     })}
   </svg></div></>;
 }

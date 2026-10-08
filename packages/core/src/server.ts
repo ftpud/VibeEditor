@@ -4,7 +4,7 @@ import chokidar from "chokidar";
 import path from "node:path";
 import os from "node:os";
 import crypto from "node:crypto";
-import { mkdir, symlink } from "node:fs/promises";
+import { mkdir, realpath, symlink } from "node:fs/promises";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { protocolCompatibility, requestTypes, type FileTreeNode, type ProtocolOperations, type Request, type RequestType, type Response, type ServerEvent, type WorkspaceOptions, type WorkspaceRoot } from "@remote-ide/protocol";
@@ -266,12 +266,14 @@ export async function createServer(host: string, port: number, workspacePath: st
   });
   const recoveryRunner = harnessRunner(roots.primary().id);
   const recoveryDispatch = async (block: HarnessBlock, prompt: string, runtime: Parameters<Parameters<HarnessRunner["start"]>[2]>[2]) => providerOperation(async () => {
-    if (block.type === "script") return executeFlowScript(block, prompt, rootWorkspace, runtime.assertActive);
-    if (block.type === "run_app") return workflowApps.execute(block, prompt, rootWorkspace, runtime.assertActive);
+    const run = (await harnesses.runs()).find((item) => item.id === runtime.runId);
+    const workspace = await workflowRunWorkspace(run, rootWorkspace);
+    if (block.type === "script") return executeFlowScript(block, prompt, workspace, runtime.assertActive);
+    if (block.type === "run_app") return workflowApps.execute(block, prompt, workspace, runtime.assertActive);
     const provider = acp.get(block.provider ?? "codex");
     await assertWorkflowModelAvailable(provider, block.model, block.reasoning);
     if (block.watchdog) return recoveryRunner.watch(runtime.runId, runtime.blockId, () => provider.usage());
-    const sessionWorkspace = await workflowSessionWorkspace(rootWorkspace, runtime.runId, runtime.blockId); await runtime.started(sessionWorkspace);
+    const sessionWorkspace = await workflowSessionWorkspace(workspace, runtime.runId, runtime.blockId); await runtime.started(sessionWorkspace);
     const agentFile = block.agent ? (await agents.list(rootWorkspace)).find((item) => item.scope === block.agent!.scope && item.name === block.agent!.name) : undefined;
     if (block.agent && !agentFile) throw new CoreError("FILE_NOT_FOUND", `Agent preset '${block.agent.name}' does not exist`);
     const appTools = withAppTools(rootWorkspace, sessionWorkspace, undefined, agentFile?.agent, provider.descriptor.id, rootWorkspace);
@@ -860,8 +862,9 @@ async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStor
       const definition = run?.definition ?? await harnesses.read(harnessId);
       const block = definition.blocks.find((block) => block.id === blockId);
       if (block?.type !== "run_app" || !block.app) throw new CoreError("INVALID_REQUEST", "Selected block is not a Run App");
-      if (request.type === "harnesses.app.read") return { app: workflowApps.read(block.app.name, workspacePath) };
-      await workflowApps.execute({ ...block, app: { ...block.app, actions: ["kill"] } }, '{"action":"kill"}', workspacePath, () => {});
+      const appWorkspace = await workflowRunWorkspace(run, workspacePath);
+      if (request.type === "harnesses.app.read") return { app: workflowApps.read(block.app.name, appWorkspace) };
+      await workflowApps.execute({ ...block, app: { ...block.app, actions: ["kill"] } }, '{"action":"kill"}', appWorkspace, () => {});
       return {};
     }
     case "harnesses.run": return { run: await startWorkflow(request.payload, { acp, tasks, agents, harnessRunner, workflowApps, aiTimers, rootWorkspace, bridgeWorkspace, workspacePath }) };
@@ -1130,11 +1133,14 @@ async function resolveWorkflowCommit(workspace: string, reference: string): Prom
 
 function boundedWorkflowOutput(value: string, limit = 200_000): string { return value.length <= limit ? value : `${value.slice(0, limit)}\n… output truncated by Core`; }
 
-async function startWorkflow(input: ProtocolOperations["harnesses.run"]["payload"] & { chatRunId?: string; testDefinition?: HarnessDefinition }, context: {
+export async function startWorkflow(input: ProtocolOperations["harnesses.run"]["payload"] & { chatRunId?: string; testDefinition?: HarnessDefinition }, context: {
   acp: AcpRegistry; tasks: WorkspaceTaskStore; agents: AgentsStore; harnessRunner: HarnessRunner; workflowApps: WorkflowAppService;
   aiTimers: AiTimerService; rootWorkspace: string; bridgeWorkspace: string; workspacePath: string;
 }): Promise<import("@remote-ide/protocol").HarnessRun> {
-  const { acp, tasks, agents, harnessRunner, workflowApps, aiTimers, rootWorkspace, bridgeWorkspace, workspacePath } = context;
+  const { acp, tasks, agents, harnessRunner, workflowApps, aiTimers, rootWorkspace, bridgeWorkspace } = context;
+  const previousRunId = input.chatRunId ?? input.rerunRunId;
+  const previousRun = previousRunId ? await harnessRunner.readRun(previousRunId) : undefined;
+  const workspacePath = await workflowRunWorkspace(previousRun, context.workspacePath);
   const dispatch: Parameters<HarnessRunner["start"]>[2] = async (block, prompt, runtime) => providerOperation(async () => {
       if (block.type === "script") return executeFlowScript(block, prompt, workspacePath, runtime.assertActive);
       if (block.type === "run_app") return workflowApps.execute(block, prompt, workspacePath, runtime.assertActive);
@@ -1184,7 +1190,14 @@ async function startWorkflow(input: ProtocolOperations["harnesses.run"]["payload
     });
   return input.chatRunId
     ? harnessRunner.continueChat(input.chatRunId, input.startBlockId!, input.input, dispatch, input.provider ?? "codex", append)
-    : harnessRunner.start(input.harnessId, input.input, dispatch, input.provider, append, input.startBlockId, input.rerunRunId, input.testDefinition);
+    : harnessRunner.start(input.harnessId, input.input, dispatch, input.provider, append, input.startBlockId, input.rerunRunId, input.testDefinition, workspacePath);
+}
+
+export async function workflowRunWorkspace(run: import("@remote-ide/protocol").HarnessRun | undefined, fallback: string): Promise<string> {
+  if (run?.workspace) return run.workspace;
+  // Older runs record only per-agent session aliases, which point at the worktree.
+  const sessionWorkspace = run?.blocks.find((block) => block.workspace)?.workspace;
+  return sessionWorkspace ? realpath(sessionWorkspace) : fallback;
 }
 
 async function workflowSessionWorkspace(workspace: string, runId: string, blockId: string): Promise<string> {

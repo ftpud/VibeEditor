@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { workspaceShellCommand } from "./workspace-shell.js";
 import path from "node:path";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import type { AiSession, HarnessAppState, HarnessAppAction, HarnessBlock } from "@remote-ide/protocol";
@@ -34,7 +35,8 @@ export class WorkflowAppService {
     if (action === "start") {
       if (!block.command?.trim()) throw new Error("Run App start needs a shell script");
       if (!app || app.status === "exited") {
-        const child = spawn("/bin/sh", ["-c", block.command], { cwd: workspace, env: { ...process.env, VIBE_WORKFLOW_INPUT: input }, detached: true, stdio: ["pipe", "pipe", "pipe"] });
+        const { shell, args } = workspaceShellCommand(block.command);
+        const child = spawn(shell, args, { cwd: workspace, env: { ...process.env, TERM: "xterm-256color", COLORTERM: "truecolor", VIBE_WORKFLOW_INPUT: input }, detached: true, stdio: ["pipe", "pipe", "pipe"] });
         app = { child, output: "", status: "starting", exitCode: null, signal: null, ready: Promise.resolve(), closed: Promise.resolve() };
         const current = app;
         const collect = (chunk: Buffer) => { current.output = (current.output + chunk.toString()).slice(-200_000); };

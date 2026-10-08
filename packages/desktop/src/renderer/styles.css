@@ -2213,6 +2213,13 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 :root[data-theme="light"] .workflow-compact-block text { fill: #26384f; }
 :root[data-theme="light"] .workflow-compact-block.running rect { animation: none; fill: #e1efff; stroke: #3574f0; }
 :root[data-theme="light"] .workflow-overall-status, :root[data-theme="light"] .workflow-start-control { background: #527eb40a; }
+/* Background app processes remain live after their workflow step completes. */
+.workflow-compact-block.background-running rect { stroke: #ff626b; fill: #482d35; filter: drop-shadow(0 0 3px #ff626b99); animation: workflow-app-glow 1.8s ease-in-out infinite; }
+.workflow-compact-block.background-running circle { fill: #ff626b; }
+.workflow-compact-block.background-running.selected rect { stroke: #ff9299; stroke-width: 2; }
+:root[data-theme="light"] .workflow-compact-block.background-running rect { fill: #ffe4e6; stroke: #d43b49; }
+@keyframes workflow-app-glow { 50% { filter: drop-shadow(0 0 6px #ff626bcc); } }
+@media (prefers-reduced-motion: reduce) { .workflow-compact-block.background-running rect { animation: none; } }
 .workflow-mode-panels, .workflow-mode-panels > div:not([hidden]) { display: flex; flex-direction: column; flex: 1; min-height: 0; min-width: 0; overflow: hidden; }
 
 /* Workflow conversations in both run views. */

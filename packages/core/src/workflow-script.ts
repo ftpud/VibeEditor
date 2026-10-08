@@ -1,11 +1,13 @@
 import crypto from "node:crypto";
+import { workspaceShellCommand } from "./workspace-shell.js";
 import { spawn } from "node:child_process";
 import type { AiSession, HarnessBlock } from "@remote-ide/protocol";
 
 export async function executeFlowScript(block: HarnessBlock, input: string, workspace: string, assertActive: () => void): Promise<AiSession> {
   assertActive();
   const output = await new Promise<string>((resolve, reject) => {
-    const child = spawn("/bin/sh", ["-c", block.command!], { cwd: workspace, env: { ...globalThis.process.env, VIBE_WORKFLOW_INPUT: input }, detached: true, stdio: ["pipe", "pipe", "pipe"] });
+    const { shell, args } = workspaceShellCommand(block.command!);
+    const child = spawn(shell, args, { cwd: workspace, env: { ...globalThis.process.env, TERM: "xterm-256color", COLORTERM: "truecolor", VIBE_WORKFLOW_INPUT: input }, detached: true, stdio: ["pipe", "pipe", "pipe"] });
     let stdout = "", stderr = ""; let failure: unknown;
     child.stdout.on("data", (chunk) => { stdout = (stdout + chunk).slice(-200_000); });
     child.stderr.on("data", (chunk) => { stderr = (stderr + chunk).slice(-20_000); });

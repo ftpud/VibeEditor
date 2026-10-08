@@ -61,7 +61,7 @@ describe("workflow apps", () => {
     const configured = { ...appBlock, app: { ...appBlock.app, actions: [...appBlock.app.actions] } };
     expect((await execute("start", configured)).status).toBe("running");
     expect((await execute("start", configured, JSON.stringify({ action: "status" }))).status).toBe("running");
-    await vi.waitFor(async () => expect((await execute("start", configured, JSON.stringify({ action: "tail" }))).output).toBe("ready"));
+    await vi.waitFor(async () => expect((await execute("start", configured, JSON.stringify({ action: "tail" }))).output).toContain("ready"));
     await expect(execute("start", { app: { name: "server", actions: ["status"] } }, JSON.stringify({ action: "kill" }))).rejects.toThrow("allowed");
     expect((await execute("start", configured, JSON.stringify({ action: "kill" }))).status).toBe("exited");
     await expect(execute("start", { app: { name: "server", actions: [] } })).rejects.toThrow("allowed");
@@ -81,7 +81,7 @@ describe("workflow apps", () => {
     const { execute } = await setup();
     await execute("start", { command: "printf 'done\\n'; exit 7" });
     await vi.waitFor(async () => expect(await execute("status")).toMatchObject({ status: "exited", exitCode: 7 }));
-    expect((await execute("tail")).output).toBe("done");
+    expect((await execute("tail")).output).toContain("done");
     expect((await execute("status", {}, "", "/another-workspace")).status).toBe("not_found");
     await expect(execute("tail", {}, "", "/another-workspace")).rejects.toThrow("has not been started");
   });
