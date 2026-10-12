@@ -517,5 +517,5 @@ No implementation was performed in this continuation check.
 - Validation: full build, required repository/Gateway typechecks, full tests and final impacted UI checks; real app children/repeated concurrent starts/stops/natural exits/detached survivors/root isolation; 910 smart integration tests; smart integration suite exit 0; clean worker tree and scoped diff review.
 - Task: ff020776-f19a-4c97-acd6-0ee10731c1c3; branch feature/todo-001-proc-sidebar; provider codex. Session decision: Reused original TODO-001 task and codex conversation for related correction; no reset; task finished.
 - Implementation/integrated SHA: cb94315b3b6af409b1f2bde16863bafa14683aaf; integration b0ab7813-e3f4-47ec-8a8b-4349ea94580a completed.
-- Publishing: pending to configured origin/refs/heads/dev.
+- Publishing: pushed normally to origin/refs/heads/dev; published SHA 5656f0019cd6c7353612c505b9c105f7668db7e7; remote tracking and remote ref verified.
 - Limitations/follow-ups: Broad PID counting inflated totals and detached survivors could accumulate across starts; complete natural exits did not reproduce duplicate/stale rows. Linux /proc gives full inherited discovery; POSIX fallback, stripped identities and previous Core lifetimes remain documented limitations. Earlier lifecycle failures repaired and final suite passed; post-merge notification error reconciled.
