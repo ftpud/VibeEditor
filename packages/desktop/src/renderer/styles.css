@@ -2269,7 +2269,12 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .workflow-card .harness-run-details { height: auto; max-height: 560px; min-height: 0; margin-top: 12px; border: 1px solid var(--workflow-border); border-radius: 12px; }
 .workflow-card .harness-run-details-body { max-height: 460px; }
 .harness-iteration-list details > .workflow-message { margin: 0 10px 10px; }
-.workflow-run-input { margin-bottom: 10px; }
+.workflow-run-prompt-row { display: flex; align-items: flex-start; gap: 8px; margin-bottom: 10px; min-width: 0; }
+.workflow-run-prompt-row > .workflow-run-input { flex: 1; min-width: 0; }
+.workflow-run-controls { display: flex; flex: 0 0 auto; gap: 3px; }
+.workflow-run-controls button { display: grid; place-items: center; width: 26px; height: 26px; padding: 0; border: 0; border-radius: 5px; background: transparent; color: inherit; cursor: pointer; opacity: .7; }
+.workflow-run-controls button:hover:not(:disabled) { opacity: 1; background: #8bbaff18; }
+.workflow-run-controls button:disabled { opacity: .35; cursor: default; }
 .workflow-run-input .workflow-message { margin-top: 6px; }
 .workflow-chatbox { display: flex; flex-direction: column; min-height: 300px; }
 .workflow-chat-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 9px 14px; border-bottom: 1px solid var(--workflow-border); color: var(--workflow-muted); font-size: 10px; }

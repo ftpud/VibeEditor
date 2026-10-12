@@ -145,6 +145,83 @@ describe("Workflow run library", () => {
     expect(screen.getByRole("button", { name: "Start Quick check" })).toBeTruthy();
   });
 
+  it("places icon controls beside the prompt and reruns the selected snapshot while pending", async () => {
+    const user = userEvent.setup();
+    const historical: HarnessRun = { ...run, id: "historical", status: "succeeded", input: "Saved prompt", createdAt: "2026-10-01T12:00:00Z" };
+    const next: HarnessRun = { ...run, id: "next" };
+    let resolveRun!: (value: HarnessRun) => void;
+    const callbacks = { ...props(), onRun: vi.fn(() => new Promise<HarnessRun>((resolve) => { resolveRun = resolve; })) };
+    render(<WorkflowRunPanel {...callbacks} runs={[run, historical]} />);
+    fireEvent.click(screen.getByRole("button", { name: "Show Workspace check" }));
+    expect(screen.queryByRole("button", { name: "Rerun" })).toBeNull();
+    fireEvent.change(screen.getByRole("combobox", { name: "Run for Workspace check" }), { target: { value: "historical" } });
+    const newRun = screen.getByRole("button", { name: "New run" });
+    const rerun = screen.getByRole("button", { name: "Rerun" });
+    const promptRow = document.querySelector(".workflow-run-prompt-row")!;
+    expect(promptRow.contains(newRun)).toBe(true);
+    expect(promptRow.contains(rerun)).toBe(true);
+    expect(promptRow.querySelector("summary")?.textContent).toBe("Run prompt");
+    for (const button of [newRun, rerun]) {
+      expect(button.textContent).toBe("");
+      expect(button.title).toBeTruthy();
+      expect(button.querySelector("svg")?.getAttribute("aria-hidden")).toBe("true");
+    }
+    newRun.focus();
+    await user.keyboard("{Enter}");
+    expect(newRun.getAttribute("aria-expanded")).toBe("true");
+    expect(screen.getByRole("button", { name: "Start Quick check" })).toBeTruthy();
+    await user.tab();
+    expect(document.activeElement).toBe(rerun);
+    await user.keyboard(" ");
+    expect(callbacks.onRun).toHaveBeenCalledWith("flow", "Saved prompt", undefined, "historical");
+    expect(rerun.hasAttribute("disabled")).toBe(true);
+    expect(screen.getByRole("button", { name: "Start Quick check" }).hasAttribute("disabled")).toBe(true);
+    await user.click(rerun);
+    expect(callbacks.onRun).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole("button", { name: "Stop run run" }));
+    await waitFor(() => expect(callbacks.onCancelRun).toHaveBeenCalledWith("run"));
+    resolveRun(next);
+    await waitFor(() => expect(screen.getByRole("combobox", { name: "Run for Workspace check" })).toHaveProperty("value", "next"));
+    expect(screen.queryByRole("button", { name: "Rerun" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Start Quick check" })).toBeNull();
+    expect(newRun.getAttribute("aria-expanded")).toBe("false");
+  });
+
+  it.each(["queued", "running", "waiting", "awaiting_permission", "awaiting_user_input", "waiting_timer", "retry_scheduled"] as const)("keeps New run and Stop available for %s runs", async (status) => {
+    const callbacks = props();
+    render(<WorkflowRunPanel {...callbacks} runs={[{ ...run, status }]} />);
+    fireEvent.click(screen.getByRole("button", { name: "Show Workspace check" }));
+    expect(screen.queryByRole("button", { name: "Rerun" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "New run" }));
+    expect(screen.getByRole("button", { name: "Start Quick check" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "New run" }));
+    expect(screen.queryByRole("button", { name: "Start Quick check" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Stop run run" }));
+    await waitFor(() => expect(callbacks.onCancelRun).toHaveBeenCalledWith("run"));
+  });
+
+  it("omits the action row for completed runs and preserves snapshot availability", () => {
+    const callbacks = props();
+    const view = render(<WorkflowRunPanel {...callbacks} runs={[{ ...run, status: "succeeded" }]} />);
+    fireEvent.click(screen.getByRole("button", { name: "Show Workspace check" }));
+    expect(screen.getByRole("button", { name: "Rerun" })).toBeTruthy();
+    expect(document.querySelector(".workflow-card-actions")).toBeNull();
+    view.rerender(<WorkflowRunPanel {...callbacks} runs={[{ ...run, status: "succeeded", definition: undefined }]} />);
+    expect(screen.queryByRole("button", { name: "Rerun" })).toBeNull();
+    expect(screen.getByRole("button", { name: "New run" })).toBeTruthy();
+  });
+
+  it("keeps starting points directly available on cards without a run", () => {
+    render(<WorkflowRunPanel {...props()} />);
+    fireEvent.click(screen.getByRole("button", { name: "Show Workspace check" }));
+    expect(screen.queryByRole("button", { name: "New run" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Rerun" })).toBeNull();
+    expect(screen.queryByRole("button", { name: /Stop run/ })).toBeNull();
+    expect(document.querySelector(".workflow-card-actions")).toBeNull();
+    expect(screen.getByRole("button", { name: "Start Quick check" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Start Custom goal" }).hasAttribute("disabled")).toBe(true);
+  });
+
   it("sends custom input to the chosen start", async () => {
     const callbacks = props();
     render(<WorkflowRunPanel {...callbacks} />);
