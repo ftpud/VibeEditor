@@ -495,5 +495,5 @@ No implementation was performed in this continuation check.
 - Validation: build, repository/Gateway typechecks, full tests, timer cancellation/resume/pending/error/transition regressions, narrow/theme Chromium CSS checks; smart integration suite exit 0; clean worker tree and scoped diff review.
 - Task: 360d8b4b-1b36-4ce8-95b7-9ffd559c4b58; branch feature/todo-003-workflow-fit-overlay; provider codex. Session decision: Reused TODO-003/004 task and codex conversation; no reset; task finished after final layout item.
 - Implementation/integrated SHA: 15fe97e0bd1ce6c584352dcf4044f5b1b98b70e3; integration 81225b9a-7dde-4473-abb4-a78163cc8c61 completed.
-- Publishing: pending to configured origin/refs/heads/dev.
+- Publishing: pushed normally to origin/refs/heads/dev; published SHA 2571c5ee09ebf3d1947bc6d7c612b19fe2d6c2ce; remote tracking and remote ref verified.
 - Limitations/follow-ups: CSS fixture visual validation rather than full Electron UI. Stop retains existing whole-run cancellation semantics. Post-merge notification error reconciled against successful integration.
