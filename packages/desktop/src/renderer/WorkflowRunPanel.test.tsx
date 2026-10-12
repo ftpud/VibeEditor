@@ -197,6 +197,26 @@ describe("workflow chat links", () => {
   const chat = { id: "chat", type: "chatbox" as const, label: "Assistant", prompt: "", position: { x: 0, y: 0 } };
   const renderChat = (text: string) => render(<BlockRunDetails block={chat} onClose={vi.fn()} state={{ blockId: "chat", status: "succeeded", chatMessages: [{ id: "reply", role: "assistant", text, timestamp: "now" }] }} />);
 
+  it("sends to an idle Chatbox in a busy run and disables only its own active turn", async () => {
+    const idle = { blockId: "chat", status: "succeeded" as const, chatMessages: [{ id: "old", role: "assistant" as const, text: "Previous reply", timestamp: "now" }] };
+    const activeRun: HarnessRun = { ...run, status: "running", blocks: [{ blockId: "other", status: "running" }, idle] };
+    let release!: () => void;
+    const onChat = vi.fn(() => new Promise<void>((resolve) => { release = resolve; }));
+    const view = render(<BlockRunDetails block={chat} run={activeRun} state={idle} onClose={vi.fn()} onChat={onChat} />);
+    expect(screen.getByText("Previous reply")).toBeTruthy();
+    fireEvent.change(screen.getByLabelText("Message Assistant"), { target: { value: "Independent input" } });
+    expect((screen.getByRole("button", { name: "Send chat message" }) as HTMLButtonElement).disabled).toBe(false);
+    fireEvent.click(screen.getByRole("button", { name: "Send chat message" }));
+    fireEvent.submit(screen.getByLabelText("Message Assistant").closest("form")!);
+    expect(onChat).toHaveBeenCalledTimes(1); expect(onChat).toHaveBeenCalledWith("Independent input");
+    release(); await waitFor(() => expect((screen.getByLabelText("Message Assistant") as HTMLTextAreaElement).value).toBe(""));
+    view.rerender(<BlockRunDetails block={chat} run={activeRun} state={{ ...idle, status: "running" }} onClose={vi.fn()} onChat={onChat} />);
+    fireEvent.change(screen.getByLabelText("Message Assistant"), { target: { value: "Duplicate" } });
+    expect((screen.getByRole("button", { name: "Send chat message" }) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.submit(screen.getByLabelText("Message Assistant").closest("form")!);
+    expect(onChat).toHaveBeenCalledTimes(1);
+  });
+
   it("shows live provider activity, connected app calls and their results", () => {
     const timestamp = "2026-10-08T12:00:00Z";
     const state: HarnessRun["blocks"][number] = { blockId: "chat", status: "running", startedAt: timestamp, agentActivity: [{ id: "tool", timestamp, text: "Running npm test\nTest output" }] };

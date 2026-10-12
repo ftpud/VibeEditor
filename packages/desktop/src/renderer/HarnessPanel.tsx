@@ -709,7 +709,7 @@ function WorkflowChatbox({ block, run, state, onClose, onSend, onStop, definitio
   const transcript = useRef<HTMLDivElement>(null);
   const followMessages = useRef(true);
   const messages = state?.chatMessages ?? [];
-  const busy = sending || !!run && activeRunStatuses.has(run.status);
+  const busy = sending || !!state && ["queued", "running", "waiting", "awaiting_permission", "awaiting_user_input", "waiting_timer", "retry_scheduled"].includes(state.status);
   const graph = run?.definition ?? definition;
   const connected = (graph?.edges ?? []).filter((edge) => edge.from === block.id).map((edge) => graph?.blocks.find((item) => item.id === edge.to)?.label).filter(Boolean);
   useLayoutEffect(() => { if (followMessages.current && transcript.current) transcript.current.scrollTop = transcript.current.scrollHeight; }, [messages.length, messages.at(-1)?.text, busy]);
