@@ -62,7 +62,8 @@ appear in the server's tool list.
 | Tool | Arguments | What it does |
 | --- | --- | --- |
 | `workflow_connections` | None | List outgoing blocks, their IDs, descriptions, and `use`, `follow`, or named `path` connections. |
-| `workflow_use_block` | `block_id`, `input` | Invoke a block connected by `use` and return its output. AI blocks continue their existing context. Timer blocks arm their configured countdown and return immediately; their `follow` connections receive the input when they fire. |
+| `workflow_use_block` | `block_id`, `input?`, `timeout_seconds?` | Invoke a block connected by `use` and return its output. AI blocks continue their existing context. Each Use connection has an editable timeout in seconds (default 300, maximum 86400); `timeout_seconds` overrides it for one call. On timeout, the result has `status: "timed_out"`, recent `messages`, `activity`, and `block_status`; the child continues running. Timer blocks arm their configured countdown and return immediately; their `follow` connections receive the input when they fire. |
+| `workflow_block_messages` | `block_id`, `count?` | Read recent messages and activity from a connected Chatbox or AI Agent, with its current status and output. Defaults to 6 messages; accepts 1–50. Does not send a prompt or start another turn. |
 | `workflow_choose_path` | `path` | Select a connected path by label. It receives the caller's final output after the turn finishes; `follow` connections also run. |
 | `workflow_run_stack` | `inputs`, `path?`, `idempotency_key?` | Run directly connected downstream agents and wait for their results within the caller's turn. `inputs` is a nonempty list of prompts; `path` is required for AI-selected routing. |
 | `workflow_resume_failed` | None | Queue failed blocks for continuation in their existing sessions. Returns immediately and leaves running/completed blocks alone. |

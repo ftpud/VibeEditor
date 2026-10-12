@@ -338,6 +338,20 @@ describe("Vibe Editor app tools", () => {
     expect(provider.send).not.toHaveBeenCalled();
   });
 
+  it("applies explicit model and reasoning when starting an idle task turn", async () => {
+    const { service, provider } = harness();
+    provider.get.mockResolvedValueOnce({ ...await provider.get(), status: "idle" });
+    await service.call("task_append_prompt", { task_id: "task-1", provider: "codex", prompt: "Build", model: "child-model", reasoning: "high" });
+    expect(provider.send).toHaveBeenCalledWith("/tasks/task-1/workspace", { prompt: "Build", configuration: { model: "child-model", reasoning: "high", mode: "agent-full-access" } });
+  });
+
+  it("refuses to silently change model or reasoning on a running task turn", async () => {
+    const { service, provider } = harness();
+    await expect(service.call("task_append_prompt", { task_id: "task-1", provider: "codex", prompt: "Build", model: "child-model", reasoning: "high" })).rejects.toThrow("current AI turn to finish");
+    expect(provider.steer).not.toHaveBeenCalled();
+    expect(provider.send).not.toHaveBeenCalled();
+  });
+
   it("starts a follow-up turn when appending to a completed task", async () => {
     const { service, provider } = harness();
     provider.get.mockResolvedValueOnce({ status: "done", model: "gpt-5", reasoning: "high", configuration: { model: "gpt-5", reasoning: "high" }, messages: [] });
@@ -362,6 +376,14 @@ describe("Vibe Editor app tools", () => {
     const message = "Subject\n\nDetailed body.\n  Indented detail\n";
     await service.call("set_commit_message", { message });
     expect(tasks.setCommitMessage).toHaveBeenCalledWith("/tasks/parent/workspace", message);
+  });
+
+  it("sets a commit draft on an explicitly selected task and publishes its workspace", async () => {
+    const { service, tasks, onCommitMessageChanged } = harness();
+    const message = "Update selected task\n\nKeep the body.\n";
+    expect(await service.call("set_commit_message", { task_id: "task-1", message })).toMatchObject({ task_id: "task-1", message, committed: false });
+    expect(tasks.setCommitMessage).toHaveBeenCalledWith("/tasks/task-1/workspace", message);
+    expect(onCommitMessageChanged).toHaveBeenCalledWith("/tasks/task-1/workspace", message);
   });
 
   it("rejects missing, non-string, whitespace-only, and oversized commit messages", async () => {

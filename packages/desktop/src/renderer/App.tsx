@@ -32,6 +32,7 @@ import { SkillsPanel, type SkillsActions } from "./SkillsPanel";
 import { AiPanel, type AiAttachment } from "./AiPanel";
 import { TimersPanel } from "./TimersPanel";
 import { WorkflowRunPanel } from "./WorkflowRunPanel";
+import { workflowDocumentOptions, restoreWorkflowDocuments } from "./workflow-documents";
 import { HarnessPanel } from "./HarnessPanel";
 import type { PermissionRequestOwner } from "./PermissionRequestActions";
 import { openTaskFromSummary } from "./permission-navigation";
@@ -324,7 +325,7 @@ export function App() {
   const javaRefreshTimer = useRef<ReturnType<typeof setTimeout>>();
   const javaCheckTimer = useRef<ReturnType<typeof setTimeout>>();
   const selfWriteUntil = useRef(new Map<string, number>());
-  const terminalWriters = useRef(new Map<string, (data: string) => void>());
+  const terminalWriters = useRef(new Map<string, (data: string, replay?: boolean) => void>());
   const terminalBuffers = useRef(new Map<string, string>());
   const markdownBlockTerminals = useRef(new Map<string, string>());
   const monacoEditorRef = useRef<editor.IStandaloneCodeEditor>();
@@ -442,11 +443,11 @@ export function App() {
     javaCheckTimer.current = setTimeout(() => { void checkJava(); }, 700);
   }, [checkJava]);
 
-  const registerTerminalWriter = useCallback((terminalId: string, writer?: (data: string) => void) => {
+  const registerTerminalWriter = useCallback((terminalId: string, writer?: (data: string, replay?: boolean) => void) => {
     if (!writer) { terminalWriters.current.delete(terminalId); return; }
     terminalWriters.current.set(terminalId, writer);
     const buffered = terminalBuffers.current.get(terminalId);
-    if (buffered) writer(buffered);
+    if (buffered) writer(buffered, true);
   }, []);
 
   const refreshGit = useCallback(async (client = clientRef.current) => {
@@ -592,6 +593,9 @@ export function App() {
   const deleteHarness = useCallback(async (id: string) => {
     await clientRef.current!.request("harnesses.delete", { id }); setHarnesses((current) => current.filter((item) => item.id !== id));
   }, []);
+  const testHarnessBlock = useCallback(async (definition: HarnessDefinition, blockId: string, input: string) => { const { run } = await clientRef.current!.request("harnesses.test", { definition, blockId, input, provider: aiProviderRef.current }); setHarnessRuns((current) => [run, ...current.filter((item) => item.id !== run.id)]); return run; }, []);
+  const readHarnessApp = useCallback(async (harnessId: string, blockId: string, runId?: string) => (await clientRef.current!.request("harnesses.app.read", { harnessId, blockId, runId })).app, []);
+  const killHarnessApp = useCallback(async (harnessId: string, blockId: string, runId?: string) => { await clientRef.current!.request("harnesses.app.kill", { harnessId, blockId, runId }); }, []);
   const runHarness = useCallback(async (harnessId: string, input: string, startBlockId?: string, rerunRunId?: string) => { const result = await clientRef.current!.request("harnesses.run", { harnessId, input, startBlockId, rerunRunId, provider: aiProviderRef.current }); setHarnessRuns((current) => [result.run, ...current.filter((item) => item.id !== result.run.id)]); return result.run; }, []);
   const chatHarness = useCallback(async (harnessId: string, blockId: string, input: string, runId?: string) => { const result = await clientRef.current!.request("harnesses.chat", { harnessId, blockId, input, runId, provider: aiProviderRef.current }); setHarnessRuns((current) => [result.run, ...current.filter((item) => item.id !== result.run.id)]); return result.run; }, []);
   const appendHarnessRun = useCallback(async (runId: string, input: string) => { const result = await clientRef.current!.request("harnesses.append", { runId, input }); setHarnessRuns((current) => current.map((item) => item.id === runId ? result.run : item)); return result.run; }, []);
@@ -616,7 +620,7 @@ export function App() {
     setSearchQueries(options.searchQueries ?? {});
     setSelectedGitPaths(new Set());
     const pinnedFiles = new Set(options.pinnedFiles ?? []);
-    const tabs = orderPinnedTabs(await Promise.all(options.openFiles.map(async (filePath): Promise<EditorTab> => {
+    let tabs = orderPinnedTabs(await Promise.all(options.openFiles.map(async (filePath): Promise<EditorTab> => {
       const title = filePath.split("/").pop() ?? filePath;
       try {
         const result = await client.request("filesystem.readFile", { path: filePath });
@@ -625,7 +629,17 @@ export function App() {
         return { id: crypto.randomUUID(), type: "file", rootId, title, path: filePath, pinned: pinnedFiles.has(filePath), dirty: false, content: "", savedContent: "", loading: false, markdownMode: /\.md$/i.test(filePath) ? "preview" : undefined, error: error instanceof Error ? error.message : "Could not restore file" };
       }
     })));
-    const activeTabId = tabs.find((tab) => tab.path === options.activeFile)?.id ?? tabs[0]?.id;
+    let activeDocumentId: string | undefined;
+    const existingGroup = layoutRef.current.editorGroups[0];
+    const carriedDocuments = existingGroup?.tabs.filter((tab) => tab.type === "workflowDocument" && (!tab.rootId || tab.rootId === rootId)) ?? [];
+    if (options.workflowDocuments?.length || carriedDocuments.length) {
+      try {
+        const { runs } = await client.request("harnesses.runs", {});
+        const restored = restoreWorkflowDocuments(tabs, options.workflowDocuments, runs, rootId, existingGroup?.tabs, existingGroup?.activeTabId);
+        tabs = orderPinnedTabs(restored.tabs); activeDocumentId = restored.activeTabId;
+      } catch (error) { tabs = orderPinnedTabs([...tabs, ...carriedDocuments]); activeDocumentId = carriedDocuments.find((tab) => tab.id === existingGroup?.activeTabId)?.id; setStatusMessage(error instanceof Error ? error.message : "Could not restore workflow documents"); }
+    }
+    const activeTabId = activeDocumentId ?? tabs.find((tab) => tab.type === "file" && tab.path === options.activeFile)?.id ?? tabs[0]?.id;
     const restoredTerminals = await Promise.all((options.terminal?.tabs ?? []).map(async (saved, index) => {
       try {
         const attached = saved.terminalId ? await client.request("terminal.attach", { terminalId: saved.terminalId }) : undefined;
@@ -744,7 +758,7 @@ export function App() {
         if (event.payload.rootId !== client.getRoot()) return;
         const { rootId, runId, blockId, title, content } = event.payload;
         const id = `workflow-document:${rootId}:${runId}:${blockId}`;
-        updateGroup((tabs) => ({ tabs: [...tabs.filter((tab) => tab.id !== id), { id, type: "workflowDocument", rootId, title, path: title, content, savedContent: content, dirty: false, loading: false, markdownMode: "preview" }], activeTabId: id }));
+        updateGroup((tabs) => ({ tabs: [...tabs.filter((tab) => tab.id !== id), { id, type: "workflowDocument", workflowRunId: runId, workflowBlockId: blockId, rootId, title, path: title, content, savedContent: content, dirty: false, loading: false, markdownMode: "preview" }], activeTabId: id }));
         return;
       }
       if (event.type === "harness.changed") { void refreshHarnessRuns(client); return; }
@@ -757,6 +771,7 @@ export function App() {
         return;
       }
       if (event.type === "commit-message.changed") {
+        if (event.payload.workspace && event.payload.workspace !== activeWorkspaceRef.current) return;
         setGitCommitMessage(event.payload.message);
         return;
       }
@@ -919,10 +934,11 @@ export function App() {
   const activeTerminalIndex = layout.terminalGroup.tabs.findIndex((tab) => tab.id === layout.terminalGroup.activeTabId);
   const terminalOptions: NonNullable<WorkspaceOptions["terminal"]> = { tabs: layout.terminalGroup.tabs.map((tab) => ({ displayName: tab.title, terminalId: tab.terminalId })), ...(activeTerminalIndex >= 0 ? { activeTabIndex: activeTerminalIndex } : {}), panelOpen: terminalPanelOpen };
   const pinnedFiles = pinnedFilePaths(persistedFileTabs);
-  const workspaceOptionsSignature = `${persistedFileTabs.map((tab) => tab.path).join("\0")}\n${pinnedFiles.join("\0")}\n${persistedActiveTab?.path ?? ""}\n${JSON.stringify(javaOptions)}\n${JSON.stringify(terminalOptions)}\n${JSON.stringify(fileColors)}\n${gitCommitMessage}\n${JSON.stringify(searchQueries)}\n${JSON.stringify(javaBreakpoints)}`;
+  const documentOptions = workflowDocumentOptions(group.tabs, group.activeTabId, selectedRootId);
+  const workspaceOptionsSignature = `${persistedFileTabs.map((tab) => tab.path).join("\0")}\n${pinnedFiles.join("\0")}\n${persistedActiveTab?.path ?? ""}\n${JSON.stringify(javaOptions)}\n${JSON.stringify(terminalOptions)}\n${JSON.stringify(fileColors)}\n${gitCommitMessage}\n${JSON.stringify(searchQueries)}\n${JSON.stringify(javaBreakpoints)}\n${JSON.stringify(documentOptions)}`;
   useEffect(() => {
     if (status !== "connected" || !workspaceOptionsReady || !clientRef.current) return;
-    const options: WorkspaceOptions = { openFiles: persistedFileTabs.map((tab) => tab.path), ...(pinnedFiles.length ? { pinnedFiles } : {}), ...(persistedActiveTab ? { activeFile: persistedActiveTab.path } : {}), ...(javaOptions ? { javaProject: javaOptions } : {}), terminal: terminalOptions, ...(Object.keys(fileColors).length ? { fileColors } : {}), ...(gitCommitMessage ? { gitCommitMessage } : {}), javaBreakpoints, ...(Object.keys(searchQueries).length ? { searchQueries } : {}) };
+    const options: WorkspaceOptions = { ...documentOptions, openFiles: persistedFileTabs.map((tab) => tab.path), ...(pinnedFiles.length ? { pinnedFiles } : {}), ...(persistedActiveTab ? { activeFile: persistedActiveTab.path } : {}), ...(javaOptions ? { javaProject: javaOptions } : {}), terminal: terminalOptions, ...(Object.keys(fileColors).length ? { fileColors } : {}), ...(gitCommitMessage ? { gitCommitMessage } : {}), javaBreakpoints, ...(Object.keys(searchQueries).length ? { searchQueries } : {}) };
     void clientRef.current.request("workspace.saveOptions", { options }).catch((error: unknown) => {
       setStatusMessage(error instanceof Error ? error.message : "Could not save workspace options");
     });
@@ -1415,7 +1431,7 @@ export function App() {
       const currentFiles = currentGroup.tabs.filter((tab) => tab.type === "file");
       const currentTerminal = layoutRef.current.terminalGroup;
       const currentActiveTerminalIndex = currentTerminal.tabs.findIndex((tab) => tab.id === currentTerminal.activeTabId);
-      await client.request("workspace.saveOptions", { options: { openFiles: currentFiles.map((tab) => tab.path), ...(pinnedFilePaths(currentFiles).length ? { pinnedFiles: pinnedFilePaths(currentFiles) } : {}), ...(currentFiles.find((tab) => tab.id === currentGroup.activeTabId) ? { activeFile: currentFiles.find((tab) => tab.id === currentGroup.activeTabId)!.path } : {}), ...(javaOptionsRef.current ? { javaProject: javaOptionsRef.current } : {}), terminal: { tabs: currentTerminal.tabs.map((tab) => ({ displayName: tab.title, terminalId: tab.terminalId })), ...(currentActiveTerminalIndex >= 0 ? { activeTabIndex: currentActiveTerminalIndex } : {}), panelOpen: layoutRef.current.panels.some((panel) => panel.type === "terminal") }, ...(Object.keys(fileColors).length ? { fileColors } : {}), ...(gitCommitMessage ? { gitCommitMessage } : {}), javaBreakpoints, ...(Object.keys(searchQueries).length ? { searchQueries } : {}) } });
+      await client.request("workspace.saveOptions", { options: { ...workflowDocumentOptions(currentGroup.tabs, currentGroup.activeTabId, selectedRootIdRef.current), openFiles: currentFiles.map((tab) => tab.path), ...(pinnedFilePaths(currentFiles).length ? { pinnedFiles: pinnedFilePaths(currentFiles) } : {}), ...(currentFiles.find((tab) => tab.id === currentGroup.activeTabId) ? { activeFile: currentFiles.find((tab) => tab.id === currentGroup.activeTabId)!.path } : {}), ...(javaOptionsRef.current ? { javaProject: javaOptionsRef.current } : {}), terminal: { tabs: currentTerminal.tabs.map((tab) => ({ displayName: tab.title, terminalId: tab.terminalId })), ...(currentActiveTerminalIndex >= 0 ? { activeTabIndex: currentActiveTerminalIndex } : {}), panelOpen: layoutRef.current.panels.some((panel) => panel.type === "terminal") }, ...(Object.keys(fileColors).length ? { fileColors } : {}), ...(gitCommitMessage ? { gitCommitMessage } : {}), javaBreakpoints, ...(Object.keys(searchQueries).length ? { searchQueries } : {}) } });
       if (!isCurrent()) return;
       const result = await client.request("tasks.switch", { ...(taskId ? { taskId } : {}), includeIgnored: showIgnoredRef.current });
       if (!isCurrent()) return;
@@ -2578,7 +2594,7 @@ export function App() {
     setTaskSwitching(true);
     try {
       const currentGroup = layoutRef.current.editorGroups[0]!; const currentFiles = currentGroup.tabs.filter((tab) => tab.type === "file" && (!tab.rootId || tab.rootId === previous)); const currentTerminal = { ...layoutRef.current.terminalGroup, tabs: layoutRef.current.terminalGroup.tabs.filter((tab) => !tab.rootId || tab.rootId === previous) }; const activeTerminalIndex = currentTerminal.tabs.findIndex((tab) => tab.id === currentTerminal.activeTabId);
-      await client.request("workspace.saveOptions", { options: { openFiles: currentFiles.map((tab) => tab.path), ...(pinnedFilePaths(currentFiles).length ? { pinnedFiles: pinnedFilePaths(currentFiles) } : {}), ...(currentFiles.find((tab) => tab.id === currentGroup.activeTabId) ? { activeFile: currentFiles.find((tab) => tab.id === currentGroup.activeTabId)!.path } : {}), ...(javaOptionsRef.current ? { javaProject: javaOptionsRef.current } : {}), terminal: { tabs: currentTerminal.tabs.map((tab) => ({ displayName: tab.title, terminalId: tab.terminalId })), ...(activeTerminalIndex >= 0 ? { activeTabIndex: activeTerminalIndex } : {}), panelOpen: layoutRef.current.panels.some((panel) => panel.type === "terminal") }, ...(Object.keys(fileColors).length ? { fileColors } : {}), ...(gitCommitMessage ? { gitCommitMessage } : {}), javaBreakpoints, ...(Object.keys(searchQueries).length ? { searchQueries } : {}) } });
+      await client.request("workspace.saveOptions", { options: { ...workflowDocumentOptions(currentGroup.tabs, currentGroup.activeTabId, selectedRootIdRef.current), openFiles: currentFiles.map((tab) => tab.path), ...(pinnedFilePaths(currentFiles).length ? { pinnedFiles: pinnedFilePaths(currentFiles) } : {}), ...(currentFiles.find((tab) => tab.id === currentGroup.activeTabId) ? { activeFile: currentFiles.find((tab) => tab.id === currentGroup.activeTabId)!.path } : {}), ...(javaOptionsRef.current ? { javaProject: javaOptionsRef.current } : {}), terminal: { tabs: currentTerminal.tabs.map((tab) => ({ displayName: tab.title, terminalId: tab.terminalId })), ...(activeTerminalIndex >= 0 ? { activeTabIndex: activeTerminalIndex } : {}), panelOpen: layoutRef.current.panels.some((panel) => panel.type === "terminal") }, ...(Object.keys(fileColors).length ? { fileColors } : {}), ...(gitCommitMessage ? { gitCommitMessage } : {}), javaBreakpoints, ...(Object.keys(searchQueries).length ? { searchQueries } : {}) } });
       client.setRoot(rootId);
       const result = await client.request("workspace.selectRoot", { rootId, includeIgnored: showIgnoredRef.current });
       selectedRootIdRef.current = rootId; setSelectedRootId(rootId); setActiveWorkspace(result.workspace); activeWorkspaceRef.current = result.workspace; setProjectName(result.projectName); setTree(result.tree);
@@ -2643,9 +2659,9 @@ export function App() {
     window.addEventListener("keydown", listener); return () => window.removeEventListener("keydown", listener);
   }, [commands, commandContext, quickOpen, shortcutBindings, workspaceSymbolsOpen]);
 
-  const workflowDesignPanel = <HarnessPanel designOnly harnesses={harnesses} runs={harnessRuns} diagnostics={harnessDiagnostics} providers={aiProviders} agents={agents} defaultProvider={aiProvider} onLoadModels={loadHarnessModels} onValidate={validateHarnessDefinition} onCreate={createHarness} onRead={readHarness} onSave={saveHarness} onDelete={deleteHarness} onRun={runHarness} onChat={chatHarness} onAppendRun={appendHarnessRun} onResolvePermission={resolveHarnessPermission} onAnswerQuestion={answerHarnessQuestion} onResumePause={resumeHarnessPause} onRetryPause={retryHarnessPause} onCancelPause={cancelHarnessPause} onCancelRun={cancelHarnessRun} onDeleteRun={deleteHarnessRun} onError={setStatusMessage} />;
+  const workflowDesignPanel = <HarnessPanel skillCatalog={skillCatalog} onRefreshSkills={refreshSkills} designOnly harnesses={harnesses} runs={harnessRuns} diagnostics={harnessDiagnostics} providers={aiProviders} agents={agents} defaultProvider={aiProvider} onLoadModels={loadHarnessModels} onValidate={validateHarnessDefinition} onCreate={createHarness} onRead={readHarness} onSave={saveHarness} onDelete={deleteHarness} onRun={runHarness} onTestBlock={testHarnessBlock} onKillApp={killHarnessApp} onReadApp={readHarnessApp} onChat={chatHarness} onAppendRun={appendHarnessRun} onResolvePermission={resolveHarnessPermission} onAnswerQuestion={answerHarnessQuestion} onResumePause={resumeHarnessPause} onRetryPause={retryHarnessPause} onCancelPause={cancelHarnessPause} onCancelRun={cancelHarnessRun} onDeleteRun={deleteHarnessRun} onError={setStatusMessage} />;
   const showWorkflowDesign = sideLayout === "classic" ? classicSideView === "harness" : workflowPanelMode === "design";
-  const workflowRunPanel = <WorkflowRunPanel key={selectedRootId} harnesses={harnesses} runs={harnessRuns} diagnostics={harnessDiagnostics} onValidate={validateHarnessDefinition} onRun={runHarness} onChat={chatHarness} onCancelRun={cancelHarnessRun} onResolvePermission={resolveHarnessPermission} onAnswerQuestion={answerHarnessQuestion} onResumePause={resumeHarnessPause} onRetryPause={retryHarnessPause} onCancelPause={cancelHarnessPause} onError={setStatusMessage} />;
+  const workflowRunPanel = <WorkflowRunPanel key={selectedRootId} harnesses={harnesses} runs={harnessRuns} diagnostics={harnessDiagnostics} onValidate={validateHarnessDefinition} onRun={runHarness} onKillApp={killHarnessApp} onReadApp={readHarnessApp} onChat={chatHarness} onCancelRun={cancelHarnessRun} onResolvePermission={resolveHarnessPermission} onAnswerQuestion={answerHarnessQuestion} onResumePause={resumeHarnessPause} onRetryPause={retryHarnessPause} onCancelPause={cancelHarnessPause} onError={setStatusMessage} />;
   const workflowPanels = <div className="workflow-mode-panels"><div hidden={!showWorkflowDesign}>{workflowDesignPanel}</div><div hidden={showWorkflowDesign}>{workflowRunPanel}</div></div>;
   const timersPanel = <TimersPanel key={selectedRootId} timers={activeTimers} schedules={schedules} workflows={harnesses} roots={workspaceRoots} selectedTaskId={selectedTaskId} defaultProvider={aiProvider} onLoadAgents={loadScheduleAgents}
     onCreateSchedule={async (input) => { const client = clientRef.current; if (!client) throw new Error("Backend is disconnected"); await client.request("schedules.create", input); await refreshAiStatuses(client); }}

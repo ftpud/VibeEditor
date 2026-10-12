@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import { mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
-import type { JavaBreakpoint, JavaProjectOptions, JavaRunConfiguration, WorkspaceOptions, WorkspaceSearchQuery, WorkspaceSearchQueries } from "@remote-ide/protocol";
+import type { JavaBreakpoint, JavaProjectOptions, JavaRunConfiguration, WorkspaceOptions, WorkspaceWorkflowDocument, WorkspaceSearchQuery, WorkspaceSearchQueries } from "@remote-ide/protocol";
 import { CoreError } from "./errors.js";
 
 const EMPTY_OPTIONS: WorkspaceOptions = { openFiles: [] };
@@ -63,6 +63,7 @@ export function validateWorkspaceOptions(value: unknown): WorkspaceOptions {
   }
   const pinnedFiles = candidate.pinnedFiles === undefined ? undefined : [...new Set(candidate.pinnedFiles as string[])];
   const activeFile = typeof candidate.activeFile === "string" && openFiles.includes(candidate.activeFile) ? candidate.activeFile : undefined;
+  const workflowDocuments = candidate.workflowDocuments === undefined ? undefined : validateWorkflowDocuments(candidate.workflowDocuments);
   const javaBreakpoints = candidate.javaBreakpoints === undefined ? undefined : validateJavaBreakpoints(candidate.javaBreakpoints);
   const javaProject = candidate.javaProject === undefined ? undefined : validateJavaProjectOptions(candidate.javaProject);
   const terminal = candidate.terminal === undefined ? undefined : validateTerminalOptions(candidate.terminal);
@@ -70,7 +71,20 @@ export function validateWorkspaceOptions(value: unknown): WorkspaceOptions {
   const searchQueries = candidate.searchQueries === undefined ? undefined : validateSearchQueries(candidate.searchQueries);
   if (candidate.gitCommitMessage !== undefined && (typeof candidate.gitCommitMessage !== "string" || candidate.gitCommitMessage.length > 10_000)) throw new CoreError("INVALID_REQUEST", "Invalid Git commit message draft");
   const gitCommitMessage = typeof candidate.gitCommitMessage === "string" ? candidate.gitCommitMessage : undefined;
-  return { openFiles, ...(javaBreakpoints ? { javaBreakpoints } : {}), ...(pinnedFiles?.length ? { pinnedFiles } : {}), ...(activeFile ? { activeFile } : {}), ...(javaProject ? { javaProject } : {}), ...(terminal ? { terminal } : {}), ...(fileColors && Object.keys(fileColors).length ? { fileColors } : {}), ...(gitCommitMessage ? { gitCommitMessage } : {}), ...(searchQueries ? { searchQueries } : {}) };
+  return { openFiles, ...(workflowDocuments ? { workflowDocuments } : {}), ...(javaBreakpoints ? { javaBreakpoints } : {}), ...(pinnedFiles?.length ? { pinnedFiles } : {}), ...(activeFile ? { activeFile } : {}), ...(javaProject ? { javaProject } : {}), ...(terminal ? { terminal } : {}), ...(fileColors && Object.keys(fileColors).length ? { fileColors } : {}), ...(gitCommitMessage ? { gitCommitMessage } : {}), ...(searchQueries ? { searchQueries } : {}) };
+}
+
+function validateWorkflowDocuments(value: unknown): WorkspaceWorkflowDocument[] {
+  if (!Array.isArray(value) || value.length > 100) throw new CoreError("INVALID_REQUEST", "Invalid workflow document tabs");
+  const seen = new Set<string>();
+  return value.flatMap((item: unknown) => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) throw new CoreError("INVALID_REQUEST", "Invalid workflow document tab");
+    const { runId, blockId, position, pinned, markdownMode, active } = item as Record<string, unknown>;
+    if ([runId, blockId].some((id) => typeof id !== "string" || !id.trim() || id.length > 200) || !Number.isInteger(position) || (position as number) < 0 || (position as number) > 1000 || (pinned !== undefined && typeof pinned !== "boolean") || (active !== undefined && typeof active !== "boolean") || (markdownMode !== undefined && markdownMode !== "edit" && markdownMode !== "preview")) throw new CoreError("INVALID_REQUEST", "Invalid workflow document tab");
+    const key = JSON.stringify([runId, blockId]);
+    if (seen.has(key)) return []; seen.add(key);
+    return [{ runId: runId as string, blockId: blockId as string, position: position as number, ...(pinned ? { pinned: true } : {}), ...(active ? { active: true } : {}), ...(markdownMode ? { markdownMode: markdownMode as "edit" | "preview" } : {}) }];
+  });
 }
 
 export function validateJavaBreakpoints(value: unknown): JavaBreakpoint[] {

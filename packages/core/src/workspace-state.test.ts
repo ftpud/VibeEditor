@@ -5,6 +5,18 @@ import { describe, expect, it } from "vitest";
 import { WorkspaceStateStore, validateWorkspaceOptions } from "./workspace-state.js";
 
 describe("WorkspaceStateStore", () => {
+  it("persists workflow document references per task without duplicating Markdown content", async () => {
+    const stateDirectory = await mkdtemp(path.join(tmpdir(), "workflow-document-state-"));
+    const workflowDocuments = [{ runId: "run", blockId: "report", position: 1, active: true, pinned: true, markdownMode: "preview" as const }];
+    const store = new WorkspaceStateStore("/workspace/task-a", stateDirectory);
+    await store.save({ openFiles: ["file.ts"], workflowDocuments });
+    expect(await new WorkspaceStateStore("/workspace/task-a", stateDirectory).load()).toEqual({ openFiles: ["file.ts"], workflowDocuments });
+    expect(await new WorkspaceStateStore("/workspace/task-b", stateDirectory).load()).toEqual({ openFiles: [] });
+    await store.save({ openFiles: [], workflowDocuments: [] });
+    expect((await store.load()).workflowDocuments).toEqual([]);
+    expect(() => validateWorkspaceOptions({ openFiles: [], workflowDocuments: [{ ...workflowDocuments[0], position: -1 }] })).toThrow("Invalid workflow document tab");
+  });
+
   it("saves and restores workspace options", async () => {
     const stateDirectory = await mkdtemp(path.join(tmpdir(), "remote-ide-state-"));
     const store = new WorkspaceStateStore("/workspace/example", stateDirectory);

@@ -11,7 +11,7 @@ afterEach(async () => { services.splice(0).forEach((service) => service.closeAll
 async function setup() {
   const workspace = await mkdtemp(path.join(os.tmpdir(), "workflow-app-")); directories.push(workspace);
   const service = new WorkflowAppService(); services.push(service);
-  const execute = async (action: HarnessAppOptions["action"], extra: Partial<HarnessBlock> = {}, input = "", target = workspace) => {
+  const execute = async (action: NonNullable<HarnessAppOptions["action"]>, extra: Partial<HarnessBlock> = {}, input = "", target = workspace) => {
     const block: HarnessBlock = { id: action, type: "run_app", label: action, prompt: "", position: { x: 0, y: 0 }, app: { action, name: "server", lines: 2 }, ...extra };
     const result = await service.execute(block, input, target, () => {});
     return JSON.parse(result.messages[0]!.text) as { status: string; pid: number; output: string; exitCode: number | null; signal: string | null };
@@ -39,11 +39,49 @@ describe("workflow apps", () => {
     expect(restarted.pid).not.toBe(started.pid);
   });
 
+  it("reads live output from both streams without starting a process and retains it after exit", async () => {
+    const { execute, workspace, service } = await setup();
+    expect(service.read("server", workspace)).toEqual({ name: "server", status: "not_found", output: "" });
+    await execute("start", { command: "printf 'stdout\\n'; printf 'stderr\\n' >&2; exec sleep 300" });
+    await vi.waitFor(() => {
+      const app = service.read("server", workspace);
+      expect(app.status).toBe("running");
+      expect(app.output).toContain("stdout");
+      expect(app.output).toContain("stderr");
+    });
+    expect(service.read("server", "/another-workspace").status).toBe("not_found");
+    const output = service.read("server", workspace).output;
+    await execute("kill");
+    expect(service.read("server", workspace)).toMatchObject({ status: "exited", signal: "SIGKILL", output });
+  });
+
+  it("uses one block for allowed actions and rejects disabled actions", async () => {
+    const { execute } = await setup();
+    const appBlock = { command: "printf 'ready\\n'; exec sleep 300", app: { name: "server", actions: ["start", "status", "tail", "kill"] as const, lines: 2 } };
+    const configured = { ...appBlock, app: { ...appBlock.app, actions: [...appBlock.app.actions] } };
+    expect((await execute("start", configured)).status).toBe("running");
+    expect((await execute("start", configured, JSON.stringify({ action: "status" }))).status).toBe("running");
+    await vi.waitFor(async () => expect((await execute("start", configured, JSON.stringify({ action: "tail" }))).output).toContain("ready"));
+    await expect(execute("start", { app: { name: "server", actions: ["status"] } }, JSON.stringify({ action: "kill" }))).rejects.toThrow("allowed");
+    expect((await execute("start", configured, JSON.stringify({ action: "kill" }))).status).toBe("exited");
+    await expect(execute("start", { app: { name: "server", actions: [] } })).rejects.toThrow("allowed");
+  });
+
+  it("uses a requested tail length without changing the saved app options", async () => {
+    const { execute } = await setup();
+    const app = { command: "printf 'first\\nsecond\\nthird\\n'; exec sleep 300", app: { name: "server", actions: ["start", "tail"] as ("start" | "tail")[], lines: 2 } };
+    await execute("start", app);
+    await vi.waitFor(async () => expect((await execute("tail", app, JSON.stringify({ action: "tail", lines: 1 }))).output).toBe("third"));
+    expect((await execute("tail", app, JSON.stringify({ action: "tail" }))).output).toBe("second\nthird");
+    await expect(execute("tail", app, JSON.stringify({ action: "tail", lines: 0 }))).rejects.toThrow("Tail lines");
+    expect(app.app.lines).toBe(2);
+  });
+
   it("records natural exits and scopes app names to a workspace", async () => {
     const { execute } = await setup();
     await execute("start", { command: "printf 'done\\n'; exit 7" });
     await vi.waitFor(async () => expect(await execute("status")).toMatchObject({ status: "exited", exitCode: 7 }));
-    expect((await execute("tail")).output).toBe("done");
+    expect((await execute("tail")).output).toContain("done");
     expect((await execute("status", {}, "", "/another-workspace")).status).toBe("not_found");
     await expect(execute("tail", {}, "", "/another-workspace")).rejects.toThrow("has not been started");
   });

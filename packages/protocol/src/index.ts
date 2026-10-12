@@ -137,6 +137,8 @@ export type WorkspaceOptions = {
   /** Pinned file paths, in their leading tab-strip order. */
   pinnedFiles?: string[];
   activeFile?: string;
+  /** Open workflow documents; content remains in Core’s workflow run history. */
+  workflowDocuments?: WorkspaceWorkflowDocument[];
   javaProject?: JavaProjectOptions;
   javaBreakpoints?: JavaBreakpoint[];
   terminal?: WorkspaceTerminalOptions;
@@ -149,6 +151,7 @@ export type WorkspaceSearchQuery = { query: string; path: string; matchCase?: bo
 export type WorkspaceSearchQueries = { recent?: WorkspaceSearchQuery[]; saved?: WorkspaceSearchQuery[] };
 export type FileColor = "red" | "orange" | "yellow" | "green" | "blue" | "purple" | "gray";
 /** Durable terminal-tab metadata. The display name is UI state, not a PTY identity. */
+export type WorkspaceWorkflowDocument = { runId: string; blockId: string; position: number; pinned?: boolean; markdownMode?: "edit" | "preview"; active?: boolean };
 export type WorkspaceTerminalOptions = { tabs: { displayName: string; terminalId?: string }[]; activeTabIndex?: number; panelOpen: boolean };
 export type TerminalSessionSnapshot = { terminalId: string; status: "running" | "exited"; output: string; exitCode?: number };
 /** Resolution is always against the currently selected workspace. A stale ID means Core no longer owns that process. */
@@ -191,9 +194,11 @@ export type WorkspaceSchedule = ScheduleInput & { id: string; rootId: WorkspaceR
 export type AiContinuationTimer = { id: string; workspace: string; provider: AiProvider; prompt: string; dueAt: string; createdAt: string; workflowRunId?: string; workflowBlockId?: string; workflowFlow?: boolean };
 
 /** Named long-lived shell apps are owned by Core and scoped to the execution workspace. */
-export type HarnessAppOptions = { action: "start" | "status" | "kill" | "tail"; name: string; lines?: number };
-export type HarnessBlock = { id: string; type: "ai" | "chatbox" | "text" | "timer" | "user_prompt" | "yes_no_prompt" | "markdown" | "script" | "run_app" | "start_button" | "start_input" | "prompt" | "task" | "review" | "verification"; seconds?: number; command?: string; app?: HarnessAppOptions; label: string; prompt: string; inputSchema?: HarnessDataSchema; outputSchema?: HarnessDataSchema; provider?: AiProvider; model?: string; reasoning?: string; agent?: AgentFileReference; watchdog?: boolean; review?: HarnessReview; verification?: HarnessVerification; join?: "all" | "any"; routing?: "all" | "ai"; position: { x: number; y: number } };
-export type HarnessEdge = { type?: "use" | "follow" | "path"; id: string; from: string; to: string; label?: string; loop?: boolean; execution?: "sync" | "async" };
+export type HarnessAppAction = "start" | "status" | "kill" | "tail";
+export type HarnessAppState = { name: string; status: "not_found" | "starting" | "running" | "exited"; output: string; pid?: number; exitCode?: number | null; signal?: string | null };
+export type HarnessAppOptions = { action?: HarnessAppAction; actions?: HarnessAppAction[]; name: string; lines?: number };
+export type HarnessBlock = { id: string; type: "ai" | "chatbox" | "skill" | "task_controls" | "text" | "timer" | "user_prompt" | "yes_no_prompt" | "markdown" | "script" | "run_app" | "start_button" | "start_input" | "prompt" | "task" | "review" | "verification"; seconds?: number; command?: string; app?: HarnessAppOptions; label: string; description?: string; skillId?: string; prompt: string; inputSchema?: HarnessDataSchema; outputSchema?: HarnessDataSchema; provider?: AiProvider; model?: string; reasoning?: string; agent?: AgentFileReference; watchdog?: boolean; review?: HarnessReview; verification?: HarnessVerification; join?: "all" | "any"; routing?: "all" | "ai"; position: { x: number; y: number } };
+export type HarnessEdge = { timeoutMs?: number; type?: "use" | "follow" | "path"; id: string; from: string; to: string; label?: string; loop?: boolean; execution?: "sync" | "async" };
 export type HarnessRetryPolicy = { maxAttempts?: number };
 export type HarnessSettings = { concurrency?: number; maxActiveRuns?: number; maxBlockAttempts?: number; maxStackSize?: number; maxLoopCount?: number; maxChildTasks?: number; promptLimitChars?: number; retry?: HarnessRetryPolicy; outputLimitChars?: number; logLimitEntries?: number; maxRunDurationMs?: number; tokenBudget?: number };
 export type HarnessDefinition = { id: string; name: string; version: number; createdAt: string; updatedAt: string; settings?: HarnessSettings; blocks: HarnessBlock[]; edges: HarnessEdge[] };
@@ -211,12 +216,13 @@ export type HarnessPauseStatus = "awaiting_permission" | "awaiting_user_input" |
 export type HarnessBlockStatus = "queued" | "running" | "succeeded" | "failed" | "blocked" | "cancelled" | "waiting" | "skipped" | HarnessPauseStatus;
 export type HarnessRunStatus = "queued" | "running" | "succeeded" | "failed" | "blocked" | "cancelled" | "waiting" | HarnessPauseStatus;
 export type HarnessChatMessage = { id: string; role: "user" | "assistant"; text: string; timestamp: string };
-export type HarnessBlockRun = { blockId: string; chatMessages?: HarnessChatMessage[]; status: HarnessBlockStatus; startedAt?: string; completedAt?: string; prompt?: string; output?: string; structuredInput?: unknown; structuredOutput?: unknown; tokens?: AiTokenUsage; error?: string; failureReason?: HarnessFailureReason; retryAt?: string; retryStartedAt?: string; provider?: AiProvider; sessionId?: string; workspace?: string; selectedRoute?: string; plannedRuns?: number; iterations?: HarnessBlockIteration[]; attempts?: HarnessBlockAttempt[]; log?: HarnessLogEntry[]; waitingUntil?: string; recoveryAttempts?: number; pendingPermission?: AiPermissionRequest; question?: string; pauseId?: string };
+export type HarnessAgentActivity = { id: string; timestamp: string; text: string };
+export type HarnessBlockRun = { blockId: string; agentActivity?: HarnessAgentActivity[]; chatMessages?: HarnessChatMessage[]; status: HarnessBlockStatus; startedAt?: string; completedAt?: string; prompt?: string; output?: string; structuredInput?: unknown; structuredOutput?: unknown; tokens?: AiTokenUsage; error?: string; failureReason?: HarnessFailureReason; retryAt?: string; retryStartedAt?: string; provider?: AiProvider; sessionId?: string; workspace?: string; selectedRoute?: string; plannedRuns?: number; iterations?: HarnessBlockIteration[]; attempts?: HarnessBlockAttempt[]; log?: HarnessLogEntry[]; waitingUntil?: string; recoveryAttempts?: number; pendingPermission?: AiPermissionRequest; question?: string; pauseId?: string };
 export type HarnessChildTask = { taskId: string; blockId: string; provider: AiProvider; workspace: string; recoveryAttempts: number; recoveryError?: string; failureReason?: HarnessFailureReason; retryAt?: string; retryStartedAt?: string };
 export type HarnessFeatureStatus = "planned" | "dispatched" | "completed" | "blocked";
 export type HarnessFeature = { id: string; prompt: string; prerequisites: string[]; status: HarnessFeatureStatus; taskId?: string; commit?: string; blockedReason?: string };
 export type HarnessConnectionTrace = { id: string; edgeId: string; direction: "forward" | "return"; status: "active" | "succeeded" | "failed"; startedAt: string; completedAt?: string };
-export type HarnessRun = { connectionTraces?: HarnessConnectionTrace[]; id: string; harnessId: string; harnessVersion: number; definition?: HarnessDefinition; executionPlan?: HarnessExecutionPlan; operations?: HarnessOperation[]; children?: HarnessChildTask[]; features?: HarnessFeature[]; corrections?: HarnessCorrectionCycle[]; input: string; status: HarnessRunStatus; createdAt: string; startedAt?: string; completedAt?: string; blocks: HarnessBlockRun[]; error?: string; cleanupErrors?: string[] };
+export type HarnessRun = { workspace?: string; connectionTraces?: HarnessConnectionTrace[]; id: string; harnessId: string; harnessVersion: number; definition?: HarnessDefinition; executionPlan?: HarnessExecutionPlan; operations?: HarnessOperation[]; children?: HarnessChildTask[]; features?: HarnessFeature[]; corrections?: HarnessCorrectionCycle[]; input: string; status: HarnessRunStatus; createdAt: string; startedAt?: string; completedAt?: string; blocks: HarnessBlockRun[]; error?: string; cleanupErrors?: string[] };
 export type HttpResponse = { status: number; statusText: string; headers: Record<string, string>; body: string; durationMs: number };
 
 export type JavaProjectOptions = {
@@ -388,6 +394,9 @@ export type ProtocolOperations = {
   "harnesses.validate": { payload: { harness: HarnessDefinition }; result: { valid: boolean; issues: HarnessValidationIssue[]; order: string[] } };
   "harnesses.runs": { payload: { harnessId?: string }; result: { runs: HarnessRun[] } };
   "harnesses.runs.delete": { payload: { runId: string }; result: Record<string, never> };
+  "harnesses.test": { payload: { definition: HarnessDefinition; blockId: string; input: string; provider?: AiProvider }; result: { run: HarnessRun } };
+  "harnesses.app.read": { payload: { harnessId: string; blockId: string; runId?: string }; result: { app: HarnessAppState } };
+  "harnesses.app.kill": { payload: { harnessId: string; blockId: string; runId?: string }; result: Record<string, never> };
   "harnesses.run": { payload: { harnessId: string; input: string; startBlockId?: string; rerunRunId?: string; provider?: AiProvider }; result: { run: HarnessRun } };
   "harnesses.chat": { payload: { harnessId: string; blockId: string; input: string; runId?: string; provider?: AiProvider }; result: { run: HarnessRun } };
   "harnesses.append": { payload: { runId: string; input: string }; result: { run: HarnessRun } };
@@ -705,7 +714,7 @@ export type JavaDebugStateEvent = { type: "java.debug.state"; payload: JavaDebug
 export type TimersChangedEvent = { type: "timers.changed"; payload: { rootId?: WorkspaceRootId } };
 export type AiChangedEvent = { type: "ai.changed"; payload: { rootId: WorkspaceRootId } };
 export type TasksChangedEvent = { type: "tasks.changed"; payload: { rootId: WorkspaceRootId } };
-export type CommitMessageChangedEvent = { type: "commit-message.changed"; payload: { rootId: WorkspaceRootId; message: string } };
+export type CommitMessageChangedEvent = { type: "commit-message.changed"; payload: { rootId: WorkspaceRootId; workspace?: string; message: string } };
 export type RunConfigChangedEvent = { type: "runConfig.changed"; payload: { rootId: WorkspaceRootId; configs: RunConfig[] } };
 
 export type HarnessChangedEvent = { type: "harness.changed"; payload: { rootId: WorkspaceRootId; runId: string } };
@@ -798,6 +807,9 @@ const requestTypeRegistry: Record<RequestType, true> = {
   "harnesses.validate": true,
   "harnesses.runs": true,
   "harnesses.runs.delete": true,
+  "harnesses.test": true,
+  "harnesses.app.read": true,
+  "harnesses.app.kill": true,
   "harnesses.run": true,
   "harnesses.chat": true,
   "harnesses.append": true,

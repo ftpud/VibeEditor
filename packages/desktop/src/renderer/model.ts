@@ -1,5 +1,5 @@
 export type Panel = { id: string; type: "explorer" | "editor" | "terminal" | "java" | "problems" | "gitlog" };
-export type EditorTab = {
+export type EditorTab = { workflowRunId?: string; workflowBlockId?: string;
   id: string;
   type: "file" | "diff" | "useful" | "agent" | "skill" | "runConfig" | "workflowDocument";
   title: string;

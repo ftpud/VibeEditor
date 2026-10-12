@@ -1,7 +1,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { HarnessBlock, HarnessDefinition, HarnessRun } from "@remote-ide/protocol";
-import { alignBlocks, autoLayoutBlocks, dragPosition, edgePath, fitCanvasViewport, HarnessPanel, minimapScrollPosition, minimapViewport, responsePreview, parseWorkflowDefinitionImport, workflowDefinitionExport, workflowRunExport } from "./HarnessPanel";
+import { alignBlocks, autoLayoutBlocks, BlockRunDetails, dragPosition, edgePath, fitCanvasViewport, HarnessPanel, minimapScrollPosition, minimapViewport, responsePreview, parseWorkflowDefinitionImport, workflowDefinitionExport, workflowRunExport } from "./HarnessPanel";
 
 afterEach(cleanup);
 
@@ -12,6 +12,100 @@ function renderEditor(ui: Parameters<typeof render>[0]) {
 }
 
 describe("HarnessPanel", () => {
+  it("links an existing skill from the catalogue and can return to custom instructions", async () => {
+    const harness: HarnessDefinition = { id: "flow", name: "Flow", version: 1, createdAt: "now", updatedAt: "now", blocks: [{ id: "skill", type: "skill", label: "Skill", description: "Custom", prompt: "Custom instructions", position: { x: 0, y: 0 } }], edges: [] };
+    const skillCatalog = { skills: [{ id: "workspace/review", scope: "workspace" as const, name: "review", title: "Reviewer", description: "Review code changes", path: "/project/.agents/skills/review/SKILL.md" }, { id: "global/blocked", scope: "global" as const, name: "blocked", title: "Blocked", path: "/skills/blocked/SKILL.md" }], policy: { allowed: ["workspace/review"], defaults: [] } };
+    const onSave = vi.fn(async (value) => value);
+    const onRefreshSkills = vi.fn(async () => {});
+    render(<HarnessPanel designOnly harnesses={[harness]} runs={[]} providers={[]} agents={[]} skillCatalog={skillCatalog} onRefreshSkills={onRefreshSkills} onCreate={vi.fn()} onSave={onSave} onDelete={vi.fn()} onRun={vi.fn()} onCancelRun={vi.fn()} onError={vi.fn()} />);
+    fireEvent.click(await screen.findByText("Skill"));
+    expect(screen.getByRole("option", { name: "Blocked (global)" })).toHaveProperty("disabled", true);
+    fireEvent.change(screen.getByLabelText("Existing skill"), { target: { value: "workspace/review" } });
+    expect(screen.queryByLabelText("Block prompt")).toBeNull();
+    expect(screen.getAllByText("Review code changes").length).toBeGreaterThan(0);
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ blocks: [expect.objectContaining({ skillId: "workspace/review", description: "Review code changes", prompt: "" })] })));
+    expect(parseWorkflowDefinitionImport(workflowDefinitionExport(onSave.mock.calls[0]![0])).blocks[0]?.skillId).toBe("workspace/review");
+    fireEvent.click(screen.getByTitle("Refresh workflow skills"));
+    expect(onRefreshSkills).toHaveBeenCalledTimes(2);
+    fireEvent.change(screen.getByLabelText("Existing skill"), { target: { value: "" } });
+    expect(screen.getByLabelText("Block prompt")).toBeTruthy();
+    expect(screen.getByLabelText("Skill description")).toBeTruthy();
+  });
+
+  it("adds Task controls and saves its provider, model, and reasoning", async () => {
+    const harness: HarnessDefinition = { id: "flow", name: "Flow", version: 1, createdAt: "now", updatedAt: "now", blocks: [], edges: [] };
+    const onSave = vi.fn(async (value) => value);
+    const onLoadModels = vi.fn().mockResolvedValue([{ id: "worker-model", name: "Worker Model", defaultReasoning: "low", reasoningLevels: ["low", "high"] }]);
+    const providers = [{ id: "worker", name: "Worker", options: [], capabilities: {} }] as unknown as Parameters<typeof HarnessPanel>[0]["providers"];
+    render(<HarnessPanel designOnly harnesses={[harness]} runs={[]} providers={providers} agents={[]} defaultProvider="worker" onLoadModels={onLoadModels} onCreate={vi.fn()} onSave={onSave} onDelete={vi.fn()} onRun={vi.fn()} onCancelRun={vi.fn()} onError={vi.fn()} />);
+    fireEvent.change(await screen.findByLabelText("Add block type"), { target: { value: "task_controls" } });
+    fireEvent.change(screen.getByLabelText("Provider"), { target: { value: "worker" } });
+    expect(screen.queryByLabelText("Agent preset")).toBeNull();
+    expect(screen.queryByLabelText("Block prompt")).toBeNull();
+    await waitFor(() => expect(onLoadModels).toHaveBeenCalledWith("worker"));
+    fireEvent.click(screen.getByRole("button", { name: "AI model" }));
+    fireEvent.click(await screen.findByRole("option", { name: /Worker Model/ }));
+    fireEvent.change(screen.getByLabelText("Workflow reasoning effort"), { target: { value: "high" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ blocks: [expect.objectContaining({ type: "task_controls", provider: "worker", model: "worker-model", reasoning: "high", prompt: "" })] })));
+    expect(parseWorkflowDefinitionImport(workflowDefinitionExport(onSave.mock.calls[0]![0])).blocks[0]).toMatchObject({ type: "task_controls", provider: "worker", model: "worker-model", reasoning: "high" });
+  });
+
+  it("shows a skill’s description and loaded instructions in run details", () => {
+    const block: HarnessBlock = { id: "skill", type: "skill", label: "Code review", description: "Use when reviewing code", prompt: "Inspect the diff", position: { x: 0, y: 0 } };
+    render(<BlockRunDetails block={block} state={{ blockId: block.id, status: "succeeded", output: "Inspect the diff" }} onClose={vi.fn()} />);
+    const details = screen.getByLabelText("Code review run details");
+    expect(details.textContent).toContain("Use when reviewing code");
+    expect(details.textContent).toContain("Inspect the diff");
+    fireEvent.click(screen.getByRole("button", { name: "Close run details" }));
+  });
+
+  it("adds and saves a SKILL block with a description and instructions", async () => {
+    const harness: HarnessDefinition = { id: "flow", name: "Flow", version: 1, createdAt: "now", updatedAt: "now", blocks: [], edges: [] };
+    const onSave = vi.fn(async (value) => value);
+    render(<HarnessPanel designOnly harnesses={[harness]} runs={[]} providers={[]} agents={[]} onCreate={vi.fn()} onSave={onSave} onDelete={vi.fn()} onRun={vi.fn()} onCancelRun={vi.fn()} onError={vi.fn()} />);
+    fireEvent.change(await screen.findByLabelText("Add block type"), { target: { value: "skill" } });
+    expect(screen.getByLabelText("Block type")).toHaveProperty("value", "skill");
+    fireEvent.change(screen.getByLabelText("Skill description"), { target: { value: "Use when reviewing code" } });
+    fireEvent.change(screen.getByLabelText("Block prompt"), { target: { value: "Inspect the diff and verify tests" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ blocks: [expect.objectContaining({ type: "skill", description: "Use when reviewing code", prompt: "Inspect the diff and verify tests" })] })));
+    const saved = onSave.mock.calls[0]![0] as HarnessDefinition;
+    expect(parseWorkflowDefinitionImport(workflowDefinitionExport(saved)).blocks[0]).toMatchObject({ type: "skill", description: "Use when reviewing code", prompt: "Inspect the diff and verify tests" });
+  });
+
+  it("saves a configurable Use connection timeout in seconds", async () => {
+    const harness: HarnessDefinition = { id: "flow", name: "Flow", version: 1, createdAt: "now", updatedAt: "now", blocks: [
+      { id: "parent", type: "chatbox", label: "Parent", prompt: "", position: { x: 20, y: 20 } },
+      { id: "child", type: "chatbox", label: "Child", prompt: "", position: { x: 260, y: 20 } },
+    ], edges: [{ id: "use", from: "parent", to: "child", type: "use" }] };
+    const onSave = vi.fn(async (value) => value);
+    renderEditor(<HarnessPanel harnesses={[harness]} runs={[]} providers={[]} agents={[]} onCreate={vi.fn()} onSave={onSave} onDelete={vi.fn()} onRun={vi.fn()} onCancelRun={vi.fn()} onError={vi.fn()} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Select connection: Parent then Child" }));
+    expect(screen.getByLabelText("Use timeout (seconds)")).toHaveProperty("placeholder", "300");
+    fireEvent.change(screen.getByLabelText("Use timeout (seconds)"), { target: { value: "1800" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(onSave.mock.calls[0]?.[0].edges[0]).toMatchObject({ type: "use", timeoutMs: 1_800_000 }));
+  });
+
+  it("tests an unsaved app draft without an App/Script switch", async () => {
+    const harness: HarnessDefinition = { id: "flow", name: "Flow", version: 1, createdAt: "now", updatedAt: "now", blocks: [{ id: "app", type: "run_app", label: "Server", prompt: "", command: "npm run dev", app: { name: "server", actions: ["start"] }, position: { x: 0, y: 0 } }], edges: [] };
+    const onTestBlock = vi.fn().mockResolvedValue({ id: "test", harnessId: "flow", status: "queued", blocks: [] });
+    const onSave = vi.fn();
+    render(<HarnessPanel designOnly harnesses={[harness]} runs={[]} providers={[]} agents={[]} onCreate={vi.fn()} onSave={onSave} onDelete={vi.fn()} onRun={vi.fn()} onTestBlock={onTestBlock} onCancelRun={vi.fn()} onError={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: "List" }));
+    fireEvent.click(screen.getByRole("button", { name: "Edit block Server" }));
+    expect(screen.queryByRole("switch", { name: "Run as app" })).toBeNull();
+    expect(screen.getByLabelText("Run App script")).toHaveProperty("value", "npm run dev");
+    fireEvent.change(screen.getByLabelText("Run App script"), { target: { value: "printf test" } });
+    fireEvent.change(screen.getByLabelText("Block test input"), { target: { value: "hello" } });
+    fireEvent.click(screen.getByRole("button", { name: "Test Server" }));
+    await waitFor(() => expect(onTestBlock).toHaveBeenCalledWith(expect.objectContaining({ blocks: [expect.objectContaining({ type: "run_app", command: "printf test" })] }), "app", "hello"));
+    expect(onSave).not.toHaveBeenCalled();
+    expect(screen.getByLabelText("Run App script")).toHaveProperty("value", "printf test");
+  });
+
   it("adds a Chatbox with AI settings and optional instructions", async () => {
     const harness: HarnessDefinition = { id: "chat-flow", name: "Chat flow", version: 1, createdAt: "now", updatedAt: "now", blocks: [], edges: [] };
     const onSave = vi.fn(async (definition) => definition);
@@ -32,15 +126,18 @@ describe("HarnessPanel", () => {
     fireEvent.change(screen.getByLabelText("Run App name"), { target: { value: "dev-server" } });
     fireEvent.change(screen.getByLabelText("Run App script"), { target: { value: "npm run dev" } });
     expect(screen.queryByLabelText("AI model")).toBeNull();
-    fireEvent.change(screen.getByLabelText("Run App action"), { target: { value: "status" } });
+    fireEvent.click(screen.getByRole("checkbox", { name: "Run App allow start" }));
     expect(screen.queryByLabelText("Run App script")).toBeNull();
-    fireEvent.change(screen.getByLabelText("Run App action"), { target: { value: "kill" } });
+    fireEvent.click(screen.getByRole("checkbox", { name: "Run App allow status" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "Run App allow kill" }));
     expect(screen.queryByLabelText("Run App tail lines")).toBeNull();
-    fireEvent.change(screen.getByLabelText("Run App action"), { target: { value: "tail" } });
+    fireEvent.click(screen.getByRole("checkbox", { name: "Run App allow tail" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "Run App allow start" }));
+    expect(screen.getByLabelText("Run App script")).toHaveProperty("value", "npm run dev");
     fireEvent.change(screen.getByLabelText("Run App tail lines"), { target: { value: "25" } });
     fireEvent.click(screen.getByTitle("Save workflow"));
     await waitFor(() => expect(onSave).toHaveBeenCalled());
-    expect(onSave.mock.calls[0]?.[0].blocks[0]).toMatchObject({ type: "run_app", command: "npm run dev", app: { name: "dev-server", action: "tail", lines: 25 } });
+    expect(onSave.mock.calls[0]?.[0].blocks[0]).toMatchObject({ type: "run_app", command: "npm run dev", app: { name: "dev-server", actions: ["status", "kill", "tail", "start"], lines: 25 } });
   });
 
   it("retries a selected failed block from its frozen snapshot", async () => {
@@ -177,6 +274,14 @@ describe("HarnessPanel", () => {
     expect(screen.getByRole("button", { name: "Reset workflow zoom" }).textContent).toBe("25%");
     fireEvent.click(screen.getByRole("button", { name: "Reset workflow zoom" }));
     expect(screen.getByRole("button", { name: "Reset workflow zoom" }).textContent).toBe("100%");
+  });
+
+  it("fits a single canvas axis independently of the other viewport dimension", () => {
+    const blocks: HarnessBlock[] = [{ id: "one", type: "text", label: "One", prompt: "", position: { x: 0, y: 0 } }, { id: "two", type: "text", label: "Two", prompt: "", position: { x: 900, y: 700 } }];
+    const horizontal = fitCanvasViewport(blocks, 600, 100, 48, "horizontal");
+    const vertical = fitCanvasViewport(blocks, 100, 600, 48, "vertical");
+    expect(horizontal.zoom).toBeCloseTo(600 / (900 + 176 + 96));
+    expect(vertical.zoom).toBeCloseTo(600 / (700 + 116 + 96));
   });
 
   it("fits every workflow block into the canvas and centers the resulting viewport", () => {

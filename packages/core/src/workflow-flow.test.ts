@@ -23,6 +23,124 @@ async function setup(blocks: HarnessBlock[], edges: HarnessEdge[], concurrency =
 }
 
 describe("typed workflows", () => {
+  it.each(["ai", "chatbox"] as const)("loads connected skills on demand for %s without dispatching another agent", async (type) => {
+    const instructions = "Inspect the diff, verify the tests, and report concrete findings.";
+    const description = "Use when reviewing code changes.";
+    const { runner, definition, store, finished } = await setup([
+      block("agent", type, { prompt: "Review this change" }),
+      block("review-skill", "skill", { label: "Code review", description, prompt: instructions }),
+      block("unused-skill", "skill", { description: "Use for deployment", prompt: "Deploy instructions" }),
+    ], [edge("agent", "review-skill", "use"), edge("agent", "unused-skill", "use")]);
+    // Verify the new type and description survive persistence.
+    expect((await store.read(definition.id)).blocks[1]).toMatchObject({ type: "skill", description, prompt: instructions });
+    const dispatch = vi.fn(async (_block: HarnessBlock, prompt: string, runtime: Parameters<Parameters<HarnessRunner["start"]>[2]>[2]) => {
+      expect(prompt).toContain(description);
+      expect(prompt).not.toContain(instructions);
+      expect(prompt).toContain("load its instructions before applying them in your own session");
+      const connections = await runner.flowTool(runtime.runId, "agent", "workflow_connections", {});
+      expect(connections).toEqual(expect.arrayContaining([expect.objectContaining({ block_id: "review-skill", blockType: "skill", description })]));
+      expect(JSON.stringify(connections)).not.toContain(instructions);
+      expect(await runner.flowTool(runtime.runId, "agent", "workflow_use_block", { block_id: "review-skill" })).toMatchObject({ output: instructions });
+      return session("Reviewed");
+    });
+    await runner.start(definition.id, "Review", dispatch);
+    const run = await finished();
+    expect(run.status).toBe("succeeded");
+    expect(dispatch).toHaveBeenCalledTimes(1);
+    expect(run.blocks.find((item) => item.blockId === "review-skill")).toMatchObject({ status: "succeeded", output: instructions });
+    expect(run.blocks.find((item) => item.blockId === "unused-skill")?.status).toBe("skipped");
+  });
+
+  it("requires a skill description and instructions", async () => {
+    const { definition } = await setup([block("skill", "skill", { description: "Use for reviews", prompt: "Review changes" })], []);
+    expect(validateHarness(definition).valid).toBe(true);
+    expect(validateHarness({ ...definition, blocks: [{ ...definition.blocks[0]!, description: " " }] }).issues).toEqual(expect.arrayContaining([expect.objectContaining({ message: expect.stringContaining("needs a description") })]));
+    expect(validateHarness({ ...definition, blocks: [{ ...definition.blocks[0]!, prompt: " " }] }).issues).toEqual(expect.arrayContaining([expect.objectContaining({ code: "empty-prompt", message: expect.stringContaining("needs instructions") })]));
+  });
+
+  it("returns child messages on a Use timeout and lets the parent monitor the ongoing child", async () => {
+    const { runner, definition, store, finished } = await setup([block("parent", "chatbox"), block("child", "chatbox"), block("unconnected", "chatbox")], [{ ...edge("parent", "child", "use"), timeoutMs: 100 }]);
+    let release!: () => void;
+    const waiting = new Promise<void>((resolve) => { release = resolve; });
+    let parentFinished = false;
+    const dispatch = async (item: HarnessBlock, _input: string, runtime: Parameters<Parameters<HarnessRunner["start"]>[2]>[2]) => {
+      if (item.id === "child") {
+        await runtime.activity(session("Still working"));
+        await waiting;
+        return session("Completed child");
+      }
+      const result = await runner.flowTool(runtime.runId, "parent", "workflow_use_block", { block_id: "child", input: "Do the work" });
+      expect(result).toMatchObject({ status: "timed_out", timeout_seconds: 0.1, block_status: "running", messages: [{ role: "user", text: "Do the work" }, { role: "assistant", text: "Still working" }] });
+      await expect(runner.flowTool(runtime.runId, "parent", "workflow_block_messages", { block_id: "unconnected" })).rejects.toThrow("connected block");
+      await expect(runner.flowTool(runtime.runId, "parent", "workflow_block_messages", { block_id: "child", count: 0 })).rejects.toThrow("message count");
+      expect(await runner.flowTool(runtime.runId, "parent", "workflow_block_messages", { block_id: "child", count: 1 })).toMatchObject({ block_status: "running", messages: [{ text: "Still working" }] });
+      parentFinished = true;
+      return session("Parent can continue");
+    };
+    try {
+      await runner.start(definition.id, "hello", dispatch, "provider", undefined, "parent");
+      await vi.waitFor(() => expect(parentFinished).toBe(true));
+      expect((await store.runs())[0]?.status).not.toBe("succeeded");
+      expect((await store.runs())[0]?.blocks.find((item) => item.blockId === "child")?.status).toBe("running");
+    } finally { release(); }
+    const run = await finished();
+    expect(run.status).toBe("succeeded");
+    expect(run.blocks.find((item) => item.blockId === "child")?.output).toBe("Completed child");
+    expect(run.connectionTraces?.map((trace) => trace.status)).toEqual(["succeeded", "succeeded"]);
+    expect((await store.list()).find((item) => item.id === definition.id)?.edges[0]?.timeoutMs).toBe(100);
+  });
+
+  it("reports a child's failure after its parent has received a timeout", async () => {
+    const { runner, definition, finished } = await setup([block("parent", "chatbox"), block("child", "chatbox")], [{ ...edge("parent", "child", "use"), timeoutMs: 30 }]);
+    let release!: () => void;
+    const waiting = new Promise<void>((resolve) => { release = resolve; });
+    const dispatch = async (item: HarnessBlock, _input: string, runtime: Parameters<Parameters<HarnessRunner["start"]>[2]>[2]) => {
+      if (item.id === "child") { await waiting; throw new Error("Child failed later"); }
+      try {
+        expect(await runner.flowTool(runtime.runId, "parent", "workflow_use_block", { block_id: "child" })).toMatchObject({ status: "timed_out" });
+        return session("Parent finished");
+      } finally { release(); }
+    };
+    await runner.start(definition.id, "hello", dispatch, "provider", undefined, "parent");
+    expect(await finished()).toMatchObject({ status: "failed", error: "Child failed later" });
+  });
+
+  it("accepts Use timeouts longer than 300 seconds and per-call overrides", async () => {
+    const { runner, definition, finished } = await setup([block("parent", "chatbox"), block("child", "text")], [{ ...edge("parent", "child", "use"), timeoutMs: 1 }]);
+    const dispatch = async (_item: HarnessBlock, _input: string, runtime: Parameters<Parameters<HarnessRunner["start"]>[2]>[2]) => {
+      await expect(runner.flowTool(runtime.runId, "parent", "workflow_use_block", { block_id: "child", timeout_seconds: 86401 })).rejects.toThrow("timeout_seconds");
+      expect(await runner.flowTool(runtime.runId, "parent", "workflow_use_block", { block_id: "child", input: "result", timeout_seconds: 1800 })).toMatchObject({ output: "result" });
+      return session("done");
+    };
+    await runner.start(definition.id, "hello", dispatch, "provider", undefined, "parent");
+    expect((await finished()).status).toBe("succeeded");
+  });
+
+  it("tests an unsaved draft block without running followers or changing the saved definition", async () => {
+    const { runner, definition, store, finished } = await setup([block("script", "script", { command: "saved" }), block("next", "text")], [edge("script", "next")]);
+    const draft = { ...definition, blocks: definition.blocks.map((item) => item.id === "script" ? { ...item, command: "unsaved" } : item) };
+    const dispatch = vi.fn(async (item: HarnessBlock) => { expect(item.command).toBe("unsaved"); return session("test output"); });
+    await runner.start(definition.id, "", dispatch, "codex", undefined, "script", undefined, draft);
+    const run = await finished();
+    expect(run.status).toBe("succeeded");
+    expect(run.blocks).toHaveLength(1);
+    expect(run.blocks[0]).toMatchObject({ blockId: "script", output: "test output" });
+    expect(dispatch).toHaveBeenCalledTimes(1);
+    expect((await store.read(definition.id)).blocks[0]?.command).toBe("saved");
+  });
+
+  it("retains connected tools when testing an AI block and skips follow steps", async () => {
+    const { runner, definition, finished } = await setup([block("ai", "ai"), block("tool", "text", { prompt: "Tool {{input}}" }), block("next", "text")], [edge("ai", "tool", "use"), edge("ai", "next")]);
+    const dispatch = vi.fn(async (_item: HarnessBlock, _input: string, runtime: Parameters<Parameters<HarnessRunner["start"]>[2]>[2]) => {
+      expect(await runner.flowTool(runtime.runId, "ai", "workflow_use_block", { block_id: "tool", input: "hello" })).toMatchObject({ output: "Tool hello" });
+      return session("done");
+    });
+    await runner.start(definition.id, "test", dispatch, "codex", undefined, "ai", undefined, definition);
+    const run = await finished();
+    expect(run.status).toBe("succeeded");
+    expect(run.blocks.map((item) => item.blockId)).toEqual(["ai", "tool"]);
+  });
+
   it("keeps Chatbox conversations and sessions across turns and exposes every connected block", async () => {
     const { runner, definition, store, finished } = await setup([
       block("chat", "chatbox", { prompt: "" }), block("tool", "text", { prompt: "Tool: {{input}}" }), block("unused", "text", { prompt: "Never called" }),
@@ -93,6 +211,70 @@ describe("typed workflows", () => {
     } finally { apps.closeAll(); }
   });
 
+  it("lets an agent choose different actions on one persisted Run App block", async () => {
+    const apps = new WorkflowAppService();
+    const { runner, definition, store, finished } = await setup([
+      block("agent", "ai"),
+      block("app", "run_app", { prompt: "", command: "printf 'ready\\n'; exec sleep 300", app: { actions: ["start", "status", "tail", "kill"], name: "server" } }),
+    ], [edge("agent", "app", "use")]);
+    expect((await store.read(definition.id)).blocks[1]?.app?.actions).toEqual(["start", "status", "tail", "kill"]);
+    try {
+      await runner.start(definition.id, "Manage the app", async (target, input, runtime) => {
+        if (target.type === "run_app") return apps.execute(target, input, os.tmpdir(), runtime.assertActive);
+        const use = async (action: string) => {
+          const result = await runner.flowTool(runtime.runId, target.id, "workflow_use_block", { block_id: "app", input: "", action }) as { output: string };
+          return JSON.parse(result.output);
+        };
+        expect(await use("start")).toMatchObject({ status: "running" });
+        expect(await use("status")).toMatchObject({ status: "running" });
+        await vi.waitFor(async () => expect(await use("tail")).toMatchObject({ output: expect.stringContaining("ready") }));
+        expect(await use("kill")).toMatchObject({ status: "exited" });
+        return session("Managed app");
+      }, "provider");
+      expect((await finished()).status).toBe("succeeded");
+    } finally { apps.closeAll(); }
+  });
+
+  it("supports input-free concurrent app status and tail calls with a requested line count", async () => {
+    const apps = new WorkflowAppService();
+    const { runner, definition, store, finished } = await setup([block("chat", "chatbox", { prompt: "" }), block("app", "run_app", { prompt: "", command: "printf 'first\\nsecond\\nthird\\n'; exec sleep 300", app: { actions: ["start", "status", "tail", "kill"], name: "status-tail-test" } })], [edge("chat", "app")]);
+    try {
+      await runner.start(definition.id, "Inspect app", async (target, input, runtime) => {
+        if (target.type === "run_app") return apps.execute(target, input, os.tmpdir(), runtime.assertActive);
+        const use = (action: string, lines?: number) => runner.flowTool(runtime.runId, "chat", "workflow_use_block", { block_id: "app", action, ...(lines !== undefined ? { lines } : {}) }) as Promise<{ app: { status: string; output?: string } }>;
+        const connected = await runner.flowTool(runtime.runId, "chat", "workflow_connections", {}) as { block_id: string }[];
+        expect(connected[0]?.block_id).toBe("app");
+        await use("start");
+        await vi.waitFor(async () => expect((await use("tail", 2)).app.output).toBe("second\nthird"));
+        const [status, tail] = await Promise.all([use("status"), use("tail", 1)]);
+        expect(status.app.status).toBe("running");
+        expect(tail.app.output).toBe("third");
+        await expect(use("tail", 0)).rejects.toThrow("1 to 10000");
+        expect((await store.runs())[0]?.blocks.find((item) => item.blockId === "app")?.status).toBe("succeeded");
+        await use("kill");
+        return session("Inspected");
+      }, "provider", undefined, "chat");
+      const run = await finished();
+      expect(run.status).toBe("succeeded");
+      expect(run.operations?.filter((item) => item.kind === "tool_command").some((item) => item.status === "failed")).toBe(true);
+      expect(run.operations?.filter((item) => item.kind === "tool_command").some((item) => item.status === "succeeded")).toBe(true);
+    } finally { apps.closeAll(); }
+  });
+
+  it("persists provider activity during a chat turn even when the response has not changed", async () => {
+    const { runner, definition, store, finished } = await setup([block("chat", "chatbox", { prompt: "" })], []);
+    await runner.start(definition.id, "Inspect", async (_target, _input, runtime) => {
+      const current = { ...session(""), status: "in_progress" as const, messages: [{ id: "user", role: "user" as const, text: "Inspect", timestamp: "now" }, { id: "exec", role: "activity" as const, text: "Running npm test", timestamp: "now" }] };
+      await runtime.activity(current);
+      expect((await store.runs())[0]?.blocks[0]?.agentActivity).toEqual([{ id: "exec", timestamp: "now", text: "Running npm test" }]);
+      current.messages[1]!.text = "Tests completed";
+      await runtime.activity(current);
+      expect((await store.runs())[0]?.blocks[0]?.agentActivity?.[0]?.text).toBe("Tests completed");
+      return session("Done");
+    }, "provider", undefined, "chat");
+    expect((await finished()).status).toBe("succeeded");
+  });
+
   it("passes each output to followers and only starts the selected entry", async () => {
     const { runner, definition, finished } = await setup([block("button", "start_button", { prompt: "Configured prompt" }), block("textStart", "start_input"), block("text", "text", { prompt: "Text: {{input}}" }), block("timer", "timer", { seconds: 0 }), block("agent", "ai")], [edge("button", "text"), edge("text", "timer"), edge("timer", "agent")]);
     const dispatch = vi.fn(async (_block, prompt) => { expect(prompt).toContain("Text: Configured prompt"); return session("result"); });
@@ -143,6 +325,31 @@ describe("typed workflows", () => {
     expect(paused.question).toBe("What next for project?");
     await runner.answerQuestion(run.id, "question", paused.sessionId!, paused.pauseId!, "build", vi.fn());
     const result = await finished(); expect(result.status).toBe("succeeded"); expect(result.blocks.find((state) => state.blockId === "after")?.output).toBe("build");
+  });
+
+  it.each([
+    ["user_prompt", false, "Please build the preview"],
+    ["user_prompt", true, "Please build the preview"],
+    ["yes_no_prompt", false, "yes"],
+    ["yes_no_prompt", true, "no"],
+  ] as const)("returns a %s answer to the calling Chatbox (return edge: %s)", async (type, returnEdge, answer) => {
+    const { runner, definition, store, finished } = await setup([block("chat", "chatbox", { prompt: "" }), block("question", type, { prompt: "What should I do?" }), block("after", "text")], [edge("chat", "question", "use"), ...(returnEdge ? [edge("question", "chat")] : []), edge("question", "after")]);
+    const providerAnswer = vi.fn();
+    const dispatch = vi.fn(async (_target: HarnessBlock, _prompt: string, runtime: Parameters<Parameters<HarnessRunner["start"]>[2]>[2]) => {
+      const response = await runner.flowTool(runtime.runId, "chat", "workflow_use_block", { block_id: "question", input: "" });
+      expect(response).toMatchObject({ blockId: "question", output: answer });
+      return session(`User said: ${answer}`);
+    });
+    const run = await runner.start(definition.id, "Ask the user", dispatch, "provider", undefined, "chat");
+    await vi.waitFor(async () => expect((await store.runs())[0]?.blocks.find((item) => item.blockId === "question")?.status).toBe("awaiting_user_input"));
+    const paused = (await store.runs())[0]!.blocks.find((item) => item.blockId === "question")!;
+    await runner.answerQuestion(run.id, "question", paused.sessionId!, paused.pauseId!, answer, providerAnswer);
+    const result = await finished();
+    expect(result.status).toBe("succeeded");
+    expect(result.blocks.find((item) => item.blockId === "chat")?.chatMessages?.at(-1)?.text).toBe(`User said: ${answer}`);
+    expect(dispatch).toHaveBeenCalledOnce();
+    expect(providerAnswer).not.toHaveBeenCalled();
+    expect(result.blocks.find((item) => item.blockId === "after")?.output).toBe(answer);
   });
 
   it.each(["yes", "no"])("validates a Yes/No answer and passes %s to followers", async (answer) => {

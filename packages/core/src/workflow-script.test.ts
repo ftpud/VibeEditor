@@ -10,7 +10,7 @@ describe("workflow scripts", () => {
     expect(result.messages[0]?.text).toBe("hello|hello");
   });
   it("reports nonzero exits with stderr", async () => {
-    await expect(executeFlowScript(script("echo broken >&2; exit 7"), "", os.tmpdir(), () => {})).rejects.toThrow("Script exited with 7: broken");
+    await expect(executeFlowScript(script("echo broken >&2; exit 7"), "", os.tmpdir(), () => {})).rejects.toThrow(/Script exited with 7:[\s\S]*broken/);
   });
   it("stops a running script when its workflow is cancelled", async () => {
     let active = true;
