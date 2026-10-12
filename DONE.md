@@ -473,5 +473,5 @@ No implementation was performed in this continuation check.
 - Validation: full build, repository/Gateway typechecks, full tests, fit/keyboard and Chromium CSS positioning checks; smart integration suite exit 0; clean worker tree and scoped diff review.
 - Task: 360d8b4b-1b36-4ce8-95b7-9ffd559c4b58; branch feature/todo-003-workflow-fit-overlay; provider codex. Session decision: New Desktop layout task, to be reused for TODO-004/005; no reset.
 - Implementation/integrated SHA: d2bd3bba05a525bcc0f21b93bb2eaba6843c0d47; integration aaaa6338-e276-4de8-9e09-a71690eb149a completed.
-- Publishing: pending to configured origin/refs/heads/dev.
+- Publishing: pushed normally to origin/refs/heads/dev; published SHA 35d067d0ad21622ee69fc3afd578da7550b5b307; remote tracking and remote ref verified.
 - Limitations/follow-ups: Browser positioning verified with a CSS fixture rather than full Electron UI. Post-merge notification errored after confirmed integration.
