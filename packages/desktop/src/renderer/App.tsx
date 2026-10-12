@@ -7,6 +7,8 @@ import type { editor } from "monaco-editor";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { CoalescedAsyncAction, CoreClient } from "./client";
+import { ConnectionRecovery, reconnectWorkspace, restoreTerminal, type RecoverySelection } from "./connection-recovery";
+import { recoverEditorGroups, workspaceRestorationGuard } from "./workspace-recovery";
 import { remoteUploadDestination, treeContainsPath } from "./remote-transfer";
 import { hasWorkspaceSetting, readSetting, readSettingNumber, readWorkspaceSetting, resetWorkspaceSetting, workspaceSettingKey, writeSetting, writeWorkspaceSetting } from "./settings";
 import { SettingsMenu, type DesktopSettings } from "./SettingsMenu";
@@ -315,6 +317,7 @@ export function App() {
   const [externalConflict, setExternalConflict] = useState<{ tabId: string; path: string; externalContent: string; externalRevision: FileRevision; error?: string }>();
   const [pendingNavigation, setPendingNavigation] = useState<{ result: SearchResult; matchLength: number }>();
   const clientRef = useRef<CoreClient>();
+  const recoveryRef = useRef<ConnectionRecovery>();
   const [managedProcessList, setManagedProcessList] = useState<ManagedWorkflowApp[]>([]);
   const [processLoading, setProcessLoading] = useState(false);
   const [processError, setProcessError] = useState("");
@@ -424,7 +427,9 @@ export function App() {
     setPendingNavigation(undefined);
   }, [activeTab?.path, pendingNavigation]);
   useEffect(() => () => {
+    recoveryRef.current?.stop();
     clientRef.current?.disconnect();
+    clientRef.current = undefined;
     if (treeRefreshTimer.current) clearTimeout(treeRefreshTimer.current);
     if (gitRefreshTimer.current) clearTimeout(gitRefreshTimer.current);
     if (javaRefreshTimer.current) clearTimeout(javaRefreshTimer.current);
@@ -503,11 +508,11 @@ export function App() {
   // Several ai.statuses requests can be in flight at once (AI activity emits a burst of ai.changed
   // events) and the backend answers them concurrently, so responses can arrive out of order. Without
   // this guard an older snapshot overwrites a newer one and the task rows keep showing stale progress.
-  const refreshAiStatuses = useCallback(async (client = clientRef.current) => {
+  const refreshAiStatuses = useCallback(async (client = clientRef.current, canApply: () => boolean = () => true) => {
     if (!client) return;
     const sequence = ++aiStatusesRequested.current; const requestedRoot = client.getRoot();
     const [statuses, timerResult, scheduleResult] = await Promise.all([client.request("ai.statuses", {}), client.request("timers.list", {}), client.request("schedules.list", {})]);
-    if (sequence <= aiStatusesApplied.current || client.getRoot() !== requestedRoot) return;
+    if (!canApply() || sequence <= aiStatusesApplied.current || client.getRoot() !== requestedRoot) return;
     aiStatusesApplied.current = sequence;
     setAiStatuses(statuses);
     setActiveTimers(timerResult.timers);
@@ -518,11 +523,11 @@ export function App() {
     const client = clientRef.current; if (!client) throw new Error("Backend is disconnected");
     return (await client.request("schedules.agents", { taskId })).agents;
   }, []);
-  const refreshTasks = useCallback(async (client = clientRef.current) => {
+  const refreshTasks = useCallback(async (client = clientRef.current, canApply: () => boolean = () => true) => {
     if (!client) return;
     const requestedRoot = client.getRoot();
     const result = await client.request("tasks.list", {});
-    if (client.getRoot() !== requestedRoot) return;
+    if (!canApply() || client.getRoot() !== requestedRoot) return;
     setTasks(result.tasks);
     setSelectedTaskId(result.selectedTaskId);
     selectedTaskIdRef.current = result.selectedTaskId;
@@ -540,10 +545,11 @@ export function App() {
     setAiSession(session);
     return true;
   }, []);
-  const refreshAi = useCallback(async (client = clientRef.current) => {
+  const refreshAi = useCallback(async (client = clientRef.current, canApply: () => boolean = () => true) => {
     if (!client) return;
     const token = aiToken();
-    const [session] = await Promise.all([client.request("ai.get", { provider: aiProviderRef.current }), refreshAiStatuses(client)]);
+    const [session] = await Promise.all([client.request("ai.get", { provider: aiProviderRef.current }), refreshAiStatuses(client, canApply)]);
+    if (!canApply()) return;
     applyAiSession(session.session, token);
   }, [aiToken, applyAiSession, refreshAiStatuses]);
   const refreshAiRef = useRef(refreshAi);
@@ -556,22 +562,22 @@ export function App() {
   backgroundAiRefresh.current ??= new CoalescedAsyncAction(async () => { await refreshAiStatusesRef.current(clientRef.current); });
   // The listing only changes when a conversation starts, is switched or is removed, so it is kept
   // out of `refreshAi`, which also runs for every chunk the agent streams.
-  const refreshAiSessions = useCallback(async (client = clientRef.current) => {
+  const refreshAiSessions = useCallback(async (client = clientRef.current, canApply: () => boolean = () => true) => {
     if (!client) return;
     const provider = aiProviderRef.current;
     const workspace = activeWorkspaceRef.current;
     const sessions = (await client.request("ai.sessions", { provider })).sessions;
-    if (provider === aiProviderRef.current && workspace === activeWorkspaceRef.current) setAiSessions(sessions);
+    if (canApply() && provider === aiProviderRef.current && workspace === activeWorkspaceRef.current) setAiSessions(sessions);
   }, []);
-  const refreshUsefulFiles = useCallback(async (client = clientRef.current) => { if (!client) return; const rootId = client.getRoot(); const files = (await client.request("useful.list", {})).files; if (client.getRoot() === rootId) setUsefulFiles(files); }, []);
-  const refreshRunConfigs = useCallback(async (client = clientRef.current) => { if (!client) return; const rootId = client.getRoot(); const configs = (await client.request("runConfig.list", {})).configs; if (client.getRoot() === rootId) setRunConfigs(configs); }, []);
-  const refreshSkills = useCallback(async (client = clientRef.current) => {
+  const refreshUsefulFiles = useCallback(async (client = clientRef.current, canApply: () => boolean = () => true) => { if (!client) return; const rootId = client.getRoot(); const files = (await client.request("useful.list", {})).files; if (canApply() && client.getRoot() === rootId) setUsefulFiles(files); }, []);
+  const refreshRunConfigs = useCallback(async (client = clientRef.current, canApply: () => boolean = () => true) => { if (!client) return; const rootId = client.getRoot(); const configs = (await client.request("runConfig.list", {})).configs; if (canApply() && client.getRoot() === rootId) setRunConfigs(configs); }, []);
+  const refreshSkills = useCallback(async (client = clientRef.current, canApply: () => boolean = () => true) => {
     if (!client) return;
     const workspace = activeWorkspaceRef.current;
     const root = client.getRoot();
     const taskId = selectedTaskIdRef.current;
     const catalog = await client.request("skills.list", {});
-    if (client.getRoot() === root && workspace === activeWorkspaceRef.current && taskId === selectedTaskIdRef.current) setSkillCatalog(catalog);
+    if (canApply() && client.getRoot() === root && workspace === activeWorkspaceRef.current && taskId === selectedTaskIdRef.current) setSkillCatalog(catalog);
   }, []);
   const selectSkills = useCallback(async (ids: string[]) => {
     const client = clientRef.current; if (!client || !aiSession.id) return;
@@ -588,21 +594,22 @@ export function App() {
       await refreshSkills(); },
     policy: async (policy) => { if (!clientRef.current) throw new Error("Backend is disconnected"); await clientRef.current.request("skills.policy", policy); await refreshSkills(); }
   };
-  const refreshAgents = useCallback(async (client = clientRef.current, taskId = selectedTaskIdRef.current) => {
+  const refreshAgents = useCallback(async (client = clientRef.current, taskId = selectedTaskIdRef.current, canApply: () => boolean = () => true) => {
     if (!client) return;
     const rootId = client.getRoot();
-    await refreshSkills(client);
+    await refreshSkills(client, canApply);
+    if (!canApply()) return;
     const next = (await client.request("agents.list", {})).agents;
-    if (client.getRoot() !== rootId) return;
+    if (!canApply() || client.getRoot() !== rootId) return;
     setAgents(next);
     const saved = workspaceKeyRef.current ? readSetting(workspaceSettingKey(workspaceKeyRef.current, aiAgentTaskKey(taskId))) ?? "" : "";
     setSelectedAgentKey(next.some((agent) => agentKey(agent) === saved) ? saved : "");
   }, [refreshSkills]);
-  const refreshHarnesses = useCallback(async (client = clientRef.current) => {
+  const refreshHarnesses = useCallback(async (client = clientRef.current, canApply: () => boolean = () => true) => {
     if (!client) return; const rootId = client.getRoot(); const result = await client.request("harnesses.list", {});
-    if (client.getRoot() === rootId) { setHarnesses(result.harnesses); setHarnessDiagnostics(result.diagnostics); }
+    if (canApply() && client.getRoot() === rootId) { setHarnesses(result.harnesses); setHarnessDiagnostics(result.diagnostics); }
   }, []);
-  const refreshHarnessRuns = useCallback(async (client = clientRef.current) => { if (!client) return; const rootId = client.getRoot(); const runs = (await client.request("harnesses.runs", {})).runs; if (client.getRoot() === rootId) setHarnessRuns(runs); }, []);
+  const refreshHarnessRuns = useCallback(async (client = clientRef.current, canApply: () => boolean = () => true) => { if (!client) return; const rootId = client.getRoot(); const runs = (await client.request("harnesses.runs", {})).runs; if (canApply() && client.getRoot() === rootId) setHarnessRuns(runs); }, []);
   const createHarness = useCallback(async (name: string, template?: "five-minute-check-in" | "git-review-commit") => {
     const result = await clientRef.current!.request("harnesses.create", { name, template }); setHarnesses((current) => [result.harness, ...current]); return result.harness;
   }, []);
@@ -631,16 +638,22 @@ export function App() {
   const loadHarnessModels = useCallback(async (provider: AiProvider) => (await clientRef.current!.request("ai.models", { provider })).models, []);
   const validateHarnessDefinition = useCallback(async (harness: HarnessDefinition) => clientRef.current!.request("harnesses.validate", { harness }), []);
 
-  const restoreWorkspaceOptions = useCallback(async (options: WorkspaceOptions, client: CoreClient, rootId = client.getRoot() ?? "legacy") => {
+  const restoreWorkspaceOptions = useCallback(async (options: WorkspaceOptions, client: CoreClient, rootId = client.getRoot() ?? "legacy", recovery = false, signal?: AbortSignal) => {
+    const current = workspaceRestorationGuard(client, rootId, activeWorkspaceRef.current, () => clientRef.current, () => activeWorkspaceRef.current, signal);
+    const ensureCurrent = () => { if (!current()) throw new Error("Obsolete workspace restoration"); };
+    ensureCurrent();
     try {
       const java = await client.request("java.getOptions", {});
-      if (client.getRoot() === rootId) { setJavaOptions(java.options); javaOptionsRef.current = java.options; }
-    } catch (error) { setStatusMessage(error instanceof Error ? error.message : "Could not load Java configuration"); }
-    setJavaBreakpoints(options.javaBreakpoints ?? []);
-    setFileColors(options.fileColors ?? {});
-    setGitCommitMessage(options.gitCommitMessage ?? "");
-    setSearchQueries(options.searchQueries ?? {});
-    setSelectedGitPaths(new Set());
+      ensureCurrent();
+      setJavaOptions(java.options); javaOptionsRef.current = java.options;
+    } catch (error) { ensureCurrent(); setStatusMessage(error instanceof Error ? error.message : "Could not load Java configuration"); }
+    if (!recovery) {
+      setJavaBreakpoints(options.javaBreakpoints ?? []);
+      setFileColors(options.fileColors ?? {});
+      setGitCommitMessage(options.gitCommitMessage ?? "");
+      setSearchQueries(options.searchQueries ?? {});
+      setSelectedGitPaths(new Set());
+    }
     const pinnedFiles = new Set(options.pinnedFiles ?? []);
     let tabs = orderPinnedTabs(await Promise.all(options.openFiles.map(async (filePath): Promise<EditorTab> => {
       const title = filePath.split("/").pop() ?? filePath;
@@ -651,31 +664,34 @@ export function App() {
         return { id: crypto.randomUUID(), type: "file", rootId, title, path: filePath, pinned: pinnedFiles.has(filePath), dirty: false, content: "", savedContent: "", loading: false, markdownMode: /\.md$/i.test(filePath) ? "preview" : undefined, error: error instanceof Error ? error.message : "Could not restore file" };
       }
     })));
+    ensureCurrent();
     let activeDocumentId: string | undefined;
     const existingGroup = layoutRef.current.editorGroups[0];
     const carriedDocuments = existingGroup?.tabs.filter((tab) => tab.type === "workflowDocument" && (!tab.rootId || tab.rootId === rootId)) ?? [];
     if (options.workflowDocuments?.length || carriedDocuments.length) {
       try {
         const { runs } = await client.request("harnesses.runs", {});
+        ensureCurrent();
         const restored = restoreWorkflowDocuments(tabs, options.workflowDocuments, runs, rootId, existingGroup?.tabs, existingGroup?.activeTabId);
         tabs = orderPinnedTabs(restored.tabs); activeDocumentId = restored.activeTabId;
-      } catch (error) { tabs = orderPinnedTabs([...tabs, ...carriedDocuments]); activeDocumentId = carriedDocuments.find((tab) => tab.id === existingGroup?.activeTabId)?.id; setStatusMessage(error instanceof Error ? error.message : "Could not restore workflow documents"); }
+      } catch (error) { ensureCurrent(); tabs = orderPinnedTabs([...tabs, ...carriedDocuments]); activeDocumentId = carriedDocuments.find((tab) => tab.id === existingGroup?.activeTabId)?.id; setStatusMessage(error instanceof Error ? error.message : "Could not restore workflow documents"); }
     }
     const activeTabId = activeDocumentId ?? tabs.find((tab) => tab.type === "file" && tab.path === options.activeFile)?.id ?? tabs[0]?.id;
     const restoredTerminals = await Promise.all((options.terminal?.tabs ?? []).map(async (saved, index) => {
       try {
-        const attached = saved.terminalId ? await client.request("terminal.attach", { terminalId: saved.terminalId }) : undefined;
-        const reattached = attached?.state === "available";
-        const session = reattached ? attached.session : await client.request("terminal.create", { cols: 80, rows: 24 });
-        const recovery = reattached ? (session.status === "running" ? "reattached" as const : undefined) : "recreated" as const;
+        const { session, reattached } = await restoreTerminal(client, saved.terminalId, recovery);
+        ensureCurrent();
+        const terminalRecovery = reattached ? (session.status === "running" ? "reattached" as const : undefined) : "recreated" as const;
         terminalBuffers.current.set(session.terminalId, `${session.output}${session.status === "exited" ? `\r\n[process exited${session.exitCode === undefined ? "" : ` with code ${session.exitCode}`}]\r\n` : ""}`);
-        return { index, tab: { id: crypto.randomUUID(), rootId, terminalId: session.terminalId, title: saved.displayName, status: session.status, ...(session.exitCode === undefined ? {} : { exitCode: session.exitCode }), recovery } };
+        return { index, tab: { id: crypto.randomUUID(), rootId, terminalId: session.terminalId, title: saved.displayName, status: session.status, ...(session.exitCode === undefined ? {} : { exitCode: session.exitCode }), recovery: terminalRecovery } };
       } catch {
+        ensureCurrent();
         const terminalId = saved.terminalId ?? crypto.randomUUID();
         terminalBuffers.current.set(terminalId, "\r\n[terminal recovery failed; no replacement shell was started]\r\n");
         return { index, tab: { id: crypto.randomUUID(), rootId, terminalId, title: saved.displayName, status: "unavailable" as const } };
       }
     }));
+    ensureCurrent();
     const activeTerminal = restoredTerminals.find((item) => item.index === options.terminal?.activeTabIndex)?.tab ?? restoredTerminals[0]?.tab;
     const savedBottomPanel = workspaceKeyRef.current ? readWorkspaceSetting(workspaceKeyRef.current, "bottom.activePanel") : null;
     const validBottomPanel = savedBottomPanel === "gitlog"
@@ -684,53 +700,68 @@ export function App() {
     const bottomPanel: BottomPanelType | undefined = validBottomPanel
       ? savedBottomPanel as BottomPanelType
       : savedBottomPanel === null && options.terminal?.panelOpen && restoredTerminals.length > 0 ? "terminal" : undefined;
-    setLayout((current) => ({
-      ...current,
-      panels: [...current.panels.filter((panel) => !["terminal", "java", "problems", "gitlog"].includes(panel.type)), ...(bottomPanel ? [{ id: bottomPanel, type: bottomPanel }] : [])],
-      editorGroups: current.editorGroups.map((item, index) => index === 0 ? { ...item, tabs, activeTabId } : item),
-      terminalGroup: { ...current.terminalGroup, tabs: restoredTerminals.map((item) => item.tab), activeTabId: activeTerminal?.id }
-    }));
-    setWorkspaceOptionsReady(true);
+    setLayout((layout) => current() ? ({
+      ...layout,
+      panels: recovery ? layout.panels : [...layout.panels.filter((panel) => !["terminal", "java", "problems", "gitlog"].includes(panel.type)), ...(bottomPanel ? [{ id: bottomPanel, type: bottomPanel }] : [])],
+      editorGroups: recovery ? recoverEditorGroups(layout.editorGroups, tabs, activeTabId, rootId, current)
+        : layout.editorGroups.map((item, index) => index === 0 ? { ...item, tabs, activeTabId } : item),
+      terminalGroup: { ...layout.terminalGroup, tabs: restoredTerminals.map((item) => item.tab), activeTabId: activeTerminal?.id }
+    }) : layout);
+    if (!recovery) setWorkspaceOptionsReady(true);
   }, []);
 
   const connect = async () => {
+    recoveryRef.current?.stop();
+    clientRef.current?.disconnect();
+    clientRef.current = undefined;
     setWorkspaceOptionsReady(false);
     setStatus("connecting"); setStatusMessage("Connecting...");
     const client = new CoreClient();
+    clientRef.current = client;
     let connectionReady = false;
+    let recoverySelection: RecoverySelection | undefined;
+    const recovery = new ConnectionRecovery(async (signal) => {
+      const expected = recoverySelection!;
+      const stillCurrent = workspaceRestorationGuard(client, expected.rootId, expected.workspace, () => clientRef.current, () => activeWorkspaceRef.current, signal);
+      const ensureCurrent = () => { if (!stillCurrent()) throw new Error("Recovery cancelled or selection changed"); };
+      ensureCurrent();
+      const { roots: rootRegistry, workspace: result } = await reconnectWorkspace(client, host.trim(), Number(port), showIgnoredRef.current, signal, expected);
+      ensureCurrent();
+      setWorkspaceRoots(rootRegistry.roots); setSelectedRootId(rootRegistry.selectedRootId);
+      setActiveWorkspace(result.workspace); activeWorkspaceRef.current = result.workspace;
+      workspaceKeyRef.current = result.workspace; cursorPositions.setWorkspace(result.workspace);
+      setProjectName(result.projectName); setTree(result.tree); setJavaOptions(result.options.javaProject);
+      await restoreWorkspaceOptions(result.options, client, client.getRoot(), true, signal);
+      ensureCurrent();
+      await Promise.all([refreshTasks(client, stillCurrent), refreshGit(client), refreshAi(client, stillCurrent), refreshAiSessions(client, stillCurrent), refreshUsefulFiles(client, stillCurrent), refreshRunConfigs(client, stillCurrent), refreshAgents(client, expected.taskId, stillCurrent), refreshHarnesses(client, stillCurrent), refreshHarnessRuns(client, stillCurrent)]);
+      ensureCurrent();
+      if (!client.isConnected()) throw new Error("Connection lost during recovery");
+      if (selectedTaskIdRef.current !== expected.taskId) throw new Error("Saved task selection changed during recovery");
+      setWorkspaceOptionsReady(true);
+      setStatus("connected");
+      recoverySelection = undefined;
+      showStatus("Backend connection restored", "success");
+    }, (error) => {
+      if (clientRef.current !== client) return;
+      if (recoverySelection && (client.getRoot() !== recoverySelection.rootId || activeWorkspaceRef.current !== recoverySelection.workspace)) {
+        recovery.stop();
+        recoverySelection = undefined;
+        return;
+      }
+      client.disconnect();
+      showStatus(`${error instanceof Error ? error.message : "Backend unavailable"}; retrying…`, "progress");
+    });
+    recoveryRef.current = recovery;
     client.onDisconnected = (message) => {
       if (!connectionReady || clientRef.current !== client) return;
       taskSwitchSequence.current += 1;
       taskSwitchActive.current = false;
       setTaskSwitching(false);
-      setWorkspaceOptionsReady(true);
+      setStatus("disconnected");
+      setWorkspaceOptionsReady(false);
+      recoverySelection ??= { rootId: client.getRoot()!, workspace: activeWorkspaceRef.current, taskId: selectedTaskIdRef.current };
       showStatus(`${message}; reconnecting…`, "progress");
-      void (async () => {
-        let retryDelay = 250;
-        while (clientRef.current === client) {
-          await new Promise((resolve) => setTimeout(resolve, retryDelay));
-          if (clientRef.current !== client) return;
-          try {
-            await client.connect(host.trim(), Number(port));
-            if (clientRef.current !== client) { client.disconnect(); return; }
-            const rootRegistry = await client.request("workspace.roots", {}); client.setRoot(rootRegistry.selectedRootId); setWorkspaceRoots(rootRegistry.roots); setSelectedRootId(rootRegistry.selectedRootId);
-            const result = await client.request("workspace.open", { includeIgnored: showIgnoredRef.current });
-            if (clientRef.current !== client) return;
-            setActiveWorkspace(result.workspace); activeWorkspaceRef.current = result.workspace;
-            setProjectName(result.projectName);
-            setTree(result.tree);
-            setJavaOptions(result.options.javaProject);
-            await restoreWorkspaceOptions(result.options, client);
-            await Promise.all([refreshTasks(client), refreshGit(client), refreshAi(client), refreshAiSessions(client), refreshUsefulFiles(client), refreshRunConfigs(client), refreshAgents(client), refreshHarnesses(client), refreshHarnessRuns(client)]);
-            if (clientRef.current !== client) return;
-            showStatus("Backend connection restored", "success");
-            return;
-          } catch {
-            retryDelay = Math.min(retryDelay * 2, 5_000);
-            showStatus("Backend unavailable; retrying…", "progress");
-          }
-        }
-      })();
+      recovery.start();
     };
     client.onServerEvent = (event) => {
       if (event.type === "configuration.changed") {
@@ -847,10 +878,11 @@ export function App() {
     };
     try {
       await client.connect(host.trim(), Number(port));
+      if (clientRef.current !== client) return;
       try {
         const rootRegistry = await client.request("workspace.roots", {}); client.setRoot(rootRegistry.selectedRootId); setWorkspaceRoots(rootRegistry.roots); setSelectedRootId(rootRegistry.selectedRootId);
         const result = await client.request("workspace.open", { includeIgnored: showIgnoredRef.current });
-        clientRef.current = client;
+        if (clientRef.current !== client) return;
         setActiveWorkspace(result.workspace); activeWorkspaceRef.current = result.workspace;
         setProjectName(result.projectName);
         // Load workspace-specific settings
@@ -923,12 +955,16 @@ export function App() {
         void refreshGit(client); void refreshTaskGit(activeTaskRef.current, client);
         writeSetting("connection", JSON.stringify({ host, port }));
       } catch (error) {
+        if (clientRef.current !== client) return;
         connectionReady = false;
+        recovery.stop();
         client.disconnect();
         if (clientRef.current === client) clientRef.current = undefined;
         setStatus("workspace-error"); setStatusMessage(error instanceof Error ? error.message : "Workspace could not be opened");
       }
     } catch (error) {
+      if (clientRef.current !== client) return;
+      recovery.stop(); client.disconnect(); clientRef.current = undefined;
       setStatus("failed"); setStatusMessage(error instanceof Error ? error.message : "Connection failed");
     }
   };
@@ -941,6 +977,7 @@ export function App() {
 
   const disconnect = () => {
     if (hasDirtyTabs && !window.confirm("Disconnect and discard unsaved changes?")) return;
+    recoveryRef.current?.stop();
     clientRef.current?.disconnect(); clientRef.current = undefined;
     workspaceKeyRef.current = "";
     cursorPositions.setWorkspace("");
@@ -1481,6 +1518,7 @@ export function App() {
       const nextProvider = savedProvider && aiProviders.some((item) => item.id === savedProvider) ? savedProvider : aiProviderRef.current;
       await switchAiProvider(nextProvider, result.selectedTaskId);
       await Promise.all([refreshGit(), refreshAi(), refreshAiSessions(), refreshTaskGit(nextTask), refreshRunConfigs(client), refreshAgents(clientRef.current, result.selectedTaskId)]);
+      if (isCurrent() && client.isConnected()) setStatus("connected");
     } catch (error) {
       if (!isCurrent()) return;
       setWorkspaceOptionsReady(true);
@@ -2627,6 +2665,7 @@ export function App() {
       setRunConfigs((configs) => configs.filter((config) => config.scope === "global"));
       await restoreWorkspaceOptions(result.options, client);
       await Promise.all([refreshTasks(client), refreshGit(client), refreshAi(client), refreshUsefulFiles(client), refreshRunConfigs(client), refreshAgents(client)]);
+      if (clientRef.current === client && client.getRoot() === rootId && client.isConnected()) setStatus("connected");
     } catch (error) { client.setRoot(previous); setStatusMessage(error instanceof Error ? error.message : "Could not switch workspace root"); }
     finally { setTaskSwitching(false); }
   };
@@ -2707,7 +2746,8 @@ export function App() {
     }}
     onCancelAll={async () => { const client = clientRef.current; if (!client) return; await client.request("timers.cancelAll", {}); await refreshAiStatuses(client); }} />;
 
-  if (status !== "connected") return <ConnectionScreen {...{ host, port, status, statusMessage, setHost, setPort, connect }} />;
+  // Keep live buffers mounted during automatic recovery; commands still see disconnected.
+  if (status !== "connected" && status !== "disconnected") return <ConnectionScreen {...{ host, port, status, statusMessage, setHost, setPort, connect }} />;
 
   return <div className="ide-shell"><ModalFocusManager />
     {statusMessage && <div className={`status-toast ${statusKind}`} role={statusKind === "error" ? "alert" : "status"} aria-live={statusKind === "error" ? "assertive" : "polite"}>

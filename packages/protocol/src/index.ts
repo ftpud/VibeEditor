@@ -16,7 +16,7 @@ export type FileRevision = { identity: string; version: string };
  * Desktop can prove it is safe to talk to a newly deployed Core.
  */
 export type ProtocolCompatibility = { minimum: number; maximum: number };
-export const protocolCompatibility: ProtocolCompatibility = { minimum: 14, maximum: 14 };
+export const protocolCompatibility: ProtocolCompatibility = { minimum: 15, maximum: 15 };
 
 export function protocolRangeIsValid(range: ProtocolCompatibility): boolean {
   return Number.isInteger(range.minimum) && Number.isInteger(range.maximum) && range.minimum > 0 && range.minimum <= range.maximum;
@@ -313,10 +313,11 @@ export type SearchReplacePreview = { id: string; files: SearchReplacePreviewFile
 export type SearchReplaceApplyResult = { applied: { path: string; revision: FileRevision }[]; failures: { path: string; code: string; message: string }[] };
 
 export type ProtocolOperations = {
+  "protocol.keepAlive": { payload: Record<string, never>; result: Record<string, never> };
   "protocol.handshake": { payload: { compatibility: ProtocolCompatibility; clientVersion?: string }; result: { compatible: boolean; compatibility: ProtocolCompatibility; message?: string } };
   "workspace.roots": { payload: Record<string, never>; result: { roots: WorkspaceRoot[]; selectedRootId: WorkspaceRootId } };
   "workspace.addRoot": { payload: { path: string; alias: string }; result: { root: WorkspaceRoot; roots: WorkspaceRoot[] } };
-  "workspace.selectRoot": { payload: { rootId: WorkspaceRootId; includeIgnored?: boolean }; result: { root: WorkspaceRoot; workspace: string; projectName: string; tree: FileTreeNode[]; options: WorkspaceOptions } };
+  "workspace.selectRoot": { payload: { rootId: WorkspaceRootId; includeIgnored?: boolean; preserveTaskSelection?: boolean }; result: { root: WorkspaceRoot; workspace: string; projectName: string; tree: FileTreeNode[]; options: WorkspaceOptions } };
   "workspace.removeRoot": { payload: { rootId: WorkspaceRootId }; result: { roots: WorkspaceRoot[]; selectedRootId: WorkspaceRootId } };
   "workspace.open": {
     payload: { includeIgnored?: boolean };
@@ -663,7 +664,7 @@ export type RequestType = keyof ProtocolOperations;
 
 /** All nested relative paths and opaque root-owned references inherit this envelope root. */
 export type Request<T extends RequestType = RequestType> = T extends RequestType
-  ? { id: string; type: T; payload: ProtocolOperations[T]["payload"] } & (T extends "protocol.handshake" | "workspace.roots" | "workspace.addRoot" ? { rootId?: never } : { rootId: WorkspaceRootId })
+  ? { id: string; type: T; payload: ProtocolOperations[T]["payload"] } & (T extends "protocol.handshake" | "protocol.keepAlive" | "workspace.roots" | "workspace.addRoot" ? { rootId?: never } : { rootId: WorkspaceRootId })
   : never;
 
 export type ErrorCode =
@@ -691,7 +692,7 @@ export type ErrorCode =
 export type ProtocolError = { code: ErrorCode; message: string };
 
 export type Response<T extends RequestType = RequestType> =
-  | ({ id: string; ok: true; result: ProtocolOperations[T]["result"] } & (T extends "protocol.handshake" | "workspace.roots" | "workspace.addRoot" ? { rootId?: never } : { rootId: WorkspaceRootId }))
+  | ({ id: string; ok: true; result: ProtocolOperations[T]["result"] } & (T extends "protocol.handshake" | "protocol.keepAlive" | "workspace.roots" | "workspace.addRoot" ? { rootId?: never } : { rootId: WorkspaceRootId }))
   | { id: string; ok: false; error: ProtocolError };
 
 export type FilesystemChangedEvent = {
@@ -736,6 +737,7 @@ export type ServerEvent = ProcessesChangedEvent | ConfigurationChangedEvent | Ti
  */
 const requestTypeRegistry: Record<RequestType, true> = {
   "protocol.handshake": true,
+  "protocol.keepAlive": true,
   "workspace.roots": true,
   "workspace.addRoot": true,
   "workspace.selectRoot": true,

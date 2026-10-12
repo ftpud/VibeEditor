@@ -31,6 +31,7 @@ class FakeWebSocket {
     this.sent.push(data);
     const request = JSON.parse(data) as { id: string; type: string };
     if (request.type === "protocol.handshake") this.receive({ id: request.id, ok: true, result: { compatible: true, compatibility: { minimum: 1, maximum: 1 } } });
+    if (request.type === "protocol.keepAlive") this.receive({ id: request.id, ok: true, result: {} });
     if (request.type === "workspace.roots") this.receive({ id: request.id, ok: true, result: { roots: [{ id: "root-primary", alias: "project", path: "/project", primary: true }, { id: "root-api", alias: "api", path: "/api", primary: false }], selectedRootId: "root-primary" } });
     if (request.type === "workspace.selectRoot") this.receive({ id: request.id, ok: true, rootId: "root-api", result: { root: { id: "root-api", alias: "api", path: "/api", primary: false }, workspace: "/api", projectName: "api", tree: [], options: { openFiles: [] } } });
   }
@@ -87,6 +88,71 @@ describe("CoreClient streaming disconnects", () => {
     socket.close();
     await Promise.all(rejections);
     for (const data of socket.sent.slice(-2)) socket.receive({ id: JSON.parse(data).id, ok: true, result: { content: "late" } });
+  });
+
+  it("detects a silent browser transport, rejects obsolete mutations, and notifies once", async () => {
+    vi.useFakeTimers();
+    const client = new CoreClient(30_000, { intervalMs: 100, timeoutMs: 50 });
+    try {
+      const disconnected = vi.fn(); client.onDisconnected = disconnected;
+      const connecting = client.connect("core", 7331);
+      const socket = FakeWebSocket.instances[0]!; socket.open(); await connecting;
+      // Browser readyState remains OPEN and close itself can stall without an event.
+      socket.send = (data) => { socket.sent.push(data); };
+      socket.close = vi.fn();
+      const mutation = client.request("filesystem.writeFile", { path: "a", content: "changed" });
+      const rejection = expect(mutation).rejects.toThrow("liveness check timed out");
+      await vi.advanceTimersByTimeAsync(149);
+      expect(disconnected).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      await rejection;
+      expect(client.isConnected()).toBe(false);
+      expect(disconnected).toHaveBeenCalledOnce();
+      await expect(client.request("tasks.list", {})).rejects.toThrow("Not connected");
+      socket.onclose?.();
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(disconnected).toHaveBeenCalledOnce();
+      expect(socket.sent.filter((data) => JSON.parse(data).type === "protocol.keepAlive")).toHaveLength(1);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally { client.disconnect(); vi.useRealTimers(); }
+  });
+
+  it("keeps healthy idle sessions alive and clears probe timers on shutdown/replacement", async () => {
+    vi.useFakeTimers();
+    const client = new CoreClient(30_000, { intervalMs: 100, timeoutMs: 50 });
+    try {
+      const disconnected = vi.fn(); client.onDisconnected = disconnected;
+      let connecting = client.connect("core", 7331);
+      const old = FakeWebSocket.instances[0]!; old.open(); await connecting;
+      await vi.advanceTimersByTimeAsync(500);
+      expect(old.sent.filter((data) => JSON.parse(data).type === "protocol.keepAlive")).toHaveLength(5);
+      expect(disconnected).not.toHaveBeenCalled();
+      old.send = (data) => { old.sent.push(data); };
+      await vi.advanceTimersByTimeAsync(100); // one outstanding probe
+      connecting = client.connect("core", 7331);
+      FakeWebSocket.instances[1]!.open(); await connecting;
+      await vi.advanceTimersByTimeAsync(100);
+      expect(disconnected).not.toHaveBeenCalled();
+      client.disconnect();
+      expect(vi.getTimerCount()).toBe(0);
+      await vi.advanceTimersByTimeAsync(500);
+      expect(disconnected).not.toHaveBeenCalled();
+    } finally { client.disconnect(); vi.useRealTimers(); }
+  });
+
+  it("validates finite positive liveness thresholds", () => {
+    for (const value of [0, -1, Infinity, NaN, 2_147_483_648]) expect(() => new CoreClient(100, { intervalMs: value })).toThrow("Liveness thresholds");
+  });
+
+  it("rejects a missing remembered root rather than falling back to the primary workspace", async () => {
+    const client = new CoreClient(); client.setRoot("root-missing");
+    const connecting = client.connect("core", 7331);
+    const rejection = expect(connecting).rejects.toThrow("Previously selected workspace root is unavailable");
+    const socket = FakeWebSocket.instances[0]!; socket.open();
+    await rejection;
+    expect(client.getRoot()).toBe("root-missing");
+    expect(client.isConnected()).toBe(false);
+    expect(socket.sent.map((data) => JSON.parse(data).type)).toEqual(["protocol.handshake", "workspace.roots"]);
   });
 
   it("settles a connection cancelled before the socket opens", async () => {
@@ -186,7 +252,8 @@ describe("CoreClient streaming disconnects", () => {
     client.setRoot("root-api"); socket.close();
     connecting = client.connect("core", 7331); socket = FakeWebSocket.instances[1]!; socket.open(); await connecting;
     expect(client.getRoot()).toBe("root-api");
-    expect(socket.sent.map((item) => JSON.parse(item) as { type: string }).some((item) => item.type === "workspace.selectRoot")).toBe(true);
+    expect(socket.sent.map((item) => JSON.parse(item)).find((item) => item.type === "workspace.selectRoot").payload).toEqual({ rootId: "root-api", preserveTaskSelection: true });
+    client.disconnect();
   });
 
   it("rejects the interrupted send, reconnects, and restores the durable AI snapshot", async () => {

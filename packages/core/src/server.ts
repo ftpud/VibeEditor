@@ -1,3 +1,4 @@
+import { monitorWebSocket, websocketLivenessThresholds, type WebSocketLivenessOptions } from "./websocket-liveness.js";
 import { listProjectApps, killProjectApp } from "./project-processes.js";
 import { managedProcesses } from "./managed-processes.js";
 import type { RawData } from "ws";
@@ -143,7 +144,8 @@ export function protocolHandshake(compatibility: { minimum: number; maximum: num
     : { compatible, compatibility: coreProtocolCompatibility, message: `Core supports protocol ${coreProtocolCompatibility.minimum}-${coreProtocolCompatibility.maximum}; this Desktop supports ${compatibility.minimum}-${compatibility.maximum}` };
 }
 
-export async function createServer(host: string, port: number, workspacePath: string): Promise<WebSocketServer> {
+export async function createServer(host: string, port: number, workspacePath: string, liveness: WebSocketLivenessOptions = {}): Promise<WebSocketServer> {
+  liveness = websocketLivenessThresholds(liveness);
   await ensureSelfConfiguration();
   const rootWorkspace = workspacePath;
   const roots = await WorkspaceRootRegistry.open(rootWorkspace);
@@ -191,6 +193,8 @@ export async function createServer(host: string, port: number, workspacePath: st
     watcher.once("error", reject);
   });
   const server = new WebSocketServer({ host, port });
+  const socketMonitors = new Set<() => void>();
+  server.once("close", () => { for (const dispose of socketMonitors) dispose(); socketMonitors.clear(); });
   const remoteTransfers = new RemoteTransferService();
   const activeSessions = new Set<WebSocket>();
   const liveRootSelections = new LiveRootSelections<WebSocket>();
@@ -405,6 +409,9 @@ export async function createServer(host: string, port: number, workspacePath: st
   server.on("listening", () => console.log(`[core] listening on ws://${host}:${port}`));
   server.on("connection", (socket, request) => {
     if (remoteTransfers.accepts(request.url)) { void remoteTransfers.attach(socket, request.url); return; }
+    const disposeMonitor = monitorWebSocket(socket, liveness);
+    socketMonitors.add(disposeMonitor);
+    socket.once("close", () => socketMonitors.delete(disposeMonitor));
     let protocolAccepted = false;
     let selectedRoot = roots.primary();
     liveRootSelections.connect(socket, selectedRoot.id);
@@ -518,6 +525,11 @@ export async function createServer(host: string, port: number, workspacePath: st
           return;
         }
         if (!protocolAccepted) throw new CoreError("INVALID_REQUEST", "Complete protocol.handshake before sending requests");
+        // Browser-compatible liveness probe must not wait for workspace services or switches.
+        if (parsed.type === "protocol.keepAlive") {
+          sendWebSocketData(socket, JSON.stringify({ id, ok: true, result: {} } satisfies Response<"protocol.keepAlive">));
+          return;
+        }
         if (parsed.type === "workspace.roots") {
           sendWebSocketData(socket, JSON.stringify({ id, ok: true, result: { roots: roots.list(), selectedRootId: selectedRoot.id } }));
           return;
@@ -579,19 +591,21 @@ export async function createServer(host: string, port: number, workspacePath: st
             const previousServices = services;
             let candidate: { nextServices: SessionServices; nextWatch: SwitchedWatch | undefined; result: { root: WorkspaceRoot; workspace: string; projectName: string; tree: FileTreeNode[]; options: WorkspaceOptions } };
             try { candidate = await transactionalRootSelection(async () => {
-              const nextServices = await makeServices(nextRoot.path, nextRoot.id);
+              const selectedTasks = parsed.payload.preserveTaskSelection ? await rootContext.tasks.list() : undefined;
+              const nextWorkspace = selectedTasks?.selectedTaskId ? rootContext.tasks.taskPath(selectedTasks.selectedTaskId) : nextRoot.path;
+              const nextServices = await makeServices(nextWorkspace, nextRoot.id);
               let nextWatch: SwitchedWatch | undefined;
               try {
-                nextWatch = await prepareSwitchedWatch(nextRoot.path, nextRoot.id);
+                nextWatch = await prepareSwitchedWatch(nextServices.workspacePath, nextRoot.id);
                 const result = { root: nextRoot, workspace: nextServices.workspacePath, projectName: nextRoot.alias, tree: await nextServices.filesystem.listTree(parsed.payload.includeIgnored === true), options: await nextServices.workspaceState.load() };
                 return { nextServices, nextWatch, result };
               } catch (error) { nextServices.java.close(); nextServices.jdt.close(); if (nextWatch) await closeSwitchedWatch(nextRoot.id, nextWatch); throw error; }
             }, async ({ nextServices, nextWatch }) => {
               await commitSwitchedWatch(nextRoot.id, nextWatch);
-              await selectRootWorkspace(rootContext.tasks);
+              if (!parsed.payload.preserveTaskSelection) await selectRootWorkspace(rootContext.tasks);
               selectedRoot = nextRoot; liveRootSelections.select(socket, nextRoot.id);
               servicesPromise = Promise.resolve(nextServices);
-              terminalSubscriptions.set(socket, { rootId: nextRoot.id, workspace: nextRoot.path, terminalIds: new Set() });
+              terminalSubscriptions.set(socket, { rootId: nextRoot.id, workspace: nextServices.workspacePath, terminalIds: new Set() });
               previousServices.java.close(); previousServices.jdt.close();
             }, async ({ nextServices, nextWatch }) => {
               nextServices.java.close(); nextServices.jdt.close(); if (nextWatch) await closeSwitchedWatch(nextRoot.id, nextWatch);
@@ -656,7 +670,7 @@ function parseRequest(data: RawData): Request {
 }
 
 export function assertRequestRoot(request: Request, selectedRootId: string): void {
-  if (request.type === "protocol.handshake" || request.type === "workspace.roots" || request.type === "workspace.addRoot") return;
+  if (request.type === "protocol.handshake" || request.type === "protocol.keepAlive" || request.type === "workspace.roots" || request.type === "workspace.addRoot") return;
   if (!request.rootId) throw new CoreError("INVALID_REQUEST", `Request ${request.type} requires an explicit rootId`);
   if (request.type !== "workspace.selectRoot" && request.rootId !== selectedRootId) throw new CoreError("INVALID_REQUEST", `Request root ${request.rootId} is not the selected root ${selectedRootId}`);
 }

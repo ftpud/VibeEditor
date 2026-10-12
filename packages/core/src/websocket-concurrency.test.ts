@@ -68,6 +68,7 @@ it("delivers independent responses and real terminal output while a file read is
 
     const slowId = send("filesystem.readFile", { path: "slow.txt" });
     await started;
+    expect(await response(send("protocol.keepAlive", {}))).toMatchObject({ ok: true, result: {} });
     const fastId = send("filesystem.readFile", { path: "fast.txt" });
     const errorId = send("filesystem.readFile", { path: "missing.txt" });
     // printf emits a contiguous marker; terminal echo contains the split arguments.
@@ -102,11 +103,58 @@ it("delivers independent responses and real terminal output while a file read is
     const orderedReadId = send("filesystem.readFile", { path: "renamed.txt" });
     // An unscoped round trip proves Core admitted the messages behind the switch.
     await response(send("workspace.roots", {}));
+    expect(await response(send("protocol.keepAlive", {}))).toMatchObject({ ok: true, result: {} });
     expect(read).not.toHaveBeenCalled();
     expect(responses.has(orderedReadId)).toBe(false);
     releaseSwitch!();
     expect(await response(switchId)).toMatchObject({ ok: true });
     expect(await response(orderedReadId)).toMatchObject({ ok: true, result: { content: "fast contents" } });
+    restoreSelect(); restoreSelect = undefined;
+
+    // Recovery of a secondary root must retain its durable selected task/worktree.
+    const secondary = path.join(directory, "secondary");
+    await mkdir(secondary);
+    const git = promisify(execFile);
+    await git("git", ["-C", secondary, "init", "-q"]);
+    await writeFile(path.join(secondary, "task.txt"), "root contents");
+    await git("git", ["-C", secondary, "add", "task.txt"]);
+    await git("git", ["-C", secondary, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qm", "initial"]);
+    const taskStore = new WorkspaceTaskStore(secondary);
+    const task = await taskStore.create("recovery-task");
+    const taskWorkspace = taskStore.taskPath(task.id);
+    await writeFile(path.join(taskWorkspace, "task.txt"), "task contents");
+    const added = await response(send("workspace.addRoot", { path: secondary, alias: "secondary" }));
+    if (!added.ok) throw new Error("Could not add secondary root");
+    const secondaryId = (added.result as ProtocolOperations["workspace.addRoot"]["result"]).root.id;
+    const selectSecondary = () => send("workspace.selectRoot", { rootId: secondaryId, preserveTaskSelection: true });
+    expect(await response(selectSecondary())).toMatchObject({ ok: true, result: { workspace: taskWorkspace } });
+    rootId = secondaryId;
+    const durableTerminal = await response(send("terminal.create", { cols: 80, rows: 24 }));
+    if (!durableTerminal.ok) throw new Error("Could not create durable terminal");
+    const durableTerminalId = (durableTerminal.result as ProtocolOperations["terminal.create"]["result"]).terminalId;
+    const closed = once(socket, "close"); socket.close(); await closed;
+    socket = new WebSocket(`ws://127.0.0.1:${address.port}`);
+    socket.on("message", (data) => {
+      const message = JSON.parse(data.toString()) as Response | ServerEvent;
+      if ("type" in message) events.push(message); else responses.set(message.id, message);
+    });
+    await once(socket, "open");
+    rootId = undefined;
+    expect(await response(send("protocol.handshake", { compatibility: protocolCompatibility }))).toMatchObject({ ok: true });
+    rootId = secondaryId;
+    expect(await response(selectSecondary())).toMatchObject({ ok: true, result: { workspace: taskWorkspace } });
+    rootId = secondaryId;
+    expect(await response(send("workspace.open", {}))).toMatchObject({ ok: true, result: { workspace: taskWorkspace } });
+    expect(await response(send("tasks.list", {}))).toMatchObject({ ok: true, result: { selectedTaskId: task.id } });
+    expect(await response(send("filesystem.readFile", { path: "task.txt" }))).toMatchObject({ ok: true, result: { content: "task contents" } });
+    expect(await response(send("terminal.attach", { terminalId: durableTerminalId }))).toMatchObject({ ok: true, result: { state: "available" } });
+    expect(await response(send("terminal.input", { terminalId: durableTerminalId, data: "printf '%s%s\\n' RESTORED_ OUTPUT\r" }))).toMatchObject({ ok: true });
+    await vi.waitFor(() => expect(events.filter((event) => event.type === "terminal.output" && event.payload.terminalId === durableTerminalId).map((event) => event.type === "terminal.output" ? event.payload.data : "").join("")).toContain("RESTORED_OUTPUT"), { timeout: 5_000 });
+    expect(await response(send("terminal.close", { terminalId: durableTerminalId }))).toMatchObject({ ok: true });
+    // Ordinary user root selection still returns to the root and clears task selection.
+    expect(await response(send("workspace.selectRoot", { rootId: secondaryId }))).toMatchObject({ ok: true, result: { workspace: secondary } });
+    const afterSelection = await response(send("tasks.list", {}));
+    expect(afterSelection.ok && (afterSelection.result as ProtocolOperations["tasks.list"]["result"]).selectedTaskId).toBeUndefined();
   } finally {
     release();
     releaseSwitch?.();
@@ -117,4 +165,4 @@ it("delivers independent responses and real terminal output while a file read is
     vi.unstubAllEnvs();
     await rm(directory, { recursive: true, force: true });
   }
-}, 20_000);
+}, 30_000);

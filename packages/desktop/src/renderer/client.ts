@@ -2,6 +2,8 @@ import { protocolCompatibility, type ProtocolOperations, type Request, type Requ
 
 type Pending = { socket: WebSocket; rootId?: string; timer: ReturnType<typeof setTimeout>; resolve(value: unknown): void; reject(error: Error): void };
 
+export type LivenessOptions = { intervalMs?: number; timeoutMs?: number };
+
 export class CoreClient {
   private socket?: WebSocket;
   private pending = new Map<string, Pending>();
@@ -10,7 +12,37 @@ export class CoreClient {
   private rootId?: string;
   private cancelConnect?: (error: Error) => void;
 
-  constructor(private readonly requestTimeoutMs = 30_000) {}
+  private heartbeatTimer?: ReturnType<typeof setTimeout>;
+  private readonly heartbeatIntervalMs: number;
+  private readonly heartbeatTimeoutMs: number;
+
+  constructor(private readonly requestTimeoutMs = 30_000, liveness: LivenessOptions = {}) {
+    this.heartbeatIntervalMs = liveness.intervalMs ?? 10_000;
+    this.heartbeatTimeoutMs = liveness.timeoutMs ?? 10_000;
+    for (const value of [this.heartbeatIntervalMs, this.heartbeatTimeoutMs]) {
+      if (!Number.isFinite(value) || value <= 0 || value > 2_147_483_647) throw new Error("Liveness thresholds must be positive finite milliseconds");
+    }
+  }
+  isConnected(): boolean { return this.socket?.readyState === WebSocket.OPEN; }
+
+  private stopHeartbeat(): void {
+    clearTimeout(this.heartbeatTimer);
+    this.heartbeatTimer = undefined;
+  }
+
+  private startHeartbeat(socket: WebSocket, lost: () => void): void {
+    const schedule = () => {
+      if (this.socket !== socket) return;
+      this.heartbeatTimer = setTimeout(() => {
+        this.heartbeatTimer = undefined;
+        if (this.socket !== socket) return;
+        // Browsers cannot send WebSocket ping frames. Keep one application probe in flight.
+        void this.request("protocol.keepAlive", {}, { timeoutMs: this.heartbeatTimeoutMs })
+          .then(schedule, () => { if (this.socket === socket) lost(); });
+      }, this.heartbeatIntervalMs);
+    };
+    schedule();
+  }
   setRoot(rootId: string): void { this.rootId = rootId; }
   getRoot(): string | undefined { return this.rootId; }
 
@@ -29,6 +61,7 @@ export class CoreClient {
       this.disconnect();
       this.socket = socket;
       let opened = false;
+      let negotiated = false;
       let settled = false;
       const finish = (error?: Error) => {
         if (settled) return;
@@ -40,7 +73,7 @@ export class CoreClient {
       };
       const cancel = (error: Error) => finish(error);
       const fail = (error: Error) => {
-        if (this.socket === socket) this.socket = undefined;
+        if (this.socket === socket) { this.socket = undefined; this.stopHeartbeat(); }
         this.rejectPendingFor(socket, error);
         finish(error);
         socket.close();
@@ -59,24 +92,31 @@ export class CoreClient {
           if (!result.compatible) throw new Error(result.message ?? "Desktop and Core protocol versions are incompatible");
           const roots = await this.request("workspace.roots", {});
           ensureCurrent();
-          const desired = this.rootId && roots.roots.some((root) => root.id === this.rootId) ? this.rootId : roots.selectedRootId;
+          if (this.rootId && !roots.roots.some((root) => root.id === this.rootId)) throw new Error(`Previously selected workspace root is unavailable: ${this.rootId}`);
+          const desired = this.rootId ?? roots.selectedRootId;
           this.rootId = desired;
-          if (desired !== roots.selectedRootId) await this.request("workspace.selectRoot", { rootId: desired });
+          if (desired !== roots.selectedRootId) await this.request("workspace.selectRoot", { rootId: desired, preserveTaskSelection: true });
           ensureCurrent();
+          negotiated = true;
           finish();
+          this.startHeartbeat(socket, () => lost("Backend liveness check timed out"));
         })().catch((error: unknown) => {
           fail(error instanceof Error ? error : new Error("Could not negotiate a compatible protocol"));
         });
       };
       socket.onerror = () => { if (!opened && this.socket === socket) fail(new Error("Could not connect to the backend")); };
       socket.onmessage = (event) => { if (this.socket === socket) this.handleMessage(String(event.data)); };
-      socket.onclose = () => {
+      const lost = (message: string) => {
         if (this.socket !== socket) return;
+        // Detach before close: browser close may never complete on a silently lost transport.
         this.socket = undefined;
-        this.rejectPendingFor(socket, new Error("Connection closed"));
-        finish(new Error(opened ? "Connection closed" : "Could not connect to the backend"));
-        if (opened) this.onDisconnected?.("Backend connection was closed");
+        this.stopHeartbeat();
+        this.rejectPendingFor(socket, new Error(message));
+        finish(new Error(opened ? message : "Could not connect to the backend"));
+        socket.close();
+        if (negotiated) this.onDisconnected?.(message);
       };
+      socket.onclose = () => lost("Connection closed");
     });
   }
 
@@ -85,7 +125,7 @@ export class CoreClient {
     const timeoutMs = options?.timeoutMs ?? this.requestTimeoutMs;
     const id = crypto.randomUUID();
     const socket = this.socket;
-    const unscoped = type === "protocol.handshake" || type === "workspace.roots" || type === "workspace.addRoot";
+    const unscoped = type === "protocol.handshake" || type === "protocol.keepAlive" || type === "workspace.roots" || type === "workspace.addRoot";
     if (!unscoped && !this.rootId) return Promise.reject(new Error(`No workspace root selected for ${type}`));
     const request = { id, type, payload, ...(!unscoped ? { rootId: this.rootId } : {}) } as Request<T>;
     return new Promise((resolve, reject) => {
@@ -106,6 +146,7 @@ export class CoreClient {
   }
 
   disconnect(): void {
+    this.stopHeartbeat();
     const socket = this.socket;
     this.socket = undefined;
     this.cancelConnect?.(new Error("Connection replaced or closed"));
