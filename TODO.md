@@ -69,3 +69,25 @@
   - Runner execution: owner=todo-runner-20261012-workflow; status=complete; last-state=done; candidate=15fe97e0bd1ce6c584352dcf4044f5b1b98b70e3; merge-key=360d8b4b-todo005-15fe97e-smart; context=workflow-desktop-layout; task=360d8b4b-1b36-4ce8-95b7-9ffd559c4b58; branch=feature/todo-003-workflow-fit-overlay; provider=codex; attempt=1; delivery=todo-005-layout-20261012-a1; root-head=0b6cbba262c61476d2603a3bc6f37d036128fc0a; merge=81225b9a-7dde-4473-abb4-a78163cc8c61 completed; implementation/integrated=15fe97e0bd1ce6c584352dcf4044f5b1b98b70e3; checks=build, repository/Gateway typechecks, full tests, timer cancellation/resume/pending/error/transition regressions, narrow/theme Chromium CSS checks; publishing=pushed origin/refs/heads/dev; published-sha=2571c5ee09ebf3d1947bc6d7c612b19fe2d6c2ce.
   - Session decision: reuse successfully merged clean Desktop task/provider conversation; same workflow card/pause presentation and styles, no reset needed.
   - Result: Armed Workflows timers render as borderless single-line strips with a colored state bar, due time, Stop/Run now actions and pending/error feedback; long labels truncate and other pause layouts remain preserved. Limitations: CSS fixture visual validation rather than full Electron UI. Stop retains existing whole-run cancellation semantics. Post-merge notification error reconciled against successful integration.
+
+
+-----
+
+Low priority:
+Review the communication, for me it looks like the current web socket connection is slow for concurrent requests as all actions are sequenced. So need to rework the connection the way, so the file contents for example, or terminal data, or things where sequence is not required could be parallelized and not wait for each other. If you think it’s bad idea - explain why, if it’s good - implement
+
+- [x] TODO-006 — Review and improve independent WebSocket request concurrency
+  - Priority: Low; after the existing workflow bugfix and UI queue.
+  - Scope: Desktop/Core WebSocket request concurrency.
+  - Request: Actionable tracking for the original “Low priority” communication request above; preserve that original text.
+  - Acceptance criteria:
+    - Trace request admission, response correlation, event delivery, and any queues in Desktop client and Core routing; establish with a focused delayed-request check whether independent operations actually block each other. Treat global serialization as a hypothesis, not a confirmed cause.
+    - If avoidable serialization exists, allow independent requests such as file reads to progress concurrently and ensure terminal output is delivered promptly while an unrelated request is slow; preserve request-ID response matching and error/disconnect handling.
+    - Keep required ordering for dependent mutations and per-resource operations, and preserve bounded resource use and backpressure. Avoid blanket parallelization that breaks consistency.
+    - Validate out-of-order independent responses and relevant ordered operations with focused coverage. Explain the findings and resulting behavior; if the proposed transport change is unjustified, document the evidence and reason rather than adding unnecessary concurrency.
+  - Context: packages/protocol/src/index.ts, packages/core/src/server.ts WebSocket message handler and routing, packages/desktop/src/renderer/client.ts pending-response handling; inspect service queues and renderer call sites as needed. Current Core handler is async, so investigate before assuming the transport serializes every action.
+  - Dependencies: None technically; lower scheduling priority than TODO-003 through TODO-005.
+  - Runner execution: owner=todo-runner-20261012-workflow; status=complete; last-state=done; candidate=abc48d6137c72be6a8c27a6408e52b7c9d4cefd7; merge-key=daa5a9cd-todo006-abc48d6-smart; context=websocket-request-concurrency; task=daa5a9cd-4e02-4ce7-afc1-795fbcffae41; branch=feature/todo-006-websocket-concurrency; provider=codex; attempt=1; delivery=todo-006-websocket-20261012-a1; root-head=411060c1433da5383b85ad67048e09d1c464cf47; merge=b6402e44-e4f4-4edf-bf13-7fa1935dad58 completed; implementation/integrated=abc48d6137c72be6a8c27a6408e52b7c9d4cefd7; checks=full build, all required typechecks, 904 tests including independent delivery, reverse responses, errors/disconnect and workspace-switch barrier; publishing=pending.
+  - Session decision: new task for independent Core/Desktop transport investigation, separate from retired workflow layout task.
+
+  - Result: Real WebSocket/PTY evidence confirms independent fast reads, errors and terminal output arrive during a held slow read, with request-ID correlation and workspace-switch ordering preserved. Added regression tests and findings documentation; transport already concurrent, so no runtime rewrite was justified. Limitations: Tests establish async concurrency, not saturated-network performance or unlimited-load backpressure. Large queued frames/event-loop stalls can still delay delivery; existing service ordering retained. Post-merge notification error reconciled against successful integration.

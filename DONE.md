@@ -497,3 +497,14 @@ No implementation was performed in this continuation check.
 - Implementation/integrated SHA: 15fe97e0bd1ce6c584352dcf4044f5b1b98b70e3; integration 81225b9a-7dde-4473-abb4-a78163cc8c61 completed.
 - Publishing: pushed normally to origin/refs/heads/dev; published SHA 2571c5ee09ebf3d1947bc6d7c612b19fe2d6c2ce; remote tracking and remote ref verified.
 - Limitations/follow-ups: CSS fixture visual validation rather than full Electron UI. Stop retains existing whole-run cancellation semantics. Post-merge notification error reconciled against successful integration.
+
+## TODO-006 — Review and improve independent WebSocket request concurrency
+
+- Completed locally: 2026-10-12.
+- Result: Real WebSocket/PTY evidence confirms independent fast reads, errors and terminal output arrive during a held slow read, with request-ID correlation and workspace-switch ordering preserved. Added regression tests and findings documentation; transport already concurrent, so no runtime rewrite was justified.
+- Changed areas: Core real WebSocket/PTY concurrency test, Desktop client response/disconnect tests, docs/WEBSOCKET-CONCURRENCY.md.
+- Validation: full build, all required typechecks, 904 tests including independent delivery, reverse responses, errors/disconnect and workspace-switch barrier; smart integration suite exit 0; clean worker tree and scoped diff review.
+- Task: daa5a9cd-4e02-4ce7-afc1-795fbcffae41; branch feature/todo-006-websocket-concurrency; provider codex. Session decision: New independent transport task; no reset; task finished after integration.
+- Implementation/integrated SHA: abc48d6137c72be6a8c27a6408e52b7c9d4cefd7; integration b6402e44-e4f4-4edf-bf13-7fa1935dad58 completed.
+- Publishing: pending to configured origin/refs/heads/dev.
+- Limitations/follow-ups: Tests establish async concurrency, not saturated-network performance or unlimited-load backpressure. Large queued frames/event-loop stalls can still delay delivery; existing service ordering retained. Post-merge notification error reconciled against successful integration.
