@@ -557,5 +557,5 @@ No implementation was performed in this continuation check.
 - Validation: build, repository/Gateway typechecks, full tests, 36 Chromium cases (240/320/800px, themes, 0/1/6 active runs), old CSS reproduces 29px wrap; reviewed scoped commit and clean worker. Smart integration suite exit 0.
 - Task: 360d8b4b-1b36-4ce8-95b7-9ffd559c4b58; branch feature/todo-003-workflow-fit-overlay; provider codex. Reused clean merged layout conversation, no reset.
 - Implementation/integrated SHA: 41e80f2a5cacf795ddc361220b8b1d249ab9ff3f. Integration 73e9edbd-155c-4dc1-a636-37242f275290 completed. Feature-assignment notification error reconciled from root history and Core integration record.
-- Publishing: pending origin/refs/heads/dev. Root TODO remains uncommitted to preserve pre-existing dispatcher backlog replacement.
+- Publishing: pushed normally to origin/refs/heads/dev; published SHA fdb95795c6bb69d763b3e572ab35c84bc5e279c0, remote/tracking verified. Root TODO remains uncommitted to preserve pre-existing dispatcher backlog replacement.
 - Limitations: many runs require horizontal scrolling; no full Electron session check. Historical TODO-001 refers to a different feature and is preserved above.
