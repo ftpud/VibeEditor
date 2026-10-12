@@ -506,5 +506,5 @@ No implementation was performed in this continuation check.
 - Validation: full build, all required typechecks, 904 tests including independent delivery, reverse responses, errors/disconnect and workspace-switch barrier; smart integration suite exit 0; clean worker tree and scoped diff review.
 - Task: daa5a9cd-4e02-4ce7-afc1-795fbcffae41; branch feature/todo-006-websocket-concurrency; provider codex. Session decision: New independent transport task; no reset; task finished after integration.
 - Implementation/integrated SHA: abc48d6137c72be6a8c27a6408e52b7c9d4cefd7; integration b6402e44-e4f4-4edf-bf13-7fa1935dad58 completed.
-- Publishing: pending to configured origin/refs/heads/dev.
+- Publishing: pushed normally to origin/refs/heads/dev; published SHA 3f05fe9ba0335f8cc9a7bd83d11841e0ea54a320; remote tracking and remote ref verified.
 - Limitations/follow-ups: Tests establish async concurrency, not saturated-network performance or unlimited-load backpressure. Large queued frames/event-loop stalls can still delay delivery; existing service ordering retained. Post-merge notification error reconciled against successful integration.
