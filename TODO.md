@@ -15,3 +15,17 @@
   - Session decision: new task for an independent Core/Protocol/Desktop process lifecycle feature; no related queue task exists.
   - Integration recovery: missing candidate dependencies repaired using validated task dependencies; existing 15ms HarnessRunner fanout test failed once, passed focused rerun and final full suite. Post-merge planned-feature notification errored; actual Git/integration/task state confirmed success, no replay.
   - Limitations: full inherited process discovery requires Linux /proc; POSIX fallback has reduced detached-child coverage; native Windows Core discovery unsupported. See docs/PROCESSES.md.
+
+- [x] TODO-002 — Independent workflow chatboxes while another block is busy
+  - Priority: High.
+  - Scope: Workflow chat / Core runtime / Desktop.
+  - Acceptance criteria:
+    - In a single workflow run with multiple Chatboxes, allow sending to an idle Chatbox while another Chatbox or agent is working; preserve each block’s existing conversation and route messages to the selected block.
+    - Use block-specific sending/running state in the UI and Core admission logic. Prevent duplicate simultaneous turns on the same block without imposing a workflow-wide lock on unrelated idle Chatboxes.
+    - Keep concurrent block state, messages, connected-tool delivery, aggregate run status, and completion consistent; submitting to one block must not reset, cancel, or overwrite another active block.
+    - Add focused regression coverage for two Chatboxes in one run, busy first/idle second, independent history and responses, and repeated submission to a busy target.
+  - Context: packages/desktop/src/renderer/HarnessPanel.tsx BlockRunDetails currently derives busy from run.status; packages/core/src/harness-runner.ts continueChat rejects activeRuns/resumingChats by run ID and active aggregate run status. Trace typed chat routes and runtime/store concurrency before changing them.
+  - Dependencies: None; independent outcome.
+  - Runner execution: owner=todo-runner-20261012-workflow; status=complete; last-state=done; candidate=a238ce92928f1510aef211abe6f9a8c6fd654b96; merge-key=451433d2-todo002-a238ce9-smart; checks=build/typechecks/full-tests/clean-tree; context=workflow-chat-concurrency; task=451433d2-5f35-44aa-9217-28ce43a5fd96; branch=feature/todo-002-independent-chatboxes; provider=codex; attempt=1; delivery=todo-002-workflow-20261012-a1; root-head=1df0850c389843f7e5e7647b3db2a5f2dd1b4c3e; merge=0f71ed2e-c222-4b5b-aea3-3d5547d21659 completed; integrated=a238ce92928f1510aef211abe6f9a8c6fd654b96; publishing=pending; integration-recovery=b0a72287 failed missing isolated dependencies, root unchanged, reused validated worker dependencies for integration environment.
+  - Session decision: new task for Core runtime concurrency; prior queue task covers unrelated process lifecycle.
+  - Result: independent Chatbox turns share runtime/history/tool routing, reject duplicate busy targets and drain before aggregate completion; Stop remains run-wide. Post-merge notification errored; Git/integration/task evidence confirmed success.

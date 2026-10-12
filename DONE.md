@@ -453,3 +453,14 @@ No implementation was performed in this continuation check.
 - Publishing: pushed normally to origin / refs/heads/dev; published SHA fdfb9b72bc8d5299ee1ae2f416b46d2e594d2f38 includes the integrated feature and completion bookkeeping. Push succeeded and remote tracking/remote ref were verified. Final publishing-record commit may follow; no feature replay needed.
 - Recovery evidence: initial isolated worktree lacked vitest; shared validated task dependencies and ran checks. An existing 15ms workflow concurrency test failed once, then passed focused and final full-suite checks. A post-merge planned-feature notification errored after integration; actual root Git history, completed integration and finished task confirmed success.
 - Limits/follow-ups: Linux /proc provides full inherited discovery. POSIX fallback cannot recover every detached child and uses lower precision identities; native Windows Core discovery unsupported. Identity-stripping commands and processes from previous Core lifetimes are excluded; see docs/PROCESSES.md. Integration dependency preparation and timing-sensitive existing workflow test remain tooling follow-ups.
+
+## TODO-002 — Independent workflow chatboxes while another block is busy
+
+- Completed locally: 2026-10-12.
+- Result: idle Chatboxes accept independent messages while another Chatbox/agent works; block-specific admission and UI busy state preserve sessions, histories, connected tools and aggregate completion. Duplicate busy-target submissions are rejected.
+- Changed areas: Core harness-runner and workflow-flow regressions; Desktop HarnessPanel and WorkflowRunPanel regressions.
+- Validation: full build, repository/Gateway typechecks, full tests; independent history/tool delivery, admission race, reverse completion and failure isolation regressions; clean task tree/diff review; smart integration suite exit 0.
+- Task: 451433d2-5f35-44aa-9217-28ce43a5fd96; branch feature/todo-002-independent-chatboxes; provider codex; finished. New task for runtime concurrency; no context reset.
+- Implementation/integrated SHA: a238ce92928f1510aef211abe6f9a8c6fd654b96; integration 0f71ed2e-c222-4b5b-aea3-3d5547d21659 completed.
+- Publishing: pending to configured origin/refs/heads/dev.
+- Limitations: Stop remains run-wide. Isolated integration dependency environment repaired; post-merge planned-feature notification errored after confirmed successful integration.
