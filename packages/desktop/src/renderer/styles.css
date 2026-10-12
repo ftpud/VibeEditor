@@ -2196,6 +2196,22 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .workflow-compact-block.awaiting_permission circle, .workflow-compact-block.awaiting_user_input circle, .workflow-compact-block.waiting circle { fill: #ffd477; }
 .workflow-compact-block.waiting_timer circle, .workflow-compact-block.retry_scheduled circle { fill: #d2afff; }
 .workflow-compact-block:focus-visible rect, .workflow-compact-block:hover rect { stroke: #b5d5ff; stroke-width: 2; }
+.workflow-timer-strip { position: relative; display: flex; align-items: center; gap: 4px; min-width: 0; margin-top: 8px; padding: 0 0 0 8px; color: #d8c3fa; font-size: 11px; white-space: nowrap; }
+.workflow-timer-strip::before { content: ""; position: absolute; inset: 0 auto 0 0; width: 3px; border-radius: 2px; background: #b99aec; }
+.workflow-timer-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; font-weight: 500; }
+.workflow-timer-strip time { flex: 0 0 auto; }
+.workflow-timer-feedback { flex: 1; min-width: 0; max-width: 40%; overflow: hidden; text-overflow: ellipsis; }
+.workflow-timer-actions { display: flex; flex: 0 0 auto; gap: 4px; }
+.workflow-timer-actions button { padding: 3px 5px; border: 0; border-radius: 4px; background: #ffffff08; color: inherit; font: inherit; cursor: pointer; }
+.workflow-timer-actions button:hover:not(:disabled) { background: #b99aec25; }
+.workflow-timer-actions button:disabled { opacity: .55; cursor: wait; }
+.workflow-timer-strip.failed { color: #ff9096; }
+.workflow-timer-strip.failed::before { background: #ff7b81; }
+:root[data-theme="light"] .workflow-timer-strip { color: #66438d; }
+:root[data-theme="light"] .workflow-timer-strip::before { background: #8960b7; }
+:root[data-theme="light"] .workflow-timer-actions button { background: #00000006; }
+:root[data-theme="light"] .workflow-timer-strip.failed { color: #9f292f; }
+:root[data-theme="light"] .workflow-timer-strip.failed::before { background: #b8434c; }
 .workflow-card-actions { flex-wrap: wrap; margin-top: 10px; }
 .workflow-card-actions button, .workflow-start-control button { display: inline-flex; align-items: center; justify-content: center; gap: 5px; font-size: 11px; }
 .workflow-starts { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }

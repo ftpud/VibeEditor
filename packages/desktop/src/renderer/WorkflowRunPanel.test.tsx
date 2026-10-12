@@ -222,6 +222,77 @@ describe("Workflow run library", () => {
     expect(screen.getByRole("button", { name: "Start Custom goal" }).hasAttribute("disabled")).toBe(true);
   });
 
+  it.each(["stop", "run now"] as const)("handles compact timer %s with pending, error, and transition feedback", async (action) => {
+    const user = userEvent.setup();
+    const timerLabel = "A long armed workflow timer label";
+    const timerWorkflow: HarnessDefinition = { ...workflow, blocks: [{ ...workflow.blocks[2]!, label: timerLabel }] };
+    const timerRun: HarnessRun = { ...run, definition: timerWorkflow, status: "waiting_timer", blocks: [{ blockId: "agent", status: "waiting_timer", pauseId: "timer-pause", waitingUntil: "2099-01-01T12:30:00.000Z" }] };
+    let rejectAction!: (error: Error) => void;
+    const operation = vi.fn(() => new Promise<HarnessRun>((_resolve, reject) => { rejectAction = reject; }));
+    const callbacks = { ...props(), onResumePause: action === "run now" ? operation : vi.fn(), onCancelPause: action === "stop" ? operation : vi.fn() };
+    const view = render(<WorkflowRunPanel {...callbacks} harnesses={[timerWorkflow]} runs={[timerRun]} />);
+    fireEvent.click(screen.getByRole("button", { name: "Show Workspace check" }));
+    const strip = screen.getByRole("region", { name: `${timerLabel} timer pause` });
+    expect(strip.classList.contains("workflow-timer-strip")).toBe(true);
+    expect(strip.classList.contains("harness-pause")).toBe(false);
+    expect(strip.querySelector("strong")?.title).toContain(timerLabel);
+    const due = strip.querySelector("time")!;
+    expect(due.dateTime).toBe("2099-01-01T12:30:00.000Z");
+    expect(due.textContent).toContain("Due");
+    expect(due.title).toContain("Scheduled for");
+    const stop = within(strip).getByRole("button", { name: `Stop timer for ${timerLabel}` });
+    const resume = within(strip).getByRole("button", { name: `Run timer now for ${timerLabel}` });
+    expect(stop.title).toContain("cancel");
+    expect(resume.title).toContain("immediately");
+    const button = action === "stop" ? stop : resume;
+    button.focus();
+    await user.keyboard("{Enter}");
+    expect(operation).toHaveBeenCalledWith("run", "agent", "timer-pause");
+    expect(strip.getAttribute("aria-busy")).toBe("true");
+    expect(stop.hasAttribute("disabled")).toBe(true);
+    expect(resume.hasAttribute("disabled")).toBe(true);
+    await user.click(button);
+    expect(operation).toHaveBeenCalledTimes(1);
+    rejectAction(new Error("Timer operation failed"));
+    expect(await within(strip).findByRole("alert")).toHaveProperty("textContent", "Timer operation failed");
+    expect(callbacks.onError).toHaveBeenCalledWith("Timer operation failed");
+    expect(strip.classList.contains("failed")).toBe(true);
+    expect(strip.getAttribute("aria-busy")).toBe("false");
+    expect(button.hasAttribute("disabled")).toBe(false);
+    operation.mockImplementation(async () => timerRun);
+    await user.click(button);
+    await waitFor(() => expect(strip.getAttribute("aria-busy")).toBe("false"));
+    expect(within(strip).queryByRole("alert")).toBeNull();
+    expect(strip.querySelector("time")).toBeTruthy();
+    expect(strip.classList.contains("failed")).toBe(false);
+    view.rerender(<WorkflowRunPanel {...callbacks} harnesses={[timerWorkflow]} runs={[{ ...timerRun, status: action === "stop" ? "cancelled" : "running", blocks: [{ blockId: "agent", status: action === "stop" ? "cancelled" : "running" }] }]} />);
+    expect(screen.queryByRole("region", { name: `${timerLabel} timer pause` })).toBeNull();
+  });
+
+  it("keeps timer actions disabled without a pause identity or callbacks", () => {
+    const timerRun: HarnessRun = { ...run, status: "waiting_timer", blocks: [{ blockId: "agent", status: "waiting_timer" }] };
+    const callbacks = props();
+    const view = render(<WorkflowRunPanel {...callbacks} runs={[timerRun]} onResumePause={vi.fn()} onCancelPause={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: "Show Workspace check" }));
+    const strip = screen.getByRole("region", { name: "Inspect timer pause" });
+    expect(strip.textContent).toContain("Waiting");
+    for (const button of within(strip).getAllByRole("button")) expect(button.hasAttribute("disabled")).toBe(true);
+    view.rerender(<WorkflowRunPanel {...callbacks} runs={[{ ...timerRun, blocks: [{ ...timerRun.blocks[0]!, pauseId: "pause" }] }]} />);
+    for (const button of within(strip).getAllByRole("button")) expect(button.hasAttribute("disabled")).toBe(true);
+  });
+
+  it("preserves question and retry pause presentations in the Workflows panel", () => {
+    const callbacks = props();
+    const view = render(<WorkflowRunPanel {...callbacks} runs={[{ ...run, status: "awaiting_user_input", blocks: [{ blockId: "agent", status: "awaiting_user_input", question: "Which branch?" }] }]} />);
+    fireEvent.click(screen.getByRole("button", { name: "Show Workspace check" }));
+    expect(screen.getByRole("region", { name: "Inspect question" }).classList.contains("workflow-user-request")).toBe(true);
+    expect(screen.getByRole("textbox", { name: "Answer Inspect" })).toBeTruthy();
+    view.rerender(<WorkflowRunPanel {...callbacks} runs={[{ ...run, status: "retry_scheduled", blocks: [{ blockId: "agent", status: "retry_scheduled", error: "Try again", retryAt: "2099-01-01T12:30:00.000Z" }] }]} />);
+    expect(screen.getByRole("region", { name: "Inspect retry pause" }).classList.contains("harness-pause")).toBe(true);
+    expect(screen.getByRole("button", { name: "Retry now" })).toBeTruthy();
+    expect(document.querySelector(".workflow-timer-strip")).toBeNull();
+  });
+
   it("sends custom input to the chosen start", async () => {
     const callbacks = props();
     render(<WorkflowRunPanel {...callbacks} />);
