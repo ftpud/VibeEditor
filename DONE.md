@@ -484,5 +484,5 @@ No implementation was performed in this continuation check.
 - Validation: full build, repository/Gateway typechecks, full tests, active/completed/no-run and keyboard interactions, narrow-width Chromium CSS checks; smart integration suite exit 0; clean worker tree and scoped diff review.
 - Task: 360d8b4b-1b36-4ce8-95b7-9ffd559c4b58; branch feature/todo-003-workflow-fit-overlay; provider codex. Session decision: Reused TODO-003 task and codex conversation with clean root synchronization; no reset.
 - Implementation/integrated SHA: 2edbe5176859e10540104ff3765bca753dfd32a7; integration f0fea944-c69f-4f7a-8e7e-73a200ca2731 completed.
-- Publishing: pending to configured origin/refs/heads/dev.
+- Publishing: pushed normally to origin/refs/heads/dev; published SHA c01feb73d6451ba3623d28772ab68e5e6e0afd56; remote tracking and remote ref verified.
 - Limitations/follow-ups: Browser checks use CSS fixtures rather than full Electron UI. Post-merge notification error reconciled against successful integration.
