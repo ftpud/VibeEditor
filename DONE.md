@@ -519,3 +519,13 @@ No implementation was performed in this continuation check.
 - Implementation/integrated SHA: cb94315b3b6af409b1f2bde16863bafa14683aaf; integration b0ab7813-e3f4-47ec-8a8b-4349ea94580a completed.
 - Publishing: pushed normally to origin/refs/heads/dev; published SHA 5656f0019cd6c7353612c505b9c105f7668db7e7; remote tracking and remote ref verified.
 - Limitations/follow-ups: Broad PID counting inflated totals and detached survivors could accumulate across starts; complete natural exits did not reproduce duplicate/stale rows. Linux /proc gives full inherited discovery; POSIX fallback, stripped identities and previous Core lifetimes remain documented limitations. Earlier lifecycle failures repaired and final suite passed; post-merge notification error reconciled.
+
+## TODO-008 — Move workflow Stop into the top toolbar
+
+- Completed locally: 2026-10-12. Result: accessible run-specific Stop icons beside New run/Rerun; dedicated action row removed; pending disable and cancellation errors/retry preserved.
+- Areas: Desktop WorkflowRunPanel, styles and interaction tests.
+- Validation: build, repository/Gateway typechecks, full tests on rerun, focused cancellation/keyboard/multiple-run tests and narrow/theme browser CSS checks; smart integration suite exit 0; reviewed scoped commit and clean worker. Initial Core timing failure passed isolated/full reruns.
+- Task: 360d8b4b-1b36-4ce8-95b7-9ffd559c4b58; branch feature/todo-003-workflow-fit-overlay; provider codex. Reused merged clean workflow layout task/conversation; no reset.
+- Implementation/integrated SHA: af845d41b180084dd74e9632d6889478fef20a2e; integration 57bcd39a-6a83-4553-a303-d3361d592bcf completed. Post-merge notification error reconciled with actual root history and retained integration evidence.
+- Publishing: pending origin/refs/heads/dev. TODO.md contains pre-existing user backlog replacement; completion annotations remain intact locally and are not staged with that unrelated edit.
+- Limitations: no full Electron visual check.
