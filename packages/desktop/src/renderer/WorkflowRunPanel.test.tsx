@@ -23,11 +23,12 @@ describe("Workflow run library", () => {
     render(<WorkflowRunPanel {...props()} harnesses={[appWorkflow]} runs={[appRun]} onKillApp={onKillApp} onReadApp={onReadApp} />);
     fireEvent.click(screen.getByRole("button", { name: "Show Workspace check" }));
     const preview = screen.getByLabelText("Live workflow tree");
+    preview.style.padding = "4px";
     Object.defineProperties(preview, { clientWidth: { value: 400 }, clientHeight: { value: 220 } });
     fireEvent.click(screen.getByRole("button", { name: "Fit workflow horizontally" }));
     expect(Number(preview.querySelector("svg")!.getAttribute("width"))).toBe(392);
     fireEvent.click(screen.getByRole("button", { name: "Fit workflow vertically" }));
-    expect(Number(preview.querySelector("svg")!.getAttribute("height"))).toBe(176);
+    expect(Number(preview.querySelector("svg")!.getAttribute("height"))).toBe(212);
     const appBlock = await screen.findByRole("button", { name: appStatus === "descendants-running" ? "Server: succeeded · Children running in background" : "Server: succeeded · Running in background" });
     expect(appBlock.classList.contains("background-running")).toBe(true);
     fireEvent.click(appBlock);
@@ -44,18 +45,26 @@ describe("Workflow run library", () => {
     expect(appBlock.getAttribute("aria-label")).toBe("Server: succeeded");
   });
 
-  it.each([120, 800])("keeps fit controls outside the scrolling chart at viewport width %i", async (viewportWidth) => {
+  it.each([{ viewportWidth: 120, hasRun: false }, { viewportWidth: 800, hasRun: false }, { viewportWidth: 120, hasRun: true }, { viewportWidth: 800, hasRun: true }])("fits from the top toolbar at width $viewportWidth with run=$hasRun", async ({ viewportWidth, hasRun }) => {
     const user = userEvent.setup();
-    render(<WorkflowRunPanel {...props()} />);
+    render(<WorkflowRunPanel {...props()} runs={hasRun ? [{ ...run, status: "succeeded" }] : []} />);
     fireEvent.click(screen.getByRole("button", { name: "Show Workspace check" }));
     const preview = screen.getByLabelText("Live workflow tree");
     const horizontal = screen.getByRole("button", { name: "Fit workflow horizontally" });
     const vertical = screen.getByRole("button", { name: "Fit workflow vertically" });
-    expect(horizontal.parentElement?.parentElement).toBe(preview.parentElement);
+    const controls = horizontal.closest(".workflow-run-controls")!;
+    expect(controls.contains(vertical)).toBe(true);
+    expect(controls.parentElement?.classList.contains("workflow-run-prompt-row")).toBe(true);
+    expect([...controls.querySelectorAll("button")].slice(0, 2)).toEqual([horizontal, vertical]);
+    expect(controls.querySelector(".workflow-control-separator") !== null).toBe(hasRun);
+    if (hasRun) expect(controls.contains(screen.getByRole("button", { name: "New run" }))).toBe(true);
+    expect(document.querySelector(".workflow-preview-controls")).toBeNull();
+    expect(document.querySelector(".workflow-preview-viewport")).toBeNull();
     expect(preview.contains(horizontal)).toBe(false);
     expect(horizontal.title).toBe("Fit horizontally");
     expect(vertical.title).toBe("Fit vertically");
-    Object.defineProperty(preview, "clientWidth", { value: viewportWidth });
+    preview.style.padding = "4px";
+    Object.defineProperties(preview, { clientWidth: { value: viewportWidth }, clientHeight: { value: 220 } });
     preview.scrollLeft = 80;
     preview.scrollTop = 40;
     horizontal.focus();
@@ -66,7 +75,7 @@ describe("Workflow run library", () => {
     await user.tab();
     expect(document.activeElement).toBe(vertical);
     await user.keyboard(" ");
-    expect(Number(preview.querySelector("svg")!.getAttribute("height"))).toBeCloseTo(176);
+    expect(Number(preview.querySelector("svg")!.getAttribute("height"))).toBeCloseTo(212);
     expect(preview.style.height).toBe("220px");
     await user.click(horizontal);
     expect(preview.style.height).toBe("");
