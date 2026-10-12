@@ -84,6 +84,7 @@ Vibe Editor is a remote-workspace IDE: an Electron/React/Monaco desktop client t
 
 - Global and project-local shell Run Configurations stored outside the checkout, pinned to the bottom toolbar, with dedicated terminals and Run/Stop/Restart actions. See [Run Configurations](docs/RUN_CONFIGS.md).
 - Visual Workflows (harnesses) connect start blocks, AI agents, scripts, long-lived apps, timers, user input, and documents through use/follow/path connections.
+- SKILL workflow blocks define a description and reusable instructions. Connected agents discover skills by description and load their instructions through Use connections when relevant.
 - Run App blocks start named foreground shell scripts without waiting for exit, check status, kill the app and its child processes, or tail the last N buffered stdout/stderr lines. App names are scoped to the Core workspace and remain available across workflow runs until killed or the Core server closes.
 - Blank, five-minute workspace check-in, and Git review/commit templates; graph validation, persisted definitions and run history, permission/user-input handling, and pause/retry/cancel controls.
 - Chatbox workflow blocks provide a persistent conversation in block details, stream replies, and invoke outgoing connected blocks on demand. Follow-up messages reuse the same per-block Core sessions and frozen workflow graph, including after a turn finishes.

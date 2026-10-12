@@ -20,7 +20,8 @@ export function validateHarness(harness: HarnessDefinition): { valid: boolean; i
   for (const block of harness.blocks) {
     if (ids.has(block.id)) issues.push({ code: "duplicate-id", blockId: block.id, message: `Block ID '${block.id}' is duplicated` }); ids.add(block.id);
     if (!block.label.trim()) issues.push({ code: "empty-label", blockId: block.id, message: "Every block needs a name" });
-    if (!["chatbox", "text", "timer", "script", "run_app", "markdown", "start_input"].includes(block.type) && !block.watchdog && !block.prompt.trim()) issues.push({ code: "empty-prompt", blockId: block.id, message: `Block '${block.label || block.id}' needs a prompt` });
+    if (!["chatbox", "text", "timer", "script", "run_app", "markdown", "start_input"].includes(block.type) && !block.watchdog && !block.prompt.trim()) issues.push({ code: "empty-prompt", blockId: block.id, message: `Block '${block.label || block.id}' needs ${block.type === "skill" ? "instructions" : "a prompt"}` });
+    if (block.type === "skill" && !block.description?.trim()) issues.push({ code: "invalid-gate", blockId: block.id, message: `Skill '${block.label || block.id}' needs a description of when to use it` });
     if (block.type === "review" && (!block.review || !isCommit(block.review.revision) || (block.review.baseRevision !== undefined && !isCommit(block.review.baseRevision)))) issues.push({ code: "invalid-gate", blockId: block.id, message: `Review block '${block.label || block.id}' needs an exact commit SHA and optional base SHA` });
     if (block.review?.correction && (!harness.blocks.some((item) => item.id === block.review!.correction!.ownerBlockId) || block.review.correction.ownerBlockId === block.id || (block.review.correction.maxCycles !== undefined && (!Number.isInteger(block.review.correction.maxCycles) || block.review.correction.maxCycles < 1 || block.review.correction.maxCycles > 20)) || (block.review.correction.verificationBlockId !== undefined && !harness.blocks.some((item) => item.id === block.review!.correction!.verificationBlockId)))) issues.push({ code: "invalid-gate", blockId: block.id, message: `Review correction settings need an existing owner block, optional verification block, and a cycle limit from 1 to 20` });
     if (block.type === "verification" && (!block.verification || !block.verification.command.trim() || (block.verification.revision !== undefined && !isCommit(block.verification.revision)) || (block.verification.timeoutMs !== undefined && (!Number.isInteger(block.verification.timeoutMs) || block.verification.timeoutMs < 1 || block.verification.timeoutMs > 30 * 60_000)) || (block.verification.workingDirectory !== undefined && (!block.verification.workingDirectory.trim() || block.verification.workingDirectory.includes("\\0"))))) issues.push({ code: "invalid-gate", blockId: block.id, message: `Verification block '${block.label || block.id}' needs a command, valid optional revision, working directory, and timeout` });
@@ -70,7 +71,7 @@ export function validateHarness(harness: HarnessDefinition): { valid: boolean; i
 }
 
 export function isHarnessFlow(harness: Pick<HarnessDefinition, "blocks" | "edges">): boolean {
-  return harness.edges.some((edge) => edge.type !== undefined) || harness.blocks.some((block) => ["ai", "chatbox", "text", "timer", "script", "run_app", "user_prompt", "yes_no_prompt", "markdown", "start_button", "start_input"].includes(block.type));
+  return harness.edges.some((edge) => edge.type !== undefined) || harness.blocks.some((block) => ["ai", "chatbox", "skill", "text", "timer", "script", "run_app", "user_prompt", "yes_no_prompt", "markdown", "start_button", "start_input"].includes(block.type));
 }
 
 /** Legacy dependency workflows treat implicit back connections as loop paths. */

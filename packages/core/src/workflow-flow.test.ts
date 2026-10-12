@@ -23,6 +23,41 @@ async function setup(blocks: HarnessBlock[], edges: HarnessEdge[], concurrency =
 }
 
 describe("typed workflows", () => {
+  it.each(["ai", "chatbox"] as const)("loads connected skills on demand for %s without dispatching another agent", async (type) => {
+    const instructions = "Inspect the diff, verify the tests, and report concrete findings.";
+    const description = "Use when reviewing code changes.";
+    const { runner, definition, store, finished } = await setup([
+      block("agent", type, { prompt: "Review this change" }),
+      block("review-skill", "skill", { label: "Code review", description, prompt: instructions }),
+      block("unused-skill", "skill", { description: "Use for deployment", prompt: "Deploy instructions" }),
+    ], [edge("agent", "review-skill", "use"), edge("agent", "unused-skill", "use")]);
+    // Verify the new type and description survive persistence.
+    expect((await store.read(definition.id)).blocks[1]).toMatchObject({ type: "skill", description, prompt: instructions });
+    const dispatch = vi.fn(async (_block: HarnessBlock, prompt: string, runtime: Parameters<Parameters<HarnessRunner["start"]>[2]>[2]) => {
+      expect(prompt).toContain(description);
+      expect(prompt).not.toContain(instructions);
+      expect(prompt).toContain("load its instructions before applying them in your own session");
+      const connections = await runner.flowTool(runtime.runId, "agent", "workflow_connections", {});
+      expect(connections).toEqual(expect.arrayContaining([expect.objectContaining({ block_id: "review-skill", blockType: "skill", description })]));
+      expect(JSON.stringify(connections)).not.toContain(instructions);
+      expect(await runner.flowTool(runtime.runId, "agent", "workflow_use_block", { block_id: "review-skill" })).toMatchObject({ output: instructions });
+      return session("Reviewed");
+    });
+    await runner.start(definition.id, "Review", dispatch);
+    const run = await finished();
+    expect(run.status).toBe("succeeded");
+    expect(dispatch).toHaveBeenCalledTimes(1);
+    expect(run.blocks.find((item) => item.blockId === "review-skill")).toMatchObject({ status: "succeeded", output: instructions });
+    expect(run.blocks.find((item) => item.blockId === "unused-skill")?.status).toBe("skipped");
+  });
+
+  it("requires a skill description and instructions", async () => {
+    const { definition } = await setup([block("skill", "skill", { description: "Use for reviews", prompt: "Review changes" })], []);
+    expect(validateHarness(definition).valid).toBe(true);
+    expect(validateHarness({ ...definition, blocks: [{ ...definition.blocks[0]!, description: " " }] }).issues).toEqual(expect.arrayContaining([expect.objectContaining({ message: expect.stringContaining("needs a description") })]));
+    expect(validateHarness({ ...definition, blocks: [{ ...definition.blocks[0]!, prompt: " " }] }).issues).toEqual(expect.arrayContaining([expect.objectContaining({ code: "empty-prompt", message: expect.stringContaining("needs instructions") })]));
+  });
+
   it("returns child messages on a Use timeout and lets the parent monitor the ongoing child", async () => {
     const { runner, definition, store, finished } = await setup([block("parent", "chatbox"), block("child", "chatbox"), block("unconnected", "chatbox")], [{ ...edge("parent", "child", "use"), timeoutMs: 100 }]);
     let release!: () => void;
