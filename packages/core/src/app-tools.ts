@@ -209,10 +209,11 @@ export const appToolDefinitions = [
   },
   {
     name: "set_commit_message",
-    description: "Set or replace the Git commit message draft for the current Vibe Editor task. Preserves multiline text and does not create a commit.",
+    description: "Set or replace the Git commit message draft for a Vibe Editor task. Omit task_id to use the current task. Preserves multiline text and does not create a commit.",
     inputSchema: {
       type: "object", additionalProperties: false,
       properties: {
+        task_id: { type: "string", minLength: 1, description: "Task to update. Omit to use the current task workspace." },
         message: { type: "string", minLength: 1, maxLength: 10_000, pattern: "\\S", description: "Commit message draft. May contain multiple lines; must contain at least one non-whitespace character." }
       },
       required: ["message"]
@@ -473,7 +474,9 @@ export class AppToolService {
     }
     if (name === "set_commit_message") {
       const message = requiredCommitMessage(args, "message");
-      const update = await this.tasks.setCommitMessage(this.currentWorkspace, message);
+      const taskId = optionalString(args, "task_id");
+      const targetWorkspace = taskId ? this.tasks.taskPath((await this.task(taskId)).id) : this.currentWorkspace;
+      const update = await this.tasks.setCommitMessage(targetWorkspace, message);
       const workspace = this.tasks.taskPath(update.task.id);
       await this.onCommitMessageChanged(workspace, message);
       return { task_id: update.task.id, message: update.message, overwritten: update.overwritten, committed: false };
@@ -642,7 +645,7 @@ function requiredCommitMessage(args: Record<string, unknown>, key: string): stri
 
 export const flowToolDefinitions = [
   { name: "workflow_connections", description: "List blocks connected to this AI Agent and their use, follow, or path connection types.", inputSchema: { type: "object", properties: {} } },
-  { name: "workflow_use_block", description: "Use a connected block. For Task controls, actions are create (branch), create_and_start (input prompt, optional branch), status (optional task_id), prompt (task_id and input prompt), and set_status (task_id and status active or finished). Provider, model and reasoning come from the block design. Results are in task_controls. For Run App, pass action to choose one of its allowed actions: start, status, kill, or tail. Input is optional (defaults to empty). For tail, lines optionally selects the last 1–10000 log lines. The result includes structured app state and logs in app, as well as the original output string. Timer blocks arm their configured countdown and return immediately; when they fire, their follow connections receive the supplied input. Other blocks return their output when done. timeout_seconds overrides the connection timeout (default 300 seconds, maximum 86400). On timeout the child keeps working; the result includes status timed_out, recent messages, and activity. Use workflow_block_messages to check its progress without sending another prompt. An AI block continues its own existing context.", inputSchema: { type: "object", properties: { block_id: { type: "string" }, timeout_seconds: { type: "number", exclusiveMinimum: 0, maximum: 86400 }, input: { type: "string" }, action: { type: "string", enum: ["start", "status", "kill", "tail", "create", "create_and_start", "prompt", "set_status"] }, task_id: { type: "string" }, branch: { type: "string" }, status: { type: "string", enum: ["active", "finished"] }, idempotency_key: { type: "string", minLength: 1, maxLength: 200 }, lines: { type: "integer", minimum: 1, maximum: 10000 } }, required: ["block_id"] } },
+  { name: "workflow_use_block", description: "Use a connected block. For Task controls, actions are create (branch), create_and_start (input prompt, optional branch), status (optional task_id), prompt (task_id and input prompt), set_status (task_id and status active or finished), set_commit_message (task_id and message or input; saves a draft), and update_commit_message (task_id and message or input; rewrites the latest unpushed commit without changing contents). Provider, model and reasoning come from the block design. Results are in task_controls. For Run App, pass action to choose one of its allowed actions: start, status, kill, or tail. Input is optional (defaults to empty). For tail, lines optionally selects the last 1–10000 log lines. The result includes structured app state and logs in app, as well as the original output string. Timer blocks arm their configured countdown and return immediately; when they fire, their follow connections receive the supplied input. Other blocks return their output when done. timeout_seconds overrides the connection timeout (default 300 seconds, maximum 86400). On timeout the child keeps working; the result includes status timed_out, recent messages, and activity. Use workflow_block_messages to check its progress without sending another prompt. An AI block continues its own existing context.", inputSchema: { type: "object", properties: { block_id: { type: "string" }, timeout_seconds: { type: "number", exclusiveMinimum: 0, maximum: 86400 }, input: { type: "string" }, action: { type: "string", enum: ["start", "status", "kill", "tail", "create", "create_and_start", "prompt", "set_status", "set_commit_message", "update_commit_message"] }, message: { type: "string", minLength: 1, maxLength: 10000, description: "Commit message text; preserves multiline messages. Used by Task controls commit-message actions." }, task_id: { type: "string" }, branch: { type: "string" }, status: { type: "string", enum: ["active", "finished"] }, idempotency_key: { type: "string", minLength: 1, maxLength: 200 }, lines: { type: "integer", minimum: 1, maximum: 10000 } }, required: ["block_id"] } },
   { name: "workflow_block_messages", description: "Read recent messages and activity from a connected AI Agent or Chatbox without invoking it. Use after a workflow_use_block timeout to check progress. count defaults to 6 (1–50).", inputSchema: { type: "object", properties: { block_id: { type: "string" }, count: { type: "integer", minimum: 1, maximum: 50 } }, required: ["block_id"] } },
   { name: "workflow_choose_path", description: "Choose a connected path by label. The chosen block receives your final output after you finish. Follow connections also run.", inputSchema: { type: "object", properties: { path: { type: "string" } }, required: ["path"] } }
 ];

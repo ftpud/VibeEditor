@@ -714,7 +714,7 @@ export type JavaDebugStateEvent = { type: "java.debug.state"; payload: JavaDebug
 export type TimersChangedEvent = { type: "timers.changed"; payload: { rootId?: WorkspaceRootId } };
 export type AiChangedEvent = { type: "ai.changed"; payload: { rootId: WorkspaceRootId } };
 export type TasksChangedEvent = { type: "tasks.changed"; payload: { rootId: WorkspaceRootId } };
-export type CommitMessageChangedEvent = { type: "commit-message.changed"; payload: { rootId: WorkspaceRootId; message: string } };
+export type CommitMessageChangedEvent = { type: "commit-message.changed"; payload: { rootId: WorkspaceRootId; workspace?: string; message: string } };
 export type RunConfigChangedEvent = { type: "runConfig.changed"; payload: { rootId: WorkspaceRootId; configs: RunConfig[] } };
 
 export type HarnessChangedEvent = { type: "harness.changed"; payload: { rootId: WorkspaceRootId; runId: string } };

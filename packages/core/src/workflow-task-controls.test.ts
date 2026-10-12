@@ -23,6 +23,8 @@ async function setup(type: "ai" | "chatbox" = "ai") {
   const tasks = {
     list: vi.fn(async () => ({ tasks: [task] })), create: vi.fn(async () => task),
     taskPath: vi.fn(() => "/root/task-1"),
+    setCommitMessage: vi.fn(async (_workspace: string, message: string) => ({ task, message, overwritten: false })),
+    updateGitCommitMessage: vi.fn(async (_id: string, message: string) => ({ task, previousCommit: "old-commit", commit: "new-commit", previousMessage: "Old subject", message })),
     setStatus: vi.fn(async (_id: string, status: WorkspaceTask["status"]) => { task.status = status; return { ...task }; })
   };
   const worker = {
@@ -31,18 +33,19 @@ async function setup(type: "ai" | "chatbox" = "ai") {
     models: vi.fn(async () => [{ id: "worker-model", name: "Worker", defaultReasoning: "low", reasoningLevels: ["low", "high"] }])
   };
   const acp = { get: vi.fn((provider: string) => { if (provider !== "worker") throw new Error(`Unexpected provider ${provider}`); return worker; }), list: vi.fn(() => [{ id: "worker", name: "Worker" }]) };
-  const context = { acp, tasks, agents: { list: vi.fn(async () => []) }, harnessRunner: runner, aiTimers: { next: vi.fn(async () => undefined) }, rootWorkspace: "/root", bridgeWorkspace: "/root", workspacePath: "/root", defaultProvider: "controller" } as unknown as Parameters<typeof executeTaskControls>[2];
+  const commitMessageChanged = vi.fn(async () => {});
+  const context = { onCommitMessageChanged: commitMessageChanged, acp, tasks, agents: { list: vi.fn(async () => []) }, harnessRunner: runner, aiTimers: { next: vi.fn(async () => undefined) }, rootWorkspace: "/root", bridgeWorkspace: "/root", workspacePath: "/root", defaultProvider: "controller" } as unknown as Parameters<typeof executeTaskControls>[2];
   const runtime = { runId: "run", blockId: controls.id, assertActive: () => {}, started: async () => {}, activity: async () => {}, attemptId: "attempt", iteration: 1 } as Parameters<typeof executeTaskControls>[3];
-  return { runner, store, controls, definition, context, runtime, worker, tasks, acp };
+  return { runner, store, controls, definition, context, runtime, worker, tasks, acp, commitMessageChanged };
 }
 
 it.each(["ai", "chatbox"] as const)("attaches task controls to %s with fixed design settings and durable operations", async (type) => {
-  const { runner, definition, context, worker, tasks, store } = await setup(type);
+  const { runner, definition, context, worker, tasks, store, commitMessageChanged } = await setup(type);
   const dispatch: Parameters<HarnessRunner["start"]>[2] = vi.fn(async (block, input, runtime) => {
     if (block.type === "task_controls") return executeTaskControls(block, input, context, runtime);
     const use = (args: Record<string, unknown>) => runner.flowTool(runtime.runId, block.id, "workflow_use_block", { block_id: "controls", ...args });
     const catalogue = await runner.flowTool(runtime.runId, block.id, "workflow_connections", {});
-    expect(catalogue).toEqual([expect.objectContaining({ blockType: "task_controls", task_controls: { provider: "worker", model: "worker-model", reasoning: "high", actions: expect.arrayContaining(["create", "status", "prompt", "set_status"]) } })]);
+    expect(catalogue).toEqual([expect.objectContaining({ blockType: "task_controls", task_controls: { provider: "worker", model: "worker-model", reasoning: "high", actions: expect.arrayContaining(["create", "status", "prompt", "set_status", "set_commit_message", "update_commit_message"]) } })]);
     await expect(use({ block_id: "unconnected", action: "status" })).rejects.toThrow("connected block");
     await expect(use({ input: '{"action":"prompt","task_id":"task-1","prompt":"Override","provider":"controller"}' })).rejects.toThrow("AI settings come from the block design");
     expect(await use({ action: "create", branch: "feature/example", idempotency_key: "create-example" })).toMatchObject({ task_controls: { task: { id: "task-1" } } });
@@ -56,6 +59,14 @@ it.each(["ai", "chatbox"] as const)("attaches task controls to %s with fixed des
     await use({ action: "set_status", task_id: "task-1", status: "finished" });
     expect(await use({ action: "status" })).toMatchObject({ task_controls: { tasks: [expect.objectContaining({ task_status: "finished" })] } });
     await use({ action: "set_status", task_id: "task-1", status: "active" });
+    const modelRequests = worker.models.mock.calls.length;
+    const message = "Improve workflow task controls\n\nPreserve multiline details.\n";
+    expect(await use({ action: "set_commit_message", task_id: "task-1", message })).toMatchObject({ task_controls: { task_id: "task-1", message, committed: false } });
+    expect(tasks.setCommitMessage).toHaveBeenCalledWith("/root/task-1", message);
+    expect(commitMessageChanged).toHaveBeenCalledWith("/root/task-1", message);
+    expect(await use({ action: "update_commit_message", task_id: "task-1", input: message })).toMatchObject({ task_controls: { task_id: "task-1", previous_commit: "old-commit", commit: "new-commit", message, rewritten: true } });
+    expect(tasks.updateGitCommitMessage).toHaveBeenCalledWith("task-1", message);
+    expect(worker.models).toHaveBeenCalledTimes(modelRequests);
     return session("Tasks managed");
   });
   const run = await runner.start(definition.id, "Manage", dispatch, "controller");
@@ -93,4 +104,16 @@ it("routes direct Task controls runs through Core without starting a workflow ag
   expect(JSON.parse(output)).toMatchObject({ tasks: [expect.objectContaining({ task_status: "active", providers: { worker: "idle" } })] });
   expect(worker.send).not.toHaveBeenCalled();
   expect(worker.models).not.toHaveBeenCalled();
+});
+
+it("surfaces existing published-history checks and requires a task for commit-message actions", async () => {
+  const { controls, context, runtime, tasks, worker } = await setup();
+  context.harnessRunner.recordTool = vi.fn(async () => {});
+  tasks.updateGitCommitMessage.mockRejectedValueOnce(new Error("Refusing to rewrite a published commit"));
+  await expect(executeTaskControls(controls, JSON.stringify({ action: "update_commit_message", task_id: "task-1", message: "New subject" }), context, runtime)).rejects.toThrow("published commit");
+  await expect(executeTaskControls(controls, JSON.stringify({ action: "set_commit_message", message: "New draft" }), context, runtime)).rejects.toThrow("require a task_id");
+  await expect(executeTaskControls(controls, JSON.stringify({ action: "set_commit_message", task_id: "task-1", message: " \n" }), context, runtime)).rejects.toThrow("non-whitespace");
+  expect(tasks.setCommitMessage).not.toHaveBeenCalled();
+  expect(worker.models).not.toHaveBeenCalled();
+  expect(worker.send).not.toHaveBeenCalled();
 });

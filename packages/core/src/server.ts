@@ -223,12 +223,12 @@ export async function createServer(host: string, port: number, workspacePath: st
   const appEventWatcher = chokidar.watch(appEvents.directory, { ignoreInitial: true, depth: 0 });
   await new Promise<void>((resolve, reject) => { appEventWatcher.once("ready", resolve); appEventWatcher.once("error", reject); });
   appEventWatcher.on("add", (file) => {
-    void appEvents.consume(file).then((event) => {
+    void appEvents.consume(file).then(async (event) => {
       if (!event) return;
-      const rootId = roots.primary().id;
+      const rootId = event.type === "tasks.changed" ? roots.primary().id : await ownerRootId(event.workspace) ?? roots.primary().id;
       const message: ServerEvent = event.type === "tasks.changed" ? { type: "tasks.changed", payload: { rootId } }
         : event.type === "ai.changed" ? { type: "ai.changed", payload: { rootId } }
-        : { type: "commit-message.changed", payload: { rootId, message: event.message } };
+        : { type: "commit-message.changed", payload: { rootId, workspace: event.workspace, message: event.message } };
       const encoded = JSON.stringify(message);
       for (const socket of activeSessions) sendWebSocketData(socket, encoded);
     }).catch((error) => console.error(`[core] app event error: ${error instanceof Error ? error.message : String(error)}`));
@@ -343,7 +343,7 @@ export async function createServer(host: string, port: number, workspacePath: st
     for (const socket of activeSessions) sendWebSocketData(socket, encoded);
   };
   const onCommitMessageChanged = async (changedWorkspace: string, message: string) => {
-    const rootId = await ownerRootId(changedWorkspace); if (!rootId) return; const encoded = JSON.stringify({ type: "commit-message.changed", payload: { rootId, message } } satisfies ServerEvent); for (const socket of activeSessions) sendWebSocketData(socket, encoded);
+    const rootId = await ownerRootId(changedWorkspace); if (!rootId) return; const encoded = JSON.stringify({ type: "commit-message.changed", payload: { rootId, workspace: changedWorkspace, message } } satisfies ServerEvent); for (const socket of activeSessions) sendWebSocketData(socket, encoded);
   };
   const appCommandWatcher = chokidar.watch(appEvents.commandsDirectory, { ignoreInitial: true, depth: 0 });
   await new Promise<void>((resolve, reject) => { appCommandWatcher.once("ready", resolve); appCommandWatcher.once("error", reject); });

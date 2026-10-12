@@ -771,6 +771,7 @@ export function App() {
         return;
       }
       if (event.type === "commit-message.changed") {
+        if (event.payload.workspace && event.payload.workspace !== activeWorkspaceRef.current) return;
         setGitCommitMessage(event.payload.message);
         return;
       }

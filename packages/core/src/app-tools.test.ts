@@ -378,6 +378,14 @@ describe("Vibe Editor app tools", () => {
     expect(tasks.setCommitMessage).toHaveBeenCalledWith("/tasks/parent/workspace", message);
   });
 
+  it("sets a commit draft on an explicitly selected task and publishes its workspace", async () => {
+    const { service, tasks, onCommitMessageChanged } = harness();
+    const message = "Update selected task\n\nKeep the body.\n";
+    expect(await service.call("set_commit_message", { task_id: "task-1", message })).toMatchObject({ task_id: "task-1", message, committed: false });
+    expect(tasks.setCommitMessage).toHaveBeenCalledWith("/tasks/task-1/workspace", message);
+    expect(onCommitMessageChanged).toHaveBeenCalledWith("/tasks/task-1/workspace", message);
+  });
+
   it("rejects missing, non-string, whitespace-only, and oversized commit messages", async () => {
     const { service, tasks } = harness();
     await expect(service.call("set_commit_message", {})).rejects.toThrow("message must contain at least one non-whitespace character");
