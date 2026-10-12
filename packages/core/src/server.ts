@@ -1,3 +1,5 @@
+import { listProjectProcesses, killProjectProcess } from "./project-processes.js";
+import { managedProcesses } from "./managed-processes.js";
 import type { RawData } from "ws";
 import { WebSocket, WebSocketServer } from "ws";
 import chokidar from "chokidar";
@@ -197,6 +199,8 @@ export async function createServer(host: string, port: number, workspacePath: st
   const removingRoots = new Set<string>();
   const terminalSubscriptions = new Map<WebSocket, { rootId: string; workspace: string; terminalIds: Set<string> }>();
   const terminalOwners = new Map<string, { socket: WebSocket; rootId: string; workspace: string }>();
+  const processesChanged = () => { const encoded = JSON.stringify({ type: "processes.changed", payload: {} } satisfies ServerEvent); for (const socket of activeSessions) sendWebSocketData(socket, encoded); };
+  managedProcesses.on("changed", processesChanged); managedProcesses.start();
   const workflowApps = new WorkflowAppService();
   let runConfigs: RunConfigService;
   const terminalHost = new TerminalSessionHost((event) => {
@@ -273,8 +277,8 @@ export async function createServer(host: string, port: number, workspacePath: st
     const run = (await harnesses.runs()).find((item) => item.id === runtime.runId);
     const workspace = await workflowRunWorkspace(run, rootWorkspace);
     if (block.type === "skill" && block.skillId) return executeWorkflowSkill(block, new SkillsStore(undefined, rootWorkspace), workspace, runtime);
-    if (block.type === "script") return executeFlowScript(block, prompt, workspace, runtime.assertActive);
-    if (block.type === "run_app") return workflowApps.execute(block, prompt, workspace, runtime.assertActive);
+    if (block.type === "script") return executeFlowScript(block, prompt, workspace, runtime.assertActive, { rootWorkspace, workflowRunId: runtime.runId, workflowBlockId: runtime.blockId });
+    if (block.type === "run_app") return workflowApps.execute(block, prompt, workspace, runtime.assertActive, { rootWorkspace, workflowRunId: runtime.runId, workflowBlockId: runtime.blockId });
     if (block.type === "task_controls") return executeTaskControls(block, prompt, { acp, tasks, agents, harnessRunner: recoveryRunner, aiTimers, rootWorkspace, bridgeWorkspace: rootWorkspace, workspacePath: workspace, defaultProvider: "codex" }, runtime);
     const provider = acp.get(block.provider ?? "codex");
     await assertWorkflowModelAvailable(provider, block.model, block.reasoning);
@@ -289,6 +293,7 @@ export async function createServer(host: string, port: number, workspacePath: st
     const autopilot = findAutopilotOption(provider.descriptor.options); const configuration = { ...(block.model ? { model: block.model } : {}), ...(block.reasoning ? { reasoning: block.reasoning } : {}), ...(autopilot ? { [autopilot.option.id]: autopilot.on } : {}) };
     const skillIds = await workflowSessionSkillIds(run?.definition, block, new SkillsStore(undefined, rootWorkspace), workspace);
     runtime.assertActive(); await provider.startFreshSession(sessionWorkspace, { prompt, configuration, mcpServers, ...(skillIds ? { skillIds } : {}), agent: workflowAgent, ...(block.agent ? { agentPreset: block.agent } : {}) }); runtime.assertActive();
+    managedProcesses.setWorkspaceContext(sessionWorkspace, { workflowRunId: runtime.runId, workflowBlockId: runtime.blockId });
     return settleWorkflowSession(provider, sessionWorkspace, aiTimers, undefined, () => recoveryRunner.isActive(runtime.runId), runtime.activity);
   });
   const recoveryAppend: NonNullable<Parameters<HarnessRunner["start"]>[4]> = async (block, prompt, runtime) => providerOperation(async () => {
@@ -396,7 +401,7 @@ export async function createServer(host: string, port: number, workspacePath: st
     .on("add", broadcastChange).on("change", broadcastChange).on("unlink", broadcastChange).on("addDir", broadcastChange).on("unlinkDir", broadcastChange)
     .on("raw", (eventName) => { if (String(eventName).includes("OVERFLOW")) rootBatcher.degrade("Filesystem watcher overflow; synchronizing affected files."); })
     .on("error", (error) => { console.error(`[core] watcher error: ${String(error)}`); rootBatcher.degrade(`Filesystem watcher degraded: ${String(error)}`); });
-  server.on("close", () => { schedules.close(); rootBatcher.dispose(); workflowApps.closeAll(); terminalHost.closeAll(); void watcher.close(); void gitIndexWatcher.close(); void runConfigWatcher.close(); void appEventWatcher.close(); void appCommandWatcher.close(); });
+  server.on("close", () => { managedProcesses.off("changed", processesChanged); if (!managedProcesses.listenerCount("changed")) managedProcesses.close(); schedules.close(); rootBatcher.dispose(); workflowApps.closeAll(); terminalHost.closeAll(); void watcher.close(); void gitIndexWatcher.close(); void runConfigWatcher.close(); void appEventWatcher.close(); void appCommandWatcher.close(); });
   server.on("listening", () => console.log(`[core] listening on ws://${host}:${port}`));
   server.on("connection", (socket, request) => {
     if (remoteTransfers.accepts(request.url)) { void remoteTransfers.attach(socket, request.url); return; }
@@ -732,6 +737,8 @@ async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStor
     case "schedules.enabled": return { schedule: await schedules.setEnabled(request.payload.scheduleId, request.payload.enabled) };
     case "schedules.delete": return { deleted: await schedules.delete(request.payload.scheduleId) };
     case "schedules.fire": return { fired: await schedules.fire(request.payload.scheduleId, true) };
+    case "processes.list": return { processes: await listProjectProcesses(rootWorkspace, tasks) };
+    case "processes.kill": return { killed: await killProjectProcess(rootWorkspace, request.payload.processId) };
     case "timers.list": return { timers: await aiTimers.list() };
     case "timers.cancel": return { cancelled: await aiTimers.cancel(request.payload.timerId) };
     case "timers.fire": return { fired: await aiTimers.fireById(request.payload.timerId) };
@@ -1150,8 +1157,8 @@ export async function startWorkflow(input: ProtocolOperations["harnesses.run"]["
   const workspacePath = await workflowRunWorkspace(previousRun, context.workspacePath);
   const dispatch: Parameters<HarnessRunner["start"]>[2] = async (block, prompt, runtime) => providerOperation(async () => {
       if (block.type === "skill" && block.skillId) return executeWorkflowSkill(block, new SkillsStore(undefined, rootWorkspace), workspacePath, runtime);
-      if (block.type === "script") return executeFlowScript(block, prompt, workspacePath, runtime.assertActive);
-      if (block.type === "run_app") return workflowApps.execute(block, prompt, workspacePath, runtime.assertActive);
+      if (block.type === "script") return executeFlowScript(block, prompt, workspacePath, runtime.assertActive, { rootWorkspace, workflowRunId: runtime.runId, workflowBlockId: runtime.blockId });
+      if (block.type === "run_app") return workflowApps.execute(block, prompt, workspacePath, runtime.assertActive, { rootWorkspace, workflowRunId: runtime.runId, workflowBlockId: runtime.blockId });
       if (block.type === "task_controls") return executeTaskControls(block, prompt, { ...context, workspacePath, defaultProvider: input.provider ?? "codex" }, runtime);
       if (block.type === "verification") return runWorkflowVerification(block, workspacePath, harnessRunner, runtime);
       if (block.type === "review") {
@@ -1187,6 +1194,7 @@ export async function startWorkflow(input: ProtocolOperations["harnesses.run"]["
       runtime.assertActive();
       try { await provider.startFreshSession(sessionWorkspace, { prompt, configuration, mcpServers, ...(skillIds ? { skillIds } : {}), agent: workflowAgent, ...(block.agent ? { agentPreset: block.agent } : {}) }); runtime.assertActive(); }
       catch (error) { runtime.assertActive(); if (!block.watchdog) throw error; console.error("[core] Watchdog startup failed; scheduling recovery", error); }
+      managedProcesses.setWorkspaceContext(sessionWorkspace, { workflowRunId: runtime.runId, workflowBlockId: runtime.blockId });
       return settleWorkflowSession(provider, sessionWorkspace, aiTimers, block.watchdog ? runtime : undefined, () => harnessRunner.isActive(runtime.runId), runtime.activity);
     });
   const append: NonNullable<Parameters<HarnessRunner["start"]>[4]> = async (block, prompt, runtime) => providerOperation(async () => {

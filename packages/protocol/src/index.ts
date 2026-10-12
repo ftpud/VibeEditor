@@ -191,6 +191,8 @@ export type ScheduledAction =
   | { type: "workflow"; provider: AiProvider; harnessId: string; input: string; startBlockId?: string };
 export type ScheduleInput = { name: string; dueAt: string; intervalSeconds?: number; taskId?: string; action: ScheduledAction };
 export type WorkspaceSchedule = ScheduleInput & { id: string; rootId: WorkspaceRootId; createdAt: string; enabled: boolean; lastRunAt?: string; lastError?: string; lastWorkflowRunId?: string };
+export type ManagedProcess = { id: string; pid: number; command: string; status: "running"; workspace: string; rootWorkspace: string; taskId?: string; taskName?: string; workflowRunId?: string; workflowBlockId?: string; provider?: string; sessionId?: string; kind: "agent" | "command" | "workflow-app"; parentPid?: number };
+
 export type AiContinuationTimer = { id: string; workspace: string; provider: AiProvider; prompt: string; dueAt: string; createdAt: string; workflowRunId?: string; workflowBlockId?: string; workflowFlow?: boolean };
 
 /** Named long-lived shell apps are owned by Core and scoped to the execution workspace. */
@@ -332,6 +334,8 @@ export type ProtocolOperations = {
   "schedules.enabled": { payload: { scheduleId: string; enabled: boolean }; result: { schedule: WorkspaceSchedule } };
   "schedules.delete": { payload: { scheduleId: string }; result: { deleted: boolean } };
   "schedules.fire": { payload: { scheduleId: string }; result: { fired: boolean } };
+  "processes.list": { payload: Record<string, never>; result: { processes: ManagedProcess[] } };
+  "processes.kill": { payload: { processId: string }; result: { killed: boolean } };
   "timers.list": { payload: Record<string, never>; result: { timers: AiContinuationTimer[] } };
   "timers.cancel": { payload: { timerId: string }; result: { cancelled: boolean } };
   "timers.fire": { payload: { timerId: string }; result: { fired: boolean } };
@@ -720,7 +724,8 @@ export type RunConfigChangedEvent = { type: "runConfig.changed"; payload: { root
 export type HarnessChangedEvent = { type: "harness.changed"; payload: { rootId: WorkspaceRootId; runId: string } };
 export type WorkflowDocumentEvent = { type: "workflow.document"; payload: { rootId: WorkspaceRootId; runId: string; blockId: string; title: string; content: string } };
 export type ConfigurationChangedEvent = { type: "configuration.changed"; payload: { rootId: WorkspaceRootId; resource: string; global: boolean } };
-export type ServerEvent = ConfigurationChangedEvent | TimersChangedEvent | WorkflowDocumentEvent | FilesystemChangedEvent | TerminalOutputEvent | TerminalExitEvent | GitChangedEvent | TaskGitChangedEvent | JavaSemanticChangedEvent | JavaOutputEvent | JavaExitEvent | JavaDebugStateEvent | AiChangedEvent | TasksChangedEvent | CommitMessageChangedEvent | RunConfigChangedEvent | HarnessChangedEvent;
+export type ProcessesChangedEvent = { type: "processes.changed"; payload: Record<string, never> };
+export type ServerEvent = ProcessesChangedEvent | ConfigurationChangedEvent | TimersChangedEvent | WorkflowDocumentEvent | FilesystemChangedEvent | TerminalOutputEvent | TerminalExitEvent | GitChangedEvent | TaskGitChangedEvent | JavaSemanticChangedEvent | JavaOutputEvent | JavaExitEvent | JavaDebugStateEvent | AiChangedEvent | TasksChangedEvent | CommitMessageChangedEvent | RunConfigChangedEvent | HarnessChangedEvent;
 
 /**
  * Every request the core accepts. Declaring it as a fully keyed record makes TypeScript
@@ -745,6 +750,8 @@ const requestTypeRegistry: Record<RequestType, true> = {
   "schedules.enabled": true,
   "schedules.delete": true,
   "schedules.fire": true,
+  "processes.list": true,
+  "processes.kill": true,
   "timers.list": true,
   "timers.cancel": true,
   "timers.fire": true,

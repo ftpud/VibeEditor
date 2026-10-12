@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { initialTaskPanel, switchedTaskPanel, taskPanelPreferenceKey } from "./task-panel-state";
+import { restoredFocusedLeftPanels, initialTaskPanel, switchedTaskPanel, taskPanelPreferenceKey } from "./task-panel-state";
 
 describe("task panel selection", () => {
   it("uses Task Git for the initial task when it has no explicit panel choice", () => {
@@ -36,5 +36,16 @@ describe("task panel selection", () => {
     expect(panel).toBe("project");
     apply(second);
     expect(panel).toBe("taskGit");
+  });
+});
+
+describe("Proc navigation persistence", () => {
+  it("restores Proc in classic task navigation", () => {
+    expect(initialTaskPanel("classic", "task", () => "proc")).toEqual({ classic: "proc" });
+  });
+  it("restores focused Proc exclusively while retaining Tasks and handling older saved preferences", () => {
+    const current = { tasks: true, ai: true, harness: false, timers: false, proc: false };
+    expect(restoredFocusedLeftPanels(current, { proc: true })).toEqual({ tasks: true, ai: false, harness: false, timers: false, proc: true });
+    expect(restoredFocusedLeftPanels(current, { timers: true })).toEqual({ tasks: true, ai: false, harness: false, timers: true, proc: false });
   });
 });

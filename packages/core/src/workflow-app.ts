@@ -1,3 +1,4 @@
+import { managedProcesses } from "./managed-processes.js";
 import crypto from "node:crypto";
 import { workspaceShellCommand } from "./workspace-shell.js";
 import path from "node:path";
@@ -11,7 +12,7 @@ export class WorkflowAppService {
   private readonly apps = new Map<string, App>();
   private closing = false;
 
-  async execute(block: HarnessBlock, input: string, workspace: string, assertActive: () => void): Promise<AiSession> {
+  async execute(block: HarnessBlock, input: string, workspace: string, assertActive: () => void, context: { rootWorkspace?: string; workflowRunId?: string; workflowBlockId?: string } = {}): Promise<AiSession> {
     assertActive();
     const options = block.app;
     if (!options || !options.name.trim() || options.name.length > 120 || options.name.includes("\0")) throw new Error("Run App needs an app name of 1 to 120 characters");
@@ -36,7 +37,8 @@ export class WorkflowAppService {
       if (!block.command?.trim()) throw new Error("Run App start needs a shell script");
       if (!app || app.status === "exited") {
         const { shell, args } = workspaceShellCommand(block.command);
-        const child = spawn(shell, args, { cwd: workspace, env: { ...process.env, TERM: "xterm-256color", COLORTERM: "truecolor", VIBE_WORKFLOW_INPUT: input }, detached: true, stdio: ["pipe", "pipe", "pipe"] });
+        const processContext = { ...context, rootWorkspace: context.rootWorkspace ?? workspace, workspace, kind: "workflow-app" as const, command: `${name}: ${block.command}` };
+        const child = managedProcesses.launch(processContext, (env) => spawn(shell, args, { cwd: workspace, env: { ...env, TERM: "xterm-256color", COLORTERM: "truecolor", VIBE_WORKFLOW_INPUT: input }, detached: true, stdio: ["pipe", "pipe", "pipe"] }));
         app = { child, output: "", status: "starting", exitCode: null, signal: null, ready: Promise.resolve(), closed: Promise.resolve() };
         const current = app;
         const collect = (chunk: Buffer) => { current.output = (current.output + chunk.toString()).slice(-200_000); };
