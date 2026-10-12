@@ -29,3 +29,16 @@
   - Runner execution: owner=todo-runner-20261012-workflow; status=complete; last-state=done; candidate=a238ce92928f1510aef211abe6f9a8c6fd654b96; merge-key=451433d2-todo002-a238ce9-smart; checks=build/typechecks/full-tests/clean-tree; context=workflow-chat-concurrency; task=451433d2-5f35-44aa-9217-28ce43a5fd96; branch=feature/todo-002-independent-chatboxes; provider=codex; attempt=1; delivery=todo-002-workflow-20261012-a1; root-head=1df0850c389843f7e5e7647b3db2a5f2dd1b4c3e; merge=0f71ed2e-c222-4b5b-aea3-3d5547d21659 completed; integrated=a238ce92928f1510aef211abe6f9a8c6fd654b96; publishing=pushed origin/refs/heads/dev; published-sha=a702ef6d0c6ae529a49f55d24d1f7ea106c84341; integration-recovery=b0a72287 failed missing isolated dependencies, root unchanged, reused validated worker dependencies for integration environment.
   - Session decision: new task for Core runtime concurrency; prior queue task covers unrelated process lifecycle.
   - Result: independent Chatbox turns share runtime/history/tool routing, reject duplicate busy targets and drain before aggregate completion; Stop remains run-wide. Post-merge notification errored; Git/integration/task evidence confirmed success.
+
+- [x] TODO-003 — Float workflow fit controls over the flowchart
+  - Priority: Normal.
+  - Scope: Workflows panel / Desktop layout.
+  - Acceptance criteria:
+    - Move horizontal and vertical Fit buttons into an overlay at the bottom-left of the flowchart viewport, removing their dedicated layout row.
+    - Keep controls anchored to the viewport while the chart scrolls or scales; retain both fit behaviors and avoid clipping in narrow and expanded workflow views.
+    - Provide accessible names, tooltips, keyboard focus, and theme-consistent styling; verify positioning and fit interactions.
+  - Context: packages/desktop/src/renderer/WorkflowRunPanel.tsx CompactWorkflowPreview renders workflow-preview-controls before workflow-compact-preview; inspect related styles.css rules.
+  - Dependencies: None; independent outcome.
+  - Runner execution: owner=todo-runner-20261012-workflow; status=complete; last-state=done; candidate=d2bd3bba05a525bcc0f21b93bb2eaba6843c0d47; merge-key=360d8b4b-todo003-d2bd3bb-smart; context=workflow-desktop-layout; task=360d8b4b-1b36-4ce8-95b7-9ffd559c4b58; branch=feature/todo-003-workflow-fit-overlay; provider=codex; attempt=1; delivery=todo-003-layout-20261012-a1; root-head=0c0e661bac6f5d445a7aa4f8d704ccadcf914c92; merge=aaaa6338-e276-4de8-9e09-a71690eb149a completed; implementation/integrated=d2bd3bba05a525bcc0f21b93bb2eaba6843c0d47; checks=full build, repository/Gateway typechecks, full tests, fit/keyboard and Chromium CSS positioning checks; publishing=pending.
+  - Session decision: new task for independent Desktop layout; retain it for related workflow card/timer layout items after merge.
+  - Result: Horizontal/vertical Fit controls float at the bottom-left of the scrolling chart viewport with keyboard access, tooltips and theme styling. Limitations: Browser positioning verified with a CSS fixture rather than full Electron UI. Post-merge notification errored after confirmed integration.
