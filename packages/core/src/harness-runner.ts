@@ -6,7 +6,7 @@ import { harnessExecutionEdges, isHarnessFlow, HarnessSchemaError, parseHarnessD
 import type { HarnessStore } from "./harnesses.js";
 import type { AiUsage } from "@remote-ide/acp";
 
-type Dispatch = (block: HarnessBlock, prompt: string, context: { runId: string; blockId: string; attemptId: string; iteration: number; started(workspace: string): Promise<void>; activity(session: AiSession, waitingUntil?: string): Promise<void>; assertActive(): void }) => Promise<AiSession>;
+type Dispatch = (block: HarnessBlock, prompt: string, context: { runId: string; blockId: string; attemptId: string; iteration: number; skillAgent?: HarnessBlock["agent"] | null; started(workspace: string): Promise<void>; activity(session: AiSession, waitingUntil?: string): Promise<void>; assertActive(): void }) => Promise<AiSession>;
 type Append = (block: HarnessBlock, prompt: string, context: { runId: string; blockId: string; workspace: string; activity?(session: AiSession, waitingUntil?: string): Promise<void> }) => Promise<AiSession>;
 type Interrupt = (provider: string, context: { runId: string; blockId: string; workspace?: string }) => Promise<void>;
 type ResolvePermission = (provider: string, workspace: string, requestId: string, optionId?: string) => Promise<AiSession>;
@@ -201,13 +201,15 @@ export class HarnessRunner {
 
   async readRun(runId: string): Promise<HarnessRun | undefined> { return (await this.store.runs()).find((run) => run.id === runId); }
 
-  async start(harnessId: string, input: string, dispatch: Dispatch, defaultProvider = "codex", append?: Append, startBlockId?: string, rerunRunId?: string, testDefinition?: HarnessDefinition, workspace?: string): Promise<HarnessRun> {
+  async start(harnessId: string, input: string, dispatch: Dispatch, defaultProvider = "codex", append?: Append, startBlockId?: string, rerunRunId?: string, testDefinition?: HarnessDefinition, workspace?: string, prepareDefinition?: (definition: HarnessDefinition) => Promise<HarnessDefinition>): Promise<HarnessRun> {
     const source = rerunRunId ? (await this.store.runs()).find((run) => run.id === rerunRunId) : undefined;
     if (rerunRunId && !source) throw new CoreError("FILE_NOT_FOUND", "Workflow run does not exist");
     if (rerunRunId && !source?.definition) throw new CoreError("INVALID_REQUEST", "This workflow run has no frozen definition to rerun");
     input = source?.input ?? input;
     if (input.length > 100_000) throw new CoreError("INVALID_REQUEST", "Harness input must contain 1–100,000 characters");
-    const harness = testDefinition ? isolatedBlockDefinition(testDefinition, startBlockId!) : source?.definition ?? await this.store.read(harnessId); const validation = validateHarness(harness);
+    let harness = testDefinition ? isolatedBlockDefinition(testDefinition, startBlockId!) : source?.definition ?? await this.store.read(harnessId);
+    if (prepareDefinition) harness = await prepareDefinition(structuredClone(harness));
+    const validation = validateHarness(harness);
     if (!validation.valid) throw new CoreError("INVALID_REQUEST", validation.issues.map((issue) => issue.message).join("; "));
     const starts = harness.blocks.filter((block) => block.type === "start_button" || block.type === "start_input");
     if (startBlockId) {
@@ -611,7 +613,7 @@ export class HarnessRunner {
     const state = execution.run.blocks.find((item) => item.blockId === blockId);
     if (state?.status !== "running" || !["ai", "chatbox"].includes(execution.blocks.find((block) => block.id === blockId)?.type ?? "")) throw new Error("Only an active AI Agent or Chatbox can use flow tools");
     const edges = execution.edges.filter((edge) => edge.from === blockId);
-    if (name === "workflow_connections") return edges.map((edge) => ({ blockId: edge.to, block_id: edge.to, name: execution.blocks.find((block) => block.id === edge.to)?.label, blockType: execution.blocks.find((block) => block.id === edge.to)?.type, description: workflowBlockDescription(execution.blocks.find((block) => block.id === edge.to)), seconds: execution.blocks.find((block) => block.id === edge.to)?.seconds, app: execution.blocks.find((block) => block.id === edge.to)?.app, timeout_seconds: (edge.timeoutMs ?? 300_000) / 1000, type: edge.type ?? "follow", path: edge.label }));
+    if (name === "workflow_connections") return edges.map((edge) => ({ blockId: edge.to, block_id: edge.to, name: execution.blocks.find((block) => block.id === edge.to)?.label, blockType: execution.blocks.find((block) => block.id === edge.to)?.type, description: workflowBlockDescription(execution.blocks.find((block) => block.id === edge.to)), seconds: execution.blocks.find((block) => block.id === edge.to)?.seconds, app: execution.blocks.find((block) => block.id === edge.to)?.app, task_controls: taskControlsMetadata(execution.blocks.find((block) => block.id === edge.to), execution.defaultProvider), timeout_seconds: (edge.timeoutMs ?? 300_000) / 1000, type: edge.type ?? "follow", path: edge.label }));
     if (name === "workflow_choose_path") {
       const edge = edges.find((edge) => edge.type === "path" && edge.label === args.path);
       if (!edge) throw new Error("Choose a connected path by its label");
@@ -634,21 +636,24 @@ export class HarnessRunner {
       const allowed = target.app?.actions ?? (target.app?.action ? [target.app.action] : []);
       if (args.action !== undefined && !allowed.includes(args.action as typeof allowed[number])) throw new Error(`App '${target.label}' does not allow '${String(args.action)}'. Allowed actions for workflow v${execution.run.harnessVersion}: ${allowed.join(", ") || "none"}. If you changed the design, save it and start a new conversation to apply the new allowed actions.`);
       if (args.lines !== undefined && (args.action !== "tail" || !Number.isInteger(args.lines) || typeof args.lines !== "number" || args.lines < 1 || args.lines > 10000)) throw new Error("Use lines from 1 to 10000 with action 'tail'");
-    } else if (args.action !== undefined || args.lines !== undefined) throw new Error("Action and lines are only available for Run App blocks");
+    } else if (target.type === "task_controls") {
+      if (args.lines !== undefined) throw new Error("Lines are only available for Run App blocks");
+    } else if (args.action !== undefined || args.lines !== undefined) throw new Error("Action is only available for Run App and Task controls blocks; lines are only available for Run App blocks");
+    if (target.type !== "task_controls" && ["task_id", "branch", "status", "idempotency_key"].some((key) => args[key] !== undefined)) throw new Error("Task arguments are only available for Task controls blocks");
     const invoke = this.flowInvocations.get(runId);
     if (!invoke) throw new Error("Flow is unavailable");
     const call = () => execution.scheduler.suspend(blockId, async () => {
       const transfer = await this.traceConnection(execution.run, edge, "forward", "active");
       try {
         const appTarget = execution.blocks.find((block) => block.id === edge.to);
-        const input = appTarget?.type === "run_app" && args.action !== undefined ? JSON.stringify({ action: args.action, input: textInput, ...(args.lines !== undefined ? { lines: args.lines } : {}) }) : textInput;
+        const input = appTarget?.type === "task_controls" && (args.action !== undefined || ["task_id", "branch", "status", "idempotency_key"].some((key) => args[key] !== undefined)) ? JSON.stringify({ action: args.action, prompt: textInput, task_id: args.task_id, branch: args.branch, status: args.status, idempotency_key: args.idempotency_key }) : appTarget?.type === "run_app" && args.action !== undefined ? JSON.stringify({ action: args.action, input: textInput, ...(args.lines !== undefined ? { lines: args.lines } : {}) }) : textInput;
         const output = await invoke(edge.to, input, [blockId]);
         transfer.status = "succeeded"; transfer.completedAt = new Date().toISOString();
         await this.traceConnection(execution.run, edge, "return", "succeeded");
         const target = execution.blocks.find((block) => block.id === edge.to);
         const timer = execution.run.blocks.find((block) => block.blockId === edge.to);
         const app = target?.type === "run_app" ? JSON.parse(output) : undefined;
-        return { blockId: edge.to, output, ...(app ? { app } : {}), ...(target?.type === "timer" ? { status: "waiting", due_at: timer?.waitingUntil } : {}) };
+        return { blockId: edge.to, output, ...(app ? { app } : {}), ...(target?.type === "task_controls" ? { task_controls: JSON.parse(output) } : {}), ...(target?.type === "skill" && target.skillId ? { skill: JSON.parse(output) } : {}), ...(target?.type === "timer" ? { status: "waiting", due_at: timer?.waitingUntil } : {}) };
       } catch (error) { transfer.status = "failed"; transfer.completedAt = new Date().toISOString(); await this.update(execution.run); throw error; }
     });
     const waitForResult = async (result: Promise<unknown>) => {
@@ -707,17 +712,23 @@ export class HarnessRunner {
       run.status = this.runActivityStatus(run); await this.update(run);
       let output = input;
       try {
-        const prompt = renderHarnessPrompt(block.prompt, input, execution.outputs);
+        const prompt = block.type === "skill" && block.skillId ? "" : renderHarnessPrompt(block.prompt, input, execution.outputs);
         if (!["ai", "chatbox"].includes(block.type)) { state.prompt = prompt; state.structuredInput = parseHarnessData(input, block.inputSchema, `${block.label} input`); this.log(state, "prompt", input); }
         if (["ai", "chatbox"].includes(block.type) || ["prompt", "task", "review", "verification"].includes(block.type)) {
-          const tools = edges.filter((edge) => edge.from === id && (edge.type === "use" || block.type === "chatbox")).map((edge) => ({ block_id: edge.to, name: blocks.find((item) => item.id === edge.to)?.label, type: blocks.find((item) => item.id === edge.to)?.type, description: workflowBlockDescription(blocks.find((item) => item.id === edge.to)), seconds: blocks.find((item) => item.id === edge.to)?.seconds, app: blocks.find((item) => item.id === edge.to)?.app, timeout_seconds: (edge.timeoutMs ?? 300_000) / 1000 }));
+          const tools = edges.filter((edge) => edge.from === id && (edge.type === "use" || block.type === "chatbox")).map((edge) => ({ block_id: edge.to, name: blocks.find((item) => item.id === edge.to)?.label, type: blocks.find((item) => item.id === edge.to)?.type, description: workflowBlockDescription(blocks.find((item) => item.id === edge.to)), seconds: blocks.find((item) => item.id === edge.to)?.seconds, app: blocks.find((item) => item.id === edge.to)?.app, task_controls: taskControlsMetadata(blocks.find((item) => item.id === edge.to), execution.defaultProvider), timeout_seconds: (edge.timeoutMs ?? 300_000) / 1000 }));
           const paths = block.type === "chatbox" ? [] : edges.filter((edge) => edge.from === id && edge.type === "path").map((edge) => edge.label);
-          const instructions = `${block.prompt}\n\nInput:\n{{input}}\n\nConnected tools: ${JSON.stringify(tools)}. Call workflow_use_block with block_id and input to use one; timeout_seconds optionally overrides its connection timeout. On a timed_out result the child keeps working. Read the returned messages and activity, then call workflow_block_messages with block_id and optional count (default 6, maximum 50) to check progress without starting another turn. For Run App blocks, pass action (start, status, kill, or tail) from the configured allowed actions. Status and tail do not need input; tail optionally accepts lines (1–10000). Read the structured app result: app.status is process status and app.output is log text for tail. For example: workflow_use_block({"block_id":"APP_BLOCK_ID","action":"status"}) or workflow_use_block({"block_id":"APP_BLOCK_ID","action":"tail","lines":100}). Skill blocks provide reusable instructions. Choose skills by their descriptions; call workflow_use_block with the skill block_id to load its instructions before applying them in your own session. Reuse loaded instructions for this workflow run. Timer blocks arm immediately and return without waiting, so you can continue your work. When a Timer fires, its follow connections receive the input you supplied to it. Reusing a waiting Timer replaces its countdown. Each AI block keeps its own context. Available paths: ${JSON.stringify(paths)}. ${paths.length ? "Call workflow_choose_path before finishing to choose one path." : ""}`;
+          const instructions = `${block.prompt}\n\nInput:\n{{input}}\n\nConnected tools: ${JSON.stringify(tools)}. Call workflow_use_block with block_id and input to use one; timeout_seconds optionally overrides its connection timeout. On a timed_out result the child keeps working. Read the returned messages and activity, then call workflow_block_messages with block_id and optional count (default 6, maximum 50) to check progress without starting another turn. For Run App blocks, pass action (start, status, kill, or tail) from the configured allowed actions. Status and tail do not need input; tail optionally accepts lines (1–10000). Read the structured app result: app.status is process status and app.output is log text for tail. For example: workflow_use_block({"block_id":"APP_BLOCK_ID","action":"status"}) or workflow_use_block({"block_id":"APP_BLOCK_ID","action":"tail","lines":100}). Task controls blocks manage task worktrees using their designed provider/model/reasoning. Call workflow_use_block with action create (branch required), create_and_start (input is the prompt; branch optional), status (task_id optional), prompt (task_id and input required), or set_status (task_id and status active or finished required). Pass idempotency_key for create and prompt operations and reuse it only when retrying the same operation. Read structured results in task_controls. Skill blocks provide reusable instructions. Choose skills by their descriptions; call workflow_use_block with the skill block_id to load its instructions before applying them in your own session. For linked skills, read the returned skill.content and resolve supporting files relative to skill.baseDirectory. Reuse loaded instructions for this workflow run. Timer blocks arm immediately and return without waiting, so you can continue your work. When a Timer fires, its follow connections receive the input you supplied to it. Reusing a waiting Timer replaces its countdown. Each AI block keeps its own context. Available paths: ${JSON.stringify(paths)}. ${paths.length ? "Call workflow_choose_path before finishing to choose one path." : ""}`;
           await this.executeBlock(run, { ...block, prompt: instructions }, blocks, [], execution.outputs, execution.dispatch, execution.defaultProvider, [input]);
           output = state.output ?? "";
           if (block.type !== "chatbox" && paths.length && !state.selectedRoute) throw new Error(`${block.label} finished without choosing a path`);
         } else if (block.type === "text" || block.type === "start_button") output = prompt;
-        else if (block.type === "skill") output = prompt;
+        else if (block.type === "skill") {
+          if (block.skillId) {
+            const caller = blocks.find((item) => item.id === ancestors.at(-1));
+            const loaded = await execution.dispatch(block, "", { runId: run.id, blockId: id, attemptId: crypto.randomUUID(), iteration: 1, skillAgent: caller?.agent ?? null, started: async () => {}, activity: async () => {}, assertActive: () => this.assertActive(run.id) });
+            output = loaded.messages.filter((message) => message.role === "assistant").at(-1)?.text ?? "";
+          } else output = prompt;
+        }
         else if (block.type === "markdown") output = block.prompt.trim() ? prompt : input;
         else if (block.type === "user_prompt" || block.type === "yes_no_prompt") {
           state.status = "awaiting_user_input"; state.question = prompt || input; state.pauseId = crypto.randomUUID(); state.sessionId = `flow:${id}`;
@@ -733,7 +744,7 @@ export class HarnessRunner {
           timers.set(id, input);
           this.log(state, "lifecycle", `Timer armed for ${state.waitingUntil}`);
           return `Timer armed for ${state.waitingUntil}`;
-        } else if (block.type === "script" || block.type === "run_app") {
+        } else if (block.type === "script" || block.type === "run_app" || block.type === "task_controls") {
           const session = await execution.dispatch(block, input, { runId: run.id, blockId: id, attemptId: crypto.randomUUID(), iteration: 1, started: async () => {}, activity: async () => {}, assertActive: () => this.assertActive(run.id) });
           state.tokens = session.tokens; this.assertTokenBudget(run);
           output = session.messages.filter((message) => message.role === "assistant").at(-1)?.text ?? "";
@@ -1328,5 +1339,9 @@ export function isolatedBlockDefinition(definition: HarnessDefinition, blockId: 
 
 /** Skill catalogues expose when to use a skill; its instructions load on demand. */
 function workflowBlockDescription(block: HarnessBlock | undefined): string | undefined {
-  return block?.type === "skill" ? block.description : block?.prompt;
+  return block?.type === "skill" ? block.description : block?.type === "task_controls" ? "Create tasks, check task and AI status, send prompts with the designed AI settings, and set tasks active or finished." : block?.prompt;
+}
+
+function taskControlsMetadata(block: HarnessBlock | undefined, defaultProvider: string) {
+  return block?.type === "task_controls" ? { actions: ["create", "create_and_start", "status", "prompt", "set_status"], provider: block.provider ?? defaultProvider, model: block.model, reasoning: block.reasoning } : undefined;
 }

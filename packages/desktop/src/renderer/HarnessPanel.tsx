@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useId, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type SetStateAction } from "react";
 import { ArrowLeftRight, ArrowUpDown, AlignStartHorizontal, AlignCenterHorizontal, AlignEndHorizontal, AlignStartVertical, AlignCenterVertical, AlignEndVertical, Bot, ClipboardPaste, Clock, Copy, Download, Eye, FileText, GripHorizontal, LayoutGrid, List, Map as MapIcon, Maximize, MessageSquare, Pencil, Play, Plus, Redo2, RotateCcw, Save, Send, Settings2, Square, Terminal, Trash2, Undo2, Upload, Workflow, X, ZoomIn, ZoomOut } from "lucide-react";
-import type { AgentFile, AiModel, AiProvider, AiProviderDescriptor, HarnessBlock, HarnessOperation, HarnessAppState, HarnessDataSchema, HarnessDefinition, HarnessRun, HarnessLogEntry, HarnessStateDiagnostic, HarnessValidationIssue } from "@remote-ide/protocol";
+import type { AgentFile, AiModel, AiProvider, AiProviderDescriptor, HarnessBlock, HarnessOperation, HarnessAppState, HarnessDataSchema, HarnessDefinition, HarnessRun, HarnessLogEntry, HarnessStateDiagnostic, HarnessValidationIssue, SkillCatalog } from "@remote-ide/protocol";
 import { useWorkflowTraces } from "./workflow-tracing";
 import { ModelPicker } from "./ModelPicker";
 import ReactMarkdown from "react-markdown";
@@ -15,6 +15,8 @@ export type HarnessPanelProps = {
   diagnostics?: HarnessStateDiagnostic[];
   providers: AiProviderDescriptor[];
   agents: AgentFile[];
+  skillCatalog?: SkillCatalog;
+  onRefreshSkills?(): Promise<void>;
   defaultProvider?: AiProvider;
   onLoadModels?(provider: AiProvider): Promise<AiModel[]>;
   onValidate?(harness: HarnessDefinition): Promise<{ valid: boolean; issues: HarnessValidationIssue[] }>;
@@ -38,7 +40,8 @@ export type HarnessPanelProps = {
   onError(message: string): void;
 };
 
-export function HarnessPanel({ designOnly = false, harnesses, runs, diagnostics = [], providers, agents, defaultProvider, onLoadModels, onValidate, onCreate, onRead, onSave, onDelete, onRun, onTestBlock, onKillApp, onReadApp, onChat, onAppendRun, onResolvePermission, onAnswerQuestion, onResumePause, onRetryPause, onCancelPause, onCancelRun, onDeleteRun, onError }: HarnessPanelProps) {
+export function HarnessPanel({ designOnly = false, harnesses, runs, diagnostics = [], providers, agents, skillCatalog, onRefreshSkills, defaultProvider, onLoadModels, onValidate, onCreate, onRead, onSave, onDelete, onRun, onTestBlock, onKillApp, onReadApp, onChat, onAppendRun, onResolvePermission, onAnswerQuestion, onResumePause, onRetryPause, onCancelPause, onCancelRun, onDeleteRun, onError }: HarnessPanelProps) {
+  useEffect(() => { if (onRefreshSkills) void onRefreshSkills().catch((error) => onError(String(error))); }, [onRefreshSkills]);
   const arrowMarkerId = `harness-arrow-${useId().replace(/:/g, "")}`;
   const [selectedId, setSelectedId] = useState<string>();
   const [draft, setDraftState] = useState<HarnessDefinition>();
@@ -196,7 +199,7 @@ export function HarnessPanel({ designOnly = false, harnesses, runs, diagnostics 
     setDraft({ ...draft, blocks: alignBlocks(draft.blocks, selectedBlockIds, alignment) });
   };
   const block = draft?.blocks.find((item) => item.id === selectedBlockId);
-  const blockProvider = block && ["ai", "chatbox", "prompt", "task", "review"].includes(block.type) ? block.provider ?? defaultProvider : undefined;
+  const blockProvider = block && ["ai", "chatbox", "task_controls", "prompt", "task", "review"].includes(block.type) ? block.provider ?? defaultProvider : undefined;
   const blockModels = blockProvider ? modelsByProvider[blockProvider] ?? [] : [];
   const selectedBlockModel = blockModels.find((model) => model.id === block?.model);
   useEffect(() => {
@@ -222,7 +225,7 @@ export function HarnessPanel({ designOnly = false, harnesses, runs, diagnostics 
     const timer = window.setTimeout(() => { void onValidate(draft).then((result) => { if (active) setRemoteValidationIssues(result.issues); }).catch((error) => { if (active) onError(error instanceof Error ? error.message : "Could not validate workflow"); }); }, 150);
     return () => { active = false; window.clearTimeout(timer); };
   }, [draft, onError, onValidate]);
-  const validationIssues = useMemo(() => [...remoteValidationIssues, ...availabilityIssues(draft, providers, agents, defaultProvider, modelsByProvider)], [agents, defaultProvider, draft, modelsByProvider, providers, remoteValidationIssues]);
+  const validationIssues = useMemo(() => [...remoteValidationIssues, ...availabilityIssues(draft, providers, agents, defaultProvider, modelsByProvider, skillCatalog)], [skillCatalog, agents, defaultProvider, draft, modelsByProvider, providers, remoteValidationIssues]);
   const validationAnnouncementKey = validationIssues.map((issue) => `${issue.code}:${issue.blockId ?? issue.edgeId ?? "workflow"}`).join("|");
   useEffect(() => {
     if (!draft) return;
@@ -347,8 +350,8 @@ export function HarnessPanel({ designOnly = false, harnesses, runs, diagnostics 
   const addBlock = (type: HarnessBlock["type"] = "ai") => {
     if (!draft) return;
     const id = crypto.randomUUID();
-    const next: HarnessBlock = { id, type, label: `${blockTypeLabels[type] ?? type} ${draft.blocks.length + 1}`, prompt: type === "start_button" ? "Start the workflow." : type === "skill" || type === "start_input" || type === "timer" || type === "script" || type === "run_app" || type === "chatbox" ? "" : "{{input}}", ...(type === "timer" ? { seconds: 60 } : {}), ...(type === "run_app" ? { app: { actions: ["start" as const], name: "app" } } : {}), position: { x: 32 + (draft.blocks.length % 3) * 220, y: 30 + Math.floor(draft.blocks.length / 3) * 170 } };
-    setDraft({ ...draft, blocks: [...draft.blocks, next] }); setSelectedBlockId(id); setSelectedBlockIds([id]);
+    const next: HarnessBlock = { id, type, label: `${blockTypeLabels[type] ?? type} ${draft.blocks.length + 1}`, prompt: type === "start_button" ? "Start the workflow." : type === "task_controls" || type === "skill" || type === "start_input" || type === "timer" || type === "script" || type === "run_app" || type === "chatbox" ? "" : "{{input}}", ...(type === "timer" ? { seconds: 60 } : {}), ...(type === "run_app" ? { app: { actions: ["start" as const], name: "app" } } : {}), position: { x: 32 + (draft.blocks.length % 3) * 220, y: 30 + Math.floor(draft.blocks.length / 3) * 170 } };
+    setDraft({ ...draft, blocks: [...draft.blocks, next] }); setSelectedBlockId(id); setSelectedBlockIds([id]); if (type === "task_controls") setTestInput('{"action":"status"}');
   };
   const duplicateBlock = () => {
     if (!draft || !block || mode !== "edit") return;
@@ -530,9 +533,18 @@ export function HarnessPanel({ designOnly = false, harnesses, runs, diagnostics 
       {block && mode === "view" && <BlockRunDetails key={`${run?.id}:${block.id}`} block={block} run={run} state={blockRun} tasks={run?.children?.filter((child) => child.blockId === block.id)} onClose={() => setSelectedBlockId(undefined)} onChat={onChat && !dirty ? async (message) => { const next = await onChat(draft.id, block.id, message, run?.id); setSelectedRunId(next.id); } : undefined} onCancelChat={run ? () => onCancelRun(run.id) : undefined} onReadApp={onReadApp && block.type === "run_app" ? () => onReadApp(draft.id, block.id, run?.id) : undefined} onKillApp={onKillApp && block.type === "run_app" ? () => onKillApp(draft.id, block.id, run?.id) : undefined} definition={draft} />}
       {block && mode === "edit" && <div className="harness-inspector"><header><strong>Block settings</strong><button title="Close block settings" onClick={() => setSelectedBlockId(undefined)}><X size={14} aria-hidden="true" /></button></header>
         <label>Name<input placeholder="Name this block…" value={block.label} onChange={(event) => updateBlock({ label: event.target.value })} /></label>
-        <label>Type<select aria-label="Block type" value={block.type} onChange={(event) => updateBlock({ type: event.target.value as HarnessBlock["type"], seconds: 60, ...(event.target.value === "run_app" ? { app: block.app ?? { actions: ["start" as const], name: "app" } } : {}), watchdog: undefined, join: undefined, routing: undefined, review: undefined, verification: undefined })}>{!flowBlockTypes.includes(block.type) && <option value={block.type}>Legacy {block.type}</option>}{flowBlockTypes.map((type) => <option key={type} value={type}>{blockTypeLabels[type]}</option>)}</select></label>
-        {["ai", "chatbox", "prompt", "task", "review"].includes(block.type) && <><div className="harness-fields"><label>Provider<select value={block.provider ?? ""} onChange={(event) => updateBlock({ provider: event.target.value || undefined, model: undefined, reasoning: undefined })}><option value="">Default</option>{providers.map((provider) => <option key={provider.id} value={provider.id}>{provider.name}</option>)}</select></label><ModelPicker models={blockModels} value={block.model ?? ""} label="AI model" onChange={(model) => { const selected = blockModels.find((item) => item.id === model); updateBlock({ model, reasoning: selected?.defaultReasoning || undefined }); }} /></div>{selectedBlockModel?.reasoningLevels.length ? <label>Reasoning effort<select aria-label="Workflow reasoning effort" value={block.reasoning ?? selectedBlockModel.defaultReasoning} onChange={(event) => updateBlock({ reasoning: event.target.value })}>{selectedBlockModel.reasoningLevels.map((level) => <option key={level} value={level} title={selectedBlockModel.reasoningDescriptions?.[level]}>{level}</option>)}</select></label> : null}<label>Agent preset<select value={block.agent ? `${block.agent.scope}:${block.agent.name}` : ""} onChange={(event) => { const agent = agents.find((item) => `${item.scope}:${item.name}` === event.target.value); updateBlock({ agent: agent ? { scope: agent.scope, name: agent.name } : undefined }); }}><option value="">None</option>{agents.map((item) => <option key={`${item.scope}:${item.name}`} value={`${item.scope}:${item.name}`}>{item.agent.name}</option>)}</select></label><small>{block.type === "chatbox" ? "Keeps one conversation per run. Open its details in View / Run to chat and use connected blocks." : "One context per AI Agent in each run. Use connected blocks through MCP; choose a path before finishing."}</small></>}
-        {block.type === "skill" && <><label>Description<textarea aria-label="Skill description" placeholder="Describe when an agent should use this skill…" rows={3} value={block.description ?? ""} onChange={(event) => updateBlock({ description: event.target.value })} /></label><small>Connect an AI Agent to this block with Use, or connect it to a Chatbox. Agents see the description and load the instructions when relevant.</small></>}
+        <label>Type<select aria-label="Block type" value={block.type} onChange={(event) => updateBlock({ type: event.target.value as HarnessBlock["type"], seconds: 60, ...(event.target.value === "task_controls" ? { agent: undefined, prompt: "" } : {}), ...(event.target.value === "run_app" ? { app: block.app ?? { actions: ["start" as const], name: "app" } } : {}), watchdog: undefined, join: undefined, routing: undefined, review: undefined, verification: undefined, ...(event.target.value !== "skill" ? { skillId: undefined } : {}) })}>{!flowBlockTypes.includes(block.type) && <option value={block.type}>Legacy {block.type}</option>}{flowBlockTypes.map((type) => <option key={type} value={type}>{blockTypeLabels[type]}</option>)}</select></label>
+        {["ai", "chatbox", "task_controls", "prompt", "task", "review"].includes(block.type) && <><div className="harness-fields"><label>Provider<select value={block.provider ?? ""} onChange={(event) => updateBlock({ provider: event.target.value || undefined, model: undefined, reasoning: undefined })}><option value="">Default</option>{providers.map((provider) => <option key={provider.id} value={provider.id}>{provider.name}</option>)}</select></label><ModelPicker models={blockModels} value={block.model ?? ""} label="AI model" onChange={(model) => { const selected = blockModels.find((item) => item.id === model); updateBlock({ model, reasoning: selected?.defaultReasoning || undefined }); }} /></div>{selectedBlockModel?.reasoningLevels.length ? <label>Reasoning effort<select aria-label="Workflow reasoning effort" value={block.reasoning ?? selectedBlockModel.defaultReasoning} onChange={(event) => updateBlock({ reasoning: event.target.value })}>{selectedBlockModel.reasoningLevels.map((level) => <option key={level} value={level} title={selectedBlockModel.reasoningDescriptions?.[level]}>{level}</option>)}</select></label> : null}{block.type !== "task_controls" && <><label>Agent preset<select value={block.agent ? `${block.agent.scope}:${block.agent.name}` : ""} onChange={(event) => { const agent = agents.find((item) => `${item.scope}:${item.name}` === event.target.value); updateBlock({ agent: agent ? { scope: agent.scope, name: agent.name } : undefined }); }}><option value="">None</option>{agents.map((item) => <option key={`${item.scope}:${item.name}`} value={`${item.scope}:${item.name}`}>{item.agent.name}</option>)}</select></label><small>{block.type === "chatbox" ? "Keeps one conversation per run. Open its details in View / Run to chat and use connected blocks." : "One context per AI Agent in each run. Use connected blocks through MCP; choose a path before finishing."}</small></>}</>}
+        {block.type === "task_controls" && <small>Connect with Use to an AI Agent, or connect to a Chatbox. Actions: create, create_and_start, status, prompt, and set_status (active or finished). Prompts use the provider, model, and reasoning above. Direct runs accept a JSON object, for example {'{"action":"status"}'}.</small>}
+        {block.type === "skill" && <>
+          <label>Existing skill<select aria-label="Existing skill" value={block.skillId ?? ""} onChange={(event) => {
+            const selected = skillCatalog?.skills.find((skill) => skill.id === event.target.value);
+            updateBlock(selected ? { skillId: selected.id, label: selected.title, description: selected.description ?? selected.title, prompt: "" } : { skillId: undefined, description: "", prompt: "" });
+          }}><option value="">Custom instructions</option>{block.skillId && !skillCatalog?.skills.some((skill) => skill.id === block.skillId) && <option value={block.skillId}>Unavailable: {block.skillId}</option>}{skillCatalog?.skills.map((skill) => <option key={skill.id} value={skill.id} disabled={!skillCatalog.policy.allowed.includes(skill.id)}>{skill.title} ({skill.scope})</option>)}</select></label>
+          {onRefreshSkills && <button title="Refresh workflow skills" onClick={() => void onRefreshSkills().catch((error) => onError(String(error)))}>Refresh skills</button>}
+          {block.skillId ? <><small>Linked skill: {block.skillId}. Its current instructions load when used. Supporting files stay with the skill.</small><p>{skillCatalog?.skills.find((skill) => skill.id === block.skillId)?.description ?? block.description}</p></> : <label>Description<textarea aria-label="Skill description" placeholder="Describe when an agent should use this skill…" rows={3} value={block.description ?? ""} onChange={(event) => updateBlock({ description: event.target.value })} /></label>}
+          <small>Connect an AI Agent to this block with Use, or connect it to a Chatbox. Agents see the description and load the instructions when relevant.</small>
+        </>}
         {block.type === "timer" && <><label>Delay in seconds<input aria-label="Timer seconds" type="number" min="0" max="86400" value={block.seconds ?? 60} onChange={(event) => updateBlock({ seconds: Number(event.target.value) })} /></label><small>Using this block arms its countdown and returns immediately. When it fires, its follow connections receive the input used to arm it.</small></>}
         {onTestBlock && <><label>Test input<textarea aria-label="Block test input" value={testInput} onChange={(event) => setTestInput(event.target.value)} /></label><small>Tests the current draft with connected tools. Follow steps are skipped.</small></>}
         {block.type === "run_app" && <>
@@ -547,7 +559,7 @@ export function HarnessPanel({ designOnly = false, harnesses, runs, diagnostics 
           <small>Keep the app in the foreground (no &amp;). Apps with the same name are shared within this workspace and stay alive after the workflow finishes. An already running app is reused.</small>
         </>}
         {block.type === "script" && <><label>Shell script<textarea placeholder="e.g. git status --short" aria-label="Shell script" rows={6} value={block.command ?? ""} onChange={(event) => updateBlock({ command: event.target.value })} /></label><small>Runs in the Core workspace. Input arrives on stdin and in VIBE_WORKFLOW_INPUT. Stdout becomes this block’s output.</small></>}
-        {!["timer", "script", "run_app", "start_input"].includes(block.type) && <label>{block.type === "markdown" ? "Markdown (blank uses input)" : block.type === "text" ? "Text" : ["user_prompt", "yes_no_prompt"].includes(block.type) ? "Question" : block.type === "start_button" ? "Start prompt" : "Instructions"}<textarea placeholder={block.type === "skill" ? "Write the instructions the agent should follow when using this skill…" : block.type === "markdown" ? "Write Markdown, or leave blank to use the incoming text…" : block.type === "text" ? "Enter text to pass to the next block…" : ["user_prompt", "yes_no_prompt"].includes(block.type) ? "What would you like to ask?" : block.type === "start_button" ? "Enter the prompt that starts this workflow…" : "Describe what this agent should do. Use {{input}} for incoming text…"} aria-label="Block prompt" rows={5} value={block.prompt} onChange={(event) => updateBlock({ prompt: event.target.value })} /></label>}
+        {!(block.type === "skill" && block.skillId) && !["task_controls", "timer", "script", "run_app", "start_input"].includes(block.type) && <label>{block.type === "markdown" ? "Markdown (blank uses input)" : block.type === "text" ? "Text" : ["user_prompt", "yes_no_prompt"].includes(block.type) ? "Question" : block.type === "start_button" ? "Start prompt" : "Instructions"}<textarea placeholder={block.type === "skill" ? "Write the instructions the agent should follow when using this skill…" : block.type === "markdown" ? "Write Markdown, or leave blank to use the incoming text…" : block.type === "text" ? "Enter text to pass to the next block…" : ["user_prompt", "yes_no_prompt"].includes(block.type) ? "What would you like to ask?" : block.type === "start_button" ? "Enter the prompt that starts this workflow…" : "Describe what this agent should do. Use {{input}} for incoming text…"} aria-label="Block prompt" rows={5} value={block.prompt} onChange={(event) => updateBlock({ prompt: event.target.value })} /></label>}
         <details><summary>Data schemas</summary><SchemaEditor title="Input schema" schema={block.inputSchema} onChange={(inputSchema) => updateBlock({ inputSchema })} /><SchemaEditor title="Output schema" schema={block.outputSchema} onChange={(outputSchema) => updateBlock({ outputSchema })} /></details>
         <small>Follow connections pass this block’s output into the next block. Templates support {'{{input}}'} and {'{{blocks.ID.output}}'}.</small>
       </div>}
@@ -824,11 +836,12 @@ const BLOCK_WIDTH = 176;
 const BLOCK_HEIGHT = 116;
 const activeRunStatuses = new Set<HarnessRun["status"]>(["queued", "running", "waiting", "awaiting_permission", "awaiting_user_input", "waiting_timer", "retry_scheduled"]);
 
-function availabilityIssues(draft: HarnessDefinition | undefined, providers: AiProviderDescriptor[], agents: AgentFile[], defaultProvider: AiProvider | undefined, modelsByProvider: Record<string, AiModel[]>): HarnessValidationIssue[] {
+function availabilityIssues(draft: HarnessDefinition | undefined, providers: AiProviderDescriptor[], agents: AgentFile[], defaultProvider: AiProvider | undefined, modelsByProvider: Record<string, AiModel[]>, skillCatalog?: SkillCatalog): HarnessValidationIssue[] {
   if (!draft) return [];
   const issues: HarnessValidationIssue[] = [];
   for (const block of draft.blocks) {
-    if (flowBlockTypes.includes(block.type) && !["ai", "chatbox"].includes(block.type)) continue;
+    if (block.type === "skill" && block.skillId && skillCatalog && (!skillCatalog.skills.some((skill) => skill.id === block.skillId) || !skillCatalog.policy.allowed.includes(block.skillId))) issues.push({ code: "invalid-gate", blockId: block.id, message: `Skill '${block.skillId}' is missing or not allowed in this project` });
+    if (flowBlockTypes.includes(block.type) && !["ai", "chatbox", "task_controls"].includes(block.type)) continue;
     const provider = block.provider ?? defaultProvider;
     if (provider && providers.length && !providers.some((item) => item.id === provider)) issues.push({ code: "unavailable-provider", blockId: block.id, message: `Block '${block.label || block.id}' uses unavailable provider '${provider}'` });
     const models = provider ? modelsByProvider[provider] : undefined;
@@ -839,6 +852,7 @@ function availabilityIssues(draft: HarnessDefinition | undefined, providers: AiP
 }
 
 function executionBehavior(block: HarnessBlock, edges: HarnessDefinition["edges"]): string {
+  if (block.type === "task_controls") return "Connected agents can create tasks, check status, send prompts using this block’s AI settings, and mark tasks active or finished. Empty direct input lists task status; other direct actions accept JSON.";
   if (block.type === "skill") return "Connected agents see this skill’s description and load its instructions on demand. The agent follows the instructions in its own session.";
   if (block.type === "chatbox") return "Open this block in View / Run to chat. Each conversation keeps its context and can invoke every outgoing connected block on demand.";
   if (flowBlockTypes.includes(block.type)) return `Follow connections pass output to each follower. ${edges.some((edge) => edge.from === block.id && edge.type === "use") ? "Use connections make blocks available as MCP tools. " : ""}${edges.some((edge) => edge.from === block.id && edge.type === "path") ? "The AI chooses one path, which receives its final output." : ""}`;
@@ -1043,10 +1057,10 @@ function edgeGeometry(from: HarnessBlock, to: HarnessBlock, loop = false, lane =
   return cubicEdge(fromCenter.x, startY, fromCenter.x, startY + direction * bend, toCenter.x, endY - direction * bend, toCenter.x, endY);
 }
 
-const flowBlockTypes: HarnessBlock["type"][] = ["ai", "chatbox", "skill", "text", "timer", "user_prompt", "yes_no_prompt", "markdown", "script", "run_app", "start_button", "start_input"];
-const blockTypeLabels: Partial<Record<HarnessBlock["type"], string>> = { ai: "AI Agent", chatbox: "Chatbox", skill: "SKILL", text: "Text input", timer: "Timer", user_prompt: "User Prompt", yes_no_prompt: "Yes/No Prompt", markdown: "Markdown document", script: "Script execution", run_app: "Run App", start_button: "Start button", start_input: "Start with text" };
+const flowBlockTypes: HarnessBlock["type"][] = ["ai", "chatbox", "skill", "task_controls", "text", "timer", "user_prompt", "yes_no_prompt", "markdown", "script", "run_app", "start_button", "start_input"];
+const blockTypeLabels: Partial<Record<HarnessBlock["type"], string>> = { ai: "AI Agent", chatbox: "Chatbox", skill: "SKILL", task_controls: "Task controls", text: "Text input", timer: "Timer", user_prompt: "User Prompt", yes_no_prompt: "Yes/No Prompt", markdown: "Markdown document", script: "Script execution", run_app: "Run App", start_button: "Start button", start_input: "Start with text" };
 
 function WorkflowBlockIcon({ type }: { type: HarnessBlock["type"] }) {
-  const Icon = type === "ai" || ["prompt", "task", "review"].includes(type) ? Bot : type === "chatbox" ? MessageSquare : type === "timer" ? Clock : type === "script" || type === "run_app" ? Terminal : type === "markdown" || type === "text" || type === "skill" ? FileText : type === "user_prompt" || type === "yes_no_prompt" ? MessageSquare : Play;
+  const Icon = type === "ai" || ["prompt", "task", "review"].includes(type) ? Bot : type === "chatbox" ? MessageSquare : type === "timer" ? Clock : type === "script" || type === "run_app" || type === "task_controls" ? Terminal : type === "markdown" || type === "text" || type === "skill" ? FileText : type === "user_prompt" || type === "yes_no_prompt" ? MessageSquare : Play;
   return <Icon size={14} aria-hidden="true" />;
 }

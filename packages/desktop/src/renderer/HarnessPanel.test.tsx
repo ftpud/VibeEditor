@@ -12,6 +12,46 @@ function renderEditor(ui: Parameters<typeof render>[0]) {
 }
 
 describe("HarnessPanel", () => {
+  it("links an existing skill from the catalogue and can return to custom instructions", async () => {
+    const harness: HarnessDefinition = { id: "flow", name: "Flow", version: 1, createdAt: "now", updatedAt: "now", blocks: [{ id: "skill", type: "skill", label: "Skill", description: "Custom", prompt: "Custom instructions", position: { x: 0, y: 0 } }], edges: [] };
+    const skillCatalog = { skills: [{ id: "workspace/review", scope: "workspace" as const, name: "review", title: "Reviewer", description: "Review code changes", path: "/project/.agents/skills/review/SKILL.md" }, { id: "global/blocked", scope: "global" as const, name: "blocked", title: "Blocked", path: "/skills/blocked/SKILL.md" }], policy: { allowed: ["workspace/review"], defaults: [] } };
+    const onSave = vi.fn(async (value) => value);
+    const onRefreshSkills = vi.fn(async () => {});
+    render(<HarnessPanel designOnly harnesses={[harness]} runs={[]} providers={[]} agents={[]} skillCatalog={skillCatalog} onRefreshSkills={onRefreshSkills} onCreate={vi.fn()} onSave={onSave} onDelete={vi.fn()} onRun={vi.fn()} onCancelRun={vi.fn()} onError={vi.fn()} />);
+    fireEvent.click(await screen.findByText("Skill"));
+    expect(screen.getByRole("option", { name: "Blocked (global)" })).toHaveProperty("disabled", true);
+    fireEvent.change(screen.getByLabelText("Existing skill"), { target: { value: "workspace/review" } });
+    expect(screen.queryByLabelText("Block prompt")).toBeNull();
+    expect(screen.getAllByText("Review code changes").length).toBeGreaterThan(0);
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ blocks: [expect.objectContaining({ skillId: "workspace/review", description: "Review code changes", prompt: "" })] })));
+    expect(parseWorkflowDefinitionImport(workflowDefinitionExport(onSave.mock.calls[0]![0])).blocks[0]?.skillId).toBe("workspace/review");
+    fireEvent.click(screen.getByTitle("Refresh workflow skills"));
+    expect(onRefreshSkills).toHaveBeenCalledTimes(2);
+    fireEvent.change(screen.getByLabelText("Existing skill"), { target: { value: "" } });
+    expect(screen.getByLabelText("Block prompt")).toBeTruthy();
+    expect(screen.getByLabelText("Skill description")).toBeTruthy();
+  });
+
+  it("adds Task controls and saves its provider, model, and reasoning", async () => {
+    const harness: HarnessDefinition = { id: "flow", name: "Flow", version: 1, createdAt: "now", updatedAt: "now", blocks: [], edges: [] };
+    const onSave = vi.fn(async (value) => value);
+    const onLoadModels = vi.fn().mockResolvedValue([{ id: "worker-model", name: "Worker Model", defaultReasoning: "low", reasoningLevels: ["low", "high"] }]);
+    const providers = [{ id: "worker", name: "Worker", options: [], capabilities: {} }] as unknown as Parameters<typeof HarnessPanel>[0]["providers"];
+    render(<HarnessPanel designOnly harnesses={[harness]} runs={[]} providers={providers} agents={[]} defaultProvider="worker" onLoadModels={onLoadModels} onCreate={vi.fn()} onSave={onSave} onDelete={vi.fn()} onRun={vi.fn()} onCancelRun={vi.fn()} onError={vi.fn()} />);
+    fireEvent.change(await screen.findByLabelText("Add block type"), { target: { value: "task_controls" } });
+    fireEvent.change(screen.getByLabelText("Provider"), { target: { value: "worker" } });
+    expect(screen.queryByLabelText("Agent preset")).toBeNull();
+    expect(screen.queryByLabelText("Block prompt")).toBeNull();
+    await waitFor(() => expect(onLoadModels).toHaveBeenCalledWith("worker"));
+    fireEvent.click(screen.getByRole("button", { name: "AI model" }));
+    fireEvent.click(await screen.findByRole("option", { name: /Worker Model/ }));
+    fireEvent.change(screen.getByLabelText("Workflow reasoning effort"), { target: { value: "high" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ blocks: [expect.objectContaining({ type: "task_controls", provider: "worker", model: "worker-model", reasoning: "high", prompt: "" })] })));
+    expect(parseWorkflowDefinitionImport(workflowDefinitionExport(onSave.mock.calls[0]![0])).blocks[0]).toMatchObject({ type: "task_controls", provider: "worker", model: "worker-model", reasoning: "high" });
+  });
+
   it("shows a skill’s description and loaded instructions in run details", () => {
     const block: HarnessBlock = { id: "skill", type: "skill", label: "Code review", description: "Use when reviewing code", prompt: "Inspect the diff", position: { x: 0, y: 0 } };
     render(<BlockRunDetails block={block} state={{ blockId: block.id, status: "succeeded", output: "Inspect the diff" }} onClose={vi.fn()} />);

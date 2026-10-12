@@ -172,9 +172,19 @@ export class SkillsStore {
   async load(workspace: string, id: string, session: AiSession): Promise<{ id: string; revision: string; baseDirectory: string; content: string }> {
     const catalogue = session.skillCatalogue;
     if (!catalogue || catalogue.threadId !== session.threadId || !catalogue.entries.some((skill) => skill.id === id)) throw new CoreError("INVALID_REQUEST", "Skill is not available in this conversation's current turn");
+    return this.loadAllowed(workspace, id, session.agentPreset);
+  }
+
+  /** Workflow references are enabled by the graph, with the same live project/agent policy. */
+  async loadForWorkflow(workspace: string, id: string, agent?: AiAgentPreset | null): Promise<{ id: string; revision: string; baseDirectory: string; content: string }> {
+    const [resolved] = await this.validateSelection(workspace, [id], agent);
+    return this.loadAllowed(workspace, resolved!, agent);
+  }
+
+  private async loadAllowed(workspace: string, id: string, agent?: AiAgentPreset | null): Promise<{ id: string; revision: string; baseDirectory: string; content: string }> {
     const catalog = await this.list(workspace);
     const skill = catalog.skills.find((skill) => skill.id === id);
-    if (!skill || !skillAllowedForAgent(catalog.policy, id, session.agentPreset)) throw new CoreError("INVALID_REQUEST", "Skill is missing or no longer allowed for this agent");
+    if (!skill || !skillAllowedForAgent(catalog.policy, id, agent)) throw new CoreError("INVALID_REQUEST", "Skill is missing or no longer allowed for this agent");
     const content = await this.read(id, workspace);
     return { id, revision: crypto.createHash("sha256").update(`${skill.path}\0${content}`).digest("hex"), baseDirectory: path.dirname(skill.path), content };
   }

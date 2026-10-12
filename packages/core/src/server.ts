@@ -23,6 +23,8 @@ import { ensureSelfConfiguration } from "./self-configuration.js";
 import { SkillsStore } from "./skills.js";
 import { AgentsStore } from "./agents.js";
 import { HarnessStore } from "./harnesses.js";
+import { prepareWorkflowSkills, executeWorkflowSkill, workflowSessionSkillIds } from "./workflow-skills.js";
+import { executeTaskControls } from "./workflow-task-controls.js";
 import { executeFlowScript } from "./workflow-script.js";
 import { WorkflowAppService } from "./workflow-app.js";
 import { HarnessRunner } from "./harness-runner.js";
@@ -160,6 +162,8 @@ export async function createServer(host: string, port: number, workspacePath: st
     const resolved = path.resolve(target); const known = workspaceOwners.get(resolved); if (known) return known;
     const direct = roots.list().filter((root) => resolved === root.path || resolved.startsWith(`${root.path}${path.sep}`)).sort((left, right) => right.path.length - left.path.length)[0];
     if (direct) { workspaceOwners.set(resolved, direct.id); return direct.id; }
+    const canonical = await realpath(resolved).catch(() => resolved);
+    if (canonical !== resolved) { const rootId = await ownerRootId(canonical); if (rootId) { workspaceOwners.set(resolved, rootId); return rootId; } }
     for (const [rootId, context] of rootContexts) { const registry = await context.tasks.list(); if (registry.tasks.some((task) => path.resolve(context.tasks.taskPath(task.id)) === resolved)) { workspaceOwners.set(resolved, rootId); return rootId; } }
     return undefined;
   };
@@ -268,8 +272,10 @@ export async function createServer(host: string, port: number, workspacePath: st
   const recoveryDispatch = async (block: HarnessBlock, prompt: string, runtime: Parameters<Parameters<HarnessRunner["start"]>[2]>[2]) => providerOperation(async () => {
     const run = (await harnesses.runs()).find((item) => item.id === runtime.runId);
     const workspace = await workflowRunWorkspace(run, rootWorkspace);
+    if (block.type === "skill" && block.skillId) return executeWorkflowSkill(block, new SkillsStore(undefined, rootWorkspace), workspace, runtime);
     if (block.type === "script") return executeFlowScript(block, prompt, workspace, runtime.assertActive);
     if (block.type === "run_app") return workflowApps.execute(block, prompt, workspace, runtime.assertActive);
+    if (block.type === "task_controls") return executeTaskControls(block, prompt, { acp, tasks, agents, harnessRunner: recoveryRunner, aiTimers, rootWorkspace, bridgeWorkspace: rootWorkspace, workspacePath: workspace, defaultProvider: "codex" }, runtime);
     const provider = acp.get(block.provider ?? "codex");
     await assertWorkflowModelAvailable(provider, block.model, block.reasoning);
     if (block.watchdog) return recoveryRunner.watch(runtime.runId, runtime.blockId, () => provider.usage());
@@ -281,7 +287,8 @@ export async function createServer(host: string, port: number, workspacePath: st
     const mcpServers = [...appTools.servers.filter((server) => server.name !== workflowTools.name), workflowTools];
     const workflowAgent = appTools.agent ? { ...appTools.agent, mcpServers: [...new Set([...(appTools.agent.mcpServers ?? []), workflowTools.name])] } : undefined;
     const autopilot = findAutopilotOption(provider.descriptor.options); const configuration = { ...(block.model ? { model: block.model } : {}), ...(block.reasoning ? { reasoning: block.reasoning } : {}), ...(autopilot ? { [autopilot.option.id]: autopilot.on } : {}) };
-    runtime.assertActive(); await provider.startFreshSession(sessionWorkspace, { prompt, configuration, mcpServers, agent: workflowAgent, ...(block.agent ? { agentPreset: block.agent } : {}) }); runtime.assertActive();
+    const skillIds = await workflowSessionSkillIds(run?.definition, block, new SkillsStore(undefined, rootWorkspace), workspace);
+    runtime.assertActive(); await provider.startFreshSession(sessionWorkspace, { prompt, configuration, mcpServers, ...(skillIds ? { skillIds } : {}), agent: workflowAgent, ...(block.agent ? { agentPreset: block.agent } : {}) }); runtime.assertActive();
     return settleWorkflowSession(provider, sessionWorkspace, aiTimers, undefined, () => recoveryRunner.isActive(runtime.runId), runtime.activity);
   });
   const recoveryAppend: NonNullable<Parameters<HarnessRunner["start"]>[4]> = async (block, prompt, runtime) => providerOperation(async () => {
@@ -1142,8 +1149,10 @@ export async function startWorkflow(input: ProtocolOperations["harnesses.run"]["
   const previousRun = previousRunId ? await harnessRunner.readRun(previousRunId) : undefined;
   const workspacePath = await workflowRunWorkspace(previousRun, context.workspacePath);
   const dispatch: Parameters<HarnessRunner["start"]>[2] = async (block, prompt, runtime) => providerOperation(async () => {
+      if (block.type === "skill" && block.skillId) return executeWorkflowSkill(block, new SkillsStore(undefined, rootWorkspace), workspacePath, runtime);
       if (block.type === "script") return executeFlowScript(block, prompt, workspacePath, runtime.assertActive);
       if (block.type === "run_app") return workflowApps.execute(block, prompt, workspacePath, runtime.assertActive);
+      if (block.type === "task_controls") return executeTaskControls(block, prompt, { ...context, workspacePath, defaultProvider: input.provider ?? "codex" }, runtime);
       if (block.type === "verification") return runWorkflowVerification(block, workspacePath, harnessRunner, runtime);
       if (block.type === "review") {
         const evidence = await collectWorkflowReviewEvidence(block, workspacePath, harnessRunner, runtime);
@@ -1174,8 +1183,9 @@ export async function startWorkflow(input: ProtocolOperations["harnesses.run"]["
       const workflowAgent = appTools.agent ? { ...appTools.agent, mcpServers: [...new Set([...(appTools.agent.mcpServers ?? []), workflowTools.name])] } : undefined;
       const autopilot = findAutopilotOption(provider.descriptor.options);
       const configuration = { ...(block.model ? { model: block.model } : {}), ...(block.reasoning ? { reasoning: block.reasoning } : {}), ...(autopilot ? { [autopilot.option.id]: autopilot.on } : {}) };
+      const skillIds = await workflowSessionSkillIds((await harnessRunner.readRun(runtime.runId))?.definition, block, new SkillsStore(undefined, rootWorkspace), workspacePath);
       runtime.assertActive();
-      try { await provider.startFreshSession(sessionWorkspace, { prompt, configuration, mcpServers, agent: workflowAgent, ...(block.agent ? { agentPreset: block.agent } : {}) }); runtime.assertActive(); }
+      try { await provider.startFreshSession(sessionWorkspace, { prompt, configuration, mcpServers, ...(skillIds ? { skillIds } : {}), agent: workflowAgent, ...(block.agent ? { agentPreset: block.agent } : {}) }); runtime.assertActive(); }
       catch (error) { runtime.assertActive(); if (!block.watchdog) throw error; console.error("[core] Watchdog startup failed; scheduling recovery", error); }
       return settleWorkflowSession(provider, sessionWorkspace, aiTimers, block.watchdog ? runtime : undefined, () => harnessRunner.isActive(runtime.runId), runtime.activity);
     });
@@ -1190,7 +1200,7 @@ export async function startWorkflow(input: ProtocolOperations["harnesses.run"]["
     });
   return input.chatRunId
     ? harnessRunner.continueChat(input.chatRunId, input.startBlockId!, input.input, dispatch, input.provider ?? "codex", append)
-    : harnessRunner.start(input.harnessId, input.input, dispatch, input.provider, append, input.startBlockId, input.rerunRunId, input.testDefinition, workspacePath);
+    : harnessRunner.start(input.harnessId, input.input, dispatch, input.provider, append, input.startBlockId, input.rerunRunId, input.testDefinition, workspacePath, (definition) => prepareWorkflowSkills(definition, new SkillsStore(undefined, rootWorkspace), workspacePath));
 }
 
 export async function workflowRunWorkspace(run: import("@remote-ide/protocol").HarnessRun | undefined, fallback: string): Promise<string> {

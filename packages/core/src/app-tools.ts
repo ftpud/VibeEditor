@@ -200,6 +200,8 @@ export const appToolDefinitions = [
         task_id: { type: "string", description: "Task id returned by task_create or task_list." },
         provider: { type: "string", description: "AI provider that owns the task conversation." },
         prompt: { type: "string", description: "Follow-up instructions for the task's agent." },
+        model: { type: "string", minLength: 1, description: "Model for the next idle task turn. Omit to retain the current model." },
+        reasoning: { type: "string", minLength: 1, description: "Reasoning effort for the next idle task turn. Omit to retain the current effort." },
         idempotency_key: { type: "string", minLength: 1, maxLength: 200, description: "Stable unique key for this prompt delivery. Reuse it only when retrying the same prompt." }
       },
       required: ["task_id", "provider", "prompt"]
@@ -408,7 +410,7 @@ export class AppToolService {
     if (name === "task_list") {
       const registry = await this.tasks.list();
       const providers = this.acp.list();
-      const tasks = await Promise.all(registry.tasks.map(async (task) => ({ ...task, ...await this.status(task) })));
+      const tasks = await Promise.all(registry.tasks.map(async (task) => ({ ...task, task_status: task.status, ...await this.status(task) })));
       return { tasks };
     }
     if (name === "task_merge") {
@@ -451,9 +453,22 @@ export class AppToolService {
       const manager = this.acp.get(provider);
       const workspace = this.tasks.taskPath(task.id);
       const current = await manager.get(workspace);
-      const session = current.status === "in_progress" || current.status === "user_prompt"
+      const model = optionalString(args, "model");
+      const reasoning = optionalString(args, "reasoning");
+      if (model !== undefined) {
+        const selected = (await manager.models()).find((item) => item.id === model && item.available !== false);
+        if (!selected) throw new Error(`Model '${model}' is unavailable for the selected provider`);
+      }
+      if (reasoning !== undefined) await validateReasoning(await manager.models(), model ?? current.model, reasoning);
+      const running = current.status === "in_progress" || current.status === "user_prompt";
+      if (running && ((model !== undefined && model !== current.model) || (reasoning !== undefined && reasoning !== current.reasoning))) throw new Error("Wait for the task's current AI turn to finish before changing its model or reasoning");
+      await this.workflow?.registerChild?.(task.id, provider, workspace);
+      const configuration: AiConfiguration = { ...(current.configuration ?? { model: current.model, reasoning: current.reasoning }) };
+      if (model !== undefined) { if (model !== current.model) delete configuration.reasoning; configuration.model = model; }
+      if (reasoning !== undefined) configuration.reasoning = reasoning;
+      const session = running
         ? await manager.steer(workspace, prompt)
-        : await manager.send(workspace, { prompt, configuration: current.configuration ?? { model: current.model, reasoning: current.reasoning } });
+        : await manager.send(workspace, { prompt, configuration });
       return { task_id: task.id, provider, session: { status: session.status, model: session.model } };
     }
     if (name === "set_commit_message") {
@@ -627,7 +642,7 @@ function requiredCommitMessage(args: Record<string, unknown>, key: string): stri
 
 export const flowToolDefinitions = [
   { name: "workflow_connections", description: "List blocks connected to this AI Agent and their use, follow, or path connection types.", inputSchema: { type: "object", properties: {} } },
-  { name: "workflow_use_block", description: "Use a connected block. For Run App, pass action to choose one of its allowed actions: start, status, kill, or tail. Input is optional (defaults to empty). For tail, lines optionally selects the last 1–10000 log lines. The result includes structured app state and logs in app, as well as the original output string. Timer blocks arm their configured countdown and return immediately; when they fire, their follow connections receive the supplied input. Other blocks return their output when done. timeout_seconds overrides the connection timeout (default 300 seconds, maximum 86400). On timeout the child keeps working; the result includes status timed_out, recent messages, and activity. Use workflow_block_messages to check its progress without sending another prompt. An AI block continues its own existing context.", inputSchema: { type: "object", properties: { block_id: { type: "string" }, timeout_seconds: { type: "number", exclusiveMinimum: 0, maximum: 86400 }, input: { type: "string" }, action: { type: "string", enum: ["start", "status", "kill", "tail"] }, lines: { type: "integer", minimum: 1, maximum: 10000 } }, required: ["block_id"] } },
+  { name: "workflow_use_block", description: "Use a connected block. For Task controls, actions are create (branch), create_and_start (input prompt, optional branch), status (optional task_id), prompt (task_id and input prompt), and set_status (task_id and status active or finished). Provider, model and reasoning come from the block design. Results are in task_controls. For Run App, pass action to choose one of its allowed actions: start, status, kill, or tail. Input is optional (defaults to empty). For tail, lines optionally selects the last 1–10000 log lines. The result includes structured app state and logs in app, as well as the original output string. Timer blocks arm their configured countdown and return immediately; when they fire, their follow connections receive the supplied input. Other blocks return their output when done. timeout_seconds overrides the connection timeout (default 300 seconds, maximum 86400). On timeout the child keeps working; the result includes status timed_out, recent messages, and activity. Use workflow_block_messages to check its progress without sending another prompt. An AI block continues its own existing context.", inputSchema: { type: "object", properties: { block_id: { type: "string" }, timeout_seconds: { type: "number", exclusiveMinimum: 0, maximum: 86400 }, input: { type: "string" }, action: { type: "string", enum: ["start", "status", "kill", "tail", "create", "create_and_start", "prompt", "set_status"] }, task_id: { type: "string" }, branch: { type: "string" }, status: { type: "string", enum: ["active", "finished"] }, idempotency_key: { type: "string", minLength: 1, maxLength: 200 }, lines: { type: "integer", minimum: 1, maximum: 10000 } }, required: ["block_id"] } },
   { name: "workflow_block_messages", description: "Read recent messages and activity from a connected AI Agent or Chatbox without invoking it. Use after a workflow_use_block timeout to check progress. count defaults to 6 (1–50).", inputSchema: { type: "object", properties: { block_id: { type: "string" }, count: { type: "integer", minimum: 1, maximum: 50 } }, required: ["block_id"] } },
   { name: "workflow_choose_path", description: "Choose a connected path by label. The chosen block receives your final output after you finish. Follow connections also run.", inputSchema: { type: "object", properties: { path: { type: "string" } }, required: ["path"] } }
 ];
