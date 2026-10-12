@@ -549,3 +549,13 @@ No implementation was performed in this continuation check.
 - Implementation/integrated SHA: ae0b9e2f7092f465292b5b549a625b767f3bc259; integration 570e67d9-905a-4b07-bffe-93fd4fecfc72 completed suite exit 0. Initial integration 4b09839f-01f9-49cd-b397-bcb3e164ace6 failed unrelated live-JVM timeout with root unchanged; isolated JVM and retained full suite passed, retry same merge delivery succeeded. Post-merge notification error reconciled from actual history and integration record.
 - Publishing: pushed normally to origin/refs/heads/dev; published SHA 2a9338d7dc0d67a300db8dc4b8e92836b4759ea5; tracking and remote ref verified. TODO.md remains locally annotated but uncommitted to preserve pre-existing user backlog replacement.
 - Limitations: near the roughly 70px resize minimum, outer scrolling is required for intrinsic controls; keyboard reachability verified. No full Electron visual check.
+
+## todo-queue-20261012-connectivity / TODO-001 — Keep workflow Stop beside Start and Rerun
+
+- Completed locally: 2026-10-12. Stop shares one horizontal row with Run/New run and Rerun in workflow cards and HarnessPanel. Narrow or many-run rows scroll horizontally; focus reveals actions; cancellation feedback retained.
+- Areas: Desktop WorkflowRunPanel, HarnessPanel, styles, interaction coverage and reusable real-component browser layout regression.
+- Validation: build, repository/Gateway typechecks, full tests, 36 Chromium cases (240/320/800px, themes, 0/1/6 active runs), old CSS reproduces 29px wrap; reviewed scoped commit and clean worker. Smart integration suite exit 0.
+- Task: 360d8b4b-1b36-4ce8-95b7-9ffd559c4b58; branch feature/todo-003-workflow-fit-overlay; provider codex. Reused clean merged layout conversation, no reset.
+- Implementation/integrated SHA: 41e80f2a5cacf795ddc361220b8b1d249ab9ff3f. Integration 73e9edbd-155c-4dc1-a636-37242f275290 completed. Feature-assignment notification error reconciled from root history and Core integration record.
+- Publishing: pending origin/refs/heads/dev. Root TODO remains uncommitted to preserve pre-existing dispatcher backlog replacement.
+- Limitations: many runs require horizontal scrolling; no full Electron session check. Historical TODO-001 refers to a different feature and is preserved above.
