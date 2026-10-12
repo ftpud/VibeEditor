@@ -462,5 +462,5 @@ No implementation was performed in this continuation check.
 - Validation: full build, repository/Gateway typechecks, full tests; independent history/tool delivery, admission race, reverse completion and failure isolation regressions; clean task tree/diff review; smart integration suite exit 0.
 - Task: 451433d2-5f35-44aa-9217-28ce43a5fd96; branch feature/todo-002-independent-chatboxes; provider codex; finished. New task for runtime concurrency; no context reset.
 - Implementation/integrated SHA: a238ce92928f1510aef211abe6f9a8c6fd654b96; integration 0f71ed2e-c222-4b5b-aea3-3d5547d21659 completed.
-- Publishing: pending to configured origin/refs/heads/dev.
+- Publishing: pushed normally to origin/refs/heads/dev; published SHA a702ef6d0c6ae529a49f55d24d1f7ea106c84341; remote tracking and remote ref verified.
 - Limitations: Stop remains run-wide. Isolated integration dependency environment repaired; post-merge planned-feature notification errored after confirmed successful integration.
