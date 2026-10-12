@@ -527,5 +527,5 @@ No implementation was performed in this continuation check.
 - Validation: build, repository/Gateway typechecks, full tests on rerun, focused cancellation/keyboard/multiple-run tests and narrow/theme browser CSS checks; smart integration suite exit 0; reviewed scoped commit and clean worker. Initial Core timing failure passed isolated/full reruns.
 - Task: 360d8b4b-1b36-4ce8-95b7-9ffd559c4b58; branch feature/todo-003-workflow-fit-overlay; provider codex. Reused merged clean workflow layout task/conversation; no reset.
 - Implementation/integrated SHA: af845d41b180084dd74e9632d6889478fef20a2e; integration 57bcd39a-6a83-4553-a303-d3361d592bcf completed. Post-merge notification error reconciled with actual root history and retained integration evidence.
-- Publishing: pending origin/refs/heads/dev. TODO.md contains pre-existing user backlog replacement; completion annotations remain intact locally and are not staged with that unrelated edit.
+- Publishing: pushed normally to origin/refs/heads/dev; published SHA 60b6cf15b3a1dcd907927eb7405003dac3fac6ad; tracking and remote ref verified. TODO.md contains pre-existing user backlog replacement; completion annotations remain intact locally and are not staged with that unrelated edit.
 - Limitations: no full Electron visual check.
