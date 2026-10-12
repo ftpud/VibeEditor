@@ -508,3 +508,14 @@ No implementation was performed in this continuation check.
 - Implementation/integrated SHA: abc48d6137c72be6a8c27a6408e52b7c9d4cefd7; integration b6402e44-e4f4-4edf-bf13-7fa1935dad58 completed.
 - Publishing: pushed normally to origin/refs/heads/dev; published SHA 3f05fe9ba0335f8cc9a7bd83d11841e0ea54a320; remote tracking and remote ref verified.
 - Limitations/follow-ups: Tests establish async concurrency, not saturated-network performance or unlimited-load backpressure. Large queued frames/event-loop stalls can still delay delivery; existing service ordering retained. Post-merge notification error reconciled against successful integration.
+
+## TODO-007 — Focus Proc on workflow apps and review growing process counts
+
+- Completed locally: 2026-10-12.
+- Result: Proc counts one entry per explicitly launched workflow app tree, excluding agent/helpers. Detached app survivors remain visible as Children running, Start reuses their launch, and Stop terminates the whole chosen app tree without affecting other apps/agents. Fixed stale Stop snapshots and unnecessary status/tail scans.
+- Changed areas: Protocol app-launch metadata; Core managed/process grouping, Run App lifecycle and routes; Desktop Proc/workflow app status UI; lifecycle/isolation/UI tests and docs/PROCESSES.md.
+- Validation: full build, required repository/Gateway typechecks, full tests and final impacted UI checks; real app children/repeated concurrent starts/stops/natural exits/detached survivors/root isolation; 910 smart integration tests; smart integration suite exit 0; clean worker tree and scoped diff review.
+- Task: ff020776-f19a-4c97-acd6-0ee10731c1c3; branch feature/todo-001-proc-sidebar; provider codex. Session decision: Reused original TODO-001 task and codex conversation for related correction; no reset; task finished.
+- Implementation/integrated SHA: cb94315b3b6af409b1f2bde16863bafa14683aaf; integration b0ab7813-e3f4-47ec-8a8b-4349ea94580a completed.
+- Publishing: pending to configured origin/refs/heads/dev.
+- Limitations/follow-ups: Broad PID counting inflated totals and detached survivors could accumulate across starts; complete natural exits did not reproduce duplicate/stale rows. Linux /proc gives full inherited discovery; POSIX fallback, stripped identities and previous Core lifetimes remain documented limitations. Earlier lifecycle failures repaired and final suite passed; post-merge notification error reconciled.
