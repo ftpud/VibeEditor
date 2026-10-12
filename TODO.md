@@ -1,0 +1,17 @@
+- [x] TODO-001 — Proc sidebar: inspect and kill AI-started processes
+  - Priority: High.
+  - Scope: Desktop sidebar / Core process lifecycle / typed protocol.
+  - Request: Add a “Proc” button immediately next to Timers, opening a process list styled and structured like the existing Timers panel.
+  - Acceptance criteria:
+    - Proc is available beside Timers in both focused and classic sidebar layouts, with consistent panel selection and persisted navigation behavior.
+    - List all currently running processes started by AI agents across the root project's workspace group, including task and workflow chat sessions and their child commands/background processes. Identify each process with command/name, PID, status, and available workspace/task/session/provider context; provider behavior remains neutral. Do not list unrelated host processes.
+    - Core owns process discovery/tracking and termination; expose typed list/kill operations and live updates through the protocol. Cover AI tool-launched processes and workflow Run App processes, rather than only the AI provider host process.
+    - Each running entry has a Kill button that terminates the selected managed process and its descendants where applicable, updates the list promptly, and shows actionable errors without affecting unrelated sessions/processes. Handle processes that exit before Kill is clicked.
+    - Match Timers panel styling, including count, loading/empty/error states, disabled pending actions, and supported themes. Refresh process state as processes start or exit.
+    - Validate process tracking/termination and sidebar behavior with focused checks, including cross-task/workflow visibility, natural exits, descendant cleanup, and isolation of unrelated processes.
+  - Context: Existing sidebar integration is in packages/desktop/src/renderer/App.tsx, TimersPanel.tsx, task-panel-state.ts and styles.css; timer protocol/routes are in packages/protocol/src/index.ts and packages/core/src/server.ts. packages/core/src/workflow-app.ts already manages workflow app processes; inspect AI provider/tool process lifecycles for complete coverage.
+  - Dependencies: None identified. Implement this high-priority item before lower-priority actionable backlog work.
+  - Runner execution: owner=todo-runner-20261012-proc; status=merged-publishing-pending; context=managed-process-sidebar; task=ff020776-f19a-4c97-acd6-0ee10731c1c3; branch=feature/todo-001-proc-sidebar; provider=codex; attempt=1; delivery=todo-001-proc-20261012-a1; root-head=846abb4b01b0884287377dcd8f228d50fa78b135; implementation/integrated=0b6f30023550d0749c145279383d97ec64099981; integration=20301abd-8798-4800-9b56-8a4b3f846b8b completed; checks=full build, all typechecks, 881 integration tests; merge-key=ff020776-todo001-0b6f300-smart; task=finished; publishing=pending origin/refs/heads/dev.
+  - Session decision: new task for an independent Core/Protocol/Desktop process lifecycle feature; no related queue task exists.
+  - Integration recovery: missing candidate dependencies repaired using validated task dependencies; existing 15ms HarnessRunner fanout test failed once, passed focused rerun and final full suite. Post-merge planned-feature notification errored; actual Git/integration/task state confirmed success, no replay.
+  - Limitations: full inherited process discovery requires Linux /proc; POSIX fallback has reduced detached-child coverage; native Windows Core discovery unsupported. See docs/PROCESSES.md.

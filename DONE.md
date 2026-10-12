@@ -440,3 +440,16 @@ Input: Start the workflow.
 `TODO.md` is absent from the current checkout and from `HEAD` (removed in commit `a2054ab`, “Remove workflow planning notes”). The previous roadmap is recoverable from its parent commit and still has unchecked items, including run history details, a chronological timeline, deterministic appended input, resource/data limits, audit fields, product hardening, documentation, and broader acceptance tests. A coder job remains; continue the workflow.
 
 No implementation was performed in this continuation check.
+
+## TODO-001 — Proc sidebar: inspect and kill AI-started processes
+
+- Completed locally: 2026-10-12.
+- Result: Proc sits beside Timers in focused/classic layouts, persists navigation, and lists managed AI processes across root/task/workflow sessions with command, PID and available context. Kill stops the selected process and managed descendants, reconciles natural exits, and protects unrelated projects/sessions.
+- Changed areas: typed Protocol list/kill/live events; Core ACP, workflow script and Run App launch tracking, Linux inherited identities, PID lifetime checks and launch cleanup; Desktop panel, state persistence and themed states; docs/PROCESSES.md.
+- Validation: full build; ACP/Protocol build and Core/Desktop/Electron/Gateway typechecks; focused real ACP/Run App/subprocess and sidebar checks; smart integration full suite passed (469 Core + 362 renderer + 6 Electron + 11 Gateway renderer + 33 Gateway Electron = 881 tests); git diff --check; clean worker tree.
+- Task: ff020776-f19a-4c97-acd6-0ee10731c1c3; branch: feature/todo-001-proc-sidebar; provider: codex. New task for an independent subsystem; no reset/reuse needed; task finished.
+- Implementation commit: 0b6f30023550d0749c145279383d97ec64099981.
+- Integrated root commit: 0b6f30023550d0749c145279383d97ec64099981 (smart fast-forward); integration: 20301abd-8798-4800-9b56-8a4b3f846b8b completed, suite exit 0.
+- Publishing: pending normal push to origin / refs/heads/dev.
+- Recovery evidence: initial isolated worktree lacked vitest; shared validated task dependencies and ran checks. An existing 15ms workflow concurrency test failed once, then passed focused and final full-suite checks. A post-merge planned-feature notification errored after integration; actual root Git history, completed integration and finished task confirmed success.
+- Limits/follow-ups: Linux /proc provides full inherited discovery. POSIX fallback cannot recover every detached child and uses lower precision identities; native Windows Core discovery unsupported. Identity-stripping commands and processes from previous Core lifetimes are excluded; see docs/PROCESSES.md. Integration dependency preparation and timing-sensitive existing workflow test remain tooling follow-ups.
