@@ -559,3 +559,13 @@ No implementation was performed in this continuation check.
 - Implementation/integrated SHA: 41e80f2a5cacf795ddc361220b8b1d249ab9ff3f. Integration 73e9edbd-155c-4dc1-a636-37242f275290 completed. Feature-assignment notification error reconciled from root history and Core integration record.
 - Publishing: pushed normally to origin/refs/heads/dev; published SHA fdb95795c6bb69d763b3e572ab35c84bc5e279c0, remote/tracking verified. Root TODO remains uncommitted to preserve pre-existing dispatcher backlog replacement.
 - Limitations: many runs require horizontal scrolling; no full Electron session check. Historical TODO-001 refers to a different feature and is preserved above.
+
+## todo-queue-20261012-connectivity / TODO-002 — Detect silently lost Desktop–Core connections
+
+- Completed locally: 2026-10-12. Desktop bounded application probes and Core ping/pong detect silent loss; one cancellable recovery loop rejects obsolete pending requests without replaying mutations. Restores root/task workspace and subscriptions; retains dirty buffers and drafts with stale-result guards. Unavailable saved selections fail explicitly.
+- Areas: Protocol keepAlive/root selection and compatibility 15, Core monitor/server, Desktop client/App/recovery helpers, transport/editor regressions, docs/CONNECTION-LIVENESS.md.
+- Validation: build, repository/Gateway typechecks, 932 tests; native WHATWG silent transport, real Core/PTY root/task/terminal recovery, healthy idle, shutdown, switch ordering, dirty buffers and replaced clients. Clean scoped commit reviewed.
+- Task: daa5a9cd-4e02-4ce7-afc1-795fbcffae41; branch feature/todo-006-websocket-concurrency; codex. Reused merged clean transport review conversation, no reset; focused dirty-buffer and integration-artifact follow-ups.
+- Implementation/integrated SHA: df0e544d4351dca132514389e45bc6857c42523e; integration a095e52d-7c64-468b-975f-bf1105aa5172 completed, suite exit 0. Initial be072170 failed stale shared Protocol artifacts and unrelated timing; normal npm parent/candidate dependency isolation repaired, fresh exact suite passed; retry original key succeeded. Post-merge notification error reconciled.
+- Publishing: pending origin/refs/heads/dev. Root TODO annotations remain uncommitted to preserve dispatcher edits.
+- Limitations: suspended event loops delay detection; drafts remain renderer memory; rejected mutations may already have completed on Core and require inspection. Missing selections require explicit action. Integration-parent local ACP/Protocol dependency pin must refresh for future protocol revisions. Historical TODO-002 preserved above.
