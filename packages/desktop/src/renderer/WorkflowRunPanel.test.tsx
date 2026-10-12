@@ -1,4 +1,5 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { HarnessDefinition, HarnessRun } from "@remote-ide/protocol";
 import { BlockRunDetails, HarnessPanel } from "./HarnessPanel";
@@ -26,7 +27,7 @@ describe("Workflow run library", () => {
     fireEvent.click(screen.getByRole("button", { name: "Fit workflow horizontally" }));
     expect(Number(preview.querySelector("svg")!.getAttribute("width"))).toBe(392);
     fireEvent.click(screen.getByRole("button", { name: "Fit workflow vertically" }));
-    expect(Number(preview.querySelector("svg")!.getAttribute("height"))).toBe(212);
+    expect(Number(preview.querySelector("svg")!.getAttribute("height"))).toBe(176);
     const appBlock = await screen.findByRole("button", { name: "Server: succeeded · Running in background" });
     expect(appBlock.classList.contains("background-running")).toBe(true);
     fireEvent.click(appBlock);
@@ -40,6 +41,34 @@ describe("Workflow run library", () => {
     expect(await screen.findByText("Exited · SIGKILL")).toBeTruthy();
     await waitFor(() => expect(appBlock.classList.contains("background-running")).toBe(false), { timeout: 2500 });
     expect(appBlock.getAttribute("aria-label")).toBe("Server: succeeded");
+  });
+
+  it.each([120, 800])("keeps fit controls outside the scrolling chart at viewport width %i", async (viewportWidth) => {
+    const user = userEvent.setup();
+    render(<WorkflowRunPanel {...props()} />);
+    fireEvent.click(screen.getByRole("button", { name: "Show Workspace check" }));
+    const preview = screen.getByLabelText("Live workflow tree");
+    const horizontal = screen.getByRole("button", { name: "Fit workflow horizontally" });
+    const vertical = screen.getByRole("button", { name: "Fit workflow vertically" });
+    expect(horizontal.parentElement?.parentElement).toBe(preview.parentElement);
+    expect(preview.contains(horizontal)).toBe(false);
+    expect(horizontal.title).toBe("Fit horizontally");
+    expect(vertical.title).toBe("Fit vertically");
+    Object.defineProperty(preview, "clientWidth", { value: viewportWidth });
+    preview.scrollLeft = 80;
+    preview.scrollTop = 40;
+    horizontal.focus();
+    await user.keyboard("{Enter}");
+    expect(Number(preview.querySelector("svg")!.getAttribute("width"))).toBeCloseTo(viewportWidth - 8);
+    expect(preview.scrollLeft).toBe(0);
+    expect(preview.scrollTop).toBe(0);
+    await user.tab();
+    expect(document.activeElement).toBe(vertical);
+    await user.keyboard(" ");
+    expect(Number(preview.querySelector("svg")!.getAttribute("height"))).toBeCloseTo(176);
+    expect(preview.style.height).toBe("220px");
+    await user.click(horizontal);
+    expect(preview.style.height).toBe("");
   });
 
   it("refreshes app output while details are open", async () => {

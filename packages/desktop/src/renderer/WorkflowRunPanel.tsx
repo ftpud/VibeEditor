@@ -122,7 +122,8 @@ function CompactWorkflowPreview({ definition, run, selectedBlockId, onSelect, on
     const viewport = viewportRef.current;
     if (!viewport) return;
     setFitHeight(axis === "vertical");
-    const next = axis === "horizontal" ? (viewport.clientWidth - 8) / width : 212 / height;
+    // Leave the bottom padding available for the floating fit controls.
+    const next = axis === "horizontal" ? (viewport.clientWidth - 8) / width : 176 / height;
     setScale(Math.max(0.05, Math.min(4, next)));
     viewport.scrollLeft = 0; viewport.scrollTop = 0;
   };
@@ -163,7 +164,7 @@ function CompactWorkflowPreview({ definition, run, selectedBlockId, onSelect, on
   const byId = new Map(blocks.map((block) => [block.id, block]));
   const width = Math.max(280, ...blocks.map((block) => block.position.x + 132));
   const height = Math.max(70, ...blocks.map((block) => block.position.y + 36));
-  return <><div className="workflow-preview-controls"><button aria-label="Fit workflow horizontally" title="Fit horizontally" onClick={() => fit("horizontal")}><ArrowLeftRight size={14} aria-hidden="true" /></button><button aria-label="Fit workflow vertically" title="Fit vertically" onClick={() => fit("vertical")}><ArrowUpDown size={14} aria-hidden="true" /></button></div><div ref={viewportRef} style={{ height: fitHeight ? 220 : undefined }} className="workflow-compact-preview" aria-label="Live workflow tree"><svg style={{ minWidth: 0 }} width={width * scale} height={height * scale} viewBox={`0 0 ${width} ${height}`}>
+  return <div className="workflow-preview-viewport"><div ref={viewportRef} style={{ height: fitHeight ? 220 : undefined }} className="workflow-compact-preview" aria-label="Live workflow tree"><svg style={{ minWidth: 0 }} width={width * scale} height={height * scale} viewBox={`0 0 ${width} ${height}`}>
     {definition.edges.map((edge) => {
       const from = byId.get(edge.from), to = byId.get(edge.to);
       if (!from || !to) return null;
@@ -178,5 +179,5 @@ function CompactWorkflowPreview({ definition, run, selectedBlockId, onSelect, on
       const label = `${block.label}: ${statusLabel(status)}${backgroundRunning ? " · Running in background" : ""}`;
       return <g key={block.id} className={`workflow-compact-block ${status}${backgroundRunning ? " background-running" : ""}${selectedBlockId === block.id ? " selected" : ""}`} transform={`translate(${block.position.x}, ${block.position.y})`} role="button" tabIndex={0} aria-pressed={selectedBlockId === block.id} aria-label={label} onClick={() => onSelect(block.id)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); onSelect(block.id); } }}><title>{label}{state?.error ? ` · ${state.error}` : ""}</title><rect width={120} height={24} rx={5} /><circle cx={10} cy={12} r={3} /><text x={18} y={16}>{block.label.length > 15 ? `${block.label.slice(0, 14)}…` : block.label}</text></g>;
     })}
-  </svg></div></>;
+  </svg></div><div className="workflow-preview-controls"><button type="button" aria-label="Fit workflow horizontally" title="Fit horizontally" onClick={() => fit("horizontal")}><ArrowLeftRight size={14} aria-hidden="true" /></button><button type="button" aria-label="Fit workflow vertically" title="Fit vertically" onClick={() => fit("vertical")}><ArrowUpDown size={14} aria-hidden="true" /></button></div></div>;
 }
