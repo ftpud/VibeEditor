@@ -475,3 +475,14 @@ No implementation was performed in this continuation check.
 - Implementation/integrated SHA: d2bd3bba05a525bcc0f21b93bb2eaba6843c0d47; integration aaaa6338-e276-4de8-9e09-a71690eb149a completed.
 - Publishing: pushed normally to origin/refs/heads/dev; published SHA 35d067d0ad21622ee69fc3afd578da7550b5b307; remote tracking and remote ref verified.
 - Limitations/follow-ups: Browser positioning verified with a CSS fixture rather than full Electron UI. Post-merge notification errored after confirmed integration.
+
+## TODO-004 — Move New run and Rerun to compact top icon controls
+
+- Completed locally: 2026-10-12.
+- Result: New run and Rerun are compact icons beside Run prompt; starting-point selection, snapshot reruns, pending states and labelled Stop controls remain available; completed cards have no dedicated action row.
+- Changed areas: Desktop WorkflowRunPanel, styles and interaction coverage.
+- Validation: full build, repository/Gateway typechecks, full tests, active/completed/no-run and keyboard interactions, narrow-width Chromium CSS checks; smart integration suite exit 0; clean worker tree and scoped diff review.
+- Task: 360d8b4b-1b36-4ce8-95b7-9ffd559c4b58; branch feature/todo-003-workflow-fit-overlay; provider codex. Session decision: Reused TODO-003 task and codex conversation with clean root synchronization; no reset.
+- Implementation/integrated SHA: 2edbe5176859e10540104ff3765bca753dfd32a7; integration f0fea944-c69f-4f7a-8e7e-73a200ca2731 completed.
+- Publishing: pending to configured origin/refs/heads/dev.
+- Limitations/follow-ups: Browser checks use CSS fixtures rather than full Electron UI. Post-merge notification error reconciled against successful integration.
