@@ -443,6 +443,9 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .harness-pause button.allow { background: #315d3b; color: white; }
 .harness-pause button.reject { background: #5e3434; color: white; }
 .harness-pause button:disabled { opacity: .55; cursor: wait; }
+.harness-run > textarea, .harness-run-actions { grid-column: 1 / -1; }
+.harness-run-actions { display: flex; flex-wrap: nowrap; align-items: center; min-width: 0; gap: 6px; padding: 4px; overflow-x: auto; scroll-padding-inline: 4px; scrollbar-width: thin; }
+.harness-run-actions button { flex: 0 0 auto; white-space: nowrap; }
 .harness-run small { grid-column: 1 / -1; color: #858990; }
 .harness-run small.error { color: #dc747c; }
 .harness-run button.danger { background: #71383d; color: #ffdadd; }
@@ -2286,12 +2289,12 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .workflow-card .harness-run-details { height: auto; max-height: 560px; min-height: 0; margin-top: 12px; border: 1px solid var(--workflow-border); border-radius: 12px; }
 .workflow-card .harness-run-details-body { max-height: 460px; }
 .harness-iteration-list details > .workflow-message { margin: 0 10px 10px; }
-.workflow-run-prompt-row { display: flex; align-items: flex-start; gap: 8px; margin-bottom: 10px; min-width: 0; }
-.workflow-run-prompt-row > .workflow-card-hint { flex: 1; min-width: 0; margin: 4px 0 0; }
+.workflow-run-prompt-row { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 8px; margin-bottom: 10px; min-width: 0; }
+.workflow-run-prompt-row > .workflow-card-hint { flex: 1 1 120px; min-width: 0; margin: 4px 0 0; }
 .workflow-control-separator { flex: 0 0 1px; align-self: center; height: 16px; margin-inline: 2px; background: #ffffff20; }
 :root[data-theme="light"] .workflow-control-separator { background: #00000020; }
-.workflow-run-prompt-row > .workflow-run-input { flex: 1; min-width: 0; }
-.workflow-run-controls { display: flex; flex: 0 1 auto; flex-wrap: wrap; justify-content: flex-end; min-width: 26px; max-width: 50%; gap: 3px; }
+.workflow-run-prompt-row > .workflow-run-input { flex: 1 1 80px; min-width: 0; }
+.workflow-run-controls { display: flex; flex: 0 1 auto; flex-wrap: nowrap; min-width: 0; max-width: 100%; gap: 3px; overflow-x: auto; padding: 4px; scroll-padding-inline: 4px; scrollbar-width: thin; }
 .workflow-run-controls button { flex: 0 0 26px; display: grid; place-items: center; width: 26px; height: 26px; padding: 0; border: 0; border-radius: 5px; background: transparent; color: inherit; cursor: pointer; opacity: .7; }
 .workflow-run-controls button:hover:not(:disabled) { opacity: 1; background: #8bbaff18; }
 .workflow-run-controls button.workflow-stop-run:hover:not(:disabled) { color: #ff9096; background: #ff7b8118; }
