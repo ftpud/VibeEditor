@@ -325,7 +325,7 @@ export function App() {
   const javaRefreshTimer = useRef<ReturnType<typeof setTimeout>>();
   const javaCheckTimer = useRef<ReturnType<typeof setTimeout>>();
   const selfWriteUntil = useRef(new Map<string, number>());
-  const terminalWriters = useRef(new Map<string, (data: string) => void>());
+  const terminalWriters = useRef(new Map<string, (data: string, replay?: boolean) => void>());
   const terminalBuffers = useRef(new Map<string, string>());
   const markdownBlockTerminals = useRef(new Map<string, string>());
   const monacoEditorRef = useRef<editor.IStandaloneCodeEditor>();
@@ -443,11 +443,11 @@ export function App() {
     javaCheckTimer.current = setTimeout(() => { void checkJava(); }, 700);
   }, [checkJava]);
 
-  const registerTerminalWriter = useCallback((terminalId: string, writer?: (data: string) => void) => {
+  const registerTerminalWriter = useCallback((terminalId: string, writer?: (data: string, replay?: boolean) => void) => {
     if (!writer) { terminalWriters.current.delete(terminalId); return; }
     terminalWriters.current.set(terminalId, writer);
     const buffered = terminalBuffers.current.get(terminalId);
-    if (buffered) writer(buffered);
+    if (buffered) writer(buffered, true);
   }, []);
 
   const refreshGit = useCallback(async (client = clientRef.current) => {

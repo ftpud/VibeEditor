@@ -3,6 +3,7 @@ import { WebLinksAddon } from "@xterm/addon-web-links";
 import { Terminal } from "@xterm/xterm";
 import { ClipboardPaste, Copy, Pencil, Plus, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import { createTerminalOutput } from "./terminal-output";
 import type { CoreClient } from "./client";
 import type { TerminalGroup, TerminalTab } from "./model";
 import type { AppTheme } from "./theme";
@@ -24,7 +25,7 @@ type Props = {
   onMove(tabId: string, targetTabId: string): void;
   onRecoveryShown?(tabId: string): void;
   onResizeStart(event: React.PointerEvent): void;
-  registerWriter(terminalId: string, writer?: (data: string) => void): void;
+  registerWriter(terminalId: string, writer?: (data: string, replay?: boolean) => void): void;
   highlightedTerminalIds?: Set<string>;
   rootAliases?: Record<string, string>;
 };
@@ -152,8 +153,9 @@ function TerminalView({ theme, fontFamily, fontSize, lineHeight, client, tab, ac
     container.addEventListener("paste", handlePaste, true);
     terminalRef.current = terminal;
     fitRef.current = fit;
-    registerWriter(tab.terminalId, (data) => terminal.write(data));
-    const input = terminal.onData((data) => { if (tab.status === "running") void client.request("terminal.input", { terminalId: tab.terminalId, data }); });
+    const output = createTerminalOutput(terminal);
+    const input = terminal.onData((data) => { if (tab.status === "running" && !output.isHistoricalReply()) void client.request("terminal.input", { terminalId: tab.terminalId, data }); });
+    registerWriter(tab.terminalId, output.write);
     const observer = new ResizeObserver(() => {
       if (!container.offsetParent) return;
       fit.fit();
@@ -167,7 +169,7 @@ function TerminalView({ theme, fontFamily, fontSize, lineHeight, client, tab, ac
     });
     return () => {
       container.removeEventListener("paste", handlePaste, true);
-      observer.disconnect(); input.dispose(); registerWriter(tab.terminalId); terminal.dispose();
+      observer.disconnect(); input.dispose(); registerWriter(tab.terminalId); output.dispose(); terminal.dispose();
     };
   }, [client, fontFamily, fontSize, lineHeight, registerWriter, tab.status, tab.terminalId, theme]);
 
