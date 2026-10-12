@@ -45,6 +45,50 @@ describe("CoreClient streaming disconnects", () => {
   });
   afterEach(() => vi.unstubAllGlobals());
 
+  it("matches out-of-order responses and delivers events while another request is pending", async () => {
+    const client = new CoreClient();
+    const connecting = client.connect("core", 7331);
+    const socket = FakeWebSocket.instances[0]!;
+    socket.open();
+    await connecting;
+    const events = vi.fn();
+    client.onServerEvent = events;
+    let slowSettled = false;
+    const slow = client.request("filesystem.readFile", { path: "slow.txt" }).then((result) => { slowSettled = true; return result; });
+    const slowId = JSON.parse(socket.sent.at(-1)!).id;
+    const fast = client.request("filesystem.readFile", { path: "fast.txt" });
+    const fastId = JSON.parse(socket.sent.at(-1)!).id;
+    const failing = client.request("filesystem.readFile", { path: "missing.txt" });
+    const errorId = JSON.parse(socket.sent.at(-1)!).id;
+    const failure = expect(failing).rejects.toThrow("FILE_NOT_FOUND: missing");
+    socket.receive({ id: errorId, ok: false, error: { code: "FILE_NOT_FOUND", message: "missing" } });
+    socket.receive({ id: fastId, ok: true, rootId: "root-primary", result: { content: "fast" } });
+    const event = { type: "terminal.output", payload: { rootId: "root-primary", terminalId: "terminal-a", data: "output" } };
+    socket.receive(event);
+    await expect(fast).resolves.toEqual({ content: "fast" });
+    await failure;
+    expect(events).toHaveBeenCalledOnce();
+    expect(events).toHaveBeenCalledWith(event);
+    expect(slowSettled).toBe(false);
+    socket.receive({ id: slowId, ok: true, rootId: "root-primary", result: { content: "slow" } });
+    await expect(slow).resolves.toEqual({ content: "slow" });
+    client.disconnect();
+  });
+
+  it("rejects every concurrent pending request on disconnect and ignores late responses", async () => {
+    const client = new CoreClient();
+    const connecting = client.connect("core", 7331);
+    const socket = FakeWebSocket.instances[0]!;
+    socket.open();
+    await connecting;
+    const first = client.request("filesystem.readFile", { path: "a" });
+    const second = client.request("filesystem.readFile", { path: "b" });
+    const rejections = [expect(first).rejects.toThrow("Connection closed"), expect(second).rejects.toThrow("Connection closed")];
+    socket.close();
+    await Promise.all(rejections);
+    for (const data of socket.sent.slice(-2)) socket.receive({ id: JSON.parse(data).id, ok: true, result: { content: "late" } });
+  });
+
   it("settles a connection cancelled before the socket opens", async () => {
     const client = new CoreClient();
     const connecting = client.connect("core", 7331);
