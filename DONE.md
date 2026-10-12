@@ -529,3 +529,13 @@ No implementation was performed in this continuation check.
 - Implementation/integrated SHA: af845d41b180084dd74e9632d6889478fef20a2e; integration 57bcd39a-6a83-4553-a303-d3361d592bcf completed. Post-merge notification error reconciled with actual root history and retained integration evidence.
 - Publishing: pushed normally to origin/refs/heads/dev; published SHA 60b6cf15b3a1dcd907927eb7405003dac3fac6ad; tracking and remote ref verified. TODO.md contains pre-existing user backlog replacement; completion annotations remain intact locally and are not staged with that unrelated edit.
 - Limitations: no full Electron visual check.
+
+## TODO-009 — Move Fit controls into the workflow toolbar
+
+- Completed locally: 2026-10-12. Result: horizontal/vertical Fit icons precede New run/Rerun/Stop with a separator; removed overlay row and reserved padding, retained viewport fitting and keyboard/tooltips including cards without runs.
+- Areas: Desktop WorkflowRunPanel, styles, fit interaction coverage.
+- Validation: build, repository/Gateway typechecks, full tests; actual-component Chromium checks of measurements, keyboard, narrow/expanded layouts and themes; smart integration suite exit 0; scoped commit reviewed, clean worker tree.
+- Task: 360d8b4b-1b36-4ce8-95b7-9ffd559c4b58; branch feature/todo-003-workflow-fit-overlay; provider codex. Reused merged clean layout task/conversation; no reset.
+- Implementation/integrated SHA: 2987a594b3636cfaf8bc1beb0af9e8ddd1796975; integration 23cf5de6-40c1-4b8f-be5c-401418a084c6 completed. Post-merge notification error reconciled with actual history and integration record.
+- Publishing: pending origin/refs/heads/dev. TODO.md remains locally annotated but uncommitted because of the pre-existing user backlog replacement.
+- Limitations: no full Electron visual check.
