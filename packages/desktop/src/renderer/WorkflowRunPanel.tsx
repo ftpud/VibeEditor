@@ -32,6 +32,7 @@ function WorkflowCard({ workflow, expanded, hidden, onToggleExpanded, ...props }
   const [startedRun, setStartedRun] = useState<HarnessRun>();
   const [inputs, setInputs] = useState<Record<string, string>>({});
   const [starting, setStarting] = useState(false);
+  const [stoppingRunIds, setStoppingRunIds] = useState<string[]>([]);
   const [showStarts, setShowStarts] = useState(false);
   const [selectedBlockId, setSelectedBlockId] = useState<string>();
   const [error, setError] = useState("");
@@ -61,6 +62,12 @@ function WorkflowCard({ workflow, expanded, hidden, onToggleExpanded, ...props }
     });
     setStarting(false);
   };
+  const stopRun = async (runId: string) => {
+    if (stoppingRunIds.includes(runId)) return;
+    setStoppingRunIds((current) => [...current, runId]);
+    try { await act(() => props.onCancelRun(runId)); }
+    finally { setStoppingRunIds((current) => current.filter((id) => id !== runId)); }
+  };
   const renderStart = (block?: HarnessBlock) => {
     const key = block?.id ?? "default";
     const value = block?.type === "start_button" ? block.prompt : inputs[key] ?? "";
@@ -84,10 +91,10 @@ function WorkflowCard({ workflow, expanded, hidden, onToggleExpanded, ...props }
         <div className="workflow-run-controls">
           <button type="button" aria-label="New run" title="Choose a starting point for a new run" aria-expanded={showStarts} onClick={() => setShowStarts((value) => !value)}><Play size={14} aria-hidden="true" /></button>
           {!activeStatuses.has(run.status) && run.definition && <button type="button" aria-label="Rerun" title="Rerun the selected run with its saved prompt and workflow" disabled={starting} onClick={() => void start(undefined, run)}><RotateCcw size={14} aria-hidden="true" /></button>}
+          {activeRuns.map((active) => <button key={active.id} type="button" className="workflow-stop-run" aria-label={`Stop run ${active.id}`} title={`${stoppingRunIds.includes(active.id) ? "Stopping" : "Stop"} workflow run ${active.id}`} aria-busy={stoppingRunIds.includes(active.id)} disabled={stoppingRunIds.includes(active.id)} onClick={() => void stopRun(active.id)}><Square size={14} aria-hidden="true" /></button>)}
         </div>
       </div>
       <CompactWorkflowPreview onReadApp={props.onReadApp} pollApps={!collapsed && !hidden} definition={definition} run={run} selectedBlockId={selectedBlockId} onSelect={setSelectedBlockId} />
-      {!!activeRuns.length && <div className="workflow-card-actions">{activeRuns.map((active) => <button key={active.id} aria-label={`Stop run ${active.id}`} onClick={() => void act(() => props.onCancelRun(active.id))}><Square size={12} /> Stop{activeRuns.length > 1 ? ` · ${active.id.slice(0, 6)}` : ""}</button>)}</div>}
 
       {run.blocks.filter((block) => pauseStatuses.has(block.status)).map((block) => <PauseResolution compactTimer key={`${run.id}:${block.blockId}:${block.pauseId}`} {...props} run={run} block={block} label={definition.blocks.find((item) => item.id === block.blockId)?.label ?? block.blockId} yesNo={definition.blocks.find((item) => item.id === block.blockId)?.type === "yes_no_prompt"} />)}
       {run.error && <p className="workflow-card-error">{run.error}</p>}{!!run.cleanupErrors?.length && <p className="workflow-card-error">{run.cleanupErrors.join("; ")}</p>}

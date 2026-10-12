@@ -223,6 +223,51 @@ describe("Workflow run library", () => {
     expect(screen.getByRole("button", { name: "Start Custom goal" }).hasAttribute("disabled")).toBe(true);
   });
 
+  it("places run-wide Stop icons beside New run and Rerun and handles cancellation feedback", async () => {
+    const user = userEvent.setup();
+    const otherRun: HarnessRun = { ...run, id: "other", createdAt: "2026-10-06T12:00:00Z" };
+    const completedRun: HarnessRun = { ...run, id: "completed", status: "succeeded" };
+    let rejectCancel!: (error: Error) => void;
+    const onCancelRun = vi.fn(() => new Promise<void>((_resolve, reject) => { rejectCancel = reject; }));
+    const callbacks = { ...props(), onCancelRun };
+    const view = render(<WorkflowRunPanel {...callbacks} runs={[run, otherRun, completedRun]} />);
+    fireEvent.click(screen.getByRole("button", { name: "Show Workspace check" }));
+    fireEvent.change(screen.getByRole("combobox", { name: "Run for Workspace check" }), { target: { value: "completed" } });
+    const controls = document.querySelector<HTMLElement>(".workflow-run-controls")!;
+    const stop = within(controls).getByRole("button", { name: "Stop run run" });
+    const otherStop = within(controls).getByRole("button", { name: "Stop run other" });
+    expect(within(controls).getByRole("button", { name: "New run" })).toBeTruthy();
+    expect(within(controls).getByRole("button", { name: "Rerun" })).toBeTruthy();
+    expect(document.querySelector(".workflow-card-actions")).toBeNull();
+    expect(stop.textContent).toBe("");
+    expect(stop.querySelector("svg")?.getAttribute("aria-hidden")).toBe("true");
+    expect(stop.title).toBe("Stop workflow run run");
+    stop.focus();
+    await user.keyboard("{Enter}");
+    expect(onCancelRun).toHaveBeenCalledWith("run");
+    expect(stop.hasAttribute("disabled")).toBe(true);
+    expect(stop.getAttribute("aria-busy")).toBe("true");
+    expect(stop.title).toBe("Stopping workflow run run");
+    expect(otherStop.hasAttribute("disabled")).toBe(false);
+    await user.click(stop);
+    expect(onCancelRun).toHaveBeenCalledTimes(1);
+    rejectCancel(new Error("Cancellation failed"));
+    expect(await screen.findByRole("alert")).toHaveProperty("textContent", "Cancellation failed");
+    expect(callbacks.onError).toHaveBeenCalledWith("Cancellation failed");
+    expect(stop.hasAttribute("disabled")).toBe(false);
+    expect(stop.getAttribute("aria-busy")).toBe("false");
+    onCancelRun.mockImplementation(async () => undefined);
+    await user.click(stop);
+    await waitFor(() => expect(stop.hasAttribute("disabled")).toBe(false));
+    expect(onCancelRun).toHaveBeenCalledTimes(2);
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.getByRole("combobox", { name: "Run for Workspace check" })).toHaveProperty("value", "completed");
+    view.rerender(<WorkflowRunPanel {...callbacks} runs={[{ ...run, status: "cancelled" }, otherRun, completedRun]} />);
+    expect(screen.queryByRole("button", { name: "Stop run run" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Stop run other" })).toBeTruthy();
+    expect(document.querySelector(".workflow-card-actions")).toBeNull();
+  });
+
   it.each(["stop", "run now"] as const)("handles compact timer %s with pending, error, and transition feedback", async (action) => {
     const user = userEvent.setup();
     const timerLabel = "A long armed workflow timer label";
