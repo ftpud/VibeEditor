@@ -7,7 +7,7 @@ import { WorkflowAppService } from "./workflow-app.js";
 
 const services: WorkflowAppService[] = [];
 const directories: string[] = [];
-afterEach(async () => { services.splice(0).forEach((service) => service.closeAll()); await Promise.all(directories.splice(0).map((directory) => rm(directory, { recursive: true, force: true }))); });
+afterEach(async () => { await Promise.all(services.splice(0).map((service) => service.closeAll())); await Promise.all(directories.splice(0).map((directory) => rm(directory, { recursive: true, force: true }))); });
 async function setup() {
   const workspace = await mkdtemp(path.join(os.tmpdir(), "workflow-app-")); directories.push(workspace);
   const service = new WorkflowAppService(); services.push(service);
@@ -96,7 +96,7 @@ describe("workflow apps", () => {
   it("kills managed processes when Core closes", async () => {
     const { execute, service } = await setup();
     const started = await execute("start", { command: "exec sleep 300" });
-    service.closeAll();
+    await service.closeAll();
     await vi.waitFor(() => expect(() => process.kill(started.pid, 0)).toThrow());
     await expect(execute("status")).rejects.toThrow("shutting down");
   });

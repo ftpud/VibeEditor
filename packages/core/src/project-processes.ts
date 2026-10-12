@@ -15,3 +15,17 @@ export async function listProjectProcesses(rootWorkspace: string, tasks: { list(
 export function killProjectProcess(rootWorkspace: string, processId: string, host: ManagedProcesses = managedProcesses) {
   return host.kill(processId, async (context) => path.resolve(context.rootWorkspace) === path.resolve(rootWorkspace));
 }
+
+/** The public Proc view includes only explicit Run App launches, grouped by tree. */
+export async function listProjectApps(rootWorkspace: string, tasks: { list(): Promise<{ tasks: WorkspaceTask[] }>; taskPath(id: string): string }, host: ManagedProcesses = managedProcesses) {
+  const registry = await tasks.list();
+  return Promise.all((await host.listApps()).filter((item) => path.resolve(item.rootWorkspace) === path.resolve(rootWorkspace)).map(async (item) => {
+    const canonical = await realpath(item.workspace).catch(() => item.workspace);
+    const task = registry.tasks.find((task) => path.resolve(tasks.taskPath(task.id)) === path.resolve(canonical));
+    return { ...item, ...(task ? { taskId: task.id, taskName: task.name } : {}) };
+  }));
+}
+export function killProjectApp(rootWorkspace: string, processId: string, host: ManagedProcesses = managedProcesses) {
+  if (typeof processId !== "string" || !processId.startsWith("app:")) throw new Error("Choose a workflow app to stop");
+  return host.kill(processId, async (context) => path.resolve(context.rootWorkspace) === path.resolve(rootWorkspace));
+}

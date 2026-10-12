@@ -1,4 +1,4 @@
-import { listProjectProcesses, killProjectProcess } from "./project-processes.js";
+import { listProjectApps, killProjectApp } from "./project-processes.js";
 import { managedProcesses } from "./managed-processes.js";
 import type { RawData } from "ws";
 import { WebSocket, WebSocketServer } from "ws";
@@ -401,7 +401,7 @@ export async function createServer(host: string, port: number, workspacePath: st
     .on("add", broadcastChange).on("change", broadcastChange).on("unlink", broadcastChange).on("addDir", broadcastChange).on("unlinkDir", broadcastChange)
     .on("raw", (eventName) => { if (String(eventName).includes("OVERFLOW")) rootBatcher.degrade("Filesystem watcher overflow; synchronizing affected files."); })
     .on("error", (error) => { console.error(`[core] watcher error: ${String(error)}`); rootBatcher.degrade(`Filesystem watcher degraded: ${String(error)}`); });
-  server.on("close", () => { managedProcesses.off("changed", processesChanged); if (!managedProcesses.listenerCount("changed")) managedProcesses.close(); schedules.close(); rootBatcher.dispose(); workflowApps.closeAll(); terminalHost.closeAll(); void watcher.close(); void gitIndexWatcher.close(); void runConfigWatcher.close(); void appEventWatcher.close(); void appCommandWatcher.close(); });
+  server.on("close", () => { managedProcesses.off("changed", processesChanged); if (!managedProcesses.listenerCount("changed")) managedProcesses.close(); schedules.close(); rootBatcher.dispose(); void workflowApps.closeAll().catch((error) => console.error("[core] Could not stop workflow apps", error)); terminalHost.closeAll(); void watcher.close(); void gitIndexWatcher.close(); void runConfigWatcher.close(); void appEventWatcher.close(); void appCommandWatcher.close(); });
   server.on("listening", () => console.log(`[core] listening on ws://${host}:${port}`));
   server.on("connection", (socket, request) => {
     if (remoteTransfers.accepts(request.url)) { void remoteTransfers.attach(socket, request.url); return; }
@@ -737,8 +737,8 @@ async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStor
     case "schedules.enabled": return { schedule: await schedules.setEnabled(request.payload.scheduleId, request.payload.enabled) };
     case "schedules.delete": return { deleted: await schedules.delete(request.payload.scheduleId) };
     case "schedules.fire": return { fired: await schedules.fire(request.payload.scheduleId, true) };
-    case "processes.list": return { processes: await listProjectProcesses(rootWorkspace, tasks) };
-    case "processes.kill": return { killed: await killProjectProcess(rootWorkspace, request.payload.processId) };
+    case "processes.list": return { processes: await listProjectApps(rootWorkspace, tasks) };
+    case "processes.kill": return { killed: await killProjectApp(rootWorkspace, request.payload.processId) };
     case "timers.list": return { timers: await aiTimers.list() };
     case "timers.cancel": return { cancelled: await aiTimers.cancel(request.payload.timerId) };
     case "timers.fire": return { fired: await aiTimers.fireById(request.payload.timerId) };

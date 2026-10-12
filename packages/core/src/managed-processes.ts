@@ -3,14 +3,14 @@ import { readdir, readFile } from "node:fs/promises";
 import { EventEmitter } from "node:events";
 import { execFile, type ChildProcess } from "node:child_process";
 import { promisify } from "node:util";
-import type { ManagedProcess } from "@remote-ide/protocol";
+import type { ManagedProcess, ManagedWorkflowApp } from "@remote-ide/protocol";
 
 const exec = promisify(execFile);
 export type ProcessRow = { pid: number; parentPid: number; birth: string; command: string; state: string; launchId?: string };
 type Row = ProcessRow;
-export type ProcessContext = Pick<ManagedProcess, "workspace" | "rootWorkspace" | "provider" | "sessionId" | "kind" | "workflowRunId" | "workflowBlockId"> & { command?: string };
+export type ProcessContext = Pick<ManagedProcess, "workspace" | "rootWorkspace" | "provider" | "sessionId" | "kind" | "workflowRunId" | "workflowBlockId" | "appName"> & { command?: string };
 type Context = ProcessContext;
-type Launch = { context: Context; pending: boolean; revision: number };
+type Launch = { context: Context; pending: boolean; revision: number; launcherPid?: number };
 type Entry = { row: Row; context: Context; launchId: string; launchRoot: boolean; ancestors: string[] };
 
 /** Only explicitly registered children and their observed descendants are managed.
@@ -27,9 +27,10 @@ export class ManagedProcesses extends EventEmitter {
     this.launches.set(launchId, { context, pending: true, revision: ++this.revision });
     return { launchId, env: { ...process.env, VIBE_MANAGED_LAUNCH: launchId } };
   }
-  launch<T extends ChildProcess>(context: Context, create: (env: NodeJS.ProcessEnv) => T): T {
+  launch<T extends ChildProcess>(context: Context, create: (env: NodeJS.ProcessEnv) => T): T { return this.launchWithIdentity(context, create).child; }
+  launchWithIdentity<T extends ChildProcess>(context: Context, create: (env: NodeJS.ProcessEnv) => T): { child: T; launchId: string } {
     const launch = this.prepare(context);
-    try { const child = create(launch.env); this.track(child, context, launch.launchId); return child; }
+    try { const child = create(launch.env); this.track(child, context, launch.launchId); return { child, launchId: launch.launchId }; }
     catch (error) { this.abandon(launch.launchId); throw error; }
   }
   abandon(launchId: string): void { this.launches.delete(launchId); }
@@ -43,7 +44,7 @@ export class ManagedProcesses extends EventEmitter {
     const register = () => {
       if (!child.pid) return;
       this.roots.set(child.pid, { context, launchId });
-      const launch = this.launches.get(launchId); if (launch) { launch.pending = false; launch.revision = ++this.revision; }
+      const launch = this.launches.get(launchId); if (launch) { launch.pending = false; launch.launcherPid = child.pid; launch.revision = ++this.revision; }
       void this.refresh().catch(() => {});
     };
     if (child.pid) register(); else child.once("spawn", register);
@@ -72,44 +73,82 @@ export class ManagedProcesses extends EventEmitter {
     return [...this.entries.values()].map(({ row, context }) => ({ ...context, id: `${row.pid}:${row.birth}`, pid: row.pid,
       parentPid: row.parentPid, command: context.command ?? row.command, status: "running" as const })).sort((a, b) => a.pid - b.pid);
   }
+  /** App provenance comes from the launch record, not a descendant's mutable kind. */
+  appSnapshot(launchId: string): ManagedWorkflowApp | undefined {
+    const launch = this.launches.get(launchId);
+    if (!launch || launch.context.kind !== "workflow-app") return undefined;
+    const members = [...this.entries.values()].filter((entry) => entry.launchId === launchId);
+    const representative = members.find((entry) => entry.launchRoot) ?? members[0];
+    if (!representative) return undefined;
+    const context = launch.context;
+    return { kind: "workflow-app", id: `app:${launchId}`, name: context.appName ?? "Workflow app", pid: representative.row.pid,
+      launcherPid: launch.launcherPid, command: context.command ?? representative.row.command,
+      status: members.some((entry) => entry.launchRoot) ? "running" : "descendants-running", processCount: members.length,
+      workspace: context.workspace, rootWorkspace: context.rootWorkspace, workflowRunId: context.workflowRunId, workflowBlockId: context.workflowBlockId };
+  }
+  async listApps(): Promise<ManagedWorkflowApp[]> {
+    if (!this.launches.size && !this.entries.size && !this.roots.size) return [];
+    await this.refresh();
+    return [...this.launches.keys()].flatMap((id) => { const app = this.appSnapshot(id); return app ? [app] : []; });
+  }
   async kill(id: string, allowed: (context: Context) => Promise<boolean>): Promise<boolean> {
     if (typeof id !== "string") throw new Error("Choose a managed process to kill");
-    await this.refresh();
-    const target = [...this.entries.values()].find(({ row }) => `${row.pid}:${row.birth}` === id);
-    if (!target) return false; // Natural exit, including PID reuse.
+    await this.refresh(true);
+    const appLaunchId = id.startsWith("app:") ? id.slice(4) : undefined;
+    const appLaunch = appLaunchId ? this.launches.get(appLaunchId) : undefined;
+    if (appLaunchId && appLaunch?.context.kind !== "workflow-app") return false;
+    const members = [...this.entries.values()];
+    const target = appLaunchId
+      ? members.find((entry) => entry.launchId === appLaunchId && entry.launchRoot) ?? members.find((entry) => entry.launchId === appLaunchId)
+      : members.find(({ row }) => `${row.pid}:${row.birth}` === id);
+    if (!target) {
+      if (appLaunchId && [...this.roots.values()].some((root) => root.launchId === appLaunchId)) throw new Error("Could not verify the app launcher identity. Refresh and retry Stop; check Core /proc permissions.");
+      return false;
+    } // Natural exit, including PID reuse.
     const selected = new Map(this.entries);
-    if (!await allowed(target.context)) throw new Error("Process belongs to another project");
+    if (!await allowed(appLaunch?.context ?? target.context)) throw new Error("Process belongs to another project");
+    const targetId = `${target.row.pid}:${target.row.birth}`;
+    const wholeLaunch = !!appLaunchId || target.launchRoot;
     const descendants = new Set([target.row.pid]);
-    for (const entry of selected.values()) if (entry.ancestors.includes(id) || (target.launchRoot && entry.launchId === target.launchId)) descendants.add(entry.row.pid);
+    for (const entry of selected.values()) if (entry.ancestors.includes(targetId) || (wholeLaunch && entry.launchId === target.launchId)) descendants.add(entry.row.pid);
     let changed = true;
     while (changed) { changed = false; for (const { row } of selected.values()) if (descendants.has(row.parentPid) && !descendants.has(row.pid)) { descendants.add(row.pid); changed = true; } }
-    // Stop the parent first, then reconcile descendants repeatedly: children can fork
-    // or reparent between discovery and signalling. Each pass validates lifetimes.
+    // Each pass reconciles the cache from its discovery snapshot before signalling.
+    // A no-candidates return therefore cannot leave a stale appSnapshot behind.
     for (let attempt = 0; attempt < 5; attempt++) {
-      const live = new Map((await this.snapshot()).map((row) => [row.pid, row]));
-      const candidates = [...selected.values()].filter(({ row }) => descendants.has(row.pid) && live.get(row.pid)?.birth === row.birth && !live.get(row.pid)?.state.startsWith("Z"));
-      if (!candidates.length) return true;
-      candidates.sort((a, b) => Number(b.row.pid === target.row.pid) - Number(a.row.pid === target.row.pid));
-      for (const { row } of candidates) {
-        try { this.signal(row.pid); } catch (error) {
-          if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw new Error(`Could not kill PID ${row.pid}: ${error instanceof Error ? error.message : String(error)}. Check Core host permissions.`);
-        }
-      }
-      await new Promise((resolve) => setTimeout(resolve, 10));
-      await this.refresh();
+      if (attempt > 0) await this.refresh(true);
       for (const entry of this.entries.values()) {
-        if (entry.ancestors.includes(id) || (target.launchRoot && entry.launchId === target.launchId)) {
+        if (entry.ancestors.includes(targetId) || (wholeLaunch && entry.launchId === target.launchId)) {
           selected.set(entry.row.pid, entry); descendants.add(entry.row.pid);
         }
       }
+      const candidates = [...this.entries.values()].filter((entry) =>
+        descendants.has(entry.row.pid) && selected.get(entry.row.pid)?.row.birth === entry.row.birth);
+      if (!candidates.length) return true;
+      candidates.sort((a, b) => Number(b.row.pid === target.row.pid) - Number(a.row.pid === target.row.pid));
+      for (const { row } of candidates) {
+        try {
+          // Verify at the signal boundary without another expensive whole-host scan.
+          if (this.snapshot === processSnapshot && process.platform === "linux") {
+            const stat = await readFile(`/proc/${row.pid}/stat`, "utf8");
+            const fields = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
+            if (fields[19] !== row.birth || fields[0] === "Z") continue;
+          }
+          this.signal(row.pid);
+        } catch (error) {
+          if (!["ESRCH", "ENOENT"].includes((error as NodeJS.ErrnoException).code ?? "")) throw new Error(`Could not kill PID ${row.pid}: ${error instanceof Error ? error.message : String(error)}. Check Core host permissions.`);
+        }
+      }
+      await new Promise((resolve) => setTimeout(resolve, 10));
     }
+    await this.refresh(true);
     if ([...this.entries.values()].some(({ row }) => descendants.has(row.pid) && selected.get(row.pid)?.row.birth === row.birth)) {
       throw new Error(`PID ${target.row.pid} or its descendants are still exiting. Refresh processes and retry Kill.`);
     }
     return true;
   }
-  private refresh(): Promise<void> {
-    if (this.refreshing) return this.refreshing;
+  private refresh(fresh = false): Promise<void> {
+    if (this.refreshing) return fresh ? this.refreshing.then(() => this.refresh()) : this.refreshing;
     this.refreshing = this.update().finally(() => { this.refreshing = undefined; });
     return this.refreshing;
   }

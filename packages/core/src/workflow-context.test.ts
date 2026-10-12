@@ -14,7 +14,7 @@ const execFileAsync = promisify(execFile);
 const directories: string[] = [];
 const services: WorkflowAppService[] = [];
 afterEach(async () => {
-  services.splice(0).forEach((service) => service.closeAll());
+  await Promise.all(services.splice(0).map((service) => service.closeAll()));
   vi.unstubAllEnvs();
   await Promise.all(directories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
 });

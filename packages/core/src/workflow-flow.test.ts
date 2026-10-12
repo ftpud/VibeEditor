@@ -273,7 +273,7 @@ describe("typed workflows", () => {
       expect(run.status).toBe("succeeded");
       expect(JSON.parse(run.blocks.find((block) => block.blockId === "status")!.output!)).toMatchObject({ status: "running" });
       expect(JSON.parse(run.blocks.find((block) => block.blockId === "stop")!.output!)).toMatchObject({ status: "exited" });
-    } finally { apps.closeAll(); }
+    } finally { await apps.closeAll(); }
   });
 
   it("lets an agent choose different actions on one persisted Run App block", async () => {
@@ -297,7 +297,7 @@ describe("typed workflows", () => {
         return session("Managed app");
       }, "provider");
       expect((await finished()).status).toBe("succeeded");
-    } finally { apps.closeAll(); }
+    } finally { await apps.closeAll(); }
   });
 
   it("supports input-free concurrent app status and tail calls with a requested line count", async () => {
@@ -323,7 +323,7 @@ describe("typed workflows", () => {
       expect(run.status).toBe("succeeded");
       expect(run.operations?.filter((item) => item.kind === "tool_command").some((item) => item.status === "failed")).toBe(true);
       expect(run.operations?.filter((item) => item.kind === "tool_command").some((item) => item.status === "succeeded")).toBe(true);
-    } finally { apps.closeAll(); }
+    } finally { await apps.closeAll(); }
   });
 
   it("persists provider activity during a chat turn even when the response has not changed", async () => {

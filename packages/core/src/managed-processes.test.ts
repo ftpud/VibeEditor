@@ -80,6 +80,20 @@ describe("managed process ownership", () => {
       host.close();
     } finally { vi.useRealTimers(); }
   });
+  it("reconciles an app whose last process exits between the cached and kill snapshots", async () => {
+    let launchId: string; let snapshots = 0;
+    const snapshot = async (): Promise<ProcessRow[]> => {
+      snapshots++;
+      return snapshots < 2 ? [{ pid: 50, parentPid: 1, birth: "ticks-50", command: "app child", state: "S", launchId }] : [];
+    };
+    const signal = vi.fn(); const host = new ManagedProcesses(snapshot, signal); hosts.push(host);
+    launchId = host.prepare({ ...context, kind: "workflow-app", appName: "Server" }).launchId;
+    expect(await host.listApps()).toHaveLength(1);
+    expect(await host.kill(`app:${launchId}`, async () => true)).toBe(false);
+    expect(signal).not.toHaveBeenCalled();
+    expect(host.appSnapshot(launchId)).toBeUndefined();
+    expect(await host.listApps()).toEqual([]);
+  });
   it("reports permission errors with the selected PID", async () => {
     let launchId: string;
     const host = new ManagedProcesses(async (): Promise<ProcessRow[]> => [{ pid: 10, parentPid: 1, birth: "10", command: "app", state: "S", launchId }], () => { throw Object.assign(new Error("permission denied"), { code: "EPERM" }); });

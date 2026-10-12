@@ -15,10 +15,10 @@ const run: HarnessRun = { id: "run", harnessId: workflow.id, harnessVersion: 1, 
 const props = () => ({ harnesses: [workflow], runs: [], onRun: vi.fn().mockResolvedValue(run), onCancelRun: vi.fn().mockResolvedValue(undefined), onError: vi.fn() });
 
 describe("Workflow run library", () => {
-  it("fits each axis and kills an app from a completed run", async () => {
+  it.each(["running", "descendants-running"] as const)("fits each axis and kills a %s app from a completed run", async (appStatus) => {
     const appWorkflow: HarnessDefinition = { ...workflow, blocks: [{ id: "app", type: "run_app", label: "Server", prompt: "", command: "npm run dev", app: { name: "server", actions: ["start"] }, position: { x: 0, y: 0 } }] };
     const appRun: HarnessRun = { ...run, status: "succeeded", definition: appWorkflow, blocks: [{ blockId: "app", status: "succeeded" }] };
-    const onReadApp = vi.fn().mockResolvedValue({ name: "server", status: "running", output: "Listening on port 3000\nerror stream", pid: 123 });
+    const onReadApp = vi.fn().mockResolvedValue({ name: "server", status: appStatus, output: "Listening on port 3000\nerror stream", pid: 123 });
     const onKillApp = vi.fn(async () => { onReadApp.mockResolvedValue({ name: "server", status: "exited", output: "Listening on port 3000\nerror stream", pid: 123, signal: "SIGKILL" }); });
     render(<WorkflowRunPanel {...props()} harnesses={[appWorkflow]} runs={[appRun]} onKillApp={onKillApp} onReadApp={onReadApp} />);
     fireEvent.click(screen.getByRole("button", { name: "Show Workspace check" }));
@@ -28,11 +28,12 @@ describe("Workflow run library", () => {
     expect(Number(preview.querySelector("svg")!.getAttribute("width"))).toBe(392);
     fireEvent.click(screen.getByRole("button", { name: "Fit workflow vertically" }));
     expect(Number(preview.querySelector("svg")!.getAttribute("height"))).toBe(176);
-    const appBlock = await screen.findByRole("button", { name: "Server: succeeded · Running in background" });
+    const appBlock = await screen.findByRole("button", { name: appStatus === "descendants-running" ? "Server: succeeded · Children running in background" : "Server: succeeded · Running in background" });
     expect(appBlock.classList.contains("background-running")).toBe(true);
     fireEvent.click(appBlock);
     expect(await screen.findByText(/Listening on port 3000/)).toBeTruthy();
     expect(onReadApp).toHaveBeenCalledWith("flow", "app", "run");
+    if (appStatus === "descendants-running") expect(await screen.findByText("Children running")).toBeTruthy();
     const kill = screen.getByRole("button", { name: "Kill process" });
     expect(kill.closest("header")).toBeTruthy();
     expect(kill.textContent).toBe("");

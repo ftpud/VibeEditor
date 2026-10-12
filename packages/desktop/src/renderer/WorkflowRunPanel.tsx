@@ -181,8 +181,8 @@ function CompactWorkflowPreview({ definition, run, selectedBlockId, onSelect, on
     {blocks.map((block) => {
       const state = run?.blocks.find((item) => item.blockId === block.id);
       const status = state?.status ?? "idle";
-      const backgroundRunning = block.type === "run_app" && appStatuses[block.id] === "running";
-      const label = `${block.label}: ${statusLabel(status)}${backgroundRunning ? " · Running in background" : ""}`;
+      const backgroundRunning = block.type === "run_app" && ["running", "descendants-running"].includes(appStatuses[block.id] ?? "");
+      const label = `${block.label}: ${statusLabel(status)}${backgroundRunning ? appStatuses[block.id] === "descendants-running" ? " · Children running in background" : " · Running in background" : ""}`;
       return <g key={block.id} className={`workflow-compact-block ${status}${backgroundRunning ? " background-running" : ""}${selectedBlockId === block.id ? " selected" : ""}`} transform={`translate(${block.position.x}, ${block.position.y})`} role="button" tabIndex={0} aria-pressed={selectedBlockId === block.id} aria-label={label} onClick={() => onSelect(block.id)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); onSelect(block.id); } }}><title>{label}{state?.error ? ` · ${state.error}` : ""}</title><rect width={120} height={24} rx={5} /><circle cx={10} cy={12} r={3} /><text x={18} y={16}>{block.label.length > 15 ? `${block.label.slice(0, 14)}…` : block.label}</text></g>;
     })}
   </svg></div><div className="workflow-preview-controls"><button type="button" aria-label="Fit workflow horizontally" title="Fit horizontally" onClick={() => fit("horizontal")}><ArrowLeftRight size={14} aria-hidden="true" /></button><button type="button" aria-label="Fit workflow vertically" title="Fit vertically" onClick={() => fit("vertical")}><ArrowUpDown size={14} aria-hidden="true" /></button></div></div>;
