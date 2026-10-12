@@ -137,6 +137,8 @@ export type WorkspaceOptions = {
   /** Pinned file paths, in their leading tab-strip order. */
   pinnedFiles?: string[];
   activeFile?: string;
+  /** Open workflow documents; content remains in Core’s workflow run history. */
+  workflowDocuments?: WorkspaceWorkflowDocument[];
   javaProject?: JavaProjectOptions;
   javaBreakpoints?: JavaBreakpoint[];
   terminal?: WorkspaceTerminalOptions;
@@ -149,6 +151,7 @@ export type WorkspaceSearchQuery = { query: string; path: string; matchCase?: bo
 export type WorkspaceSearchQueries = { recent?: WorkspaceSearchQuery[]; saved?: WorkspaceSearchQuery[] };
 export type FileColor = "red" | "orange" | "yellow" | "green" | "blue" | "purple" | "gray";
 /** Durable terminal-tab metadata. The display name is UI state, not a PTY identity. */
+export type WorkspaceWorkflowDocument = { runId: string; blockId: string; position: number; pinned?: boolean; markdownMode?: "edit" | "preview"; active?: boolean };
 export type WorkspaceTerminalOptions = { tabs: { displayName: string; terminalId?: string }[]; activeTabIndex?: number; panelOpen: boolean };
 export type TerminalSessionSnapshot = { terminalId: string; status: "running" | "exited"; output: string; exitCode?: number };
 /** Resolution is always against the currently selected workspace. A stale ID means Core no longer owns that process. */
