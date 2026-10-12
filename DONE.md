@@ -539,3 +539,13 @@ No implementation was performed in this continuation check.
 - Implementation/integrated SHA: 2987a594b3636cfaf8bc1beb0af9e8ddd1796975; integration 23cf5de6-40c1-4b8f-be5c-401418a084c6 completed. Post-merge notification error reconciled with actual history and integration record.
 - Publishing: pushed normally to origin/refs/heads/dev; published SHA 7ae1b26db916235dc616f9ad4a67426baa546a06; tracking and remote ref verified. TODO.md remains locally annotated but uncommitted because of the pre-existing user backlog replacement.
 - Limitations: no full Electron visual check.
+
+## TODO-010 — Keep expanded workflow Chatbox composer reachable during resize
+
+- Completed locally: 2026-10-12. Result: lowered transcript minimum from 140px to zero, removed expanded chatbox fixed 300px minimum in favor of intrinsic controls; transcript shrinks/scrolls and chart/run context scrolls separately. Composer remains in panel at moderate resize heights; normal transcript grows with available space.
+- Areas: Desktop WorkflowRunPanel context wrapper and workflow/chatbox CSS.
+- Validation: build, repository/Gateway typechecks, full tests on rerun; real rendered Chromium progressive Tasks resize from focused composer without manual outer scrolling, panel bounds, themes/widths, normal restoration, keyboard/send. At 381px panel height composer bottom improved 1061px to 837px within 850px boundary; roomy transcript grows to 292px. Scoped commit reviewed, clean worker.
+- Task: 360d8b4b-1b36-4ce8-95b7-9ffd559c4b58; branch feature/todo-003-workflow-fit-overlay; provider codex. Reused clean merged layout task/conversation, no reset; targeted containment review follow-up improved verification and layout.
+- Implementation/integrated SHA: ae0b9e2f7092f465292b5b549a625b767f3bc259; integration 570e67d9-905a-4b07-bffe-93fd4fecfc72 completed suite exit 0. Initial integration 4b09839f-01f9-49cd-b397-bcb3e164ace6 failed unrelated live-JVM timeout with root unchanged; isolated JVM and retained full suite passed, retry same merge delivery succeeded. Post-merge notification error reconciled from actual history and integration record.
+- Publishing: pending origin/refs/heads/dev. TODO.md remains locally annotated but uncommitted to preserve pre-existing user backlog replacement.
+- Limitations: near the roughly 70px resize minimum, outer scrolling is required for intrinsic controls; keyboard reachability verified. No full Electron visual check.
