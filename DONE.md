@@ -537,5 +537,5 @@ No implementation was performed in this continuation check.
 - Validation: build, repository/Gateway typechecks, full tests; actual-component Chromium checks of measurements, keyboard, narrow/expanded layouts and themes; smart integration suite exit 0; scoped commit reviewed, clean worker tree.
 - Task: 360d8b4b-1b36-4ce8-95b7-9ffd559c4b58; branch feature/todo-003-workflow-fit-overlay; provider codex. Reused merged clean layout task/conversation; no reset.
 - Implementation/integrated SHA: 2987a594b3636cfaf8bc1beb0af9e8ddd1796975; integration 23cf5de6-40c1-4b8f-be5c-401418a084c6 completed. Post-merge notification error reconciled with actual history and integration record.
-- Publishing: pending origin/refs/heads/dev. TODO.md remains locally annotated but uncommitted because of the pre-existing user backlog replacement.
+- Publishing: pushed normally to origin/refs/heads/dev; published SHA 7ae1b26db916235dc616f9ad4a67426baa546a06; tracking and remote ref verified. TODO.md remains locally annotated but uncommitted because of the pre-existing user backlog replacement.
 - Limitations: no full Electron visual check.
