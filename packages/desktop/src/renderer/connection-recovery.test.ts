@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { ConnectionRecovery, recoveryRetryDelay } from "./connection-recovery";
+import { ConnectionRecovery, recoveryFailureFeedback, recoveryRetryDelay } from "./connection-recovery";
 
 afterEach(() => vi.useRealTimers());
 
@@ -147,4 +147,15 @@ it("reports snapshot producer rejection once and stops retrying", async () => {
   expect(attempt).toHaveBeenCalledOnce();
   expect(failed).toHaveBeenCalledWith(error);
   expect(vi.getTimerCount()).toBe(0);
+});
+
+
+it("shows actionable paused feedback for snapshot limits and progress for transient failures", () => {
+  const feedback = recoveryFailureFeedback(Object.assign(new Error("Tree exceeds maxNodes (10000)"), { code: "WORKSPACE_TREE_TOO_LARGE" }));
+  expect(feedback).toMatchObject({ retry: false, kind: "error" });
+  expect(feedback.message).toContain("Tree exceeds maxNodes");
+  expect(feedback.message).toContain("restoration paused");
+  expect(feedback.message).toContain("reconnect or select a workspace");
+  expect(feedback.message).not.toContain("retrying");
+  expect(recoveryFailureFeedback(new Error("Offline"))).toEqual({ retry: true, kind: "progress", message: "Offline; retrying…" });
 });

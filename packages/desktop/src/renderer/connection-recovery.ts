@@ -7,6 +7,15 @@ export function recoveryRetryDelay(backoffMs: number, sample: number): number {
   return Math.min(backoffMs, lower + Math.floor(unit * (backoffMs - lower + 1)));
 }
 
+/** Shared retry policy and user feedback for restoration failures. */
+export function recoveryFailureFeedback(error: unknown): { retry: boolean; message: string; kind: "error" | "progress" } {
+  const detail = error instanceof Error ? error.message : "Backend unavailable";
+  if (error && typeof error === "object" && "code" in error && error.code === "WORKSPACE_TREE_TOO_LARGE") {
+    return { retry: false, kind: "error", message: `${detail}; restoration paused. Open a smaller workspace or adjust Core tree limits, then reconnect or select a workspace.` };
+  }
+  return { retry: true, kind: "progress", message: `${detail}; retrying…` };
+}
+
 /** Owns one recovery attempt loop, including its retry timer. */
 export class ConnectionRecovery {
   private controller?: AbortController;
@@ -54,7 +63,7 @@ export class ConnectionRecovery {
           if (signal.aborted) return;
           this.failed(error);
           // A producer limit needs operator action; reconnecting cannot reduce the tree.
-          if (error && typeof error === "object" && "code" in error && error.code === "WORKSPACE_TREE_TOO_LARGE") return;
+          if (!recoveryFailureFeedback(error).retry) return;
           backoff = Math.min(backoff * 2, this.maximumDelayMs);
         }
       }

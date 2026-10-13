@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { protocolCompatibility } from "@remote-ide/protocol";
+import { recoveryFailureFeedback } from "./connection-recovery";
 import { CoalescedAsyncAction, CoreClient } from "./client";
 
 it("keeps the downloadable Desktop manifest aligned with the protocol package", async () => {
@@ -45,6 +46,23 @@ describe("CoreClient streaming disconnects", () => {
     vi.stubGlobal("WebSocket", FakeWebSocket);
   });
   afterEach(() => vi.unstubAllGlobals());
+
+  it("preserves snapshot error codes through response parsing and keeps the client usable", async () => {
+    const client = new CoreClient();
+    try {
+      const connecting = client.connect("core", 7331);
+      const socket = FakeWebSocket.instances[0]!;
+      socket.open(); await connecting;
+      const pending = client.request("workspace.open", {}).catch((error: unknown) => error);
+      const id = JSON.parse(socket.sent.at(-1)!).id;
+      socket.receive({ id, ok: false, error: { code: "WORKSPACE_TREE_TOO_LARGE", message: "Open a smaller workspace" } });
+      const error = await pending;
+      expect(error).toMatchObject({ code: "WORKSPACE_TREE_TOO_LARGE", message: "WORKSPACE_TREE_TOO_LARGE: Open a smaller workspace" });
+      expect(recoveryFailureFeedback(error)).toMatchObject({ retry: false, kind: "error" });
+      expect(client.isConnected()).toBe(true);
+      await expect(client.request("protocol.keepAlive", {})).resolves.toEqual({});
+    } finally { client.disconnect(); }
+  });
 
   it("ignores malformed event sequences without consuming pending responses or leaking diagnostic payloads", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);

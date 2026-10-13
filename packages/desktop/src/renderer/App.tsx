@@ -9,7 +9,7 @@ import remarkGfm from "remark-gfm";
 import { workflowRunsForContext } from "./workflow-context";
 import { InvalidationRefreshes } from "./invalidation-refreshes";
 import { CoalescedAsyncAction, CoreClient } from "./client";
-import { ConnectionRecovery, reconnectWorkspace, restoreTerminal, type RecoverySelection } from "./connection-recovery";
+import { ConnectionRecovery, recoveryFailureFeedback, reconnectWorkspace, restoreTerminal, type RecoverySelection } from "./connection-recovery";
 import { recoverEditorGroups, workspaceRestorationGuard } from "./workspace-recovery";
 import { remoteUploadDestination, treeContainsPath } from "./remote-transfer";
 import { hasWorkspaceSetting, readSetting, readSettingNumber, readWorkspaceSetting, resetWorkspaceSetting, workspaceSettingKey, writeSetting, writeWorkspaceSetting } from "./settings";
@@ -755,8 +755,13 @@ export function App() {
         return;
       }
       invalidationRefreshes.current?.reset();
-      client.disconnect();
-      showStatus(`${error instanceof Error ? error.message : "Backend unavailable"}; retrying…`, "progress");
+      const feedback = recoveryFailureFeedback(error);
+      if (feedback.retry) client.disconnect();
+      else {
+        setStatus("disconnected");
+        setWorkspaceOptionsReady(false);
+      }
+      showStatus(feedback.message, feedback.kind);
     });
     recoveryRef.current = recovery;
     client.onDisconnected = (message) => {
@@ -2783,6 +2788,7 @@ export function App() {
     {statusMessage && <div className={`status-toast ${statusKind}`} role={statusKind === "error" ? "alert" : "status"} aria-live={statusKind === "error" ? "assertive" : "polite"}>
       {statusKind === "progress" ? <LoaderCircle className="status-toast-spinner" size={16} /> : statusKind === "success" ? <Check size={16} /> : <CircleAlert size={16} />}
       <span>{statusMessage}</span>
+      {status === "disconnected" && statusKind === "error" && <button onClick={() => { showStatus("Restoring backend connection…", "progress"); recoveryRef.current?.start(); }}>Reconnect</button>}
       {projectTransfer && <button title="Cancel file transfer" onClick={() => void cancelProjectTransfer()}><X size={14} /></button>}
       {lastDeleted && statusKind === "success" && <button onClick={() => void restoreLastDeleted()}>Undo</button>}
       {statusKind !== "progress" && <button title="Dismiss" aria-label="Dismiss status message" onClick={() => setStatusMessageState("")}><X size={14} /></button>}
