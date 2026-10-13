@@ -609,3 +609,13 @@ No implementation was performed in this continuation check.
 - Implementation/integrated SHA:8a537c6e89ee27190c2af1e45115c26f6cb7dac6; integrationfaadb219-db8e-423e-85b6-898a168e375b completed; post-merge notification error reconciled.
 - Publishing: pushed normally origin/refs/heads/dev at799326fae01e91f809da452b1a023a4d47c1290e,remote/tracking verified. TODO dispatcher/runner edits preserved locally and uncommitted.
 - Limitations: reduces synchronization but cannot guarantee different schedules, especially after suspension.
+
+## todo-queue-20261012-connectivity / TODO-014 — Coalesce configuration and process invalidation refreshes
+
+- Completed locally: 2026-10-13. Per-context configuration/process channels allow one active batch plus one follow-up; identity guards suppress stale commits and disconnect/unmount drops queued work. Batches wait all sibling reads through failures.
+- Areas: Desktop App/client, invalidation helper and deferred tests, docs/INVALIDATION-REFRESH-COALESCING.md.
+- Validation: build,repository/Gateway typechecks,969 full/42 focused tests;101 invalidation pairs reduced606 reads to12 with final snapshots retained; failure/sibling waits, follow-up events and replacement tested. Clean scoped commit reviewed.
+- Task: daa5a9cd-4e02-4ce7-afc1-795fbcffae41; feature/todo-006-websocket-concurrency; codex. Reused clean merged transport conversation, no reset; task retired finished after this item.
+- Implementation/integrated SHA:000d88afd4f3a5b6a891128bc01fb7455b9a91d5; integration2e55ed25-ea66-4f20-b76a-2442ef491fae completed suite exit0. Initial5501cbb9 failed unrelated liveJVM timeout; isolated JVM/full candidate rerun passed; same-key merge retry succeeded. Post-merge notification error reconciled.
+- Publishing: pending origin/refs/heads/dev. TODO dispatcher/runner edits remain locally intact and uncommitted.
+- Limitations: already-issued reads are not cancelled; manual refreshes separate; tests do not mount full Electron/Monaco app.
