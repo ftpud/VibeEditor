@@ -579,3 +579,13 @@ No implementation was performed in this continuation check.
 - Implementation/integrated SHA: 5352ab6cdc20d69640c33093db4790eff47fa884; integration dfd30dec-9944-4dc5-a8ea-170178b71a9d completed suite exit0. Post-merge feature-assignment error reconciled with root and Core record.
 - Publishing: pushed normally origin/refs/heads/dev; published SHA532060d87145673223b1a9336bb06f30989d67d6, tracking/remote verified. Root TODO annotations remain uncommitted to preserve dispatcher additions.
 - Limitations: excludes producer snapshots and kernel/TLS buffers. Concrete snapshot finding recorded as TODO-016; historical TODO-003 entry preserved above.
+
+## todo-queue-20261012-connectivity / TODO-011 — Bound concurrent Core request admission
+
+- Completed locally: 2026-10-13. Per-peer configurable admission cap (default32), immediate correlated overload errors, no waiting queue, keepAlive exemption. Disconnect guards prevent waiting requests starting mutations; lease cleanup preserves concurrency and switch ordering.
+- Areas: Core server, admission helper and unit/real WebSocket tests, docs/WEBSOCKET-ADMISSION.md.
+- Validation: build, repository/Gateway typechecks,952 full tests, focused saturation/isolation, success/error release, blocked initialization/switch mutations never start after close. Clean scoped commit reviewed; smart suite exit0.
+- Task: daa5a9cd-4e02-4ce7-afc1-795fbcffae41; feature/todo-006-websocket-concurrency; codex. Reused clean merged transport conversation, no reset.
+- Implementation/integrated SHA:16eeabd53e6104267c9ea92729e023a0d83d17a5; integration022e9dec-703e-4fb4-aed2-26acdd3a6a3b completed. Feature-assignment notification error reconciled.
+- Publishing: pending origin/refs/heads/dev. TODO dispatcher/runner edits remain intact locally and uncommitted.
+- Limitations: already-started operations may finish; excludes inbound rate, service fanout and server-wide concurrency.
