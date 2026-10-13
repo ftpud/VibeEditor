@@ -1,3 +1,4 @@
+import { RequestAdmission, requestAdmissionLimit, type RequestAdmissionOptions } from "./request-admission.js";
 import { configureWebSocketOutput, sendWebSocketData, sendWebSocketPong, websocketOutboundLimits, type WebSocketOutboundOptions } from "./websocket-output.js";
 export { sendWebSocketData } from "./websocket-output.js";
 import { monitorWebSocket, websocketLivenessThresholds, type WebSocketLivenessOptions } from "./websocket-liveness.js";
@@ -131,11 +132,12 @@ export function protocolHandshake(compatibility: { minimum: number; maximum: num
     : { compatible, compatibility: coreProtocolCompatibility, message: `Core supports protocol ${coreProtocolCompatibility.minimum}-${coreProtocolCompatibility.maximum}; this Desktop supports ${compatibility.minimum}-${compatibility.maximum}` };
 }
 
-export type CoreConnectionOptions = WebSocketLivenessOptions & { outbound?: WebSocketOutboundOptions };
+export type CoreConnectionOptions = WebSocketLivenessOptions & { outbound?: WebSocketOutboundOptions; admission?: RequestAdmissionOptions };
 
 export async function createServer(host: string, port: number, workspacePath: string, options: CoreConnectionOptions = {}): Promise<WebSocketServer> {
   const liveness = websocketLivenessThresholds(options);
   const outbound = websocketOutboundLimits(options.outbound);
+  const admissionLimit = requestAdmissionLimit(options.admission);
   await ensureSelfConfiguration();
   const rootWorkspace = workspacePath;
   const roots = await WorkspaceRootRegistry.open(rootWorkspace);
@@ -401,6 +403,8 @@ export async function createServer(host: string, port: number, workspacePath: st
     configureWebSocketOutput(socket, outbound);
     socket.on("ping", (data) => sendWebSocketPong(socket, data));
     if (remoteTransfers.accepts(request.url)) { void remoteTransfers.attach(socket, request.url); return; }
+    const admission = new RequestAdmission(admissionLimit, () => socket.readyState === WebSocket.OPEN);
+    socket.once("close", () => admission.close());
     const disposeMonitor = monitorWebSocket(socket, liveness);
     socketMonitors.add(disposeMonitor);
     socket.once("close", () => socketMonitors.delete(disposeMonitor));
@@ -410,6 +414,7 @@ export async function createServer(host: string, port: number, workspacePath: st
     const makeServices = async (nextWorkspace: string, ownerRootId = selectedRoot.id): Promise<SessionServices> => {
       const filesystem = new WorkspaceFileSystem();
       await filesystem.open(nextWorkspace);
+      admission.assertOpen();
       workspaceOwners.set(path.resolve(nextWorkspace), ownerRootId);
       runConfigs.registerWorkspace(nextWorkspace, roots.get(ownerRootId).path);
       runConfigWatcher.add(runConfigs.directory(nextWorkspace, "local"));
@@ -496,6 +501,7 @@ export async function createServer(host: string, port: number, workspacePath: st
     // startup workspace until another explicit task switch happens.
     servicesPromise = (async () => {
       const registry = await tasks.list();
+      admission.assertOpen();
       const selectedWorkspace = registry.selectedTaskId ? tasks.taskPath(registry.selectedTaskId) : rootWorkspace;
       terminalSubscriptions.set(socket, { rootId: selectedRoot.id, workspace: selectedWorkspace, terminalIds: new Set() });
       await commitSwitchedWatch(selectedRoot.id, await prepareSwitchedWatch(selectedWorkspace));
@@ -507,7 +513,9 @@ export async function createServer(host: string, port: number, workspacePath: st
     console.log(`[core] connected: ${client}`);
     socket.on("message", async (data) => {
       let id = "unknown";
+      let releaseAdmission: (() => void) | undefined;
       try {
+        admission.assertOpen();
         const parsed = parseRequest(data);
         id = parsed.id;
         console.log(`[core] request ${parsed.id}: ${parsed.type}`);
@@ -526,6 +534,7 @@ export async function createServer(host: string, port: number, workspacePath: st
           sendWebSocketData(socket, JSON.stringify({ id, ok: true, result: {} } satisfies Response<"protocol.keepAlive">));
           return;
         }
+        releaseAdmission = admission.acquire();
         if (parsed.type === "workspace.roots") {
           sendWebSocketData(socket, JSON.stringify({ id, ok: true, result: { roots: roots.list(), selectedRootId: selectedRoot.id } }));
           return;
@@ -544,11 +553,13 @@ export async function createServer(host: string, port: number, workspacePath: st
           const [targetTasks, targetOptions] = await Promise.all([targetContext.tasks.list(), new WorkspaceStateStore(target.path, process.env.REMOTE_IDE_STATE_DIR).load()]);
           const blocker = rootRemovalBlocker({ tasks: targetTasks.tasks.length, openFiles: targetOptions.openFiles.length, terminals: terminalHost.hasWorkspace(target.path), transfers: remoteTransfers.hasWorkspace(target.path) });
           if (blocker) throw new CoreError("INVALID_REQUEST", blocker);
+          admission.assertOpen();
           assertRootRemovalAllowed(liveRootSelections, target.id);
           removingRoots.add(target.id);
           try {
             const subscriptions = [...(rootWatchSubscriptions.get(target.id) ?? [])];
             await Promise.all(subscriptions.map((subscription) => closeSwitchedWatch(target.id, subscription)));
+            admission.assertOpen();
             await roots.remove(parsed.payload.rootId);
             rootContexts.delete(parsed.payload.rootId);
           } finally { removingRoots.delete(target.id); }
@@ -580,6 +591,7 @@ export async function createServer(host: string, port: number, workspacePath: st
         let rootSelectionResult: { root: WorkspaceRoot; workspace: string; projectName: string; tree: FileTreeNode[]; options: WorkspaceOptions } | undefined;
         try {
           services = await servicesPromise;
+          admission.assertOpen();
           if (parsed.type === "workspace.selectRoot") {
             const nextRoot = roots.get(parsed.payload.rootId);
             if (removingRoots.has(nextRoot.id)) throw new CoreError("INVALID_REQUEST", "Workspace root is being removed");
@@ -588,6 +600,7 @@ export async function createServer(host: string, port: number, workspacePath: st
             let candidate: { nextServices: SessionServices; nextWatch: SwitchedWatch | undefined; result: { root: WorkspaceRoot; workspace: string; projectName: string; tree: FileTreeNode[]; options: WorkspaceOptions } };
             try { candidate = await transactionalRootSelection(async () => {
               const selectedTasks = parsed.payload.preserveTaskSelection ? await rootContext.tasks.list() : undefined;
+              admission.assertOpen();
               const nextWorkspace = selectedTasks?.selectedTaskId ? rootContext.tasks.taskPath(selectedTasks.selectedTaskId) : nextRoot.path;
               const nextServices = await makeServices(nextWorkspace, nextRoot.id);
               let nextWatch: SwitchedWatch | undefined;
@@ -597,8 +610,11 @@ export async function createServer(host: string, port: number, workspacePath: st
                 return { nextServices, nextWatch, result };
               } catch (error) { nextServices.java.close(); nextServices.jdt.close(); if (nextWatch) await closeSwitchedWatch(nextRoot.id, nextWatch); throw error; }
             }, async ({ nextServices, nextWatch }) => {
+              admission.assertOpen();
               await commitSwitchedWatch(nextRoot.id, nextWatch);
+              admission.assertOpen();
               if (!parsed.payload.preserveTaskSelection) await selectRootWorkspace(rootContext.tasks);
+              admission.assertOpen();
               selectedRoot = nextRoot; liveRootSelections.select(socket, nextRoot.id);
               servicesPromise = Promise.resolve(nextServices);
               terminalSubscriptions.set(socket, { rootId: nextRoot.id, workspace: nextServices.workspacePath, terminalIds: new Set() });
@@ -608,6 +624,7 @@ export async function createServer(host: string, port: number, workspacePath: st
             }); } catch (error) { liveRootSelections.cancelSelection(socket); throw error; }
             services = candidate.nextServices; rootSelectionResult = candidate.result;
           } else if (parsed.type === "tasks.switch" || (parsed.type === "tasks.delete" && (await rootContext.tasks.list()).selectedTaskId === parsed.payload.taskId)) {
+            admission.assertOpen();
             const selected = await rootContext.tasks.select(parsed.type === "tasks.switch" ? parsed.payload.taskId : undefined);
             services.java.close(); services.jdt.close();
             servicesPromise = makeServices(selected.workspace);
@@ -616,6 +633,7 @@ export async function createServer(host: string, port: number, workspacePath: st
             await commitSwitchedWatch(selectedRoot.id, await prepareSwitchedWatch(selected.workspace));
           }
         } finally { release?.(); }
+        admission.assertOpen();
         const result = parsed.type === "workspace.selectRoot"
           ? rootSelectionResult!
           : await handleRequest(services, rootContext.tasks, acp, rootContext.usefulFiles, rootContext.agents, rootContext.harnesses, harnessRunner(selectedRoot.id), workflowApps, terminalHost, runConfigs, aiTimers, schedules, remoteTransfers, selectedRoot.path, parsed, rootWorkspace);
@@ -633,7 +651,7 @@ export async function createServer(host: string, port: number, workspacePath: st
         const coreError = error instanceof CoreError ? error : new CoreError("INVALID_REQUEST", error instanceof Error ? error.message : "Invalid request");
         console.error(`[core] error ${id}: ${coreError.code} ${coreError.message}`);
         sendWebSocketData(socket, JSON.stringify({ id, ok: false, error: { code: coreError.code, message: coreError.message } } satisfies Response));
-      }
+      } finally { releaseAdmission?.(); }
     });
     socket.on("close", () => {
       activeSessions.delete(socket);
