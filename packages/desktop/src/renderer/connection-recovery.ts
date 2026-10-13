@@ -1,5 +1,12 @@
 import type { CoreClient } from "./client";
 
+/** Equal jitter keeps each delay in the upper half of its capped backoff window. */
+export function recoveryRetryDelay(backoffMs: number, sample: number): number {
+  const lower = Math.ceil(backoffMs / 2);
+  const unit = Number.isFinite(sample) ? Math.max(0, Math.min(1, sample)) : 0.5;
+  return Math.min(backoffMs, lower + Math.floor(unit * (backoffMs - lower + 1)));
+}
+
 /** Owns one recovery attempt loop, including its retry timer. */
 export class ConnectionRecovery {
   private controller?: AbortController;
@@ -8,8 +15,14 @@ export class ConnectionRecovery {
     private readonly attempt: (signal: AbortSignal) => Promise<void>,
     private readonly failed: (error: unknown) => void,
     private readonly initialDelayMs = 250,
-    private readonly maximumDelayMs = 5_000
-  ) {}
+    private readonly maximumDelayMs = 5_000,
+    private readonly random: () => number = Math.random
+  ) {
+    for (const value of [initialDelayMs, maximumDelayMs]) {
+      if (!Number.isSafeInteger(value) || value <= 0 || value > 2_147_483_647) throw new Error("Recovery delays must be positive timer integers");
+    }
+    if (initialDelayMs > maximumDelayMs) throw new Error("Initial recovery delay must not exceed maximum delay");
+  }
 
   start(): void {
     if (this.controller) return;
@@ -25,12 +38,12 @@ export class ConnectionRecovery {
 
   private async run(controller: AbortController): Promise<void> {
     const { signal } = controller;
-    let delay = this.initialDelayMs;
+    let backoff = this.initialDelayMs;
     try {
       while (!signal.aborted) {
         await new Promise<void>((resolve) => {
           const finish = () => { clearTimeout(timer); signal.removeEventListener("abort", finish); resolve(); };
-          const timer = setTimeout(finish, delay);
+          const timer = setTimeout(finish, recoveryRetryDelay(backoff, this.random()));
           signal.addEventListener("abort", finish, { once: true });
         });
         if (signal.aborted) return;
@@ -40,7 +53,7 @@ export class ConnectionRecovery {
         } catch (error) {
           if (signal.aborted) return;
           this.failed(error);
-          delay = Math.min(delay * 2, this.maximumDelayMs);
+          backoff = Math.min(backoff * 2, this.maximumDelayMs);
         }
       }
     } finally {
