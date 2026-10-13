@@ -1,6 +1,10 @@
 # Vibe Editor
 
-Vibe Editor is an experimental, remote-first, AI-first development environment. Your projects, terminals, builds, and AI agents run on your development machine; a local desktop app gives you an editor, Git tools, and control over the work.
+> **VibeEditor is an experimental testbed for remote-first, AI-first IDE ideas—not a production-ready product.**
+
+VibeEditor is a place to explore what a remote-first, AI-first development environment can become when features can be vibecoded and implemented quickly. It is deliberately hackable rather than finished: the repository provides a working foundation, but anyone can fork it, replace parts of it, or build whatever workflow and IDE experience they want on top.
+
+The experiment is built around a simple idea from [WHY.md](WHY.md): **the development machine is the server, and the local app is the control surface**.
 
 Each task has its own workspace with files, terminals, AI conversations, and notes, so you can switch tasks and return to where you left off. Let an agent work, review its changes, or take over yourself.
 
