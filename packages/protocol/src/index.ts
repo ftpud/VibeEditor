@@ -16,7 +16,7 @@ export type FileRevision = { identity: string; version: string };
  * Desktop can prove it is safe to talk to a newly deployed Core.
  */
 export type ProtocolCompatibility = { minimum: number; maximum: number };
-export const protocolCompatibility: ProtocolCompatibility = { minimum: 14, maximum: 14 };
+export const protocolCompatibility: ProtocolCompatibility = { minimum: 15, maximum: 15 };
 
 export function protocolRangeIsValid(range: ProtocolCompatibility): boolean {
   return Number.isInteger(range.minimum) && Number.isInteger(range.maximum) && range.minimum > 0 && range.minimum <= range.maximum;
@@ -191,11 +191,15 @@ export type ScheduledAction =
   | { type: "workflow"; provider: AiProvider; harnessId: string; input: string; startBlockId?: string };
 export type ScheduleInput = { name: string; dueAt: string; intervalSeconds?: number; taskId?: string; action: ScheduledAction };
 export type WorkspaceSchedule = ScheduleInput & { id: string; rootId: WorkspaceRootId; createdAt: string; enabled: boolean; lastRunAt?: string; lastError?: string; lastWorkflowRunId?: string };
+/** One explicitly registered Run App launch, including surviving descendants. */
+export type ManagedWorkflowApp = { kind: "workflow-app"; id: string; name: string; pid: number; launcherPid?: number; command: string; status: "running" | "descendants-running"; processCount: number; workspace: string; rootWorkspace: string; taskId?: string; taskName?: string; workflowRunId?: string; workflowBlockId?: string };
+export type ManagedProcess = { id: string; pid: number; command: string; status: "running"; workspace: string; rootWorkspace: string; taskId?: string; taskName?: string; workflowRunId?: string; workflowBlockId?: string; provider?: string; sessionId?: string; kind: "agent" | "command" | "workflow-app"; appName?: string; parentPid?: number };
+
 export type AiContinuationTimer = { id: string; workspace: string; provider: AiProvider; prompt: string; dueAt: string; createdAt: string; workflowRunId?: string; workflowBlockId?: string; workflowFlow?: boolean };
 
 /** Named long-lived shell apps are owned by Core and scoped to the execution workspace. */
 export type HarnessAppAction = "start" | "status" | "kill" | "tail";
-export type HarnessAppState = { name: string; status: "not_found" | "starting" | "running" | "exited"; output: string; pid?: number; exitCode?: number | null; signal?: string | null };
+export type HarnessAppState = { name: string; status: "not_found" | "starting" | "running" | "descendants-running" | "exited"; output: string; pid?: number; exitCode?: number | null; signal?: string | null };
 export type HarnessAppOptions = { action?: HarnessAppAction; actions?: HarnessAppAction[]; name: string; lines?: number };
 export type HarnessBlock = { id: string; type: "ai" | "chatbox" | "skill" | "task_controls" | "text" | "timer" | "user_prompt" | "yes_no_prompt" | "markdown" | "script" | "run_app" | "start_button" | "start_input" | "prompt" | "task" | "review" | "verification"; seconds?: number; command?: string; app?: HarnessAppOptions; label: string; description?: string; skillId?: string; prompt: string; inputSchema?: HarnessDataSchema; outputSchema?: HarnessDataSchema; provider?: AiProvider; model?: string; reasoning?: string; agent?: AgentFileReference; watchdog?: boolean; review?: HarnessReview; verification?: HarnessVerification; join?: "all" | "any"; routing?: "all" | "ai"; position: { x: number; y: number } };
 export type HarnessEdge = { timeoutMs?: number; type?: "use" | "follow" | "path"; id: string; from: string; to: string; label?: string; loop?: boolean; execution?: "sync" | "async" };
@@ -222,7 +226,11 @@ export type HarnessChildTask = { taskId: string; blockId: string; provider: AiPr
 export type HarnessFeatureStatus = "planned" | "dispatched" | "completed" | "blocked";
 export type HarnessFeature = { id: string; prompt: string; prerequisites: string[]; status: HarnessFeatureStatus; taskId?: string; commit?: string; blockedReason?: string };
 export type HarnessConnectionTrace = { id: string; edgeId: string; direction: "forward" | "return"; status: "active" | "succeeded" | "failed"; startedAt: string; completedAt?: string };
-export type HarnessRun = { workspace?: string; connectionTraces?: HarnessConnectionTrace[]; id: string; harnessId: string; harnessVersion: number; definition?: HarnessDefinition; executionPlan?: HarnessExecutionPlan; operations?: HarnessOperation[]; children?: HarnessChildTask[]; features?: HarnessFeature[]; corrections?: HarnessCorrectionCycle[]; input: string; status: HarnessRunStatus; createdAt: string; startedAt?: string; completedAt?: string; blocks: HarnessBlockRun[]; error?: string; cleanupErrors?: string[] };
+/** The request envelope supplies rootId; an empty target explicitly selects that root. */
+export type HarnessTaskTarget = { taskId?: string };
+/** Core resolves this once. Continuations and reruns retain it regardless of selection. */
+export type HarnessWorkspaceBinding = { rootWorkspace: string; workspace: string; taskId?: string; taskName?: string };
+export type HarnessRun = { binding?: HarnessWorkspaceBinding; workspace?: string; connectionTraces?: HarnessConnectionTrace[]; id: string; harnessId: string; harnessVersion: number; definition?: HarnessDefinition; executionPlan?: HarnessExecutionPlan; operations?: HarnessOperation[]; children?: HarnessChildTask[]; features?: HarnessFeature[]; corrections?: HarnessCorrectionCycle[]; input: string; status: HarnessRunStatus; createdAt: string; startedAt?: string; completedAt?: string; blocks: HarnessBlockRun[]; error?: string; cleanupErrors?: string[] };
 export type HttpResponse = { status: number; statusText: string; headers: Record<string, string>; body: string; durationMs: number };
 
 export type JavaProjectOptions = {
@@ -309,10 +317,11 @@ export type SearchReplacePreview = { id: string; files: SearchReplacePreviewFile
 export type SearchReplaceApplyResult = { applied: { path: string; revision: FileRevision }[]; failures: { path: string; code: string; message: string }[] };
 
 export type ProtocolOperations = {
+  "protocol.keepAlive": { payload: Record<string, never>; result: Record<string, never> };
   "protocol.handshake": { payload: { compatibility: ProtocolCompatibility; clientVersion?: string }; result: { compatible: boolean; compatibility: ProtocolCompatibility; message?: string } };
   "workspace.roots": { payload: Record<string, never>; result: { roots: WorkspaceRoot[]; selectedRootId: WorkspaceRootId } };
   "workspace.addRoot": { payload: { path: string; alias: string }; result: { root: WorkspaceRoot; roots: WorkspaceRoot[] } };
-  "workspace.selectRoot": { payload: { rootId: WorkspaceRootId; includeIgnored?: boolean }; result: { root: WorkspaceRoot; workspace: string; projectName: string; tree: FileTreeNode[]; options: WorkspaceOptions } };
+  "workspace.selectRoot": { payload: { rootId: WorkspaceRootId; includeIgnored?: boolean; preserveTaskSelection?: boolean }; result: { root: WorkspaceRoot; workspace: string; projectName: string; tree: FileTreeNode[]; options: WorkspaceOptions } };
   "workspace.removeRoot": { payload: { rootId: WorkspaceRootId }; result: { roots: WorkspaceRoot[]; selectedRootId: WorkspaceRootId } };
   "workspace.open": {
     payload: { includeIgnored?: boolean };
@@ -332,6 +341,8 @@ export type ProtocolOperations = {
   "schedules.enabled": { payload: { scheduleId: string; enabled: boolean }; result: { schedule: WorkspaceSchedule } };
   "schedules.delete": { payload: { scheduleId: string }; result: { deleted: boolean } };
   "schedules.fire": { payload: { scheduleId: string }; result: { fired: boolean } };
+  "processes.list": { payload: Record<string, never>; result: { processes: ManagedWorkflowApp[] } };
+  "processes.kill": { payload: { processId: string }; result: { killed: boolean } };
   "timers.list": { payload: Record<string, never>; result: { timers: AiContinuationTimer[] } };
   "timers.cancel": { payload: { timerId: string }; result: { cancelled: boolean } };
   "timers.fire": { payload: { timerId: string }; result: { fired: boolean } };
@@ -392,13 +403,13 @@ export type ProtocolOperations = {
   "harnesses.update": { payload: { harness: HarnessDefinition }; result: { harness: HarnessDefinition } };
   "harnesses.delete": { payload: { id: string }; result: Record<string, never> };
   "harnesses.validate": { payload: { harness: HarnessDefinition }; result: { valid: boolean; issues: HarnessValidationIssue[]; order: string[] } };
-  "harnesses.runs": { payload: { harnessId?: string }; result: { runs: HarnessRun[] } };
+  "harnesses.runs": { payload: { harnessId?: string; runId?: string }; result: { runs: HarnessRun[] } };
   "harnesses.runs.delete": { payload: { runId: string }; result: Record<string, never> };
-  "harnesses.test": { payload: { definition: HarnessDefinition; blockId: string; input: string; provider?: AiProvider }; result: { run: HarnessRun } };
+  "harnesses.test": { payload: { definition: HarnessDefinition; blockId: string; input: string; provider?: AiProvider; target?: HarnessTaskTarget }; result: { run: HarnessRun } };
   "harnesses.app.read": { payload: { harnessId: string; blockId: string; runId?: string }; result: { app: HarnessAppState } };
   "harnesses.app.kill": { payload: { harnessId: string; blockId: string; runId?: string }; result: Record<string, never> };
-  "harnesses.run": { payload: { harnessId: string; input: string; startBlockId?: string; rerunRunId?: string; provider?: AiProvider }; result: { run: HarnessRun } };
-  "harnesses.chat": { payload: { harnessId: string; blockId: string; input: string; runId?: string; provider?: AiProvider }; result: { run: HarnessRun } };
+  "harnesses.run": { payload: { harnessId: string; input: string; startBlockId?: string; rerunRunId?: string; provider?: AiProvider; target?: HarnessTaskTarget }; result: { run: HarnessRun } };
+  "harnesses.chat": { payload: { harnessId: string; blockId: string; input: string; runId?: string; provider?: AiProvider; target?: HarnessTaskTarget }; result: { run: HarnessRun } };
   "harnesses.append": { payload: { runId: string; input: string }; result: { run: HarnessRun } };
   "harnesses.permission.resolve": { payload: { runId: string; blockId: string; sessionId: string; pauseId: string; requestId: string; optionId?: string }; result: { run: HarnessRun } };
   "harnesses.answer": { payload: { runId: string; blockId: string; sessionId: string; pauseId: string; input: string }; result: { run: HarnessRun } };
@@ -657,7 +668,7 @@ export type RequestType = keyof ProtocolOperations;
 
 /** All nested relative paths and opaque root-owned references inherit this envelope root. */
 export type Request<T extends RequestType = RequestType> = T extends RequestType
-  ? { id: string; type: T; payload: ProtocolOperations[T]["payload"] } & (T extends "protocol.handshake" | "workspace.roots" | "workspace.addRoot" ? { rootId?: never } : { rootId: WorkspaceRootId })
+  ? { id: string; type: T; payload: ProtocolOperations[T]["payload"] } & (T extends "protocol.handshake" | "protocol.keepAlive" | "workspace.roots" | "workspace.addRoot" ? { rootId?: never } : { rootId: WorkspaceRootId })
   : never;
 
 export type ErrorCode =
@@ -667,6 +678,8 @@ export type ErrorCode =
   | "PATH_OUTSIDE_WORKSPACE"
   | "FILE_NOT_FOUND"
   | "FILE_TOO_LARGE"
+  /** Complete workspace snapshot exceeded a producer limit; narrow the workspace or adjust Core limits. */
+  | "WORKSPACE_TREE_TOO_LARGE"
   | "BINARY_FILE"
   | "READ_FAILED"
   | "WRITE_FAILED"
@@ -685,7 +698,7 @@ export type ErrorCode =
 export type ProtocolError = { code: ErrorCode; message: string };
 
 export type Response<T extends RequestType = RequestType> =
-  | ({ id: string; ok: true; result: ProtocolOperations[T]["result"] } & (T extends "protocol.handshake" | "workspace.roots" | "workspace.addRoot" ? { rootId?: never } : { rootId: WorkspaceRootId }))
+  | ({ id: string; ok: true; result: ProtocolOperations[T]["result"] } & (T extends "protocol.handshake" | "protocol.keepAlive" | "workspace.roots" | "workspace.addRoot" ? { rootId?: never } : { rootId: WorkspaceRootId }))
   | { id: string; ok: false; error: ProtocolError };
 
 export type FilesystemChangedEvent = {
@@ -720,7 +733,8 @@ export type RunConfigChangedEvent = { type: "runConfig.changed"; payload: { root
 export type HarnessChangedEvent = { type: "harness.changed"; payload: { rootId: WorkspaceRootId; runId: string } };
 export type WorkflowDocumentEvent = { type: "workflow.document"; payload: { rootId: WorkspaceRootId; runId: string; blockId: string; title: string; content: string } };
 export type ConfigurationChangedEvent = { type: "configuration.changed"; payload: { rootId: WorkspaceRootId; resource: string; global: boolean } };
-export type ServerEvent = ConfigurationChangedEvent | TimersChangedEvent | WorkflowDocumentEvent | FilesystemChangedEvent | TerminalOutputEvent | TerminalExitEvent | GitChangedEvent | TaskGitChangedEvent | JavaSemanticChangedEvent | JavaOutputEvent | JavaExitEvent | JavaDebugStateEvent | AiChangedEvent | TasksChangedEvent | CommitMessageChangedEvent | RunConfigChangedEvent | HarnessChangedEvent;
+export type ProcessesChangedEvent = { type: "processes.changed"; payload: Record<string, never> };
+export type ServerEvent = ProcessesChangedEvent | ConfigurationChangedEvent | TimersChangedEvent | WorkflowDocumentEvent | FilesystemChangedEvent | TerminalOutputEvent | TerminalExitEvent | GitChangedEvent | TaskGitChangedEvent | JavaSemanticChangedEvent | JavaOutputEvent | JavaExitEvent | JavaDebugStateEvent | AiChangedEvent | TasksChangedEvent | CommitMessageChangedEvent | RunConfigChangedEvent | HarnessChangedEvent;
 
 /**
  * Every request the core accepts. Declaring it as a fully keyed record makes TypeScript
@@ -729,6 +743,7 @@ export type ServerEvent = ConfigurationChangedEvent | TimersChangedEvent | Workf
  */
 const requestTypeRegistry: Record<RequestType, true> = {
   "protocol.handshake": true,
+  "protocol.keepAlive": true,
   "workspace.roots": true,
   "workspace.addRoot": true,
   "workspace.selectRoot": true,
@@ -745,6 +760,8 @@ const requestTypeRegistry: Record<RequestType, true> = {
   "schedules.enabled": true,
   "schedules.delete": true,
   "schedules.fire": true,
+  "processes.list": true,
+  "processes.kill": true,
   "timers.list": true,
   "timers.cancel": true,
   "timers.fire": true,
@@ -929,3 +946,5 @@ const requestTypeRegistry: Record<RequestType, true> = {
 };
 
 export const requestTypes: RequestType[] = Object.keys(requestTypeRegistry) as RequestType[];
+
+export { isServerEvent, serverEventTypes } from "./server-events.js";

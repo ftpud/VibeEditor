@@ -1,11 +1,45 @@
 import os from "node:os";
 import path from "node:path";
 import { mkdtemp, readdir } from "node:fs/promises";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { AppEventBridge, appBridgeInstanceId } from "./app-events.js";
 import { appToolServer } from "./app-tools.js";
 
+const writes = vi.hoisted(() => ({ wait: undefined as Promise<void> | undefined, entered: undefined as (() => void) | undefined }));
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  return { ...actual, writeFile: async (...args: Parameters<typeof actual.writeFile>) => {
+    await actual.writeFile(...args);
+    if (writes.wait && String(args[0]).endsWith(".tmp")) { writes.entered?.(); await writes.wait; }
+  } };
+});
+
 describe("AppEventBridge", () => {
+  it("hides incomplete command and response writes from readers", async () => {
+    const state = await mkdtemp(path.join(os.tmpdir(), "vibe-atomic-bridge-"));
+    const bridge = new AppEventBridge("/workspace", state);
+    let release!: () => void;
+    const hold = () => {
+      writes.wait = new Promise<void>((resolve) => { release = resolve; });
+      return new Promise<void>((resolve) => { writes.entered = resolve; });
+    };
+    const entered = hold();
+    const pending = bridge.call({ name: "workflow_use_block", args: { block_id: "git-check" } });
+    try {
+      await entered;
+      expect((await readdir(bridge.commandsDirectory)).filter((file) => file.endsWith(".json"))).toEqual([]);
+      writes.wait = undefined; release();
+      await vi.waitFor(async () => expect((await readdir(bridge.commandsDirectory)).some((file) => file.endsWith(".json"))).toBe(true));
+      const file = (await readdir(bridge.commandsDirectory)).find((file) => file.endsWith(".json"))!;
+      const responseEntered = hold();
+      const consume = bridge.consumeCommand(path.join(bridge.commandsDirectory, file), async () => ({ output: "Unmerged paths:\nOK\n" }));
+      await responseEntered;
+      expect((await readdir(bridge.responsesDirectory)).filter((file) => file.endsWith(".json"))).toEqual([]);
+      writes.wait = undefined; release();
+      await consume;
+      await expect(pending).resolves.toEqual({ output: "Unmerged paths:\nOK\n" });
+    } finally { writes.wait = undefined; writes.entered = undefined; release(); }
+  });
   it("isolates workflow commands from other Core processes for the same workspace", async () => {
     const state = await mkdtemp(path.join(os.tmpdir(), "vibe-editor-command-owners-"));
     const server = appToolServer("/workspace", "/workflow/session", "codex", "/workspace", { runId: "run", blockId: "agent", flow: true });
@@ -20,7 +54,7 @@ describe("AppEventBridge", () => {
     const pending = caller.call(command);
     let files: string[] = [];
     for (let attempt = 0; files.length === 0 && attempt < 100; attempt += 1) {
-      files = await readdir(owner.commandsDirectory);
+      files = (await readdir(owner.commandsDirectory)).filter((file) => file.endsWith(".json"));
       if (!files.length) await new Promise((resolve) => setTimeout(resolve, 5));
     }
     expect(files).toHaveLength(1);
@@ -53,7 +87,7 @@ describe("AppEventBridge", () => {
     const pending = caller.call({ name: "task_create_and_start", args: { provider: "codex" }, currentWorkspace: "/workspace/task", currentProvider: "codex" });
     let files: string[] = [];
     for (let attempt = 0; files.length === 0 && attempt < 100; attempt += 1) {
-      files = await readdir(owner.commandsDirectory);
+      files = (await readdir(owner.commandsDirectory)).filter((file) => file.endsWith(".json"));
       if (files.length === 0) await new Promise((resolve) => setTimeout(resolve, 5));
     }
     expect(files).toHaveLength(1);

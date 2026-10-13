@@ -164,6 +164,23 @@ describe("HarnessPanel", () => {
     await waitFor(() => expect(onRun).toHaveBeenCalledWith("flow", "repeat this", undefined, "old-run"));
   });
 
+  it("keeps Run, snapshot Rerun and each active run cancellation available in the action group", async () => {
+    const harness: HarnessDefinition = { id: "flow", name: "Flow", version: 1, createdAt: "now", updatedAt: "now", blocks: [{ id: "work", type: "ai", label: "Work", prompt: "Check", position: { x: 0, y: 0 } }], edges: [] };
+    const completed: HarnessRun = { id: "completed", harnessId: "flow", harnessVersion: 1, definition: harness, input: "Saved prompt", status: "succeeded", createdAt: "now", blocks: [] };
+    const active = ["first", "second"].map((id) => ({ ...completed, id, status: "running" as const }));
+    const onRun = vi.fn().mockResolvedValue({ ...completed, id: "rerun", status: "queued" });
+    const onCancelRun = vi.fn().mockResolvedValue(undefined);
+    render(<HarnessPanel harnesses={[harness]} runs={[completed, ...active]} providers={[]} agents={[]} onCreate={vi.fn()} onSave={vi.fn()} onDelete={vi.fn()} onRun={onRun} onCancelRun={onCancelRun} onError={vi.fn()} />);
+    fireEvent.change(await screen.findByRole("combobox", { name: "Selected workflow run" }), { target: { value: "completed" } });
+    expect(screen.getByRole("button", { name: "Send" }).hasAttribute("disabled")).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "Stop run second" }));
+    await waitFor(() => expect(onCancelRun).toHaveBeenCalledWith("second"));
+    expect(screen.getByRole("button", { name: "Stop run first" })).toBeTruthy();
+    expect(screen.getByRole("combobox", { name: "Selected workflow run" })).toHaveProperty("value", "completed");
+    fireEvent.click(screen.getByRole("button", { name: "Rerun selected workflow snapshot" }));
+    await waitFor(() => expect(onRun).toHaveBeenCalledWith("flow", "Saved prompt", undefined, "completed"));
+  });
+
   it("exports redacted workflow definitions and imports current or legacy envelopes", () => {
     const definition: HarnessDefinition = { id: "flow", name: "Secret flow", version: 2, createdAt: "now", updatedAt: "now", blocks: [{ id: "plan", type: "prompt", label: "Plan", prompt: "token=super-secret-value", position: { x: 20, y: 20 } }], edges: [], settings: { tokenBudget: 5000 } };
     const exported = workflowDefinitionExport(definition);

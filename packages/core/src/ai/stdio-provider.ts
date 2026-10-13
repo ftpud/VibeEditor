@@ -1,3 +1,4 @@
+import { managedProcesses } from "../managed-processes.js";
 import crypto from "node:crypto";
 import os from "node:os";
 import path from "node:path";
@@ -548,7 +549,8 @@ export abstract class StdioAcpProvider extends AcpProvider {
   /** Spawns the agent, performs the ACP handshake and opens a session. */
   private async connect(workspace: string, configuration: AiConfiguration, servers?: AcpSendRequest["mcpServers"], savedSessionId?: string): Promise<Connected> {
     const launch = this.command(configuration);
-    const child = spawn(launch.command, launch.args, { cwd: workspace, env: { ...process.env, ...launch.env }, stdio: "pipe" });
+    const processContext = { workspace, rootWorkspace: await this.projectRoot(workspace), provider: this.descriptor.id, kind: "agent" as const };
+    const child = managedProcesses.launch(processContext, (env) => spawn(launch.command, launch.args, { cwd: workspace, env: { ...env, ...launch.env }, stdio: "pipe" }));
     // Spawn failures (most commonly an optional provider CLI missing from PATH)
     // are emitted asynchronously. Listen before constructing the ACP transport so
     // ENOENT rejects discovery instead of becoming an unhandled process error.
@@ -585,6 +587,7 @@ export abstract class StdioAcpProvider extends AcpProvider {
           created = await connection.newSession({ cwd: workspace, mcpServers: this.mcpServers(servers) }) as CreatedSession;
         }
       } else created = await connection.newSession({ cwd: workspace, mcpServers: this.mcpServers(servers) }) as CreatedSession;
+      managedProcesses.setSession(child.pid, created.sessionId);
       const configOptions = created.configOptions ?? [];
       this.rememberModels(configOptions, created.models);
       return {

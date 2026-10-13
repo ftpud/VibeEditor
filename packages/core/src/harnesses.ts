@@ -83,7 +83,9 @@ export class HarnessStore {
 
   async saveRun(run: HarnessRun): Promise<void> {
     await this.mutate(async () => {
-      const merged = [structuredClone(run), ...(await this.runs()).filter((item) => item.id !== run.id)]; const counts = new Map<string, number>();
+      const current = await this.runs();
+      assertRunBinding(run, current.find((item) => item.id === run.id));
+      const merged = [structuredClone(run), ...current.filter((item) => item.id !== run.id)]; const counts = new Map<string, number>();
       const retained = merged.filter((item) => { const count = counts.get(item.harnessId) ?? 0; counts.set(item.harnessId, count + 1); return count < RUNS_PER_WORKFLOW; });
       await this.writeJson("runs.json", { schemaVersion: SCHEMA_VERSION, runs: retained } satisfies RunFile);
     });
@@ -92,6 +94,7 @@ export class HarnessStore {
   async createRun(run: HarnessRun, maxActiveRuns: number): Promise<void> {
     await this.mutate(async () => {
       const current = await this.runs();
+      assertRunBinding(run, current.find((item) => item.id === run.id));
       const active = current.filter((item) => item.harnessId === run.harnessId && activeRunStatuses.has(item.status)).length;
       if (active >= maxActiveRuns) throw new CoreError("INVALID_REQUEST", `Workflow already has ${active} active run${active === 1 ? "" : "s"}; its limit is ${maxActiveRuns}`);
       const merged = [structuredClone(run), ...current.filter((item) => item.id !== run.id)]; const counts = new Map<string, number>();
@@ -186,10 +189,24 @@ function redactWorkflowValue(key: string, value: unknown): unknown {
 const activeRunStatuses = new Set<HarnessRun["status"]>(["queued", "running", "waiting", "awaiting_permission", "awaiting_user_input", "waiting_timer", "retry_scheduled"]);
 const activeBlockStatuses = new Set<HarnessRun["blocks"][number]["status"]>(["queued", "running", "waiting", "awaiting_permission", "awaiting_user_input", "waiting_timer", "retry_scheduled"]);
 function isRecord(value: unknown): value is Record<string, unknown> { return Boolean(value) && typeof value === "object"; }
+function isBinding(value: unknown): value is NonNullable<HarnessRun["binding"]> {
+  if (!isRecord(value)) return false;
+  const validPath = (value: unknown) => typeof value === "string" && path.isAbsolute(value) && !value.includes("\0");
+  return validPath(value.rootWorkspace) && validPath(value.workspace)
+    && (value.taskId === undefined || typeof value.taskId === "string" && !!value.taskId)
+    && (value.taskName === undefined || typeof value.taskName === "string");
+}
+
+function assertRunBinding(run: HarnessRun, previous?: HarnessRun): void {
+  if (run.binding !== undefined && (!isBinding(run.binding) || run.workspace !== undefined && run.workspace !== run.binding.workspace)) throw new CoreError("INVALID_REQUEST", "Workflow has an invalid recorded worktree binding");
+  if (previous?.binding && (run.binding?.rootWorkspace !== previous.binding.rootWorkspace || run.binding.workspace !== previous.binding.workspace || run.binding.taskId !== previous.binding.taskId || run.binding.taskName !== previous.binding.taskName)) throw new CoreError("INVALID_REQUEST", "Workflow worktree binding is immutable");
+}
+
 function isRun(value: unknown): value is HarnessRun {
   const statuses = ["queued", "running", "succeeded", "failed", "blocked", "cancelled", "waiting", "awaiting_permission", "awaiting_user_input", "waiting_timer", "retry_scheduled"];
   if (!isRecord(value) || typeof value.id !== "string" || typeof value.harnessId !== "string" || typeof value.harnessVersion !== "number" || typeof value.input !== "string" || !statuses.includes(String(value.status)) || typeof value.createdAt !== "string" || !Array.isArray(value.blocks)) return false;
   if (value.workspace !== undefined && (typeof value.workspace !== "string" || !value.workspace || value.workspace.includes("\0"))) return false;
+  if (value.binding !== undefined && (!isBinding(value.binding) || value.workspace !== undefined && value.workspace !== value.binding.workspace)) return false;
   if (value.connectionTraces !== undefined && (!Array.isArray(value.connectionTraces) || !value.connectionTraces.every((trace) => isRecord(trace) && typeof trace.id === "string" && typeof trace.edgeId === "string" && ["forward", "return"].includes(String(trace.direction)) && ["active", "succeeded", "failed"].includes(String(trace.status)) && typeof trace.startedAt === "string" && (trace.completedAt === undefined || typeof trace.completedAt === "string")))) return false;
   if (value.definition !== undefined && !isHarness(value.definition)) return false;
   if (value.executionPlan !== undefined && (!isRecord(value.executionPlan) || value.executionPlan.version !== 1 || typeof value.executionPlan.createdAt !== "string" || typeof value.executionPlan.definitionVersion !== "number" || !Array.isArray(value.executionPlan.order) || !value.executionPlan.order.every((item) => typeof item === "string") || !Array.isArray(value.executionPlan.blocks) || !value.executionPlan.blocks.every((item) => isRecord(item) && typeof item.blockId === "string" && Array.isArray(item.incoming) && item.incoming.every((edge) => typeof edge === "string") && Array.isArray(item.outgoing) && item.outgoing.every((edge) => typeof edge === "string")))) return false;

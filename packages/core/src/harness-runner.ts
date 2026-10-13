@@ -12,10 +12,11 @@ type Interrupt = (provider: string, context: { runId: string; blockId: string; w
 type ResolvePermission = (provider: string, workspace: string, requestId: string, optionId?: string) => Promise<AiSession>;
 type AnswerQuestion = (provider: string, workspace: string, input: string) => Promise<AiSession>;
 type FireTimer = (provider: string, workspace: string) => Promise<boolean>;
-type ActiveExecution = { run: HarnessRun; blocks: HarnessBlock[]; edges: HarnessEdge[]; outputs: Map<string, string>; dispatch: Dispatch; append: Append; defaultProvider: string; background: Set<Promise<void>>; stackInvocations: Map<string, number>; loopInvocations: Map<string, number>; turnClaims: Map<string, string>; scheduler: ExecutionScheduler };
+type ActiveExecution = { run: HarnessRun; blocks: HarnessBlock[]; edges: HarnessEdge[]; outputs: Map<string, string>; dispatch: Dispatch; append: Append; defaultProvider: string; background: Set<Promise<void>>; stackInvocations: Map<string, number>; loopInvocations: Map<string, number>; turnClaims: Map<string, string>; flowBusy?: Set<string>; scheduler: ExecutionScheduler };
 type RecoveryPolicy = { maxAttempts: number; transportBackoffMs: number; maxElapsedMs?: number; jitterRatio?: number; random?: () => number };
 type ResolvedRecoveryPolicy = Required<RecoveryPolicy>;
 export type HarnessRecoveryInspector = {
+  binding?(run: HarnessRun): Promise<void>;
   session(provider: string, workspace: string): Promise<AiSession | undefined>;
   timer(runId: string, blockId: string, provider: string, workspace: string): Promise<boolean>;
   child?(child: HarnessChildTask): Promise<boolean>;
@@ -25,6 +26,7 @@ export class HarnessRunner {
   private readonly flowInvocations = new Map<string, (id: string, input: string, ancestors?: string[]) => Promise<string>>();
   private readonly appToolCalls = new Map<string, Promise<unknown>>();
   private readonly resumingChats = new Set<string>();
+  private chatAdmissionQueue = Promise.resolve();
   private readonly flowAnswers = new Map<string, (answer: string) => void>();
   private readonly cancelled = new Set<string>();
   private readonly activeRuns = new Set<string>();
@@ -199,9 +201,12 @@ export class HarnessRunner {
     throw new Cancelled();
   }
 
-  async readRun(runId: string): Promise<HarnessRun | undefined> { return (await this.store.runs()).find((run) => run.id === runId); }
+  async readRun(runId: string): Promise<HarnessRun | undefined> {
+    const live = this.executions.get(runId)?.run;
+    return live ? structuredClone(live) : (await this.store.runs()).find((run) => run.id === runId);
+  }
 
-  async start(harnessId: string, input: string, dispatch: Dispatch, defaultProvider = "codex", append?: Append, startBlockId?: string, rerunRunId?: string, testDefinition?: HarnessDefinition, workspace?: string, prepareDefinition?: (definition: HarnessDefinition) => Promise<HarnessDefinition>): Promise<HarnessRun> {
+  async start(harnessId: string, input: string, dispatch: Dispatch, defaultProvider = "codex", append?: Append, startBlockId?: string, rerunRunId?: string, testDefinition?: HarnessDefinition, workspace?: string, prepareDefinition?: (definition: HarnessDefinition) => Promise<HarnessDefinition>, binding?: HarnessRun["binding"]): Promise<HarnessRun> {
     const source = rerunRunId ? (await this.store.runs()).find((run) => run.id === rerunRunId) : undefined;
     if (rerunRunId && !source) throw new CoreError("FILE_NOT_FOUND", "Workflow run does not exist");
     if (rerunRunId && !source?.definition) throw new CoreError("INVALID_REQUEST", "This workflow run has no frozen definition to rerun");
@@ -224,7 +229,7 @@ export class HarnessRunner {
       if (!input.trim()) throw new CoreError("INVALID_REQUEST", "Enter text to start the flow");
     }
     const createdAt = new Date().toISOString();
-    const run: HarnessRun = { workspace: source?.workspace ?? workspace, id: crypto.randomUUID(), harnessId, harnessVersion: harness.version, input: input.trim(), status: "queued", createdAt, blocks: validation.order.map((blockId) => ({ blockId, status: "queued" })), operations: [] };
+    const run: HarnessRun = { binding: source?.binding ?? binding, workspace: binding?.workspace ?? source?.workspace ?? workspace, id: crypto.randomUUID(), harnessId, harnessVersion: harness.version, input: input.trim(), status: "queued", createdAt, blocks: validation.order.map((blockId) => ({ blockId, status: "queued" })), operations: [] };
     run.definition = structuredClone(harness);
     run.executionPlan = { version: 1, createdAt, definitionVersion: harness.version, order: [...validation.order], blocks: validation.order.map((blockId) => ({ blockId, incoming: harness.edges.filter((edge) => edge.to === blockId).map((edge) => edge.id), outgoing: harness.edges.filter((edge) => edge.from === blockId).map((edge) => edge.id) })) };
     await this.store.createRun(run, harness.settings?.maxActiveRuns ?? 4); this.changed(run.id);
@@ -232,26 +237,51 @@ export class HarnessRunner {
     return run;
   }
 
-  async continueChat(runId: string, blockId: string, input: string, dispatch: Dispatch, defaultProvider: string, append: Append): Promise<HarnessRun> {
-    if (this.activeRuns.has(runId) || this.resumingChats.has(runId)) throw new CoreError("INVALID_REQUEST", "Wait for the current workflow turn to finish before sending another message");
-    this.resumingChats.add(runId);
+  async continueChat(runId: string, blockId: string, input: string, dispatch: Dispatch, defaultProvider: string, append: Append, binding?: HarnessRun["binding"]): Promise<HarnessRun> {
+    const key = `${runId}:${blockId}`;
+    if (this.resumingChats.has(key)) throw new CoreError("INVALID_REQUEST", "Wait for the current workflow turn on this Chatbox to finish before sending another message");
+    this.resumingChats.add(key);
+    // Serialize admission, not provider turns: concurrent resumes must share one
+    // execution and one mutable run rather than load competing store snapshots.
+    const previous = this.chatAdmissionQueue;
+    let release!: () => void;
+    this.chatAdmissionQueue = new Promise<void>((resolve) => { release = resolve; });
+    await previous;
     try {
       if (typeof input !== "string" || !input.trim() || input.length > 100_000) throw new CoreError("INVALID_REQUEST", "Chat input must contain 1–100,000 characters");
-      const run = (await this.store.runs()).find((item) => item.id === runId);
+      const execution = this.executions.get(runId);
+      const run = execution?.run ?? (await this.store.runs()).find((item) => item.id === runId);
       const definition = run?.definition;
       const block = definition?.blocks.find((item) => item.id === blockId);
       if (!run || !definition || block?.type !== "chatbox") throw new CoreError("INVALID_REQUEST", "Select a Chatbox in an existing workflow run");
+      run.binding ??= binding;
+      if (run.binding) run.workspace = run.binding.workspace;
       const validation = validateHarness(definition);
       if (!validation.valid) throw new CoreError("INVALID_REQUEST", "This saved workflow definition is invalid");
       const state = run.blocks.find((item) => item.blockId === blockId)!;
-      if (isActiveStatus(run.status)) throw new CoreError("INVALID_REQUEST", "The previous workflow turn is still active");
+      if (execution) {
+        const invoke = this.flowInvocations.get(runId);
+        if (!this.isActive(runId) || !isActiveStatus(run.status) || !invoke || execution.flowBusy?.has(blockId) || isActiveStatus(state.status)) throw new CoreError("INVALID_REQUEST", "Wait for the current workflow turn on this Chatbox to finish before sending another message");
+        // invoke claims the block synchronously, before its first persistence await.
+        // The flow drains background turns before recording the aggregate outcome.
+        let pending!: Promise<void>;
+        pending = invoke(blockId, input.trim()).then(() => {}, async (error) => {
+          if (!this.isActive(runId)) return;
+          state.status = "failed"; state.error = error instanceof Error ? error.message : String(error); state.completedAt = new Date().toISOString(); run.status = this.runActivityStatus(run);
+          await this.update(run);
+        }).finally(() => execution.background.delete(pending));
+        execution.background.add(pending);
+        await this.update(run);
+        return structuredClone(run);
+      }
+      if (this.activeRuns.has(runId) || isActiveStatus(run.status)) throw new CoreError("INVALID_REQUEST", "The previous workflow turn is still active");
       run.input = input.trim(); run.status = "queued"; run.error = undefined; run.completedAt = undefined; run.startedAt = undefined;
       state.status = "queued"; state.error = undefined; state.pendingPermission = undefined; state.question = undefined; state.pauseId = undefined; state.waitingUntil = undefined;
       await this.store.createRun(run, definition.settings?.maxActiveRuns ?? 4);
       this.changed(run.id); this.activeRuns.add(run.id);
       void this.execute(run, definition.blocks, definition.edges, validation.order, dispatch, state.provider ?? defaultProvider, append, false, blockId);
       return structuredClone(run);
-    } finally { this.resumingChats.delete(runId); }
+    } finally { this.resumingChats.delete(key); release(); }
   }
 
   async recover(dispatch: Dispatch, defaultProvider = "codex", append?: Append, inspector?: HarnessRecoveryInspector): Promise<HarnessRun[]> {
@@ -267,6 +297,11 @@ export class HarnessRunner {
       const order = run.executionPlan.order;
       if (order.length !== definition.blocks.length || order.some((id) => !definition.blocks.some((block) => block.id === id))) {
         await this.failRecovery(run, "The persisted workflow execution plan does not match its frozen definition. Start a new run; completed sessions and task workspaces were preserved.");
+        recovered.push(structuredClone(run)); continue;
+      }
+      try { await inspector?.binding?.(run); }
+      catch (error) {
+        await this.failRecovery(run, `Workflow recovery could not validate its bound worktree: ${error instanceof Error ? error.message : String(error)}`);
         recovered.push(structuredClone(run)); continue;
       }
       if (isHarnessFlow(definition)) {
@@ -527,13 +562,13 @@ export class HarnessRunner {
     const concurrency = run.definition?.settings?.concurrency ?? this.concurrency;
     run.status = this.runActivityStatus(run); run.startedAt ??= new Date().toISOString(); const background = new Set<Promise<void>>(); this.executions.set(run.id, { run, blocks, edges, outputs, dispatch, append, defaultProvider, background, stackInvocations: new Map(), loopInvocations: new Map(), turnClaims: new Map(), scheduler: new ExecutionScheduler(concurrency, () => this.assertActive(run.id)) });
     if (recovering) for (const state of run.blocks) if (isActiveStatus(state.status)) this.log(state, "lifecycle", "Core restarted and reconciled this workflow stage");
-    await this.update(run);
     const running = new Map<string, Promise<{ blockId: string; error?: unknown }>>();
     try {
       if (isHarnessFlow({ blocks, edges })) {
         await this.executeFlow(this.executions.get(run.id)!, startBlockId);
         run.status = "succeeded"; run.completedAt = new Date().toISOString(); await this.recordCompletedOperation(run, "terminal_outcome", "terminal:succeeded", undefined, { status: "succeeded" }); await this.update(run); return;
       }
+      await this.update(run);
       while (running.size || background.size || run.blocks.some((block) => isActiveStatus(block.status))) {
         if (this.cancelled.has(run.id)) throw new Cancelled();
         let changed = false;
@@ -694,7 +729,12 @@ export class HarnessRunner {
 
   private async executeFlow(execution: ActiveExecution, startBlockId?: string): Promise<void> {
     const { run, blocks, edges } = execution;
-    const busy = new Set<string>();
+    const busy = new Set<string>(); execution.flowBusy = busy;
+    // Unselected Chatboxes are available for independent user turns. They are
+    // not scheduled by this explicitly selected flow entry point.
+    if (startBlockId) for (const state of run.blocks) {
+      if (state.blockId !== startBlockId && state.status === "queued" && blocks.find((block) => block.id === state.blockId)?.type === "chatbox") state.status = "skipped";
+    }
     const timers = new Map<string, string>();
     let steps = 0;
     const invoke = async (id: string, input: string, ancestors: string[] = []): Promise<string> => {
@@ -752,7 +792,7 @@ export class HarnessRunner {
         if (!["ai", "chatbox"].includes(block.type)) state.structuredOutput = parseHarnessData(output, block.outputSchema, `${block.label} output`);
         this.assertActive(run.id); this.log(state, "response", output); state.output = output.slice(-200_000); execution.outputs.set(id, output); state.status = "succeeded"; state.completedAt = new Date().toISOString(); run.status = this.runActivityStatus(run); await this.update(run);
       } catch (error) {
-        state.status = this.isActive(run.id) ? "failed" : "cancelled"; state.error = error instanceof Error ? error.message : String(error); state.completedAt = new Date().toISOString(); this.log(state, "error", state.error); await this.update(run); throw error;
+        state.status = this.isActive(run.id) ? "failed" : "cancelled"; state.error = error instanceof Error ? error.message : String(error); state.completedAt = new Date().toISOString(); this.log(state, "error", state.error); if (this.isActive(run.id)) run.status = this.runActivityStatus(run); await this.update(run); throw error;
       } finally { busy.delete(id); }
       if (block.type === "markdown") this.openDocument?.({ runId: run.id, blockId: id, title: block.label.endsWith(".md") ? block.label : `${block.label}.md`, content: output });
       for (const edge of edges.filter((edge) => block.type !== "chatbox" && edge.from === id && (edge.type === "follow" || !edge.type || (edge.type === "path" && edge.label === state.selectedRoute)))) {
@@ -776,7 +816,15 @@ export class HarnessRunner {
     this.flowInvocations.set(run.id, invoke);
     const roots = startBlockId ? [startBlockId] : blocks.filter((block) => !edges.some((edge) => edge.to === block.id)).map((block) => block.id);
     if (!roots.length && blocks.length) roots.push(blocks[0]!.id);
-    for (const id of roots) await invoke(id, run.input);
+    let entryError: unknown;
+    for (const id of roots) {
+      try { await invoke(id, run.input); } catch (error) {
+        // A failed entry turn must not cancel unrelated Chatboxes still working.
+        if (!this.isActive(run.id)) throw error;
+        entryError ??= error;
+        break;
+      }
+    }
     while (timers.size || execution.background.size) {
       if (!timers.size) { await Promise.allSettled([...execution.background]); continue; }
       this.assertActive(run.id);
@@ -791,7 +839,11 @@ export class HarnessRunner {
       this.log(state, "response", input); this.log(state, "lifecycle", "Timer fired; starting followers"); run.status = this.runActivityStatus(run); await this.update(run);
       for (const edge of edges.filter((edge) => edge.from === id && (edge.type === "follow" || !edge.type))) { await this.traceConnection(run, edge, "forward", "succeeded"); await invoke(edge.to, input); }
     }
+    // Close admission synchronously with the drain, before execute records the
+    // terminal outcome on its next microtask. No late turn may revive this flow.
+    this.flowInvocations.delete(run.id);
     this.assertActive(run.id);
+    if (entryError) throw entryError;
     const failed = run.blocks.find((state) => state.status === "failed");
     if (failed) throw new Error(failed.error ?? "A connected workflow block failed");
     for (const state of run.blocks) if (state.status === "queued") state.status = "skipped";

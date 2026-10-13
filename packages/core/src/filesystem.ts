@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { constants } from "node:fs";
-import { access, cp, lstat, mkdir, readFile, readdir, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
+import { access, cp, lstat, mkdir, readFile, readdir, opendir, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { createHash } from "node:crypto";
 import path from "node:path";
@@ -13,10 +13,54 @@ const execFileAsync = promisify(execFile);
 export const MAX_FILE_SIZE = 2 * 1024 * 1024;
 const TRASH_DIRECTORY = ".vibe-trash";
 
+export interface WorkspaceTreeLimits {
+  maxNodes: number;
+  maxPathBytes: number;
+  maxDepth: number;
+}
+export const DEFAULT_WORKSPACE_TREE_LIMITS: Readonly<WorkspaceTreeLimits> = {
+  maxNodes: Infinity, maxPathBytes: Infinity, maxDepth: Infinity
+};
+
+function treeTooLarge(limit: string): CoreError {
+  return new CoreError("WORKSPACE_TREE_TOO_LARGE", `Workspace tree exceeds ${limit}. Open a smaller workspace, exclude generated files with Git ignore rules, disable includeIgnored, or adjust Core VIBE_TREE_* limits and outbound capacity.`);
+}
+
+class TreeBudget {
+  private nodes = 0;
+  private bytes = 0;
+  constructor(readonly limits: WorkspaceTreeLimits) {}
+  add(relative: string, depth: number): void {
+    if (depth > this.limits.maxDepth) throw treeTooLarge(`maxDepth (${this.limits.maxDepth})`);
+    if (++this.nodes > this.limits.maxNodes) throw treeTooLarge(`maxNodes (${this.limits.maxNodes})`);
+    this.bytes += Buffer.byteLength(relative, "utf8");
+    if (this.bytes > this.limits.maxPathBytes) throw treeTooLarge(`maxPathBytes (${this.limits.maxPathBytes})`);
+  }
+}
+
 export class WorkspaceFileSystem {
   private workspace?: string;
+  private readonly treeLimits: WorkspaceTreeLimits;
+
+  constructor(limits: Partial<WorkspaceTreeLimits> = {}) {
+    this.treeLimits = { ...DEFAULT_WORKSPACE_TREE_LIMITS };
+    const variables = { maxNodes: "VIBE_TREE_MAX_NODES", maxPathBytes: "VIBE_TREE_MAX_PATH_BYTES", maxDepth: "VIBE_TREE_MAX_DEPTH" } as const;
+    for (const key of Object.keys(variables) as (keyof WorkspaceTreeLimits)[]) {
+      const configured = limits[key] ?? process.env[variables[key]];
+      if (configured === undefined) continue;
+      const value = Number(configured);
+      if (!Number.isSafeInteger(value) || value <= 0) throw new Error(`${variables[key]} must be a positive safe integer`);
+      this.treeLimits[key] = value;
+    }
+  }
 
   async open(workspacePath: string, includeIgnored = false): Promise<FileTreeNode[]> {
+    await this.initialize(workspacePath);
+    return this.listTree(includeIgnored);
+  }
+
+  /** Validate and select a workspace without producing a snapshot. */
+  async initialize(workspacePath: string): Promise<void> {
     if (!path.isAbsolute(workspacePath)) {
       throw new CoreError("WORKSPACE_NOT_FOUND", "Workspace path must be absolute");
     }
@@ -24,7 +68,6 @@ export class WorkspaceFileSystem {
       const info = await stat(workspacePath);
       if (!info.isDirectory()) throw new Error("not a directory");
       this.workspace = await realpath(workspacePath);
-      return await this.listTree(includeIgnored);
     } catch (error) {
       this.workspace = undefined;
       if (error instanceof CoreError) throw error;
@@ -39,14 +82,15 @@ export class WorkspaceFileSystem {
 
   async listTree(includeIgnored = false): Promise<FileTreeNode[]> {
     const root = this.getWorkspace();
+    const budget = new TreeBudget(this.treeLimits);
     if (!includeIgnored) {
-      const tracked = await listGitPaths(root);
+      const tracked = await listGitPaths(root, this.treeLimits);
       if (tracked) {
-        const directories = await listGitDirectories(root);
-        return buildTreeFromPaths([...tracked, ...directories], directories);
+        const directories = await listGitDirectories(root, this.treeLimits);
+        return buildTreeFromPaths([...tracked, ...directories], directories, budget);
       }
     }
-    return this.walkDirectory(root, "");
+    return this.walkDirectory(root, "", budget, 1);
   }
 
   /**
@@ -324,10 +368,10 @@ export class WorkspaceFileSystem {
     }
   }
 
-  private async walkDirectory(absoluteDir: string, relativeDir: string): Promise<FileTreeNode[]> {
-    const entries = await readdir(absoluteDir, { withFileTypes: true });
+  private async walkDirectory(absoluteDir: string, relativeDir: string, budget: TreeBudget, depth: number): Promise<FileTreeNode[]> {
+    const entries = await opendir(absoluteDir);
     const nodes: FileTreeNode[] = [];
-    for (const entry of entries.sort((a, b) => Number(b.isDirectory()) - Number(a.isDirectory()) || a.name.localeCompare(b.name))) {
+    for await (const entry of entries) {
       if (!relativeDir && entry.name === TRASH_DIRECTORY) continue;
       const relative = path.posix.join(relativeDir.split(path.sep).join(path.posix.sep), entry.name);
       const absolute = path.join(absoluteDir, entry.name);
@@ -339,12 +383,14 @@ export class WorkspaceFileSystem {
           if (!resolved.startsWith(root + path.sep)) continue;
         } catch { continue; }
       }
+      if (entry.isDirectory() || entry.isFile()) budget.add(relative, depth);
       if (entry.isDirectory()) {
-        nodes.push({ name: entry.name, path: relative, type: "directory", children: await this.walkDirectory(absolute, relative) });
+        nodes.push({ name: entry.name, path: relative, type: "directory", children: await this.walkDirectory(absolute, relative, budget, depth + 1) });
       } else if (entry.isFile()) {
         nodes.push({ name: entry.name, path: relative, type: "file" });
       }
     }
+    nodes.sort(compareTreeNodes);
     return nodes;
   }
 
@@ -357,31 +403,33 @@ export class WorkspaceFileSystem {
   }
 }
 
-async function listGitPaths(root: string): Promise<string[] | undefined> {
+async function listGitPaths(root: string, limits: WorkspaceTreeLimits): Promise<string[] | undefined> {
   try {
     const { stdout } = await execFileAsync("git", ["-C", root, "ls-files", "--cached", "--others", "--exclude-standard", "-z"], {
       encoding: "utf8",
-      maxBuffer: 64 * 1024 * 1024
+      maxBuffer: Math.max(4096, limits.maxPathBytes + limits.maxNodes * 2)
     });
     return stdout.split("\0").filter((entry) => entry.length > 0);
-  } catch {
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER") throw treeTooLarge("Git output collection budget");
     return undefined;
   }
 }
 
-async function listGitDirectories(root: string): Promise<Set<string>> {
+async function listGitDirectories(root: string, limits: WorkspaceTreeLimits): Promise<Set<string>> {
   try {
     const { stdout } = await execFileAsync("git", ["-C", root, "ls-files", "--others", "--exclude-standard", "--directory", "-z"], {
       encoding: "utf8",
-      maxBuffer: 64 * 1024 * 1024
+      maxBuffer: Math.max(4096, limits.maxPathBytes + limits.maxNodes * 2)
     });
     return new Set(stdout.split("\0").filter((entry) => entry.endsWith("/")).map((entry) => entry.slice(0, -1)));
-  } catch {
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER") throw treeTooLarge("Git output collection budget");
     return new Set();
   }
 }
 
-function buildTreeFromPaths(paths: string[], directoryPaths = new Set<string>()): FileTreeNode[] {
+function buildTreeFromPaths(paths: string[], directoryPaths: Set<string>, budget: TreeBudget): FileTreeNode[] {
   const rootNodes: FileTreeNode[] = [];
   const directories = new Map<string, FileTreeNode[]>([["", rootNodes]]);
   const seen = new Set<string>();
@@ -395,6 +443,7 @@ function buildTreeFromPaths(paths: string[], directoryPaths = new Set<string>())
       const parent = directories.get(relative)!;
       relative = relative ? `${relative}/${name}` : name;
       if (seen.has(relative)) continue;
+      budget.add(relative, index + 1);
       seen.add(relative);
       if (index === segments.length - 1 && !directoryPaths.has(relative)) {
         parent.push({ name, path: relative, type: "file" });
@@ -409,7 +458,11 @@ function buildTreeFromPaths(paths: string[], directoryPaths = new Set<string>())
   return rootNodes;
 }
 
+function compareTreeNodes(a: FileTreeNode, b: FileTreeNode): number {
+  return Number(b.type === "directory") - Number(a.type === "directory") || a.name.localeCompare(b.name);
+}
+
 function sortTree(nodes: FileTreeNode[]): void {
-  nodes.sort((a, b) => Number(b.type === "directory") - Number(a.type === "directory") || a.name.localeCompare(b.name));
+  nodes.sort(compareTreeNodes);
   for (const node of nodes) if (node.children) sortTree(node.children);
 }

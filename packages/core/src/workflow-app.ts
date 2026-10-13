@@ -1,17 +1,27 @@
+import { managedProcesses } from "./managed-processes.js";
 import crypto from "node:crypto";
 import { workspaceShellCommand } from "./workspace-shell.js";
 import path from "node:path";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import type { AiSession, HarnessAppState, HarnessAppAction, HarnessBlock } from "@remote-ide/protocol";
 
-type App = { child: ChildProcessWithoutNullStreams; output: string; status: "starting" | "running" | "exited"; exitCode: number | null; signal: string | null; ready: Promise<void>; closed: Promise<void> };
+type App = { launchId: string; child: ChildProcessWithoutNullStreams; output: string; status: "starting" | "running" | "exited"; exitCode: number | null; signal: string | null; ready: Promise<void>; closed: Promise<void> };
 
 /** Apps outlive individual workflow runs and are stopped when the Core server closes. */
 export class WorkflowAppService {
   private readonly apps = new Map<string, App>();
   private closing = false;
+  private readonly operations = new Map<string, Promise<AiSession>>();
 
-  async execute(block: HarnessBlock, input: string, workspace: string, assertActive: () => void): Promise<AiSession> {
+  async execute(block: HarnessBlock, input: string, workspace: string, assertActive: () => void, context: { rootWorkspace?: string; workflowRunId?: string; workflowBlockId?: string } = {}): Promise<AiSession> {
+    const key = `${path.resolve(workspace)}\0${block.app?.name.trim() ?? ""}`;
+    const operation = (this.operations.get(key) ?? Promise.resolve()).catch(() => {}).then(() => this.executeLocked(block, input, workspace, assertActive, context));
+    this.operations.set(key, operation);
+    try { return await operation; }
+    finally { if (this.operations.get(key) === operation) this.operations.delete(key); }
+  }
+
+  private async executeLocked(block: HarnessBlock, input: string, workspace: string, assertActive: () => void, context: { rootWorkspace?: string; workflowRunId?: string; workflowBlockId?: string } = {}): Promise<AiSession> {
     assertActive();
     const options = block.app;
     if (!options || !options.name.trim() || options.name.length > 120 || options.name.includes("\0")) throw new Error("Run App needs an app name of 1 to 120 characters");
@@ -32,12 +42,14 @@ export class WorkflowAppService {
     const key = `${path.resolve(workspace)}\0${name}`;
     let app = this.apps.get(key);
     if (this.closing) throw new Error("Core is shutting down");
+    if (action === "start" && app?.status === "exited") await managedProcesses.listApps();
     if (action === "start") {
       if (!block.command?.trim()) throw new Error("Run App start needs a shell script");
-      if (!app || app.status === "exited") {
+      if (!app || (app.status === "exited" && !managedProcesses.appSnapshot(app.launchId))) {
         const { shell, args } = workspaceShellCommand(block.command);
-        const child = spawn(shell, args, { cwd: workspace, env: { ...process.env, TERM: "xterm-256color", COLORTERM: "truecolor", VIBE_WORKFLOW_INPUT: input }, detached: true, stdio: ["pipe", "pipe", "pipe"] });
-        app = { child, output: "", status: "starting", exitCode: null, signal: null, ready: Promise.resolve(), closed: Promise.resolve() };
+        const processContext = { ...context, rootWorkspace: context.rootWorkspace ?? workspace, workspace, kind: "workflow-app" as const, appName: name, command: `${name}: ${block.command}` };
+        const { child, launchId } = managedProcesses.launchWithIdentity(processContext, (env) => spawn(shell, args, { cwd: workspace, env: { ...env, TERM: "xterm-256color", COLORTERM: "truecolor", VIBE_WORKFLOW_INPUT: input }, detached: true, stdio: ["pipe", "pipe", "pipe"] }));
+        app = { launchId, child, output: "", status: "starting", exitCode: null, signal: null, ready: Promise.resolve(), closed: Promise.resolve() };
         const current = app;
         const collect = (chunk: Buffer) => { current.output = (current.output + chunk.toString()).slice(-200_000); };
         child.stdout.on("data", collect); child.stderr.on("data", collect);
@@ -46,15 +58,16 @@ export class WorkflowAppService {
           child.once("spawn", () => { current.status = "running"; resolve(); });
           child.once("error", (error) => { current.status = "exited"; reject(error); });
         });
+        child.once("exit", (code, signal) => { current.status = "exited"; current.exitCode = code; current.signal = signal; });
         current.closed = new Promise<void>((resolve) => child.once("close", (code, signal) => { current.status = "exited"; current.exitCode = code; current.signal = signal; resolve(); }));
         this.apps.set(key, current);
       }
       await app.ready;
     } else if (action === "kill") {
-      if (app && app.status !== "exited") {
-        await app.ready;
-        this.kill(app);
-        await app.closed;
+      if (app) {
+        if (app.status !== "exited") await app.ready;
+        const killed = await this.kill(app);
+        if (killed) await app.closed;
       }
     } else if (action === "tail") {
       if (!Number.isInteger(lines) || typeof lines !== "number" || lines < 1 || lines > 10_000) throw new Error("Tail lines must be an integer from 1 to 10000");
@@ -63,29 +76,28 @@ export class WorkflowAppService {
     assertActive();
     const tail = action === "tail" ? tailLines(app!.output, lines as number) : undefined;
     // Keep even heavily escaped log text below the workflow's output limit as JSON.
-    const result = { name, status: app?.status ?? "not_found", ...(app ? { pid: app.child.pid, exitCode: app.exitCode, signal: app.signal } : {}), ...(tail !== undefined ? { output: tail.slice(-30_000), truncated: tail.length > 30_000 } : {}) };
+    const result = { name, status: app ? managedProcesses.appSnapshot(app.launchId)?.status ?? app.status : "not_found", ...(app ? { pid: app.child.pid, exitCode: app.exitCode, signal: app.signal } : {}), ...(tail !== undefined ? { output: tail.slice(-30_000), truncated: tail.length > 30_000 } : {}) };
     return { id: crypto.randomUUID(), status: "idle", messages: [{ id: crypto.randomUUID(), role: "assistant", text: JSON.stringify(result), timestamp: new Date().toISOString() }] } as AiSession;
   }
 
   read(name: string, workspace: string): HarnessAppState {
     const app = this.apps.get(`${path.resolve(workspace)}\0${name.trim()}`);
-    return { name: name.trim(), status: app?.status ?? "not_found", output: app?.output ?? "", ...(app ? { pid: app.child.pid, exitCode: app.exitCode, signal: app.signal } : {}) };
+    return { name: name.trim(), status: app ? managedProcesses.appSnapshot(app.launchId)?.status ?? app.status : "not_found", output: app?.output ?? "", ...(app ? { pid: app.child.pid, exitCode: app.exitCode, signal: app.signal } : {}) };
   }
 
-  closeAll(): void {
+  async closeAll(): Promise<void> {
     this.closing = true;
-    for (const app of this.apps.values()) if (app.status !== "exited") this.kill(app);
+    await Promise.allSettled([...this.operations.values()]);
+    await Promise.all([...this.apps.values()].map((app) => this.kill(app)));
   }
 
   hasWorkspace(workspace: string): boolean {
     const prefix = `${path.resolve(workspace)}\0`;
-    return [...this.apps].some(([key, app]) => key.startsWith(prefix) && app.status !== "exited");
+    return [...this.apps].some(([key, app]) => key.startsWith(prefix) && (app.status !== "exited" || !!managedProcesses.appSnapshot(app.launchId)));
   }
 
-  private kill(app: App): void {
-    if (!app.child.pid) return;
-    try { process.kill(-app.child.pid, "SIGKILL"); }
-    catch (error) { if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error; }
+  private async kill(app: App): Promise<boolean> {
+    return managedProcesses.kill(`app:${app.launchId}`, async () => true);
   }
 }
 

@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { protocolCompatibility } from "@remote-ide/protocol";
+import { recoveryFailureFeedback } from "./connection-recovery";
 import { CoalescedAsyncAction, CoreClient } from "./client";
 
 it("keeps the downloadable Desktop manifest aligned with the protocol package", async () => {
@@ -31,6 +32,7 @@ class FakeWebSocket {
     this.sent.push(data);
     const request = JSON.parse(data) as { id: string; type: string };
     if (request.type === "protocol.handshake") this.receive({ id: request.id, ok: true, result: { compatible: true, compatibility: { minimum: 1, maximum: 1 } } });
+    if (request.type === "protocol.keepAlive") this.receive({ id: request.id, ok: true, result: {} });
     if (request.type === "workspace.roots") this.receive({ id: request.id, ok: true, result: { roots: [{ id: "root-primary", alias: "project", path: "/project", primary: true }, { id: "root-api", alias: "api", path: "/api", primary: false }], selectedRootId: "root-primary" } });
     if (request.type === "workspace.selectRoot") this.receive({ id: request.id, ok: true, rootId: "root-api", result: { root: { id: "root-api", alias: "api", path: "/api", primary: false }, workspace: "/api", projectName: "api", tree: [], options: { openFiles: [] } } });
   }
@@ -44,6 +46,166 @@ describe("CoreClient streaming disconnects", () => {
     vi.stubGlobal("WebSocket", FakeWebSocket);
   });
   afterEach(() => vi.unstubAllGlobals());
+
+  it("preserves snapshot error codes through response parsing and keeps the client usable", async () => {
+    const client = new CoreClient();
+    try {
+      const connecting = client.connect("core", 7331);
+      const socket = FakeWebSocket.instances[0]!;
+      socket.open(); await connecting;
+      const pending = client.request("workspace.open", {}).catch((error: unknown) => error);
+      const id = JSON.parse(socket.sent.at(-1)!).id;
+      socket.receive({ id, ok: false, error: { code: "WORKSPACE_TREE_TOO_LARGE", message: "Open a smaller workspace" } });
+      const error = await pending;
+      expect(error).toMatchObject({ code: "WORKSPACE_TREE_TOO_LARGE", message: "WORKSPACE_TREE_TOO_LARGE: Open a smaller workspace" });
+      expect(recoveryFailureFeedback(error)).toMatchObject({ retry: false, kind: "error" });
+      expect(client.isConnected()).toBe(true);
+      await expect(client.request("protocol.keepAlive", {})).resolves.toEqual({});
+    } finally { client.disconnect(); }
+  });
+
+  it("ignores malformed event sequences without consuming pending responses or leaking diagnostic payloads", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const client = new CoreClient();
+    try {
+      const connecting = client.connect("core", 7331);
+      const socket = FakeWebSocket.instances[0]!; socket.open(); await connecting;
+      const events = vi.fn(); client.onServerEvent = events;
+      let settled = false;
+      const pending = client.request("filesystem.readFile", { path: "private-file" }).then((result) => { settled = true; return result; });
+      const id = JSON.parse(socket.sent.at(-1)!).id;
+      for (let i = 0; i < 20; i++) {
+        socket.onmessage?.({ data: "{malformed private-secret" });
+        for (const message of [null, [], { type: "future.event", payload: {} },
+          { type: "terminal.output" }, { type: "terminal.output", payload: null },
+          { type: "terminal.output", payload: { rootId: "r", terminalId: "t", data: 42 } },
+          { type: "java.debug.state", payload: { rootId: "r", status: "paused", variables: [null] } },
+          { type: "runConfig.changed", payload: { rootId: "r", configs: [{ name: "private-secret" }] } },
+          { id, type: "terminal.output", ok: true, result: { content: "wrong" }, payload: { rootId: "r", terminalId: "t", data: "fake" } },
+          { id, ok: false, error: null }, { id, ok: false, error: { code: 1, message: "private-secret" } }
+        ]) socket.receive(message);
+      }
+      await Promise.resolve();
+      expect(settled).toBe(false); expect(events).not.toHaveBeenCalled();
+      expect(warn).toHaveBeenCalledTimes(5);
+      expect(warn.mock.calls).toEqual(Array.from({ length: 5 }, () => ["[core-client] Ignoring invalid server message"]));
+      const event = { type: "terminal.output", payload: { rootId: "root-primary", terminalId: "t", data: "valid" } };
+      socket.receive(event);
+      socket.receive({ id, ok: true, rootId: "root-primary", result: { content: "valid response" } });
+      await expect(pending).resolves.toEqual({ content: "valid response" });
+      expect(events).toHaveBeenCalledOnce(); expect(events).toHaveBeenCalledWith(event);
+      expect(client.isConnected()).toBe(true);
+    } finally { client.disconnect(); warn.mockRestore(); }
+  });
+
+  it("matches out-of-order responses and delivers events while another request is pending", async () => {
+    const client = new CoreClient();
+    const connecting = client.connect("core", 7331);
+    const socket = FakeWebSocket.instances[0]!;
+    socket.open();
+    await connecting;
+    const events = vi.fn();
+    client.onServerEvent = events;
+    let slowSettled = false;
+    const slow = client.request("filesystem.readFile", { path: "slow.txt" }).then((result) => { slowSettled = true; return result; });
+    const slowId = JSON.parse(socket.sent.at(-1)!).id;
+    const fast = client.request("filesystem.readFile", { path: "fast.txt" });
+    const fastId = JSON.parse(socket.sent.at(-1)!).id;
+    const failing = client.request("filesystem.readFile", { path: "missing.txt" });
+    const errorId = JSON.parse(socket.sent.at(-1)!).id;
+    const failure = expect(failing).rejects.toThrow("FILE_NOT_FOUND: missing");
+    socket.receive({ id: errorId, ok: false, error: { code: "FILE_NOT_FOUND", message: "missing" } });
+    socket.receive({ id: fastId, ok: true, rootId: "root-primary", result: { content: "fast" } });
+    const event = { type: "terminal.output", payload: { rootId: "root-primary", terminalId: "terminal-a", data: "output" } };
+    socket.receive(event);
+    await expect(fast).resolves.toEqual({ content: "fast" });
+    await failure;
+    expect(events).toHaveBeenCalledOnce();
+    expect(events).toHaveBeenCalledWith(event);
+    expect(slowSettled).toBe(false);
+    socket.receive({ id: slowId, ok: true, rootId: "root-primary", result: { content: "slow" } });
+    await expect(slow).resolves.toEqual({ content: "slow" });
+    client.disconnect();
+  });
+
+  it("rejects every concurrent pending request on disconnect and ignores late responses", async () => {
+    const client = new CoreClient();
+    const connecting = client.connect("core", 7331);
+    const socket = FakeWebSocket.instances[0]!;
+    socket.open();
+    await connecting;
+    const first = client.request("filesystem.readFile", { path: "a" });
+    const second = client.request("filesystem.readFile", { path: "b" });
+    const rejections = [expect(first).rejects.toThrow("Connection closed"), expect(second).rejects.toThrow("Connection closed")];
+    socket.close();
+    await Promise.all(rejections);
+    for (const data of socket.sent.slice(-2)) socket.receive({ id: JSON.parse(data).id, ok: true, result: { content: "late" } });
+  });
+
+  it("detects a silent browser transport, rejects obsolete mutations, and notifies once", async () => {
+    vi.useFakeTimers();
+    const client = new CoreClient(30_000, { intervalMs: 100, timeoutMs: 50 });
+    try {
+      const disconnected = vi.fn(); client.onDisconnected = disconnected;
+      const connecting = client.connect("core", 7331);
+      const socket = FakeWebSocket.instances[0]!; socket.open(); await connecting;
+      // Browser readyState remains OPEN and close itself can stall without an event.
+      socket.send = (data) => { socket.sent.push(data); };
+      socket.close = vi.fn();
+      const mutation = client.request("filesystem.writeFile", { path: "a", content: "changed" });
+      const rejection = expect(mutation).rejects.toThrow("liveness check timed out");
+      await vi.advanceTimersByTimeAsync(149);
+      expect(disconnected).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      await rejection;
+      expect(client.isConnected()).toBe(false);
+      expect(disconnected).toHaveBeenCalledOnce();
+      await expect(client.request("tasks.list", {})).rejects.toThrow("Not connected");
+      socket.onclose?.();
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(disconnected).toHaveBeenCalledOnce();
+      expect(socket.sent.filter((data) => JSON.parse(data).type === "protocol.keepAlive")).toHaveLength(1);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally { client.disconnect(); vi.useRealTimers(); }
+  });
+
+  it("keeps healthy idle sessions alive and clears probe timers on shutdown/replacement", async () => {
+    vi.useFakeTimers();
+    const client = new CoreClient(30_000, { intervalMs: 100, timeoutMs: 50 });
+    try {
+      const disconnected = vi.fn(); client.onDisconnected = disconnected;
+      let connecting = client.connect("core", 7331);
+      const old = FakeWebSocket.instances[0]!; old.open(); await connecting;
+      await vi.advanceTimersByTimeAsync(500);
+      expect(old.sent.filter((data) => JSON.parse(data).type === "protocol.keepAlive")).toHaveLength(5);
+      expect(disconnected).not.toHaveBeenCalled();
+      old.send = (data) => { old.sent.push(data); };
+      await vi.advanceTimersByTimeAsync(100); // one outstanding probe
+      connecting = client.connect("core", 7331);
+      FakeWebSocket.instances[1]!.open(); await connecting;
+      await vi.advanceTimersByTimeAsync(100);
+      expect(disconnected).not.toHaveBeenCalled();
+      client.disconnect();
+      expect(vi.getTimerCount()).toBe(0);
+      await vi.advanceTimersByTimeAsync(500);
+      expect(disconnected).not.toHaveBeenCalled();
+    } finally { client.disconnect(); vi.useRealTimers(); }
+  });
+
+  it("validates finite positive liveness thresholds", () => {
+    for (const value of [0, -1, Infinity, NaN, 2_147_483_648]) expect(() => new CoreClient(100, { intervalMs: value })).toThrow("Liveness thresholds");
+  });
+
+  it("rejects a missing remembered root rather than falling back to the primary workspace", async () => {
+    const client = new CoreClient(); client.setRoot("root-missing");
+    const connecting = client.connect("core", 7331);
+    const rejection = expect(connecting).rejects.toThrow("Previously selected workspace root is unavailable");
+    const socket = FakeWebSocket.instances[0]!; socket.open();
+    await rejection;
+    expect(client.getRoot()).toBe("root-missing");
+    expect(client.isConnected()).toBe(false);
+    expect(socket.sent.map((data) => JSON.parse(data).type)).toEqual(["protocol.handshake", "workspace.roots"]);
+  });
 
   it("settles a connection cancelled before the socket opens", async () => {
     const client = new CoreClient();
@@ -142,7 +304,8 @@ describe("CoreClient streaming disconnects", () => {
     client.setRoot("root-api"); socket.close();
     connecting = client.connect("core", 7331); socket = FakeWebSocket.instances[1]!; socket.open(); await connecting;
     expect(client.getRoot()).toBe("root-api");
-    expect(socket.sent.map((item) => JSON.parse(item) as { type: string }).some((item) => item.type === "workspace.selectRoot")).toBe(true);
+    expect(socket.sent.map((item) => JSON.parse(item)).find((item) => item.type === "workspace.selectRoot").payload).toEqual({ rootId: "root-api", preserveTaskSelection: true });
+    client.disconnect();
   });
 
   it("rejects the interrupted send, reconnects, and restores the durable AI snapshot", async () => {

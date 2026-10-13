@@ -2,11 +2,15 @@ import { javaConfigurationPath, resolveSkillIds, skillAllowedForAgent } from "@r
 import { DiffEditor, type Monaco } from "@monaco-editor/react";
 import { Archive, ArrowDown, ArrowUp, ArrowUpRight, Bot, Bug, Check, ChevronDown, ChevronRight, CircleAlert, Clock, ClipboardCopy, Coffee, Columns2, Eye, EyeOff, File, FileCode2, FileDiff, FileText, Folder, FolderOpen, GitBranch, GitCompareArrows, GitMerge, Library, ListTodo, ListTree, LoaderCircle, LogOut, MoreVertical, Package, Palette, Pencil, Pin, PinOff, Play, Plus, RefreshCw, Save, Search, Settings, ShieldAlert, Square, SquareTerminal, Trash2, Workflow, X } from "lucide-react";
 import { Children, isValidElement, useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
-import type { SkillCatalog, AgentFile, AgentFileScope, AiContinuationTimer, AiConfiguration, AiModel, AiProvider, AiProviderDescriptor, AiSession, AiStatus, AiTaskSummary, AiUsage, FileColor, FileRevision, FileTreeNode, GitBranch as GitBranchInfo, GitDiffHunk, GitHistoryRewritePreview, GitStatusEntry, GitUpstreamStatus, HarnessDefinition, HarnessRun, HarnessStateDiagnostic, HttpResponse, JavaBreakpoint, JavaDebugState, JavaProjectNode, JavaProjectOptions, JavaTypeSuggestion, ProtocolOperations, RootedJavaDiagnostic, RootedJavaLspLocation, RootedWorkspaceSymbol, RunConfig, RunConfigScope, SearchResult, TaskCheckpoint, TaskCheckpointFile, UsefulFile, UsefulFileScope, WorkspaceSchedule, WorkspaceOptions, WorkspaceRoot, WorkspaceSearchQueries, WorkspaceTask } from "@remote-ide/protocol";
+import type { ManagedWorkflowApp, SkillCatalog, AgentFile, AgentFileScope, AiContinuationTimer, AiConfiguration, AiModel, AiProvider, AiProviderDescriptor, AiSession, AiStatus, AiTaskSummary, AiUsage, FileColor, FileRevision, FileTreeNode, GitBranch as GitBranchInfo, GitDiffHunk, GitHistoryRewritePreview, GitStatusEntry, GitUpstreamStatus, HarnessDefinition, HarnessRun, HarnessStateDiagnostic, HttpResponse, JavaBreakpoint, JavaDebugState, JavaProjectNode, JavaProjectOptions, JavaTypeSuggestion, ProtocolOperations, RootedJavaDiagnostic, RootedJavaLspLocation, RootedWorkspaceSymbol, RunConfig, RunConfigScope, SearchResult, TaskCheckpoint, TaskCheckpointFile, UsefulFile, UsefulFileScope, WorkspaceSchedule, WorkspaceOptions, WorkspaceRoot, WorkspaceSearchQueries, WorkspaceTask } from "@remote-ide/protocol";
 import type { editor } from "monaco-editor";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { mergeWorkflowHistory, workflowRunsForContext } from "./workflow-context";
+import { InvalidationRefreshes } from "./invalidation-refreshes";
 import { CoalescedAsyncAction, CoreClient } from "./client";
+import { ConnectionRecovery, recoveryFailureFeedback, reconnectWorkspace, restoreTerminal, type RecoverySelection } from "./connection-recovery";
+import { recoverEditorGroups, workspaceRestorationGuard } from "./workspace-recovery";
 import { remoteUploadDestination, treeContainsPath } from "./remote-transfer";
 import { hasWorkspaceSetting, readSetting, readSettingNumber, readWorkspaceSetting, resetWorkspaceSetting, workspaceSettingKey, writeSetting, writeWorkspaceSetting } from "./settings";
 import { SettingsMenu, type DesktopSettings } from "./SettingsMenu";
@@ -30,6 +34,7 @@ import { GitChangesView as KeyboardGitChangesView } from "./GitChangesView";
 import { GitConflictWorkspaceDialog } from "./GitConflictWorkspace";
 import { SkillsPanel, type SkillsActions } from "./SkillsPanel";
 import { AiPanel, type AiAttachment } from "./AiPanel";
+import { ProcessesPanel } from "./ProcessesPanel";
 import { TimersPanel } from "./TimersPanel";
 import { WorkflowRunPanel } from "./WorkflowRunPanel";
 import { workflowDocumentOptions, restoreWorkflowDocuments } from "./workflow-documents";
@@ -41,7 +46,7 @@ import { configureMonacoThemes, monacoTheme, type HighlightTheme } from "./theme
 import { CURSOR_POSITIONS_SETTING, CursorPositionStore, validateCursorPosition } from "./cursor-state";
 import { MarkdownPreview } from "./MarkdownPreview";
 import { FindInFilesDialog } from "./FindInFilesDialog";
-import { initialTaskPanel, switchedTaskPanel, taskPanelPreferenceKey, type ClassicTaskPanel } from "./task-panel-state";
+import { restoredFocusedLeftPanels, initialTaskPanel, switchedTaskPanel, taskPanelPreferenceKey, type ClassicTaskPanel } from "./task-panel-state";
 import { ProjectTree } from "./ProjectTree";
 import { JavaFileIcon } from "./JavaFileIcon";
 import { FileKindIcon } from "./FileKindIcon";
@@ -164,7 +169,7 @@ export function App() {
   const [leftSidebarWidth, setLeftSidebarWidth] = useState(520);
   const [rightSidebarWidth, setRightSidebarWidth] = useState(360);
   const [workflowPanelMode, setWorkflowPanelMode] = useState<"design" | "run">("run");
-  const [leftPanels, setLeftPanels] = useState({ tasks: true, ai: true, harness: false, timers: false });
+  const [leftPanels, setLeftPanels] = useState({ tasks: true, ai: true, harness: false, timers: false, proc: false });
   const [rightPanels, setRightPanels] = useState({ project: true, git: true, taskGit: false, promptHistory: false, java: false, useful: false, agents: false, skills: false });
   const [classicSideView, setClassicSideView] = useState<ClassicTaskPanel>("project");
   const [classicLeftWidth, setClassicLeftWidth] = useState(260);
@@ -209,6 +214,8 @@ export function App() {
   const [agents, setAgents] = useState<AgentFile[]>([]);
   const [harnesses, setHarnesses] = useState<HarnessDefinition[]>([]);
   const [harnessRuns, setHarnessRuns] = useState<HarnessRun[]>([]);
+  const harnessRunsRef = useRef(harnessRuns);
+  harnessRunsRef.current = harnessRuns;
   const [harnessDiagnostics, setHarnessDiagnostics] = useState<HarnessStateDiagnostic[]>([]);
   const [selectedAgentKey, setSelectedAgentKey] = useState("");
   const [fileColors, setFileColors] = useState<Record<string, FileColor>>({});
@@ -314,6 +321,29 @@ export function App() {
   const [externalConflict, setExternalConflict] = useState<{ tabId: string; path: string; externalContent: string; externalRevision: FileRevision; error?: string }>();
   const [pendingNavigation, setPendingNavigation] = useState<{ result: SearchResult; matchLength: number }>();
   const clientRef = useRef<CoreClient>();
+  const recoveryRef = useRef<ConnectionRecovery>();
+  const invalidationRefreshes = useRef<InvalidationRefreshes>();
+  const [managedProcessList, setManagedProcessList] = useState<ManagedWorkflowApp[]>([]);
+  const [processLoading, setProcessLoading] = useState(false);
+  const [processError, setProcessError] = useState("");
+  const processSequence = useRef(0);
+  const processLoadedRoot = useRef<string>();
+  const refreshProcesses = useCallback(async (client = clientRef.current, canApply: () => boolean = () => true) => {
+    if (!client || !client.isConnected() || !canApply()) return;
+    const root = client.getRoot(); const sequence = ++processSequence.current;
+    const current = () => canApply() && clientRef.current === client && client.isConnected() && root === client.getRoot();
+    setProcessLoading(processLoadedRoot.current !== root);
+    try {
+      const result = await client.request("processes.list", {});
+      if (sequence === processSequence.current && current()) { processLoadedRoot.current = root; setManagedProcessList(result.processes); setProcessError(""); }
+    } catch (error) {
+      if (sequence === processSequence.current && current()) setProcessError(error instanceof Error ? error.message : "Could not load processes. Refresh to retry.");
+    } finally { if (sequence === processSequence.current && current()) setProcessLoading(false); }
+  }, []);
+  useEffect(() => {
+    processLoadedRoot.current = undefined; ++processSequence.current;
+    setManagedProcessList([]); setProcessError(""); void refreshProcesses();
+  }, [selectedRootId, refreshProcesses]);
   const projectContentFilterVersion = useRef(0);
   const gitRollbackRunningRef = useRef(false);
   const aiProviderRef = useRef<AiProvider>(readSetting("aiProvider") === "copilot" ? "copilot" : "codex");
@@ -403,7 +433,10 @@ export function App() {
     setPendingNavigation(undefined);
   }, [activeTab?.path, pendingNavigation]);
   useEffect(() => () => {
+    invalidationRefreshes.current?.dispose();
+    recoveryRef.current?.stop();
     clientRef.current?.disconnect();
+    clientRef.current = undefined;
     if (treeRefreshTimer.current) clearTimeout(treeRefreshTimer.current);
     if (gitRefreshTimer.current) clearTimeout(gitRefreshTimer.current);
     if (javaRefreshTimer.current) clearTimeout(javaRefreshTimer.current);
@@ -482,25 +515,26 @@ export function App() {
   // Several ai.statuses requests can be in flight at once (AI activity emits a burst of ai.changed
   // events) and the backend answers them concurrently, so responses can arrive out of order. Without
   // this guard an older snapshot overwrites a newer one and the task rows keep showing stale progress.
-  const refreshAiStatuses = useCallback(async (client = clientRef.current) => {
+  const refreshAiStatuses = useCallback(async (client = clientRef.current, canApply: () => boolean = () => true) => {
     if (!client) return;
     const sequence = ++aiStatusesRequested.current; const requestedRoot = client.getRoot();
     const [statuses, timerResult, scheduleResult] = await Promise.all([client.request("ai.statuses", {}), client.request("timers.list", {}), client.request("schedules.list", {})]);
-    if (sequence <= aiStatusesApplied.current || client.getRoot() !== requestedRoot) return;
+    if (!canApply() || sequence <= aiStatusesApplied.current || client.getRoot() !== requestedRoot) return;
     aiStatusesApplied.current = sequence;
     setAiStatuses(statuses);
     setActiveTimers(timerResult.timers);
+    void refreshProcesses();
     setSchedules(scheduleResult.schedules);
   }, []);
   const loadScheduleAgents = useCallback(async (taskId?: string) => {
     const client = clientRef.current; if (!client) throw new Error("Backend is disconnected");
     return (await client.request("schedules.agents", { taskId })).agents;
   }, []);
-  const refreshTasks = useCallback(async (client = clientRef.current) => {
+  const refreshTasks = useCallback(async (client = clientRef.current, canApply: () => boolean = () => true) => {
     if (!client) return;
     const requestedRoot = client.getRoot();
     const result = await client.request("tasks.list", {});
-    if (client.getRoot() !== requestedRoot) return;
+    if (!canApply() || clientRef.current !== client || !client.isConnected() || client.getRoot() !== requestedRoot) return;
     setTasks(result.tasks);
     setSelectedTaskId(result.selectedTaskId);
     selectedTaskIdRef.current = result.selectedTaskId;
@@ -518,10 +552,11 @@ export function App() {
     setAiSession(session);
     return true;
   }, []);
-  const refreshAi = useCallback(async (client = clientRef.current) => {
+  const refreshAi = useCallback(async (client = clientRef.current, canApply: () => boolean = () => true) => {
     if (!client) return;
     const token = aiToken();
-    const [session] = await Promise.all([client.request("ai.get", { provider: aiProviderRef.current }), refreshAiStatuses(client)]);
+    const [session] = await Promise.all([client.request("ai.get", { provider: aiProviderRef.current }), refreshAiStatuses(client, canApply)]);
+    if (!canApply()) return;
     applyAiSession(session.session, token);
   }, [aiToken, applyAiSession, refreshAiStatuses]);
   const refreshAiRef = useRef(refreshAi);
@@ -534,22 +569,22 @@ export function App() {
   backgroundAiRefresh.current ??= new CoalescedAsyncAction(async () => { await refreshAiStatusesRef.current(clientRef.current); });
   // The listing only changes when a conversation starts, is switched or is removed, so it is kept
   // out of `refreshAi`, which also runs for every chunk the agent streams.
-  const refreshAiSessions = useCallback(async (client = clientRef.current) => {
+  const refreshAiSessions = useCallback(async (client = clientRef.current, canApply: () => boolean = () => true) => {
     if (!client) return;
     const provider = aiProviderRef.current;
     const workspace = activeWorkspaceRef.current;
     const sessions = (await client.request("ai.sessions", { provider })).sessions;
-    if (provider === aiProviderRef.current && workspace === activeWorkspaceRef.current) setAiSessions(sessions);
+    if (canApply() && provider === aiProviderRef.current && workspace === activeWorkspaceRef.current) setAiSessions(sessions);
   }, []);
-  const refreshUsefulFiles = useCallback(async (client = clientRef.current) => { if (!client) return; const rootId = client.getRoot(); const files = (await client.request("useful.list", {})).files; if (client.getRoot() === rootId) setUsefulFiles(files); }, []);
-  const refreshRunConfigs = useCallback(async (client = clientRef.current) => { if (!client) return; const rootId = client.getRoot(); const configs = (await client.request("runConfig.list", {})).configs; if (client.getRoot() === rootId) setRunConfigs(configs); }, []);
-  const refreshSkills = useCallback(async (client = clientRef.current) => {
+  const refreshUsefulFiles = useCallback(async (client = clientRef.current, canApply: () => boolean = () => true) => { if (!client) return; const rootId = client.getRoot(); const files = (await client.request("useful.list", {})).files; if (canApply() && clientRef.current === client && client.isConnected() && client.getRoot() === rootId) setUsefulFiles(files); }, []);
+  const refreshRunConfigs = useCallback(async (client = clientRef.current, canApply: () => boolean = () => true) => { if (!client) return; const rootId = client.getRoot(); const configs = (await client.request("runConfig.list", {})).configs; if (canApply() && client.getRoot() === rootId) setRunConfigs(configs); }, []);
+  const refreshSkills = useCallback(async (client = clientRef.current, canApply: () => boolean = () => true) => {
     if (!client) return;
     const workspace = activeWorkspaceRef.current;
     const root = client.getRoot();
     const taskId = selectedTaskIdRef.current;
     const catalog = await client.request("skills.list", {});
-    if (client.getRoot() === root && workspace === activeWorkspaceRef.current && taskId === selectedTaskIdRef.current) setSkillCatalog(catalog);
+    if (canApply() && clientRef.current === client && client.isConnected() && client.getRoot() === root && workspace === activeWorkspaceRef.current && taskId === selectedTaskIdRef.current) setSkillCatalog(catalog);
   }, []);
   const selectSkills = useCallback(async (ids: string[]) => {
     const client = clientRef.current; if (!client || !aiSession.id) return;
@@ -566,21 +601,28 @@ export function App() {
       await refreshSkills(); },
     policy: async (policy) => { if (!clientRef.current) throw new Error("Backend is disconnected"); await clientRef.current.request("skills.policy", policy); await refreshSkills(); }
   };
-  const refreshAgents = useCallback(async (client = clientRef.current, taskId = selectedTaskIdRef.current) => {
+  const refreshAgents = useCallback(async (client = clientRef.current, taskId = selectedTaskIdRef.current, canApply: () => boolean = () => true) => {
     if (!client) return;
     const rootId = client.getRoot();
-    await refreshSkills(client);
+    await refreshSkills(client, canApply);
+    if (!canApply() || clientRef.current !== client || !client.isConnected() || client.getRoot() !== rootId) return;
     const next = (await client.request("agents.list", {})).agents;
-    if (client.getRoot() !== rootId) return;
+    if (!canApply() || clientRef.current !== client || !client.isConnected() || client.getRoot() !== rootId) return;
     setAgents(next);
     const saved = workspaceKeyRef.current ? readSetting(workspaceSettingKey(workspaceKeyRef.current, aiAgentTaskKey(taskId))) ?? "" : "";
     setSelectedAgentKey(next.some((agent) => agentKey(agent) === saved) ? saved : "");
   }, [refreshSkills]);
-  const refreshHarnesses = useCallback(async (client = clientRef.current) => {
+  const refreshHarnesses = useCallback(async (client = clientRef.current, canApply: () => boolean = () => true) => {
     if (!client) return; const rootId = client.getRoot(); const result = await client.request("harnesses.list", {});
-    if (client.getRoot() === rootId) { setHarnesses(result.harnesses); setHarnessDiagnostics(result.diagnostics); }
+    if (canApply() && clientRef.current === client && client.isConnected() && client.getRoot() === rootId) { setHarnesses(result.harnesses); setHarnessDiagnostics(result.diagnostics); }
   }, []);
-  const refreshHarnessRuns = useCallback(async (client = clientRef.current) => { if (!client) return; const rootId = client.getRoot(); const runs = (await client.request("harnesses.runs", {})).runs; if (client.getRoot() === rootId) setHarnessRuns(runs); }, []);
+  const refreshHarnessRuns = useCallback(async (client = clientRef.current, canApply: () => boolean = () => true) => {
+    if (!client) return;
+    const rootId = client.getRoot();
+    const baseline = harnessRunsRef.current;
+    const { runs } = await client.request("harnesses.runs", {});
+    if (canApply() && clientRef.current === client && client.getRoot() === rootId) setHarnessRuns((current) => mergeWorkflowHistory(current, runs, baseline));
+  }, []);
   const createHarness = useCallback(async (name: string, template?: "five-minute-check-in" | "git-review-commit") => {
     const result = await clientRef.current!.request("harnesses.create", { name, template }); setHarnesses((current) => [result.harness, ...current]); return result.harness;
   }, []);
@@ -593,11 +635,11 @@ export function App() {
   const deleteHarness = useCallback(async (id: string) => {
     await clientRef.current!.request("harnesses.delete", { id }); setHarnesses((current) => current.filter((item) => item.id !== id));
   }, []);
-  const testHarnessBlock = useCallback(async (definition: HarnessDefinition, blockId: string, input: string) => { const { run } = await clientRef.current!.request("harnesses.test", { definition, blockId, input, provider: aiProviderRef.current }); setHarnessRuns((current) => [run, ...current.filter((item) => item.id !== run.id)]); return run; }, []);
+  const testHarnessBlock = useCallback(async (definition: HarnessDefinition, blockId: string, input: string) => { const { run } = await clientRef.current!.request("harnesses.test", { definition, blockId, input, provider: aiProviderRef.current, target: { taskId: selectedTaskIdRef.current } }); setHarnessRuns((current) => [run, ...current.filter((item) => item.id !== run.id)]); return run; }, []);
   const readHarnessApp = useCallback(async (harnessId: string, blockId: string, runId?: string) => (await clientRef.current!.request("harnesses.app.read", { harnessId, blockId, runId })).app, []);
   const killHarnessApp = useCallback(async (harnessId: string, blockId: string, runId?: string) => { await clientRef.current!.request("harnesses.app.kill", { harnessId, blockId, runId }); }, []);
-  const runHarness = useCallback(async (harnessId: string, input: string, startBlockId?: string, rerunRunId?: string) => { const result = await clientRef.current!.request("harnesses.run", { harnessId, input, startBlockId, rerunRunId, provider: aiProviderRef.current }); setHarnessRuns((current) => [result.run, ...current.filter((item) => item.id !== result.run.id)]); return result.run; }, []);
-  const chatHarness = useCallback(async (harnessId: string, blockId: string, input: string, runId?: string) => { const result = await clientRef.current!.request("harnesses.chat", { harnessId, blockId, input, runId, provider: aiProviderRef.current }); setHarnessRuns((current) => [result.run, ...current.filter((item) => item.id !== result.run.id)]); return result.run; }, []);
+  const runHarness = useCallback(async (harnessId: string, input: string, startBlockId?: string, rerunRunId?: string) => { const result = await clientRef.current!.request("harnesses.run", { harnessId, input, startBlockId, rerunRunId, provider: aiProviderRef.current, target: { taskId: selectedTaskIdRef.current } }); setHarnessRuns((current) => [result.run, ...current.filter((item) => item.id !== result.run.id)]); return result.run; }, []);
+  const chatHarness = useCallback(async (harnessId: string, blockId: string, input: string, runId?: string) => { const result = await clientRef.current!.request("harnesses.chat", { harnessId, blockId, input, runId, provider: aiProviderRef.current, target: { taskId: selectedTaskIdRef.current } }); setHarnessRuns((current) => [result.run, ...current.filter((item) => item.id !== result.run.id)]); return result.run; }, []);
   const appendHarnessRun = useCallback(async (runId: string, input: string) => { const result = await clientRef.current!.request("harnesses.append", { runId, input }); setHarnessRuns((current) => current.map((item) => item.id === runId ? result.run : item)); return result.run; }, []);
   const resolveHarnessPermission = useCallback(async (runId: string, blockId: string, sessionId: string, pauseId: string, requestId: string, optionId?: string) => { const result = await clientRef.current!.request("harnesses.permission.resolve", { runId, blockId, sessionId, pauseId, requestId, optionId }); setHarnessRuns((current) => current.map((item) => item.id === runId ? result.run : item)); return result.run; }, []);
   const answerHarnessQuestion = useCallback(async (runId: string, blockId: string, sessionId: string, pauseId: string, input: string) => { const result = await clientRef.current!.request("harnesses.answer", { runId, blockId, sessionId, pauseId, input }); setHarnessRuns((current) => current.map((item) => item.id === runId ? result.run : item)); return result.run; }, []);
@@ -609,16 +651,22 @@ export function App() {
   const loadHarnessModels = useCallback(async (provider: AiProvider) => (await clientRef.current!.request("ai.models", { provider })).models, []);
   const validateHarnessDefinition = useCallback(async (harness: HarnessDefinition) => clientRef.current!.request("harnesses.validate", { harness }), []);
 
-  const restoreWorkspaceOptions = useCallback(async (options: WorkspaceOptions, client: CoreClient, rootId = client.getRoot() ?? "legacy") => {
+  const restoreWorkspaceOptions = useCallback(async (options: WorkspaceOptions, client: CoreClient, rootId = client.getRoot() ?? "legacy", recovery = false, signal?: AbortSignal) => {
+    const current = workspaceRestorationGuard(client, rootId, activeWorkspaceRef.current, () => clientRef.current, () => activeWorkspaceRef.current, signal);
+    const ensureCurrent = () => { if (!current()) throw new Error("Obsolete workspace restoration"); };
+    ensureCurrent();
     try {
       const java = await client.request("java.getOptions", {});
-      if (client.getRoot() === rootId) { setJavaOptions(java.options); javaOptionsRef.current = java.options; }
-    } catch (error) { setStatusMessage(error instanceof Error ? error.message : "Could not load Java configuration"); }
-    setJavaBreakpoints(options.javaBreakpoints ?? []);
-    setFileColors(options.fileColors ?? {});
-    setGitCommitMessage(options.gitCommitMessage ?? "");
-    setSearchQueries(options.searchQueries ?? {});
-    setSelectedGitPaths(new Set());
+      ensureCurrent();
+      setJavaOptions(java.options); javaOptionsRef.current = java.options;
+    } catch (error) { ensureCurrent(); setStatusMessage(error instanceof Error ? error.message : "Could not load Java configuration"); }
+    if (!recovery) {
+      setJavaBreakpoints(options.javaBreakpoints ?? []);
+      setFileColors(options.fileColors ?? {});
+      setGitCommitMessage(options.gitCommitMessage ?? "");
+      setSearchQueries(options.searchQueries ?? {});
+      setSelectedGitPaths(new Set());
+    }
     const pinnedFiles = new Set(options.pinnedFiles ?? []);
     let tabs = orderPinnedTabs(await Promise.all(options.openFiles.map(async (filePath): Promise<EditorTab> => {
       const title = filePath.split("/").pop() ?? filePath;
@@ -629,31 +677,34 @@ export function App() {
         return { id: crypto.randomUUID(), type: "file", rootId, title, path: filePath, pinned: pinnedFiles.has(filePath), dirty: false, content: "", savedContent: "", loading: false, markdownMode: /\.md$/i.test(filePath) ? "preview" : undefined, error: error instanceof Error ? error.message : "Could not restore file" };
       }
     })));
+    ensureCurrent();
     let activeDocumentId: string | undefined;
     const existingGroup = layoutRef.current.editorGroups[0];
     const carriedDocuments = existingGroup?.tabs.filter((tab) => tab.type === "workflowDocument" && (!tab.rootId || tab.rootId === rootId)) ?? [];
     if (options.workflowDocuments?.length || carriedDocuments.length) {
       try {
         const { runs } = await client.request("harnesses.runs", {});
+        ensureCurrent();
         const restored = restoreWorkflowDocuments(tabs, options.workflowDocuments, runs, rootId, existingGroup?.tabs, existingGroup?.activeTabId);
         tabs = orderPinnedTabs(restored.tabs); activeDocumentId = restored.activeTabId;
-      } catch (error) { tabs = orderPinnedTabs([...tabs, ...carriedDocuments]); activeDocumentId = carriedDocuments.find((tab) => tab.id === existingGroup?.activeTabId)?.id; setStatusMessage(error instanceof Error ? error.message : "Could not restore workflow documents"); }
+      } catch (error) { ensureCurrent(); tabs = orderPinnedTabs([...tabs, ...carriedDocuments]); activeDocumentId = carriedDocuments.find((tab) => tab.id === existingGroup?.activeTabId)?.id; setStatusMessage(error instanceof Error ? error.message : "Could not restore workflow documents"); }
     }
     const activeTabId = activeDocumentId ?? tabs.find((tab) => tab.type === "file" && tab.path === options.activeFile)?.id ?? tabs[0]?.id;
     const restoredTerminals = await Promise.all((options.terminal?.tabs ?? []).map(async (saved, index) => {
       try {
-        const attached = saved.terminalId ? await client.request("terminal.attach", { terminalId: saved.terminalId }) : undefined;
-        const reattached = attached?.state === "available";
-        const session = reattached ? attached.session : await client.request("terminal.create", { cols: 80, rows: 24 });
-        const recovery = reattached ? (session.status === "running" ? "reattached" as const : undefined) : "recreated" as const;
+        const { session, reattached } = await restoreTerminal(client, saved.terminalId, recovery);
+        ensureCurrent();
+        const terminalRecovery = reattached ? (session.status === "running" ? "reattached" as const : undefined) : "recreated" as const;
         terminalBuffers.current.set(session.terminalId, `${session.output}${session.status === "exited" ? `\r\n[process exited${session.exitCode === undefined ? "" : ` with code ${session.exitCode}`}]\r\n` : ""}`);
-        return { index, tab: { id: crypto.randomUUID(), rootId, terminalId: session.terminalId, title: saved.displayName, status: session.status, ...(session.exitCode === undefined ? {} : { exitCode: session.exitCode }), recovery } };
+        return { index, tab: { id: crypto.randomUUID(), rootId, terminalId: session.terminalId, title: saved.displayName, status: session.status, ...(session.exitCode === undefined ? {} : { exitCode: session.exitCode }), recovery: terminalRecovery } };
       } catch {
+        ensureCurrent();
         const terminalId = saved.terminalId ?? crypto.randomUUID();
         terminalBuffers.current.set(terminalId, "\r\n[terminal recovery failed; no replacement shell was started]\r\n");
         return { index, tab: { id: crypto.randomUUID(), rootId, terminalId, title: saved.displayName, status: "unavailable" as const } };
       }
     }));
+    ensureCurrent();
     const activeTerminal = restoredTerminals.find((item) => item.index === options.terminal?.activeTabIndex)?.tab ?? restoredTerminals[0]?.tab;
     const savedBottomPanel = workspaceKeyRef.current ? readWorkspaceSetting(workspaceKeyRef.current, "bottom.activePanel") : null;
     const validBottomPanel = savedBottomPanel === "gitlog"
@@ -662,60 +713,105 @@ export function App() {
     const bottomPanel: BottomPanelType | undefined = validBottomPanel
       ? savedBottomPanel as BottomPanelType
       : savedBottomPanel === null && options.terminal?.panelOpen && restoredTerminals.length > 0 ? "terminal" : undefined;
-    setLayout((current) => ({
-      ...current,
-      panels: [...current.panels.filter((panel) => !["terminal", "java", "problems", "gitlog"].includes(panel.type)), ...(bottomPanel ? [{ id: bottomPanel, type: bottomPanel }] : [])],
-      editorGroups: current.editorGroups.map((item, index) => index === 0 ? { ...item, tabs, activeTabId } : item),
-      terminalGroup: { ...current.terminalGroup, tabs: restoredTerminals.map((item) => item.tab), activeTabId: activeTerminal?.id }
-    }));
-    setWorkspaceOptionsReady(true);
+    setLayout((layout) => current() ? ({
+      ...layout,
+      panels: recovery ? layout.panels : [...layout.panels.filter((panel) => !["terminal", "java", "problems", "gitlog"].includes(panel.type)), ...(bottomPanel ? [{ id: bottomPanel, type: bottomPanel }] : [])],
+      editorGroups: recovery ? recoverEditorGroups(layout.editorGroups, tabs, activeTabId, rootId, current)
+        : layout.editorGroups.map((item, index) => index === 0 ? { ...item, tabs, activeTabId } : item),
+      terminalGroup: { ...layout.terminalGroup, tabs: restoredTerminals.map((item) => item.tab), activeTabId: activeTerminal?.id }
+    }) : layout);
+    if (!recovery) setWorkspaceOptionsReady(true);
   }, []);
 
   const connect = async () => {
+    invalidationRefreshes.current?.dispose();
+    recoveryRef.current?.stop();
+    clientRef.current?.disconnect();
+    clientRef.current = undefined;
     setWorkspaceOptionsReady(false);
     setStatus("connecting"); setStatusMessage("Connecting...");
     const client = new CoreClient();
+    clientRef.current = client;
     let connectionReady = false;
+    let recoverySelection: RecoverySelection | undefined;
+    const recovery = new ConnectionRecovery(async (signal) => {
+      const expected = recoverySelection!;
+      const stillCurrent = workspaceRestorationGuard(client, expected.rootId, expected.workspace, () => clientRef.current, () => activeWorkspaceRef.current, signal);
+      const ensureCurrent = () => { if (!stillCurrent()) throw new Error("Recovery cancelled or selection changed"); };
+      ensureCurrent();
+      const { roots: rootRegistry, workspace: result } = await reconnectWorkspace(client, host.trim(), Number(port), showIgnoredRef.current, signal, expected);
+      ensureCurrent();
+      setWorkspaceRoots(rootRegistry.roots); setSelectedRootId(rootRegistry.selectedRootId);
+      setActiveWorkspace(result.workspace); activeWorkspaceRef.current = result.workspace;
+      workspaceKeyRef.current = result.workspace; cursorPositions.setWorkspace(result.workspace);
+      setProjectName(result.projectName); setTree(result.tree); setJavaOptions(result.options.javaProject);
+      await restoreWorkspaceOptions(result.options, client, client.getRoot(), true, signal);
+      ensureCurrent();
+      await Promise.all([refreshTasks(client, stillCurrent), refreshGit(client), refreshAi(client, stillCurrent), refreshAiSessions(client, stillCurrent), refreshUsefulFiles(client, stillCurrent), refreshRunConfigs(client, stillCurrent), refreshAgents(client, expected.taskId, stillCurrent), refreshHarnesses(client, stillCurrent), refreshHarnessRuns(client, stillCurrent)]);
+      ensureCurrent();
+      if (!client.isConnected()) throw new Error("Connection lost during recovery");
+      if (selectedTaskIdRef.current !== expected.taskId) throw new Error("Saved task selection changed during recovery");
+      setWorkspaceOptionsReady(true);
+      setStatus("connected");
+      recoverySelection = undefined;
+      showStatus("Backend connection restored", "success");
+    }, (error) => {
+      if (clientRef.current !== client) return;
+      if (recoverySelection && (client.getRoot() !== recoverySelection.rootId || activeWorkspaceRef.current !== recoverySelection.workspace)) {
+        recovery.stop();
+        recoverySelection = undefined;
+        return;
+      }
+      invalidationRefreshes.current?.reset();
+      const feedback = recoveryFailureFeedback(error);
+      if (feedback.retry) client.disconnect();
+      else {
+        setStatus("disconnected");
+        setWorkspaceOptionsReady(false);
+      }
+      showStatus(feedback.message, feedback.kind);
+    });
+    recoveryRef.current = recovery;
     client.onDisconnected = (message) => {
       if (!connectionReady || clientRef.current !== client) return;
+      invalidationRefreshes.current?.reset();
       taskSwitchSequence.current += 1;
       taskSwitchActive.current = false;
       setTaskSwitching(false);
-      setWorkspaceOptionsReady(true);
+      setStatus("disconnected");
+      setWorkspaceOptionsReady(false);
+      recoverySelection ??= { rootId: client.getRoot()!, workspace: activeWorkspaceRef.current, taskId: selectedTaskIdRef.current };
       showStatus(`${message}; reconnecting…`, "progress");
-      void (async () => {
-        let retryDelay = 250;
-        while (clientRef.current === client) {
-          await new Promise((resolve) => setTimeout(resolve, retryDelay));
-          if (clientRef.current !== client) return;
-          try {
-            await client.connect(host.trim(), Number(port));
-            if (clientRef.current !== client) { client.disconnect(); return; }
-            const rootRegistry = await client.request("workspace.roots", {}); client.setRoot(rootRegistry.selectedRootId); setWorkspaceRoots(rootRegistry.roots); setSelectedRootId(rootRegistry.selectedRootId);
-            const result = await client.request("workspace.open", { includeIgnored: showIgnoredRef.current });
-            if (clientRef.current !== client) return;
-            setActiveWorkspace(result.workspace); activeWorkspaceRef.current = result.workspace;
-            setProjectName(result.projectName);
-            setTree(result.tree);
-            setJavaOptions(result.options.javaProject);
-            await restoreWorkspaceOptions(result.options, client);
-            await Promise.all([refreshTasks(client), refreshGit(client), refreshAi(client), refreshAiSessions(client), refreshUsefulFiles(client), refreshRunConfigs(client), refreshAgents(client), refreshHarnesses(client), refreshHarnessRuns(client)]);
-            if (clientRef.current !== client) return;
-            showStatus("Backend connection restored", "success");
-            return;
-          } catch {
-            retryDelay = Math.min(retryDelay * 2, 5_000);
-            showStatus("Backend unavailable; retrying…", "progress");
-          }
-        }
-      })();
+      recovery.start();
     };
-    client.onServerEvent = (event) => {
-      if (event.type === "configuration.changed") {
-        if (!event.payload.global && event.payload.rootId !== client.getRoot()) return;
-        void Promise.all([refreshAgents(client), refreshUsefulFiles(client), refreshHarnesses(client), refreshTasks(client)]).catch((error) => setStatusMessage(error instanceof Error ? error.message : "Could not refresh configuration"));
-        return;
+    const invalidations = new InvalidationRefreshes(() => {
+      const rootId = client.getRoot();
+      return clientRef.current === client && client.isConnected() && rootId
+        ? { rootId, workspace: activeWorkspaceRef.current, revision: taskSwitchSequence.current } : undefined;
+    }, {
+      configuration: [
+        (canApply) => refreshAgents(client, selectedTaskIdRef.current, canApply),
+        (canApply) => refreshUsefulFiles(client, canApply),
+        (canApply) => refreshHarnesses(client, canApply),
+        (canApply) => refreshTasks(client, canApply)
+      ],
+      processes: (canApply) => refreshProcesses(client, canApply),
+      configurationFailed: (error) => setStatusMessage(error instanceof Error ? error.message : "Could not refresh configuration")
+    });
+    invalidationRefreshes.current = invalidations;
+    const pendingWorkflowRuns = new Set<string>();
+    const workflowRefresh = new CoalescedAsyncAction(async (canApply) => {
+      const rootId = client.getRoot();
+      const runIds = [...pendingWorkflowRuns];
+      pendingWorkflowRuns.clear();
+      for (const runId of runIds) {
+        const { runs } = await client.request("harnesses.runs", { runId });
+        if (!canApply() || clientRef.current !== client || client.getRoot() !== rootId) return;
+        setHarnessRuns((current) => [...runs, ...current.filter((run) => !runs.some((updated) => updated.id === run.id))]);
       }
+    });
+    client.onServerEvent = (event) => {
+      if (event.type === "configuration.changed" || event.type === "processes.changed") { invalidations.handle(event); return; }
       if (event.type === "timers.changed") { backgroundAiRefresh.current!.trigger(); return; }
       if (event.payload.rootId !== client.getRoot() && event.type === "filesystem.changed") {
         const changed = new Set(event.payload.paths); updateGroup((tabs, active) => ({ tabs: tabs.map((tab) => tab.rootId === event.payload.rootId && tab.type === "file" && (event.payload.overflow || changed.has(tab.path)) ? { ...tab, error: "Changed in its remote root; activate this tab to reconcile" } : tab), activeTabId: active })); return;
@@ -761,7 +857,7 @@ export function App() {
         updateGroup((tabs) => ({ tabs: [...tabs.filter((tab) => tab.id !== id), { id, type: "workflowDocument", workflowRunId: runId, workflowBlockId: blockId, rootId, title, path: title, content, savedContent: content, dirty: false, loading: false, markdownMode: "preview" }], activeTabId: id }));
         return;
       }
-      if (event.type === "harness.changed") { void refreshHarnessRuns(client); return; }
+      if (event.type === "harness.changed") { pendingWorkflowRuns.add(event.payload.runId); workflowRefresh.trigger(); return; }
       if (event.type === "tasks.changed") {
         void Promise.all([refreshTasks(client), refreshAiStatuses(client)]).catch(() => undefined);
         return;
@@ -824,10 +920,11 @@ export function App() {
     };
     try {
       await client.connect(host.trim(), Number(port));
+      if (clientRef.current !== client) return;
       try {
         const rootRegistry = await client.request("workspace.roots", {}); client.setRoot(rootRegistry.selectedRootId); setWorkspaceRoots(rootRegistry.roots); setSelectedRootId(rootRegistry.selectedRootId);
         const result = await client.request("workspace.open", { includeIgnored: showIgnoredRef.current });
-        clientRef.current = client;
+        if (clientRef.current !== client) return;
         setActiveWorkspace(result.workspace); activeWorkspaceRef.current = result.workspace;
         setProjectName(result.projectName);
         // Load workspace-specific settings
@@ -850,7 +947,7 @@ export function App() {
         if (wsLineHeight >= 1 && wsLineHeight <= 2) setUiLineHeight(wsLineHeight);
         // Restore both modes so switching layouts does not replace saved geometry with defaults.
         setWorkflowPanelMode(setting("workflow.panelMode") === "design" ? "design" : "run");
-        try { const saved = JSON.parse(setting("focused.leftPanels") ?? "{}"); if (typeof saved === "object" && saved !== null) setLeftPanels((current) => { const panels = { ...current, ...saved }; return { ...panels, harness: Boolean(panels.harness), timers: Boolean(panels.timers) && !panels.harness, ai: Boolean(panels.ai) && !panels.harness && !panels.timers }; }); } catch {}
+        try { const saved = JSON.parse(setting("focused.leftPanels") ?? "{}"); if (typeof saved === "object" && saved !== null) setLeftPanels((current) => restoredFocusedLeftPanels(current, saved)); } catch {}
         try { const saved = JSON.parse(setting("focused.rightPanels") ?? "{}"); if (typeof saved === "object" && saved !== null) setRightPanels((current) => ({ ...current, ...saved })); } catch {}
         const savedFocusedLeftWidth = Number(setting("focused.leftWidth")); if (savedFocusedLeftWidth >= 280 && savedFocusedLeftWidth <= 900) setLeftSidebarWidth(savedFocusedLeftWidth);
         const savedFocusedRightWidth = Number(setting("focused.rightWidth")); if (savedFocusedRightWidth >= 180 && savedFocusedRightWidth <= 700) setRightSidebarWidth(savedFocusedRightWidth);
@@ -859,7 +956,7 @@ export function App() {
         const savedTasksOpen = setting("classic.tasksOpen"); if (savedTasksOpen === "true" || savedTasksOpen === "false") setClassicTasksOpen(savedTasksOpen === "true");
         const savedAiOpen = setting("classic.aiOpen"); if (savedAiOpen === "true" || savedAiOpen === "false") setClassicAiOpen(savedAiOpen === "true");
         const savedSplit = Number(setting("classic.split")); if (savedSplit >= 10 && savedSplit <= 90) setClassicSplit(savedSplit);
-        const savedSideView = setting("classic.sideView"); if (["project", "git", "taskGit", "java", "useful", "agents", "harness", "workflowRuns", "timers"].includes(savedSideView ?? "")) setClassicSideView(savedSideView as typeof classicSideView);
+        const savedSideView = setting("classic.sideView"); if (["project", "git", "taskGit", "java", "useful", "agents", "harness", "workflowRuns", "timers", "proc"].includes(savedSideView ?? "")) setClassicSideView(savedSideView as typeof classicSideView);
         const savedTerminalHeight = Number(setting("bottom.terminalHeight")); if (savedTerminalHeight >= 130 && savedTerminalHeight <= 520) setTerminalHeight(savedTerminalHeight);
         const savedJavaHeight = Number(setting("bottom.javaHeight")); if (savedJavaHeight >= 140 && savedJavaHeight <= 1200) setJavaPanelHeight(savedJavaHeight);
         const savedProblemsHeight = Number(setting("bottom.problemsHeight")); if (savedProblemsHeight >= 120 && savedProblemsHeight <= 520) setProblemsHeight(savedProblemsHeight);
@@ -900,12 +997,20 @@ export function App() {
         void refreshGit(client); void refreshTaskGit(activeTaskRef.current, client);
         writeSetting("connection", JSON.stringify({ host, port }));
       } catch (error) {
+        if (clientRef.current !== client) return;
         connectionReady = false;
+        recovery.stop();
+        invalidations.dispose();
+        workflowRefresh.dispose();
         client.disconnect();
         if (clientRef.current === client) clientRef.current = undefined;
         setStatus("workspace-error"); setStatusMessage(error instanceof Error ? error.message : "Workspace could not be opened");
       }
     } catch (error) {
+      if (clientRef.current !== client) return;
+      invalidations.dispose();
+      workflowRefresh.dispose();
+      recovery.stop(); client.disconnect(); clientRef.current = undefined;
       setStatus("failed"); setStatusMessage(error instanceof Error ? error.message : "Connection failed");
     }
   };
@@ -918,6 +1023,8 @@ export function App() {
 
   const disconnect = () => {
     if (hasDirtyTabs && !window.confirm("Disconnect and discard unsaved changes?")) return;
+    invalidationRefreshes.current?.dispose();
+    recoveryRef.current?.stop();
     clientRef.current?.disconnect(); clientRef.current = undefined;
     workspaceKeyRef.current = "";
     cursorPositions.setWorkspace("");
@@ -1419,6 +1526,7 @@ export function App() {
     if (!clientRef.current) return;
     if (taskSwitchActive.current) { queuedTaskSwitch.current = taskId; return; }
     if (taskId === selectedTaskIdRef.current) return;
+    invalidationRefreshes.current?.reset();
     const client = clientRef.current;
     const sequence = ++taskSwitchSequence.current;
     const isCurrent = () => taskSwitchSequence.current === sequence && clientRef.current === client;
@@ -1458,6 +1566,8 @@ export function App() {
       const nextProvider = savedProvider && aiProviders.some((item) => item.id === savedProvider) ? savedProvider : aiProviderRef.current;
       await switchAiProvider(nextProvider, result.selectedTaskId);
       await Promise.all([refreshGit(), refreshAi(), refreshAiSessions(), refreshTaskGit(nextTask), refreshRunConfigs(client), refreshAgents(clientRef.current, result.selectedTaskId)]);
+      if (isCurrent()) invalidationRefreshes.current?.refreshConfiguration();
+      if (isCurrent() && client.isConnected()) setStatus("connected");
     } catch (error) {
       if (!isCurrent()) return;
       setWorkspaceOptionsReady(true);
@@ -1491,7 +1601,7 @@ export function App() {
   }, [refreshTaskGit]);
 
   const openTask = useCallback((taskId?: string, pendingPermission = false) => {
-    openTaskFromSummary({ taskId, pendingPermission, sideLayout, openClassicAi: () => setClassicAiOpen(true), openFocusedAi: () => setLeftPanels((current) => ({ ...current, tasks: true, ai: true, harness: false, timers: false })), switchTask: (id) => void switchTask(id) });
+    openTaskFromSummary({ taskId, pendingPermission, sideLayout, openClassicAi: () => setClassicAiOpen(true), openFocusedAi: () => setLeftPanels((current) => ({ ...current, tasks: true, ai: true, harness: false, timers: false, proc: false })), switchTask: (id) => void switchTask(id) });
   }, [sideLayout, switchTask]);
 
   const currentAiAttachmentKey = selectedTaskId ?? "root";
@@ -1516,7 +1626,7 @@ export function App() {
       return { ...current, [key]: [...attachments, { id: `workspace:${path}`, name: path.split("/").pop() ?? path, path }] };
     });
     if (sideLayout === "classic") setClassicAiOpen(true);
-    else setLeftPanels((current) => ({ ...current, ai: true, harness: false, timers: false }));
+    else setLeftPanels((current) => ({ ...current, ai: true, harness: false, timers: false, proc: false }));
     void refreshAi(); setEditorGitMenu(undefined);
   }, [refreshAi, selectedTaskId, sideLayout]);
   const sendAiPrompt = useCallback(async (prompt: string, configuration: AiConfiguration, attachments: AiAttachment[]) => {
@@ -1571,7 +1681,7 @@ export function App() {
   }, [aiToken, applyAiSession, refreshAi]);
   const followUpCheckpoint = useCallback((checkpoint: TaskCheckpoint) => {
     updateAiDraft(`Review the changes from this checkpoint and continue: ${checkpoint.prompt}`);
-    if (sideLayout === "classic") setClassicAiOpen(true); else setLeftPanels((current) => ({ ...current, ai: true, harness: false, timers: false }));
+    if (sideLayout === "classic") setClassicAiOpen(true); else setLeftPanels((current) => ({ ...current, ai: true, harness: false, timers: false, proc: false }));
   }, [sideLayout, updateAiDraft]);
   const configureAi = useCallback(async (configuration: AiConfiguration) => {
     if (!clientRef.current) return;
@@ -2591,10 +2701,13 @@ export function App() {
     const client = clientRef.current;
     if (!client || rootId === selectedRootId) return;
     const previous = selectedRootId;
+    const selectionRefreshes = invalidationRefreshes.current;
+    selectionRefreshes?.reset();
     setTaskSwitching(true);
     try {
       const currentGroup = layoutRef.current.editorGroups[0]!; const currentFiles = currentGroup.tabs.filter((tab) => tab.type === "file" && (!tab.rootId || tab.rootId === previous)); const currentTerminal = { ...layoutRef.current.terminalGroup, tabs: layoutRef.current.terminalGroup.tabs.filter((tab) => !tab.rootId || tab.rootId === previous) }; const activeTerminalIndex = currentTerminal.tabs.findIndex((tab) => tab.id === currentTerminal.activeTabId);
       await client.request("workspace.saveOptions", { options: { ...workflowDocumentOptions(currentGroup.tabs, currentGroup.activeTabId, selectedRootIdRef.current), openFiles: currentFiles.map((tab) => tab.path), ...(pinnedFilePaths(currentFiles).length ? { pinnedFiles: pinnedFilePaths(currentFiles) } : {}), ...(currentFiles.find((tab) => tab.id === currentGroup.activeTabId) ? { activeFile: currentFiles.find((tab) => tab.id === currentGroup.activeTabId)!.path } : {}), ...(javaOptionsRef.current ? { javaProject: javaOptionsRef.current } : {}), terminal: { tabs: currentTerminal.tabs.map((tab) => ({ displayName: tab.title, terminalId: tab.terminalId })), ...(activeTerminalIndex >= 0 ? { activeTabIndex: activeTerminalIndex } : {}), panelOpen: layoutRef.current.panels.some((panel) => panel.type === "terminal") }, ...(Object.keys(fileColors).length ? { fileColors } : {}), ...(gitCommitMessage ? { gitCommitMessage } : {}), javaBreakpoints, ...(Object.keys(searchQueries).length ? { searchQueries } : {}) } });
+      selectionRefreshes?.reset();
       client.setRoot(rootId);
       const result = await client.request("workspace.selectRoot", { rootId, includeIgnored: showIgnoredRef.current });
       selectedRootIdRef.current = rootId; setSelectedRootId(rootId); setActiveWorkspace(result.workspace); activeWorkspaceRef.current = result.workspace; setProjectName(result.projectName); setTree(result.tree);
@@ -2604,7 +2717,11 @@ export function App() {
       setRunConfigs((configs) => configs.filter((config) => config.scope === "global"));
       await restoreWorkspaceOptions(result.options, client);
       await Promise.all([refreshTasks(client), refreshGit(client), refreshAi(client), refreshUsefulFiles(client), refreshRunConfigs(client), refreshAgents(client)]);
-    } catch (error) { client.setRoot(previous); setStatusMessage(error instanceof Error ? error.message : "Could not switch workspace root"); }
+      if (clientRef.current === client && client.getRoot() === rootId && client.isConnected()) {
+        selectionRefreshes?.refreshConfiguration();
+        setStatus("connected");
+      }
+    } catch (error) { selectionRefreshes?.reset(); client.setRoot(previous); setStatusMessage(error instanceof Error ? error.message : "Could not switch workspace root"); }
     finally { setTaskSwitching(false); }
   };
   selectWorkspaceRootRef.current = selectWorkspaceRoot;
@@ -2641,7 +2758,7 @@ export function App() {
     { id: "terminal.new", label: "New Terminal", category: "Terminal", when: (context) => context.connected, execute: () => { void createTerminal(); } },
     { id: "terminal.toggle", label: "Toggle Terminal Panel", category: "Terminal", when: (context) => context.connected, execute: toggleTerminalPanel },
     { id: "task.create", label: "Create Task", category: "Task", when: (context) => context.connected && !context.taskSwitching, execute: () => setShowCreateTaskDialog(true) },
-    { id: "ai.open", label: "Open AI", category: "AI", when: (context) => context.connected, execute: () => { if (sideLayout === "classic") setClassicAiOpen(true); else setLeftPanels((current) => ({ ...current, ai: true, harness: false, timers: false })); void refreshAi(); } },
+    { id: "ai.open", label: "Open AI", category: "AI", when: (context) => context.connected, execute: () => { if (sideLayout === "classic") setClassicAiOpen(true); else setLeftPanels((current) => ({ ...current, ai: true, harness: false, timers: false, proc: false })); void refreshAi(); } },
     { id: "java.configuration", label: "Edit Java Run/Debug Configuration", category: "Java", when: (context) => context.connected, execute: () => setShowRunConfigurationDialog(true) },
     { id: "editor.save", label: "Save Active Editor", category: "Editor", when: (context) => context.hasActiveEditor && context.activeEditorDirty, execute: () => saveActive() }
   ];
@@ -2659,10 +2776,15 @@ export function App() {
     window.addEventListener("keydown", listener); return () => window.removeEventListener("keydown", listener);
   }, [commands, commandContext, quickOpen, shortcutBindings, workspaceSymbolsOpen]);
 
-  const workflowDesignPanel = <HarnessPanel skillCatalog={skillCatalog} onRefreshSkills={refreshSkills} designOnly harnesses={harnesses} runs={harnessRuns} diagnostics={harnessDiagnostics} providers={aiProviders} agents={agents} defaultProvider={aiProvider} onLoadModels={loadHarnessModels} onValidate={validateHarnessDefinition} onCreate={createHarness} onRead={readHarness} onSave={saveHarness} onDelete={deleteHarness} onRun={runHarness} onTestBlock={testHarnessBlock} onKillApp={killHarnessApp} onReadApp={readHarnessApp} onChat={chatHarness} onAppendRun={appendHarnessRun} onResolvePermission={resolveHarnessPermission} onAnswerQuestion={answerHarnessQuestion} onResumePause={resumeHarnessPause} onRetryPause={retryHarnessPause} onCancelPause={cancelHarnessPause} onCancelRun={cancelHarnessRun} onDeleteRun={deleteHarnessRun} onError={setStatusMessage} />;
+  const taskHarnessRuns = workflowRunsForContext(harnessRuns, workspaceRoots.find((root) => root.id === selectedRootId)?.path, activeWorkspace, selectedTaskId);
+  const workflowDesignPanel = <HarnessPanel skillCatalog={skillCatalog} onRefreshSkills={refreshSkills} designOnly harnesses={harnesses} runs={taskHarnessRuns} diagnostics={harnessDiagnostics} providers={aiProviders} agents={agents} defaultProvider={aiProvider} onLoadModels={loadHarnessModels} onValidate={validateHarnessDefinition} onCreate={createHarness} onRead={readHarness} onSave={saveHarness} onDelete={deleteHarness} onRun={runHarness} onTestBlock={testHarnessBlock} onKillApp={killHarnessApp} onReadApp={readHarnessApp} onChat={chatHarness} onAppendRun={appendHarnessRun} onResolvePermission={resolveHarnessPermission} onAnswerQuestion={answerHarnessQuestion} onResumePause={resumeHarnessPause} onRetryPause={retryHarnessPause} onCancelPause={cancelHarnessPause} onCancelRun={cancelHarnessRun} onDeleteRun={deleteHarnessRun} onError={setStatusMessage} />;
   const showWorkflowDesign = sideLayout === "classic" ? classicSideView === "harness" : workflowPanelMode === "design";
-  const workflowRunPanel = <WorkflowRunPanel key={selectedRootId} harnesses={harnesses} runs={harnessRuns} diagnostics={harnessDiagnostics} onValidate={validateHarnessDefinition} onRun={runHarness} onKillApp={killHarnessApp} onReadApp={readHarnessApp} onChat={chatHarness} onCancelRun={cancelHarnessRun} onResolvePermission={resolveHarnessPermission} onAnswerQuestion={answerHarnessQuestion} onResumePause={resumeHarnessPause} onRetryPause={retryHarnessPause} onCancelPause={cancelHarnessPause} onError={setStatusMessage} />;
+  const workflowRunPanel = <WorkflowRunPanel key={`${selectedRootId}:${selectedTaskId ?? "root"}`} harnesses={harnesses} runs={taskHarnessRuns} diagnostics={harnessDiagnostics} onValidate={validateHarnessDefinition} onRun={runHarness} onKillApp={killHarnessApp} onReadApp={readHarnessApp} onChat={chatHarness} onCancelRun={cancelHarnessRun} onResolvePermission={resolveHarnessPermission} onAnswerQuestion={answerHarnessQuestion} onResumePause={resumeHarnessPause} onRetryPause={retryHarnessPause} onCancelPause={cancelHarnessPause} onError={setStatusMessage} />;
   const workflowPanels = <div className="workflow-mode-panels"><div hidden={!showWorkflowDesign}>{workflowDesignPanel}</div><div hidden={showWorkflowDesign}>{workflowRunPanel}</div></div>;
+  const processesPanel = <ProcessesPanel key={selectedRootId} processes={managedProcessList} loading={processLoading} error={processError} disabled={status !== "connected" || taskSwitching} onRefresh={() => refreshProcesses()} onKill={async (processId) => {
+    const client = clientRef.current; if (!client) throw new Error("Backend is disconnected. Reconnect and try again.");
+    await client.request("processes.kill", { processId }); await refreshProcesses();
+  }} />;
   const timersPanel = <TimersPanel key={selectedRootId} timers={activeTimers} schedules={schedules} workflows={harnesses} roots={workspaceRoots} selectedTaskId={selectedTaskId} defaultProvider={aiProvider} onLoadAgents={loadScheduleAgents}
     onCreateSchedule={async (input) => { const client = clientRef.current; if (!client) throw new Error("Backend is disconnected"); await client.request("schedules.create", input); await refreshAiStatuses(client); }}
     onScheduleAction={async (scheduleId, action) => {
@@ -2680,12 +2802,14 @@ export function App() {
     }}
     onCancelAll={async () => { const client = clientRef.current; if (!client) return; await client.request("timers.cancelAll", {}); await refreshAiStatuses(client); }} />;
 
-  if (status !== "connected") return <ConnectionScreen {...{ host, port, status, statusMessage, setHost, setPort, connect }} />;
+  // Keep live buffers mounted during automatic recovery; commands still see disconnected.
+  if (status !== "connected" && status !== "disconnected") return <ConnectionScreen {...{ host, port, status, statusMessage, setHost, setPort, connect }} />;
 
   return <div className="ide-shell"><ModalFocusManager />
     {statusMessage && <div className={`status-toast ${statusKind}`} role={statusKind === "error" ? "alert" : "status"} aria-live={statusKind === "error" ? "assertive" : "polite"}>
       {statusKind === "progress" ? <LoaderCircle className="status-toast-spinner" size={16} /> : statusKind === "success" ? <Check size={16} /> : <CircleAlert size={16} />}
       <span>{statusMessage}</span>
+      {status === "disconnected" && statusKind === "error" && <button onClick={() => { showStatus("Restoring backend connection…", "progress"); recoveryRef.current?.start(); }}>Reconnect</button>}
       {projectTransfer && <button title="Cancel file transfer" onClick={() => void cancelProjectTransfer()}><X size={14} /></button>}
       {lastDeleted && statusKind === "success" && <button onClick={() => void restoreLastDeleted()}>Undo</button>}
       {statusKind !== "progress" && <button title="Dismiss" aria-label="Dismiss status message" onClick={() => setStatusMessageState("")}><X size={14} /></button>}
@@ -2694,14 +2818,15 @@ export function App() {
       {sideLayout === "ai-focused" ? <>
       <nav className="tool-stripe" aria-label="Left tool windows">
         <button className={`tool-stripe-button ${leftPanels.tasks ? "active" : ""}`} title={leftPanels.tasks ? "Hide Tasks" : "Show Tasks"} onClick={() => setLeftPanels((current) => ({ ...current, tasks: !current.tasks }))}><ListTodo size={15} /><span>Tasks</span>{tasks.length > 0 && <span className="tool-badge">{tasks.length > 99 ? "99+" : tasks.length}</span>}</button>
-        <button className={`tool-stripe-button ${leftPanels.ai ? "active" : ""}`} title={leftPanels.ai ? "Hide AI" : "Show AI"} onClick={() => setLeftPanels((current) => { if (!current.ai) void refreshAi(); return { ...current, ai: !current.ai, harness: false, timers: false }; })}><Bot size={15} /><span>AI</span>{aiSession.status === "in_progress" && <span className="tool-badge">...</span>}</button>
-        <button className={`tool-stripe-button ${leftPanels.harness && workflowPanelMode === "run" ? "active" : ""}`} title="Workflows · View / Run" onClick={() => { setWorkflowPanelMode("run"); setLeftPanels((current) => ({ ...current, harness: true, ai: false, timers: false })); void Promise.all([refreshHarnesses(), refreshHarnessRuns()]); }}><Play size={15} /><span>Workflows</span></button>
+        <button className={`tool-stripe-button ${leftPanels.ai ? "active" : ""}`} title={leftPanels.ai ? "Hide AI" : "Show AI"} onClick={() => setLeftPanels((current) => { if (!current.ai) void refreshAi(); return { ...current, ai: !current.ai, harness: false, timers: false, proc: false }; })}><Bot size={15} /><span>AI</span>{aiSession.status === "in_progress" && <span className="tool-badge">...</span>}</button>
+        <button className={`tool-stripe-button ${leftPanels.harness && workflowPanelMode === "run" ? "active" : ""}`} title="Workflows · View / Run" onClick={() => { setWorkflowPanelMode("run"); setLeftPanels((current) => ({ ...current, harness: true, ai: false, timers: false, proc: false })); void Promise.all([refreshHarnesses(), refreshHarnessRuns()]); }}><Play size={15} /><span>Workflows</span></button>
         <div className="tool-stripe-bottom">
-          <button className={`tool-stripe-button ${leftPanels.harness && workflowPanelMode === "design" ? "active" : ""}`} title="Workflow design" onClick={() => { setWorkflowPanelMode("design"); setLeftPanels((current) => ({ ...current, harness: true, ai: false, timers: false })); void refreshHarnesses(); }}><Workflow size={15} /><span>Workflow design</span></button>
-          <button className={`tool-stripe-button ${leftPanels.timers ? "active" : ""}`} title={leftPanels.timers ? "Hide Timers" : "Show Timers"} onClick={() => setLeftPanels((current) => ({ ...current, timers: !current.timers, ai: false, harness: false }))}><Clock size={15} /><span>Timers</span>{(activeTimers.length + schedules.filter((item) => item.enabled).length) > 0 && <span className="tool-badge">{activeTimers.length + schedules.filter((item) => item.enabled).length}</span>}</button>
+          <button className={`tool-stripe-button ${leftPanels.harness && workflowPanelMode === "design" ? "active" : ""}`} title="Workflow design" onClick={() => { setWorkflowPanelMode("design"); setLeftPanels((current) => ({ ...current, harness: true, ai: false, timers: false, proc: false })); void refreshHarnesses(); }}><Workflow size={15} /><span>Workflow design</span></button>
+          <button className={`tool-stripe-button ${leftPanels.timers ? "active" : ""}`} title={leftPanels.timers ? "Hide Timers" : "Show Timers"} onClick={() => setLeftPanels((current) => ({ ...current, timers: !current.timers, proc: false, ai: false, harness: false }))}><Clock size={15} /><span>Timers</span>{(activeTimers.length + schedules.filter((item) => item.enabled).length) > 0 && <span className="tool-badge">{activeTimers.length + schedules.filter((item) => item.enabled).length}</span>}</button>
+          <button className={`tool-stripe-button ${leftPanels.proc ? "active" : ""}`} title={leftPanels.proc ? "Hide Proc" : "Show Proc"} onClick={() => { setLeftPanels((current) => ({ ...current, proc: !current.proc, ai: false, harness: false, timers: false })); void refreshProcesses(); }}><SquareTerminal size={15} /><span>Proc</span>{managedProcessList.length > 0 && <span className="tool-badge">{managedProcessList.length}</span>}</button>
         </div>
       </nav>
-      {(leftPanels.tasks || leftPanels.ai || leftPanels.harness || leftPanels.timers) && <><aside className="side-panel side-panel-left" style={{ width: leftSidebarWidth }}><ResizablePanelStack workspace={activeWorkspace} setting="focused.leftSizes" ids={[...(leftPanels.tasks ? ["tasks"] : []), ...((leftPanels.ai || leftPanels.harness || leftPanels.timers) ? ["ai"] : [])]}>
+      {(leftPanels.tasks || leftPanels.ai || leftPanels.harness || leftPanels.timers || leftPanels.proc) && <><aside className="side-panel side-panel-left" style={{ width: leftSidebarWidth }}><ResizablePanelStack workspace={activeWorkspace} setting="focused.leftSizes" ids={[...(leftPanels.tasks ? ["tasks"] : []), ...((leftPanels.ai || leftPanels.harness || leftPanels.timers || leftPanels.proc) ? ["ai"] : [])]}>
         {leftPanels.tasks && <section key="tasks" className="stacked-panel"><header className="panel-header"><span>Tasks</span><button title="Create task" disabled={taskSwitching} onClick={() => setShowCreateTaskDialog(true)}><Plus size={15} /></button></header><div className="task-filters"><QuickFilter value={taskFilter} placeholder="Filter tasks" label="Filter tasks" onChange={setTaskFilter} /><select aria-label="Task lifecycle filter" value={taskLifecycleFilter} onChange={(event) => setTaskLifecycleFilter(event.target.value as typeof taskLifecycleFilter)}><option value="active">Active</option><option value="finished">Finished</option><option value="archived">Archived</option><option value="all">All</option></select></div><div className="tasks-list">
           {showRootTask && <TaskRow icon={<Folder size={15} />} name="Root workspace" summary={aiStatuses.root} selected={selectedTaskId === undefined} disabled={taskSwitching} onClick={() => openTask(undefined, aiStatuses.root.pendingPermission)} onCancelTimer={() => void timerAction(undefined, "cancel")} onFireTimer={() => void timerAction(undefined, "fire")} />}
           {filteredTasks.map((task) => { const summary = aiStatuses.tasks[task.id] ?? emptyAiSummary; return <TaskRow key={task.id} icon={<ListTodo size={15} />} name={task.name} branch={task.branch} summary={summary} finished={task.status === "finished"} archived={task.archived} selected={selectedTaskId === task.id} disabled={taskSwitching} onClick={() => openTask(task.id, summary.pendingPermission)} onSetFinished={() => void setTaskStatus(task, task.status === "finished" ? "active" : "finished")} onRename={() => void renameTask(task)} onSetArchived={() => void setTaskArchived(task, !task.archived)} onMerge={() => setMergeDialog(task)} onDelete={() => void deleteTask(task)} onCancelTimer={() => void timerAction(task, "cancel")} onFireTimer={() => void timerAction(task, "fire")} />; })}
@@ -2709,6 +2834,7 @@ export function App() {
         </div></section>}
         {leftPanels.ai && <section key="ai" className="stacked-panel"><header className="panel-header"><span>AI</span><AgentPicker agents={agents} value={selectedAgentKey} disabled={aiSession.status === "in_progress"} onChange={selectAgent} /><span className={`ai-status ${aiSession.status}`}>{formatAiStatus(aiSession.status)}</span></header><AiPanel key={`${activeWorkspace}:${selectedTaskId ?? "root"}:${aiProvider}:${aiSession.id ?? "legacy"}`} provider={aiProvider} providers={aiProviders} session={chatSession} sessions={aiSessions} models={aiModels} usage={aiUsage} attachments={currentAiAttachments} draft={currentAiDraft} workspacePath={activeWorkspace} permissionOwner={{ provider: aiProvider, ...(selectedTaskId ? { taskId: selectedTaskId } : {}), ...(aiSession.id ? { sessionId: aiSession.id } : {}) }} skills={availableChatSkills} onSkillsChange={selectSkills} onOpenSkills={() => { setRightPanels((current) => ({ ...current, skills: true })); void refreshSkills(); }} permissionActionsDisabled={taskSwitching} sessionChangesDisabled={selectedTaskTimerActive} onProviderChange={(provider) => void switchAiProvider(provider)} onConfigurationChange={configureAi} onAttachmentsChange={updateAiAttachments} onDraftChange={updateAiDraft} onSend={sendAiPrompt} onSendAsTask={selectedTaskId ? undefined : sendAiPromptAsTask} onSteer={steerAiPrompt} onInterrupt={() => void interruptAi()} onNewSession={() => void newAiSession()} onSwitchSession={(session) => void switchAiSession(session)} onRemoveSession={(session) => void removeAiSession(session)} onResolvePermission={resolveAiPermission} onOpenFile={(path, line, column) => void openAiFile(path, line, column)} onOpenExternal={(url) => void window.desktop?.openExternal(url)} /></section>}
         {leftPanels.harness && <section key="harness" className="stacked-panel"><header className="panel-header"><span>{workflowPanelMode === "design" ? "Workflow design" : "Workflows"}</span><button title="Refresh workflows" onClick={() => void Promise.all([refreshHarnesses(), refreshHarnessRuns()])}><RefreshCw size={14} /></button></header>{workflowPanels}</section>}
+        {leftPanels.proc && <section key="proc" className="stacked-panel">{processesPanel}</section>}
         {leftPanels.timers && <section key="timers" className="stacked-panel">{timersPanel}</section>}
       </ResizablePanelStack></aside><div className="resize-handle" role="separator" aria-label="Resize left sidebar" aria-orientation="vertical" aria-valuemin={280} aria-valuemax={Math.round(Math.min(900, window.innerWidth * .65))} aria-valuenow={Math.round(leftSidebarWidth)} tabIndex={0} onKeyDown={(event) => keyboardResize(event, leftSidebarWidth, setLeftSidebarWidth, 280, Math.min(900, window.innerWidth * .65))} onPointerDown={beginLeftSidebarResize} /></>}
       </> : <>
@@ -2724,10 +2850,11 @@ export function App() {
         <div className="tool-stripe-bottom">
           <button className={`tool-stripe-button ${classicSideView === "harness" ? "active" : ""}`} title="Workflow design" onClick={() => { selectClassicSideView("harness"); void refreshHarnesses(); }}><Workflow size={15} /><span>Workflow design</span></button>
           <button className={`tool-stripe-button ${classicSideView === "timers" ? "active" : ""}`} title="Timers" onClick={() => selectClassicSideView("timers")}><Clock size={15} /><span>Timers</span>{(activeTimers.length + schedules.filter((item) => item.enabled).length) > 0 && <span className="tool-badge">{activeTimers.length + schedules.filter((item) => item.enabled).length}</span>}</button>
+          <button className={`tool-stripe-button ${classicSideView === "proc" ? "active" : ""}`} title="Proc" onClick={() => { selectClassicSideView("proc"); void refreshProcesses(); }}><SquareTerminal size={15} /><span>Proc</span>{managedProcessList.length > 0 && <span className="tool-badge">{managedProcessList.length}</span>}</button>
         </div>
       </nav>
       <aside className="side-panel classic-left-panel" style={{ width: classicLeftWidth }}>
-        {classicSideView === "timers" ? timersPanel : classicSideView === "project" ? <>
+        {classicSideView === "proc" ? processesPanel : classicSideView === "timers" ? timersPanel : classicSideView === "project" ? <>
           <header className="panel-header"><span>Project</span><div className="panel-header-actions"><button title={showIgnored ? "Hide ignored files" : "Show all files (including Git-ignored)"} className={showIgnored ? "active" : ""} onClick={toggleShowIgnored}>{showIgnored ? <Eye size={14} /> : <EyeOff size={14} />}</button><button title="Synchronize files" onClick={() => void refreshTree()}><RefreshCw size={14} /></button></div></header>
           <QuickFilter value={projectFilter} placeholder={projectContentFilter ? "Filter by file contents" : "Filter files"} label={projectContentFilter ? "Filter files by contents" : "Filter project files"} onChange={setProjectFilter} contentSearch={projectContentFilter} contentSearchLoading={projectContentFilterLoading} onContentSearchChange={setProjectContentFilter} />
           <div className="workspace-name"><select aria-label="Workspace root" value={selectedRootId} disabled={taskSwitching} onChange={(event) => void selectWorkspaceRoot(event.target.value)}>{workspaceRoots.map((root) => <option key={root.id} value={root.id}>{root.alias}</option>)}</select><button title="Add remote workspace root" onClick={() => setWorkspaceRootDialogOpen(true)}><Plus size={13} /></button><button title="Unregister an inactive workspace root" disabled={!workspaceRoots.some((root) => !root.primary && root.id !== selectedRootId)} onClick={() => void removeWorkspaceRoot()}><Trash2 size={13} /></button></div>

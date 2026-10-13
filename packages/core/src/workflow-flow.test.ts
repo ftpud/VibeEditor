@@ -192,6 +192,71 @@ describe("typed workflows", () => {
     expect((await finished()).blocks[0]?.chatMessages?.at(-1)?.text).toBe("Resumed");
   });
 
+  it.each(["chatbox", "ai"] as const)("admits an idle Chatbox while a %s runs and preserves independent histories and tool delivery", async (firstType) => {
+    const { runner, definition, store, finished } = await setup([block("first", firstType), block("second", "chatbox"), block("tool", "text", { prompt: "Tool: {{input}}" })], [edge("second", "tool", "use")], 2);
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const dispatch = vi.fn(async (target: HarnessBlock, _prompt: string, runtime: Parameters<Parameters<HarnessRunner["start"]>[2]>[2]) => {
+      await runtime.started(`/session/${target.id}`);
+      if (target.id === "first") { await gate; return session("First reply"); }
+      expect(await runner.flowTool(runtime.runId, "second", "workflow_use_block", { block_id: "tool", input: "first tool input" })).toMatchObject({ output: "Tool: first tool input" });
+      return session("Second reply");
+    });
+    const append = vi.fn(async (target: HarnessBlock, _prompt: string, runtime: Parameters<NonNullable<Parameters<HarnessRunner["start"]>[4]>>[2]) => {
+      expect(target.id).toBe("second"); expect(runtime.workspace).toBe("/session/second");
+      expect(await runner.flowTool(runtime.runId, "second", "workflow_use_block", { block_id: "tool", input: "follow-up tool input" })).toMatchObject({ output: "Tool: follow-up tool input" });
+      await runtime.activity?.(session("Streaming second follow-up"));
+      return session("Second follow-up reply");
+    });
+    const run = await runner.start(definition.id, "First input", dispatch, "provider", append, "first");
+    // A submission immediately after start must not duplicate its queued turn.
+    if (firstType === "chatbox") await expect(runner.continueChat(run.id, "first", "duplicate", dispatch, "provider", append)).rejects.toThrow("current workflow turn");
+    await vi.waitFor(async () => expect((await store.runs())[0]?.blocks.find((state) => state.blockId === "first")?.workspace).toBe("/session/first"));
+    await runner.continueChat(run.id, "second", "Second input", dispatch, "provider", append);
+    await vi.waitFor(async () => expect((await store.runs())[0]?.blocks.find((state) => state.blockId === "second")?.status).toBe("succeeded"));
+    await runner.continueChat(run.id, "second", "Second follow-up", dispatch, "provider", append);
+    await vi.waitFor(async () => expect((await store.runs())[0]?.blocks.find((state) => state.blockId === "second")?.output).toBe("Second follow-up reply"));
+    const active = (await store.runs())[0]!;
+    expect(active.status).toBe("running"); expect(active.completedAt).toBeUndefined(); expect(runner.isActive(run.id)).toBe(true);
+    expect(active.input).toBe("First input"); expect(active.blocks.find((state) => state.blockId === "first")?.status).toBe("running");
+    release(); const final = await finished();
+    expect(final.status).toBe("succeeded");
+    expect(final.blocks.find((state) => state.blockId === "first")?.output).toBe("First reply");
+    expect(final.blocks.find((state) => state.blockId === "second")?.chatMessages?.map((message) => message.text)).toEqual(["Second input", "Second reply", "Second follow-up", "Second follow-up reply"]);
+    if (firstType === "chatbox") expect(final.blocks.find((state) => state.blockId === "first")?.chatMessages?.map((message) => message.text)).toEqual(["First input", "First reply"]);
+    expect(final.blocks.find((state) => state.blockId === "tool")?.log?.filter((entry) => entry.kind === "response")).toHaveLength(2);
+    expect(dispatch).toHaveBeenCalledTimes(2); expect(append).toHaveBeenCalledOnce();
+  });
+
+  it("serializes simultaneous resumed admission and drains an independent turn after entry failure", async () => {
+    const { runner, definition, store, finished } = await setup([block("first", "chatbox"), block("second", "chatbox")], [], 2);
+    const dispatch = vi.fn(async (target: HarnessBlock, _prompt: string, runtime: Parameters<Parameters<HarnessRunner["start"]>[2]>[2]) => { await runtime.started(`/session/${target.id}`); return session("Original reply"); });
+    const original = await runner.start(definition.id, "Original", dispatch, "provider", async () => session("unused"), "first");
+    await finished(); await vi.waitFor(() => expect(runner.isActive(original.id)).toBe(false));
+    let fail!: () => void; let release!: () => void;
+    const failure = new Promise<void>((resolve) => { fail = resolve; }); const gate = new Promise<void>((resolve) => { release = resolve; });
+    const append = vi.fn(async () => { await failure; throw new Error("Entry failed deliberately"); });
+    const independent = vi.fn(async (target: HarnessBlock, _prompt: string, runtime: Parameters<Parameters<HarnessRunner["start"]>[2]>[2]) => { await runtime.started(`/session/${target.id}`); await gate; return session("Independent reply"); });
+    const turns = await Promise.allSettled([
+      runner.continueChat(original.id, "first", "Failing turn", independent, "provider", append),
+      runner.continueChat(original.id, "second", "Independent turn", independent, "provider", append),
+      runner.continueChat(original.id, "first", "Duplicate turn", independent, "provider", append),
+    ]);
+    expect(turns.map((turn) => turn.status)).toEqual(["fulfilled", "fulfilled", "rejected"]);
+    await vi.waitFor(async () => expect((await store.runs())[0]?.blocks.find((state) => state.blockId === "second")?.workspace).toBe("/session/second"));
+    fail();
+    await vi.waitFor(async () => expect((await store.runs())[0]?.blocks.find((state) => state.blockId === "first")?.status).toBe("failed"));
+    const active = (await store.runs())[0]!;
+    expect(active.status).toBe("running"); expect(active.blocks.find((state) => state.blockId === "second")?.status).toBe("running");
+    await expect(runner.continueChat(original.id, "second", "Duplicate second", independent, "provider", append)).rejects.toThrow("current workflow turn");
+    release(); const final = await finished();
+    expect(final.status).toBe("failed"); expect(final.error).toBe("Entry failed deliberately");
+    expect(final.blocks.find((state) => state.blockId === "second")?.status).toBe("succeeded");
+    expect(final.blocks.find((state) => state.blockId === "second")?.chatMessages?.map((message) => message.text)).toEqual(["Independent turn", "Independent reply"]);
+    expect(final.blocks.find((state) => state.blockId === "first")?.chatMessages?.filter((message) => message.role === "user").map((message) => message.text)).toEqual(["Original", "Failing turn"]);
+    expect(append).toHaveBeenCalledOnce(); expect(independent).toHaveBeenCalledOnce();
+  });
+
   it("runs app actions as connected tools without waiting for app exit", async () => {
     const apps = new WorkflowAppService();
     const { runner, definition, store, finished } = await setup([
@@ -208,7 +273,7 @@ describe("typed workflows", () => {
       expect(run.status).toBe("succeeded");
       expect(JSON.parse(run.blocks.find((block) => block.blockId === "status")!.output!)).toMatchObject({ status: "running" });
       expect(JSON.parse(run.blocks.find((block) => block.blockId === "stop")!.output!)).toMatchObject({ status: "exited" });
-    } finally { apps.closeAll(); }
+    } finally { await apps.closeAll(); }
   });
 
   it("lets an agent choose different actions on one persisted Run App block", async () => {
@@ -232,7 +297,7 @@ describe("typed workflows", () => {
         return session("Managed app");
       }, "provider");
       expect((await finished()).status).toBe("succeeded");
-    } finally { apps.closeAll(); }
+    } finally { await apps.closeAll(); }
   });
 
   it("supports input-free concurrent app status and tail calls with a requested line count", async () => {
@@ -258,7 +323,7 @@ describe("typed workflows", () => {
       expect(run.status).toBe("succeeded");
       expect(run.operations?.filter((item) => item.kind === "tool_command").some((item) => item.status === "failed")).toBe(true);
       expect(run.operations?.filter((item) => item.kind === "tool_command").some((item) => item.status === "succeeded")).toBe(true);
-    } finally { apps.closeAll(); }
+    } finally { await apps.closeAll(); }
   });
 
   it("persists provider activity during a chat turn even when the response has not changed", async () => {
