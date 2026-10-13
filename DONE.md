@@ -569,3 +569,13 @@ No implementation was performed in this continuation check.
 - Implementation/integrated SHA: df0e544d4351dca132514389e45bc6857c42523e; integration a095e52d-7c64-468b-975f-bf1105aa5172 completed, suite exit 0. Initial be072170 failed stale shared Protocol artifacts and unrelated timing; normal npm parent/candidate dependency isolation repaired, fresh exact suite passed; retry original key succeeded. Post-merge notification error reconciled.
 - Publishing: pushed normally to origin/refs/heads/dev; published SHA f239936e2ae52b386f08d78d011bbe96d634a2c0, remote/tracking verified. Root TODO annotations remain uncommitted to preserve dispatcher edits.
 - Limitations: suspended event loops delay detection; drafts remain renderer memory; rejected mutations may already have completed on Core and require inspection. Missing selections require explicit action. Integration-parent local ACP/Protocol dependency pin must refresh for future protocol revisions. Historical TODO-002 preserved above.
+
+## todo-queue-20261012-connectivity / TODO-003 — Bound WebSocket outbound buffering for slow clients
+
+- Completed locally: 2026-10-13. Per-peer byte limits disconnect explicitly on overflow/send failure; bounded snapshot invalidation coalescing and budgeted pong replies preserve required responses/streams. Close cleanup releases terminal owner references and late session services while preserving durable PTYs for reattachment. No mutation replay.
+- Areas: Core sender/server, unit and real WebSocket/PTY integration coverage, docs/WEBSOCKET-OUTBOUND.md.
+- Validation: build, repository/Gateway typechecks, full suite 945 tests and focused transport 42 tests; slow/healthy peer isolation, send errors, pong payload/budget, coalescing limits/deadline, late initialization cleanup and terminal recovery. Clean scoped commit reviewed. Earlier unchanged workflow timing failures passed isolated/final full reruns.
+- Task: daa5a9cd-4e02-4ce7-afc1-795fbcffae41; branch feature/todo-006-websocket-concurrency; codex. Reused same transport conversation; resumed after actual quota reset, no context reset or duplicate implementation.
+- Implementation/integrated SHA: 5352ab6cdc20d69640c33093db4790eff47fa884; integration dfd30dec-9944-4dc5-a8ea-170178b71a9d completed suite exit0. Post-merge feature-assignment error reconciled with root and Core record.
+- Publishing: pending origin/refs/heads/dev. Root TODO annotations remain uncommitted to preserve dispatcher additions.
+- Limitations: excludes producer snapshots and kernel/TLS buffers. Concrete snapshot finding recorded as TODO-016; historical TODO-003 entry preserved above.
