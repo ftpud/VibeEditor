@@ -587,5 +587,5 @@ No implementation was performed in this continuation check.
 - Validation: build, repository/Gateway typechecks,952 full tests, focused saturation/isolation, success/error release, blocked initialization/switch mutations never start after close. Clean scoped commit reviewed; smart suite exit0.
 - Task: daa5a9cd-4e02-4ce7-afc1-795fbcffae41; feature/todo-006-websocket-concurrency; codex. Reused clean merged transport conversation, no reset.
 - Implementation/integrated SHA:16eeabd53e6104267c9ea92729e023a0d83d17a5; integration022e9dec-703e-4fb4-aed2-26acdd3a6a3b completed. Feature-assignment notification error reconciled.
-- Publishing: pending origin/refs/heads/dev. TODO dispatcher/runner edits remain intact locally and uncommitted.
+- Publishing: pushed normally origin/refs/heads/dev at a4c0a92efdc198565e3164735ed7bcc684248af0, remote/tracking verified. TODO dispatcher/runner edits remain intact locally and uncommitted.
 - Limitations: already-started operations may finish; excludes inbound rate, service fanout and server-wide concurrency.
