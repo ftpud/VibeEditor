@@ -5,6 +5,7 @@ These guides explain individual features and the boundaries behind them.
 
 | Guide | Read it when you want to… |
 | --- | --- |
+| [Technical guide](TECHNICAL_GUIDE.md) | Find detailed setup requirements, development commands, deployment behavior, and architecture. |
 | [Internal MCP tools](MCP.md) | Give agents task, Git, timer, session, and workflow tools. |
 | [ACP providers](ACP.md) | Understand the shared Codex/Copilot interface or add a provider. |
 | [Java debugging](JAVA_DEBUGGING.md) | Configure Maven and Java, debug a project, or apply code changes while paused. |
