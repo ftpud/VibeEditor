@@ -589,3 +589,13 @@ No implementation was performed in this continuation check.
 - Implementation/integrated SHA:16eeabd53e6104267c9ea92729e023a0d83d17a5; integration022e9dec-703e-4fb4-aed2-26acdd3a6a3b completed. Feature-assignment notification error reconciled.
 - Publishing: pushed normally origin/refs/heads/dev at a4c0a92efdc198565e3164735ed7bcc684248af0, remote/tracking verified. TODO dispatcher/runner edits remain intact locally and uncommitted.
 - Limitations: already-started operations may finish; excludes inbound rate, service fanout and server-wide concurrency.
+
+## todo-queue-20261012-connectivity / TODO-012 — Validate incoming server events before renderer dispatch
+
+- Completed locally: 2026-10-13. Shared Protocol event validator covers18 event types and nested payloads; malformed/unknown messages cannot reach renderer callbacks or consume pending responses. Diagnostics capped without payload logging; optional fields/wire version15 preserved.
+- Areas: Protocol registry/validator, Desktop client and parsing/event coverage, docs/SERVER-EVENT-VALIDATION.md.
+- Validation: build,repository/Gateway typechecks,956 full-suite and25 focused tests; all event examples, nested failures, malformed traffic then valid correlated responses/events. Clean scoped commit reviewed; smart suite exit0.
+- Task: daa5a9cd-4e02-4ce7-afc1-795fbcffae41; feature/todo-006-websocket-concurrency; codex. Reused clean transport conversation; no reset needed.
+- Implementation/integrated SHA:4938505d89890f221bcd7155718a13431c49fd71; integrationef784182-f356-4d75-89a8-0a921c02a0c5 completed; post-merge notification error reconciled.
+- Publishing: pending origin/refs/heads/dev. TODO dispatcher/runner edits preserved locally and uncommitted.
+- Limitations: no inbound size/rate bound or operation-specific response-result validation.
