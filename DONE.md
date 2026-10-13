@@ -599,3 +599,13 @@ No implementation was performed in this continuation check.
 - Implementation/integrated SHA:4938505d89890f221bcd7155718a13431c49fd71; integrationef784182-f356-4d75-89a8-0a921c02a0c5 completed; post-merge notification error reconciled.
 - Publishing: pushed normally origin/refs/heads/dev at16674775abfe52fe2e177e9bba3f5d71c54a507b,tracking/remote verified. TODO dispatcher/runner edits preserved locally and uncommitted.
 - Limitations: no inbound size/rate bound or operation-specific response-result validation.
+
+## todo-queue-20261012-connectivity / TODO-013 — Spread reconnect retries with bounded jitter
+
+- Completed locally: 2026-10-13. Equal jitter spreads first retry125–250ms and capped retries2.5–5s; independent exponential window resets after success. Cancellation/selection restoration/no replay preserved.
+- Areas: Desktop ConnectionRecovery, deterministic recovery tests, docs/CONNECTION-RETRY-JITTER.md.
+- Validation: build,repository/Gateway typechecks,959 full/32 focused tests including min/cap/differing samples/reset/abort. Clean scoped commit reviewed; smart suite exit0.
+- Task: daa5a9cd-4e02-4ce7-afc1-795fbcffae41; feature/todo-006-websocket-concurrency; codex. Same clean merged transport conversation, no reset.
+- Implementation/integrated SHA:8a537c6e89ee27190c2af1e45115c26f6cb7dac6; integrationfaadb219-db8e-423e-85b6-898a168e375b completed; post-merge notification error reconciled.
+- Publishing: pending origin/refs/heads/dev. TODO dispatcher/runner edits preserved locally and uncommitted.
+- Limitations: reduces synchronization but cannot guarantee different schedules, especially after suspension.
