@@ -201,7 +201,10 @@ export class HarnessRunner {
     throw new Cancelled();
   }
 
-  async readRun(runId: string): Promise<HarnessRun | undefined> { return (await this.store.runs()).find((run) => run.id === runId); }
+  async readRun(runId: string): Promise<HarnessRun | undefined> {
+    const live = this.executions.get(runId)?.run;
+    return live ? structuredClone(live) : (await this.store.runs()).find((run) => run.id === runId);
+  }
 
   async start(harnessId: string, input: string, dispatch: Dispatch, defaultProvider = "codex", append?: Append, startBlockId?: string, rerunRunId?: string, testDefinition?: HarnessDefinition, workspace?: string, prepareDefinition?: (definition: HarnessDefinition) => Promise<HarnessDefinition>, binding?: HarnessRun["binding"]): Promise<HarnessRun> {
     const source = rerunRunId ? (await this.store.runs()).find((run) => run.id === rerunRunId) : undefined;

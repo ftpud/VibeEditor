@@ -403,7 +403,7 @@ export type ProtocolOperations = {
   "harnesses.update": { payload: { harness: HarnessDefinition }; result: { harness: HarnessDefinition } };
   "harnesses.delete": { payload: { id: string }; result: Record<string, never> };
   "harnesses.validate": { payload: { harness: HarnessDefinition }; result: { valid: boolean; issues: HarnessValidationIssue[]; order: string[] } };
-  "harnesses.runs": { payload: { harnessId?: string }; result: { runs: HarnessRun[] } };
+  "harnesses.runs": { payload: { harnessId?: string; runId?: string }; result: { runs: HarnessRun[] } };
   "harnesses.runs.delete": { payload: { runId: string }; result: Record<string, never> };
   "harnesses.test": { payload: { definition: HarnessDefinition; blockId: string; input: string; provider?: AiProvider; target?: HarnessTaskTarget }; result: { run: HarnessRun } };
   "harnesses.app.read": { payload: { harnessId: string; blockId: string; runId?: string }; result: { app: HarnessAppState } };

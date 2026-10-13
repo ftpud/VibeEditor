@@ -926,7 +926,10 @@ async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStor
     case "harnesses.delete": await harnesses.delete(request.payload.id); return {};
     case "harnesses.validate": return validateHarness(request.payload.harness);
     case "harnesses.runs": {
-      const runs = await harnesses.runs(request.payload.harnessId);
+      const selectedRun = request.payload.runId ? await harnessRunner.readRun(request.payload.runId) : undefined;
+      const runs = request.payload.runId
+        ? selectedRun && (!request.payload.harnessId || selectedRun.harnessId === request.payload.harnessId) ? [selectedRun] : []
+        : await harnesses.runs(request.payload.harnessId);
       return { runs: await Promise.all(runs.map(async (run) => {
         if (run.binding) return run;
         try { const binding = await resolveWorkflowBinding(run, undefined, { tasks, rootWorkspace, workspacePath }); return { ...run, workspace: binding.workspace, binding }; }

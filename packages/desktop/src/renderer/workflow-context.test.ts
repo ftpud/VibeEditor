@@ -1,6 +1,15 @@
 import { expect, it } from "vitest";
 import type { HarnessRun } from "@remote-ide/protocol";
-import { workflowRunsForContext } from "./workflow-context";
+import { mergeWorkflowHistory, workflowRunsForContext } from "./workflow-context";
+
+it("keeps live cancellation and new runs when an older history response arrives", () => {
+  const running = { id: "run", status: "running" } as HarnessRun;
+  const cancelled = { ...running, status: "cancelled" } as HarnessRun;
+  const started = { id: "new", status: "running" } as HarnessRun;
+  const historical = { id: "old", status: "succeeded" } as HarnessRun;
+  expect(mergeWorkflowHistory([cancelled, started], [running, historical], [running])).toEqual([cancelled, started, historical]);
+  expect(mergeWorkflowHistory([running], [cancelled, historical], [running])).toEqual([cancelled, historical]);
+});
 
 it("scopes controls by root, task and bound worktree even when an obsolete response arrives", () => {
   const runs = [

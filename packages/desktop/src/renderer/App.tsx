@@ -6,7 +6,7 @@ import type { ManagedWorkflowApp, SkillCatalog, AgentFile, AgentFileScope, AiCon
 import type { editor } from "monaco-editor";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { workflowRunsForContext } from "./workflow-context";
+import { mergeWorkflowHistory, workflowRunsForContext } from "./workflow-context";
 import { InvalidationRefreshes } from "./invalidation-refreshes";
 import { CoalescedAsyncAction, CoreClient } from "./client";
 import { ConnectionRecovery, recoveryFailureFeedback, reconnectWorkspace, restoreTerminal, type RecoverySelection } from "./connection-recovery";
@@ -214,6 +214,8 @@ export function App() {
   const [agents, setAgents] = useState<AgentFile[]>([]);
   const [harnesses, setHarnesses] = useState<HarnessDefinition[]>([]);
   const [harnessRuns, setHarnessRuns] = useState<HarnessRun[]>([]);
+  const harnessRunsRef = useRef(harnessRuns);
+  harnessRunsRef.current = harnessRuns;
   const [harnessDiagnostics, setHarnessDiagnostics] = useState<HarnessStateDiagnostic[]>([]);
   const [selectedAgentKey, setSelectedAgentKey] = useState("");
   const [fileColors, setFileColors] = useState<Record<string, FileColor>>({});
@@ -614,7 +616,13 @@ export function App() {
     if (!client) return; const rootId = client.getRoot(); const result = await client.request("harnesses.list", {});
     if (canApply() && clientRef.current === client && client.isConnected() && client.getRoot() === rootId) { setHarnesses(result.harnesses); setHarnessDiagnostics(result.diagnostics); }
   }, []);
-  const refreshHarnessRuns = useCallback(async (client = clientRef.current, canApply: () => boolean = () => true) => { if (!client) return; const rootId = client.getRoot(); const runs = (await client.request("harnesses.runs", {})).runs; if (canApply() && client.getRoot() === rootId) setHarnessRuns(runs); }, []);
+  const refreshHarnessRuns = useCallback(async (client = clientRef.current, canApply: () => boolean = () => true) => {
+    if (!client) return;
+    const rootId = client.getRoot();
+    const baseline = harnessRunsRef.current;
+    const { runs } = await client.request("harnesses.runs", {});
+    if (canApply() && clientRef.current === client && client.getRoot() === rootId) setHarnessRuns((current) => mergeWorkflowHistory(current, runs, baseline));
+  }, []);
   const createHarness = useCallback(async (name: string, template?: "five-minute-check-in" | "git-review-commit") => {
     const result = await clientRef.current!.request("harnesses.create", { name, template }); setHarnesses((current) => [result.harness, ...current]); return result.harness;
   }, []);
@@ -791,6 +799,17 @@ export function App() {
       configurationFailed: (error) => setStatusMessage(error instanceof Error ? error.message : "Could not refresh configuration")
     });
     invalidationRefreshes.current = invalidations;
+    const pendingWorkflowRuns = new Set<string>();
+    const workflowRefresh = new CoalescedAsyncAction(async (canApply) => {
+      const rootId = client.getRoot();
+      const runIds = [...pendingWorkflowRuns];
+      pendingWorkflowRuns.clear();
+      for (const runId of runIds) {
+        const { runs } = await client.request("harnesses.runs", { runId });
+        if (!canApply() || clientRef.current !== client || client.getRoot() !== rootId) return;
+        setHarnessRuns((current) => [...runs, ...current.filter((run) => !runs.some((updated) => updated.id === run.id))]);
+      }
+    });
     client.onServerEvent = (event) => {
       if (event.type === "configuration.changed" || event.type === "processes.changed") { invalidations.handle(event); return; }
       if (event.type === "timers.changed") { backgroundAiRefresh.current!.trigger(); return; }
@@ -838,7 +857,7 @@ export function App() {
         updateGroup((tabs) => ({ tabs: [...tabs.filter((tab) => tab.id !== id), { id, type: "workflowDocument", workflowRunId: runId, workflowBlockId: blockId, rootId, title, path: title, content, savedContent: content, dirty: false, loading: false, markdownMode: "preview" }], activeTabId: id }));
         return;
       }
-      if (event.type === "harness.changed") { void refreshHarnessRuns(client); return; }
+      if (event.type === "harness.changed") { pendingWorkflowRuns.add(event.payload.runId); workflowRefresh.trigger(); return; }
       if (event.type === "tasks.changed") {
         void Promise.all([refreshTasks(client), refreshAiStatuses(client)]).catch(() => undefined);
         return;
@@ -982,6 +1001,7 @@ export function App() {
         connectionReady = false;
         recovery.stop();
         invalidations.dispose();
+        workflowRefresh.dispose();
         client.disconnect();
         if (clientRef.current === client) clientRef.current = undefined;
         setStatus("workspace-error"); setStatusMessage(error instanceof Error ? error.message : "Workspace could not be opened");
@@ -989,6 +1009,7 @@ export function App() {
     } catch (error) {
       if (clientRef.current !== client) return;
       invalidations.dispose();
+      workflowRefresh.dispose();
       recovery.stop(); client.disconnect(); clientRef.current = undefined;
       setStatus("failed"); setStatusMessage(error instanceof Error ? error.message : "Connection failed");
     }
