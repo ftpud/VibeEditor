@@ -3,6 +3,7 @@ import type { HarnessConnectionTrace, HarnessRun } from "@remote-ide/protocol";
 
 export type AnimatedWorkflowTrace = HarnessConnectionTrace & { receivedAt: number; delayMs: number };
 const durationMs = 900;
+const recentTransferMs = 5_000;
 const activeStatuses = new Set(["queued", "running", "waiting", "awaiting_permission", "awaiting_user_input", "waiting_timer", "retry_scheduled"]);
 
 export function useWorkflowTraces(run?: HarnessRun): AnimatedWorkflowTrace[] {
@@ -12,16 +13,21 @@ export function useWorkflowTraces(run?: HarnessRun): AnimatedWorkflowTrace[] {
   useEffect(() => {
     const records = run?.connectionTraces ?? [];
     const now = Date.now();
+    let previousTraces: AnimatedWorkflowTrace[] | undefined;
     if (cursor.current.runId !== run?.id) {
-      cursor.current = { runId: run?.id, seen: new Set(records.map((trace) => trace.id)) };
-      setTraces(active ? records.filter((trace) => trace.status === "active").map((trace) => ({ ...trace, receivedAt: now, delayMs: 0 })) : []);
-      return;
+      // A fast transfer may finish before the first snapshot reaches Desktop.
+      // Replay recent transfers once, but leave older run history quiet.
+      cursor.current = { runId: run?.id, seen: new Set(records.filter((trace) => {
+        const age = now - Date.parse(trace.completedAt ?? trace.startedAt);
+        return !(active && trace.status === "active") && !(age >= 0 && age < recentTransferMs);
+      }).map((trace) => trace.id)) };
+      previousTraces = [];
     }
     if (run?.status === "cancelled") { setTraces([]); return; }
     const additions = records.filter((trace) => !cursor.current.seen.has(trace.id));
     cursor.current.seen = new Set(records.map((trace) => trace.id));
     setTraces((previous) => {
-      const next = previous.map((trace) => ({ ...trace, ...records.find((record) => record.id === trace.id) }));
+      const next = (previousTraces ?? previous).map((trace) => ({ ...trace, ...records.find((record) => record.id === trace.id) }));
       for (const trace of additions) {
         const request = trace.direction === "return" ? [...next].reverse().find((item) => item.edgeId === trace.edgeId && item.direction === "forward") : undefined;
         const delayMs = request ? Math.max(0, durationMs - (now - request.receivedAt)) : 0;
