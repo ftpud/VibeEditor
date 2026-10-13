@@ -617,5 +617,5 @@ No implementation was performed in this continuation check.
 - Validation: build,repository/Gateway typechecks,969 full/42 focused tests;101 invalidation pairs reduced606 reads to12 with final snapshots retained; failure/sibling waits, follow-up events and replacement tested. Clean scoped commit reviewed.
 - Task: daa5a9cd-4e02-4ce7-afc1-795fbcffae41; feature/todo-006-websocket-concurrency; codex. Reused clean merged transport conversation, no reset; task retired finished after this item.
 - Implementation/integrated SHA:000d88afd4f3a5b6a891128bc01fb7455b9a91d5; integration2e55ed25-ea66-4f20-b76a-2442ef491fae completed suite exit0. Initial5501cbb9 failed unrelated liveJVM timeout; isolated JVM/full candidate rerun passed; same-key merge retry succeeded. Post-merge notification error reconciled.
-- Publishing: pending origin/refs/heads/dev. TODO dispatcher/runner edits remain locally intact and uncommitted.
+- Publishing: pushed normally origin/refs/heads/dev atb6e8ffaa32599e65e8ceb5f0b27e08daed8af793,remote/tracking verified. TODO dispatcher/runner edits remain locally intact and uncommitted.
 - Limitations: already-issued reads are not cancelled; manual refreshes separate; tests do not mount full Electron/Monaco app.
