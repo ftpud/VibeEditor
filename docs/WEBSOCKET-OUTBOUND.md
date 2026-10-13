@@ -140,16 +140,17 @@ and stops automatic recovery retries for this code. Operators can narrow the
 workspace, ignore generated files, disable includeIgnored, or adjust limits.
 
 Core reads positive safe integer environment variables when constructing each
-filesystem service: `VIBE_TREE_MAX_NODES` (default 10000),
-`VIBE_TREE_MAX_PATH_BYTES` (default 524288), and `VIBE_TREE_MAX_DEPTH` (default
-128). Tests/embedders may pass corresponding `maxNodes`, `maxPathBytes`, and
+filesystem service: `VIBE_TREE_MAX_NODES`,
+`VIBE_TREE_MAX_PATH_BYTES`, and `VIBE_TREE_MAX_DEPTH`. Each limit is unlimited
+when its variable is unset. Tests/embedders may pass corresponding `maxNodes`, `maxPathBytes`, and
 `maxDepth` constructor options. Depth counts path components; path bytes sum UTF-8
 relative paths of every unique visible node, including implicit parent directories.
 Equality is allowed. Budgets are shared across the complete tree, reset per request,
 and checked before inserting nodes or descending into directories.
 
 Git stdout and stderr collection each have a byte cap of maxPathBytes +
-2 * maxNodes per command, with a 4096-byte floor to accommodate Git diagnostics. Overflow is an explicit snapshot error and never a
+2 * maxNodes per command when both limits are configured; otherwise collection is unlimited.
+The cap has a 4096-byte floor to accommodate Git diagnostics. Overflow is an explicit snapshot error and never a
 fallback to traversal. The two bounded Git lists retain existing ignore and empty
 directory semantics. Directory traversal streams entries with opendir, closes
 handles on rejection, and sorts only admitted nodes. Trash filtering and symlink
@@ -157,9 +158,6 @@ behavior are preserved. Snapshot limits do not constrain mutation operations. Se
 the workspace without collecting a tree; failed snapshots retain the selected
 workspace so healthy file requests and mutations can still proceed.
 
-At defaults, JSON escaping costs at most six bytes per input path byte; node names
-are included in their paths. Thus names plus paths cost at most 6 MiB, with less
-than 1 MiB of node structure for 10000 nodes. This leaves ample room under the
-16 MiB default outbound budget for the usual workspace response metadata. This
-is a tree bound, not a bound on unrelated workspace options. Custom smaller
-outbound budgets or larger producer limits must be coordinated by the operator.
+The outbound budget remains independent of tree limits. Large trees may require
+increasing the 16 MiB default outbound budget. Configured producer limits and
+outbound budgets must be coordinated by the operator.

@@ -3,7 +3,7 @@ import { promisify } from "node:util";
 import { access, mkdtemp, mkdir, readFile, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MAX_FILE_SIZE, WorkspaceFileSystem } from "./filesystem.js";
 
 const execFileAsync = promisify(execFile);
@@ -157,6 +157,27 @@ describe("WorkspaceFileSystem", () => {
 });
 
 describe("workspace tree producer limits", () => {
+  it.each([false, true])("allows trees beyond the former default path and Git output limits (Git=%s)", async (git) => {
+    const root = await mkdtemp(path.join(tmpdir(), "tree-unlimited-"));
+    if (git) await execFileAsync("git", ["-C", root, "init", "-q"]);
+    for (let i = 0; i < 5200; i++) await writeFile(path.join(root, `${i}${"x".repeat(220)}`), "x");
+    expect(await new WorkspaceFileSystem().open(root)).toHaveLength(5200);
+  });
+
+  it("honors configured environment limits while leaving other limits unlimited", async () => {
+    vi.stubEnv("VIBE_TREE_MAX_NODES", "1");
+    try {
+      const root = await mkdtemp(path.join(tmpdir(), "tree-env-limit-"));
+      await writeFile(path.join(root, "é".repeat(100)), "x");
+      const filesystem = new WorkspaceFileSystem();
+      expect(await filesystem.open(root)).toHaveLength(1);
+      await writeFile(path.join(root, "extra"), "x");
+      await expect(filesystem.listTree()).rejects.toMatchObject({ code: "WORKSPACE_TREE_TOO_LARGE" });
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it.each([false, true])("checks exact aggregate boundaries and rejects without changing files (Git=%s)", async (git) => {
     const root = await mkdtemp(path.join(tmpdir(), "tree-limits-"));
     await mkdir(path.join(root, "dir"));

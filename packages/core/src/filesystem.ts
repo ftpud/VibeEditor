@@ -19,7 +19,7 @@ export interface WorkspaceTreeLimits {
   maxDepth: number;
 }
 export const DEFAULT_WORKSPACE_TREE_LIMITS: Readonly<WorkspaceTreeLimits> = {
-  maxNodes: 10_000, maxPathBytes: 512 * 1024, maxDepth: 128
+  maxNodes: Infinity, maxPathBytes: Infinity, maxDepth: Infinity
 };
 
 function treeTooLarge(limit: string): CoreError {
@@ -46,7 +46,9 @@ export class WorkspaceFileSystem {
     this.treeLimits = { ...DEFAULT_WORKSPACE_TREE_LIMITS };
     const variables = { maxNodes: "VIBE_TREE_MAX_NODES", maxPathBytes: "VIBE_TREE_MAX_PATH_BYTES", maxDepth: "VIBE_TREE_MAX_DEPTH" } as const;
     for (const key of Object.keys(variables) as (keyof WorkspaceTreeLimits)[]) {
-      const value = limits[key] ?? (process.env[variables[key]] === undefined ? this.treeLimits[key] : Number(process.env[variables[key]]));
+      const configured = limits[key] ?? process.env[variables[key]];
+      if (configured === undefined) continue;
+      const value = Number(configured);
       if (!Number.isSafeInteger(value) || value <= 0) throw new Error(`${variables[key]} must be a positive safe integer`);
       this.treeLimits[key] = value;
     }
