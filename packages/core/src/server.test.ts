@@ -159,6 +159,8 @@ describe("WebSocket stream delivery", () => {
   it("contains a close race between the ready-state check and send", () => {
     const socket = {
       readyState: WebSocket.OPEN,
+      bufferedAmount: 0,
+      once: vi.fn(), off: vi.fn(), terminate: vi.fn(),
       send: () => { throw new Error("WebSocket is not open: readyState 2 (CLOSING)"); }
     } as unknown as WebSocket;
 

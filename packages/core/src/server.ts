@@ -1,3 +1,5 @@
+import { configureWebSocketOutput, sendWebSocketData, sendWebSocketPong, websocketOutboundLimits, type WebSocketOutboundOptions } from "./websocket-output.js";
+export { sendWebSocketData } from "./websocket-output.js";
 import { monitorWebSocket, websocketLivenessThresholds, type WebSocketLivenessOptions } from "./websocket-liveness.js";
 import { listProjectApps, killProjectApp } from "./project-processes.js";
 import { managedProcesses } from "./managed-processes.js";
@@ -61,21 +63,6 @@ type SessionServices = {
 };
 
 type SwitchedWatch = { watcher: ReturnType<typeof chokidar.watch>; gitWatcher: ReturnType<typeof chokidar.watch>; batcher: WorkspaceWatchBatcher };
-
-/**
- * `readyState` can change between the check and `send`. Supplying a callback keeps
- * ws from surfacing that race as an uncaught error, while the try/catch also makes
- * this safe for implementations that throw synchronously.
- */
-export function sendWebSocketData(socket: WebSocket, data: string): boolean {
-  if (socket.readyState !== WebSocket.OPEN) return false;
-  try {
-    socket.send(data, () => undefined);
-    return true;
-  } catch {
-    return false;
-  }
-}
 
 export class LiveRootSelections<T extends object> {
   private readonly selections = new Map<T, string>();
@@ -144,8 +131,11 @@ export function protocolHandshake(compatibility: { minimum: number; maximum: num
     : { compatible, compatibility: coreProtocolCompatibility, message: `Core supports protocol ${coreProtocolCompatibility.minimum}-${coreProtocolCompatibility.maximum}; this Desktop supports ${compatibility.minimum}-${compatibility.maximum}` };
 }
 
-export async function createServer(host: string, port: number, workspacePath: string, liveness: WebSocketLivenessOptions = {}): Promise<WebSocketServer> {
-  liveness = websocketLivenessThresholds(liveness);
+export type CoreConnectionOptions = WebSocketLivenessOptions & { outbound?: WebSocketOutboundOptions };
+
+export async function createServer(host: string, port: number, workspacePath: string, options: CoreConnectionOptions = {}): Promise<WebSocketServer> {
+  const liveness = websocketLivenessThresholds(options);
+  const outbound = websocketOutboundLimits(options.outbound);
   await ensureSelfConfiguration();
   const rootWorkspace = workspacePath;
   const roots = await WorkspaceRootRegistry.open(rootWorkspace);
@@ -192,7 +182,7 @@ export async function createServer(host: string, port: number, workspacePath: st
     watcher.once("ready", resolve);
     watcher.once("error", reject);
   });
-  const server = new WebSocketServer({ host, port });
+  const server = new WebSocketServer({ host, port, autoPong: false });
   const socketMonitors = new Set<() => void>();
   server.once("close", () => { for (const dispose of socketMonitors) dispose(); socketMonitors.clear(); });
   const remoteTransfers = new RemoteTransferService();
@@ -408,6 +398,8 @@ export async function createServer(host: string, port: number, workspacePath: st
   server.on("close", () => { managedProcesses.off("changed", processesChanged); if (!managedProcesses.listenerCount("changed")) managedProcesses.close(); schedules.close(); rootBatcher.dispose(); void workflowApps.closeAll().catch((error) => console.error("[core] Could not stop workflow apps", error)); terminalHost.closeAll(); void watcher.close(); void gitIndexWatcher.close(); void runConfigWatcher.close(); void appEventWatcher.close(); void appCommandWatcher.close(); });
   server.on("listening", () => console.log(`[core] listening on ws://${host}:${port}`));
   server.on("connection", (socket, request) => {
+    configureWebSocketOutput(socket, outbound);
+    socket.on("ping", (data) => sendWebSocketPong(socket, data));
     if (remoteTransfers.accepts(request.url)) { void remoteTransfers.attach(socket, request.url); return; }
     const disposeMonitor = monitorWebSocket(socket, liveness);
     socketMonitors.add(disposeMonitor);
@@ -436,6 +428,7 @@ export async function createServer(host: string, port: number, workspacePath: st
         finally { if (socket.readyState === WebSocket.OPEN) sendWebSocketData(socket, JSON.stringify({ type: "java.semantic.changed", payload: { rootId: ownerRootId } } satisfies ServerEvent)); }
       });
       const checkpoints = checkpointStore(nextWorkspace); await checkpoints.recover();
+      if (socket.readyState !== WebSocket.OPEN) { java.close(); jdt.close(); throw new CoreError("INVALID_REQUEST", "Session closed while services were being prepared"); }
       return { workspacePath: nextWorkspace, filesystem, search, git, java, jdt, workspaceState, checkpoints };
     };
     let servicesPromise: Promise<SessionServices>;
@@ -487,6 +480,7 @@ export async function createServer(host: string, port: number, workspacePath: st
       }
     };
     const commitSwitchedWatch = async (rootId: string, next: SwitchedWatch | undefined) => {
+      if (socket.readyState !== WebSocket.OPEN) { if (next) await closeSwitchedWatch(rootId, next); return; }
       const previous = switchedWatches.get(rootId);
       if (next) {
         switchedWatches.set(rootId, next);
@@ -507,6 +501,8 @@ export async function createServer(host: string, port: number, workspacePath: st
       await commitSwitchedWatch(selectedRoot.id, await prepareSwitchedWatch(selectedWorkspace));
       return makeServices(selectedWorkspace);
     })();
+    // Initialization can outlive a failed handshake send; requests still observe its error.
+    void servicesPromise.catch(() => undefined);
     const client = request.socket.remoteAddress ?? "unknown";
     console.log(`[core] connected: ${client}`);
     socket.on("message", async (data) => {
@@ -643,8 +639,9 @@ export async function createServer(host: string, port: number, workspacePath: st
       activeSessions.delete(socket);
       liveRootSelections.disconnect(socket);
       terminalSubscriptions.delete(socket);
+      for (const [id, owner] of terminalOwners) if (owner.socket === socket) terminalOwners.delete(id);
       for (const [rootId, subscription] of switchedWatches) void closeSwitchedWatch(rootId, subscription);
-      void servicesPromise.then((services) => { services.java.close(); services.jdt.close(); });
+      void servicesPromise.then((services) => { services.java.close(); services.jdt.close(); }, () => undefined);
       console.log(`[core] disconnected: ${client}`);
     });
     socket.on("error", (error) => console.error(`[core] socket error: ${error.message}`));
