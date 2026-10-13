@@ -115,14 +115,7 @@ interrupted terminal command is observed exactly once. Another check holds
 service initialization past an oversized handshake and verifies late cleanup.
 Existing delayed-request and workspace-switch regression checks still apply.
 
-Additional concrete finding: `WorkspaceFileSystem.listTree` builds a complete tree
-from Git path lists (each Git subprocess allows 64 MiB stdout) or a directory walk,
-and `workspace.open` JSON-encodes that complete result before this sender sees it.
-There is no aggregate node/encoded-size limit on that tree. One large snapshot can
-therefore consume substantial producer memory or fail this delivery limit even
-with a single request. This is distinct from the queued admission work: it needs
-snapshot sizing/pagination or producer-side bounds, rather than more parallelism.
-No such API or producer change is included here.
+Workspace tree producer bounds are now implemented by TODO-016, described below.
 
 Inbound flooding, client event validation, retry jitter,
 configuration/process refresh coalescing, and workflow binding are already in the
@@ -133,6 +126,40 @@ use the bounded control path.
 
 A legitimate large response can exceed a configured limit and trigger recovery;
 this policy does not chunk responses or paginate large snapshots. Operators using
-large payloads must choose a sufficient budget. A persistent oversized recovery
-snapshot requires adjusting that budget before recovery can finish. Timer bounds
+large payloads must choose a sufficient budget. Workspace tree producer rejection stops automatic recovery and requires operator
+action as described below. Other oversized recovery payloads require adjusting
+the outbound budget. Timer bounds
 also assume the event loop runs; OS suspension or stalls delay enforcement.
+
+## Workspace snapshot producer bounds (TODO-016)
+
+`workspace.open`, root selection and `filesystem.listTree` now fail with a
+correlated `WORKSPACE_TREE_TOO_LARGE` error before serializing an oversized tree.
+No partial tree is returned. The socket stays usable; Desktop reports the error
+and stops automatic recovery retries for this code. Operators can narrow the
+workspace, ignore generated files, disable includeIgnored, or adjust limits.
+
+Core reads positive safe integer environment variables when constructing each
+filesystem service: `VIBE_TREE_MAX_NODES` (default 10000),
+`VIBE_TREE_MAX_PATH_BYTES` (default 524288), and `VIBE_TREE_MAX_DEPTH` (default
+128). Tests/embedders may pass corresponding `maxNodes`, `maxPathBytes`, and
+`maxDepth` constructor options. Depth counts path components; path bytes sum UTF-8
+relative paths of every unique visible node, including implicit parent directories.
+Equality is allowed. Budgets are shared across the complete tree, reset per request,
+and checked before inserting nodes or descending into directories.
+
+Git stdout and stderr collection each have a byte cap of maxPathBytes +
+2 * maxNodes per command, with a 4096-byte floor to accommodate Git diagnostics. Overflow is an explicit snapshot error and never a
+fallback to traversal. The two bounded Git lists retain existing ignore and empty
+directory semantics. Directory traversal streams entries with opendir, closes
+handles on rejection, and sorts only admitted nodes. Trash filtering and symlink
+behavior are preserved. Snapshot limits do not constrain mutation operations. Service initialization validates
+the workspace without collecting a tree; failed snapshots retain the selected
+workspace so healthy file requests and mutations can still proceed.
+
+At defaults, JSON escaping costs at most six bytes per input path byte; node names
+are included in their paths. Thus names plus paths cost at most 6 MiB, with less
+than 1 MiB of node structure for 10000 nodes. This leaves ample room under the
+16 MiB default outbound budget for the usual workspace response metadata. This
+is a tree bound, not a bound on unrelated workspace options. Custom smaller
+outbound budgets or larger producer limits must be coordinated by the operator.

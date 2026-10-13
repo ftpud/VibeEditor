@@ -155,3 +155,52 @@ describe("WorkspaceFileSystem", () => {
     await expect(fs.read("large.txt")).rejects.toMatchObject({ code: "FILE_TOO_LARGE" });
   });
 });
+
+describe("workspace tree producer limits", () => {
+  it.each([false, true])("checks exact aggregate boundaries and rejects without changing files (Git=%s)", async (git) => {
+    const root = await mkdtemp(path.join(tmpdir(), "tree-limits-"));
+    await mkdir(path.join(root, "dir"));
+    await writeFile(path.join(root, "dir", "file"), "unchanged");
+    if (git) await execFileAsync("git", ["-C", root, "init", "-q"]);
+    const exact = new WorkspaceFileSystem({ maxNodes: 2, maxPathBytes: 11, maxDepth: 2 });
+    expect((await exact.open(root))[0]?.children?.[0]?.path).toBe("dir/file");
+    for (const limits of [{ maxNodes: 1 }, { maxPathBytes: 10 }, { maxDepth: 1 }]) {
+      await expect(new WorkspaceFileSystem(limits).open(root)).rejects.toMatchObject({ code: "WORKSPACE_TREE_TOO_LARGE" });
+    }
+    await writeFile(path.join(root, "extra"), "extra");
+    await expect(exact.listTree()).rejects.toMatchObject({ code: "WORKSPACE_TREE_TOO_LARGE" });
+    expect((await exact.read("dir/file")).content).toBe("unchanged");
+  });
+
+  it.each([false, true])("bounds deep paths and UTF-8 long names (Git=%s)", async (git) => {
+    const root = await mkdtemp(path.join(tmpdir(), "tree-depth-"));
+    if (git) await execFileAsync("git", ["-C", root, "init", "-q"]);
+    await mkdir(path.join(root, "a/b/c/d"), { recursive: true });
+    await writeFile(path.join(root, "a/b/c/d", "é".repeat(100)), "x");
+    await expect(new WorkspaceFileSystem({ maxDepth: 3 }).open(root)).rejects.toMatchObject({ code: "WORKSPACE_TREE_TOO_LARGE" });
+    await expect(new WorkspaceFileSystem({ maxPathBytes: 100 }).open(root)).rejects.toMatchObject({ code: "WORKSPACE_TREE_TOO_LARGE" });
+  });
+
+  it("rejects bounded Git stdout rather than falling back to the walk", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "tree-git-output-"));
+    await execFileAsync("git", ["-C", root, "init", "-q"]);
+    for (let i = 0; i < 30; i++) await writeFile(path.join(root, `${i}${"x".repeat(200)}`), "x");
+    await expect(new WorkspaceFileSystem({ maxNodes: 1, maxPathBytes: 1 }).open(root)).rejects.toMatchObject({ code: "WORKSPACE_TREE_TOO_LARGE", message: expect.stringContaining("Git output") });
+  });
+
+  it("applies limits after Git ignore filtering and to includeIgnored traversal", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "tree-ignore-limits-"));
+    await execFileAsync("git", ["-C", root, "init", "-q"]);
+    await writeFile(path.join(root, ".gitignore"), "generated/\n");
+    await mkdir(path.join(root, "generated"));
+    for (let i = 0; i < 20; i++) await writeFile(path.join(root, "generated", String(i)), "x");
+    const filesystem = new WorkspaceFileSystem({ maxNodes: 1 });
+    expect(await filesystem.open(root)).toEqual([{ name: ".gitignore", path: ".gitignore", type: "file" }]);
+    await expect(filesystem.listTree(true)).rejects.toMatchObject({ code: "WORKSPACE_TREE_TOO_LARGE" });
+    expect(await filesystem.listTree()).toHaveLength(1);
+  });
+
+  it("validates limits", () => {
+    for (const maxNodes of [0, -1, NaN, 1.5, Infinity]) expect(() => new WorkspaceFileSystem({ maxNodes })).toThrow("positive safe integer");
+  });
+});

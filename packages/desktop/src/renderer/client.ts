@@ -184,7 +184,7 @@ export class CoreClient {
     this.pending.delete(response.id);
     if (response.ok && pending.rootId && response.rootId && response.rootId !== pending.rootId) pending.reject(new Error(`Stale cross-root response: expected ${pending.rootId}, received ${response.rootId}`));
     else if (response.ok) pending.resolve(response.result);
-    else pending.reject(new Error(`${response.error.code}: ${response.error.message}`));
+    else pending.reject(Object.assign(new Error(`${response.error.code}: ${response.error.message}`), { code: response.error.code }));
   }
 }
 

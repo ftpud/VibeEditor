@@ -135,3 +135,16 @@ it("does not let a replaced in-progress attempt schedule retries or clear the ne
   expect(signals[1]!.aborted).toBe(false);
   recovery.stop(); expect(signals[1]!.aborted).toBe(true); expect(vi.getTimerCount()).toBe(0);
 });
+
+it("reports snapshot producer rejection once and stops retrying", async () => {
+  vi.useFakeTimers();
+  const error = Object.assign(new Error("Narrow the workspace"), { code: "WORKSPACE_TREE_TOO_LARGE" });
+  const attempt = vi.fn().mockRejectedValue(error);
+  const failed = vi.fn();
+  const recovery = new ConnectionRecovery(attempt, failed, 10, 20, () => 1);
+  recovery.start();
+  await vi.advanceTimersByTimeAsync(1000);
+  expect(attempt).toHaveBeenCalledOnce();
+  expect(failed).toHaveBeenCalledWith(error);
+  expect(vi.getTimerCount()).toBe(0);
+});

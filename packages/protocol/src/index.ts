@@ -678,6 +678,8 @@ export type ErrorCode =
   | "PATH_OUTSIDE_WORKSPACE"
   | "FILE_NOT_FOUND"
   | "FILE_TOO_LARGE"
+  /** Complete workspace snapshot exceeded a producer limit; narrow the workspace or adjust Core limits. */
+  | "WORKSPACE_TREE_TOO_LARGE"
   | "BINARY_FILE"
   | "READ_FAILED"
   | "WRITE_FAILED"

@@ -53,6 +53,8 @@ export class ConnectionRecovery {
         } catch (error) {
           if (signal.aborted) return;
           this.failed(error);
+          // A producer limit needs operator action; reconnecting cannot reduce the tree.
+          if (error && typeof error === "object" && "code" in error && error.code === "WORKSPACE_TREE_TOO_LARGE") return;
           backoff = Math.min(backoff * 2, this.maximumDelayMs);
         }
       }

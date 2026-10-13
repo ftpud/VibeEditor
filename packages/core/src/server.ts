@@ -165,7 +165,7 @@ export async function createServer(host: string, port: number, workspacePath: st
   };
   if (savedTasks.selectedTaskId) workspacePath = tasks.taskPath(savedTasks.selectedTaskId);
   const validation = new WorkspaceFileSystem();
-  await validation.open(workspacePath);
+  await validation.initialize(workspacePath);
   const workspace = validation.getWorkspace();
   const workspaceState = new WorkspaceStateStore(workspace, process.env.REMOTE_IDE_STATE_DIR);
   const watcher = chokidar.watch(workspace, {
@@ -437,7 +437,7 @@ export async function createServer(host: string, port: number, workspacePath: st
     liveRootSelections.connect(socket, selectedRoot.id);
     const makeServices = async (nextWorkspace: string, ownerRootId = selectedRoot.id): Promise<SessionServices> => {
       const filesystem = new WorkspaceFileSystem();
-      await filesystem.open(nextWorkspace);
+      await filesystem.initialize(nextWorkspace);
       admission.assertOpen();
       workspaceOwners.set(path.resolve(nextWorkspace), ownerRootId);
       runConfigs.registerWorkspace(nextWorkspace, roots.get(ownerRootId).path);
@@ -594,14 +594,14 @@ export async function createServer(host: string, port: number, workspacePath: st
           const rootIds = [...new Set(parsed.payload.rootIds)]; if (!rootIds.length || rootIds.length > 16) throw new CoreError("INVALID_REQUEST", "Search must name between 1 and 16 registered roots");
           const results = await Promise.all(rootIds.map(async (rootId) => {
             const root = roots.get(rootId); const context = contextFor(rootId); const taskRegistry = await context.tasks.list(); const target = taskRegistry.selectedTaskId ? context.tasks.taskPath(taskRegistry.selectedTaskId) : root.path;
-            const filesystem = new WorkspaceFileSystem(); await filesystem.open(target); const result = await new WorkspaceSearch(filesystem).search(parsed.payload.query, parsed.payload.path, parsed.payload.matchCase, { include: parsed.payload.include, exclude: parsed.payload.exclude });
+            const filesystem = new WorkspaceFileSystem(); await filesystem.initialize(target); const result = await new WorkspaceSearch(filesystem).search(parsed.payload.query, parsed.payload.path, parsed.payload.matchCase, { include: parsed.payload.include, exclude: parsed.payload.exclude });
             return { matches: result.matches.map((match) => ({ ...match, rootId })), truncated: result.truncated };
           }));
           const matches = results.flatMap((result) => result.matches).slice(0, 500); sendWebSocketData(socket, JSON.stringify({ id, ok: true, rootId: parsed.rootId, result: { matches, truncated: results.some((result) => result.truncated) || results.reduce((count, result) => count + result.matches.length, 0) > matches.length } })); return;
         }
         if (parsed.type === "filesystem.readRootFile") {
           const root = roots.get(parsed.payload.targetRootId); const context = contextFor(root.id); const taskRegistry = await context.tasks.list(); const target = taskRegistry.selectedTaskId ? context.tasks.taskPath(taskRegistry.selectedTaskId) : root.path;
-          const filesystem = new WorkspaceFileSystem(); await filesystem.open(target); const file = await filesystem.read(parsed.payload.path); sendWebSocketData(socket, JSON.stringify({ id, ok: true, rootId: parsed.rootId, result: { rootId: root.id, path: parsed.payload.path, ...file } })); return;
+          const filesystem = new WorkspaceFileSystem(); await filesystem.initialize(target); const file = await filesystem.read(parsed.payload.path); sendWebSocketData(socket, JSON.stringify({ id, ok: true, rootId: parsed.rootId, result: { rootId: root.id, path: parsed.payload.path, ...file } })); return;
         }
         // Requests are handled concurrently, so anything that arrives while a task switch is
         // rebuilding the services has to wait for it. Otherwise it would run against the
