@@ -6,6 +6,7 @@ import type { ManagedWorkflowApp, SkillCatalog, AgentFile, AgentFileScope, AiCon
 import type { editor } from "monaco-editor";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { InvalidationRefreshes } from "./invalidation-refreshes";
 import { CoalescedAsyncAction, CoreClient } from "./client";
 import { ConnectionRecovery, reconnectWorkspace, restoreTerminal, type RecoverySelection } from "./connection-recovery";
 import { recoverEditorGroups, workspaceRestorationGuard } from "./workspace-recovery";
@@ -318,21 +319,23 @@ export function App() {
   const [pendingNavigation, setPendingNavigation] = useState<{ result: SearchResult; matchLength: number }>();
   const clientRef = useRef<CoreClient>();
   const recoveryRef = useRef<ConnectionRecovery>();
+  const invalidationRefreshes = useRef<InvalidationRefreshes>();
   const [managedProcessList, setManagedProcessList] = useState<ManagedWorkflowApp[]>([]);
   const [processLoading, setProcessLoading] = useState(false);
   const [processError, setProcessError] = useState("");
   const processSequence = useRef(0);
   const processLoadedRoot = useRef<string>();
-  const refreshProcesses = useCallback(async () => {
-    const client = clientRef.current; if (!client) return;
+  const refreshProcesses = useCallback(async (client = clientRef.current, canApply: () => boolean = () => true) => {
+    if (!client || !client.isConnected() || !canApply()) return;
     const root = client.getRoot(); const sequence = ++processSequence.current;
+    const current = () => canApply() && clientRef.current === client && client.isConnected() && root === client.getRoot();
     setProcessLoading(processLoadedRoot.current !== root);
     try {
       const result = await client.request("processes.list", {});
-      if (sequence === processSequence.current && root === client.getRoot()) { processLoadedRoot.current = root; setManagedProcessList(result.processes); setProcessError(""); }
+      if (sequence === processSequence.current && current()) { processLoadedRoot.current = root; setManagedProcessList(result.processes); setProcessError(""); }
     } catch (error) {
-      if (sequence === processSequence.current && root === client.getRoot()) setProcessError(error instanceof Error ? error.message : "Could not load processes. Refresh to retry.");
-    } finally { if (sequence === processSequence.current) setProcessLoading(false); }
+      if (sequence === processSequence.current && current()) setProcessError(error instanceof Error ? error.message : "Could not load processes. Refresh to retry.");
+    } finally { if (sequence === processSequence.current && current()) setProcessLoading(false); }
   }, []);
   useEffect(() => {
     processLoadedRoot.current = undefined; ++processSequence.current;
@@ -427,6 +430,7 @@ export function App() {
     setPendingNavigation(undefined);
   }, [activeTab?.path, pendingNavigation]);
   useEffect(() => () => {
+    invalidationRefreshes.current?.dispose();
     recoveryRef.current?.stop();
     clientRef.current?.disconnect();
     clientRef.current = undefined;
@@ -527,7 +531,7 @@ export function App() {
     if (!client) return;
     const requestedRoot = client.getRoot();
     const result = await client.request("tasks.list", {});
-    if (!canApply() || client.getRoot() !== requestedRoot) return;
+    if (!canApply() || clientRef.current !== client || !client.isConnected() || client.getRoot() !== requestedRoot) return;
     setTasks(result.tasks);
     setSelectedTaskId(result.selectedTaskId);
     selectedTaskIdRef.current = result.selectedTaskId;
@@ -569,7 +573,7 @@ export function App() {
     const sessions = (await client.request("ai.sessions", { provider })).sessions;
     if (canApply() && provider === aiProviderRef.current && workspace === activeWorkspaceRef.current) setAiSessions(sessions);
   }, []);
-  const refreshUsefulFiles = useCallback(async (client = clientRef.current, canApply: () => boolean = () => true) => { if (!client) return; const rootId = client.getRoot(); const files = (await client.request("useful.list", {})).files; if (canApply() && client.getRoot() === rootId) setUsefulFiles(files); }, []);
+  const refreshUsefulFiles = useCallback(async (client = clientRef.current, canApply: () => boolean = () => true) => { if (!client) return; const rootId = client.getRoot(); const files = (await client.request("useful.list", {})).files; if (canApply() && clientRef.current === client && client.isConnected() && client.getRoot() === rootId) setUsefulFiles(files); }, []);
   const refreshRunConfigs = useCallback(async (client = clientRef.current, canApply: () => boolean = () => true) => { if (!client) return; const rootId = client.getRoot(); const configs = (await client.request("runConfig.list", {})).configs; if (canApply() && client.getRoot() === rootId) setRunConfigs(configs); }, []);
   const refreshSkills = useCallback(async (client = clientRef.current, canApply: () => boolean = () => true) => {
     if (!client) return;
@@ -577,7 +581,7 @@ export function App() {
     const root = client.getRoot();
     const taskId = selectedTaskIdRef.current;
     const catalog = await client.request("skills.list", {});
-    if (canApply() && client.getRoot() === root && workspace === activeWorkspaceRef.current && taskId === selectedTaskIdRef.current) setSkillCatalog(catalog);
+    if (canApply() && clientRef.current === client && client.isConnected() && client.getRoot() === root && workspace === activeWorkspaceRef.current && taskId === selectedTaskIdRef.current) setSkillCatalog(catalog);
   }, []);
   const selectSkills = useCallback(async (ids: string[]) => {
     const client = clientRef.current; if (!client || !aiSession.id) return;
@@ -598,16 +602,16 @@ export function App() {
     if (!client) return;
     const rootId = client.getRoot();
     await refreshSkills(client, canApply);
-    if (!canApply()) return;
+    if (!canApply() || clientRef.current !== client || !client.isConnected() || client.getRoot() !== rootId) return;
     const next = (await client.request("agents.list", {})).agents;
-    if (!canApply() || client.getRoot() !== rootId) return;
+    if (!canApply() || clientRef.current !== client || !client.isConnected() || client.getRoot() !== rootId) return;
     setAgents(next);
     const saved = workspaceKeyRef.current ? readSetting(workspaceSettingKey(workspaceKeyRef.current, aiAgentTaskKey(taskId))) ?? "" : "";
     setSelectedAgentKey(next.some((agent) => agentKey(agent) === saved) ? saved : "");
   }, [refreshSkills]);
   const refreshHarnesses = useCallback(async (client = clientRef.current, canApply: () => boolean = () => true) => {
     if (!client) return; const rootId = client.getRoot(); const result = await client.request("harnesses.list", {});
-    if (canApply() && client.getRoot() === rootId) { setHarnesses(result.harnesses); setHarnessDiagnostics(result.diagnostics); }
+    if (canApply() && clientRef.current === client && client.isConnected() && client.getRoot() === rootId) { setHarnesses(result.harnesses); setHarnessDiagnostics(result.diagnostics); }
   }, []);
   const refreshHarnessRuns = useCallback(async (client = clientRef.current, canApply: () => boolean = () => true) => { if (!client) return; const rootId = client.getRoot(); const runs = (await client.request("harnesses.runs", {})).runs; if (canApply() && client.getRoot() === rootId) setHarnessRuns(runs); }, []);
   const createHarness = useCallback(async (name: string, template?: "five-minute-check-in" | "git-review-commit") => {
@@ -711,6 +715,7 @@ export function App() {
   }, []);
 
   const connect = async () => {
+    invalidationRefreshes.current?.dispose();
     recoveryRef.current?.stop();
     clientRef.current?.disconnect();
     clientRef.current = undefined;
@@ -748,12 +753,14 @@ export function App() {
         recoverySelection = undefined;
         return;
       }
+      invalidationRefreshes.current?.reset();
       client.disconnect();
       showStatus(`${error instanceof Error ? error.message : "Backend unavailable"}; retrying…`, "progress");
     });
     recoveryRef.current = recovery;
     client.onDisconnected = (message) => {
       if (!connectionReady || clientRef.current !== client) return;
+      invalidationRefreshes.current?.reset();
       taskSwitchSequence.current += 1;
       taskSwitchActive.current = false;
       setTaskSwitching(false);
@@ -763,13 +770,23 @@ export function App() {
       showStatus(`${message}; reconnecting…`, "progress");
       recovery.start();
     };
+    const invalidations = new InvalidationRefreshes(() => {
+      const rootId = client.getRoot();
+      return clientRef.current === client && client.isConnected() && rootId
+        ? { rootId, workspace: activeWorkspaceRef.current, revision: taskSwitchSequence.current } : undefined;
+    }, {
+      configuration: [
+        (canApply) => refreshAgents(client, selectedTaskIdRef.current, canApply),
+        (canApply) => refreshUsefulFiles(client, canApply),
+        (canApply) => refreshHarnesses(client, canApply),
+        (canApply) => refreshTasks(client, canApply)
+      ],
+      processes: (canApply) => refreshProcesses(client, canApply),
+      configurationFailed: (error) => setStatusMessage(error instanceof Error ? error.message : "Could not refresh configuration")
+    });
+    invalidationRefreshes.current = invalidations;
     client.onServerEvent = (event) => {
-      if (event.type === "configuration.changed") {
-        if (!event.payload.global && event.payload.rootId !== client.getRoot()) return;
-        void Promise.all([refreshAgents(client), refreshUsefulFiles(client), refreshHarnesses(client), refreshTasks(client)]).catch((error) => setStatusMessage(error instanceof Error ? error.message : "Could not refresh configuration"));
-        return;
-      }
-      if (event.type === "processes.changed") { void refreshProcesses(); return; }
+      if (event.type === "configuration.changed" || event.type === "processes.changed") { invalidations.handle(event); return; }
       if (event.type === "timers.changed") { backgroundAiRefresh.current!.trigger(); return; }
       if (event.payload.rootId !== client.getRoot() && event.type === "filesystem.changed") {
         const changed = new Set(event.payload.paths); updateGroup((tabs, active) => ({ tabs: tabs.map((tab) => tab.rootId === event.payload.rootId && tab.type === "file" && (event.payload.overflow || changed.has(tab.path)) ? { ...tab, error: "Changed in its remote root; activate this tab to reconcile" } : tab), activeTabId: active })); return;
@@ -958,12 +975,14 @@ export function App() {
         if (clientRef.current !== client) return;
         connectionReady = false;
         recovery.stop();
+        invalidations.dispose();
         client.disconnect();
         if (clientRef.current === client) clientRef.current = undefined;
         setStatus("workspace-error"); setStatusMessage(error instanceof Error ? error.message : "Workspace could not be opened");
       }
     } catch (error) {
       if (clientRef.current !== client) return;
+      invalidations.dispose();
       recovery.stop(); client.disconnect(); clientRef.current = undefined;
       setStatus("failed"); setStatusMessage(error instanceof Error ? error.message : "Connection failed");
     }
@@ -977,6 +996,7 @@ export function App() {
 
   const disconnect = () => {
     if (hasDirtyTabs && !window.confirm("Disconnect and discard unsaved changes?")) return;
+    invalidationRefreshes.current?.dispose();
     recoveryRef.current?.stop();
     clientRef.current?.disconnect(); clientRef.current = undefined;
     workspaceKeyRef.current = "";
@@ -1479,6 +1499,7 @@ export function App() {
     if (!clientRef.current) return;
     if (taskSwitchActive.current) { queuedTaskSwitch.current = taskId; return; }
     if (taskId === selectedTaskIdRef.current) return;
+    invalidationRefreshes.current?.reset();
     const client = clientRef.current;
     const sequence = ++taskSwitchSequence.current;
     const isCurrent = () => taskSwitchSequence.current === sequence && clientRef.current === client;
@@ -1518,6 +1539,7 @@ export function App() {
       const nextProvider = savedProvider && aiProviders.some((item) => item.id === savedProvider) ? savedProvider : aiProviderRef.current;
       await switchAiProvider(nextProvider, result.selectedTaskId);
       await Promise.all([refreshGit(), refreshAi(), refreshAiSessions(), refreshTaskGit(nextTask), refreshRunConfigs(client), refreshAgents(clientRef.current, result.selectedTaskId)]);
+      if (isCurrent()) invalidationRefreshes.current?.refreshConfiguration();
       if (isCurrent() && client.isConnected()) setStatus("connected");
     } catch (error) {
       if (!isCurrent()) return;
@@ -2652,10 +2674,13 @@ export function App() {
     const client = clientRef.current;
     if (!client || rootId === selectedRootId) return;
     const previous = selectedRootId;
+    const selectionRefreshes = invalidationRefreshes.current;
+    selectionRefreshes?.reset();
     setTaskSwitching(true);
     try {
       const currentGroup = layoutRef.current.editorGroups[0]!; const currentFiles = currentGroup.tabs.filter((tab) => tab.type === "file" && (!tab.rootId || tab.rootId === previous)); const currentTerminal = { ...layoutRef.current.terminalGroup, tabs: layoutRef.current.terminalGroup.tabs.filter((tab) => !tab.rootId || tab.rootId === previous) }; const activeTerminalIndex = currentTerminal.tabs.findIndex((tab) => tab.id === currentTerminal.activeTabId);
       await client.request("workspace.saveOptions", { options: { ...workflowDocumentOptions(currentGroup.tabs, currentGroup.activeTabId, selectedRootIdRef.current), openFiles: currentFiles.map((tab) => tab.path), ...(pinnedFilePaths(currentFiles).length ? { pinnedFiles: pinnedFilePaths(currentFiles) } : {}), ...(currentFiles.find((tab) => tab.id === currentGroup.activeTabId) ? { activeFile: currentFiles.find((tab) => tab.id === currentGroup.activeTabId)!.path } : {}), ...(javaOptionsRef.current ? { javaProject: javaOptionsRef.current } : {}), terminal: { tabs: currentTerminal.tabs.map((tab) => ({ displayName: tab.title, terminalId: tab.terminalId })), ...(activeTerminalIndex >= 0 ? { activeTabIndex: activeTerminalIndex } : {}), panelOpen: layoutRef.current.panels.some((panel) => panel.type === "terminal") }, ...(Object.keys(fileColors).length ? { fileColors } : {}), ...(gitCommitMessage ? { gitCommitMessage } : {}), javaBreakpoints, ...(Object.keys(searchQueries).length ? { searchQueries } : {}) } });
+      selectionRefreshes?.reset();
       client.setRoot(rootId);
       const result = await client.request("workspace.selectRoot", { rootId, includeIgnored: showIgnoredRef.current });
       selectedRootIdRef.current = rootId; setSelectedRootId(rootId); setActiveWorkspace(result.workspace); activeWorkspaceRef.current = result.workspace; setProjectName(result.projectName); setTree(result.tree);
@@ -2665,8 +2690,11 @@ export function App() {
       setRunConfigs((configs) => configs.filter((config) => config.scope === "global"));
       await restoreWorkspaceOptions(result.options, client);
       await Promise.all([refreshTasks(client), refreshGit(client), refreshAi(client), refreshUsefulFiles(client), refreshRunConfigs(client), refreshAgents(client)]);
-      if (clientRef.current === client && client.getRoot() === rootId && client.isConnected()) setStatus("connected");
-    } catch (error) { client.setRoot(previous); setStatusMessage(error instanceof Error ? error.message : "Could not switch workspace root"); }
+      if (clientRef.current === client && client.getRoot() === rootId && client.isConnected()) {
+        selectionRefreshes?.refreshConfiguration();
+        setStatus("connected");
+      }
+    } catch (error) { selectionRefreshes?.reset(); client.setRoot(previous); setStatusMessage(error instanceof Error ? error.message : "Could not switch workspace root"); }
     finally { setTaskSwitching(false); }
   };
   selectWorkspaceRootRef.current = selectWorkspaceRoot;
@@ -2725,7 +2753,7 @@ export function App() {
   const showWorkflowDesign = sideLayout === "classic" ? classicSideView === "harness" : workflowPanelMode === "design";
   const workflowRunPanel = <WorkflowRunPanel key={selectedRootId} harnesses={harnesses} runs={harnessRuns} diagnostics={harnessDiagnostics} onValidate={validateHarnessDefinition} onRun={runHarness} onKillApp={killHarnessApp} onReadApp={readHarnessApp} onChat={chatHarness} onCancelRun={cancelHarnessRun} onResolvePermission={resolveHarnessPermission} onAnswerQuestion={answerHarnessQuestion} onResumePause={resumeHarnessPause} onRetryPause={retryHarnessPause} onCancelPause={cancelHarnessPause} onError={setStatusMessage} />;
   const workflowPanels = <div className="workflow-mode-panels"><div hidden={!showWorkflowDesign}>{workflowDesignPanel}</div><div hidden={showWorkflowDesign}>{workflowRunPanel}</div></div>;
-  const processesPanel = <ProcessesPanel key={selectedRootId} processes={managedProcessList} loading={processLoading} error={processError} disabled={status !== "connected" || taskSwitching} onRefresh={refreshProcesses} onKill={async (processId) => {
+  const processesPanel = <ProcessesPanel key={selectedRootId} processes={managedProcessList} loading={processLoading} error={processError} disabled={status !== "connected" || taskSwitching} onRefresh={() => refreshProcesses()} onKill={async (processId) => {
     const client = clientRef.current; if (!client) throw new Error("Backend is disconnected. Reconnect and try again.");
     await client.request("processes.kill", { processId }); await refreshProcesses();
   }} />;

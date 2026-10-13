@@ -192,11 +192,15 @@ export class CoreClient {
 export class CoalescedAsyncAction {
   private running = false;
   private queued = false;
+  private disposed = false;
   private idleWaiters: Array<() => void> = [];
 
-  constructor(private readonly action: () => Promise<void>) {}
+  constructor(private readonly action: (canApply: () => boolean) => Promise<void>) {}
+
+  dispose(): void { this.disposed = true; this.queued = false; }
 
   trigger(): void {
+    if (this.disposed) return;
     this.queued = true;
     if (!this.running) void this.drain();
   }
@@ -211,7 +215,7 @@ export class CoalescedAsyncAction {
     try {
       while (this.queued) {
         this.queued = false;
-        try { await this.action(); } catch { /* refresh failures are retried by a later event or reconnect */ }
+        try { await this.action(() => !this.disposed); } catch { /* refresh failures are retried by a later event or reconnect */ }
       }
     } finally {
       this.running = false;
