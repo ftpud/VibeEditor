@@ -577,5 +577,5 @@ No implementation was performed in this continuation check.
 - Validation: build, repository/Gateway typechecks, full suite 945 tests and focused transport 42 tests; slow/healthy peer isolation, send errors, pong payload/budget, coalescing limits/deadline, late initialization cleanup and terminal recovery. Clean scoped commit reviewed. Earlier unchanged workflow timing failures passed isolated/final full reruns.
 - Task: daa5a9cd-4e02-4ce7-afc1-795fbcffae41; branch feature/todo-006-websocket-concurrency; codex. Reused same transport conversation; resumed after actual quota reset, no context reset or duplicate implementation.
 - Implementation/integrated SHA: 5352ab6cdc20d69640c33093db4790eff47fa884; integration dfd30dec-9944-4dc5-a8ea-170178b71a9d completed suite exit0. Post-merge feature-assignment error reconciled with root and Core record.
-- Publishing: pending origin/refs/heads/dev. Root TODO annotations remain uncommitted to preserve dispatcher additions.
+- Publishing: pushed normally origin/refs/heads/dev; published SHA532060d87145673223b1a9336bb06f30989d67d6, tracking/remote verified. Root TODO annotations remain uncommitted to preserve dispatcher additions.
 - Limitations: excludes producer snapshots and kernel/TLS buffers. Concrete snapshot finding recorded as TODO-016; historical TODO-003 entry preserved above.
