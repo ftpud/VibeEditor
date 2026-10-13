@@ -629,3 +629,13 @@ No implementation was performed in this continuation check.
 - Implementation/integrated SHA:8fe9b5e8709c76a8c3bf21fb42f8891d5ca08105; integrationda484901-859f-4735-9131-8a3bbd311fc8 completed. Normal npm integration ACP/Protocol pins refreshed to this worker. Post-merge feature-assignment error reconciled.
 - Publishing: pushed normally origin/refs/heads/dev at7def54e5029511e9580e097ec914c47c636de313,remote/tracking verified. Root TODO annotations/dispatcher edits remain local and uncommitted.
 - Limitations: provider fixtures run actual subprocesses; external providers not exercised. Flow restart intentionally avoids mutation replay. Legacy records lacking an unambiguous worktree require a new run.
+
+## todo-queue-20261012-connectivity / TODO-016 — Bound workspace tree snapshot production
+
+- Completed locally: 2026-10-13. Configurable10,000-node/512KiB-path/128-depth defaults bound tree construction; Git stdout capped and directory walk incremental. Oversize returns bounded correlated WORKSPACE_TREE_TOO_LARGE, no partial tree, same socket usable. Workspace validation avoids snapshots; permanent recovery error pauses retries, retains live buffers and offers explicit Reconnect.
+- Areas: Protocol error, Core filesystem/server/tests, Desktop response error code/recovery feedback/App/tests, docs/WEBSOCKET-OUTBOUND.md.
+- Validation: build,repository/Gateway typechecks,full suite retry passed (519Core,419Desktop plus Electron/Gateway); feedback421Desktop/6Electron passed; smart full integration exit0. Git/nonGit boundaries, UTF8/depth, capped stdout, ignore filtering, healthy reads/probes on same socket after rejection and permanent-error retry termination covered. Scoped clean commits reviewed; earlier unrelated workflow timing failures passed rechecks.
+- Task:ad7bc9aa-7c19-4ea7-8757-c7e11760d1cd; feature/todo016-bounded-workspace-trees; codex gpt-6.1-sol low. New independent filesystem task/session; focused permanent-error feedback follow-up; no context reset.
+- Implementation SHAs:58763ead49eeb51cf5e4d5ce48a45729b4509aa2 and d079bcdd72b26861e64ceca8a6cd2ed33e937b7b; integrated HEADd079bcdd72b26861e64ceca8a6cd2ed33e937b7b. Integrationbee5fca8-df64-4394-b958-af7b9710225e completed. Normal npm ACP/Protocol pin refreshed to this worker; post-merge notification error reconciled.
+- Publishing: pending origin/refs/heads/dev. Root TODO annotations/dispatcher edits retained locally and uncommitted.
+- Limitations: custom producer/outbound limits require coordination; unrelated workspace metadata and kernel/TLS buffers outside tree bounds.
