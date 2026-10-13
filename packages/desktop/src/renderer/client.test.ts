@@ -46,6 +46,40 @@ describe("CoreClient streaming disconnects", () => {
   });
   afterEach(() => vi.unstubAllGlobals());
 
+  it("ignores malformed event sequences without consuming pending responses or leaking diagnostic payloads", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const client = new CoreClient();
+    try {
+      const connecting = client.connect("core", 7331);
+      const socket = FakeWebSocket.instances[0]!; socket.open(); await connecting;
+      const events = vi.fn(); client.onServerEvent = events;
+      let settled = false;
+      const pending = client.request("filesystem.readFile", { path: "private-file" }).then((result) => { settled = true; return result; });
+      const id = JSON.parse(socket.sent.at(-1)!).id;
+      for (let i = 0; i < 20; i++) {
+        socket.onmessage?.({ data: "{malformed private-secret" });
+        for (const message of [null, [], { type: "future.event", payload: {} },
+          { type: "terminal.output" }, { type: "terminal.output", payload: null },
+          { type: "terminal.output", payload: { rootId: "r", terminalId: "t", data: 42 } },
+          { type: "java.debug.state", payload: { rootId: "r", status: "paused", variables: [null] } },
+          { type: "runConfig.changed", payload: { rootId: "r", configs: [{ name: "private-secret" }] } },
+          { id, type: "terminal.output", ok: true, result: { content: "wrong" }, payload: { rootId: "r", terminalId: "t", data: "fake" } },
+          { id, ok: false, error: null }, { id, ok: false, error: { code: 1, message: "private-secret" } }
+        ]) socket.receive(message);
+      }
+      await Promise.resolve();
+      expect(settled).toBe(false); expect(events).not.toHaveBeenCalled();
+      expect(warn).toHaveBeenCalledTimes(5);
+      expect(warn.mock.calls).toEqual(Array.from({ length: 5 }, () => ["[core-client] Ignoring invalid server message"]));
+      const event = { type: "terminal.output", payload: { rootId: "root-primary", terminalId: "t", data: "valid" } };
+      socket.receive(event);
+      socket.receive({ id, ok: true, rootId: "root-primary", result: { content: "valid response" } });
+      await expect(pending).resolves.toEqual({ content: "valid response" });
+      expect(events).toHaveBeenCalledOnce(); expect(events).toHaveBeenCalledWith(event);
+      expect(client.isConnected()).toBe(true);
+    } finally { client.disconnect(); warn.mockRestore(); }
+  });
+
   it("matches out-of-order responses and delivers events while another request is pending", async () => {
     const client = new CoreClient();
     const connecting = client.connect("core", 7331);

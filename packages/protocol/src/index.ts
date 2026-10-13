@@ -940,3 +940,5 @@ const requestTypeRegistry: Record<RequestType, true> = {
 };
 
 export const requestTypes: RequestType[] = Object.keys(requestTypeRegistry) as RequestType[];
+
+export { isServerEvent, serverEventTypes } from "./server-events.js";

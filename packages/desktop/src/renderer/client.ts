@@ -1,4 +1,4 @@
-import { protocolCompatibility, type ProtocolOperations, type Request, type RequestType, type Response, type ServerEvent } from "@remote-ide/protocol";
+import { isServerEvent, protocolCompatibility, type ProtocolOperations, type Request, type RequestType, type Response, type ServerEvent } from "@remote-ide/protocol";
 
 type Pending = { socket: WebSocket; rootId?: string; timer: ReturnType<typeof setTimeout>; resolve(value: unknown): void; reject(error: Error): void };
 
@@ -10,6 +10,7 @@ export class CoreClient {
   onDisconnected?: (message: string) => void;
   onServerEvent?: (event: ServerEvent) => void;
   private rootId?: string;
+  private invalidMessageDiagnostics = 0;
   private cancelConnect?: (error: Error) => void;
 
   private heartbeatTimer?: ReturnType<typeof setTimeout>;
@@ -154,17 +155,29 @@ export class CoreClient {
     socket?.close();
   }
 
+  private invalidMessage(): void {
+    // A lifetime cap prevents a noisy peer/reconnect cycle from flooding diagnostics.
+    if (this.invalidMessageDiagnostics >= 5) return;
+    this.invalidMessageDiagnostics++;
+    console.warn("[core-client] Ignoring invalid server message");
+  }
+
   private handleMessage(data: string): void {
-    let message: Response | ServerEvent;
-    try { message = JSON.parse(data) as Response | ServerEvent; } catch { return; }
-    if (!message || typeof message !== "object" || Array.isArray(message)) return;
+    let message: unknown;
+    try { message = JSON.parse(data); } catch { this.invalidMessage(); return; }
+    if (!message || typeof message !== "object" || Array.isArray(message)) { this.invalidMessage(); return; }
     if ("type" in message) {
-      this.onServerEvent?.(message);
+      if (isServerEvent(message)) this.onServerEvent?.(message);
+      else this.invalidMessage();
       return;
     }
-    const response = message;
-    if (typeof response.id !== "string" || typeof response.ok !== "boolean") return;
-    if (!response.ok && (!response.error || typeof response.error.code !== "string" || typeof response.error.message !== "string")) return;
+    const envelope = message as Record<string, unknown>;
+    if (typeof envelope.id !== "string" || typeof envelope.ok !== "boolean") { this.invalidMessage(); return; }
+    if (!envelope.ok) {
+      const error = envelope.error;
+      if (!error || typeof error !== "object" || Array.isArray(error) || !("code" in error) || typeof error.code !== "string" || !("message" in error) || typeof error.message !== "string") { this.invalidMessage(); return; }
+    }
+    const response = message as Response;
     const pending = this.pending.get(response.id);
     if (!pending) return;
     clearTimeout(pending.timer);
