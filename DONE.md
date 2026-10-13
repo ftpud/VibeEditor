@@ -607,5 +607,5 @@ No implementation was performed in this continuation check.
 - Validation: build,repository/Gateway typechecks,959 full/32 focused tests including min/cap/differing samples/reset/abort. Clean scoped commit reviewed; smart suite exit0.
 - Task: daa5a9cd-4e02-4ce7-afc1-795fbcffae41; feature/todo-006-websocket-concurrency; codex. Same clean merged transport conversation, no reset.
 - Implementation/integrated SHA:8a537c6e89ee27190c2af1e45115c26f6cb7dac6; integrationfaadb219-db8e-423e-85b6-898a168e375b completed; post-merge notification error reconciled.
-- Publishing: pending origin/refs/heads/dev. TODO dispatcher/runner edits preserved locally and uncommitted.
+- Publishing: pushed normally origin/refs/heads/dev at799326fae01e91f809da452b1a023a4d47c1290e,remote/tracking verified. TODO dispatcher/runner edits preserved locally and uncommitted.
 - Limitations: reduces synchronization but cannot guarantee different schedules, especially after suspension.
