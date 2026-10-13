@@ -3,8 +3,16 @@ import { RequestAdmission, requestAdmissionLimit } from "./request-admission.js"
 
 describe("per-connection request admission", () => {
   it("validates limits", () => {
-    expect(requestAdmissionLimit()).toBe(32);
+    expect(requestAdmissionLimit()).toBe(Infinity);
+    expect(requestAdmissionLimit({ maxInFlight: 2 })).toBe(2);
     for (const maxInFlight of [0, -1, 1.2, NaN, Infinity]) expect(() => requestAdmissionLimit({ maxInFlight })).toThrow();
+  });
+  it("admits requests beyond the former default when no limit is configured", () => {
+    const peer = new RequestAdmission(requestAdmissionLimit());
+    const releases = Array.from({ length: 100 }, () => peer.acquire());
+    expect(peer.inFlight).toBe(100);
+    for (const release of releases) release();
+    expect(peer.inFlight).toBe(0);
   });
   it("rejects without queueing and releases success and error slots idempotently", async () => {
     const peer = new RequestAdmission(2); const healthy = new RequestAdmission(2);

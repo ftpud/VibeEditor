@@ -2,7 +2,8 @@ import { CoreError } from "./errors.js";
 
 export type RequestAdmissionOptions = { maxInFlight?: number };
 export function requestAdmissionLimit(options: RequestAdmissionOptions = {}): number {
-  const limit = options.maxInFlight ?? 32;
+  if (options.maxInFlight === undefined) return Infinity;
+  const limit = options.maxInFlight;
   if (!Number.isSafeInteger(limit) || limit <= 0) throw new Error("maxInFlight must be a positive safe integer");
   return limit;
 }

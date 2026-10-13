@@ -1,4 +1,4 @@
-# Bounded Core request admission
+# Configurable Core request admission
 
 Queue `todo-queue-20261012-connectivity`, TODO-011.
 
@@ -7,8 +7,8 @@ Desktop request timeouts only remove the client's pending response; they do not
 cancel Core service work. Outbound byte limits alone therefore do not bound
 concurrent service calls or handlers waiting for initialization/task switches.
 
-Each Desktop connection now admits at most 32 concurrent application requests by
-default. Configure/test this with the fourth argument to `createServer`:
+Each Desktop connection admits unlimited concurrent application requests by
+default. Set an explicit cap with the fourth argument to `createServer`:
 
 ```ts
 createServer(host, port, workspace, {
@@ -16,7 +16,7 @@ createServer(host, port, workspace, {
 });
 ```
 
-The value must be a positive safe integer and is validated before server startup.
+When provided, the value must be a positive safe integer and is validated before server startup.
 There is no additional admission queue: a slot covers service initialization,
 workspace/task switch barriers, service execution, and response submission.
 Independent operations still run concurrently below the cap; a held operation
