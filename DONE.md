@@ -619,3 +619,13 @@ No implementation was performed in this continuation check.
 - Implementation/integrated SHA:000d88afd4f3a5b6a891128bc01fb7455b9a91d5; integration2e55ed25-ea66-4f20-b76a-2442ef491fae completed suite exit0. Initial5501cbb9 failed unrelated liveJVM timeout; isolated JVM/full candidate rerun passed; same-key merge retry succeeded. Post-merge notification error reconciled.
 - Publishing: pushed normally origin/refs/heads/dev atb6e8ffaa32599e65e8ceb5f0b27e08daed8af793,remote/tracking verified. TODO dispatcher/runner edits remain locally intact and uncommitted.
 - Limitations: already-issued reads are not cancelled; manual refreshes separate; tests do not mount full Electron/Monaco app.
+
+## todo-queue-20261012-connectivity / TODO-015 — Bind workflow runs to the selected task worktree
+
+- Completed locally: 2026-10-13. Core resolves/persists immutable task/worktree bindings; new runs capture selected task/root, continuations and reruns retain recorded binding. Desktop filters controls/runs by context and labels bound task. Deleted/redirected/unbound legacy workspaces fail explicitly; legacy recorded paths migrate safely. Child-task targets and primary bridge for secondary-root recovery preserved.
+- Areas: Protocol target/binding types, Core server/runner/store and persistence/execution tests, Desktop App/panels/context filtering.
+- Validation: build,repository/Gateway typechecks,full tests (511Core,418Desktop plus Electron/Gateway); real two-worktree agent/script/app effects, skills/verification/review, switching/reconnect/rerun, Core restart and secondary recoveryAppend/timer owner loop, immutable/malformed records and alias rejection. Clean14-file scoped commit reviewed; smart suite exit0.
+- Task:0fc75f2b-713f-4af7-900d-d3215d7f78c3; feature/todo015-immutable-workflow-task-binding; codex gpt-6.1-sol low. New isolated task/session for large independent execution scope; focused child/bridge/restart review follow-ups; no reset.
+- Implementation/integrated SHA:8fe9b5e8709c76a8c3bf21fb42f8891d5ca08105; integrationda484901-859f-4735-9131-8a3bbd311fc8 completed. Normal npm integration ACP/Protocol pins refreshed to this worker. Post-merge feature-assignment error reconciled.
+- Publishing: pending origin/refs/heads/dev. Root TODO annotations/dispatcher edits remain local and uncommitted.
+- Limitations: provider fixtures run actual subprocesses; external providers not exercised. Flow restart intentionally avoids mutation replay. Legacy records lacking an unambiguous worktree require a new run.
