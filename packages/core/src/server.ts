@@ -223,6 +223,7 @@ export async function createServer(host: string, port: number, workspacePath: st
   const appEventWatcher = chokidar.watch(appEvents.directory, { ignoreInitial: true, depth: 0 });
   await new Promise<void>((resolve, reject) => { appEventWatcher.once("ready", resolve); appEventWatcher.once("error", reject); });
   appEventWatcher.on("add", (file) => {
+    if (!file.endsWith(".json")) return;
     void appEvents.consume(file).then(async (event) => {
       if (!event) return;
       const rootId = event.type === "tasks.changed" ? roots.primary().id : await ownerRootId(event.workspace) ?? roots.primary().id;
@@ -373,6 +374,7 @@ export async function createServer(host: string, port: number, workspacePath: st
   const appCommandWatcher = chokidar.watch(appEvents.commandsDirectory, { ignoreInitial: true, depth: 0 });
   await new Promise<void>((resolve, reject) => { appCommandWatcher.once("ready", resolve); appCommandWatcher.once("error", reject); });
   appCommandWatcher.on("add", (file) => {
+    if (!file.endsWith(".json")) return;
     void appEvents.consumeCommand(file, async (command) => {
       const currentWorkspace = command.currentWorkspace ?? rootWorkspace;
       const workflowRootId = command.workflowRunId ? [...harnessRunners].find(([, runner]) => runner.isActive(command.workflowRunId!))?.[0] : undefined;
