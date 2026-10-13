@@ -41,7 +41,7 @@ it("runs apps and scripts with terminal shell initialization in the same Git wor
     block("script", "script", { command: '[[ -n "$BASH_VERSION" ]] && workflow_tool' }),
     block("app", "run_app", { command: '[[ -n "$BASH_VERSION" ]] && workflow_tool; exec sleep 300', app: { name: "server", actions: ["start"] } }),
   ], edges: [{ id: "next", from: "script", to: "app", type: "follow" }] });
-  const context = { harnessRunner: runner, workflowApps: apps, rootWorkspace: root, bridgeWorkspace: root, workspacePath: worktree } as Parameters<typeof startWorkflow>[1];
+  const context = { tasks: { list: async () => ({ tasks: [{ id: "task", name: "Task" }] }), taskPath: () => worktree }, harnessRunner: runner, workflowApps: apps, rootWorkspace: root, bridgeWorkspace: root, workspacePath: worktree } as unknown as Parameters<typeof startWorkflow>[1];
   const run = await startWorkflow({ harnessId: definition.id, input: "start", provider: "codex" }, context);
   await vi.waitFor(async () => expect((await runner.readRun(run.id))?.status).toBe("succeeded"));
   expect((await runner.readRun(run.id))?.workspace).toBe(worktree);

@@ -91,7 +91,7 @@ function WorkflowCard({ workflow, expanded, hidden, onToggleExpanded, ...props }
     <div id={bodyId} className="workflow-card-body" hidden={collapsed}>
     <div className="workflow-card-context">
     {run ? <>
-      <div className="workflow-run-meta"><select aria-label={`Run for ${workflow.name}`} value={run.id} onChange={(event) => { setSelectedRunId(event.target.value); setSelectedBlockId(undefined); }}>{runs.map((item) => <option key={item.id} value={item.id}>{statusLabel(item.status)} · {new Date(item.createdAt).toLocaleString()}</option>)}</select><span>{completed}/{definition.blocks.length} complete</span></div>
+      <div className="workflow-run-meta"><select aria-label={`Run for ${workflow.name}`} value={run.id} onChange={(event) => { setSelectedRunId(event.target.value); setSelectedBlockId(undefined); }}>{runs.map((item) => <option key={item.id} value={item.id}>{statusLabel(item.status)} · {new Date(item.createdAt).toLocaleString()}</option>)}</select><span title={run.binding?.workspace ?? run.workspace}>{run.binding?.taskName ?? run.binding?.taskId ?? (run.binding ? "Root workspace" : "Legacy workspace")} · {completed}/{definition.blocks.length} complete</span></div>
       <div className="workflow-run-prompt-row">
         <details className="workflow-run-input"><summary>Run prompt</summary><WorkflowMessage key={run.id} title="Prompt" value={run.input} /></details>
         <div className="workflow-run-controls" onFocus={(event) => event.target.scrollIntoView({ block: "nearest", inline: "nearest" })}>

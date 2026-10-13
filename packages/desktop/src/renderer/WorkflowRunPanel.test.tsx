@@ -15,6 +15,11 @@ const run: HarnessRun = { id: "run", harnessId: workflow.id, harnessVersion: 1, 
 const props = () => ({ harnesses: [workflow], runs: [], onRun: vi.fn().mockResolvedValue(run), onCancelRun: vi.fn().mockResolvedValue(undefined), onError: vi.fn() });
 
 describe("Workflow run library", () => {
+  it("shows the immutable bound task and its Core-resolved worktree", () => {
+    render(<WorkflowRunPanel {...props()} runs={[{ ...run, binding: { rootWorkspace: "/root", workspace: "/task-a", taskId: "a", taskName: "Task A" } }]} />);
+    fireEvent.click(screen.getByRole("button", { name: "Show Workspace check" }));
+    expect(screen.getByText(/Task A ·/).getAttribute("title")).toBe("/task-a");
+  });
   it.each(["running", "descendants-running"] as const)("fits each axis and kills a %s app from a completed run", async (appStatus) => {
     const appWorkflow: HarnessDefinition = { ...workflow, blocks: [{ id: "app", type: "run_app", label: "Server", prompt: "", command: "npm run dev", app: { name: "server", actions: ["start"] }, position: { x: 0, y: 0 } }] };
     const appRun: HarnessRun = { ...run, status: "succeeded", definition: appWorkflow, blocks: [{ blockId: "app", status: "succeeded" }] };

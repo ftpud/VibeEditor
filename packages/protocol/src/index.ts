@@ -226,7 +226,11 @@ export type HarnessChildTask = { taskId: string; blockId: string; provider: AiPr
 export type HarnessFeatureStatus = "planned" | "dispatched" | "completed" | "blocked";
 export type HarnessFeature = { id: string; prompt: string; prerequisites: string[]; status: HarnessFeatureStatus; taskId?: string; commit?: string; blockedReason?: string };
 export type HarnessConnectionTrace = { id: string; edgeId: string; direction: "forward" | "return"; status: "active" | "succeeded" | "failed"; startedAt: string; completedAt?: string };
-export type HarnessRun = { workspace?: string; connectionTraces?: HarnessConnectionTrace[]; id: string; harnessId: string; harnessVersion: number; definition?: HarnessDefinition; executionPlan?: HarnessExecutionPlan; operations?: HarnessOperation[]; children?: HarnessChildTask[]; features?: HarnessFeature[]; corrections?: HarnessCorrectionCycle[]; input: string; status: HarnessRunStatus; createdAt: string; startedAt?: string; completedAt?: string; blocks: HarnessBlockRun[]; error?: string; cleanupErrors?: string[] };
+/** The request envelope supplies rootId; an empty target explicitly selects that root. */
+export type HarnessTaskTarget = { taskId?: string };
+/** Core resolves this once. Continuations and reruns retain it regardless of selection. */
+export type HarnessWorkspaceBinding = { rootWorkspace: string; workspace: string; taskId?: string; taskName?: string };
+export type HarnessRun = { binding?: HarnessWorkspaceBinding; workspace?: string; connectionTraces?: HarnessConnectionTrace[]; id: string; harnessId: string; harnessVersion: number; definition?: HarnessDefinition; executionPlan?: HarnessExecutionPlan; operations?: HarnessOperation[]; children?: HarnessChildTask[]; features?: HarnessFeature[]; corrections?: HarnessCorrectionCycle[]; input: string; status: HarnessRunStatus; createdAt: string; startedAt?: string; completedAt?: string; blocks: HarnessBlockRun[]; error?: string; cleanupErrors?: string[] };
 export type HttpResponse = { status: number; statusText: string; headers: Record<string, string>; body: string; durationMs: number };
 
 export type JavaProjectOptions = {
@@ -401,11 +405,11 @@ export type ProtocolOperations = {
   "harnesses.validate": { payload: { harness: HarnessDefinition }; result: { valid: boolean; issues: HarnessValidationIssue[]; order: string[] } };
   "harnesses.runs": { payload: { harnessId?: string }; result: { runs: HarnessRun[] } };
   "harnesses.runs.delete": { payload: { runId: string }; result: Record<string, never> };
-  "harnesses.test": { payload: { definition: HarnessDefinition; blockId: string; input: string; provider?: AiProvider }; result: { run: HarnessRun } };
+  "harnesses.test": { payload: { definition: HarnessDefinition; blockId: string; input: string; provider?: AiProvider; target?: HarnessTaskTarget }; result: { run: HarnessRun } };
   "harnesses.app.read": { payload: { harnessId: string; blockId: string; runId?: string }; result: { app: HarnessAppState } };
   "harnesses.app.kill": { payload: { harnessId: string; blockId: string; runId?: string }; result: Record<string, never> };
-  "harnesses.run": { payload: { harnessId: string; input: string; startBlockId?: string; rerunRunId?: string; provider?: AiProvider }; result: { run: HarnessRun } };
-  "harnesses.chat": { payload: { harnessId: string; blockId: string; input: string; runId?: string; provider?: AiProvider }; result: { run: HarnessRun } };
+  "harnesses.run": { payload: { harnessId: string; input: string; startBlockId?: string; rerunRunId?: string; provider?: AiProvider; target?: HarnessTaskTarget }; result: { run: HarnessRun } };
+  "harnesses.chat": { payload: { harnessId: string; blockId: string; input: string; runId?: string; provider?: AiProvider; target?: HarnessTaskTarget }; result: { run: HarnessRun } };
   "harnesses.append": { payload: { runId: string; input: string }; result: { run: HarnessRun } };
   "harnesses.permission.resolve": { payload: { runId: string; blockId: string; sessionId: string; pauseId: string; requestId: string; optionId?: string }; result: { run: HarnessRun } };
   "harnesses.answer": { payload: { runId: string; blockId: string; sessionId: string; pauseId: string; input: string }; result: { run: HarnessRun } };

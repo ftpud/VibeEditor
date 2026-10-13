@@ -2,11 +2,31 @@ import os from "node:os";
 import path from "node:path";
 import crypto from "node:crypto";
 import { mkdtemp, readFile, readdir, writeFile } from "node:fs/promises";
+import type { HarnessRun } from "@remote-ide/protocol";
 import { describe, expect, it } from "vitest";
 import { validateHarness } from "./harness-graph.js";
 import { HarnessStore } from "./harnesses.js";
 
 describe("HarnessStore", () => {
+  it("persists an immutable typed worktree binding and quarantines malformed records", async () => {
+    const state = await mkdtemp(path.join(os.tmpdir(), "workflow-binding-store-"));
+    const store = new HarnessStore("/workspace", state);
+    const run: HarnessRun = { id: "bound", harnessId: "flow", harnessVersion: 1, input: "work", status: "succeeded", createdAt: "now", blocks: [], workspace: "/task-a", binding: { rootWorkspace: "/workspace", workspace: "/task-a", taskId: "a", taskName: "Task A" } };
+    await store.saveRun(run);
+    const saved = (await new HarnessStore("/workspace", state).runs())[0]!;
+    expect(saved.binding).toEqual(run.binding);
+    for (const replacement of [undefined, { ...run.binding!, workspace: "/task-b" }, { ...run.binding!, taskId: "b" }]) {
+      await expect(store.saveRun({ ...run, workspace: replacement?.workspace, binding: replacement })).rejects.toThrow("immutable");
+      await expect(store.createRun({ ...run, workspace: replacement?.workspace, binding: replacement }, 4)).rejects.toThrow("immutable");
+    }
+    await expect(store.saveRun({ ...run, id: "malformed", binding: { ...run.binding!, workspace: "relative" } })).rejects.toThrow("invalid recorded");
+    const key = crypto.createHash("sha256").update("/workspace").digest("hex");
+    const directory = path.join(state, "harnesses", key);
+    await writeFile(path.join(directory, "runs.json"), JSON.stringify({ schemaVersion: 1, runs: [run, { ...run, id: "corrupt", binding: { rootWorkspace: "/workspace", workspace: 42 } }] }));
+    expect((await store.runs()).map((item) => item.id)).toEqual(["bound"]);
+    expect(await store.diagnostics()).toEqual(expect.arrayContaining([expect.objectContaining({ reason: "Records failed schema validation" })]));
+  });
+
   it("persists workspace-isolated definitions and increments versions", async () => {
     const state = await mkdtemp(path.join(os.tmpdir(), "remote-ide-harness-state-"));
     const first = new HarnessStore("/workspace/first", state);

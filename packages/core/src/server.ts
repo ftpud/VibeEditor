@@ -10,7 +10,7 @@ import chokidar from "chokidar";
 import path from "node:path";
 import os from "node:os";
 import crypto from "node:crypto";
-import { mkdir, realpath, symlink } from "node:fs/promises";
+import { mkdir, realpath, stat, symlink } from "node:fs/promises";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { protocolCompatibility, requestTypes, type FileTreeNode, type ProtocolOperations, type Request, type RequestType, type Response, type ServerEvent, type WorkspaceOptions, type WorkspaceRoot } from "@remote-ide/protocol";
@@ -264,47 +264,71 @@ export async function createServer(host: string, port: number, workspacePath: st
     aiChanged(workspace);
     const encoded = JSON.stringify({ type: "timers.changed", payload: {} } satisfies ServerEvent);
     for (const socket of activeSessions) sendWebSocketData(socket, encoded);
-  }, (timer, effect, reconcile) => {
+  }, async (timer, effect, reconcile) => {
     if (!timer.workflowRunId || !timer.workflowBlockId) return effect();
-    return harnessRunner(roots.primary().id).runTimerOperation(timer.workflowRunId, timer.workflowBlockId, `timer-fire:${timer.workflowOperationKey ?? timer.id}`, { timerId: timer.id, dueAt: timer.dueAt }, effect, reconcile);
+    let owner: { rootId: string; run: import("@remote-ide/protocol").HarnessRun } | undefined;
+    for (const candidate of roots.list()) {
+      const run = await harnessRunner(candidate.id).readRun(timer.workflowRunId);
+      if (run) { owner = { rootId: candidate.id, run }; break; }
+    }
+    if (!owner) throw new CoreError("FILE_NOT_FOUND", "Workflow timer run no longer exists");
+    const boundRoot = roots.get(owner.rootId).path;
+    await validateWorkflowTarget(owner.run, timer.workspace, { tasks: contextFor(owner.rootId).tasks, rootWorkspace: boundRoot, workspacePath: boundRoot });
+    return harnessRunner(owner.rootId).runTimerOperation(timer.workflowRunId, timer.workflowBlockId, `timer-fire:${timer.workflowOperationKey ?? timer.id}`, { timerId: timer.id, dueAt: timer.dueAt }, effect, reconcile);
   });
-  const recoveryRunner = harnessRunner(roots.primary().id);
-  const recoveryDispatch = async (block: HarnessBlock, prompt: string, runtime: Parameters<Parameters<HarnessRunner["start"]>[2]>[2]) => providerOperation(async () => {
-    const run = (await harnesses.runs()).find((item) => item.id === runtime.runId);
-    const workspace = await workflowRunWorkspace(run, rootWorkspace);
-    if (block.type === "skill" && block.skillId) return executeWorkflowSkill(block, new SkillsStore(undefined, rootWorkspace), workspace, runtime);
-    if (block.type === "script") return executeFlowScript(block, prompt, workspace, runtime.assertActive, { rootWorkspace, workflowRunId: runtime.runId, workflowBlockId: runtime.blockId });
-    if (block.type === "run_app") return workflowApps.execute(block, prompt, workspace, runtime.assertActive, { rootWorkspace, workflowRunId: runtime.runId, workflowBlockId: runtime.blockId });
-    if (block.type === "task_controls") return executeTaskControls(block, prompt, { acp, tasks, agents, harnessRunner: recoveryRunner, aiTimers, rootWorkspace, bridgeWorkspace: rootWorkspace, workspacePath: workspace, defaultProvider: "codex" }, runtime);
-    const provider = acp.get(block.provider ?? "codex");
-    await assertWorkflowModelAvailable(provider, block.model, block.reasoning);
-    if (block.watchdog) return recoveryRunner.watch(runtime.runId, runtime.blockId, () => provider.usage());
-    const sessionWorkspace = await workflowSessionWorkspace(workspace, runtime.runId, runtime.blockId); await runtime.started(sessionWorkspace);
-    const agentFile = block.agent ? (await agents.list(rootWorkspace)).find((item) => item.scope === block.agent!.scope && item.name === block.agent!.name) : undefined;
-    if (block.agent && !agentFile) throw new CoreError("FILE_NOT_FOUND", `Agent preset '${block.agent.name}' does not exist`);
-    const appTools = withAppTools(rootWorkspace, sessionWorkspace, undefined, agentFile?.agent, provider.descriptor.id, rootWorkspace);
-    const workflowTools = appToolServer(rootWorkspace, sessionWorkspace, provider.descriptor.id, rootWorkspace, { ...runtime, flow: ["ai", "chatbox"].includes(block.type) });
-    const mcpServers = [...appTools.servers.filter((server) => server.name !== workflowTools.name), workflowTools];
-    const workflowAgent = appTools.agent ? { ...appTools.agent, mcpServers: [...new Set([...(appTools.agent.mcpServers ?? []), workflowTools.name])] } : undefined;
-    const autopilot = findAutopilotOption(provider.descriptor.options); const configuration = { ...(block.model ? { model: block.model } : {}), ...(block.reasoning ? { reasoning: block.reasoning } : {}), ...(autopilot ? { [autopilot.option.id]: autopilot.on } : {}) };
-    const skillIds = await workflowSessionSkillIds(run?.definition, block, new SkillsStore(undefined, rootWorkspace), workspace);
-    runtime.assertActive(); await provider.startFreshSession(sessionWorkspace, { prompt, configuration, mcpServers, ...(skillIds ? { skillIds } : {}), agent: workflowAgent, ...(block.agent ? { agentPreset: block.agent } : {}) }); runtime.assertActive();
-    managedProcesses.setWorkspaceContext(sessionWorkspace, { workflowRunId: runtime.runId, workflowBlockId: runtime.blockId });
-    return settleWorkflowSession(provider, sessionWorkspace, aiTimers, undefined, () => recoveryRunner.isActive(runtime.runId), runtime.activity);
-  });
-  const recoveryAppend: NonNullable<Parameters<HarnessRunner["start"]>[4]> = async (block, prompt, runtime) => providerOperation(async () => {
-    const provider = acp.get(block.provider ?? "codex"); if (!recoveryRunner.isActive(runtime.runId)) throw new Error("Workflow is no longer active"); const current = await provider.get(runtime.workspace);
-    const workflowTools = appToolServer(rootWorkspace, runtime.workspace, provider.descriptor.id, rootWorkspace, { runId: runtime.runId, blockId: runtime.blockId, flow: ["ai", "chatbox"].includes(block.type) });
-    if (current.status === "in_progress" || current.status === "user_prompt") await provider.steer(runtime.workspace, prompt);
-    else await provider.send(runtime.workspace, { prompt, configuration: current.configuration ?? { model: current.model, reasoning: current.reasoning }, mcpServers: [workflowTools] });
-    if (!recoveryRunner.isActive(runtime.runId)) throw new Error("Workflow is no longer active");
-    return settleWorkflowSession(provider, runtime.workspace, aiTimers, undefined, () => recoveryRunner.isActive(runtime.runId), runtime.activity);
-  });
-  await recoveryRunner.recover(recoveryDispatch, "codex", recoveryAppend, {
-    session: async (provider, target) => acp.get(provider).get(target).catch(() => undefined),
-    timer: async (runId, blockId, provider, target) => { const timer = await aiTimers.next(target, provider); return timer?.workflowRunId === runId && timer.workflowBlockId === blockId; },
-    child: async (child) => (await tasks.list()).tasks.some((task) => task.id === child.taskId && path.resolve(tasks.taskPath(task.id)) === path.resolve(child.workspace))
-  });
+  const recoveryBridgeWorkspace = rootWorkspace;
+  for (const recoveryRoot of roots.list()) {
+    const rootWorkspace = recoveryRoot.path;
+    const { tasks, agents, harnesses } = contextFor(recoveryRoot.id);
+    const recoveryRunner = harnessRunner(recoveryRoot.id);
+    const recoveryDispatch = async (block: HarnessBlock, prompt: string, runtime: Parameters<Parameters<HarnessRunner["start"]>[2]>[2]) => providerOperation(async () => {
+      const run = (await harnesses.runs()).find((item) => item.id === runtime.runId);
+      if (!run) throw new CoreError("FILE_NOT_FOUND", "Workflow run does not exist");
+      const workspace = (await resolveWorkflowBinding(run, undefined, { tasks, rootWorkspace, workspacePath: rootWorkspace })).workspace;
+      if (block.type === "skill" && block.skillId) return executeWorkflowSkill(block, new SkillsStore(undefined, rootWorkspace), workspace, runtime);
+      if (block.type === "script") return executeFlowScript(block, prompt, workspace, runtime.assertActive, { rootWorkspace, workflowRunId: runtime.runId, workflowBlockId: runtime.blockId });
+      if (block.type === "run_app") return workflowApps.execute(block, prompt, workspace, runtime.assertActive, { rootWorkspace, workflowRunId: runtime.runId, workflowBlockId: runtime.blockId });
+      if (block.type === "task_controls") return executeTaskControls(block, prompt, { acp, tasks, agents, harnessRunner: recoveryRunner, aiTimers, rootWorkspace, bridgeWorkspace: recoveryBridgeWorkspace, workspacePath: workspace, defaultProvider: "codex" }, runtime);
+      if (block.type === "verification") return runWorkflowVerification(block, workspace, recoveryRunner, runtime);
+      if (block.type === "review") {
+        const evidence = await collectWorkflowReviewEvidence(block, workspace, recoveryRunner, runtime);
+        prompt += `\n\nCore-recorded review evidence:\nCommit: ${evidence.revision}\nBase: ${evidence.baseRevision}\nChanged files: ${evidence.files.join(", ")}\n\nDiff:\n${evidence.diff}`;
+      }
+      const provider = acp.get(block.provider ?? "codex");
+      await assertWorkflowModelAvailable(provider, block.model, block.reasoning);
+      if (block.watchdog) return recoveryRunner.watch(runtime.runId, runtime.blockId, () => provider.usage());
+      const sessionWorkspace = await workflowSessionWorkspace(workspace, runtime.runId, runtime.blockId); await runtime.started(sessionWorkspace);
+      const agentFile = block.agent ? (await agents.list(workspace)).find((item) => item.scope === block.agent!.scope && item.name === block.agent!.name) : undefined;
+      if (block.agent && !agentFile) throw new CoreError("FILE_NOT_FOUND", `Agent preset '${block.agent.name}' does not exist`);
+      const appTools = withAppTools(rootWorkspace, sessionWorkspace, undefined, agentFile?.agent, provider.descriptor.id, recoveryBridgeWorkspace);
+      const workflowTools = appToolServer(rootWorkspace, sessionWorkspace, provider.descriptor.id, recoveryBridgeWorkspace, { ...runtime, flow: ["ai", "chatbox"].includes(block.type) });
+      const mcpServers = [...appTools.servers.filter((server) => server.name !== workflowTools.name), workflowTools];
+      const workflowAgent = appTools.agent ? { ...appTools.agent, mcpServers: [...new Set([...(appTools.agent.mcpServers ?? []), workflowTools.name])] } : undefined;
+      const autopilot = findAutopilotOption(provider.descriptor.options); const configuration = { ...(block.model ? { model: block.model } : {}), ...(block.reasoning ? { reasoning: block.reasoning } : {}), ...(autopilot ? { [autopilot.option.id]: autopilot.on } : {}) };
+      const skillIds = await workflowSessionSkillIds(run?.definition, block, new SkillsStore(undefined, rootWorkspace), workspace);
+      runtime.assertActive(); await provider.startFreshSession(sessionWorkspace, { prompt, configuration, mcpServers, ...(skillIds ? { skillIds } : {}), agent: workflowAgent, ...(block.agent ? { agentPreset: block.agent } : {}) }); runtime.assertActive();
+      managedProcesses.setWorkspaceContext(sessionWorkspace, { workflowRunId: runtime.runId, workflowBlockId: runtime.blockId });
+      return settleWorkflowSession(provider, sessionWorkspace, aiTimers, undefined, () => recoveryRunner.isActive(runtime.runId), runtime.activity);
+    });
+    const recoveryAppend: NonNullable<Parameters<HarnessRunner["start"]>[4]> = async (block, prompt, runtime) => providerOperation(async () => {
+      const recovered = await recoveryRunner.readRun(runtime.runId);
+      if (!recovered) throw new CoreError("FILE_NOT_FOUND", "Workflow run does not exist");
+      const binding = await resolveWorkflowBinding(recovered, undefined, { tasks, rootWorkspace, workspacePath: rootWorkspace });
+      if (await availableWorkflowWorkspace(runtime.workspace) !== binding.workspace) throw new CoreError("INVALID_REQUEST", "Workflow recovery session worktree changed");
+      const provider = acp.get(block.provider ?? "codex"); if (!recoveryRunner.isActive(runtime.runId)) throw new Error("Workflow is no longer active"); const current = await provider.get(runtime.workspace);
+      const workflowTools = appToolServer(rootWorkspace, runtime.workspace, provider.descriptor.id, recoveryBridgeWorkspace, { runId: runtime.runId, blockId: runtime.blockId, flow: ["ai", "chatbox"].includes(block.type) });
+      if (current.status === "in_progress" || current.status === "user_prompt") await provider.steer(runtime.workspace, prompt);
+      else await provider.send(runtime.workspace, { prompt, configuration: current.configuration ?? { model: current.model, reasoning: current.reasoning }, mcpServers: [workflowTools] });
+      if (!recoveryRunner.isActive(runtime.runId)) throw new Error("Workflow is no longer active");
+      return settleWorkflowSession(provider, runtime.workspace, aiTimers, undefined, () => recoveryRunner.isActive(runtime.runId), runtime.activity);
+    });
+    await recoveryRunner.recover(recoveryDispatch, "codex", recoveryAppend, {
+      binding: async (run) => { run.binding ??= await resolveWorkflowBinding(run, undefined, { tasks, rootWorkspace, workspacePath: rootWorkspace }); run.workspace = run.binding.workspace; await validateWorkflowBinding(run.binding, tasks, rootWorkspace); },
+      session: async (provider, target) => acp.get(provider).get(target).catch(() => undefined),
+      timer: async (runId, blockId, provider, target) => { const timer = await aiTimers.next(target, provider); return timer?.workflowRunId === runId && timer.workflowBlockId === blockId; },
+      child: async (child) => (await tasks.list()).tasks.some((task) => task.id === child.taskId && path.resolve(tasks.taskPath(task.id)) === path.resolve(child.workspace))
+    });
+  }
   const scheduledPromptTargets = new Set<string>();
   const schedules = new ScheduleService(rootWorkspace, async (schedule, active) => {
     const root = roots.get(schedule.rootId);
@@ -582,7 +606,8 @@ export async function createServer(host: string, port: number, workspacePath: st
         // Requests are handled concurrently, so anything that arrives while a task switch is
         // rebuilding the services has to wait for it. Otherwise it would run against the
         // previous worktree and answer the client with another task's state.
-        const rootContext = contextFor(parsed.type === "workspace.selectRoot" ? parsed.payload.rootId : selectedRoot.id);
+        const requestRoot = roots.get(parsed.type === "workspace.selectRoot" ? parsed.payload.rootId : parsed.rootId ?? selectedRoot.id);
+        const rootContext = contextFor(requestRoot.id);
         const switchesWorkspace = parsed.type === "tasks.switch" || parsed.type === "tasks.delete" || parsed.type === "workspace.selectRoot";
         if (!switchesWorkspace) await switching;
         let release: (() => void) | undefined;
@@ -636,7 +661,7 @@ export async function createServer(host: string, port: number, workspacePath: st
         admission.assertOpen();
         const result = parsed.type === "workspace.selectRoot"
           ? rootSelectionResult!
-          : await handleRequest(services, rootContext.tasks, acp, rootContext.usefulFiles, rootContext.agents, rootContext.harnesses, harnessRunner(selectedRoot.id), workflowApps, terminalHost, runConfigs, aiTimers, schedules, remoteTransfers, selectedRoot.path, parsed, rootWorkspace);
+          : await handleRequest(services, rootContext.tasks, acp, rootContext.usefulFiles, rootContext.agents, rootContext.harnesses, harnessRunner(requestRoot.id), workflowApps, terminalHost, runConfigs, aiTimers, schedules, remoteTransfers, requestRoot.path, parsed, rootWorkspace);
         if (["tasks.create", "tasks.createFromPrompt", "tasks.status", "tasks.rename", "tasks.archive", "tasks.delete"].includes(parsed.type)) { const encoded = JSON.stringify({ type: "tasks.changed", payload: { rootId: selectedRoot.id } } satisfies ServerEvent); for (const session of activeSessions) sendWebSocketData(session, encoded); }
         const terminalSubscription = terminalSubscriptions.get(socket);
         if (terminalSubscription && parsed.type === "terminal.create") { const terminalId = (result as { terminalId: string }).terminalId; terminalSubscription.terminalIds.add(terminalId); terminalOwners.set(terminalId, { socket, rootId: parsed.rootId, workspace: services.workspacePath }); }
@@ -707,6 +732,15 @@ async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStor
   if (request.type !== "workspace.open") filesystem.getWorkspace();
   if (request.type === "filesystem.remoteTransferBegin") return remoteTransfers.begin(workspacePath, request.payload);
   if (request.type === "filesystem.remoteTransferCancel") return { cancelled: remoteTransfers.cancel(request.payload.token) };
+  if (["harnesses.append", "harnesses.permission.resolve", "harnesses.answer", "harnesses.pause.resume", "harnesses.pause.retry"].includes(request.type)) {
+    const { runId } = request.payload as { runId: string };
+    const run = await harnessRunner.readRun(runId);
+    if (!run) throw new CoreError("FILE_NOT_FOUND", "Workflow run does not exist");
+    await resolveWorkflowBinding(run, undefined, { tasks, rootWorkspace, workspacePath });
+    for (const block of run.blocks.filter((block) => block.workspace)) {
+      await validateWorkflowTarget(run, block.workspace!, { tasks, rootWorkspace, workspacePath });
+    }
+  }
   switch (request.type) {
     case "workspace.open": {
       const tree = await filesystem.open(workspacePath, request.payload.includeIgnored === true);
@@ -891,11 +925,18 @@ async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStor
     }
     case "harnesses.delete": await harnesses.delete(request.payload.id); return {};
     case "harnesses.validate": return validateHarness(request.payload.harness);
-    case "harnesses.runs": return { runs: await harnesses.runs(request.payload.harnessId) };
+    case "harnesses.runs": {
+      const runs = await harnesses.runs(request.payload.harnessId);
+      return { runs: await Promise.all(runs.map(async (run) => {
+        if (run.binding) return run;
+        try { const binding = await resolveWorkflowBinding(run, undefined, { tasks, rootWorkspace, workspacePath }); return { ...run, workspace: binding.workspace, binding }; }
+        catch { return run; } // Preserve unreadable legacy evidence; execution rejects it explicitly.
+      })) };
+    }
     case "harnesses.runs.delete": await harnesses.deleteRun(request.payload.runId); return {};
     case "harnesses.test": {
       const { definition, blockId, input, provider } = request.payload;
-      return { run: await startWorkflow({ harnessId: definition.id, input, provider, startBlockId: blockId, testDefinition: definition }, { acp, tasks, agents, harnessRunner, workflowApps, aiTimers, rootWorkspace, bridgeWorkspace, workspacePath }) };
+      return { run: await startWorkflow({ harnessId: definition.id, input, provider, target: request.payload.target, startBlockId: blockId, testDefinition: definition }, { acp, tasks, agents, harnessRunner, workflowApps, aiTimers, rootWorkspace, bridgeWorkspace, workspacePath }) };
     }
     case "harnesses.app.read":
     case "harnesses.app.kill": {
@@ -905,7 +946,7 @@ async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStor
       const definition = run?.definition ?? await harnesses.read(harnessId);
       const block = definition.blocks.find((block) => block.id === blockId);
       if (block?.type !== "run_app" || !block.app) throw new CoreError("INVALID_REQUEST", "Selected block is not a Run App");
-      const appWorkspace = await workflowRunWorkspace(run, workspacePath);
+      const appWorkspace = run ? (await resolveWorkflowBinding(run, undefined, { tasks, rootWorkspace, workspacePath })).workspace : await availableWorkflowWorkspace(workspacePath);
       if (request.type === "harnesses.app.read") return { app: workflowApps.read(block.app.name, appWorkspace) };
       await workflowApps.execute({ ...block, app: { ...block.app, actions: ["kill"] } }, '{"action":"kill"}', appWorkspace, () => {});
       return {};
@@ -918,15 +959,15 @@ async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStor
       if (payload.runId && (!existing || existing.harnessId !== payload.harnessId)) throw new CoreError("INVALID_REQUEST", "Chat run does not belong to this workflow");
       const definition = existing?.definition ?? await harnesses.read(payload.harnessId);
       if (definition.blocks.find((block) => block.id === payload.blockId)?.type !== "chatbox") throw new CoreError("INVALID_REQUEST", "Select a Chatbox block");
-      return { run: await startWorkflow({ harnessId: payload.harnessId, input: payload.input, startBlockId: payload.blockId, chatRunId: payload.runId, provider: existing?.blocks.find((block) => block.blockId === payload.blockId)?.provider ?? payload.provider }, { acp, tasks, agents, harnessRunner, workflowApps, aiTimers, rootWorkspace, bridgeWorkspace, workspacePath }) };
+      return { run: await startWorkflow({ harnessId: payload.harnessId, input: payload.input, startBlockId: payload.blockId, chatRunId: payload.runId, target: payload.target, provider: existing?.blocks.find((block) => block.blockId === payload.blockId)?.provider ?? payload.provider }, { acp, tasks, agents, harnessRunner, workflowApps, aiTimers, rootWorkspace, bridgeWorkspace, workspacePath }) };
     }
     case "harnesses.append": return { run: await harnessRunner.appendInput(request.payload.runId, request.payload.input) };
     case "harnesses.permission.resolve": return { run: await harnessRunner.resolvePermission(request.payload.runId, request.payload.blockId, request.payload.sessionId, request.payload.pauseId, request.payload.requestId, request.payload.optionId, async (provider, target, requestId, optionId) => acp.get(provider).resolvePermission(target, requestId, optionId)) };
     case "harnesses.answer": return { run: await harnessRunner.answerQuestion(request.payload.runId, request.payload.blockId, request.payload.sessionId, request.payload.pauseId, request.payload.input, async (provider, target, input) => acp.get(provider).steer(target, input)) };
     case "harnesses.pause.resume": return { run: await harnessRunner.resumeTimer(request.payload.runId, request.payload.blockId, request.payload.pauseId, (provider, target) => aiTimers.fireNext(target, provider)) };
     case "harnesses.pause.retry": return { run: await harnessRunner.retryPause(request.payload.runId, request.payload.blockId, request.payload.pauseId) };
-    case "harnesses.pause.cancel": return { run: await harnessRunner.cancelPause(request.payload.runId, request.payload.blockId, request.payload.pauseId, async (provider, runtime) => { const target = runtime.workspace ?? await workflowSessionWorkspace(workspacePath, runtime.runId, runtime.blockId); await aiTimers.cancelWorkspace(target); await acp.get(provider).interrupt(target); }) };
-    case "harnesses.cancel": return { run: await harnessRunner.cancel(request.payload.runId, async (provider, runtime) => { const target = runtime.workspace ?? await workflowSessionWorkspace(workspacePath, runtime.runId, runtime.blockId); await aiTimers.cancelWorkspace(target); await acp.get(provider).interrupt(target); }) };
+    case "harnesses.pause.cancel": return { run: await harnessRunner.cancelPause(request.payload.runId, request.payload.blockId, request.payload.pauseId, async (provider, runtime) => { const target = runtime.workspace ?? await workflowSessionWorkspace(await workflowRunWorkspace(await harnessRunner.readRun(runtime.runId), rootWorkspace), runtime.runId, runtime.blockId); await aiTimers.cancelWorkspace(target); await acp.get(provider).interrupt(target); }) };
+    case "harnesses.cancel": return { run: await harnessRunner.cancel(request.payload.runId, async (provider, runtime) => { const target = runtime.workspace ?? await workflowSessionWorkspace(await workflowRunWorkspace(await harnessRunner.readRun(runtime.runId), rootWorkspace), runtime.runId, runtime.blockId); await aiTimers.cancelWorkspace(target); await acp.get(provider).interrupt(target); }) };
     case "http.execute": return executeHttpRequest(request.payload.method, request.payload.url, request.payload.headers, request.payload.body);
     case "filesystem.listTree": return { tree: await filesystem.listTree(request.payload.includeIgnored === true) };
     case "filesystem.snapshot": return { entries: await filesystem.snapshot(request.payload.paths) };
@@ -1183,8 +1224,11 @@ export async function startWorkflow(input: ProtocolOperations["harnesses.run"]["
   const { acp, tasks, agents, harnessRunner, workflowApps, aiTimers, rootWorkspace, bridgeWorkspace } = context;
   const previousRunId = input.chatRunId ?? input.rerunRunId;
   const previousRun = previousRunId ? await harnessRunner.readRun(previousRunId) : undefined;
-  const workspacePath = await workflowRunWorkspace(previousRun, context.workspacePath);
+  if (previousRunId && !previousRun) throw new CoreError("FILE_NOT_FOUND", "Workflow run does not exist");
+  const binding = await resolveWorkflowBinding(previousRun, input.target, context);
+  const workspacePath = binding.workspace;
   const dispatch: Parameters<HarnessRunner["start"]>[2] = async (block, prompt, runtime) => providerOperation(async () => {
+      await validateWorkflowBinding(binding, tasks, rootWorkspace);
       if (block.type === "skill" && block.skillId) return executeWorkflowSkill(block, new SkillsStore(undefined, rootWorkspace), workspacePath, runtime);
       if (block.type === "script") return executeFlowScript(block, prompt, workspacePath, runtime.assertActive, { rootWorkspace, workflowRunId: runtime.runId, workflowBlockId: runtime.blockId });
       if (block.type === "run_app") return workflowApps.execute(block, prompt, workspacePath, runtime.assertActive, { rootWorkspace, workflowRunId: runtime.runId, workflowBlockId: runtime.blockId });
@@ -1200,6 +1244,7 @@ export async function startWorkflow(input: ProtocolOperations["harnesses.run"]["
       if (block.watchdog) return harnessRunner.watch(runtime.runId, runtime.blockId, () => provider.usage(), () => harnessRunner.recoverChildren(runtime.runId, async (child) => {
         const task = (await tasks.list()).tasks.find((item) => item.id === child.taskId);
         if (!task || task.status === "finished" || task.archived || await aiTimers.next(child.workspace, child.provider)) return undefined;
+        if (await availableWorkflowWorkspace(tasks.taskPath(child.taskId)) !== await availableWorkflowWorkspace(child.workspace)) throw new CoreError("INVALID_REQUEST", "Workflow child worktree changed");
         return acp.get(child.provider).get(child.workspace);
       }, async (child, session) => {
         const manager = acp.get(child.provider);
@@ -1227,6 +1272,8 @@ export async function startWorkflow(input: ProtocolOperations["harnesses.run"]["
       return settleWorkflowSession(provider, sessionWorkspace, aiTimers, block.watchdog ? runtime : undefined, () => harnessRunner.isActive(runtime.runId), runtime.activity);
     });
   const append: NonNullable<Parameters<HarnessRunner["start"]>[4]> = async (block, prompt, runtime) => providerOperation(async () => {
+      await validateWorkflowBinding(binding, tasks, rootWorkspace);
+      if (await availableWorkflowWorkspace(runtime.workspace) !== workspacePath) throw new CoreError("INVALID_REQUEST", "Workflow session no longer points to its bound worktree");
       const provider = acp.get(block.provider ?? input.provider); if (!harnessRunner.isActive(runtime.runId)) throw new Error("Workflow is no longer active"); const current = await provider.get(runtime.workspace);
       if (!harnessRunner.isActive(runtime.runId)) throw new Error("Workflow is no longer active");
       const workflowTools = appToolServer(rootWorkspace, runtime.workspace, provider.descriptor.id, bridgeWorkspace, { runId: runtime.runId, blockId: runtime.blockId, flow: ["ai", "chatbox"].includes(block.type) });
@@ -1236,15 +1283,64 @@ export async function startWorkflow(input: ProtocolOperations["harnesses.run"]["
       return settleWorkflowSession(provider, runtime.workspace, aiTimers, block.watchdog ? runtime : undefined, () => harnessRunner.isActive(runtime.runId), runtime.activity);
     });
   return input.chatRunId
-    ? harnessRunner.continueChat(input.chatRunId, input.startBlockId!, input.input, dispatch, input.provider ?? "codex", append)
-    : harnessRunner.start(input.harnessId, input.input, dispatch, input.provider, append, input.startBlockId, input.rerunRunId, input.testDefinition, workspacePath, (definition) => prepareWorkflowSkills(definition, new SkillsStore(undefined, rootWorkspace), workspacePath));
+    ? harnessRunner.continueChat(input.chatRunId, input.startBlockId!, input.input, dispatch, input.provider ?? "codex", append, binding)
+    : harnessRunner.start(input.harnessId, input.input, dispatch, input.provider, append, input.startBlockId, input.rerunRunId, input.testDefinition, workspacePath, (definition) => prepareWorkflowSkills(definition, new SkillsStore(undefined, rootWorkspace), workspacePath), binding);
 }
 
 export async function workflowRunWorkspace(run: import("@remote-ide/protocol").HarnessRun | undefined, fallback: string): Promise<string> {
-  if (run?.workspace) return run.workspace;
-  // Older runs record only per-agent session aliases, which point at the worktree.
-  const sessionWorkspace = run?.blocks.find((block) => block.workspace)?.workspace;
-  return sessionWorkspace ? realpath(sessionWorkspace) : fallback;
+  if (!run) return availableWorkflowWorkspace(fallback);
+  const recorded = run.binding?.workspace ?? run.workspace;
+  if (recorded) return availableWorkflowWorkspace(recorded);
+  // A child session is intentional targeting, not evidence of the parent's cwd.
+  for (const block of run.blocks) {
+    if (!block.workspace) continue;
+    const workspace = await availableWorkflowWorkspace(block.workspace);
+    if (!run.children?.some((child) => path.resolve(child.workspace) === workspace)) return workspace;
+  }
+  throw new CoreError("INVALID_REQUEST", "Legacy workflow run has no recorded workspace; start a new run in the selected task");
+}
+
+async function availableWorkflowWorkspace(workspace: string): Promise<string> {
+  try {
+    const resolved = await realpath(workspace);
+    if (!(await stat(resolved)).isDirectory()) throw new Error("Not a directory");
+    return resolved;
+  } catch { throw new CoreError("FILE_NOT_FOUND", `Workflow worktree is unavailable: ${workspace}`); }
+}
+
+export async function validateWorkflowBinding(binding: import("@remote-ide/protocol").HarnessWorkspaceBinding, tasks: Pick<WorkspaceTaskStore, "list" | "taskPath">, rootWorkspace: string): Promise<void> {
+  if (!binding || typeof binding.rootWorkspace !== "string" || typeof binding.workspace !== "string" || (binding.taskId !== undefined && (typeof binding.taskId !== "string" || !binding.taskId))) throw new CoreError("INVALID_REQUEST", "Workflow has an invalid recorded worktree binding");
+  if (path.resolve(binding.rootWorkspace) !== path.resolve(rootWorkspace)) throw new CoreError("INVALID_REQUEST", "Workflow run belongs to a different root");
+  if (binding.taskId) {
+    if (!(await tasks.list()).tasks.some((task) => task.id === binding.taskId)) throw new CoreError("FILE_NOT_FOUND", "Workflow bound task no longer exists");
+    if (await availableWorkflowWorkspace(tasks.taskPath(binding.taskId)) !== binding.workspace) throw new CoreError("INVALID_REQUEST", "Workflow task worktree changed since this run started");
+  }
+  if (!binding.taskId && binding.workspace !== await availableWorkflowWorkspace(rootWorkspace)) throw new CoreError("INVALID_REQUEST", "Workflow root binding points to a task worktree without a recorded task identity");
+  if (await availableWorkflowWorkspace(binding.workspace) !== binding.workspace) throw new CoreError("INVALID_REQUEST", "Workflow bound worktree was redirected");
+}
+
+export async function resolveWorkflowBinding(run: import("@remote-ide/protocol").HarnessRun | undefined, target: import("@remote-ide/protocol").HarnessTaskTarget | undefined, context: { tasks: Pick<WorkspaceTaskStore, "list" | "taskPath">; rootWorkspace: string; workspacePath: string }): Promise<import("@remote-ide/protocol").HarnessWorkspaceBinding> {
+  if (target !== undefined && (!target || typeof target !== "object" || (target.taskId !== undefined && (typeof target.taskId !== "string" || !target.taskId)))) throw new CoreError("INVALID_REQUEST", "Workflow target must identify a task or explicitly select the root workspace");
+  if (run?.binding) { await validateWorkflowBinding(run.binding, context.tasks, context.rootWorkspace); return run.binding; }
+  const workspace = run ? await workflowRunWorkspace(run, context.rootWorkspace)
+    : target ? await availableWorkflowWorkspace(await permissionTargetWorkspace(context.tasks, context.rootWorkspace, target.taskId))
+    : await availableWorkflowWorkspace(context.workspacePath);
+  // Legacy callers and records may have a workspace but no task identity. Infer
+  // identity only from the recorded path, never the mutable selected task.
+  const task = (await context.tasks.list()).tasks.find((task) => path.resolve(context.tasks.taskPath(task.id)) === workspace);
+  if (!run && target?.taskId && task?.id !== target.taskId) throw new CoreError("INVALID_REQUEST", "Selected task does not resolve to the workflow worktree");
+  if (!task && workspace !== await availableWorkflowWorkspace(context.rootWorkspace)) throw new CoreError("FILE_NOT_FOUND", "Workflow recorded task worktree is no longer registered");
+  return { rootWorkspace: context.rootWorkspace, workspace, ...(task ? { taskId: task.id, taskName: task.name } : {}) };
+}
+
+export async function validateWorkflowTarget(run: import("@remote-ide/protocol").HarnessRun, workspace: string, context: Parameters<typeof resolveWorkflowBinding>[2]): Promise<void> {
+  const binding = await resolveWorkflowBinding(run, undefined, context);
+  const resolved = await availableWorkflowWorkspace(workspace);
+  if (resolved === binding.workspace) return;
+  const child = run.children?.find((child) => path.resolve(child.workspace) === path.resolve(workspace));
+  if (!child) throw new CoreError("INVALID_REQUEST", "Workflow session points to a different worktree");
+  const registered = await permissionTargetWorkspace(context.tasks, context.rootWorkspace, child.taskId);
+  if (await availableWorkflowWorkspace(registered) !== resolved) throw new CoreError("INVALID_REQUEST", "Workflow child worktree changed");
 }
 
 async function workflowSessionWorkspace(workspace: string, runId: string, blockId: string): Promise<string> {
@@ -1255,6 +1351,7 @@ async function workflowSessionWorkspace(workspace: string, runId: string, blockI
   await mkdir(directory, { recursive: true });
   try { await symlink(path.resolve(workspace), alias, "dir"); }
   catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; }
+  if (await realpath(alias) !== await availableWorkflowWorkspace(workspace)) throw new CoreError("INVALID_REQUEST", "Workflow session alias points to a different worktree");
   return alias;
 }
 

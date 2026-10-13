@@ -16,6 +16,7 @@ type ActiveExecution = { run: HarnessRun; blocks: HarnessBlock[]; edges: Harness
 type RecoveryPolicy = { maxAttempts: number; transportBackoffMs: number; maxElapsedMs?: number; jitterRatio?: number; random?: () => number };
 type ResolvedRecoveryPolicy = Required<RecoveryPolicy>;
 export type HarnessRecoveryInspector = {
+  binding?(run: HarnessRun): Promise<void>;
   session(provider: string, workspace: string): Promise<AiSession | undefined>;
   timer(runId: string, blockId: string, provider: string, workspace: string): Promise<boolean>;
   child?(child: HarnessChildTask): Promise<boolean>;
@@ -202,7 +203,7 @@ export class HarnessRunner {
 
   async readRun(runId: string): Promise<HarnessRun | undefined> { return (await this.store.runs()).find((run) => run.id === runId); }
 
-  async start(harnessId: string, input: string, dispatch: Dispatch, defaultProvider = "codex", append?: Append, startBlockId?: string, rerunRunId?: string, testDefinition?: HarnessDefinition, workspace?: string, prepareDefinition?: (definition: HarnessDefinition) => Promise<HarnessDefinition>): Promise<HarnessRun> {
+  async start(harnessId: string, input: string, dispatch: Dispatch, defaultProvider = "codex", append?: Append, startBlockId?: string, rerunRunId?: string, testDefinition?: HarnessDefinition, workspace?: string, prepareDefinition?: (definition: HarnessDefinition) => Promise<HarnessDefinition>, binding?: HarnessRun["binding"]): Promise<HarnessRun> {
     const source = rerunRunId ? (await this.store.runs()).find((run) => run.id === rerunRunId) : undefined;
     if (rerunRunId && !source) throw new CoreError("FILE_NOT_FOUND", "Workflow run does not exist");
     if (rerunRunId && !source?.definition) throw new CoreError("INVALID_REQUEST", "This workflow run has no frozen definition to rerun");
@@ -225,7 +226,7 @@ export class HarnessRunner {
       if (!input.trim()) throw new CoreError("INVALID_REQUEST", "Enter text to start the flow");
     }
     const createdAt = new Date().toISOString();
-    const run: HarnessRun = { workspace: source?.workspace ?? workspace, id: crypto.randomUUID(), harnessId, harnessVersion: harness.version, input: input.trim(), status: "queued", createdAt, blocks: validation.order.map((blockId) => ({ blockId, status: "queued" })), operations: [] };
+    const run: HarnessRun = { binding: source?.binding ?? binding, workspace: binding?.workspace ?? source?.workspace ?? workspace, id: crypto.randomUUID(), harnessId, harnessVersion: harness.version, input: input.trim(), status: "queued", createdAt, blocks: validation.order.map((blockId) => ({ blockId, status: "queued" })), operations: [] };
     run.definition = structuredClone(harness);
     run.executionPlan = { version: 1, createdAt, definitionVersion: harness.version, order: [...validation.order], blocks: validation.order.map((blockId) => ({ blockId, incoming: harness.edges.filter((edge) => edge.to === blockId).map((edge) => edge.id), outgoing: harness.edges.filter((edge) => edge.from === blockId).map((edge) => edge.id) })) };
     await this.store.createRun(run, harness.settings?.maxActiveRuns ?? 4); this.changed(run.id);
@@ -233,7 +234,7 @@ export class HarnessRunner {
     return run;
   }
 
-  async continueChat(runId: string, blockId: string, input: string, dispatch: Dispatch, defaultProvider: string, append: Append): Promise<HarnessRun> {
+  async continueChat(runId: string, blockId: string, input: string, dispatch: Dispatch, defaultProvider: string, append: Append, binding?: HarnessRun["binding"]): Promise<HarnessRun> {
     const key = `${runId}:${blockId}`;
     if (this.resumingChats.has(key)) throw new CoreError("INVALID_REQUEST", "Wait for the current workflow turn on this Chatbox to finish before sending another message");
     this.resumingChats.add(key);
@@ -250,6 +251,8 @@ export class HarnessRunner {
       const definition = run?.definition;
       const block = definition?.blocks.find((item) => item.id === blockId);
       if (!run || !definition || block?.type !== "chatbox") throw new CoreError("INVALID_REQUEST", "Select a Chatbox in an existing workflow run");
+      run.binding ??= binding;
+      if (run.binding) run.workspace = run.binding.workspace;
       const validation = validateHarness(definition);
       if (!validation.valid) throw new CoreError("INVALID_REQUEST", "This saved workflow definition is invalid");
       const state = run.blocks.find((item) => item.blockId === blockId)!;
@@ -291,6 +294,11 @@ export class HarnessRunner {
       const order = run.executionPlan.order;
       if (order.length !== definition.blocks.length || order.some((id) => !definition.blocks.some((block) => block.id === id))) {
         await this.failRecovery(run, "The persisted workflow execution plan does not match its frozen definition. Start a new run; completed sessions and task workspaces were preserved.");
+        recovered.push(structuredClone(run)); continue;
+      }
+      try { await inspector?.binding?.(run); }
+      catch (error) {
+        await this.failRecovery(run, `Workflow recovery could not validate its bound worktree: ${error instanceof Error ? error.message : String(error)}`);
         recovered.push(structuredClone(run)); continue;
       }
       if (isHarnessFlow(definition)) {
