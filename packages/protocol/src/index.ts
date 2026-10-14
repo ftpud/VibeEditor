@@ -201,7 +201,7 @@ export type AiContinuationTimer = { id: string; workspace: string; provider: AiP
 export type HarnessAppAction = "start" | "status" | "kill" | "tail";
 export type HarnessAppState = { name: string; status: "not_found" | "starting" | "running" | "descendants-running" | "exited"; output: string; pid?: number; exitCode?: number | null; signal?: string | null };
 export type HarnessAppOptions = { action?: HarnessAppAction; actions?: HarnessAppAction[]; name: string; lines?: number };
-export type HarnessBlock = { id: string; type: "ai" | "chatbox" | "skill" | "task_controls" | "terminal_control" | "text" | "timer" | "user_prompt" | "yes_no_prompt" | "markdown" | "script" | "run_app" | "start_button" | "start_input" | "prompt" | "task" | "review" | "verification"; seconds?: number; command?: string; app?: HarnessAppOptions; label: string; description?: string; skillId?: string; prompt: string; inputSchema?: HarnessDataSchema; outputSchema?: HarnessDataSchema; provider?: AiProvider; model?: string; reasoning?: string; agent?: AgentFileReference; watchdog?: boolean; review?: HarnessReview; verification?: HarnessVerification; join?: "all" | "any"; routing?: "all" | "ai"; position: { x: number; y: number } };
+export type HarnessBlock = { id: string; type: "ai" | "chatbox" | "skill" | "task_controls" | "terminal_control" | "text" | "timer" | "user_prompt" | "yes_no_prompt" | "markdown" | "script" | "run_app" | "start_button" | "start_input" | "prompt" | "task" | "review" | "verification"; seconds?: number; command?: string; app?: HarnessAppOptions; autopilot?: boolean; label: string; description?: string; skillId?: string; prompt: string; inputSchema?: HarnessDataSchema; outputSchema?: HarnessDataSchema; provider?: AiProvider; model?: string; reasoning?: string; agent?: AgentFileReference; watchdog?: boolean; review?: HarnessReview; verification?: HarnessVerification; join?: "all" | "any"; routing?: "all" | "ai"; position: { x: number; y: number } };
 export type HarnessEdge = { timeoutMs?: number; type?: "use" | "follow" | "path"; id: string; from: string; to: string; label?: string; loop?: boolean; execution?: "sync" | "async" };
 export type HarnessRetryPolicy = { maxAttempts?: number };
 export type HarnessSettings = { concurrency?: number; maxActiveRuns?: number; maxBlockAttempts?: number; maxStackSize?: number; maxLoopCount?: number; maxChildTasks?: number; promptLimitChars?: number; retry?: HarnessRetryPolicy; outputLimitChars?: number; logLimitEntries?: number; maxRunDurationMs?: number; tokenBudget?: number };
@@ -221,7 +221,7 @@ export type HarnessBlockStatus = "queued" | "running" | "succeeded" | "failed" |
 export type HarnessRunStatus = "queued" | "running" | "succeeded" | "failed" | "blocked" | "cancelled" | "waiting" | HarnessPauseStatus;
 export type HarnessChatMessage = { id: string; role: "user" | "assistant"; text: string; timestamp: string };
 export type HarnessAgentActivity = { id: string; timestamp: string; text: string };
-export type HarnessBlockRun = { blockId: string; agentActivity?: HarnessAgentActivity[]; chatMessages?: HarnessChatMessage[]; status: HarnessBlockStatus; startedAt?: string; completedAt?: string; prompt?: string; output?: string; structuredInput?: unknown; structuredOutput?: unknown; tokens?: AiTokenUsage; error?: string; failureReason?: HarnessFailureReason; retryAt?: string; retryStartedAt?: string; provider?: AiProvider; sessionId?: string; workspace?: string; selectedRoute?: string; plannedRuns?: number; iterations?: HarnessBlockIteration[]; attempts?: HarnessBlockAttempt[]; log?: HarnessLogEntry[]; waitingUntil?: string; recoveryAttempts?: number; pendingPermission?: AiPermissionRequest; question?: string; pauseId?: string };
+export type HarnessBlockRun = { blockId: string; autopilot?: boolean; agentActivity?: HarnessAgentActivity[]; chatMessages?: HarnessChatMessage[]; status: HarnessBlockStatus; startedAt?: string; completedAt?: string; prompt?: string; output?: string; structuredInput?: unknown; structuredOutput?: unknown; tokens?: AiTokenUsage; error?: string; failureReason?: HarnessFailureReason; retryAt?: string; retryStartedAt?: string; provider?: AiProvider; sessionId?: string; workspace?: string; selectedRoute?: string; plannedRuns?: number; iterations?: HarnessBlockIteration[]; attempts?: HarnessBlockAttempt[]; log?: HarnessLogEntry[]; waitingUntil?: string; recoveryAttempts?: number; pendingPermission?: AiPermissionRequest; question?: string; pauseId?: string };
 export type HarnessChildTask = { taskId: string; blockId: string; provider: AiProvider; workspace: string; recoveryAttempts: number; recoveryError?: string; failureReason?: HarnessFailureReason; retryAt?: string; retryStartedAt?: string };
 export type HarnessFeatureStatus = "planned" | "dispatched" | "completed" | "blocked";
 export type HarnessFeature = { id: string; prompt: string; prerequisites: string[]; status: HarnessFeatureStatus; taskId?: string; commit?: string; blockedReason?: string };
@@ -408,6 +408,7 @@ export type ProtocolOperations = {
   "harnesses.test": { payload: { definition: HarnessDefinition; blockId: string; input: string; provider?: AiProvider; target?: HarnessTaskTarget }; result: { run: HarnessRun } };
   "harnesses.app.read": { payload: { harnessId: string; blockId: string; runId?: string }; result: { app: HarnessAppState } };
   "harnesses.app.terminal": { payload: { harnessId: string; blockId: string; runId?: string }; result: TerminalSessionSnapshot };
+  "harnesses.autopilot": { payload: { runId: string; blockId: string; sessionId: string; enabled: boolean }; result: { run: HarnessRun } };
   "harnesses.steer": { payload: { runId: string; blockId: string; sessionId: string; input: string }; result: { run: HarnessRun } };
   "harnesses.app.kill": { payload: { harnessId: string; blockId: string; runId?: string }; result: Record<string, never> };
   "harnesses.run": { payload: { harnessId: string; input: string; startBlockId?: string; rerunRunId?: string; provider?: AiProvider; target?: HarnessTaskTarget }; result: { run: HarnessRun } };
@@ -832,6 +833,7 @@ const requestTypeRegistry: Record<RequestType, true> = {
   "harnesses.test": true,
   "harnesses.app.read": true,
   "harnesses.app.terminal": true,
+  "harnesses.autopilot": true,
   "harnesses.steer": true,
   "harnesses.app.kill": true,
   "harnesses.run": true,

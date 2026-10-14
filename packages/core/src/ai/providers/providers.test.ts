@@ -26,7 +26,7 @@ class MissingProvider extends StdioAcpProvider {
   protected async fallbackModels(): Promise<AiModel[]> { return [{ id: "fallback", name: "Fallback", defaultReasoning: "", reasoningLevels: [] }]; }
 }
 
-async function settle(provider: FakeProvider, workspace: string): Promise<AiSession> {
+async function settle(provider: StdioAcpProvider, workspace: string): Promise<AiSession> {
   for (let attempt = 0; attempt < 200; attempt += 1) {
     const session = await provider.get(workspace);
     if (session.status !== "in_progress") return session;
@@ -434,6 +434,43 @@ describe("ACP integration", () => {
     session = await settle(provider, workspace);
     expect(session.messages.some((message) => message.text.includes("Permission: yes"))).toBe(true);
     await provider.clear(workspace);
+  });
+
+  it("supports Copilot Autopilot for new turns and a pending permission without restarting", async () => {
+    class FakeCopilot extends CopilotSessionManager {
+      protected command() { return { command: "python3", args: [FAKE_AGENT], env: { FAKE_PERMISSION: "on" } }; }
+    }
+    const state = await mkdtemp(path.join(os.tmpdir(), "copilot-autopilot-"));
+    const workspace = process.cwd();
+    const provider = new FakeCopilot(() => {}, state);
+    try {
+      await provider.send(workspace, { prompt: "unattended", configuration: { model: "model-a", autopilot: true } });
+      let session = await settle(provider, workspace);
+      expect(session.pendingPermission).toBeUndefined();
+      expect(session.messages.some((message) => message.text.includes("Permission: yes"))).toBe(true);
+      expect(session.availableOptions).toContainEqual(expect.objectContaining({ id: "autopilot", permissionApproval: true }));
+      await provider.configure(workspace, { autopilot: false });
+      await provider.send(workspace, { prompt: "ask me", configuration: {} });
+      for (let attempt = 0; !session.pendingPermission && attempt < 100; attempt += 1) { await new Promise((resolve) => setTimeout(resolve, 10)); session = await provider.get(workspace); }
+      expect(session.pendingPermission).toBeDefined();
+      const threadId = session.threadId;
+      const sessionId = session.id;
+      const pendingId = session.pendingPermission!.id;
+      await expect(provider.configure(workspace, { model: "model-b" })).rejects.toThrow("currently working");
+      await provider.configure(workspace, { autopilot: true });
+      session = await settle(provider, workspace);
+      expect(session).toMatchObject({ id: sessionId, threadId, configuration: { autopilot: true } });
+      expect(session.pendingPermission).toBeUndefined();
+      expect(session.messages.filter((message) => message.text.includes("Permission: yes"))).toHaveLength(2);
+      await expect(provider.resolvePermission(workspace, pendingId, "yes")).rejects.toThrow("no longer pending");
+      await provider.configure(workspace, { autopilot: false });
+      await provider.send(workspace, { prompt: "ask again", configuration: {} });
+      session = await provider.get(workspace);
+      for (let attempt = 0; !session.pendingPermission && attempt < 100; attempt += 1) { await new Promise((resolve) => setTimeout(resolve, 10)); session = await provider.get(workspace); }
+      expect(session.pendingPermission).toBeDefined();
+      await provider.resolvePermission(workspace, session.pendingPermission!.id, "no");
+      await settle(provider, workspace);
+    } finally { if ((await provider.get(workspace)).status === "in_progress") await provider.interrupt(workspace); await provider.clear(workspace); }
   });
 
   it("maps typed prompt blocks and remote MCP transports to ACP", async () => {

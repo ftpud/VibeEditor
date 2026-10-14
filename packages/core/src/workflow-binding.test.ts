@@ -51,6 +51,20 @@ async function setup() {
   return { root, tasks, a, b, wa, wb, store, runner, context, provider };
 }
 
+it("applies a Chatbox's saved Autopilot preference and defaults new workflow sessions to on", async () => {
+  const f = await setup();
+  Object.assign(f.provider.descriptor, { options: [{ id: "autoApprove", name: "Autopilot", type: "boolean", defaultValue: false, permissionApproval: true }] });
+  const created = await f.store.create("Autopilot");
+  let definition = await f.store.update({ ...created, blocks: [block("chat", "chatbox", { prompt: "", autopilot: false })], edges: [] });
+  let run = await startWorkflow({ harnessId: definition.id, input: "manual", startBlockId: "chat", provider: "test", target: {} }, f.context);
+  await vi.waitFor(async () => expect((await f.runner.readRun(run.id))?.status).toBe("succeeded"));
+  expect(f.provider.startFreshSession).toHaveBeenLastCalledWith(expect.any(String), expect.objectContaining({ configuration: { autoApprove: false } }));
+  definition = await f.store.update({ ...definition, blocks: [block("chat", "chatbox", { prompt: "" })] });
+  run = await startWorkflow({ harnessId: definition.id, input: "automatic", startBlockId: "chat", provider: "test", target: {} }, f.context);
+  await vi.waitFor(async () => expect((await f.runner.readRun(run.id))?.status).toBe("succeeded"));
+  expect(f.provider.startFreshSession).toHaveBeenLastCalledWith(expect.any(String), expect.objectContaining({ configuration: { autoApprove: true } }));
+});
+
 it("captures task A while selection is B, preserves agent cwd, script/app effects and reruns across switches", async () => {
   const f = await setup(); const created = await f.store.create("Binding");
   const definition = await f.store.update({ ...created, blocks: [block("agent", "ai"), block("script", "script", { command: 'pwd > script-effects.txt; sleep 0.1' }), block("app", "run_app", { command: 'pwd > app-effects.txt; exec sleep 300', app: { name: "bound", actions: ["start"] } })], edges: [{ id: "one", from: "agent", to: "script", type: "follow" }, { id: "two", from: "script", to: "app", type: "follow" }] });

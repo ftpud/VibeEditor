@@ -14,9 +14,10 @@ const FALLBACK_MODELS: { id: string; name: string; reasoningLevels: string[]; pr
 export class CopilotSessionManager extends StdioAcpProvider {
   readonly descriptor: AiProviderDescriptor = {
     id: "copilot", name: "Copilot ACP", description: "GitHub Copilot CLI's native Agent Client Protocol server.",
-    settings: { title: "Copilot settings", description: "Server-level options are applied when Vibe launches the ACP server for this workspace.", sections: [{ id: "limits", name: "Tools & limits", description: "Resource and tool safeguards." }] },
+    settings: { title: "Copilot settings", description: "Tool permissions and spending limits for this workspace's Copilot session.", sections: [{ id: "limits", name: "Tools & limits", description: "Resource and tool safeguards." }] },
     capabilities: { models: true, usage: true, mcp: true, agents: true, contextWindow: true, skills: true },
     options: [
+      { id: "autopilot", name: "Autopilot", description: "Approve tool permission requests automatically for this session.", section: "limits", type: "boolean", defaultValue: false, permissionApproval: true },
       { id: "maxAiCredits", name: "Maximum AI credits", description: "Optional per-session spending guard. Set to 0 to use the provider default.", section: "limits", type: "number", defaultValue: 0, min: 0 }
     ]
   };

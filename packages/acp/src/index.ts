@@ -43,7 +43,8 @@ export type AiModelDetails = {
   note?: string;
 };
 export type AiModel = { id: string; name: string; defaultReasoning: string; reasoningLevels: string[] } & AiModelDetails;
-export type AiOption = { id: string; name: string; description: string; section?: string; type: "select" | "number" | "boolean" | "text"; defaultValue: string | number | boolean; choices?: { value: string; name: string; description?: string }[]; min?: number; max?: number; modelDependent?: boolean };
+/** permissionApproval marks a client-owned boolean that approves ACP tool permission requests. */
+export type AiOption = { permissionApproval?: boolean; id: string; name: string; description: string; section?: string; type: "select" | "number" | "boolean" | "text"; defaultValue: string | number | boolean; choices?: { value: string; name: string; description?: string }[]; min?: number; max?: number; modelDependent?: boolean };
 export type AiAutopilotOption = { option: AiOption; on: string | boolean; off: string | boolean };
 export type AiSettingsSection = { id: string; name: string; description?: string };
 export type AiSettingsLayout = { title: string; description: string; sections: AiSettingsSection[] };

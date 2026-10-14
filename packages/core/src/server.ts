@@ -318,7 +318,7 @@ export async function createServer(host: string, port: number, workspacePath: st
       const workflowTools = appToolServer(rootWorkspace, sessionWorkspace, provider.descriptor.id, recoveryBridgeWorkspace, { ...runtime, flow: ["ai", "chatbox"].includes(block.type) });
       const mcpServers = [...appTools.servers.filter((server) => server.name !== workflowTools.name), workflowTools];
       const workflowAgent = appTools.agent ? { ...appTools.agent, mcpServers: [...new Set([...(appTools.agent.mcpServers ?? []), workflowTools.name])] } : undefined;
-      const autopilot = findAutopilotOption(provider.descriptor.options); const configuration = { ...(block.model ? { model: block.model } : {}), ...(block.reasoning ? { reasoning: block.reasoning } : {}), ...(autopilot ? { [autopilot.option.id]: autopilot.on } : {}) };
+      const autopilot = findAutopilotOption(provider.descriptor.options); const configuration = { ...(block.model ? { model: block.model } : {}), ...(block.reasoning ? { reasoning: block.reasoning } : {}), ...(autopilot ? { [autopilot.option.id]: block.autopilot === false ? autopilot.off : autopilot.on } : {}) };
       const skillIds = await workflowSessionSkillIds(run?.definition, block, new SkillsStore(undefined, rootWorkspace), workspace);
       runtime.assertActive(); await provider.startFreshSession(sessionWorkspace, { prompt, configuration, mcpServers, ...(skillIds ? { skillIds } : {}), agent: workflowAgent, ...(block.agent ? { agentPreset: block.agent } : {}) }); runtime.assertActive();
       managedProcesses.setWorkspaceContext(sessionWorkspace, { workflowRunId: runtime.runId, workflowBlockId: runtime.blockId });
@@ -747,7 +747,7 @@ async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStor
   if (request.type !== "workspace.open") filesystem.getWorkspace();
   if (request.type === "filesystem.remoteTransferBegin") return remoteTransfers.begin(workspacePath, request.payload);
   if (request.type === "filesystem.remoteTransferCancel") return { cancelled: remoteTransfers.cancel(request.payload.token) };
-  if (["harnesses.steer", "harnesses.append", "harnesses.permission.resolve", "harnesses.answer", "harnesses.pause.resume", "harnesses.pause.retry"].includes(request.type)) {
+  if (["harnesses.autopilot", "harnesses.steer", "harnesses.append", "harnesses.permission.resolve", "harnesses.answer", "harnesses.pause.resume", "harnesses.pause.retry"].includes(request.type)) {
     const { runId } = request.payload as { runId: string };
     const run = await harnessRunner.readRun(runId);
     if (!run) throw new CoreError("FILE_NOT_FOUND", "Workflow run does not exist");
@@ -982,6 +982,14 @@ async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStor
       if (definition.blocks.find((block) => block.id === payload.blockId)?.type !== "chatbox") throw new CoreError("INVALID_REQUEST", "Select a Chatbox block");
       return { run: await startWorkflow({ harnessId: payload.harnessId, input: payload.input, startBlockId: payload.blockId, chatRunId: payload.runId, target: payload.target, provider: existing?.blocks.find((block) => block.blockId === payload.blockId)?.provider ?? payload.provider }, { acp, tasks, agents, harnessRunner, workflowApps, aiTimers, rootWorkspace, bridgeWorkspace, workspacePath }) };
     }
+    case "harnesses.autopilot": return { run: await harnessRunner.setAutopilot(request.payload.runId, request.payload.blockId, request.payload.sessionId, request.payload.enabled, async (providerId, target, sessionId, enabled) => {
+      const provider = acp.get(providerId);
+      const session = await provider.get(target);
+      if (session.id !== sessionId) throw new CoreError("INVALID_REQUEST", "Chatbox session changed");
+      const option = findAutopilotOption([...provider.descriptor.options, ...session.availableOptions ?? []]);
+      if (!option) throw new CoreError("INVALID_REQUEST", "This provider does not support Autopilot");
+      return provider.configure(target, { [option.option.id]: enabled ? option.on : option.off });
+    }) };
     case "harnesses.steer": return { run: await harnessRunner.steerChat(request.payload.runId, request.payload.blockId, request.payload.sessionId, request.payload.input, (provider, target, input) => acp.get(provider).steer(target, input)) };
     case "harnesses.append": return { run: await harnessRunner.appendInput(request.payload.runId, request.payload.input) };
     case "harnesses.permission.resolve": return { run: await harnessRunner.resolvePermission(request.payload.runId, request.payload.blockId, request.payload.sessionId, request.payload.pauseId, request.payload.requestId, request.payload.optionId, async (provider, target, requestId, optionId) => acp.get(provider).resolvePermission(target, requestId, optionId)) };
@@ -1287,7 +1295,7 @@ export async function startWorkflow(input: ProtocolOperations["harnesses.run"]["
       const mcpServers = [...appTools.servers.filter((server) => server.name !== workflowTools.name), workflowTools];
       const workflowAgent = appTools.agent ? { ...appTools.agent, mcpServers: [...new Set([...(appTools.agent.mcpServers ?? []), workflowTools.name])] } : undefined;
       const autopilot = findAutopilotOption(provider.descriptor.options);
-      const configuration = { ...(block.model ? { model: block.model } : {}), ...(block.reasoning ? { reasoning: block.reasoning } : {}), ...(autopilot ? { [autopilot.option.id]: autopilot.on } : {}) };
+      const configuration = { ...(block.model ? { model: block.model } : {}), ...(block.reasoning ? { reasoning: block.reasoning } : {}), ...(autopilot ? { [autopilot.option.id]: block.autopilot === false ? autopilot.off : autopilot.on } : {}) };
       const skillIds = await workflowSessionSkillIds((await harnessRunner.readRun(runtime.runId))?.definition, block, new SkillsStore(undefined, rootWorkspace), workspacePath);
       runtime.assertActive();
       try { await provider.startFreshSession(sessionWorkspace, { prompt, configuration, mcpServers, ...(skillIds ? { skillIds } : {}), agent: workflowAgent, ...(block.agent ? { agentPreset: block.agent } : {}) }); runtime.assertActive(); }

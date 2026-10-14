@@ -2447,6 +2447,10 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .harness-app-output pre { max-height: 240px; overflow: auto; margin: 0; padding: 8px; background: #202226; color: #d7d9dc; font: .7692rem/1.5 var(--ui-font-family), monospace; white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
 
 .harness-run-details > header .harness-detail-actions button { width: 24px; height: 24px; padding: 0; display: grid; place-items: center; border-radius: 4px; }
+.harness-run-details > header .harness-detail-actions .workflow-autopilot { width: auto; padding: 0 8px; white-space: nowrap; }
+.harness-run-details > header .workflow-autopilot[aria-pressed="true"] { color: var(--workflow-accent); background: #579dff16; }
+.harness-inspector .harness-autopilot { display: flex; align-items: center; gap: 6px; }
+.harness-inspector .harness-autopilot input { flex: none; width: auto; margin: 0; }
 :root[data-theme="light"] .harness-app-output > header span { color: #657082; }
 :root[data-theme="light"] .harness-app-output { border-color: #d2dbe8; }
 :root[data-theme="light"] .harness-app-output pre { background: #eaf0f8; color: #283345; }

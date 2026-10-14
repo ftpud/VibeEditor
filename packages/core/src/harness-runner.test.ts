@@ -2,7 +2,7 @@ import os from "node:os";
 import path from "node:path";
 import { mkdtemp } from "node:fs/promises";
 import { describe, expect, it, vi } from "vitest";
-import type { HarnessBlock, HarnessOperationKind } from "@remote-ide/protocol";
+import type { AiSession, HarnessBlock, HarnessOperationKind } from "@remote-ide/protocol";
 import { AiProviderError } from "@remote-ide/acp";
 import { classifyWorkflowFailure, connectedInput, HarnessRunner, nextWatchdogReset, isRecoverableWorkflowError } from "./harness-runner.js";
 import { HarnessStore } from "./harnesses.js";
@@ -654,6 +654,37 @@ describe("HarnessRunner", () => {
     await runner.start(definition.id, "build", dispatch, "test", append);
     for (let tries = 0; tries < 150 && (await store.runs())[0]?.status !== "succeeded"; tries += 1) await new Promise((resolve) => setTimeout(resolve, 10));
     expect(append).toHaveBeenCalledWith(expect.objectContaining({ id: "worker" }), "follow-up", expect.objectContaining({ workspace: "/sessions/worker" }));
+  });
+
+  it("changes Autopilot only for the owned Chatbox session and resumes a pending permission", async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "workflow-autopilot-"));
+    const store = new HarnessStore("/workspace", directory);
+    const created = await store.create("Autopilot");
+    const definition = await store.update({ ...created, blocks: [{ id: "chat", type: "chatbox", label: "Chat", prompt: "", autopilot: false, position: { x: 0, y: 0 } }], edges: [] });
+    const runner = new HarnessRunner(store, () => {});
+    let release!: () => void;
+    const waiting = new Promise<void>((resolve) => { release = resolve; });
+    const running: AiSession = { id: "owned", model: "test", reasoning: "", status: "in_progress", configuration: { autopilot: false }, availableOptions: [{ id: "autopilot", name: "Autopilot", description: "", type: "boolean", defaultValue: false, permissionApproval: true }], messages: [] };
+    const run = await runner.start(definition.id, "work", async (_block, _prompt, runtime) => {
+      await runtime.started("/workflow/chat");
+      await runtime.activity({ ...running, pendingPermission: { id: "permission", title: "Run command", toolCallId: "tool", options: [{ optionId: "yes", name: "Allow", kind: "allow_once" }] } });
+      await waiting;
+      return { ...running, status: "done" };
+    }, "test");
+    const configure = vi.fn(async (_provider, _workspace, _sessionId, enabled) => ({ ...running, configuration: { autopilot: enabled } }));
+    try {
+      await vi.waitFor(async () => expect((await runner.readRun(run.id))?.status).toBe("awaiting_permission"));
+      await expect(runner.setAutopilot(run.id, "chat", "stale", true, configure)).rejects.toThrow("no longer available");
+      expect(configure).not.toHaveBeenCalled();
+      const resumed = await runner.setAutopilot(run.id, "chat", "owned", true, configure);
+      expect(configure).toHaveBeenCalledWith("test", "/workflow/chat", "owned", true);
+      expect(resumed).toMatchObject({ status: "running", blocks: [expect.objectContaining({ autopilot: true, status: "running", sessionId: "owned" })] });
+      expect(resumed.blocks[0]?.pendingPermission).toBeUndefined();
+      expect(resumed.definition?.blocks[0]?.autopilot).toBe(false);
+      expect((await runner.setAutopilot(run.id, "chat", "owned", false, configure)).blocks[0]?.autopilot).toBe(false);
+    } finally { release(); }
+    await vi.waitFor(async () => expect((await runner.readRun(run.id))?.status).toBe("succeeded"));
+    expect((await runner.setAutopilot(run.id, "chat", "owned", true, configure)).blocks[0]?.autopilot).toBe(true);
   });
 
   it("resolves a permission only for its exact paused workflow attempt", async () => {

@@ -30,6 +30,18 @@ describe("Workflow run library", () => {
     expect(onReadRun).toHaveBeenCalledTimes(1);
   });
 
+  it("changes Autopilot on the selected Chatbox session while it waits for permission", async () => {
+    const chatWorkflow: HarnessDefinition = { ...workflow, blocks: [{ id: "chat", type: "chatbox", label: "Assistant", prompt: "", position: { x: 0, y: 0 } }], edges: [] };
+    const chatRun: HarnessRun = { ...run, definition: chatWorkflow, status: "awaiting_permission", blocks: [{ blockId: "chat", status: "awaiting_permission", sessionId: "owned-session", autopilot: false }] };
+    const onAutopilot = vi.fn().mockResolvedValue({ ...chatRun, blocks: [{ ...chatRun.blocks[0], autopilot: true }] });
+    render(<WorkflowRunPanel {...props()} harnesses={[chatWorkflow]} runs={[chatRun]} onAutopilot={onAutopilot} />);
+    fireEvent.click(screen.getByRole("button", { name: "Show Workspace check" }));
+    fireEvent.click(screen.getByRole("button", { name: "Assistant: awaiting permission" }));
+    fireEvent.click(screen.getByRole("button", { name: "Autopilot" }));
+    await waitFor(() => expect(onAutopilot).toHaveBeenCalledWith("run", "chat", "owned-session", true));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Autopilot" }).getAttribute("aria-pressed")).toBe("true"));
+  });
+
   it("sends steering to the selected Chatbox session and retains stop", async () => {
     const chatWorkflow: HarnessDefinition = { ...workflow, blocks: [{ id: "chat", type: "chatbox", label: "Assistant", prompt: "", position: { x: 0, y: 0 } }], edges: [] };
     const chatRun: HarnessRun = { ...run, definition: chatWorkflow, blocks: [{ blockId: "chat", status: "running", sessionId: "session" }] };

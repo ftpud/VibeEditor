@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import type { HarnessDefinition, HarnessBlock, HarnessConnectionTrace, HarnessBlockAttempt, HarnessBlockIteration, HarnessEdge, HarnessRun, HarnessLogEntry, HarnessChildTask, HarnessFailureReason, HarnessPauseStatus, HarnessOperation, HarnessOperationKind, HarnessFeature, HarnessReviewFinding, HarnessCorrectionCycle, AiSession } from "@remote-ide/protocol";
-import { AiProviderError, normalizeAiFailure, type AiFailure } from "@remote-ide/acp";
+import { AiProviderError, findAutopilotOption, normalizeAiFailure, type AiFailure } from "@remote-ide/acp";
 import { CoreError } from "./errors.js";
 import { harnessExecutionEdges, isHarnessFlow, HarnessSchemaError, parseHarnessData, validateHarness, renderHarnessPrompt } from "./harness-graph.js";
 import type { HarnessStore } from "./harnesses.js";
@@ -348,6 +348,28 @@ export class HarnessRunner {
     if (!run.cleanupErrors.length) run.cleanupErrors = undefined;
     else await this.update(run);
     return run;
+  }
+
+  async setAutopilot(runId: string, blockId: string, sessionId: string, enabled: boolean, configure: (provider: string, workspace: string, sessionId: string, enabled: boolean) => Promise<AiSession>): Promise<HarnessRun> {
+    if (typeof enabled !== "boolean") throw new CoreError("INVALID_REQUEST", "Autopilot must be a boolean");
+    const execution = this.executions.get(runId);
+    const run = execution?.run ?? await this.readRun(runId);
+    const state = run?.blocks.find((item) => item.blockId === blockId);
+    const block = run?.definition?.blocks.find((item) => item.id === blockId);
+    if (!run || block?.type !== "chatbox" || !state?.workspace || !state.provider || !sessionId || state.sessionId !== sessionId || ["cancelled", "failed", "blocked"].includes(state.status)) {
+      throw new CoreError("INVALID_REQUEST", "Chatbox session is no longer available");
+    }
+    const change = async () => {
+      if (state.sessionId !== sessionId || ["cancelled", "failed", "blocked"].includes(state.status)) throw new CoreError("INVALID_REQUEST", "Chatbox session changed");
+      const session = await configure(state.provider!, state.workspace!, sessionId, enabled);
+      if (state.sessionId !== sessionId || session.id !== sessionId) throw new CoreError("INVALID_REQUEST", "Chatbox session changed");
+      state.autopilot = enabled;
+      if (execution && this.isActive(runId) && state.status === "awaiting_permission") await this.recordActivity(run, state, session);
+      else await this.update(run);
+    };
+    if (execution && this.isActive(runId)) await execution.scheduler.control(blockId, change);
+    else await change();
+    return structuredClone(run);
   }
 
   async steerChat(runId: string, blockId: string, sessionId: string, input: string, steer: AnswerQuestion): Promise<HarnessRun> {
@@ -1122,6 +1144,8 @@ export class HarnessRunner {
 
   private async recordActivity(run: HarnessRun, state: HarnessRun["blocks"][number], session: AiSession, waitingUntil?: string): Promise<void> {
     this.assertActive(run.id);
+    const option = findAutopilotOption(session.availableOptions ?? []);
+    const autopilot = option ? String(session.configuration?.[option.option.id] ?? option.option.defaultValue) === String(option.on) : state.autopilot;
     const status: "running" | HarnessPauseStatus = session.pendingPermission ? "awaiting_permission" : waitingUntil ? "waiting_timer" : session.status === "user_prompt" ? "awaiting_user_input" : "running";
     const question = status === "awaiting_user_input" ? session.messages.filter((message) => message.role === "assistant").at(-1)?.text : undefined;
     const permission = status === "awaiting_permission" ? session.pendingPermission : undefined;
@@ -1137,7 +1161,8 @@ export class HarnessRunner {
     if (chatChanged) chatReply!.text = chatText!;
     const responseChanged = response !== undefined && response !== state.output;
     const pauseId = status === "running" ? undefined : state.status === status ? state.pauseId ?? crypto.randomUUID() : crypto.randomUUID();
-    if (state.status === status && state.waitingUntil === waitingUntil && state.question === question && JSON.stringify(state.pendingPermission) === JSON.stringify(permission) && state.sessionId === session.id && state.pauseId === pauseId && !responseChanged && !chatChanged && !activityChanged) return;
+    if (state.autopilot === autopilot && state.status === status && state.waitingUntil === waitingUntil && state.question === question && JSON.stringify(state.pendingPermission) === JSON.stringify(permission) && state.sessionId === session.id && state.pauseId === pauseId && !responseChanged && !chatChanged && !activityChanged) return;
+    state.autopilot = autopilot;
     if (responseChanged) { state.output = response; this.log(state, "response", response!); }
     const previous = state.status; state.status = status; state.sessionId = session.id; state.waitingUntil = waitingUntil; state.question = question; state.pendingPermission = permission;
     const attempt = state.attempts?.at(-1); if (attempt && session.id) { attempt.sessionId = session.id; await this.recordCompletedOperation(run, "session_binding", `session:${attempt.id}`, state.blockId, { sessionId: session.id, workspace: state.workspace }, attempt.id); }

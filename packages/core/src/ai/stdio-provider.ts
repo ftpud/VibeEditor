@@ -146,23 +146,30 @@ export abstract class StdioAcpProvider extends AcpProvider {
   protected async describeModels(models: AiModel[]): Promise<AiModel[]> { return models; }
 
   async configure(workspace: string, configuration: AiConfiguration | string, legacyReasoning?: string): Promise<AiSession> {
-    if (this.runtimes.get(workspace)?.running) throw new CoreError("INVALID_REQUEST", `${this.descriptor.name} is currently working`);
+    const clientOptions = new Set(this.descriptor.options.filter((option) => option.permissionApproval).map((option) => option.id));
+    const clientOnly = typeof configuration !== "string" && Object.keys(configuration).every((key) => clientOptions.has(key));
+    if (this.runtimes.get(workspace)?.running && !clientOnly) throw new CoreError("INVALID_REQUEST", `${this.descriptor.name} is currently working`);
     const runtime = this.runtimes.get(workspace);
     const session = runtime?.session ?? await this.get(workspace);
     const previousModel = session.model;
     const desired = typeof configuration === "string" ? { model: configuration, reasoning: legacyReasoning ?? session.reasoning } : configuration;
+    if (Object.entries(desired).some(([key, value]) => clientOptions.has(key) && typeof value !== "boolean")) throw new CoreError("INVALID_REQUEST", "Autopilot must be a boolean");
     applyConfiguration(session, desired);
     if (typeof desired.model === "string" || typeof desired.reasoning === "string") session.nextConfiguration = undefined;
     const restartForModel = runtime && this.needsUnlistedModelLaunch(runtime, session.model);
     if (restartForModel) { await this.closeRuntime(workspace); session.threadId = undefined; }
     else if (!runtime && previousModel !== session.model && this.supportsUnlistedModel(session.model)) session.threadId = undefined;
-    if (runtime && !restartForModel) {
+    if (runtime && !restartForModel && !clientOnly) {
       const warnings = await this.applyAcpConfiguration(runtime, runtime.configOptions, runtime.modes);
       if (warnings.length > 0) session.messages.push(this.message("activity", `Session configuration\n${warnings.join("\n")}`));
-      const dynamic = new Set(["model", "reasoning", "mode", ...runtime.configOptions.map((option) => option.id)]);
+      const dynamic = new Set(["model", "reasoning", "mode", ...runtime.configOptions.map((option) => option.id), ...clientOptions]);
       if (Object.keys(desired).some((key) => !dynamic.has(key))) await this.closeRuntime(workspace);
     }
-    await this.save(workspace, session); this.onChanged(workspace); return session;
+    await this.save(workspace, session); this.onChanged(workspace);
+    const permission = session.pendingPermission;
+    const allowed = permission && this.automaticPermissionOption(session, permission.options);
+    if (allowed) return this.resolvePermission(workspace, permission!.id, allowed.optionId);
+    return session;
   }
 
   async configureNext(workspace: string, configuration: AiConfiguration): Promise<AiSession> {
@@ -634,7 +641,14 @@ export abstract class StdioAcpProvider extends AcpProvider {
     }
   }
 
+  private automaticPermissionOption(session: AiSession, options: RequestPermissionRequest["options"]) {
+    const enabled = this.descriptor.options.some((option) => option.permissionApproval && option.type === "boolean" && (session.configuration?.[option.id] ?? option.defaultValue) === true);
+    return enabled ? options.find((option) => option.kind === "allow_once") ?? options.find((option) => option.kind === "allow_always") : undefined;
+  }
+
   private async requestPermission(workspace: string, runtime: Runtime, params: RequestPermissionRequest): Promise<RequestPermissionResponse> {
+    const allowed = this.automaticPermissionOption(runtime.session, params.options);
+    if (allowed) return { outcome: { outcome: "selected", optionId: allowed.optionId } };
     const id = crypto.randomUUID();
     const detail = toolBody(params.toolCall);
     runtime.session.pendingPermission = {
@@ -835,7 +849,7 @@ export abstract class StdioAcpProvider extends AcpProvider {
   private toUiOptions(options: SessionConfigOption[], modes: ModeState): AiOption[] {
     const mapped: AiOption[] = options.filter((option) => option.category !== "model" && option.category !== "thought_level").map((option) => ({ id: option.id, name: option.name, description: option.description ?? "Configuration advertised by the ACP agent.", section: "acp", type: option.type, defaultValue: option.currentValue, ...(option.type === "select" ? { choices: selectOptions(option) } : {}) }));
     if (modes && !options.some((option) => option.category === "mode")) mapped.unshift({ id: "mode", name: "Agent mode", description: "Controls the ACP agent's operating mode for this session.", section: "acp", type: "select", defaultValue: modes.currentModeId, choices: modes.availableModes.map((mode) => ({ value: mode.id, name: mode.name ?? mode.id, description: mode.description ?? undefined })) });
-    return mapped;
+    return [...this.descriptor.options.filter((option) => option.permissionApproval), ...mapped.filter((option) => !this.descriptor.options.some((own) => own.permissionApproval && own.id === option.id))];
   }
 
   /**

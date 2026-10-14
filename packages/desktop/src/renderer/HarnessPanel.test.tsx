@@ -12,6 +12,24 @@ function renderEditor(ui: Parameters<typeof render>[0]) {
 }
 
 describe("HarnessPanel", () => {
+  it("toggles Chatbox Autopilot while permission is pending and reports failures", async () => {
+    const block = { id: "chat", type: "chatbox", label: "Chat", prompt: "", position: { x: 0, y: 0 } } as const;
+    const state = { blockId: "chat", status: "awaiting_permission", sessionId: "session", autopilot: false } as const;
+    const onAutopilot = vi.fn().mockResolvedValue(undefined);
+    const view = render(<BlockRunDetails block={block} state={state} onClose={vi.fn()} onAutopilot={onAutopilot} />);
+    const toggle = screen.getByRole("button", { name: "Autopilot" });
+    expect(toggle.getAttribute("aria-pressed")).toBe("false");
+    fireEvent.click(toggle);
+    await waitFor(() => expect(toggle.getAttribute("aria-pressed")).toBe("true"));
+    expect(onAutopilot).toHaveBeenCalledWith(true);
+    onAutopilot.mockRejectedValueOnce(new Error("Session changed"));
+    fireEvent.click(toggle);
+    expect((await screen.findByRole("alert")).textContent).toBe("Session changed");
+    expect(toggle.getAttribute("aria-pressed")).toBe("true");
+    view.rerender(<BlockRunDetails block={block} state={{ ...state, sessionId: "new", autopilot: false }} onClose={vi.fn()} onAutopilot={onAutopilot} />);
+    await waitFor(() => expect(toggle.getAttribute("aria-pressed")).toBe("false"));
+  });
+
   it("links an existing skill from the catalogue and can return to custom instructions", async () => {
     const harness: HarnessDefinition = { id: "flow", name: "Flow", version: 1, createdAt: "now", updatedAt: "now", blocks: [{ id: "skill", type: "skill", label: "Skill", description: "Custom", prompt: "Custom instructions", position: { x: 0, y: 0 } }], edges: [] };
     const skillCatalog = { skills: [{ id: "workspace/review", scope: "workspace" as const, name: "review", title: "Reviewer", description: "Review code changes", path: "/project/.agents/skills/review/SKILL.md" }, { id: "global/blocked", scope: "global" as const, name: "blocked", title: "Blocked", path: "/skills/blocked/SKILL.md" }], policy: { allowed: ["workspace/review"], defaults: [] } };
@@ -113,9 +131,11 @@ describe("HarnessPanel", () => {
     fireEvent.change(screen.getByLabelText("Add block type"), { target: { value: "chatbox" } });
     expect(screen.getByLabelText("AI model")).toBeTruthy();
     expect(screen.getByLabelText("Block prompt")).toHaveProperty("value", "");
+    expect(screen.getByLabelText("Block Autopilot")).toHaveProperty("checked", true);
+    fireEvent.click(screen.getByLabelText("Block Autopilot"));
     fireEvent.click(screen.getByTitle("Save workflow"));
     await waitFor(() => expect(onSave).toHaveBeenCalled());
-    expect(onSave.mock.calls[0]?.[0].blocks[0]).toMatchObject({ type: "chatbox", prompt: "" });
+    expect(onSave.mock.calls[0]?.[0].blocks[0]).toMatchObject({ type: "chatbox", prompt: "", autopilot: false });
   });
 
   it("adds and saves Terminal Control without AI configuration", async () => {
