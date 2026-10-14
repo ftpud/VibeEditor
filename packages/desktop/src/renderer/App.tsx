@@ -484,6 +484,9 @@ export function App() {
     const buffered = terminalBuffers.current.get(terminalId);
     if (buffered) writer(buffered, true);
   }, []);
+  const markUnreadTerminalOutput = useCallback((terminalId: string) => {
+    setLayout((current) => markTerminalActivity(current, terminalId));
+  }, []);
 
   const refreshGit = useCallback(async (client = clientRef.current) => {
     if (!client) return;
@@ -880,7 +883,6 @@ export function App() {
         terminalBuffers.current.set(event.payload.terminalId, ((terminalBuffers.current.get(event.payload.terminalId) ?? "") + event.payload.data).slice(-1_000_000));
         const writer = terminalWriters.current.get(event.payload.terminalId);
         if (writer) writer(event.payload.data);
-        if (event.payload.data) setLayout((current) => markTerminalActivity(current, event.payload.terminalId));
         return;
       }
       if (event.type === "terminal.exit") {
@@ -889,7 +891,7 @@ export function App() {
         const writer = terminalWriters.current.get(event.payload.terminalId);
         writer?.(exitMessage);
         updateTerminalGroup((current) => ({ ...current, tabs: current.tabs.map((tab) => tab.terminalId === event.payload.terminalId ? { ...tab, status: "exited", exitCode: event.payload.exitCode } : tab) }));
-        setLayout((current) => markTerminalActivity(current, event.payload.terminalId));
+        markUnreadTerminalOutput(event.payload.terminalId);
         return;
       }
       if (event.type === "java.semantic.changed") { refreshJavaSemanticRef.current?.(); return; }
@@ -3035,7 +3037,7 @@ export function App() {
       <nav className="right-tool-stripe" aria-label="Right tool windows"><button className={`tool-stripe-button right ${classicTasksOpen ? "active" : ""}`} title={classicTasksOpen ? "Hide Tasks" : "Show Tasks"} onClick={() => setClassicTasksOpen((open) => !open)}><ListTodo size={15} /><span>Tasks</span>{tasks.length > 0 && <span className="tool-badge">{tasks.length > 99 ? "99+" : tasks.length}</span>}</button><button className={`tool-stripe-button right ${classicAiOpen ? "active" : ""}`} title={classicAiOpen ? "Hide AI" : "Show AI"} onClick={() => { setClassicAiOpen((open) => { if (!open) void refreshAi(); return !open; }); }}><Bot size={15} /><span>AI</span>{aiSession.status === "in_progress" && <span className="tool-badge">...</span>}</button><button className={`tool-stripe-button right ${rightPanels.skills ? "active" : ""}`} title={rightPanels.skills ? "Hide Skills" : "Show Skills"} onClick={() => { setRightPanels((current) => ({ ...current, skills: !current.skills })); void refreshSkills(); }}><Library size={15} /><span>Skills</span></button></nav>
       </>}
     </div>
-    {layout.panels.some((panel) => panel.type === "terminal") && <TerminalPanel theme={theme} fontFamily={terminalFontFamily} fontSize={uiFontSize} lineHeight={uiLineHeight} client={clientRef.current!} group={layout.terminalGroup} height={terminalHeight} highlightedTerminalIds={new Set(runConfigs.filter((config) => ["starting", "running", "stopping"].includes(config.status)).flatMap((config) => config.terminalId ? [config.terminalId] : []))} onActivate={activateTerminalTab} onCreate={() => void createTerminal()} onClose={closeTerminal} onRename={renameTerminal} onDuplicate={(tab) => void duplicateTerminal(tab)} onMove={moveTerminal} onRecoveryShown={(tabId) => updateTerminalGroup((group) => ({ ...group, tabs: group.tabs.map((tab) => tab.id === tabId ? { ...tab, recovery: undefined } : tab) }))} onResizeStart={beginTerminalResize} registerWriter={registerTerminalWriter} />}
+    {layout.terminalGroup.tabs.length > 0 && <TerminalPanel visible={terminalPanelOpen} onActivity={markUnreadTerminalOutput} theme={theme} fontFamily={terminalFontFamily} fontSize={uiFontSize} lineHeight={uiLineHeight} client={clientRef.current!} group={layout.terminalGroup} height={terminalHeight} highlightedTerminalIds={new Set(runConfigs.filter((config) => ["starting", "running", "stopping"].includes(config.status)).flatMap((config) => config.terminalId ? [config.terminalId] : []))} onActivate={activateTerminalTab} onCreate={() => void createTerminal()} onClose={closeTerminal} onRename={renameTerminal} onDuplicate={(tab) => void duplicateTerminal(tab)} onMove={moveTerminal} onRecoveryShown={(tabId) => updateTerminalGroup((group) => ({ ...group, tabs: group.tabs.map((tab) => tab.id === tabId ? { ...tab, recovery: undefined } : tab) }))} onResizeStart={beginTerminalResize} registerWriter={registerTerminalWriter} />}
     {layout.panels.some((panel) => panel.type === "java") && javaOptions && <JavaPanel key={`java-panel:${selectedRootId}`} height={javaPanelHeight} log={javaLog} running={javaRunning} options={javaOptions} debugState={javaDebugState} onConfigure={() => setShowRunConfigurationDialog(true)} onApplyChanges={applyJavaChanges} onInspect={(reference, start) => clientRef.current!.request("java.debug.variables", { reference, start })} onBuild={() => void runJavaAction("java.build")} onRun={() => void runJavaAction("java.run")} onDebug={() => void debugJava()} onStop={() => void stopJava()} onDebugCommand={(command) => void commandJavaDebugger(command)} onClear={() => setJavaLog("")} onResizeStart={beginJavaResize} onHeightChange={setJavaPanelHeight} />}
     {layout.panels.some((panel) => panel.type === "problems") && javaOptions && <ProblemsPanel height={problemsHeight} diagnostics={javaDiagnostics} checking={javaChecking} onRefresh={() => void checkJava()} onOpen={(diagnostic) => void openDiagnostic(diagnostic)} onResizeStart={beginProblemsResize} />}
     {layout.panels.some((panel) => panel.type === "gitlog") && <GitLogPanel client={clientRef.current!} height={gitLogHeight} onResizeStart={beginGitLogResize} onRepositoryChanged={() => { void Promise.all([refreshGit(), refreshTree()]); }} onMergeConflict={() => { void clientRef.current?.request("git.conflicts", {}).then((conflicts) => setGitConflictPath(conflicts.files[0]?.path ?? "")); }} />}

@@ -3,7 +3,7 @@ import { WebLinksAddon } from "@xterm/addon-web-links";
 import { Terminal } from "@xterm/xterm";
 import { ClipboardPaste, Copy, Pencil, Plus, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import { createTerminalOutput } from "./terminal-output";
+import { createTerminalOutput, terminalBufferText } from "./terminal-output";
 import type { CoreClient } from "./client";
 import type { TerminalGroup, TerminalTab } from "./model";
 import type { AppTheme } from "./theme";
@@ -17,6 +17,8 @@ type Props = {
   client: CoreClient;
   group: TerminalGroup;
   height: number;
+  visible?: boolean;
+  onActivity?(terminalId: string): void;
   onActivate(id: string): void;
   onCreate(): void;
   onClose(tab: TerminalTab): void;
@@ -30,16 +32,16 @@ type Props = {
   rootAliases?: Record<string, string>;
 };
 
-export function TerminalPanel({ theme, fontFamily, fontSize, lineHeight, client, group, height, onActivate, onCreate, onClose, onRename, onDuplicate, onMove, onRecoveryShown, onResizeStart, registerWriter, highlightedTerminalIds, rootAliases = {} }: Props) {
-  return <section className="terminal-panel" style={{ height }}>
+export function TerminalPanel({ theme, fontFamily, fontSize, lineHeight, client, group, height, visible = true, onActivity, onActivate, onCreate, onClose, onRename, onDuplicate, onMove, onRecoveryShown, onResizeStart, registerWriter, highlightedTerminalIds, rootAliases = {} }: Props) {
+  return <section className="terminal-panel" hidden={!visible} style={{ height, ...(!visible ? { display: "none" } : {}) }}>
     <div className="terminal-resize-handle" onPointerDown={onResizeStart} />
     <div className="terminal-tabs" role="tablist">
       {group.tabs.map((tab) => <TerminalTabButton key={tab.id} tab={tab} rootAlias={tab.rootId ? rootAliases[tab.rootId] : undefined} active={tab.id === group.activeTabId} highlighted={highlightedTerminalIds?.has(tab.terminalId)} onActivate={onActivate} onClose={onClose} onRename={onRename} onDuplicate={onDuplicate} onMove={onMove} />)}
       <button className="terminal-action" title="New terminal" onClick={onCreate}><Plus size={15} /></button>
     </div>
-    {group.tabs.filter((tab) => tab.id === group.activeTabId).map((tab) => <TerminalRecoveryNotice key={tab.id} tab={tab} onDismiss={() => onRecoveryShown?.(tab.id)} />)}
+    {group.tabs.filter((tab) => visible && tab.id === group.activeTabId).map((tab) => <TerminalRecoveryNotice key={tab.id} tab={tab} onDismiss={() => onRecoveryShown?.(tab.id)} />)}
     <div className="terminal-content">
-      {group.tabs.map((tab) => <TerminalView key={tab.id} theme={theme} fontFamily={fontFamily} fontSize={fontSize} lineHeight={lineHeight} client={client} tab={tab} active={tab.id === group.activeTabId} registerWriter={registerWriter} />)}
+      {group.tabs.map((tab) => <TerminalView key={tab.id} theme={theme} fontFamily={fontFamily} fontSize={fontSize} lineHeight={lineHeight} client={client} tab={tab} active={visible && tab.id === group.activeTabId} onActivity={onActivity} registerWriter={registerWriter} />)}
     </div>
   </section>;
 }
@@ -113,10 +115,15 @@ export function TerminalRecoveryNotice({ tab, onDismiss }: { tab: TerminalTab; o
   return null;
 }
 
-function TerminalView({ theme, fontFamily, fontSize, lineHeight, client, tab, active, registerWriter }: { theme: AppTheme; fontFamily: string; fontSize: number; lineHeight: number; client: CoreClient; tab: TerminalTab; active: boolean; registerWriter: Props["registerWriter"] }) {
+function TerminalView({ theme, fontFamily, fontSize, lineHeight, client, tab, active, onActivity, registerWriter }: { theme: AppTheme; fontFamily: string; fontSize: number; lineHeight: number; client: CoreClient; tab: TerminalTab; active: boolean; onActivity?: Props["onActivity"]; registerWriter: Props["registerWriter"] }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<Terminal>();
   const fitRef = useRef<FitAddon>();
+  const outputRef = useRef<ReturnType<typeof createTerminalOutput>>();
+  const activeRef = useRef(active);
+  activeRef.current = active;
+  const onActivityRef = useRef(onActivity);
+  onActivityRef.current = onActivity;
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number }>();
 
   const paste = (text: string) => {
@@ -154,7 +161,8 @@ function TerminalView({ theme, fontFamily, fontSize, lineHeight, client, tab, ac
     container.addEventListener("paste", handlePaste, true);
     terminalRef.current = terminal;
     fitRef.current = fit;
-    const output = createTerminalOutput(terminal);
+    const output = createTerminalOutput(terminal, { text: () => terminalBufferText(terminal), isViewed: () => activeRef.current, onChange: () => onActivityRef.current?.(tab.terminalId) });
+    outputRef.current = output;
     const input = terminal.onData((data) => { if (tab.status === "running" && !output.isHistoricalReply()) void client.request("terminal.input", { terminalId: tab.terminalId, data }); });
     registerWriter(tab.terminalId, output.write);
     const observer = new ResizeObserver(() => {
@@ -165,8 +173,9 @@ function TerminalView({ theme, fontFamily, fontSize, lineHeight, client, tab, ac
     observer.observe(container);
     const focusOwner = document.activeElement;
     requestAnimationFrame(() => {
+      if (!container.offsetParent) return;
       fit.fit();
-      if (active) focusTerminalIfUnchanged(focusOwner, () => terminal.focus());
+      if (activeRef.current) focusTerminalIfUnchanged(focusOwner, () => terminal.focus());
     });
     return () => {
       container.removeEventListener("paste", handlePaste, true);
@@ -176,8 +185,10 @@ function TerminalView({ theme, fontFamily, fontSize, lineHeight, client, tab, ac
 
   useEffect(() => {
     if (!active) return;
+    outputRef.current?.acknowledge();
     const focusOwner = document.activeElement;
     requestAnimationFrame(() => {
+      if (!activeRef.current || !containerRef.current?.offsetParent) return;
       fitRef.current?.fit();
       focusTerminalIfUnchanged(focusOwner, () => terminalRef.current?.focus());
     });
