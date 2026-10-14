@@ -29,6 +29,7 @@ const eventPayloadSchemas = {
   "timers.changed": { rootId: optional(string) },
   "workflow.document": { rootId: string, runId: string, blockId: string, title: string, content: string },
   "filesystem.changed": { rootId: string, paths: array(string), overflow: boolean, health: choice("healthy", "degraded"), message: optional(string) },
+  "terminal.opened": { rootId: string, workspace: string, session: shape({ terminalId: string, status: choice("running", "exited"), output: string, exitCode: optional(number), displayName: optional(string) }) },
   "terminal.output": { rootId: string, terminalId: string, data: string },
   "terminal.exit": { rootId: string, terminalId: string, exitCode: number },
   "git.changed": { rootId: string },

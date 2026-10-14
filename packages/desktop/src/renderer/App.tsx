@@ -730,7 +730,11 @@ export function App() {
       } catch (error) { ensureCurrent(); tabs = orderPinnedTabs([...tabs, ...carriedDocuments]); activeDocumentId = carriedDocuments.find((tab) => tab.id === existingGroup?.activeTabId)?.id; setStatusMessage(error instanceof Error ? error.message : "Could not restore workflow documents"); }
     }
     const activeTabId = activeDocumentId ?? tabs.find((tab) => tab.type === "file" && tab.path === options.activeFile)?.id ?? tabs[0]?.id;
-    const restoredTerminals = await Promise.all((options.terminal?.tabs ?? []).map(async (saved, index) => {
+    const discovered = (await client.request("terminal.list", {})).terminals.filter((session) => session.displayName);
+    ensureCurrent();
+    const savedTerminals = [...(options.terminal?.tabs ?? [])];
+    for (const session of discovered) if (!savedTerminals.some((tab) => tab.terminalId === session.terminalId)) savedTerminals.push({ terminalId: session.terminalId, displayName: session.displayName! });
+    const restoredTerminals = await Promise.all(savedTerminals.map(async (saved, index) => {
       try {
         const { session, reattached } = await restoreTerminal(client, saved.terminalId, recovery);
         ensureCurrent();
@@ -752,7 +756,7 @@ export function App() {
       || ((savedBottomPanel === "java" || savedBottomPanel === "problems") && Boolean(options.javaProject));
     const bottomPanel: BottomPanelType | undefined = validBottomPanel
       ? savedBottomPanel as BottomPanelType
-      : savedBottomPanel === null && options.terminal?.panelOpen && restoredTerminals.length > 0 ? "terminal" : undefined;
+      : savedBottomPanel === null && (options.terminal?.panelOpen || discovered.length > 0) && restoredTerminals.length > 0 ? "terminal" : undefined;
     setLayout((layout) => current() ? ({
       ...layout,
       panels: recovery ? layout.panels : [...layout.panels.filter((panel) => !["terminal", "java", "problems", "gitlog"].includes(panel.type)), ...(bottomPanel ? [{ id: bottomPanel, type: bottomPanel }] : [])],
@@ -867,6 +871,10 @@ export function App() {
         const changed = new Set(event.payload.paths); updateGroup((tabs, active) => ({ tabs: tabs.map((tab) => tab.rootId === event.payload.rootId && tab.type === "file" && (event.payload.overflow || changed.has(tab.path)) ? { ...tab, error: "Changed in its remote root; activate this tab to reconcile" } : tab), activeTabId: active })); return;
       }
       if (event.payload.rootId !== client.getRoot() && event.type !== "terminal.output" && event.type !== "terminal.exit") return;
+      if (event.type === "terminal.opened") {
+        if (event.payload.workspace === activeWorkspaceRef.current && event.payload.session.displayName) void openTerminalReference(event.payload.session.terminalId, event.payload.session.displayName).catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : "Could not open workflow terminal"));
+        return;
+      }
       if (event.type === "terminal.output") {
         terminalBuffers.current.set(event.payload.terminalId, ((terminalBuffers.current.get(event.payload.terminalId) ?? "") + event.payload.data).slice(-1_000_000));
         const writer = terminalWriters.current.get(event.payload.terminalId);
@@ -2022,7 +2030,7 @@ export function App() {
       const attached = await clientRef.current.request("terminal.attach", { terminalId });
       if (attached.state === "stale") { setStatusMessage("That terminal is no longer available."); return false; }
       terminalBuffers.current.set(attached.session.terminalId, attached.session.output);
-      updateTerminalGroup((current) => { const id = crypto.randomUUID(); return { ...current, tabs: [...current.tabs, { id, rootId: selectedRootIdRef.current, terminalId: attached.session.terminalId, title, status: attached.session.status === "running" ? "running" : "exited", ...(attached.session.exitCode === undefined ? {} : { exitCode: attached.session.exitCode }), ...(attached.session.status === "running" ? { recovery: "reattached" as const } : {}) }], activeTabId: id }; });
+      updateTerminalGroup((current) => { const alreadyOpen = current.tabs.find((tab) => tab.terminalId === attached.session.terminalId); if (alreadyOpen) return { ...current, activeTabId: alreadyOpen.id }; const id = crypto.randomUUID(); return { ...current, tabs: [...current.tabs, { id, rootId: selectedRootIdRef.current, terminalId: attached.session.terminalId, title, status: attached.session.status === "running" ? "running" : "exited", ...(attached.session.exitCode === undefined ? {} : { exitCode: attached.session.exitCode }), ...(attached.session.status === "running" ? { recovery: "reattached" as const } : {}) }], activeTabId: id }; });
     } else updateTerminalGroup((current) => ({ ...current, activeTabId: existing.id }));
     setLayout((current) => ({ ...current, panels: [...current.panels.filter((panel) => !["terminal", "java", "problems", "gitlog"].includes(panel.type)), { id: "terminal", type: "terminal" }] }));
     return true;

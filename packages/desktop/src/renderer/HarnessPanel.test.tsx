@@ -118,6 +118,19 @@ describe("HarnessPanel", () => {
     expect(onSave.mock.calls[0]?.[0].blocks[0]).toMatchObject({ type: "chatbox", prompt: "" });
   });
 
+  it("adds and saves Terminal Control without AI configuration", async () => {
+    const harness: HarnessDefinition = { id: "terminal", name: "Terminals", version: 1, createdAt: "now", updatedAt: "now", blocks: [], edges: [] };
+    const onSave = vi.fn(async (definition) => definition);
+    renderEditor(<HarnessPanel harnesses={[harness]} runs={[]} providers={[]} agents={[]} onCreate={vi.fn()} onSave={onSave} onDelete={vi.fn()} onRun={vi.fn()} onCancelRun={vi.fn()} onError={vi.fn()} />);
+    fireEvent.change(screen.getByLabelText("Add block type"), { target: { value: "terminal_control" } });
+    expect(screen.queryByLabelText("AI model")).toBeNull();
+    expect(screen.queryByLabelText("Block prompt")).toBeNull();
+    expect(screen.getByText(/Supply JSON input/)).toBeTruthy();
+    fireEvent.click(screen.getByTitle("Save workflow"));
+    await waitFor(() => expect(onSave).toHaveBeenCalled());
+    expect(onSave.mock.calls[0]?.[0].blocks[0]).toMatchObject({ type: "terminal_control", prompt: "" });
+  });
+
   it("configures and saves a long-lived app block", async () => {
     const harness: HarnessDefinition = { id: "flow", name: "Apps", version: 1, createdAt: "now", updatedAt: "now", blocks: [], edges: [] };
     const onSave = vi.fn(async (definition) => definition);

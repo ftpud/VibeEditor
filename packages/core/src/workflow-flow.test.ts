@@ -7,6 +7,8 @@ import { HarnessRunner } from "./harness-runner.js";
 import { HarnessStore } from "./harnesses.js";
 import { WorkflowAppService } from "./workflow-app.js";
 import { executeFlowScript } from "./workflow-script.js";
+import { executeTerminalControl } from "./workflow-terminal.js";
+import { TerminalSessionHost } from "./process-manager.js";
 import { validateHarness } from "./harness-graph.js";
 
 const block = (id: string, type: HarnessBlock["type"], extra: Partial<HarnessBlock> = {}): HarnessBlock => ({ id, type, label: id, prompt: "{{input}}", position: { x: 0, y: 0 }, ...extra });
@@ -23,6 +25,25 @@ async function setup(blocks: HarnessBlock[], edges: HarnessEdge[], concurrency =
 }
 
 describe("typed workflows", () => {
+  it("exposes Terminal Control through Use connections and forwards structured arguments", async () => {
+    const { runner, definition, store, finished } = await setup([block("agent", "ai"), block("terminals", "terminal_control", { prompt: "" })], [edge("agent", "terminals", "use")]);
+    expect((await store.read(definition.id)).blocks[1]?.type).toBe("terminal_control");
+    const write = vi.fn();
+    const host = new TerminalSessionHost(() => {}, () => ({ write, resize: vi.fn(), kill: vi.fn(), onData: vi.fn(), onExit: vi.fn() }));
+    await runner.start(definition.id, "control terminals", async (current, input, runtime) => {
+      if (current.type === "terminal_control") return executeTerminalControl(input, "/task", host, runtime.assertActive);
+      expect(input).toContain("Control terminals in this task workspace");
+      const opened = await runner.flowTool(runtime.runId, current.id, "workflow_use_block", { block_id: "terminals", action: "open", name: "Server" }) as { terminal: { terminalId: string; displayName: string } };
+      expect(opened.terminal.displayName).toBe("Server");
+      expect(await runner.flowTool(runtime.runId, current.id, "workflow_use_block", { block_id: "terminals", action: "list" })).toMatchObject({ terminal: { terminals: [expect.objectContaining({ terminalId: opened.terminal.terminalId })] } });
+      await runner.flowTool(runtime.runId, current.id, "workflow_use_block", { block_id: "terminals", action: "write", terminal_id: opened.terminal.terminalId, data: "echo ready\n" });
+      expect(write).toHaveBeenCalledWith("echo ready\n");
+      return session("controlled");
+    });
+    expect((await finished()).status).toBe("succeeded");
+    host.closeAll();
+  });
+
   it("steers the live Chatbox session without waiting for its active turn", async () => {
     const { runner, definition, finished } = await setup([block("chat", "chatbox")], []);
     let release!: () => void;

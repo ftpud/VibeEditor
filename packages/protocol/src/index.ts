@@ -153,7 +153,7 @@ export type FileColor = "red" | "orange" | "yellow" | "green" | "blue" | "purple
 /** Durable terminal-tab metadata. The display name is UI state, not a PTY identity. */
 export type WorkspaceWorkflowDocument = { runId: string; blockId: string; position: number; pinned?: boolean; markdownMode?: "edit" | "preview"; active?: boolean };
 export type WorkspaceTerminalOptions = { tabs: { displayName: string; terminalId?: string }[]; activeTabIndex?: number; panelOpen: boolean };
-export type TerminalSessionSnapshot = { terminalId: string; status: "running" | "exited"; output: string; exitCode?: number };
+export type TerminalSessionSnapshot = { terminalId: string; status: "running" | "exited"; output: string; exitCode?: number; displayName?: string };
 /** Resolution is always against the currently selected workspace. A stale ID means Core no longer owns that process. */
 export type TerminalAttachResult = { state: "available"; session: TerminalSessionSnapshot } | { state: "stale"; reason: "session-unavailable" };
 export type WorkspaceTask = { id: string; name: string; branch: string; baseBranch: string; status: "active" | "finished"; archived: boolean };
@@ -201,7 +201,7 @@ export type AiContinuationTimer = { id: string; workspace: string; provider: AiP
 export type HarnessAppAction = "start" | "status" | "kill" | "tail";
 export type HarnessAppState = { name: string; status: "not_found" | "starting" | "running" | "descendants-running" | "exited"; output: string; pid?: number; exitCode?: number | null; signal?: string | null };
 export type HarnessAppOptions = { action?: HarnessAppAction; actions?: HarnessAppAction[]; name: string; lines?: number };
-export type HarnessBlock = { id: string; type: "ai" | "chatbox" | "skill" | "task_controls" | "text" | "timer" | "user_prompt" | "yes_no_prompt" | "markdown" | "script" | "run_app" | "start_button" | "start_input" | "prompt" | "task" | "review" | "verification"; seconds?: number; command?: string; app?: HarnessAppOptions; label: string; description?: string; skillId?: string; prompt: string; inputSchema?: HarnessDataSchema; outputSchema?: HarnessDataSchema; provider?: AiProvider; model?: string; reasoning?: string; agent?: AgentFileReference; watchdog?: boolean; review?: HarnessReview; verification?: HarnessVerification; join?: "all" | "any"; routing?: "all" | "ai"; position: { x: number; y: number } };
+export type HarnessBlock = { id: string; type: "ai" | "chatbox" | "skill" | "task_controls" | "terminal_control" | "text" | "timer" | "user_prompt" | "yes_no_prompt" | "markdown" | "script" | "run_app" | "start_button" | "start_input" | "prompt" | "task" | "review" | "verification"; seconds?: number; command?: string; app?: HarnessAppOptions; label: string; description?: string; skillId?: string; prompt: string; inputSchema?: HarnessDataSchema; outputSchema?: HarnessDataSchema; provider?: AiProvider; model?: string; reasoning?: string; agent?: AgentFileReference; watchdog?: boolean; review?: HarnessReview; verification?: HarnessVerification; join?: "all" | "any"; routing?: "all" | "ai"; position: { x: number; y: number } };
 export type HarnessEdge = { timeoutMs?: number; type?: "use" | "follow" | "path"; id: string; from: string; to: string; label?: string; loop?: boolean; execution?: "sync" | "async" };
 export type HarnessRetryPolicy = { maxAttempts?: number };
 export type HarnessSettings = { concurrency?: number; maxActiveRuns?: number; maxBlockAttempts?: number; maxStackSize?: number; maxLoopCount?: number; maxChildTasks?: number; promptLimitChars?: number; retry?: HarnessRetryPolicy; outputLimitChars?: number; logLimitEntries?: number; maxRunDurationMs?: number; tokenBudget?: number };
@@ -494,8 +494,9 @@ export type ProtocolOperations = {
     payload: { previewId: string; confirmed: boolean };
     result: SearchReplaceApplyResult;
   };
+  "terminal.list": { payload: Record<string, never>; result: { terminals: TerminalSessionSnapshot[] } };
   "terminal.create": {
-    payload: { cols: number; rows: number };
+    payload: { cols: number; rows: number; displayName?: string };
     result: TerminalSessionSnapshot;
   };
   "terminal.attach": {
@@ -708,6 +709,8 @@ export type FilesystemChangedEvent = {
   payload: { rootId: WorkspaceRootId; paths: string[]; overflow: boolean; health: "healthy" | "degraded"; message?: string };
 };
 
+export type TerminalOpenedEvent = { type: "terminal.opened"; payload: { rootId: WorkspaceRootId; workspace: string; session: TerminalSessionSnapshot } };
+
 export type TerminalOutputEvent = {
   type: "terminal.output";
   payload: { rootId: WorkspaceRootId; terminalId: string; data: string };
@@ -736,7 +739,7 @@ export type HarnessChangedEvent = { type: "harness.changed"; payload: { rootId: 
 export type WorkflowDocumentEvent = { type: "workflow.document"; payload: { rootId: WorkspaceRootId; runId: string; blockId: string; title: string; content: string } };
 export type ConfigurationChangedEvent = { type: "configuration.changed"; payload: { rootId: WorkspaceRootId; resource: string; global: boolean } };
 export type ProcessesChangedEvent = { type: "processes.changed"; payload: Record<string, never> };
-export type ServerEvent = ProcessesChangedEvent | ConfigurationChangedEvent | TimersChangedEvent | WorkflowDocumentEvent | FilesystemChangedEvent | TerminalOutputEvent | TerminalExitEvent | GitChangedEvent | TaskGitChangedEvent | JavaSemanticChangedEvent | JavaOutputEvent | JavaExitEvent | JavaDebugStateEvent | AiChangedEvent | TasksChangedEvent | CommitMessageChangedEvent | RunConfigChangedEvent | HarnessChangedEvent;
+export type ServerEvent = ProcessesChangedEvent | ConfigurationChangedEvent | TimersChangedEvent | WorkflowDocumentEvent | FilesystemChangedEvent | TerminalOpenedEvent | TerminalOutputEvent | TerminalExitEvent | GitChangedEvent | TaskGitChangedEvent | JavaSemanticChangedEvent | JavaOutputEvent | JavaExitEvent | JavaDebugStateEvent | AiChangedEvent | TasksChangedEvent | CommitMessageChangedEvent | RunConfigChangedEvent | HarnessChangedEvent;
 
 /**
  * Every request the core accepts. Declaring it as a fully keyed record makes TypeScript
@@ -860,6 +863,7 @@ const requestTypeRegistry: Record<RequestType, true> = {
   "filesystem.readRootFile": true,
   "filesystem.replacePreview": true,
   "filesystem.replaceApply": true,
+  "terminal.list": true,
   "terminal.create": true,
   "terminal.attach": true,
   "terminal.input": true,

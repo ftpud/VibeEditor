@@ -1,0 +1,48 @@
+import os from "node:os";
+import path from "node:path";
+import { mkdtemp, realpath, rm } from "node:fs/promises";
+import { expect, it, vi } from "vitest";
+import type { HarnessBlock } from "@remote-ide/protocol";
+import { TerminalSessionHost } from "./process-manager.js";
+import { executeTerminalControl } from "./workflow-terminal.js";
+import { WorkflowAppService } from "./workflow-app.js";
+
+it("opens named task terminals, lists, writes and reads while rejecting other workspaces", () => {
+  let data: ((value: string) => void) | undefined;
+  const write = vi.fn();
+  const events = vi.fn();
+  const factory = vi.fn(() => ({ write, resize: vi.fn(), kill: vi.fn(), onData: (callback: (value: string) => void) => { data = callback; return { dispose() {} }; }, onExit: vi.fn() }));
+  const host = new TerminalSessionHost(events, factory);
+  const call = (args: unknown, workspace = "/task") => JSON.parse(executeTerminalControl(JSON.stringify(args), workspace, host, () => {}).messages[0]!.text);
+  const opened = call({ action: "open", name: "Dev server" });
+  expect(factory).toHaveBeenCalledWith("/task", 100, 30);
+  expect(events).toHaveBeenCalledWith(expect.objectContaining({ type: "opened", workspace: "/task", session: expect.objectContaining({ displayName: "Dev server" }) }));
+  expect(call({ action: "list" }).terminals).toEqual([expect.objectContaining({ terminalId: opened.terminalId, displayName: "Dev server" })]);
+  expect(call({ action: "list" }, "/another").terminals).toEqual([]);
+  expect(() => call({ action: "write", terminal_id: opened.terminalId, data: "secret" }, "/another")).toThrow("not found");
+  call({ action: "write", terminal_id: opened.terminalId, data: "npm run dev\n" });
+  expect(write).toHaveBeenCalledWith("npm run dev\n");
+  data!("first\r\nsecond\r\nthird");
+  expect(call({ action: "read", terminal_id: opened.terminalId, lines: 2 }).output).toBe("second\nthird");
+  expect(() => call({ action: "read", terminal_id: opened.terminalId, lines: 0 })).toThrow("lines");
+  expect(() => call({ action: "open", name: "" })).toThrow("name");
+  expect(() => executeTerminalControl('{"action":"open","name":"blocked"}', "/task", host, () => { throw new Error("cancelled"); })).toThrow("cancelled");
+  expect(factory).toHaveBeenCalledTimes(1);
+  host.closeAll();
+});
+
+it("runs apps in a writable PTY in the task workspace and exposes their named terminal", async () => {
+  const workspace = await realpath(await mkdtemp(path.join(os.tmpdir(), "terminal-app-")));
+  const host = new TerminalSessionHost(() => {});
+  const apps = new WorkflowAppService(host);
+  try {
+    const block: HarnessBlock = { id: "app", type: "run_app", label: "App", prompt: "", position: { x: 0, y: 0 }, app: { name: "Interactive", actions: ["start"] }, command: 'test -t 0 && test -t 1 && printf "PTY_READY\\n"; read -r answer; printf "ANSWER:%s|%s\\n" "$answer" "$PWD"; exec sleep 300' };
+    await apps.execute(block, "", workspace, () => {});
+    const terminal = host.list(workspace)[0]!;
+    expect(terminal.displayName).toBe("Interactive");
+    await vi.waitFor(() => expect(host.attach(workspace, terminal.terminalId)?.output).toContain("PTY_READY"));
+    executeTerminalControl(JSON.stringify({ action: "write", terminal_id: terminal.terminalId, data: "hello\n" }), workspace, host, () => {});
+    await vi.waitFor(() => expect(apps.read("Interactive", workspace).output).toContain(`ANSWER:hello|${workspace}`));
+    expect(host.list("/another")).toEqual([]);
+  } finally { await apps.closeAll(); host.closeAll(); await rm(workspace, { recursive: true, force: true }); }
+});

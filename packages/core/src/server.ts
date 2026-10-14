@@ -1,3 +1,4 @@
+import { executeTerminalControl } from "./workflow-terminal.js";
 import { RequestAdmission, requestAdmissionLimit, type RequestAdmissionOptions } from "./request-admission.js";
 import { configureWebSocketOutput, sendWebSocketData, sendWebSocketPong, websocketOutboundLimits, type WebSocketOutboundOptions } from "./websocket-output.js";
 export { sendWebSocketData } from "./websocket-output.js";
@@ -197,9 +198,19 @@ export async function createServer(host: string, port: number, workspacePath: st
   const terminalOwners = new Map<string, { socket: WebSocket; rootId: string; workspace: string }>();
   const processesChanged = () => { const encoded = JSON.stringify({ type: "processes.changed", payload: {} } satisfies ServerEvent); for (const socket of activeSessions) sendWebSocketData(socket, encoded); };
   managedProcesses.on("changed", processesChanged); managedProcesses.start();
-  const workflowApps = new WorkflowAppService();
   let runConfigs: RunConfigService;
   const terminalHost = new TerminalSessionHost((event) => {
+    if (event.type === "opened") {
+      void ownerRootId(event.workspace).then((rootId) => {
+        if (!rootId) return;
+        const message = JSON.stringify({ type: "terminal.opened", payload: { rootId, workspace: event.workspace, session: event.session } } satisfies ServerEvent);
+        for (const socket of activeSessions) {
+          const subscription = terminalSubscriptions.get(socket);
+          if (subscription && path.resolve(subscription.workspace) === event.workspace && subscription.rootId === rootId) sendWebSocketData(socket, message);
+        }
+      }).catch((error) => console.error("[core] Could not announce terminal", error));
+      return;
+    }
     runConfigs?.onTerminalEvent(event);
     const owner = terminalOwners.get(event.terminalId);
     if (owner && owner.workspace === event.workspace) {
@@ -209,6 +220,7 @@ export async function createServer(host: string, port: number, workspacePath: st
       sendWebSocketData(owner.socket, JSON.stringify(message));
     }
   });
+  const workflowApps = new WorkflowAppService(terminalHost);
   runConfigs = new RunConfigService(terminalHost, (changedWorkspace) => {
     void Promise.all([runConfigs.list(changedWorkspace), ownerRootId(changedWorkspace)]).then(([configs, rootId]) => { if (!rootId) return; const encoded = JSON.stringify({ type: "runConfig.changed", payload: { rootId, configs } } satisfies ServerEvent); for (const socket of activeSessions) sendWebSocketData(socket, encoded); });
   }, rootWorkspace);
@@ -288,6 +300,7 @@ export async function createServer(host: string, port: number, workspacePath: st
       const workspace = (await resolveWorkflowBinding(run, undefined, { tasks, rootWorkspace, workspacePath: rootWorkspace })).workspace;
       if (block.type === "skill" && block.skillId) return executeWorkflowSkill(block, new SkillsStore(undefined, rootWorkspace), workspace, runtime);
       if (block.type === "script") return executeFlowScript(block, prompt, workspace, runtime.assertActive, { rootWorkspace, workflowRunId: runtime.runId, workflowBlockId: runtime.blockId });
+      if (block.type === "terminal_control") return executeTerminalControl(prompt, workspace, workflowApps.terminals, runtime.assertActive);
       if (block.type === "run_app") return workflowApps.execute(block, prompt, workspace, runtime.assertActive, { rootWorkspace, workflowRunId: runtime.runId, workflowBlockId: runtime.blockId });
       if (block.type === "task_controls") return executeTaskControls(block, prompt, { acp, tasks, agents, harnessRunner: recoveryRunner, aiTimers, rootWorkspace, bridgeWorkspace: recoveryBridgeWorkspace, workspacePath: workspace, defaultProvider: "codex" }, runtime);
       if (block.type === "verification") return runWorkflowVerification(block, workspace, recoveryRunner, runtime);
@@ -954,7 +967,7 @@ async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStor
       const block = definition.blocks.find((block) => block.id === blockId);
       if (block?.type !== "run_app" || !block.app) throw new CoreError("INVALID_REQUEST", "Selected block is not a Run App");
       const appWorkspace = run ? (await resolveWorkflowBinding(run, undefined, { tasks, rootWorkspace, workspacePath })).workspace : await availableWorkflowWorkspace(workspacePath);
-      if (request.type === "harnesses.app.terminal") return workflowApps.openTerminal(block.app.name, appWorkspace, workspacePath, terminalHost);
+      if (request.type === "harnesses.app.terminal") return workflowApps.openTerminal(block.app.name, appWorkspace, appWorkspace, terminalHost);
       if (request.type === "harnesses.app.read") return { app: workflowApps.read(block.app.name, appWorkspace) };
       await workflowApps.execute({ ...block, app: { ...block.app, actions: ["kill"] } }, '{"action":"kill"}', appWorkspace, () => {});
       return {};
@@ -1032,8 +1045,9 @@ async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStor
       if (typeof request.payload.previewId !== "string" || typeof request.payload.confirmed !== "boolean") throw new CoreError("INVALID_REQUEST", "previewId and confirmed are required");
       return search.applyReplace(request.payload.previewId, request.payload.confirmed);
     }
+    case "terminal.list": return { terminals: terminalHost.list(workspacePath) };
     case "terminal.create": {
-      return terminalHost.create(workspacePath, request.payload.cols, request.payload.rows);
+      return terminalHost.create(workspacePath, request.payload.cols, request.payload.rows, workspacePath, request.payload.displayName);
     }
     case "terminal.attach": {
       if (typeof request.payload.terminalId !== "string") throw new CoreError("INVALID_REQUEST", "terminalId must be a string");
@@ -1240,6 +1254,7 @@ export async function startWorkflow(input: ProtocolOperations["harnesses.run"]["
       await validateWorkflowBinding(binding, tasks, rootWorkspace);
       if (block.type === "skill" && block.skillId) return executeWorkflowSkill(block, new SkillsStore(undefined, rootWorkspace), workspacePath, runtime);
       if (block.type === "script") return executeFlowScript(block, prompt, workspacePath, runtime.assertActive, { rootWorkspace, workflowRunId: runtime.runId, workflowBlockId: runtime.blockId });
+      if (block.type === "terminal_control") return executeTerminalControl(prompt, workspacePath, workflowApps.terminals, runtime.assertActive);
       if (block.type === "run_app") return workflowApps.execute(block, prompt, workspacePath, runtime.assertActive, { rootWorkspace, workflowRunId: runtime.runId, workflowBlockId: runtime.blockId });
       if (block.type === "task_controls") return executeTaskControls(block, prompt, { ...context, workspacePath, defaultProvider: input.provider ?? "codex" }, runtime);
       if (block.type === "verification") return runWorkflowVerification(block, workspacePath, harnessRunner, runtime);
