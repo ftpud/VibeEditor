@@ -1,7 +1,20 @@
 import { describe, expect, it, vi } from "vitest";
-import { assertWorkflowModelAvailable, settleWorkflowSession } from "./server.js";
+import { assertWorkflowModelAvailable, settleWorkflowSession, workflowCapturesSnapshots } from "./server.js";
 import { WebSocket } from "ws";
 import { assertRequestRoot, assertRootRemovalAllowed, assertSessionChangeAllowed, LiveRootSelections, permissionTargetWorkspace, protocolHandshake, renameWorkspacePaths, rootRemovalBlocker, selectRootWorkspace, sendWebSocketData, transactionalRootSelection, WorkspaceWatchBatcher } from "./server.js";
+
+describe("workflow snapshot policy", () => {
+  it("skips use-connected helpers while retaining lead and follow-block snapshots", () => {
+    const run = { definition: { edges: [
+      { from: "lead", to: "helper", type: "use" },
+      { from: "lead", to: "review", type: "follow" }
+    ] } } as unknown as import("@remote-ide/protocol").HarnessRun;
+    expect(workflowCapturesSnapshots(run, "helper")).toBe(false);
+    expect(workflowCapturesSnapshots(run, "lead")).toBe(true);
+    expect(workflowCapturesSnapshots(run, "review")).toBe(true);
+    expect(workflowCapturesSnapshots(undefined, "lead")).toBe(true);
+  });
+});
 
 describe("protocol handshake", () => {
   it("rejects workflow models that are no longer available", async () => {

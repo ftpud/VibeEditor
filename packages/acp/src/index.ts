@@ -66,7 +66,11 @@ export type AiMcpServer =
 export type AiAgent = { name: string; description?: string; instructions: string; mcpServers?: string[] };
 export type AiAgentPreset = { scope: "global" | "local" | "workspace"; name: string };
 export type AiTaskSummary = { status: AiStatus; preview: string; additions: number; deletions: number; pendingPermission: boolean; waitingUntil?: string };
-export type AcpSendRequest = { prompt: string; content?: AiContentBlock[]; configuration: AiConfiguration; mcpServers?: AiMcpServer[]; agent?: AiAgent; agentPreset?: AiAgentPreset; skillIds?: string[] };
+export type AcpSendRequest = {
+  prompt: string; content?: AiContentBlock[]; configuration: AiConfiguration; mcpServers?: AiMcpServer[]; agent?: AiAgent; agentPreset?: AiAgentPreset; skillIds?: string[];
+  /** Core workspace snapshots. Inherits the live session's policy; new sessions default to true. */
+  captureSnapshots?: boolean;
+};
 
 /** Shared provider contract. Each provider owns its settings UI metadata. */
 export abstract class AcpProvider {

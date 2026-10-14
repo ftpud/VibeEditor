@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { mkdtemp, mkdir, readFile, writeFile, rename } from "node:fs/promises";
 import crypto from "node:crypto";
 import os from "node:os";
@@ -7,14 +7,14 @@ import { fileURLToPath } from "node:url";
 import type { AiConfiguration, AiModel, AiProviderDescriptor, AiSession } from "@remote-ide/acp";
 import { CodexSessionManager } from "./codex.js";
 import { CopilotSessionManager } from "./copilot.js";
-import { StdioAcpProvider } from "../stdio-provider.js";
+import { StdioAcpProvider, type AcpTurnObserver } from "../stdio-provider.js";
 import { SkillsStore } from "../../skills.js";
 import { AcpRegistry } from "../acp.js";
 
 const FAKE_AGENT = fileURLToPath(new URL("./fake-acp-agent.py", import.meta.url));
 
 class FakeProvider extends StdioAcpProvider {
-  constructor(onChanged: (workspace: string) => void, state: string, private readonly env: NodeJS.ProcessEnv = {}, projectRoot?: (workspace: string) => Promise<string>) { super(onChanged, state, undefined, projectRoot); }
+  constructor(onChanged: (workspace: string) => void, state: string, private readonly env: NodeJS.ProcessEnv = {}, projectRoot?: (workspace: string) => Promise<string>, turns?: AcpTurnObserver) { super(onChanged, state, turns, projectRoot); }
   readonly descriptor: AiProviderDescriptor = { id: "fake", name: "Fake ACP", description: "test", settings: { title: "t", description: "d", sections: [] }, options: [], capabilities: { models: true, usage: true, mcp: true, agents: true, contextWindow: true, skills: true } };
   protected command(_configuration: AiConfiguration) { return { command: "python3", args: [FAKE_AGENT], env: this.env }; }
   protected async fallbackModels(): Promise<AiModel[]> { return [{ id: "fallback", name: "Fallback", defaultReasoning: "medium", reasoningLevels: ["medium"] }]; }
@@ -314,6 +314,30 @@ describe("ACP integration", () => {
     expect(JSON.parse(codex["command"]({ webSearch: "default" }).env.CODEX_CONFIG as string)).toEqual({});
     expect(codex["command"]({ mode: "read-only" }).env.INITIAL_AGENT_MODE).toBe("read-only");
   });
+  it.each([false, true])("skips helper snapshots for sends and steering (live steering: %s) and preserves regular checkpoints", async (liveSteering) => {
+    const state = await mkdtemp(path.join(os.tmpdir(), "remote-ide-ai-snapshots-"));
+    const turns = { begin: vi.fn(async () => crypto.randomUUID()), complete: vi.fn(async () => {}) };
+    const provider = new FakeProvider(() => undefined, state, { FAKE_SLOW: "on", ...(liveSteering ? { FAKE_STEERING: "on" } : {}) }, undefined, turns);
+    const workspace = process.cwd();
+    try {
+      await provider.startFreshSession(workspace, { prompt: "helper assignment", configuration: { model: "model-a" }, captureSnapshots: false });
+      await provider.steer(workspace, "helper steering");
+      const helper = await settle(provider, workspace);
+      expect(helper.messages.filter((message) => message.role === "user").map((message) => message.text)).toEqual(["helper assignment", "helper steering"]);
+      await provider.send(workspace, { prompt: "helper follow-up", configuration: {} });
+      await settle(provider, workspace);
+      expect(turns.begin).not.toHaveBeenCalled();
+      expect(turns.complete).not.toHaveBeenCalled();
+
+      await provider.startFreshSession(workspace, { prompt: "regular prompt", configuration: { model: "model-a" } });
+      await provider.steer(workspace, "regular steering");
+      await settle(provider, workspace);
+      expect(turns.begin).toHaveBeenCalledTimes(2);
+      expect(turns.complete).toHaveBeenCalled();
+      expect(turns.complete.mock.calls.flat()).toContain("completed");
+    } finally { await provider.clear(workspace); }
+  }, 15_000);
+
   it("queues mid-turn input for agents without steering and runs it next", async () => {
     const state = await mkdtemp(path.join(os.tmpdir(), "remote-ide-ai-queue-"));
     const provider = new FakeProvider(() => undefined, state);
