@@ -219,6 +219,38 @@ describe("typed workflows", () => {
     expect((await finished()).blocks[0]?.chatMessages?.at(-1)?.text).toBe("Resumed");
   });
 
+  it("waits for a completed Chatbox snapshot to publish before accepting its next turn", async () => {
+    const { runner, definition, store, finished } = await setup([block("first", "ai"), block("chat", "chatbox")], [], 2);
+    let releaseFirst!: () => void;
+    const firstTurn = new Promise<void>((resolve) => { releaseFirst = resolve; });
+    let releaseSave!: () => void;
+    const saving = new Promise<void>((resolve) => { releaseSave = resolve; });
+    let held = false;
+    const save = store.saveRun.bind(store);
+    vi.spyOn(store, "saveRun").mockImplementation(async (snapshot) => {
+      if (!held && snapshot.blocks.find((item) => item.blockId === "chat")?.status === "succeeded") {
+        held = true; await saving;
+      }
+      await save(snapshot);
+    });
+    const dispatch = async (target: HarnessBlock) => {
+      if (target.id === "first") await firstTurn;
+      return session("First reply");
+    };
+    const append = vi.fn(async () => session("Follow-up reply"));
+    const run = await runner.start(definition.id, "Start", dispatch, "provider", append, "first");
+    try {
+      await vi.waitFor(async () => expect((await runner.readRun(run.id))?.blocks.find((item) => item.blockId === "chat")?.status).toBe("skipped"));
+      await runner.continueChat(run.id, "chat", "Hello", dispatch, "provider", append);
+      await vi.waitFor(() => expect(held).toBe(true));
+      const next = runner.continueChat(run.id, "chat", "Follow up", dispatch, "provider", append);
+      await Promise.resolve();
+      expect(append).not.toHaveBeenCalled();
+      releaseSave(); await next;
+    } finally { releaseSave(); releaseFirst(); }
+    expect((await finished()).status).toBe("succeeded");
+  });
+
   it.each(["chatbox", "ai"] as const)("admits an idle Chatbox while a %s runs and preserves independent histories and tool delivery", async (firstType) => {
     const { runner, definition, store, finished } = await setup([block("first", firstType), block("second", "chatbox"), block("tool", "text", { prompt: "Tool: {{input}}" })], [edge("second", "tool", "use")], 2);
     let release!: () => void;

@@ -44,8 +44,14 @@ it("refreshes only the requested run without transferring historical output", as
     await request("protocol.handshake", { compatibility: protocolCompatibility });
     rootId = (await request("workspace.roots", {})).selectedRootId;
     expect((await request("harnesses.runs", {})).runs).toHaveLength(2);
+    const summaries = await request("harnesses.runs", { summary: true });
+    expect(summaries.runs).toHaveLength(2);
+    expect(summaries.runs.every((run) => run.summary === true)).toBe(true);
+    expect(JSON.stringify(summaries).length).toBeLessThan(1500);
+    expect(summaries.runs.find((run) => run.id === "history")?.blocks).toEqual([{ blockId: "old", status: "succeeded" }]);
     const result = await request("harnesses.runs", { runId: "current" });
     expect(result.runs).toEqual([current]);
+    expect((await request("harnesses.runs", { runId: "history" })).runs[0]?.blocks[0]?.output?.length).toBe(500_000);
     expect(JSON.stringify(result).length).toBeLessThan(1000);
     expect((await request("harnesses.runs", { runId: "missing" })).runs).toEqual([]);
     expect((await request("harnesses.runs", { runId: "current", harnessId: "other" })).runs).toEqual([]);

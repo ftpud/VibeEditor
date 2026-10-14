@@ -61,7 +61,7 @@ function stamp(session: AiSession): number { return Date.parse(session.updatedAt
 /** Everything the session picker needs to label a conversation, without its transcript. */
 function summarize(session: AiSession): AiSession {
   const first = session.messages?.find((message) => message.role === "user");
-  return { ...session, pendingPermission: undefined, availableCommands: undefined, availableOptions: undefined, messages: first ? [first] : [] };
+  return { ...session, pendingPermission: undefined, availableCommands: undefined, availableOptions: undefined, messages: first ? [{ id: first.id, role: first.role, text: first.text.slice(0, 2000), timestamp: first.timestamp }] : [] };
 }
 
 const MODEL_CACHE_MS = 5 * 60_000;
@@ -465,18 +465,37 @@ export abstract class StdioAcpProvider extends AcpProvider {
     const modified = await this.archiveStamp(workspace);
     const cached = this.archiveIndex.get(workspace);
     if (cached && cached.at === modified) return cached.sessions;
+    try {
+      const saved = JSON.parse(await readFile(`${directory}.index.json`, "utf8"));
+      if (saved.version === 1 && saved.at === modified && Array.isArray(saved.sessions) && saved.sessions.every((entry: AiSession) => entry && typeof entry.id === "string" && Array.isArray(entry.messages) && entry.messages.length <= 1)) {
+        this.archiveIndex.set(workspace, { at: modified, sessions: saved.sessions });
+        return saved.sessions;
+      }
+    } catch { /* A stale or damaged index is rebuilt from archived transcripts. */ }
     let names: string[] = [];
     try { names = await readdir(directory); } catch { this.archiveIndex.set(workspace, { at: modified, sessions: [] }); return []; }
     const sessions = await Promise.all(names.filter((name) => name.endsWith(".json")).map(async (name) => {
       try { return summarize(JSON.parse(await readFile(path.join(directory, name), "utf8")) as AiSession); } catch { return undefined; }
     }));
     const index = sessions.filter((session): session is AiSession => Boolean(session?.id)).sort((left, right) => stamp(right) - stamp(left));
-    this.archiveIndex.set(workspace, { at: modified, sessions: index });
+    await this.cacheIndex(workspace, index, modified);
     return index;
   }
 
   private async archiveStamp(workspace: string): Promise<number> { return stat(this.archiveDirectory(workspace)).then((stats) => stats.mtimeMs).catch(() => 0); }
-  private async cacheIndex(workspace: string, sessions: AiSession[]): Promise<void> { this.archiveIndex.set(workspace, { at: await this.archiveStamp(workspace), sessions }); }
+  private async cacheIndex(workspace: string, sessions: AiSession[], capturedStamp?: number): Promise<void> {
+    const at = capturedStamp ?? await this.archiveStamp(workspace);
+    this.archiveIndex.set(workspace, { at, sessions });
+    // Keep the index beside the archive directory so writing it does not change
+    // the directory timestamp used to detect changes by another Core process.
+    const file = `${this.archiveDirectory(workspace)}.index.json`;
+    const temporary = `${file}.${crypto.randomUUID()}.tmp`;
+    try {
+      await writeFile(temporary, JSON.stringify({ version: 1, at, sessions }));
+      await rename(temporary, file);
+    } catch { /* Derived metadata is optional; transcripts remain authoritative. */ }
+    finally { await rm(temporary, { force: true }).catch(() => {}); }
+  }
 
   private async readArchived(workspace: string, sessionId: string): Promise<AiSession | undefined> {
     try {

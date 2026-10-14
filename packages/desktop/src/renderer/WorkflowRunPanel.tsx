@@ -4,7 +4,7 @@ import type { HarnessAppState, HarnessBlock, HarnessDefinition, HarnessRun } fro
 import { BlockRunDetails, PauseResolution, WorkflowMessage, type HarnessPanelProps } from "./HarnessPanel";
 import { useWorkflowTraces } from "./workflow-tracing";
 
-type Props = Pick<HarnessPanelProps, "harnesses" | "runs" | "diagnostics" | "onRun" | "onChat" | "onValidate" | "onCancelRun" | "onKillApp" | "onOpenAppTerminal" | "onSteerChat" | "onReadApp" | "onResolvePermission" | "onAnswerQuestion" | "onResumePause" | "onRetryPause" | "onCancelPause" | "onError">;
+type Props = Pick<HarnessPanelProps, "harnesses" | "runs" | "diagnostics" | "onReadRun" | "onRun" | "onChat" | "onValidate" | "onCancelRun" | "onKillApp" | "onOpenAppTerminal" | "onSteerChat" | "onReadApp" | "onResolvePermission" | "onAnswerQuestion" | "onResumePause" | "onRetryPause" | "onCancelPause" | "onError">;
 const activeStatuses = new Set(["queued", "running", "waiting", "awaiting_permission", "awaiting_user_input", "waiting_timer", "retry_scheduled"]);
 const pauseStatuses = new Set(["awaiting_permission", "awaiting_user_input", "waiting_timer", "retry_scheduled"]);
 const statusLabel = (status: string) => status.replaceAll("_", " ");
@@ -39,6 +39,14 @@ function WorkflowCard({ workflow, expanded, hidden, onToggleExpanded, ...props }
   const [error, setError] = useState("");
   const runs = [...props.runs, ...(startedRun && !props.runs.some((run) => run.id === startedRun.id) ? [startedRun] : [])].sort((a, b) => Number(activeStatuses.has(b.status)) - Number(activeStatuses.has(a.status)) || b.createdAt.localeCompare(a.createdAt));
   const run = runs.find((item) => item.id === selectedRunId) ?? runs[0];
+  const [loadingError, setLoadingError] = useState("");
+  useEffect(() => {
+    if (collapsed || hidden || !run?.summary || !props.onReadRun) return;
+    let active = true;
+    setLoadingError("");
+    void props.onReadRun(run.id).catch((cause) => { if (active) setLoadingError(cause instanceof Error ? cause.message : "Could not load run details"); });
+    return () => { active = false; };
+  }, [collapsed, hidden, run?.id, run?.summary, props.onReadRun]);
   const definition = run?.definition ?? workflow;
   const selectedBlock = definition.blocks.find((block) => block.id === selectedBlockId);
   const starts = workflow.blocks.filter((block) => block.type === "start_button" || block.type === "start_input");
@@ -90,7 +98,7 @@ function WorkflowCard({ workflow, expanded, hidden, onToggleExpanded, ...props }
     </div></header>
     <div id={bodyId} className="workflow-card-body" hidden={collapsed}>
     <div className="workflow-card-context">
-    {run ? <>
+    {run?.summary ? <div><p role={loadingError ? "alert" : "status"}>{loadingError || "Loading run details…"}</p>{loadingError && <button onClick={() => { setLoadingError(""); void props.onReadRun?.(run.id).catch((cause) => setLoadingError(String(cause))); }}>Retry</button>}</div> : run ? <>
       <div className="workflow-run-meta"><select aria-label={`Run for ${workflow.name}`} value={run.id} onChange={(event) => { setSelectedRunId(event.target.value); setSelectedBlockId(undefined); }}>{runs.map((item) => <option key={item.id} value={item.id}>{statusLabel(item.status)} · {new Date(item.createdAt).toLocaleString()}</option>)}</select><span title={run.binding?.workspace ?? run.workspace}>{run.binding?.taskName ?? run.binding?.taskId ?? (run.binding ? "Root workspace" : "Legacy workspace")} · {completed}/{definition.blocks.length} complete</span></div>
       <div className="workflow-run-prompt-row">
         <details className="workflow-run-input"><summary>Run prompt</summary><WorkflowMessage key={run.id} title="Prompt" value={run.input} /></details>
@@ -107,7 +115,7 @@ function WorkflowCard({ workflow, expanded, hidden, onToggleExpanded, ...props }
       {run.error && <p className="workflow-card-error">{run.error}</p>}{!!run.cleanupErrors?.length && <p className="workflow-card-error">{run.cleanupErrors.join("; ")}</p>}
     </> : <><div className="workflow-run-prompt-row"><p className="workflow-card-hint">{workflow.blocks.length} blocks · {workflow.blocks.some((block) => block.type === "chatbox") ? "Open a Chatbox or choose a starting point" : "Choose a starting point"}</p><div className="workflow-run-controls" onFocus={(event) => event.target.scrollIntoView({ block: "nearest", inline: "nearest" })}>{fitControls}</div></div><CompactWorkflowPreview ref={previewRef} onReadApp={props.onReadApp} pollApps={!collapsed && !hidden} definition={definition} selectedBlockId={selectedBlockId} onSelect={setSelectedBlockId} /></>}
     </div>
-    {selectedBlock && <BlockRunDetails key={`${run?.id ?? workflow.id}:${selectedBlock.id}`} block={selectedBlock} run={run} state={run?.blocks.find((block) => block.blockId === selectedBlock.id)} tasks={run?.children?.filter((child) => child.blockId === selectedBlock.id)} onClose={() => setSelectedBlockId(undefined)} onChat={props.onChat ? async (message) => { const next = await props.onChat!(workflow.id, selectedBlock.id, message, run?.id); setStartedRun(next); setSelectedRunId(next.id); } : undefined} onSteer={props.onSteerChat && run && run.blocks.find((item) => item.blockId === selectedBlock.id)?.sessionId ? async (input) => { const state = run.blocks.find((item) => item.blockId === selectedBlock.id)!; const next = await props.onSteerChat!(run.id, selectedBlock.id, state.sessionId!, input); setStartedRun(next); } : undefined} onOpenAppTerminal={props.onOpenAppTerminal && selectedBlock.type === "run_app" ? () => props.onOpenAppTerminal!(workflow.id, selectedBlock.id, run?.id) : undefined} onCancelChat={run ? () => props.onCancelRun(run.id) : undefined} onReadApp={props.onReadApp && selectedBlock.type === "run_app" ? () => props.onReadApp!(workflow.id, selectedBlock.id, run?.id) : undefined} onKillApp={props.onKillApp && selectedBlock.type === "run_app" ? () => props.onKillApp!(workflow.id, selectedBlock.id, run?.id) : undefined} definition={definition} />}
+    {selectedBlock && !run?.summary && <BlockRunDetails key={`${run?.id ?? workflow.id}:${selectedBlock.id}`} block={selectedBlock} run={run} state={run?.blocks.find((block) => block.blockId === selectedBlock.id)} tasks={run?.children?.filter((child) => child.blockId === selectedBlock.id)} onClose={() => setSelectedBlockId(undefined)} onChat={props.onChat ? async (message) => { const next = await props.onChat!(workflow.id, selectedBlock.id, message, run?.id); setStartedRun(next); setSelectedRunId(next.id); } : undefined} onSteer={props.onSteerChat && run && run.blocks.find((item) => item.blockId === selectedBlock.id)?.sessionId ? async (input) => { const state = run.blocks.find((item) => item.blockId === selectedBlock.id)!; const next = await props.onSteerChat!(run.id, selectedBlock.id, state.sessionId!, input); setStartedRun(next); } : undefined} onOpenAppTerminal={props.onOpenAppTerminal && selectedBlock.type === "run_app" ? () => props.onOpenAppTerminal!(workflow.id, selectedBlock.id, run?.id) : undefined} onCancelChat={run ? () => props.onCancelRun(run.id) : undefined} onReadApp={props.onReadApp && selectedBlock.type === "run_app" ? () => props.onReadApp!(workflow.id, selectedBlock.id, run?.id) : undefined} onKillApp={props.onKillApp && selectedBlock.type === "run_app" ? () => props.onKillApp!(workflow.id, selectedBlock.id, run?.id) : undefined} definition={definition} />}
     {(!run || showStarts) && <div className="workflow-starts">{starts.length ? starts.map((block) => renderStart(block)) : renderStart()}</div>}
     {error && <p role="alert" className="workflow-card-error">{error}</p>}
     </div>

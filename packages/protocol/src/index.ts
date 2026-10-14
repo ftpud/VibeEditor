@@ -230,7 +230,7 @@ export type HarnessConnectionTrace = { id: string; edgeId: string; direction: "f
 export type HarnessTaskTarget = { taskId?: string };
 /** Core resolves this once. Continuations and reruns retain it regardless of selection. */
 export type HarnessWorkspaceBinding = { rootWorkspace: string; workspace: string; taskId?: string; taskName?: string };
-export type HarnessRun = { binding?: HarnessWorkspaceBinding; workspace?: string; connectionTraces?: HarnessConnectionTrace[]; id: string; harnessId: string; harnessVersion: number; definition?: HarnessDefinition; executionPlan?: HarnessExecutionPlan; operations?: HarnessOperation[]; children?: HarnessChildTask[]; features?: HarnessFeature[]; corrections?: HarnessCorrectionCycle[]; input: string; status: HarnessRunStatus; createdAt: string; startedAt?: string; completedAt?: string; blocks: HarnessBlockRun[]; error?: string; cleanupErrors?: string[] };
+export type HarnessRun = { summary?: true; binding?: HarnessWorkspaceBinding; workspace?: string; connectionTraces?: HarnessConnectionTrace[]; id: string; harnessId: string; harnessVersion: number; definition?: HarnessDefinition; executionPlan?: HarnessExecutionPlan; operations?: HarnessOperation[]; children?: HarnessChildTask[]; features?: HarnessFeature[]; corrections?: HarnessCorrectionCycle[]; input: string; status: HarnessRunStatus; createdAt: string; startedAt?: string; completedAt?: string; blocks: HarnessBlockRun[]; error?: string; cleanupErrors?: string[] };
 export type HttpResponse = { status: number; statusText: string; headers: Record<string, string>; body: string; durationMs: number };
 
 export type JavaProjectOptions = {
@@ -403,7 +403,7 @@ export type ProtocolOperations = {
   "harnesses.update": { payload: { harness: HarnessDefinition }; result: { harness: HarnessDefinition } };
   "harnesses.delete": { payload: { id: string }; result: Record<string, never> };
   "harnesses.validate": { payload: { harness: HarnessDefinition }; result: { valid: boolean; issues: HarnessValidationIssue[]; order: string[] } };
-  "harnesses.runs": { payload: { harnessId?: string; runId?: string }; result: { runs: HarnessRun[] } };
+  "harnesses.runs": { payload: { harnessId?: string; runId?: string; summary?: boolean }; result: { runs: HarnessRun[] } };
   "harnesses.runs.delete": { payload: { runId: string }; result: Record<string, never> };
   "harnesses.test": { payload: { definition: HarnessDefinition; blockId: string; input: string; provider?: AiProvider; target?: HarnessTaskTarget }; result: { run: HarnessRun } };
   "harnesses.app.read": { payload: { harnessId: string; blockId: string; runId?: string }; result: { app: HarnessAppState } };

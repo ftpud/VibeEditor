@@ -1,3 +1,4 @@
+import { startBackgroundLoading } from "./background-loading";
 import { javaConfigurationPath, resolveSkillIds, skillAllowedForAgent } from "@remote-ide/protocol";
 import { DiffEditor, type Monaco } from "@monaco-editor/react";
 import { Archive, ArrowDown, ArrowUp, ArrowUpRight, Bot, Bug, Check, ChevronDown, ChevronRight, CircleAlert, Clock, ClipboardCopy, Coffee, Columns2, Eye, EyeOff, File, FileCode2, FileDiff, FileText, Folder, FolderOpen, GitBranch, GitCompareArrows, GitMerge, Library, ListTodo, ListTree, LoaderCircle, LogOut, MoreVertical, Package, Palette, Pencil, Pin, PinOff, Play, Plus, RefreshCw, Save, Search, Settings, ShieldAlert, Square, SquareTerminal, Trash2, Workflow, X } from "lucide-react";
@@ -574,7 +575,7 @@ export function App() {
     const provider = aiProviderRef.current;
     const workspace = activeWorkspaceRef.current;
     const sessions = (await client.request("ai.sessions", { provider })).sessions;
-    if (canApply() && provider === aiProviderRef.current && workspace === activeWorkspaceRef.current) setAiSessions(sessions);
+    if (canApply() && clientRef.current === client && provider === aiProviderRef.current && workspace === activeWorkspaceRef.current) setAiSessions(sessions);
   }, []);
   const refreshUsefulFiles = useCallback(async (client = clientRef.current, canApply: () => boolean = () => true) => { if (!client) return; const rootId = client.getRoot(); const files = (await client.request("useful.list", {})).files; if (canApply() && clientRef.current === client && client.isConnected() && client.getRoot() === rootId) setUsefulFiles(files); }, []);
   const refreshRunConfigs = useCallback(async (client = clientRef.current, canApply: () => boolean = () => true) => { if (!client) return; const rootId = client.getRoot(); const configs = (await client.request("runConfig.list", {})).configs; if (canApply() && client.getRoot() === rootId) setRunConfigs(configs); }, []);
@@ -612,16 +613,49 @@ export function App() {
     const saved = workspaceKeyRef.current ? readSetting(workspaceSettingKey(workspaceKeyRef.current, aiAgentTaskKey(taskId))) ?? "" : "";
     setSelectedAgentKey(next.some((agent) => agentKey(agent) === saved) ? saved : "");
   }, [refreshSkills]);
+  const [harnessesLoading, setHarnessesLoading] = useState(false);
+  const [harnessRunsLoading, setHarnessRunsLoading] = useState(false);
   const refreshHarnesses = useCallback(async (client = clientRef.current, canApply: () => boolean = () => true) => {
-    if (!client) return; const rootId = client.getRoot(); const result = await client.request("harnesses.list", {});
-    if (canApply() && clientRef.current === client && client.isConnected() && client.getRoot() === rootId) { setHarnesses(result.harnesses); setHarnessDiagnostics(result.diagnostics); }
+    if (!client) return;
+    const rootId = client.getRoot();
+    const current = () => canApply() && clientRef.current === client && client.isConnected() && client.getRoot() === rootId;
+    try {
+      const result = await client.request("harnesses.list", {});
+      if (current()) { setHarnesses(result.harnesses); setHarnessDiagnostics(result.diagnostics); }
+    } finally { if (current()) setHarnessesLoading(false); }
   }, []);
   const refreshHarnessRuns = useCallback(async (client = clientRef.current, canApply: () => boolean = () => true) => {
     if (!client) return;
     const rootId = client.getRoot();
     const baseline = harnessRunsRef.current;
-    const { runs } = await client.request("harnesses.runs", {});
-    if (canApply() && clientRef.current === client && client.getRoot() === rootId) setHarnessRuns((current) => mergeWorkflowHistory(current, runs, baseline));
+    const current = () => canApply() && clientRef.current === client && client.isConnected() && client.getRoot() === rootId;
+    try {
+      const { runs } = await client.request("harnesses.runs", { summary: true });
+      if (current()) setHarnessRuns((existing) => mergeWorkflowHistory(existing, runs, baseline));
+    } finally { if (current()) setHarnessRunsLoading(false); }
+  }, []);
+  const pendingHarnessDetails = useRef(new Map<string, { client: CoreClient; promise: Promise<HarnessRun> }>());
+  const readHarnessRun = useCallback((runId: string): Promise<HarnessRun> => {
+    const client = clientRef.current;
+    if (!client) return Promise.reject(new Error("Backend is disconnected"));
+    const rootId = client.getRoot();
+    const key = `${rootId}:${runId}`;
+    const pending = pendingHarnessDetails.current.get(key);
+    if (pending?.client === client) return pending.promise;
+    const baseline = harnessRunsRef.current.find((run) => run.id === runId);
+    const promise = client.request("harnesses.runs", { runId }).then(({ runs }) => {
+      if (clientRef.current !== client || client.getRoot() !== rootId) throw new Error("Workspace changed while loading run details");
+      const run = runs[0];
+      if (!run) throw new Error("Workflow run is no longer available");
+      setHarnessRuns((current) => {
+        const existing = current.find((item) => item.id === runId);
+        if (existing && existing !== baseline && !existing.summary) return current;
+        return [run, ...current.filter((item) => item.id !== runId)];
+      });
+      return run;
+    }).finally(() => { if (pendingHarnessDetails.current.get(key)?.promise === promise) pendingHarnessDetails.current.delete(key); });
+    pendingHarnessDetails.current.set(key, { client, promise });
+    return promise;
   }, []);
   const createHarness = useCallback(async (name: string, template?: "five-minute-check-in" | "git-review-commit") => {
     const result = await clientRef.current!.request("harnesses.create", { name, template }); setHarnesses((current) => [result.harness, ...current]); return result.harness;
@@ -688,7 +722,8 @@ export function App() {
     const carriedDocuments = existingGroup?.tabs.filter((tab) => tab.type === "workflowDocument" && (!tab.rootId || tab.rootId === rootId)) ?? [];
     if (options.workflowDocuments?.length || carriedDocuments.length) {
       try {
-        const { runs } = await client.request("harnesses.runs", {});
+        const runIds = [...new Set([...(options.workflowDocuments ?? []).map((document) => document.runId), ...carriedDocuments.flatMap((tab) => tab.workflowRunId ? [tab.workflowRunId] : [])])];
+        const runs = (await Promise.all(runIds.map((runId) => client.request("harnesses.runs", { runId })))).flatMap((result) => result.runs);
         ensureCurrent();
         const restored = restoreWorkflowDocuments(tabs, options.workflowDocuments, runs, rootId, existingGroup?.tabs, existingGroup?.activeTabId);
         tabs = orderPinnedTabs(restored.tabs); activeDocumentId = restored.activeTabId;
@@ -734,6 +769,10 @@ export function App() {
     clientRef.current?.disconnect();
     clientRef.current = undefined;
     setWorkspaceOptionsReady(false);
+    setHarnesses([]); setHarnessRuns([]); setHarnessesLoading(true); setHarnessRunsLoading(true);
+    setAgents([]); setSelectedAgentKey(""); setUsefulFiles([]); setRunConfigs([]);
+    setSkillCatalog({ skills: [], policy: { allowed: [], defaults: [] } });
+    setAiStatuses({ root: emptyAiSummary, tasks: {} }); setActiveTimers([]); setSchedules([]);
     setStatus("connecting"); setStatusMessage(`Opening connection to ${host.trim()}:${port}…`);
     const client = new CoreClient();
     clientRef.current = client;
@@ -753,7 +792,7 @@ export function App() {
       setProjectName(result.projectName); setTree(result.tree); setJavaOptions(result.options.javaProject);
       await restoreWorkspaceOptions(result.options, client, client.getRoot(), true, signal);
       ensureCurrent();
-      await Promise.all([refreshTasks(client, stillCurrent), refreshGit(client), refreshAi(client, stillCurrent), refreshAiSessions(client, stillCurrent), refreshUsefulFiles(client, stillCurrent), refreshRunConfigs(client, stillCurrent), refreshAgents(client, expected.taskId, stillCurrent), refreshHarnesses(client, stillCurrent), refreshHarnessRuns(client, stillCurrent)]);
+      await Promise.all([refreshTasks(client, stillCurrent), refreshGit(client), refreshAi(client, stillCurrent), refreshUsefulFiles(client, stillCurrent), refreshRunConfigs(client, stillCurrent), refreshAgents(client, expected.taskId, stillCurrent), refreshHarnesses(client, stillCurrent)]);
       ensureCurrent();
       if (!client.isConnected()) throw new Error("Connection lost during recovery");
       if (selectedTaskIdRef.current !== expected.taskId) throw new Error("Saved task selection changed during recovery");
@@ -761,6 +800,7 @@ export function App() {
       setStatus("connected");
       recoverySelection = undefined;
       showStatus("Backend connection restored", "success");
+      startBackgroundLoading([() => refreshAiSessions(client, stillCurrent), () => refreshHarnessRuns(client, stillCurrent)], stillCurrent, () => showStatus("Session history could not load. Refresh the panel to retry.", "error"));
     }, (error) => {
       if (clientRef.current !== client) return;
       if (recoverySelection && (client.getRoot() !== recoverySelection.rootId || activeWorkspaceRef.current !== recoverySelection.workspace)) {
@@ -811,8 +851,12 @@ export function App() {
       const runIds = [...pendingWorkflowRuns];
       pendingWorkflowRuns.clear();
       for (const runId of runIds) {
-        const { runs } = await client.request("harnesses.runs", { runId });
+        const summary = harnessRunsRef.current.find((run) => run.id === runId)?.summary !== undefined || !harnessRunsRef.current.some((run) => run.id === runId);
+        const { runs } = await client.request("harnesses.runs", { runId, summary });
         if (!canApply() || clientRef.current !== client || client.getRoot() !== rootId) return;
+        if (runs[0]?.summary && harnessRunsRef.current.some((run) => run.id === runId && !run.summary)) {
+          pendingWorkflowRuns.add(runId); workflowRefresh.trigger(); continue;
+        }
         setHarnessRuns((current) => [...runs, ...current.filter((run) => !runs.some((updated) => updated.id === run.id))]);
       }
     });
@@ -1003,14 +1047,20 @@ export function App() {
           const reasoning = savedReasoning && model.reasoningLevels.includes(savedReasoning) ? savedReasoning : model.defaultReasoning;
           if (session.model !== savedModel || session.reasoning !== reasoning) session = (await client.request("ai.configure", { provider, model: savedModel, reasoning })).session;
         }
-        setStatusMessage("Loading AI usage and session history…");
-        setAiModels(modelResult.models); setAiSession(session); setAiUsage((await client.request("ai.usage", { provider })).usage);
-        setAiSessions((await client.request("ai.sessions", { provider })).sessions);
-        setStatusMessage("Checking task agent status…");
-        await refreshAiStatuses(client);
-        setStatusMessage("Loading workflows, agents, and run configurations…");
-        await Promise.all([refreshUsefulFiles(client), refreshRunConfigs(client), refreshAgents(client, taskResult.selectedTaskId), refreshHarnesses(client), refreshHarnessRuns(client)]);
+        setAiModels(modelResult.models); setAiSession(session); setAiSessions([session]); setAiUsage(undefined);
         setTree(result.tree); connectionReady = true; setStatus("connected"); setStatusMessage("");
+        const backgroundRoot = client.getRoot();
+        const backgroundWorkspace = result.workspace;
+        const backgroundRevision = taskSwitchSequence.current;
+        const canApply = () => clientRef.current === client && client.isConnected() && client.getRoot() === backgroundRoot
+          && activeWorkspaceRef.current === backgroundWorkspace && taskSwitchSequence.current === backgroundRevision;
+        // History and auxiliary panels hydrate independently of the usable workspace.
+        startBackgroundLoading([
+          () => client.request("ai.usage", { provider }).then(({ usage }) => { if (canApply() && provider === aiProviderRef.current) setAiUsage(usage); }),
+          () => refreshAiSessions(client, canApply), () => refreshAiStatuses(client, canApply), () => refreshUsefulFiles(client, canApply),
+          () => refreshRunConfigs(client, canApply), () => refreshAgents(client, taskResult.selectedTaskId, canApply),
+          () => refreshHarnesses(client, canApply), () => refreshHarnessRuns(client, canApply)
+        ], canApply, () => showStatus("Some background panels could not load. Use their refresh button to retry.", "error"));
         void refreshGit(client); void refreshTaskGit(activeTaskRef.current, client);
         writeSetting("connection", JSON.stringify({ host, port }));
       } catch (error) {
@@ -2802,10 +2852,10 @@ export function App() {
   }, [commands, commandContext, quickOpen, shortcutBindings, workspaceSymbolsOpen]);
 
   const taskHarnessRuns = workflowRunsForContext(harnessRuns, workspaceRoots.find((root) => root.id === selectedRootId)?.path, activeWorkspace, selectedTaskId);
-  const workflowDesignPanel = <HarnessPanel skillCatalog={skillCatalog} onRefreshSkills={refreshSkills} designOnly harnesses={harnesses} runs={taskHarnessRuns} diagnostics={harnessDiagnostics} providers={aiProviders} agents={agents} defaultProvider={aiProvider} onLoadModels={loadHarnessModels} onValidate={validateHarnessDefinition} onCreate={createHarness} onRead={readHarness} onSave={saveHarness} onDelete={deleteHarness} onRun={runHarness} onTestBlock={testHarnessBlock} onKillApp={killHarnessApp} onReadApp={readHarnessApp} onChat={chatHarness} onSteerChat={steerHarnessChat} onOpenAppTerminal={openHarnessAppTerminal} onAppendRun={appendHarnessRun} onResolvePermission={resolveHarnessPermission} onAnswerQuestion={answerHarnessQuestion} onResumePause={resumeHarnessPause} onRetryPause={retryHarnessPause} onCancelPause={cancelHarnessPause} onCancelRun={cancelHarnessRun} onDeleteRun={deleteHarnessRun} onError={setStatusMessage} />;
+  const workflowDesignPanel = <HarnessPanel skillCatalog={skillCatalog} onRefreshSkills={refreshSkills} designOnly harnesses={harnesses} runs={taskHarnessRuns} diagnostics={harnessDiagnostics} providers={aiProviders} agents={agents} defaultProvider={aiProvider} onLoadModels={loadHarnessModels} onValidate={validateHarnessDefinition} onCreate={createHarness} onRead={readHarness} onSave={saveHarness} onDelete={deleteHarness} onRun={runHarness} onTestBlock={testHarnessBlock} onKillApp={killHarnessApp} onReadApp={readHarnessApp} onReadRun={readHarnessRun} onChat={chatHarness} onSteerChat={steerHarnessChat} onOpenAppTerminal={openHarnessAppTerminal} onAppendRun={appendHarnessRun} onResolvePermission={resolveHarnessPermission} onAnswerQuestion={answerHarnessQuestion} onResumePause={resumeHarnessPause} onRetryPause={retryHarnessPause} onCancelPause={cancelHarnessPause} onCancelRun={cancelHarnessRun} onDeleteRun={deleteHarnessRun} onError={setStatusMessage} />;
   const showWorkflowDesign = sideLayout === "classic" ? classicSideView === "harness" : workflowPanelMode === "design";
-  const workflowRunPanel = <WorkflowRunPanel key={`${selectedRootId}:${selectedTaskId ?? "root"}`} harnesses={harnesses} runs={taskHarnessRuns} diagnostics={harnessDiagnostics} onValidate={validateHarnessDefinition} onRun={runHarness} onKillApp={killHarnessApp} onReadApp={readHarnessApp} onChat={chatHarness} onSteerChat={steerHarnessChat} onOpenAppTerminal={openHarnessAppTerminal} onCancelRun={cancelHarnessRun} onResolvePermission={resolveHarnessPermission} onAnswerQuestion={answerHarnessQuestion} onResumePause={resumeHarnessPause} onRetryPause={retryHarnessPause} onCancelPause={cancelHarnessPause} onError={setStatusMessage} />;
-  const workflowPanels = <div className="workflow-mode-panels"><div hidden={!showWorkflowDesign}>{workflowDesignPanel}</div><div hidden={showWorkflowDesign}>{workflowRunPanel}</div></div>;
+  const workflowRunPanel = <WorkflowRunPanel key={`${selectedRootId}:${selectedTaskId ?? "root"}`} harnesses={harnesses} runs={taskHarnessRuns} diagnostics={harnessDiagnostics} onValidate={validateHarnessDefinition} onRun={runHarness} onKillApp={killHarnessApp} onReadApp={readHarnessApp} onReadRun={readHarnessRun} onChat={chatHarness} onSteerChat={steerHarnessChat} onOpenAppTerminal={openHarnessAppTerminal} onCancelRun={cancelHarnessRun} onResolvePermission={resolveHarnessPermission} onAnswerQuestion={answerHarnessQuestion} onResumePause={resumeHarnessPause} onRetryPause={retryHarnessPause} onCancelPause={cancelHarnessPause} onError={setStatusMessage} />;
+  const workflowPanels = harnessesLoading || harnessRunsLoading ? <p role="status">Loading workflows…</p> : <div className="workflow-mode-panels"><div hidden={!showWorkflowDesign}>{workflowDesignPanel}</div><div hidden={showWorkflowDesign}>{workflowRunPanel}</div></div>;
   const processesPanel = <ProcessesPanel key={selectedRootId} processes={managedProcessList} loading={processLoading} error={processError} disabled={status !== "connected" || taskSwitching} onRefresh={() => refreshProcesses()} onKill={async (processId) => {
     const client = clientRef.current; if (!client) throw new Error("Backend is disconnected. Reconnect and try again.");
     await client.request("processes.kill", { processId }); await refreshProcesses();

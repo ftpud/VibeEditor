@@ -25,3 +25,11 @@ it("scopes controls by root, task and bound worktree even when an obsolete respo
   expect(workflowRunsForContext(runs, "/root", "/root").map((run) => run.id)).toEqual(["root"]);
   expect(workflowRunsForContext(runs, "/root", "/replacement", "a")).toEqual([]);
 });
+
+it("retains hydrated details on a summary refresh and replaces them when lifecycle changes", () => {
+  const full = { id: "run", status: "running", blocks: [{ blockId: "chat", status: "running", output: "Live reply" }] } as HarnessRun;
+  const summary = { ...full, summary: true, blocks: [{ blockId: "chat", status: "running" }] } as HarnessRun;
+  expect(mergeWorkflowHistory([full], [summary], [full])).toEqual([full]);
+  const completed = { ...summary, status: "succeeded", blocks: [{ blockId: "chat", status: "succeeded" }] } as HarnessRun;
+  expect(mergeWorkflowHistory([full], [completed], [full])).toEqual([completed]);
+});

@@ -15,6 +15,21 @@ const run: HarnessRun = { id: "run", harnessId: workflow.id, harnessVersion: 1, 
 const props = () => ({ harnesses: [workflow], runs: [], onRun: vi.fn().mockResolvedValue(run), onCancelRun: vi.fn().mockResolvedValue(undefined), onError: vi.fn() });
 
 describe("Workflow run library", () => {
+  it("loads full run details only when the workflow is opened", async () => {
+    const summary: HarnessRun = { ...run, summary: true, definition: undefined, input: "", blocks: run.blocks.map(({ blockId, status }) => ({ blockId, status })) };
+    let resolve!: (run: HarnessRun) => void;
+    const onReadRun = vi.fn(() => new Promise<HarnessRun>((done) => { resolve = done; }));
+    const view = render(<WorkflowRunPanel {...props()} runs={[summary]} onReadRun={onReadRun} />);
+    expect(onReadRun).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Show Workspace check" }));
+    await waitFor(() => expect(onReadRun).toHaveBeenCalledWith("run"));
+    expect(screen.getByText("Loading run details…")).toBeTruthy();
+    resolve(run);
+    view.rerender(<WorkflowRunPanel {...props()} runs={[run]} onReadRun={onReadRun} />);
+    expect(screen.getByRole("button", { name: "Inspect: running" })).toBeTruthy();
+    expect(onReadRun).toHaveBeenCalledTimes(1);
+  });
+
   it("sends steering to the selected Chatbox session and retains stop", async () => {
     const chatWorkflow: HarnessDefinition = { ...workflow, blocks: [{ id: "chat", type: "chatbox", label: "Assistant", prompt: "", position: { x: 0, y: 0 } }], edges: [] };
     const chatRun: HarnessRun = { ...run, definition: chatWorkflow, blocks: [{ blockId: "chat", status: "running", sessionId: "session" }] };

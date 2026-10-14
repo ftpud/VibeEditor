@@ -28,7 +28,7 @@ import { ConfigurationService } from "./configuration.js";
 import { ensureSelfConfiguration } from "./self-configuration.js";
 import { SkillsStore } from "./skills.js";
 import { AgentsStore } from "./agents.js";
-import { HarnessStore } from "./harnesses.js";
+import { HarnessStore, summarizeHarnessRun } from "./harnesses.js";
 import { prepareWorkflowSkills, executeWorkflowSkill, workflowSessionSkillIds } from "./workflow-skills.js";
 import { executeTaskControls } from "./workflow-task-controls.js";
 import { executeFlowScript } from "./workflow-script.js";
@@ -931,8 +931,9 @@ async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStor
       const selectedRun = request.payload.runId ? await harnessRunner.readRun(request.payload.runId) : undefined;
       const runs = request.payload.runId
         ? selectedRun && (!request.payload.harnessId || selectedRun.harnessId === request.payload.harnessId) ? [selectedRun] : []
-        : await harnesses.runs(request.payload.harnessId);
-      return { runs: await Promise.all(runs.map(async (run) => {
+        : request.payload.summary ? await harnesses.summaries(request.payload.harnessId) : await harnesses.runs(request.payload.harnessId);
+      return { runs: await Promise.all(runs.map(async (record) => {
+        const run = request.payload.summary ? summarizeHarnessRun(record) : record;
         if (run.binding) return run;
         try { const binding = await resolveWorkflowBinding(run, undefined, { tasks, rootWorkspace, workspacePath }); return { ...run, workspace: binding.workspace, binding }; }
         catch { return run; } // Preserve unreadable legacy evidence; execution rejects it explicitly.

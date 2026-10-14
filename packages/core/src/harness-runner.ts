@@ -12,7 +12,7 @@ type Interrupt = (provider: string, context: { runId: string; blockId: string; w
 type ResolvePermission = (provider: string, workspace: string, requestId: string, optionId?: string) => Promise<AiSession>;
 type AnswerQuestion = (provider: string, workspace: string, input: string) => Promise<AiSession>;
 type FireTimer = (provider: string, workspace: string) => Promise<boolean>;
-type ActiveExecution = { run: HarnessRun; blocks: HarnessBlock[]; edges: HarnessEdge[]; outputs: Map<string, string>; dispatch: Dispatch; append: Append; defaultProvider: string; background: Set<Promise<void>>; stackInvocations: Map<string, number>; loopInvocations: Map<string, number>; turnClaims: Map<string, string>; flowBusy?: Set<string>; scheduler: ExecutionScheduler };
+type ActiveExecution = { run: HarnessRun; blocks: HarnessBlock[]; edges: HarnessEdge[]; outputs: Map<string, string>; dispatch: Dispatch; append: Append; defaultProvider: string; background: Set<Promise<void>>; stackInvocations: Map<string, number>; loopInvocations: Map<string, number>; turnClaims: Map<string, string>; flowBusy?: Set<string>; flowFinishing?: Map<string, Promise<void>>; scheduler: ExecutionScheduler };
 type RecoveryPolicy = { maxAttempts: number; transportBackoffMs: number; maxElapsedMs?: number; jitterRatio?: number; random?: () => number };
 type ResolvedRecoveryPolicy = Required<RecoveryPolicy>;
 export type HarnessRecoveryInspector = {
@@ -249,7 +249,11 @@ export class HarnessRunner {
     await previous;
     try {
       if (typeof input !== "string" || !input.trim() || input.length > 100_000) throw new CoreError("INVALID_REQUEST", "Chat input must contain 1–100,000 characters");
-      const execution = this.executions.get(runId);
+      let execution = this.executions.get(runId);
+      // A finished provider turn may still be publishing its final snapshot.
+      // Wait for that publication before admitting the next chat turn.
+      const finishing = execution?.run.blocks.find((item) => item.blockId === blockId)?.status === "succeeded" ? execution.flowFinishing?.get(blockId) : undefined;
+      if (finishing) { await finishing; execution = this.executions.get(runId); }
       const run = execution?.run ?? (await this.store.runs()).find((item) => item.id === runId);
       const definition = run?.definition;
       const block = definition?.blocks.find((item) => item.id === blockId);
@@ -755,6 +759,7 @@ export class HarnessRunner {
   private async executeFlow(execution: ActiveExecution, startBlockId?: string): Promise<void> {
     const { run, blocks, edges } = execution;
     const busy = new Set<string>(); execution.flowBusy = busy;
+    const finishing = new Map<string, Promise<void>>(); execution.flowFinishing = finishing;
     // Unselected Chatboxes are available for independent user turns. They are
     // not scheduled by this explicitly selected flow entry point.
     if (startBlockId) for (const state of run.blocks) {
@@ -768,6 +773,8 @@ export class HarnessRunner {
       if (++steps > 1000) throw new Error("Flow exceeded 1000 block executions");
       const block = blocks.find((item) => item.id === id)!;
       const state = run.blocks.find((item) => item.blockId === id)!;
+      let published!: () => void;
+      finishing.set(id, new Promise<void>((resolve) => { published = resolve; }));
       busy.add(id); state.error = undefined; state.status = "running"; state.startedAt = new Date().toISOString(); state.completedAt = undefined; state.selectedRoute = undefined;
       if (block.type === "chatbox") {
         const timestamp = new Date().toISOString();
@@ -815,10 +822,11 @@ export class HarnessRunner {
           output = session.messages.filter((message) => message.role === "assistant").at(-1)?.text ?? "";
         }
         if (!["ai", "chatbox"].includes(block.type)) state.structuredOutput = parseHarnessData(output, block.outputSchema, `${block.label} output`);
-        this.assertActive(run.id); this.log(state, "response", output); state.output = output.slice(-200_000); execution.outputs.set(id, output); state.status = "succeeded"; state.completedAt = new Date().toISOString(); run.status = this.runActivityStatus(run); await this.update(run);
+        this.assertActive(run.id); this.log(state, "response", output); state.output = output.slice(-200_000); execution.outputs.set(id, output); state.status = "succeeded"; state.completedAt = new Date().toISOString(); run.status = this.runActivityStatus(run);
+        await this.update(run);
       } catch (error) {
         state.status = this.isActive(run.id) ? "failed" : "cancelled"; state.error = error instanceof Error ? error.message : String(error); state.completedAt = new Date().toISOString(); this.log(state, "error", state.error); if (this.isActive(run.id)) run.status = this.runActivityStatus(run); await this.update(run); throw error;
-      } finally { busy.delete(id); }
+      } finally { finishing.delete(id); busy.delete(id); published(); }
       if (block.type === "markdown") this.openDocument?.({ runId: run.id, blockId: id, title: block.label.endsWith(".md") ? block.label : `${block.label}.md`, content: output });
       for (const edge of edges.filter((edge) => block.type !== "chatbox" && edge.from === id && (edge.type === "follow" || !edge.type || (edge.type === "path" && edge.label === state.selectedRoute)))) {
         // A question used as a tool returns its answer to the waiting caller.

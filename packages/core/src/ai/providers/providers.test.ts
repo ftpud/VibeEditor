@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, writeFile, rename } from "node:fs/promises";
 import crypto from "node:crypto";
 import os from "node:os";
 import path from "node:path";
@@ -36,6 +36,32 @@ async function settle(provider: FakeProvider, workspace: string): Promise<AiSess
 }
 
 describe("ACP integration", () => {
+  it("reuses persisted session labels after restart and rebuilds damaged or stale indexes", async () => {
+    const state = await mkdtemp(path.join(os.tmpdir(), "acp-summary-index-"));
+    const workspace = "/workspace";
+    const key = crypto.createHash("sha256").update(workspace).digest("hex");
+    const directory = path.join(state, `${key}-fake-sessions`);
+    const file = path.join(directory, "archived.json");
+    await mkdir(directory);
+    const archived: AiSession = { id: "archived", status: "idle", model: "auto", reasoning: "low", messages: [{ id: "first", role: "user", text: "Archived question", timestamp: "now" }, { id: "reply", role: "assistant", text: "x".repeat(200_000), timestamp: "now" }] };
+    await writeFile(file, JSON.stringify(archived));
+    const provider = new FakeProvider(() => {}, state);
+    expect((await provider.sessions(workspace)).find((session) => session.id === "archived")?.messages).toHaveLength(1);
+    const indexFile = `${directory}.index.json`;
+    const cached = JSON.parse(await readFile(indexFile, "utf8"));
+    expect(JSON.stringify(cached).length).toBeLessThan(1000);
+    // A different label in the derived index proves the restarted provider
+    // loaded it instead of rereading and summarizing the full transcript.
+    cached.sessions[0].messages[0].text = "Cached label";
+    await writeFile(indexFile, JSON.stringify(cached));
+    expect((await new FakeProvider(() => {}, state).sessions(workspace)).find((session) => session.id === "archived")?.messages[0]?.text).toBe("Cached label");
+    await writeFile(indexFile, "damaged index");
+    expect((await new FakeProvider(() => {}, state).sessions(workspace)).find((session) => session.id === "archived")?.messages[0]?.text).toBe("Archived question");
+    await writeFile(`${file}.tmp`, JSON.stringify({ ...archived, messages: [{ ...archived.messages[0], text: "Updated question" }] }));
+    await rename(`${file}.tmp`, file);
+    expect((await provider.sessions(workspace)).find((session) => session.id === "archived")?.messages[0]?.text).toBe("Updated question");
+  });
+
   it("offers GPT-6 Sol even when an older Codex catalogue omits it and launches it explicitly", async () => {
     class InspectCodex extends CodexSessionManager {
       describeCatalogue(models: AiModel[]) { return this.describeModels(models); }

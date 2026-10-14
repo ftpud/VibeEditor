@@ -1,13 +1,32 @@
 import os from "node:os";
 import path from "node:path";
 import crypto from "node:crypto";
-import { mkdtemp, readFile, readdir, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, writeFile, rename } from "node:fs/promises";
 import type { HarnessRun } from "@remote-ide/protocol";
 import { describe, expect, it } from "vitest";
 import { validateHarness } from "./harness-graph.js";
 import { HarnessStore } from "./harnesses.js";
 
 describe("HarnessStore", () => {
+  it("persists lightweight summaries and rebuilds stale or damaged derived state", async () => {
+    const state = await mkdtemp(path.join(os.tmpdir(), "workflow-summary-store-"));
+    const store = new HarnessStore("/workspace", state);
+    const run: HarnessRun = { id: "run", harnessId: "flow", harnessVersion: 1, input: "Request", status: "succeeded", createdAt: "now", workspace: "/workspace", blocks: [{ blockId: "chat", status: "succeeded", output: "x".repeat(200_000), chatMessages: [{ id: "reply", role: "assistant", text: "y".repeat(200_000), timestamp: "now" }] }] };
+    await store.saveRun(run);
+    const directory = path.join(state, "harnesses", crypto.createHash("sha256").update("/workspace").digest("hex"));
+    const summary = (await new HarnessStore("/workspace", state).summaries())[0]!;
+    expect(summary.summary).toBe(true);
+    expect(summary.blocks).toEqual([{ blockId: "chat", status: "succeeded" }]);
+    expect(JSON.stringify(summary).length).toBeLessThan(500);
+    expect((await store.runs())[0]).toEqual(run);
+    await writeFile(path.join(directory, "runs-summary.json"), "broken cache");
+    expect(await store.summaries()).toEqual([summary]);
+    const updated = { ...run, status: "cancelled" as const };
+    await writeFile(path.join(directory, "replacement.json"), JSON.stringify({ schemaVersion: 1, runs: [updated] }));
+    await rename(path.join(directory, "replacement.json"), path.join(directory, "runs.json"));
+    expect((await store.summaries())[0]?.status).toBe("cancelled");
+  });
+
   it("persists an immutable typed worktree binding and quarantines malformed records", async () => {
     const state = await mkdtemp(path.join(os.tmpdir(), "workflow-binding-store-"));
     const store = new HarnessStore("/workspace", state);

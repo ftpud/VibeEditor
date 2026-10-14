@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import os from "node:os";
 import path from "node:path";
-import { copyFile, mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import type { HarnessDefinition, HarnessRun, HarnessStateDiagnostic } from "@remote-ide/protocol";
 import { workflowTemplate } from "./workflow-templates.js";
 import { CoreError } from "./errors.js";
@@ -79,6 +79,31 @@ export class HarnessStore {
 
   async runs(harnessId?: string): Promise<HarnessRun[]> {
     return (await this.readRecords("runs.json", "runs", isRun)).filter((run) => !harnessId || run.harnessId === harnessId).slice(0, RUNS_PER_WORKFLOW);
+  }
+
+  /** Derived metadata avoids parsing transcripts on routine list requests. */
+  async summaries(harnessId?: string): Promise<HarnessRun[]> {
+    const stamp = await stat(path.join(this.directory, "runs.json")).then((value) => `${value.mtimeMs}:${value.size}`).catch(() => "missing");
+    try {
+      const cached = JSON.parse(await readFile(path.join(this.directory, "runs-summary.json"), "utf8"));
+      if (cached.schemaVersion === 1 && cached.stamp === stamp && Array.isArray(cached.runs) && cached.runs.every((run: unknown) => isRun(run) && run.summary === true)) {
+        return cached.runs.filter((run: HarnessRun) => !harnessId || run.harnessId === harnessId).slice(0, RUNS_PER_WORKFLOW);
+      }
+    } catch { /* Rebuild missing, stale, or damaged derived state from durable runs. */ }
+    const runs = (await this.readRecords("runs.json", "runs", isRun)).map(summarizeHarnessRun);
+    await this.cacheSummaries(runs, stamp);
+    return runs.filter((run) => !harnessId || run.harnessId === harnessId).slice(0, RUNS_PER_WORKFLOW);
+  }
+
+  private async cacheSummaries(runs: HarnessRun[], stamp: string): Promise<void> {
+    const target = path.join(this.directory, "runs-summary.json");
+    const temporary = `${target}.${crypto.randomUUID()}.tmp`;
+    try {
+      await mkdir(this.directory, { recursive: true });
+      await writeFile(temporary, JSON.stringify({ schemaVersion: 1, stamp, runs }, redactWorkflowValue));
+      await rename(temporary, target);
+    } catch { /* A cache write must not prevent reading or saving durable state. */ }
+    finally { await rm(temporary, { force: true }).catch(() => {}); }
   }
 
   async saveRun(run: HarnessRun): Promise<void> {
@@ -169,7 +194,18 @@ export class HarnessStore {
 
   private async writeJson(name: string, value: unknown): Promise<void> {
     await mkdir(this.directory, { recursive: true }); const target = path.join(this.directory, name); const temporary = path.join(this.directory, `${name}.${crypto.randomUUID()}.tmp`);
-    try { await writeFile(temporary, `${JSON.stringify(value, redactWorkflowValue, 2)}\n`, "utf8"); await copyFile(target, `${target}.bak`).catch((error) => { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }); await rename(temporary, target); }
+    try {
+      await writeFile(temporary, `${JSON.stringify(value, redactWorkflowValue, 2)}\n`, "utf8");
+      if (name === "runs.json") {
+        const records = (value as RunFile).runs;
+        // Prepare derived state before publishing the durable outcome. Readers
+        // validate its stamp against runs.json, so it is ignored until promotion.
+        const stamp = await stat(temporary).then((entry) => `${entry.mtimeMs}:${entry.size}`);
+        await this.cacheSummaries(records.map(summarizeHarnessRun), stamp);
+      }
+      await copyFile(target, `${target}.bak`).catch((error) => { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; });
+      await rename(temporary, target);
+    }
     catch (error) { await rm(temporary, { force: true }).catch(() => undefined); throw new CoreError("WRITE_FAILED", `Could not save workflows: ${message(error)}`); }
   }
 
@@ -179,6 +215,12 @@ export class HarnessStore {
     void settled.finally(() => { if (mutationQueues.get(this.directory) === settled) mutationQueues.delete(this.directory); });
     return result;
   }
+}
+
+export function summarizeHarnessRun(run: HarnessRun): HarnessRun {
+  return { summary: true, id: run.id, harnessId: run.harnessId, harnessVersion: run.harnessVersion, input: run.input.slice(0, 200), status: run.status,
+    createdAt: run.createdAt, startedAt: run.startedAt, completedAt: run.completedAt, workspace: run.workspace, binding: run.binding,
+    blocks: run.blocks.map(({ blockId, status }) => ({ blockId, status })) };
 }
 
 function validName(name: string): string { const value = name.trim(); if (!value || value.length > 120) throw new CoreError("INVALID_REQUEST", "Harness name must contain 1–120 characters"); return value; }
