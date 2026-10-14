@@ -827,6 +827,8 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .terminal-tab:hover { background: #34363a; color: #d8d9dc; }
 .terminal-tab.active { color: #f0f0f0; background: #1e1f22; border-bottom: 2px solid #3574f0; }
 .terminal-tab > span:first-child { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.terminal-tab.has-unread-output { border-bottom: 2px solid #3574f0; font-weight: 600; }
+.terminal-activity-dot { width: 6px; height: 6px; flex: 0 0 6px; border-radius: 50%; background: #3574f0; }
 .terminal-tab-renaming { padding: 3px 6px; cursor: default; }
 .terminal-tab-renaming input { width: 100%; min-width: 0; height: 23px; padding: 0 5px; border: 1px solid #3574f0; border-radius: 2px; outline: none; background: #1e1f22; color: #f0f0f0; }
 .terminal-action { width: 30px; flex: 0 0 30px; display: grid; place-items: center; border: 0; background: transparent; color: #aaa; cursor: pointer; }

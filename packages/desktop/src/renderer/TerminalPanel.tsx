@@ -67,10 +67,10 @@ export function TerminalTabButton({ tab, rootAlias, active, highlighted, onActiv
   return <>{renaming ? <div className={`terminal-tab terminal-tab-renaming ${active ? "active" : ""}`}>
     <input ref={renameInputRef} aria-label={`Rename ${tab.title}`} value={draft} maxLength={100} onChange={(event) => setDraft(event.target.value)} onBlur={finishRename} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); finishRename(); } else if (event.key === "Escape") { event.preventDefault(); setRenaming(false); } }} />
   </div> : <button
-    className={`terminal-tab ${active ? "active" : ""} ${highlighted ? "run-config-running" : ""}`}
+    className={`terminal-tab ${active ? "active" : ""} ${highlighted ? "run-config-running" : ""} ${tab.hasUnreadOutput ? "has-unread-output" : ""}`}
     role="tab"
     aria-selected={active}
-    title={`${tab.title} — ${statusLabel}. Middle-click to close.`}
+    title={`${tab.title} — ${statusLabel}.${tab.hasUnreadOutput ? " New output available." : ""} Middle-click to close.`}
     onMouseDown={(event) => {
       if (event.button !== 1) return;
       event.preventDefault();
@@ -86,6 +86,7 @@ export function TerminalTabButton({ tab, rootAlias, active, highlighted, onActiv
     onContextMenu={(event) => { event.preventDefault(); setMenu({ x: Math.min(event.clientX, window.innerWidth - 160), y: Math.min(event.clientY, window.innerHeight - 74) }); }}
   >
     <span>{tab.title}{rootAlias && <small className="root-badge">{rootAlias}</small>}{visibleStatus}</span>
+    {tab.hasUnreadOutput && <span className="terminal-activity-dot" role="img" aria-label="New terminal output" />}
     <span className="close" title={`Close ${tab.title}`} onClick={(event) => { event.stopPropagation(); onClose(tab); }}><X size={13} /></span>
   </button>}
     {menu && <div className="terminal-context-menu terminal-tab-menu" style={{ left: menu.x, top: menu.y }} onMouseDown={(event) => event.stopPropagation()}>

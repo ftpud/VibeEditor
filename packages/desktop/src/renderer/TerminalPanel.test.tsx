@@ -21,6 +21,18 @@ describe("terminal focus", () => {
 });
 
 describe("TerminalTabButton", () => {
+  it("shows unread output independently of the running app highlight", () => {
+    const { rerender } = render(<TerminalTabButton tab={{ ...tab, hasUnreadOutput: true }} active={false} highlighted onActivate={vi.fn()} onClose={vi.fn()} />);
+    const button = screen.getByRole("tab");
+    expect(button.classList.contains("has-unread-output")).toBe(true);
+    expect(button.classList.contains("run-config-running")).toBe(true);
+    expect(screen.getByRole("img", { name: "New terminal output" })).toBeTruthy();
+    expect(button.title).toContain("New output available");
+    rerender(<TerminalTabButton tab={tab} active highlighted onActivate={vi.fn()} onClose={vi.fn()} />);
+    expect(screen.queryByRole("img", { name: "New terminal output" })).toBeNull();
+    expect(button.classList.contains("has-unread-output")).toBe(false);
+    expect(button.classList.contains("run-config-running")).toBe(true);
+  });
   it("visibly identifies the owning root", () => {
     render(<TerminalTabButton tab={{ ...tab, rootId: "root-api" }} rootAlias="API" active={false} onActivate={vi.fn()} onClose={vi.fn()} />);
     expect(screen.getByText("API").classList.contains("root-badge")).toBe(true);

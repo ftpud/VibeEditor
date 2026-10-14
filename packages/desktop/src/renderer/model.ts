@@ -32,7 +32,7 @@ export function editorTabLabel(tab: EditorTab): string {
 }
 /** Renderer-only recovery state. A recreated tab is a new Core-owned shell, never a restored process. */
 export type TerminalRecovery = "reattached" | "recreated";
-export type TerminalTab = { id: string; terminalId: string; rootId?: string; title: string; status: "running" | "exited" | "unavailable"; exitCode?: number; recovery?: TerminalRecovery };
+export type TerminalTab = { id: string; terminalId: string; rootId?: string; title: string; status: "running" | "exited" | "unavailable"; exitCode?: number; recovery?: TerminalRecovery; hasUnreadOutput?: boolean };
 export type TerminalGroup = { id: string; tabs: TerminalTab[]; activeTabId?: string };
 export type LayoutModel = { panels: Panel[]; editorGroups: EditorGroup[]; terminalGroup: TerminalGroup };
 
