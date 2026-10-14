@@ -346,8 +346,8 @@ describe("typed workflows", () => {
       await runner.start(definition.id, "Manage the app", async (target, input, runtime) => {
         if (target.type === "run_app") return apps.execute(target, input, os.tmpdir(), runtime.assertActive);
         const use = async (action: string) => {
-          const result = await runner.flowTool(runtime.runId, target.id, "workflow_use_block", { block_id: "app", input: "", action }) as { output: string };
-          return JSON.parse(result.output);
+          const result = await runner.flowTool(runtime.runId, target.id, "workflow_use_block", { block_id: "app", input: "", action }) as { app: unknown };
+          return result.app;
         };
         expect(await use("start")).toMatchObject({ status: "running" });
         expect(await use("status")).toMatchObject({ status: "running" });
