@@ -71,6 +71,47 @@ describe("typed workflows", () => {
     await expect(runner.steerChat(run.id, "chat", "session", "Late input", steer)).rejects.toThrow("no longer running");
   });
 
+  it("publishes steering before acknowledgement and preserves the active turn transcript and reasoning", async () => {
+    const { runner, store, definition, finished } = await setup([block("chat", "chatbox")], []);
+    let release!: () => void;
+    const waiting = new Promise<void>((resolve) => { release = resolve; });
+    let ready!: () => void;
+    const started = new Promise<void>((resolve) => { ready = resolve; });
+    let activity!: (session: AiSession) => Promise<void>;
+    const live = { ...session("Working"), status: "in_progress", messages: [
+      { id: "initial", role: "user", text: "Initial", timestamp: "now" },
+      { id: "reasoning", role: "activity", text: "Reasoning\nInvestigating", timestamp: "now" },
+      { id: "answer", role: "assistant", text: "Working", timestamp: "now" }
+    ] } as AiSession;
+    const run = await runner.start(definition.id, "Initial", async (_block, _prompt, runtime) => {
+      await runtime.started("/workspace/session");
+      activity = runtime.activity!;
+      await activity(live); ready(); await waiting; return live;
+    }, "test");
+    await started;
+    let acknowledge!: () => void;
+    const acknowledgement = new Promise<void>((resolve) => { acknowledge = resolve; });
+    let submitted!: () => void;
+    const submission = new Promise<void>((resolve) => { submitted = resolve; });
+    const steering = runner.steerChat(run.id, "chat", "session", "Focus on tests", async () => {
+      live.messages.push({ id: "steering", role: "user", text: "Focus on tests", timestamp: "now" });
+      submitted(); await acknowledgement; return live;
+    });
+    try {
+      await submission;
+      expect((await store.runs()).find((item) => item.id === run.id)?.blocks[0]?.chatMessages?.some((item) => item.text === "Focus on tests")).toBe(true);
+      await activity(live);
+      let state = (await store.runs()).find((item) => item.id === run.id)!.blocks[0]!;
+      expect(state.agentActivity).toEqual([expect.objectContaining({ id: "reasoning", text: "Reasoning\nInvestigating" })]);
+      expect(state.chatMessages?.at(-1)?.text).toBe("Working");
+      live.messages.push({ id: "continued", role: "assistant", text: "Continued", timestamp: "now" });
+      await activity(live);
+      state = (await store.runs()).find((item) => item.id === run.id)!.blocks[0]!;
+      expect(state.chatMessages?.at(-1)?.text).toBe("Working\n\nContinued");
+    } finally { acknowledge(); await steering; release(); }
+    expect((await finished()).blocks[0]?.chatMessages?.at(-1)?.text).toBe("Working\n\nContinued");
+  });
+
   it.each(["ai", "chatbox"] as const)("loads connected skills on demand for %s without dispatching another agent", async (type) => {
     const instructions = "Inspect the diff, verify the tests, and report concrete findings.";
     const description = "Use when reviewing code changes.";

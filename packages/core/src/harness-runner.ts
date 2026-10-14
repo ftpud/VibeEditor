@@ -27,6 +27,8 @@ export class HarnessRunner {
   private readonly appToolCalls = new Map<string, Promise<unknown>>();
   private readonly agentStarts = new Set<string>();
   private readonly resumingChats = new Set<string>();
+  // Steering adds user messages inside a turn; it must not move the transcript boundary.
+  private readonly chatTurnUsers = new WeakMap<HarnessRun["blocks"][number], string | null>();
   private chatAdmissionQueue = Promise.resolve();
   private readonly flowAnswers = new Map<string, (answer: string) => void>();
   private readonly cancelled = new Set<string>();
@@ -360,12 +362,13 @@ export class HarnessRunner {
     await execution.scheduler.control(blockId, async () => {
       this.assertActive(runId);
       if (state.status !== "running" || state.sessionId !== sessionId) throw new CoreError("INVALID_REQUEST", "Chatbox session changed");
-      await steer(state.provider!, state.workspace!, value);
-      this.assertActive(runId);
+      // Publish the input while provider acknowledgement is still pending.
       const reply = state.chatMessages?.pop();
       state.chatMessages = [...state.chatMessages ?? [], { id: crypto.randomUUID(), role: "user" as const, text: value, timestamp: new Date().toISOString() }, ...(reply ? [reply] : [])].slice(-200);
       this.log(state, "prompt", `User steering: ${value}`);
       await this.update(execution.run);
+      await steer(state.provider!, state.workspace!, value);
+      this.assertActive(runId);
     });
     return structuredClone(execution.run);
   }
@@ -715,14 +718,14 @@ export class HarnessRunner {
         await execution.scheduler.control(target.id, async () => {
           this.assertActive(runId);
           if (child.status !== "running") throw new Error("Connected AI session is no longer running");
-          await this.steerAgent!(child.provider!, child.workspace!, textInput);
-          this.assertActive(runId);
           if (target.type === "chatbox") {
             const reply = child.chatMessages?.pop();
             child.chatMessages = [...child.chatMessages ?? [], { id: crypto.randomUUID(), role: "user" as const, text: textInput, timestamp: new Date().toISOString() }, ...(reply ? [reply] : [])].slice(-200);
           }
           this.log(child, "prompt", `Agent steering: ${textInput}`);
           await this.update(execution.run);
+          await this.steerAgent!(child.provider!, child.workspace!, textInput);
+          this.assertActive(runId);
         });
         return this.flowBlockMessages(execution.run, target.id, 6);
       }
@@ -837,6 +840,7 @@ export class HarnessRunner {
       if (block.type === "chatbox") {
         const timestamp = new Date().toISOString();
         state.agentActivity = [];
+        this.chatTurnUsers.delete(state);
         state.chatMessages = [...state.chatMessages ?? [], { id: crypto.randomUUID(), role: "user", text: input, timestamp }, { id: crypto.randomUUID(), role: "assistant", text: "", timestamp }].slice(-200) as NonNullable<typeof state.chatMessages>;
       }
       run.status = this.runActivityStatus(run); await this.update(run);
@@ -994,7 +998,7 @@ export class HarnessRunner {
               : dispatch(this.effectiveBlock(run, block), prompt, { runId: run.id, blockId: block.id, attemptId, iteration: index + 1, started, activity, assertActive: () => this.assertActive(run.id) });
           });
           this.assertActive(run.id);
-          if (block.type === "chatbox") state.chatMessages!.at(-1)!.text = chatResponse(settled);
+          if (block.type === "chatbox") state.chatMessages!.at(-1)!.text = chatResponse(settled, this.chatTurnUsers.get(state));
           state.sessionId = settled.id; attempt.sessionId = settled.id; if (iteration) iteration.sessionId = settled.id;
           state.tokens = settled.tokens;
           this.assertTokenBudget(run);
@@ -1122,10 +1126,11 @@ export class HarnessRunner {
     const question = status === "awaiting_user_input" ? session.messages.filter((message) => message.role === "assistant").at(-1)?.text : undefined;
     const permission = status === "awaiting_permission" ? session.pendingPermission : undefined;
     const response = waitingUntil || !state.chatMessages ? session.messages.filter((message) => message.role === "assistant").at(-1)?.text.slice(-200_000) : undefined;
+    if (state.chatMessages && !this.chatTurnUsers.has(state)) this.chatTurnUsers.set(state, session.messages.filter((message) => message.role === "user").at(-1)?.id ?? null);
     const chatReply = state.chatMessages?.at(-1);
-    const chatText = chatReply?.role === "assistant" ? chatResponse(session) : undefined;
+    const chatText = chatReply?.role === "assistant" ? chatResponse(session, this.chatTurnUsers.get(state)) : undefined;
     const chatChanged = chatText !== undefined && chatText !== chatReply?.text;
-    const lastUser = session.messages.map((message) => message.role).lastIndexOf("user");
+    const lastUser = state.chatMessages ? session.messages.findIndex((message) => message.id === this.chatTurnUsers.get(state)) : session.messages.map((message) => message.role).lastIndexOf("user");
     const agentActivity = session.messages.slice(lastUser + 1).filter((message) => message.role === "activity").slice(-50).map((message) => ({ id: message.id, timestamp: message.timestamp, text: (message.text || message.content?.filter((item) => item.type === "text").map((item) => item.text).join("\n") || "Agent activity").slice(-8000) }));
     const activityChanged = JSON.stringify(state.agentActivity ?? []) !== JSON.stringify(agentActivity);
     if (activityChanged) state.agentActivity = agentActivity;
@@ -1472,8 +1477,8 @@ export function nextWatchdogReset(usage?: AiUsage, now = Date.now()): string {
   return new Date(candidates.length ? (exhausted.length ? Math.max(...candidates) : Math.min(...candidates)) : now + 300_000).toISOString();
 }
 
-function chatResponse(session: AiSession): string {
-  const lastUser = session.messages.map((message) => message.role).lastIndexOf("user");
+function chatResponse(session: AiSession, turnUserId?: string | null): string {
+  const lastUser = turnUserId === undefined ? session.messages.map((message) => message.role).lastIndexOf("user") : session.messages.findIndex((message) => message.id === turnUserId);
   return session.messages.slice(lastUser + 1).filter((message) => message.role === "assistant").map((message) => message.text).join("\n\n").slice(-200_000);
 }
 
