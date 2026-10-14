@@ -47,6 +47,21 @@ describe("CoreClient streaming disconnects", () => {
   });
   afterEach(() => vi.unstubAllGlobals());
 
+  it("reports the current transport and handshake operation", async () => {
+    const client = new CoreClient();
+    const progress = vi.fn();
+    client.onConnectionProgress = progress;
+    try {
+      const connecting = client.connect("core", 7331);
+      expect(progress).toHaveBeenLastCalledWith("Opening connection to core:7331…");
+      FakeWebSocket.instances[0]!.open();
+      await connecting;
+      expect(progress.mock.calls.map(([message]) => message)).toEqual([
+        "Opening connection to core:7331…", "Checking Desktop and Core compatibility…", "Finding workspace roots…"
+      ]);
+    } finally { client.disconnect(); }
+  });
+
   it("preserves snapshot error codes through response parsing and keeps the client usable", async () => {
     const client = new CoreClient();
     try {

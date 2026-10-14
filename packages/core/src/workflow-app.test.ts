@@ -4,6 +4,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { HarnessAppOptions, HarnessBlock } from "@remote-ide/protocol";
 import { WorkflowAppService } from "./workflow-app.js";
+import { TerminalSessionHost } from "./process-manager.js";
 
 const services: WorkflowAppService[] = [];
 const directories: string[] = [];
@@ -20,6 +21,29 @@ async function setup() {
 }
 
 describe("workflow apps", () => {
+  it("replays and streams output without launching a shell or killing the app on close", async () => {
+    const { execute, workspace, service } = await setup();
+    const shell = vi.fn();
+    const events = vi.fn();
+    const host = new TerminalSessionHost(events, shell);
+    await execute("start", { command: "printf 'first\\n'; sleep 0.2; printf 'second\\n' >&2; exec sleep 300" });
+    await vi.waitFor(() => expect(service.read("server", workspace).output).toContain("first"));
+    const terminal = service.openTerminal("server", workspace, workspace, host);
+    expect(terminal.output).toContain("first\r\n");
+    expect(service.openTerminal("server", workspace, workspace, host).terminalId).toBe(terminal.terminalId);
+    expect(host.attach("/other", terminal.terminalId)).toBeUndefined();
+    await vi.waitFor(() => expect(host.attach(workspace, terminal.terminalId)?.output).toContain("second\r\n"));
+    expect(events).toHaveBeenCalledWith(expect.objectContaining({ type: "output", terminalId: terminal.terminalId }));
+    host.close(workspace, terminal.terminalId);
+    expect(service.read("server", workspace).status).toBe("running");
+    const reopened = service.openTerminal("server", workspace, workspace, host);
+    expect(reopened.terminalId).not.toBe(terminal.terminalId);
+    await execute("kill");
+    expect(host.attach(workspace, reopened.terminalId)?.status).toBe("exited");
+    expect(shell).not.toHaveBeenCalled();
+    host.closeAll();
+  });
+
   it("starts without waiting, keeps the app alive, tails both streams, reuses starts, and kills it", async () => {
     const { execute, workspace } = await setup();
     const script = 'printf "old\\ninput:%s\\n" "$VIBE_WORKFLOW_INPUT"; pwd; printf "error\\n" >&2; sleep 300 & wait';

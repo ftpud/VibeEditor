@@ -7,6 +7,7 @@ export type LivenessOptions = { intervalMs?: number; timeoutMs?: number };
 export class CoreClient {
   private socket?: WebSocket;
   private pending = new Map<string, Pending>();
+  onConnectionProgress?: (message: string) => void;
   onDisconnected?: (message: string) => void;
   onServerEvent?: (event: ServerEvent) => void;
   private rootId?: string;
@@ -58,6 +59,7 @@ export class CoreClient {
 
   connect(host: string, port: number): Promise<void> {
     return new Promise((resolve, reject) => {
+      this.onConnectionProgress?.(`Opening connection to ${host}:${port}…`);
       const socket = new WebSocket(`ws://${host}:${port}`);
       this.disconnect();
       this.socket = socket;
@@ -88,9 +90,11 @@ export class CoreClient {
         if (this.socket !== socket) return;
         opened = true;
         void (async () => {
+          this.onConnectionProgress?.("Checking Desktop and Core compatibility…");
           const result = await this.request("protocol.handshake", { compatibility: protocolCompatibility, clientVersion: "0.1.0" });
           ensureCurrent();
           if (!result.compatible) throw new Error(result.message ?? "Desktop and Core protocol versions are incompatible");
+          this.onConnectionProgress?.("Finding workspace roots…");
           const roots = await this.request("workspace.roots", {});
           ensureCurrent();
           if (this.rootId && !roots.roots.some((root) => root.id === this.rootId)) throw new Error(`Previously selected workspace root is unavailable: ${this.rootId}`);

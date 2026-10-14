@@ -640,6 +640,11 @@ export function App() {
   const killHarnessApp = useCallback(async (harnessId: string, blockId: string, runId?: string) => { await clientRef.current!.request("harnesses.app.kill", { harnessId, blockId, runId }); }, []);
   const runHarness = useCallback(async (harnessId: string, input: string, startBlockId?: string, rerunRunId?: string) => { const result = await clientRef.current!.request("harnesses.run", { harnessId, input, startBlockId, rerunRunId, provider: aiProviderRef.current, target: { taskId: selectedTaskIdRef.current } }); setHarnessRuns((current) => [result.run, ...current.filter((item) => item.id !== result.run.id)]); return result.run; }, []);
   const chatHarness = useCallback(async (harnessId: string, blockId: string, input: string, runId?: string) => { const result = await clientRef.current!.request("harnesses.chat", { harnessId, blockId, input, runId, provider: aiProviderRef.current, target: { taskId: selectedTaskIdRef.current } }); setHarnessRuns((current) => [result.run, ...current.filter((item) => item.id !== result.run.id)]); return result.run; }, []);
+  const steerHarnessChat = useCallback(async (runId: string, blockId: string, sessionId: string, input: string) => {
+    const { run } = await clientRef.current!.request("harnesses.steer", { runId, blockId, sessionId, input });
+    setHarnessRuns((current) => current.map((item) => item.id === runId ? run : item));
+    return run;
+  }, []);
   const appendHarnessRun = useCallback(async (runId: string, input: string) => { const result = await clientRef.current!.request("harnesses.append", { runId, input }); setHarnessRuns((current) => current.map((item) => item.id === runId ? result.run : item)); return result.run; }, []);
   const resolveHarnessPermission = useCallback(async (runId: string, blockId: string, sessionId: string, pauseId: string, requestId: string, optionId?: string) => { const result = await clientRef.current!.request("harnesses.permission.resolve", { runId, blockId, sessionId, pauseId, requestId, optionId }); setHarnessRuns((current) => current.map((item) => item.id === runId ? result.run : item)); return result.run; }, []);
   const answerHarnessQuestion = useCallback(async (runId: string, blockId: string, sessionId: string, pauseId: string, input: string) => { const result = await clientRef.current!.request("harnesses.answer", { runId, blockId, sessionId, pauseId, input }); setHarnessRuns((current) => current.map((item) => item.id === runId ? result.run : item)); return result.run; }, []);
@@ -729,9 +734,10 @@ export function App() {
     clientRef.current?.disconnect();
     clientRef.current = undefined;
     setWorkspaceOptionsReady(false);
-    setStatus("connecting"); setStatusMessage("Connecting...");
+    setStatus("connecting"); setStatusMessage(`Opening connection to ${host.trim()}:${port}…`);
     const client = new CoreClient();
     clientRef.current = client;
+    client.onConnectionProgress = (message) => { if (clientRef.current === client) setStatusMessage(message); };
     let connectionReady = false;
     let recoverySelection: RecoverySelection | undefined;
     const recovery = new ConnectionRecovery(async (signal) => {
@@ -922,7 +928,9 @@ export function App() {
       await client.connect(host.trim(), Number(port));
       if (clientRef.current !== client) return;
       try {
+        setStatusMessage("Loading workspace roots…");
         const rootRegistry = await client.request("workspace.roots", {}); client.setRoot(rootRegistry.selectedRootId); setWorkspaceRoots(rootRegistry.roots); setSelectedRootId(rootRegistry.selectedRootId);
+        setStatusMessage("Opening workspace and reading files…");
         const result = await client.request("workspace.open", { includeIgnored: showIgnoredRef.current });
         if (clientRef.current !== client) return;
         setActiveWorkspace(result.workspace); activeWorkspaceRef.current = result.workspace;
@@ -961,13 +969,17 @@ export function App() {
         const savedJavaHeight = Number(setting("bottom.javaHeight")); if (savedJavaHeight >= 140 && savedJavaHeight <= 1200) setJavaPanelHeight(savedJavaHeight);
         const savedProblemsHeight = Number(setting("bottom.problemsHeight")); if (savedProblemsHeight >= 120 && savedProblemsHeight <= 520) setProblemsHeight(savedProblemsHeight);
         const savedGitLogHeight = Number(setting("bottom.gitLogHeight")); if (savedGitLogHeight >= 180 && savedGitLogHeight <= 650) setGitLogHeight(savedGitLogHeight);
+        setStatusMessage("Discovering AI providers…");
         const providerResult = await client.request("ai.providers", {});
         setAiProviders(providerResult.providers);
         setJavaOptions(result.options.javaProject);
         if (result.options.javaProject) {
+          setStatusMessage("Loading Java project…");
           try { setJavaTree((await client.request("java.getProjectTree", {})).tree); } catch { setJavaTree([]); }
         } else setJavaTree([]);
+        setStatusMessage("Restoring editors and terminals…");
         await restoreWorkspaceOptions(result.options, client);
+        setStatusMessage("Loading tasks…");
         const taskResult = await client.request("tasks.list", {});
         setTasks(taskResult.tasks); setSelectedTaskId(taskResult.selectedTaskId); selectedTaskIdRef.current = taskResult.selectedTaskId; activeTaskRef.current = taskResult.tasks.find((task) => task.id === taskResult.selectedTaskId);
         const initialPanel = initialTaskPanel(sideLayout, taskResult.selectedTaskId, setting);
@@ -980,7 +992,9 @@ export function App() {
         const provider = known(taskProvider) ? taskProvider! : known(wsProvider) ? wsProvider! : (providerResult.providers[0]?.id ?? "codex");
         aiProviderRef.current = provider; setAiProvider(provider);
         wsSave(aiProviderTaskKey(taskResult.selectedTaskId), provider);
+        setStatusMessage(`Loading ${providerResult.providers.find((item) => item.id === provider)?.name ?? provider} models…`);
         const modelResult = await client.request("ai.models", { provider });
+        setStatusMessage("Restoring AI session…");
         let session = (await client.request("ai.get", { provider })).session;
         const savedModel = setting(`ai.${provider}.model`);
         const savedReasoning = setting(`ai.${provider}.reasoning`);
@@ -989,9 +1003,12 @@ export function App() {
           const reasoning = savedReasoning && model.reasoningLevels.includes(savedReasoning) ? savedReasoning : model.defaultReasoning;
           if (session.model !== savedModel || session.reasoning !== reasoning) session = (await client.request("ai.configure", { provider, model: savedModel, reasoning })).session;
         }
+        setStatusMessage("Loading AI usage and session history…");
         setAiModels(modelResult.models); setAiSession(session); setAiUsage((await client.request("ai.usage", { provider })).usage);
         setAiSessions((await client.request("ai.sessions", { provider })).sessions);
+        setStatusMessage("Checking task agent status…");
         await refreshAiStatuses(client);
+        setStatusMessage("Loading workflows, agents, and run configurations…");
         await Promise.all([refreshUsefulFiles(client), refreshRunConfigs(client), refreshAgents(client, taskResult.selectedTaskId), refreshHarnesses(client), refreshHarnessRuns(client)]);
         setTree(result.tree); connectionReady = true; setStatus("connected"); setStatusMessage("");
         void refreshGit(client); void refreshTaskGit(activeTaskRef.current, client);
@@ -1961,6 +1978,14 @@ export function App() {
     return true;
   };
 
+  const openHarnessAppTerminal = async (harnessId: string, blockId: string, runId?: string) => {
+    const client = clientRef.current;
+    if (!client) throw new Error("Backend is disconnected");
+    const terminal = await client.request("harnesses.app.terminal", { harnessId, blockId, runId });
+    const label = harnesses.find((item) => item.id === harnessId)?.blocks.find((item) => item.id === blockId)?.label ?? "App";
+    if (!await openTerminalReference(terminal.terminalId, `${label} output`)) throw new Error("App output terminal is unavailable");
+  };
+
   const openRunConfigTerminal = async (config: RunConfig) => {
     if (!config.terminalId || !clientRef.current) return;
     await openTerminalReference(config.terminalId, config.name);
@@ -2777,9 +2802,9 @@ export function App() {
   }, [commands, commandContext, quickOpen, shortcutBindings, workspaceSymbolsOpen]);
 
   const taskHarnessRuns = workflowRunsForContext(harnessRuns, workspaceRoots.find((root) => root.id === selectedRootId)?.path, activeWorkspace, selectedTaskId);
-  const workflowDesignPanel = <HarnessPanel skillCatalog={skillCatalog} onRefreshSkills={refreshSkills} designOnly harnesses={harnesses} runs={taskHarnessRuns} diagnostics={harnessDiagnostics} providers={aiProviders} agents={agents} defaultProvider={aiProvider} onLoadModels={loadHarnessModels} onValidate={validateHarnessDefinition} onCreate={createHarness} onRead={readHarness} onSave={saveHarness} onDelete={deleteHarness} onRun={runHarness} onTestBlock={testHarnessBlock} onKillApp={killHarnessApp} onReadApp={readHarnessApp} onChat={chatHarness} onAppendRun={appendHarnessRun} onResolvePermission={resolveHarnessPermission} onAnswerQuestion={answerHarnessQuestion} onResumePause={resumeHarnessPause} onRetryPause={retryHarnessPause} onCancelPause={cancelHarnessPause} onCancelRun={cancelHarnessRun} onDeleteRun={deleteHarnessRun} onError={setStatusMessage} />;
+  const workflowDesignPanel = <HarnessPanel skillCatalog={skillCatalog} onRefreshSkills={refreshSkills} designOnly harnesses={harnesses} runs={taskHarnessRuns} diagnostics={harnessDiagnostics} providers={aiProviders} agents={agents} defaultProvider={aiProvider} onLoadModels={loadHarnessModels} onValidate={validateHarnessDefinition} onCreate={createHarness} onRead={readHarness} onSave={saveHarness} onDelete={deleteHarness} onRun={runHarness} onTestBlock={testHarnessBlock} onKillApp={killHarnessApp} onReadApp={readHarnessApp} onChat={chatHarness} onSteerChat={steerHarnessChat} onOpenAppTerminal={openHarnessAppTerminal} onAppendRun={appendHarnessRun} onResolvePermission={resolveHarnessPermission} onAnswerQuestion={answerHarnessQuestion} onResumePause={resumeHarnessPause} onRetryPause={retryHarnessPause} onCancelPause={cancelHarnessPause} onCancelRun={cancelHarnessRun} onDeleteRun={deleteHarnessRun} onError={setStatusMessage} />;
   const showWorkflowDesign = sideLayout === "classic" ? classicSideView === "harness" : workflowPanelMode === "design";
-  const workflowRunPanel = <WorkflowRunPanel key={`${selectedRootId}:${selectedTaskId ?? "root"}`} harnesses={harnesses} runs={taskHarnessRuns} diagnostics={harnessDiagnostics} onValidate={validateHarnessDefinition} onRun={runHarness} onKillApp={killHarnessApp} onReadApp={readHarnessApp} onChat={chatHarness} onCancelRun={cancelHarnessRun} onResolvePermission={resolveHarnessPermission} onAnswerQuestion={answerHarnessQuestion} onResumePause={resumeHarnessPause} onRetryPause={retryHarnessPause} onCancelPause={cancelHarnessPause} onError={setStatusMessage} />;
+  const workflowRunPanel = <WorkflowRunPanel key={`${selectedRootId}:${selectedTaskId ?? "root"}`} harnesses={harnesses} runs={taskHarnessRuns} diagnostics={harnessDiagnostics} onValidate={validateHarnessDefinition} onRun={runHarness} onKillApp={killHarnessApp} onReadApp={readHarnessApp} onChat={chatHarness} onSteerChat={steerHarnessChat} onOpenAppTerminal={openHarnessAppTerminal} onCancelRun={cancelHarnessRun} onResolvePermission={resolveHarnessPermission} onAnswerQuestion={answerHarnessQuestion} onResumePause={resumeHarnessPause} onRetryPause={retryHarnessPause} onCancelPause={cancelHarnessPause} onError={setStatusMessage} />;
   const workflowPanels = <div className="workflow-mode-panels"><div hidden={!showWorkflowDesign}>{workflowDesignPanel}</div><div hidden={showWorkflowDesign}>{workflowRunPanel}</div></div>;
   const processesPanel = <ProcessesPanel key={selectedRootId} processes={managedProcessList} loading={processLoading} error={processError} disabled={status !== "connected" || taskSwitching} onRefresh={() => refreshProcesses()} onKill={async (processId) => {
     const client = clientRef.current; if (!client) throw new Error("Backend is disconnected. Reconnect and try again.");
@@ -3078,8 +3103,8 @@ function ConnectionScreen(props: { host: string; port: string; status: Connectio
     <h1>Vibe Editor</h1><p>Connect to a core backend</p>
     <label>Host<input autoFocus value={props.host} onChange={(event) => props.setHost(event.target.value)} placeholder="192.168.1.50" required /></label>
     <label>Port<input value={props.port} onChange={(event) => props.setPort(event.target.value)} type="number" min="1" max="65535" required /></label>
-    {props.statusMessage && <div className={`connection-message ${props.status}`}>{props.statusMessage}</div>}
-    <button className="primary" disabled={connecting}>{connecting ? "Connecting..." : "Connect"}</button>
+    {props.statusMessage && <div role="status" aria-live="polite" className={`connection-message ${props.status}`}>{props.statusMessage}</div>}
+    <button className="primary" disabled={connecting}>{connecting ? props.statusMessage : "Connect"}</button>
   </form></main>;
 }
 

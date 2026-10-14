@@ -407,6 +407,8 @@ export type ProtocolOperations = {
   "harnesses.runs.delete": { payload: { runId: string }; result: Record<string, never> };
   "harnesses.test": { payload: { definition: HarnessDefinition; blockId: string; input: string; provider?: AiProvider; target?: HarnessTaskTarget }; result: { run: HarnessRun } };
   "harnesses.app.read": { payload: { harnessId: string; blockId: string; runId?: string }; result: { app: HarnessAppState } };
+  "harnesses.app.terminal": { payload: { harnessId: string; blockId: string; runId?: string }; result: TerminalSessionSnapshot };
+  "harnesses.steer": { payload: { runId: string; blockId: string; sessionId: string; input: string }; result: { run: HarnessRun } };
   "harnesses.app.kill": { payload: { harnessId: string; blockId: string; runId?: string }; result: Record<string, never> };
   "harnesses.run": { payload: { harnessId: string; input: string; startBlockId?: string; rerunRunId?: string; provider?: AiProvider; target?: HarnessTaskTarget }; result: { run: HarnessRun } };
   "harnesses.chat": { payload: { harnessId: string; blockId: string; input: string; runId?: string; provider?: AiProvider; target?: HarnessTaskTarget }; result: { run: HarnessRun } };
@@ -826,6 +828,8 @@ const requestTypeRegistry: Record<RequestType, true> = {
   "harnesses.runs.delete": true,
   "harnesses.test": true,
   "harnesses.app.read": true,
+  "harnesses.app.terminal": true,
+  "harnesses.steer": true,
   "harnesses.app.kill": true,
   "harnesses.run": true,
   "harnesses.chat": true,

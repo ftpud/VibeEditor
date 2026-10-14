@@ -1,11 +1,13 @@
 import { managedProcesses } from "./managed-processes.js";
+import { EventEmitter } from "node:events";
+import { TerminalSessionHost, type TerminalSnapshot } from "./process-manager.js";
 import crypto from "node:crypto";
 import { workspaceShellCommand } from "./workspace-shell.js";
 import path from "node:path";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import type { AiSession, HarnessAppState, HarnessAppAction, HarnessBlock } from "@remote-ide/protocol";
 
-type App = { launchId: string; child: ChildProcessWithoutNullStreams; output: string; status: "starting" | "running" | "exited"; exitCode: number | null; signal: string | null; ready: Promise<void>; closed: Promise<void> };
+type App = { events: EventEmitter; terminalIds: Map<string, string>; launchId: string; child: ChildProcessWithoutNullStreams; output: string; status: "starting" | "running" | "exited"; exitCode: number | null; signal: string | null; ready: Promise<void>; closed: Promise<void> };
 
 /** Apps outlive individual workflow runs and are stopped when the Core server closes. */
 export class WorkflowAppService {
@@ -49,9 +51,9 @@ export class WorkflowAppService {
         const { shell, args } = workspaceShellCommand(block.command);
         const processContext = { ...context, rootWorkspace: context.rootWorkspace ?? workspace, workspace, kind: "workflow-app" as const, appName: name, command: `${name}: ${block.command}` };
         const { child, launchId } = managedProcesses.launchWithIdentity(processContext, (env) => spawn(shell, args, { cwd: workspace, env: { ...env, TERM: "xterm-256color", COLORTERM: "truecolor", VIBE_WORKFLOW_INPUT: input }, detached: true, stdio: ["pipe", "pipe", "pipe"] }));
-        app = { launchId, child, output: "", status: "starting", exitCode: null, signal: null, ready: Promise.resolve(), closed: Promise.resolve() };
+        app = { events: new EventEmitter(), terminalIds: new Map(), launchId, child, output: "", status: "starting", exitCode: null, signal: null, ready: Promise.resolve(), closed: Promise.resolve() };
         const current = app;
-        const collect = (chunk: Buffer) => { current.output = (current.output + chunk.toString()).slice(-200_000); };
+        const collect = (chunk: Buffer) => { current.output = (current.output + chunk.toString()).slice(-200_000); current.events.emit("output", chunk.toString()); };
         child.stdout.on("data", collect); child.stderr.on("data", collect);
         child.stdin.on("error", () => {}); child.stdin.end(input);
         current.ready = new Promise<void>((resolve, reject) => {
@@ -59,7 +61,7 @@ export class WorkflowAppService {
           child.once("error", (error) => { current.status = "exited"; reject(error); });
         });
         child.once("exit", (code, signal) => { current.status = "exited"; current.exitCode = code; current.signal = signal; });
-        current.closed = new Promise<void>((resolve) => child.once("close", (code, signal) => { current.status = "exited"; current.exitCode = code; current.signal = signal; resolve(); }));
+        current.closed = new Promise<void>((resolve) => child.once("close", (code, signal) => { current.status = "exited"; current.exitCode = code; current.signal = signal; current.events.emit("exit", code ?? 1); resolve(); }));
         this.apps.set(key, current);
       }
       await app.ready;
@@ -78,6 +80,21 @@ export class WorkflowAppService {
     // Keep even heavily escaped log text below the workflow's output limit as JSON.
     const result = { name, status: app ? managedProcesses.appSnapshot(app.launchId)?.status ?? app.status : "not_found", ...(app ? { pid: app.child.pid, exitCode: app.exitCode, signal: app.signal } : {}), ...(tail !== undefined ? { output: tail.slice(-30_000), truncated: tail.length > 30_000 } : {}) };
     return { id: crypto.randomUUID(), status: "idle", messages: [{ id: crypto.randomUUID(), role: "assistant", text: JSON.stringify(result), timestamp: new Date().toISOString() }] } as AiSession;
+  }
+
+  openTerminal(name: string, workspace: string, terminalWorkspace: string, host: TerminalSessionHost): TerminalSnapshot {
+    const app = this.apps.get(`${path.resolve(workspace)}\0${name.trim()}`);
+    if (!app) throw new Error(`App '${name}' has not been started in this workspace`);
+    const existing = app.terminalIds.get(terminalWorkspace);
+    const snapshot = existing && host.attach(terminalWorkspace, existing);
+    if (snapshot) return snapshot;
+    const terminal = host.createOutput(terminalWorkspace, app.output.replace(/(?<!\r)\n/g, "\r\n"), (data, exit) => {
+      const output = (chunk: string) => data(chunk.replace(/(?<!\r)\n/g, "\r\n"));
+      app.events.on("output", output); app.events.on("exit", exit);
+      return () => { app.events.off("output", output); app.events.off("exit", exit); };
+    }, app.child.stdout.readableEnded && app.child.stderr.readableEnded && app.status === "exited" ? app.exitCode ?? 1 : undefined);
+    app.terminalIds.set(terminalWorkspace, terminal.terminalId);
+    return terminal;
   }
 
   read(name: string, workspace: string): HarnessAppState {

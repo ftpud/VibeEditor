@@ -734,7 +734,7 @@ async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStor
   if (request.type !== "workspace.open") filesystem.getWorkspace();
   if (request.type === "filesystem.remoteTransferBegin") return remoteTransfers.begin(workspacePath, request.payload);
   if (request.type === "filesystem.remoteTransferCancel") return { cancelled: remoteTransfers.cancel(request.payload.token) };
-  if (["harnesses.append", "harnesses.permission.resolve", "harnesses.answer", "harnesses.pause.resume", "harnesses.pause.retry"].includes(request.type)) {
+  if (["harnesses.steer", "harnesses.append", "harnesses.permission.resolve", "harnesses.answer", "harnesses.pause.resume", "harnesses.pause.retry"].includes(request.type)) {
     const { runId } = request.payload as { runId: string };
     const run = await harnessRunner.readRun(runId);
     if (!run) throw new CoreError("FILE_NOT_FOUND", "Workflow run does not exist");
@@ -943,6 +943,7 @@ async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStor
       const { definition, blockId, input, provider } = request.payload;
       return { run: await startWorkflow({ harnessId: definition.id, input, provider, target: request.payload.target, startBlockId: blockId, testDefinition: definition }, { acp, tasks, agents, harnessRunner, workflowApps, aiTimers, rootWorkspace, bridgeWorkspace, workspacePath }) };
     }
+    case "harnesses.app.terminal":
     case "harnesses.app.read":
     case "harnesses.app.kill": {
       const { harnessId, blockId, runId } = request.payload;
@@ -952,6 +953,7 @@ async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStor
       const block = definition.blocks.find((block) => block.id === blockId);
       if (block?.type !== "run_app" || !block.app) throw new CoreError("INVALID_REQUEST", "Selected block is not a Run App");
       const appWorkspace = run ? (await resolveWorkflowBinding(run, undefined, { tasks, rootWorkspace, workspacePath })).workspace : await availableWorkflowWorkspace(workspacePath);
+      if (request.type === "harnesses.app.terminal") return workflowApps.openTerminal(block.app.name, appWorkspace, workspacePath, terminalHost);
       if (request.type === "harnesses.app.read") return { app: workflowApps.read(block.app.name, appWorkspace) };
       await workflowApps.execute({ ...block, app: { ...block.app, actions: ["kill"] } }, '{"action":"kill"}', appWorkspace, () => {});
       return {};
@@ -966,6 +968,7 @@ async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStor
       if (definition.blocks.find((block) => block.id === payload.blockId)?.type !== "chatbox") throw new CoreError("INVALID_REQUEST", "Select a Chatbox block");
       return { run: await startWorkflow({ harnessId: payload.harnessId, input: payload.input, startBlockId: payload.blockId, chatRunId: payload.runId, target: payload.target, provider: existing?.blocks.find((block) => block.blockId === payload.blockId)?.provider ?? payload.provider }, { acp, tasks, agents, harnessRunner, workflowApps, aiTimers, rootWorkspace, bridgeWorkspace, workspacePath }) };
     }
+    case "harnesses.steer": return { run: await harnessRunner.steerChat(request.payload.runId, request.payload.blockId, request.payload.sessionId, request.payload.input, (provider, target, input) => acp.get(provider).steer(target, input)) };
     case "harnesses.append": return { run: await harnessRunner.appendInput(request.payload.runId, request.payload.input) };
     case "harnesses.permission.resolve": return { run: await harnessRunner.resolvePermission(request.payload.runId, request.payload.blockId, request.payload.sessionId, request.payload.pauseId, request.payload.requestId, request.payload.optionId, async (provider, target, requestId, optionId) => acp.get(provider).resolvePermission(target, requestId, optionId)) };
     case "harnesses.answer": return { run: await harnessRunner.answerQuestion(request.payload.runId, request.payload.blockId, request.payload.sessionId, request.payload.pauseId, request.payload.input, async (provider, target, input) => acp.get(provider).steer(target, input)) };
