@@ -82,13 +82,14 @@ describe("response provenance", () => {
   });
 });
 
-describe("activity terminal links", () => {
-  it("opens an activity terminal by its opaque reference and disables a stale link", async () => {
-    const onOpenTerminal = vi.fn().mockResolvedValue(false);
-    const conversation: AiSession = { id: "one", model: "model-a", reasoning: "low", status: "done", messages: [{ id: "tool", role: "activity", text: "Run build", terminalId: "terminal-1", timestamp: "2026-08-30T12:00:00.000Z" }] };
-    render(<AiPanel provider="codex" providers={[]} session={conversation} sessions={[conversation]} models={[]} attachments={[]} permissionOwner={{ provider: "codex" }} onProviderChange={vi.fn()} onConfigurationChange={vi.fn()} onAttachmentsChange={vi.fn()} onSend={vi.fn()} onSteer={vi.fn()} onInterrupt={vi.fn()} onNewSession={vi.fn()} onSwitchSession={vi.fn()} onRemoveSession={vi.fn()} onResolvePermission={vi.fn()} onOpenTerminal={onOpenTerminal} />);
-    fireEvent.click(screen.getByTitle("Open this activity's terminal"));
-    await vi.waitFor(() => expect(onOpenTerminal).toHaveBeenCalledWith("terminal-1"));
-    await vi.waitFor(() => expect((screen.getByRole("button", { name: "Terminal unavailable" }) as HTMLButtonElement).disabled).toBe(true));
+describe("activity output", () => {
+  it("keeps execution output expandable without linking provider terminal IDs to Vibe terminals", () => {
+    const conversation: AiSession = { id: "one", model: "model-a", reasoning: "low", status: "done", messages: [{ id: "tool", role: "activity", text: "Run build\nBuild succeeded", terminalId: "terminal-1", timestamp: "2026-08-30T12:00:00.000Z" }] };
+    render(<AiPanel provider="codex" providers={[]} session={conversation} sessions={[conversation]} models={[]} attachments={[]} permissionOwner={{ provider: "codex" }} onProviderChange={vi.fn()} onConfigurationChange={vi.fn()} onAttachmentsChange={vi.fn()} onSend={vi.fn()} onSteer={vi.fn()} onInterrupt={vi.fn()} onNewSession={vi.fn()} onSwitchSession={vi.fn()} onRemoveSession={vi.fn()} onResolvePermission={vi.fn()} />);
+    const summary = screen.getByText("Run build").closest("summary")!;
+    expect(summary.closest("details")).toBeTruthy();
+    expect(screen.getByText("Build succeeded")).toBeTruthy();
+    expect(summary.querySelector("button, a")).toBeNull();
+    expect(screen.queryByTitle("Open this activity's terminal")).toBeNull();
   });
 });

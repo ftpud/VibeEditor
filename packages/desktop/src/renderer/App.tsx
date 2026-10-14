@@ -2048,14 +2048,6 @@ export function App() {
     if (!config.terminalId || !clientRef.current) return;
     await openTerminalReference(config.terminalId, config.name);
   };
-  useEffect(() => {
-    const listener = (event: Event) => {
-      const { terminalId, resolve } = (event as CustomEvent<{ terminalId: string; resolve(opened: boolean): void }>).detail;
-      void openTerminalReference(terminalId, "AI activity").then(resolve);
-    };
-    window.addEventListener("vibe:open-terminal", listener);
-    return () => window.removeEventListener("vibe:open-terminal", listener);
-  });
   const runConfigAction = async (config: RunConfig, action: "run" | "stop" | "restart" | "openTerminal") => {
     setRunConfigMenu(undefined);
     try { const next = (await clientRef.current!.request(`runConfig.${action}` as "runConfig.run", { scope: config.scope, name: config.name })).config; setRunConfigs((items) => items.map((item) => item.scope === next.scope && item.name === next.name ? next : item)); if (action !== "stop") await openRunConfigTerminal(next); }
