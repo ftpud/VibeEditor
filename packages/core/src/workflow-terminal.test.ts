@@ -1,11 +1,45 @@
 import os from "node:os";
 import path from "node:path";
-import { mkdtemp, realpath, rm } from "node:fs/promises";
+import { mkdtemp, readFile, realpath, rm } from "node:fs/promises";
 import { expect, it, vi } from "vitest";
 import type { HarnessBlock } from "@remote-ide/protocol";
 import { TerminalSessionHost } from "./process-manager.js";
 import { executeTerminalControl } from "./workflow-terminal.js";
 import { WorkflowAppService } from "./workflow-app.js";
+
+it("starts a named terminal and executes its command in one call", async () => {
+  const workspace = await realpath(await mkdtemp(path.join(os.tmpdir(), "terminal-command-")));
+  const host = new TerminalSessionHost(() => {});
+  try {
+    const opened = JSON.parse(executeTerminalControl(JSON.stringify({ action: "open_and_run", name: "Command", command: "pwd > command-result.txt" }), workspace, host, () => {}).messages[0]!.text);
+    expect(opened).toMatchObject({ terminalId: expect.any(String), displayName: "Command", status: "running" });
+    await vi.waitFor(async () => expect((await readFile(path.join(workspace, "command-result.txt"), "utf8")).trim()).toBe(workspace));
+    expect(host.attach(workspace, opened.terminalId)?.status).toBe("running");
+    expect(host.attach("/another", opened.terminalId)).toBeUndefined();
+  } finally { host.closeAll(); await rm(workspace, { recursive: true, force: true }); }
+});
+
+it("validates open_and_run before opening a terminal and preserves existing newlines", () => {
+  const write = vi.fn();
+  const kill = vi.fn();
+  const factory = vi.fn(() => ({ write, resize: vi.fn(), kill, onData: vi.fn(), onExit: vi.fn() }));
+  const host = new TerminalSessionHost(() => {}, factory);
+  const call = (args: unknown) => executeTerminalControl(JSON.stringify(args), "/task", host, () => {});
+  for (const command of [undefined, "", "  ", 12, "x".repeat(100001), "echo\0bad"]) {
+    expect(() => call({ action: "open_and_run", name: "Command", command })).toThrow("command");
+  }
+  expect(() => call({ action: "open_and_run", name: "", command: "echo ready" })).toThrow("name");
+  expect(() => executeTerminalControl('{"action":"open_and_run","name":"Command","command":"echo ready"}', "/task", host, () => { throw new Error("cancelled"); })).toThrow("cancelled");
+  expect(factory).not.toHaveBeenCalled();
+  call({ action: "open_and_run", name: "Command", command: "echo ready" });
+  call({ action: "open_and_run", name: "Command", command: "echo ready\n" });
+  expect(write.mock.calls).toEqual([["echo ready\n"], ["echo ready\n"]]);
+  write.mockImplementationOnce(() => { throw new Error("write failed"); });
+  expect(() => call({ action: "open_and_run", name: "Failed", command: "echo ready" })).toThrow("write failed");
+  expect(kill).toHaveBeenCalledTimes(1);
+  expect(host.list("/task")).toHaveLength(2);
+  host.closeAll();
+});
 
 it("opens named task terminals, lists, writes and reads while rejecting other workspaces", () => {
   let data: ((value: string) => void) | undefined;

@@ -38,6 +38,13 @@ describe("typed workflows", () => {
       expect(await runner.flowTool(runtime.runId, current.id, "workflow_use_block", { block_id: "terminals", action: "list" })).toMatchObject({ terminal: { terminals: [expect.objectContaining({ terminalId: opened.terminal.terminalId })] } });
       await runner.flowTool(runtime.runId, current.id, "workflow_use_block", { block_id: "terminals", action: "write", terminal_id: opened.terminal.terminalId, data: "echo ready\n" });
       expect(write).toHaveBeenCalledWith("echo ready\n");
+      const started = await runner.flowTool(runtime.runId, current.id, "workflow_use_block", { block_id: "terminals", action: "open_and_run", name: "Dev server", command: "npm run dev" }) as { terminal: { terminalId: string; displayName: string } };
+      expect(started.terminal).toMatchObject({ terminalId: expect.any(String), displayName: "Dev server" });
+      expect(started.terminal.terminalId).not.toBe(opened.terminal.terminalId);
+      expect(write).toHaveBeenLastCalledWith("npm run dev\n");
+      await runner.flowTool(runtime.runId, current.id, "workflow_use_block", { block_id: "terminals", action: "open_and_run", name: "Input command", input: "echo input" });
+      expect(write).toHaveBeenLastCalledWith("echo input\n");
+      await expect(runner.flowTool(runtime.runId, current.id, "workflow_use_block", { block_id: "terminals", action: "unknown" })).rejects.toThrow("open_and_run");
       return session("controlled");
     });
     expect((await finished()).status).toBe("succeeded");
