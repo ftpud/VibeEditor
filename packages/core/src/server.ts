@@ -268,7 +268,7 @@ export async function createServer(host: string, port: number, workspacePath: st
       }, 4, undefined, (document) => {
         const event = JSON.stringify({ type: "workflow.document", payload: { rootId, ...document } } satisfies ServerEvent);
         for (const socket of activeSessions) sendWebSocketData(socket, event);
-      });
+      }, (provider, workspace, input) => acp.get(provider).steer(workspace, input));
       harnessRunners.set(rootId, runner);
     }
     return runner;

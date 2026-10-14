@@ -25,6 +25,7 @@ export type HarnessRecoveryInspector = {
 export class HarnessRunner {
   private readonly flowInvocations = new Map<string, (id: string, input: string, ancestors?: string[]) => Promise<string>>();
   private readonly appToolCalls = new Map<string, Promise<unknown>>();
+  private readonly agentStarts = new Set<string>();
   private readonly resumingChats = new Set<string>();
   private chatAdmissionQueue = Promise.resolve();
   private readonly flowAnswers = new Map<string, (answer: string) => void>();
@@ -36,7 +37,7 @@ export class HarnessRunner {
   private readonly operationsInFlight = new Map<string, Promise<unknown>>();
   private updateQueue = Promise.resolve();
   private readonly recovery: ResolvedRecoveryPolicy;
-  constructor(private readonly store: HarnessStore, private readonly changed: (runId: string) => void, private readonly concurrency = 4, recovery: RecoveryPolicy = { maxAttempts: 3, transportBackoffMs: 5_000 }, private readonly openDocument?: (document: { runId: string; blockId: string; title: string; content: string }) => void) {
+  constructor(private readonly store: HarnessStore, private readonly changed: (runId: string) => void, private readonly concurrency = 4, recovery: RecoveryPolicy = { maxAttempts: 3, transportBackoffMs: 5_000 }, private readonly openDocument?: (document: { runId: string; blockId: string; title: string; content: string }) => void, private readonly steerAgent?: AnswerQuestion) {
     this.recovery = { maxElapsedMs: 15 * 60_000, jitterRatio: 0.2, random: Math.random, ...recovery };
   }
 
@@ -700,6 +701,33 @@ export class HarnessRunner {
       execution.messageReads.set(key, fingerprint);
       return unchanged && !args.include_unchanged ? { blockId: target.id, block_status: result.block_status, unchanged: true } : result;
     }
+    if (target.type !== "task_controls" && ["task_id", "branch", "status", "message", "idempotency_key"].some((key) => args[key] !== undefined)) throw new Error("Task arguments are only available for Task controls blocks");
+    if (target.type !== "terminal_control" && ["terminal_id", "name", "data"].some((key) => args[key] !== undefined)) throw new Error("Terminal arguments are only available for Terminal Control blocks");
+    const agentTarget = ["ai", "chatbox"].includes(target.type);
+    if (agentTarget && args.lines !== undefined && args.action !== "tail") throw new Error("AI lines are only available with action 'tail'");
+    if (agentTarget && args.action !== undefined) {
+      if (!["start", "status", "tail", "steer"].includes(String(args.action))) throw new Error("AI action must be start, status, tail, or steer");
+      if (args.lines !== undefined && (args.action !== "tail" || typeof args.lines !== "number" || !Number.isInteger(args.lines) || args.lines < 1 || args.lines > 50)) throw new Error("Use lines from 1 to 50 with AI action 'tail'");
+      if (args.action === "status" || args.action === "tail") return this.flowBlockMessages(execution.run, target.id, args.action === "status" ? 0 : (args.lines as number | undefined) ?? 6);
+      if (args.action === "steer") {
+        const child = execution.run.blocks.find((item) => item.blockId === target.id)!;
+        if (!textInput.trim() || child.status !== "running" || !child.workspace || !child.provider || !this.steerAgent) throw new Error("Steering requires a running connected AI session and nonempty input");
+        await execution.scheduler.control(target.id, async () => {
+          this.assertActive(runId);
+          if (child.status !== "running") throw new Error("Connected AI session is no longer running");
+          await this.steerAgent!(child.provider!, child.workspace!, textInput);
+          this.assertActive(runId);
+          if (target.type === "chatbox") {
+            const reply = child.chatMessages?.pop();
+            child.chatMessages = [...child.chatMessages ?? [], { id: crypto.randomUUID(), role: "user" as const, text: textInput, timestamp: new Date().toISOString() }, ...(reply ? [reply] : [])].slice(-200);
+          }
+          this.log(child, "prompt", `Agent steering: ${textInput}`);
+          await this.update(execution.run);
+        });
+        return this.flowBlockMessages(execution.run, target.id, 6);
+      }
+      if (execution.flowBusy?.has(target.id) || this.agentStarts.has(`${runId}:${target.id}`)) throw new Error("Connected AI block is already running; use status, tail, or steer");
+    }
     const timeoutMs = args.timeout_seconds === undefined ? edge.timeoutMs ?? 300_000 : typeof args.timeout_seconds === "number" ? Math.round(args.timeout_seconds * 1000) : NaN;
     if (!Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 86_400_000) throw new Error("Use timeout_seconds greater than zero and at most 86400");
     if (target.type === "run_app") {
@@ -710,9 +738,7 @@ export class HarnessRunner {
       if (args.action !== undefined && !["list", "open", "read", "write"].includes(String(args.action))) throw new Error("Terminal Control action must be list, open, read, or write");
     } else if (target.type === "task_controls") {
       if (args.lines !== undefined) throw new Error("Lines are only available for Run App blocks");
-    } else if (args.action !== undefined || args.lines !== undefined) throw new Error("Action is only available for Run App, Terminal Control and Task controls blocks; lines are only available for Run App and Terminal Control blocks");
-    if (target.type !== "task_controls" && ["task_id", "branch", "status", "message", "idempotency_key"].some((key) => args[key] !== undefined)) throw new Error("Task arguments are only available for Task controls blocks");
-    if (target.type !== "terminal_control" && ["terminal_id", "name", "data"].some((key) => args[key] !== undefined)) throw new Error("Terminal arguments are only available for Terminal Control blocks");
+    } else if (!agentTarget && (args.action !== undefined || args.lines !== undefined)) throw new Error("Action is only available for Run App, Terminal Control and Task controls blocks; lines are only available for Run App and Terminal Control blocks");
     const invoke = this.flowInvocations.get(runId);
     if (!invoke) throw new Error("Flow is unavailable");
     const call = () => execution.scheduler.suspend(blockId, async () => {
@@ -746,6 +772,17 @@ export class HarnessRunner {
         })]);
       } finally { if (timer) clearTimeout(timer); }
     };
+    if (agentTarget && args.action === "start") {
+      const key = `${runId}:${target.id}`;
+      const result = call();
+      this.agentStarts.add(key);
+      const pending = result.then(() => {}, () => {}).finally(() => {
+        execution.background.delete(pending);
+        this.agentStarts.delete(key);
+      });
+      execution.background.add(pending);
+      return { blockId: target.id, status: "started" };
+    }
     if (target.type !== "run_app") return waitForResult(call());
     const key = `${runId}:${target.id}`;
     const pending = this.appToolCalls.get(key) ?? Promise.resolve();
@@ -763,8 +800,8 @@ export class HarnessRunner {
       blockId, block_status: state.status,
       // The latest output is already represented by these messages. Polling
       // must not also repeat the entire (potentially much larger) output.
-      messages: messages.slice(-count).map((message) => ({ ...message, text: message.text.slice(-8000), ...(message.text.length > 8000 ? { truncated: true } : {}) })),
-      activity: (state.agentActivity ?? []).slice(-count),
+      messages: (count ? messages.slice(-count) : []).map((message) => ({ ...message, text: message.text.slice(-8000), ...(message.text.length > 8000 ? { truncated: true } : {}) })),
+      activity: count ? (state.agentActivity ?? []).slice(-count) : [],
       ...(state.error ? { error: state.error } : {})
     };
   }
@@ -811,7 +848,7 @@ export class HarnessRunner {
           const tools = edges.filter((edge) => edge.from === id && (edge.type === "use" || block.type === "chatbox")).map((edge) => ({ block_id: edge.to, name: blocks.find((item) => item.id === edge.to)?.label, type: blocks.find((item) => item.id === edge.to)?.type, description: workflowBlockDescription(blocks.find((item) => item.id === edge.to)), seconds: blocks.find((item) => item.id === edge.to)?.seconds, app: blocks.find((item) => item.id === edge.to)?.app, task_controls: taskControlsMetadata(blocks.find((item) => item.id === edge.to), execution.defaultProvider), timeout_seconds: (edge.timeoutMs ?? 300_000) / 1000 }));
           const paths = block.type === "chatbox" ? [] : edges.filter((edge) => edge.from === id && edge.type === "path").map((edge) => edge.label);
           const inputTemplate = /\{\{\s*input\s*\}\}/.test(block.prompt) ? block.prompt : `${block.prompt}\n\nInput:\n{{input}}`;
-          const instructions = `Connected tools: ${JSON.stringify(tools)}. Call workflow_use_block with block_id and input to use one; timeout_seconds optionally overrides its connection timeout. On a timed_out result the child keeps working. Read the returned messages and activity, then call workflow_block_messages with block_id and optional count (default 6, maximum 50) to check progress without starting another turn. For Run App blocks, pass action (start, status, kill, or tail) from the configured allowed actions. Status and tail do not need input; tail optionally accepts lines (1–10000). Read the structured app result: app.status is process status and app.output is log text for tail. For example: workflow_use_block({"block_id":"APP_BLOCK_ID","action":"status"}) or workflow_use_block({"block_id":"APP_BLOCK_ID","action":"tail","lines":100}). Terminal Control blocks list, open, read, and write terminals in the bound task workspace. Pass action, terminal_id for read/write, name for open, data for write (raw text; include a newline to execute a command), and optional lines for read. Read structured results in terminal. Task controls blocks manage task worktrees using their designed provider/model/reasoning. Call workflow_use_block with action create (branch required), create_and_start (input is the prompt; branch optional), status (task_id optional), prompt (task_id and input required), set_status (task_id and status active or finished required), set_commit_message (task_id and message or input; sets the commit-message draft), or update_commit_message (task_id and message or input; rewrites the latest unpushed commit message without changing contents). Pass idempotency_key for create and prompt operations and reuse it only when retrying the same operation. Read structured results in task_controls. Skill blocks provide reusable instructions. Choose skills by their descriptions; call workflow_use_block with the skill block_id to load its instructions before applying them in your own session. For linked skills, read the returned skill.content and resolve supporting files relative to skill.baseDirectory. Reuse loaded instructions for this workflow run. User Prompt and Yes/No Prompt blocks wait for a human answer in the workflow UI and return that answer to you. Their wait does not expire with the connection timeout. Timer blocks arm immediately and return without waiting, so you can continue your work. When a Timer fires, its follow connections receive the input you supplied to it. Reusing a waiting Timer replaces its countdown. Each AI block keeps its own context. Available paths: ${JSON.stringify(paths)}. ${paths.length ? "Call workflow_choose_path before finishing to choose one path." : ""}`;
+          const instructions = `Connected tools: ${JSON.stringify(tools)}. For connected AI Agents and Chatboxes, action start launches input in the background immediately, status checks state, tail reads recent messages (lines 1–50), and steer sends input to the running session without waiting for completion. Start different connected blocks independently; do not start an already running block. Call workflow_use_block with block_id and input to use one; timeout_seconds optionally overrides its connection timeout. On a timed_out result the child keeps working. Read the returned messages and activity, then call workflow_block_messages with block_id and optional count (default 6, maximum 50) to check progress without starting another turn. For Run App blocks, pass action (start, status, kill, or tail) from the configured allowed actions. Status and tail do not need input; tail optionally accepts lines (1–10000). Read the structured app result: app.status is process status and app.output is log text for tail. For example: workflow_use_block({"block_id":"APP_BLOCK_ID","action":"status"}) or workflow_use_block({"block_id":"APP_BLOCK_ID","action":"tail","lines":100}). Terminal Control blocks list, open, read, and write terminals in the bound task workspace. Pass action, terminal_id for read/write, name for open, data for write (raw text; include a newline to execute a command), and optional lines for read. Read structured results in terminal. Task controls blocks manage task worktrees using their designed provider/model/reasoning. Call workflow_use_block with action create (branch required), create_and_start (input is the prompt; branch optional), status (task_id optional), prompt (task_id and input required), set_status (task_id and status active or finished required), set_commit_message (task_id and message or input; sets the commit-message draft), or update_commit_message (task_id and message or input; rewrites the latest unpushed commit message without changing contents). Pass idempotency_key for create and prompt operations and reuse it only when retrying the same operation. Read structured results in task_controls. Skill blocks provide reusable instructions. Choose skills by their descriptions; call workflow_use_block with the skill block_id to load its instructions before applying them in your own session. For linked skills, read the returned skill.content and resolve supporting files relative to skill.baseDirectory. Reuse loaded instructions for this workflow run. User Prompt and Yes/No Prompt blocks wait for a human answer in the workflow UI and return that answer to you. Their wait does not expire with the connection timeout. Timer blocks arm immediately and return without waiting, so you can continue your work. When a Timer fires, its follow connections receive the input you supplied to it. Reusing a waiting Timer replaces its countdown. Each AI block keeps its own context. Available paths: ${JSON.stringify(paths)}. ${paths.length ? "Call workflow_choose_path before finishing to choose one path." : ""}`;
           // The session already has the frozen block instructions and tool
           // catalogue. Keep dynamic templates, but do not resend the runtime
           // manual or a Chatbox's static instructions on every user message.
@@ -1084,7 +1121,7 @@ export class HarnessRunner {
     const status: "running" | HarnessPauseStatus = session.pendingPermission ? "awaiting_permission" : waitingUntil ? "waiting_timer" : session.status === "user_prompt" ? "awaiting_user_input" : "running";
     const question = status === "awaiting_user_input" ? session.messages.filter((message) => message.role === "assistant").at(-1)?.text : undefined;
     const permission = status === "awaiting_permission" ? session.pendingPermission : undefined;
-    const response = waitingUntil ? session.messages.filter((message) => message.role === "assistant").at(-1)?.text.slice(-200_000) : undefined;
+    const response = waitingUntil || !state.chatMessages ? session.messages.filter((message) => message.role === "assistant").at(-1)?.text.slice(-200_000) : undefined;
     const chatReply = state.chatMessages?.at(-1);
     const chatText = chatReply?.role === "assistant" ? chatResponse(session) : undefined;
     const chatChanged = chatText !== undefined && chatText !== chatReply?.text;

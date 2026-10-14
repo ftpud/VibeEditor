@@ -14,12 +14,12 @@ import { validateHarness } from "./harness-graph.js";
 const block = (id: string, type: HarnessBlock["type"], extra: Partial<HarnessBlock> = {}): HarnessBlock => ({ id, type, label: id, prompt: "{{input}}", position: { x: 0, y: 0 }, ...extra });
 const edge = (from: string, to: string, type: HarnessEdge["type"] = "follow", label?: string): HarnessEdge => ({ id: `${from}-${to}-${type}`, from, to, type, label });
 const session = (output: string): AiSession => ({ id: "session", status: "idle", messages: [{ id: "message", role: "assistant", text: output, timestamp: "now" }] } as AiSession);
-async function setup(blocks: HarnessBlock[], edges: HarnessEdge[], concurrency = 1) {
+async function setup(blocks: HarnessBlock[], edges: HarnessEdge[], concurrency = 1, steer?: ConstructorParameters<typeof HarnessRunner>[5]) {
   const directory = await mkdtemp(path.join(os.tmpdir(), "flow-types-"));
   const store = new HarnessStore("/workspace", directory);
   const created = await store.create("Flow");
   const definition = await store.update({ ...created, blocks, edges });
-  const runner = new HarnessRunner(store, () => {}, concurrency);
+  const runner = new HarnessRunner(store, () => {}, concurrency, undefined, undefined, steer);
   const finished = async () => { await vi.waitFor(async () => expect((await store.runs())[0]?.status).toMatch(/^(succeeded|failed|cancelled)$/)); return (await store.runs())[0]!; };
   return { store, definition, runner, finished };
 }
@@ -136,6 +136,41 @@ describe("typed workflows", () => {
     expect(run.blocks.find((item) => item.blockId === "child")?.output).toBe("Completed child");
     expect(run.connectionTraces?.map((trace) => trace.status)).toEqual(["succeeded", "succeeded"]);
     expect((await store.list()).find((item) => item.id === definition.id)?.edges[0]?.timeoutMs).toBe(100);
+  });
+
+  it.each(["ai", "chatbox"] as const)("starts connected %s blocks independently and supports status, tail, and live steering", async (childType) => {
+    const steer = vi.fn(async () => session("Steered"));
+    const { runner, definition, finished } = await setup([block("parent", "chatbox"), block("first", childType), block("second", "chatbox"), block("other", "chatbox")], [edge("parent", "first", "use"), edge("parent", "second", "use")], 3, steer);
+    let release!: () => void;
+    const waiting = new Promise<void>((resolve) => { release = resolve; });
+    const active = new Set<string>();
+    await runner.start(definition.id, "hello", async (item, _input, runtime) => {
+      if (item.id !== "parent") {
+        await runtime.started(`/sessions/${item.id}`);
+        await runtime.activity({ ...session(`${item.id} working`), status: "in_progress" });
+        active.add(item.id);
+        await waiting;
+        return session(`${item.id} done`);
+      }
+      try {
+        for (const block_id of ["first", "second"]) expect(await runner.flowTool(runtime.runId, "parent", "workflow_use_block", { block_id, action: "start", input: "Work" })).toMatchObject({ status: "started" });
+        await vi.waitFor(() => expect(active.size).toBe(2));
+        expect(await runner.flowTool(runtime.runId, "parent", "workflow_use_block", { block_id: "first", action: "status" })).toMatchObject({ block_status: "running", messages: [] });
+        expect(await runner.flowTool(runtime.runId, "parent", "workflow_use_block", { block_id: "second", action: "tail", lines: 1 })).toMatchObject({ messages: [{ text: "second working" }] });
+        expect(await runner.flowTool(runtime.runId, "parent", "workflow_use_block", { block_id: "first", action: "tail", lines: 1 })).toMatchObject({ messages: [{ text: "first working" }] });
+        await runner.flowTool(runtime.runId, "parent", "workflow_use_block", { block_id: "first", action: "steer", input: "Focus on tests" });
+        expect(steer).toHaveBeenCalledWith("provider", "/sessions/first", "Focus on tests");
+        await expect(runner.flowTool(runtime.runId, "parent", "workflow_use_block", { block_id: "first", action: "start" })).rejects.toThrow("already running");
+        await expect(runner.flowTool(runtime.runId, "parent", "workflow_use_block", { block_id: "other", action: "status" })).rejects.toThrow("connected block");
+        await expect(runner.flowTool(runtime.runId, "parent", "workflow_use_block", { block_id: "first", action: "tail", lines: 0 })).rejects.toThrow("lines");
+        release();
+        await vi.waitFor(async () => expect(await runner.flowTool(runtime.runId, "parent", "workflow_use_block", { block_id: "first", action: "status" })).toMatchObject({ block_status: "succeeded" }));
+        expect(await runner.flowTool(runtime.runId, "parent", "workflow_use_block", { block_id: "first", action: "tail", lines: 1 })).toMatchObject({ messages: [{ text: "first done" }] });
+        await expect(runner.flowTool(runtime.runId, "parent", "workflow_use_block", { block_id: "first", action: "steer", input: "Late" })).rejects.toThrow("running connected AI");
+        return session("Parent done");
+      } finally { release(); }
+    }, "provider", undefined, "parent");
+    expect((await finished()).status).toBe("succeeded");
   });
 
   it("reports a child's failure after its parent has received a timeout", async () => {
