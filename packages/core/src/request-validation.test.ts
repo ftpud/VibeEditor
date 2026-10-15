@@ -8,6 +8,10 @@ const rejectsPayload = (type: RequestType, payload: unknown) => {
 };
 
 describe("validateRequestPayload", () => {
+  it("requires a scan identity and a typed storage cleanup selection", () => {
+    expect(() => validateRequestPayload("storage.cleanup", { scanId: "scan", category: "tasks", age: "finished" })).not.toThrow();
+    for (const payload of [{ category: "tasks", age: "finished" }, { scanId: "scan", category: "unknown", age: "older" }, { scanId: "scan", category: ["tasks"], age: "finished" }, { scanId: "scan", category: "logs", age: "all" }]) rejectsPayload("storage.cleanup", payload);
+  });
   it("requires a plain object envelope for targeted and envelope-only operations", () => {
     for (const payload of [null, [], "payload", 1]) {
       rejectsPayload("tasks.list", payload);

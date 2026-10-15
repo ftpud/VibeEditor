@@ -8,6 +8,14 @@ const values = { theme: "dark" as const, highlightTheme: "default" as const, uiF
 const shortcutProps = { commands: [], shortcutBindings: {}, platform: "linux" as const, onShortcutChange: vi.fn(), onShortcutsReset: vi.fn() };
 
 describe("SettingsMenu", () => {
+  it("opens server cleanup from settings and keeps it searchable", () => {
+    const onStorage = vi.fn();
+    render(<SettingsMenu {...shortcutProps} onStorage={onStorage} workspace="/project" sideLayout="classic" onSideLayoutChange={vi.fn()} values={values} isWorkspaceOverride={() => false} onChange={vi.fn()} onReset={vi.fn()} />);
+    fireEvent.change(screen.getByRole("textbox", { name: "Search settings" }), { target: { value: "cleanup" } });
+    fireEvent.click(screen.getByRole("button", { name: "Cleanup…" }));
+    expect(onStorage).toHaveBeenCalledOnce();
+    expect(screen.queryByText(/No desktop settings match/)).toBeNull();
+  });
   it("filters persisted desktop settings", () => {
     render(<SettingsMenu {...shortcutProps} workspace="/project" sideLayout="classic" onSideLayoutChange={vi.fn()} values={values} isWorkspaceOverride={() => false} onChange={vi.fn()} onReset={vi.fn()} />);
     fireEvent.change(screen.getByRole("textbox", { name: "Search settings" }), { target: { value: "font" } });

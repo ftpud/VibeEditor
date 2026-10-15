@@ -137,6 +137,21 @@ export class HarnessStore {
     });
   }
 
+  async cleanupRunsBefore(cutoff: number): Promise<number> {
+    return this.mutate(async () => {
+      const runs = await this.readRecords("runs.json", "runs", isRun);
+      const retained = runs.filter((run) => activeRunStatuses.has(run.status) || !run.completedAt || !(Date.parse(run.completedAt) < cutoff));
+      if (retained.length === runs.length) return 0;
+      await this.writeJson("runs.json", { schemaVersion: SCHEMA_VERSION, runs: retained } satisfies RunFile);
+      // A recovery backup must not retain the history the user just removed.
+      await copyFile(path.join(this.directory, "runs.json"), path.join(this.directory, "runs.json.bak"));
+      return runs.length - retained.length;
+    });
+  }
+
+  /** Storage maintenance must include every workflow, beyond the UI list limit. */
+  async storageRuns(): Promise<HarnessRun[]> { return this.readRecords("runs.json", "runs", isRun); }
+
   async recoverInterruptedRuns(): Promise<HarnessRun[]> {
     return this.mutate(async () => {
       const runs = await this.runs(); const recovered: HarnessRun[] = []; const now = new Date().toISOString();

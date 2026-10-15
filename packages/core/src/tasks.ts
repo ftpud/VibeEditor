@@ -389,6 +389,21 @@ export class WorkspaceTaskStore {
     }, this.directory);
   }
 
+  /** Storage cleanup preserves branches and independently managed history. */
+  async cleanupFinished(taskId: string, isBusy: (workspace: string) => Promise<boolean>): Promise<void> {
+    return serializedRootMutation(this.rootWorkspace, async () => {
+      const registry = await this.listUnlocked();
+      const task = registry.tasks.find((item) => item.id === taskId);
+      const workspace = this.taskPath(taskId);
+      if (!task || task.status !== "finished" || registry.selectedTaskId === taskId || await isBusy(workspace)) throw new CoreError("INVALID_REQUEST", "Task is active, selected, or no longer finished");
+      const status = await taskGit(workspace, ["status", "--porcelain", "--untracked-files=all", "--ignore-submodules=none"]);
+      if (status.stdout.trim()) throw new CoreError("INVALID_REQUEST", "Task has uncommitted or untracked files");
+      await taskGit(this.rootWorkspace, ["worktree", "remove", "--force", workspace]);
+      await rm(path.dirname(workspace), { recursive: true, force: true });
+      await this.save({ ...registry, tasks: registry.tasks.filter((item) => item.id !== taskId) });
+    }, this.directory);
+  }
+
   taskPath(taskId: string): string {
     if (typeof taskId !== "string" || !taskId || taskId === "." || taskId === ".." || /[/\\\0]/.test(taskId)) {
       throw new CoreError("INVALID_REQUEST", "Invalid task ID");

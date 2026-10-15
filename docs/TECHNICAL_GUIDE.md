@@ -215,6 +215,16 @@ Core stores task registries/worktrees, workspace options, useful files, managed 
 
 Task Git prompt checkpoints are also stored there as content-addressed snapshots outside the repository. See [Task Git prompt history](TASK_GIT_HISTORY.md).
 
+### Server storage cleanup
+
+Open **Settings → Cleanup…** in Desktop to calculate allocated disk usage for all Vibe projects under the connected server user's state directory. Core scans in the background; Desktop polls progress and refreshes totals after cleanup. The panel also inventories provider data, the Codex runtime, Gateway releases and server logs. It does not count workflow symlink targets as additional workspace copies. Shared hardlinks across separately measured storage units can be counted more than once. The panel shows free space for the state directory's volume, rather than assuming every managed path resides on that volume.
+
+Task bars distinguish active (red), finished (blue), and unregistered/retained workspaces. Finished cleanup removes clean, unselected worktrees and ignored build output, while preserving Git branches and separately managed histories. Core rechecks task status, managed processes, terminals, persisted agent activity and active workflow references before removal. Dirty worktrees are skipped and reported.
+
+History bars distinguish today, the preceding seven days excluding today, and older data. **Cleanup older** removes eligible data older than seven days; **Cleanup week + older** removes eligible data from before server-local midnight today. Archived AI conversations, ended workflow runs, inactive finished-task checkpoint stores, abandoned workflow temporary files and rotated server logs have cleanup actions. Workflow totals measure allocated bytes; their per-run age shares and reclaimable sizes are estimates. Workflow cleanup rewrites both current records and their recovery backup. Direct filesystem cleanup rechecks the previewed file identity, size and modification time and rejects symlink substitutions.
+
+Current conversations, active workflows, command bridge state, unidentified checkpoint stores, provider databases and linked native histories, settings, credentials and installed runtimes remain protected. These appear in the inventory with an explanation. A cleanup preview is tied to its server scan identity; clients cannot supply deletion paths. Cleanup continues if the panel closes, and graceful Core shutdown waits for the job.
+
 ## Current limitations and security
 
 - Core can register multiple workspace roots per process and has no authentication, authorization, or TLS. Anyone who can reach its port can modify files and run commands with Core's operating-system permissions. Do not expose it to the public internet.

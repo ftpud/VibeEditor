@@ -1,3 +1,9 @@
+export type StorageAge = "today" | "week" | "older";
+export type StorageCategory = "tasks" | "sessions" | "workflows" | "checkpoints" | "logs" | "provider" | "runtime" | "other";
+export type StorageUsage = { id: StorageCategory; label: string; description: string; bytes: number; count: number; segments: { id: string; label: string; bytes: number }[]; cleanable: { finished: number; week: number; older: number } };
+export type StorageSnapshot = { id: string; phase: "idle" | "scanning" | "cleaning" | "ready" | "error"; updatedAt: string; server: string; paths: string[]; categories: StorageUsage[]; totalBytes: number; scannedFiles: number; message: string; warnings: string[]; disk?: { total: number; available: number } };
+export type StorageCleanup = { scanId: string; category: StorageCategory; age: "finished" | "older" | "week" };
+
 export type FileTreeNode = {
   name: string;
   path: string;
@@ -16,7 +22,7 @@ export type FileRevision = { identity: string; version: string };
  * Desktop can prove it is safe to talk to a newly deployed Core.
  */
 export type ProtocolCompatibility = { minimum: number; maximum: number };
-export const protocolCompatibility: ProtocolCompatibility = { minimum: 16, maximum: 16 };
+export const protocolCompatibility: ProtocolCompatibility = { minimum: 17, maximum: 17 };
 
 export function protocolRangeIsValid(range: ProtocolCompatibility): boolean {
   return Number.isInteger(range.minimum) && Number.isInteger(range.maximum) && range.minimum > 0 && range.minimum <= range.maximum;
@@ -317,6 +323,9 @@ export type SearchReplacePreview = { id: string; files: SearchReplacePreviewFile
 export type SearchReplaceApplyResult = { applied: { path: string; revision: FileRevision }[]; failures: { path: string; code: string; message: string }[] };
 
 export type ProtocolOperations = {
+  "storage.scan": { payload: Record<string, never>; result: StorageSnapshot };
+  "storage.status": { payload: Record<string, never>; result: StorageSnapshot };
+  "storage.cleanup": { payload: StorageCleanup; result: StorageSnapshot };
   "protocol.keepAlive": { payload: Record<string, never>; result: Record<string, never> };
   "protocol.handshake": { payload: { compatibility: ProtocolCompatibility; clientVersion?: string; token?: string }; result: { compatible: boolean; compatibility: ProtocolCompatibility; message?: string } };
   "workspace.roots": { payload: Record<string, never>; result: { roots: WorkspaceRoot[]; selectedRootId: WorkspaceRootId } };
@@ -778,6 +787,9 @@ const requestTypeRegistry: Record<RequestType, true> = {
   "tasks.rename": true,
   "tasks.archive": true,
   "tasks.switch": true,
+  "storage.scan": true,
+  "storage.status": true,
+  "storage.cleanup": true,
   "tasks.delete": true,
   "ai.providers": true,
   "ai.get": true,

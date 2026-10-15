@@ -27,6 +27,7 @@ import { WorkspaceSearch } from "./search.js";
 import { JavaProjectService } from "./java.js";
 import { JdtLanguageService } from "./jdtls.js";
 import { WorkspaceTaskStore } from "./tasks.js";
+import { ServerStorage } from "./storage.js";
 import { UsefulFilesStore } from "./useful-files.js";
 import { ConfigurationService } from "./configuration.js";
 import { ensureSelfConfiguration } from "./self-configuration.js";
@@ -260,6 +261,18 @@ export async function createServer(host: string, port: number, workspacePath: st
     complete: async (target, ids, status, provenance) => { await Promise.all(ids.map((id) => checkpointStore(target).complete(id, status, provenance))); taskGitChanged(target); }
   }, async (target) => { const rootId = await ownerRootId(target); return rootId ? roots.get(rootId).path : rootWorkspace; }, rootWorkspace);
   const harnessRunners = new Map<string, HarnessRunner>();
+  const storage = new ServerStorage({
+    roots: () => roots.list().map((root) => root.path),
+    isBusy: async (target) => {
+      if (terminalHost.hasWorkspace(target) || (await managedProcesses.list()).some((process) => process.workspace === target)) return true;
+      for (const root of roots.list()) {
+        const runs = await contextFor(root.id).harnesses.summaries();
+        if (runs.some((run) => !["succeeded", "failed", "cancelled", "blocked"].includes(run.status) && (run.binding?.workspace === target || run.workspace === target || run.children?.some((child) => child.workspace === target)))) return true;
+      }
+      return false;
+    },
+    changed: () => { for (const root of roots.list()) { const encoded = JSON.stringify({ type: "tasks.changed", payload: { rootId: root.id } } satisfies ServerEvent); for (const socket of activeSessions) sendWebSocketData(socket, encoded); } }
+  });
   const harnessRunner = (rootId: string) => {
     if (draining) throw new CoreError("INVALID_REQUEST", "Core is shutting down");
     let runner = harnessRunners.get(rootId);
@@ -455,6 +468,7 @@ export async function createServer(host: string, port: number, workspacePath: st
   void listening.catch(() => undefined);
   let cleanupPromise: Promise<void> | undefined;
   const cleanupServices = () => cleanupPromise ??= (async () => {
+    await storage.drain();
     managedProcesses.off("changed", processesChanged);
     if (!managedProcesses.listenerCount("changed")) managedProcesses.close();
     rootBatcher.dispose(); terminalHost.closeAll();
@@ -722,6 +736,9 @@ export async function createServer(host: string, port: number, workspacePath: st
         admission.assertOpen();
         const result = parsed.type === "workspace.selectRoot"
           ? rootSelectionResult!
+          : parsed.type === "storage.scan" ? storage.scan()
+          : parsed.type === "storage.status" ? storage.status()
+          : parsed.type === "storage.cleanup" ? storage.cleanup(parsed.payload)
           : await handleRequest(services, rootContext.tasks, acp, rootContext.usefulFiles, rootContext.agents, rootContext.harnesses, harnessRunner(requestRoot.id), workflowApps, terminalHost, runConfigs, aiTimers, schedules, remoteTransfers, requestRoot.path, parsed, rootWorkspace);
         if (["tasks.create", "tasks.createFromPrompt", "tasks.status", "tasks.rename", "tasks.archive", "tasks.delete"].includes(parsed.type)) { const encoded = JSON.stringify({ type: "tasks.changed", payload: { rootId: selectedRoot.id } } satisfies ServerEvent); for (const session of activeSessions) sendWebSocketData(session, encoded); }
         const terminalSubscription = terminalSubscriptions.get(socket);

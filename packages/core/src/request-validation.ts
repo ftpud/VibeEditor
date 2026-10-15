@@ -12,6 +12,10 @@ export function validateRequestPayload(type: RequestType, payload: unknown): voi
   const record = requireRecord(payload, `${type} payload must be an object`);
 
   switch (type) {
+    case "storage.cleanup":
+      requireNonEmptyString(record.scanId, "Storage scan ID is required");
+      if (typeof record.category !== "string" || typeof record.age !== "string" || !["tasks", "sessions", "workflows", "checkpoints", "logs", "provider", "runtime", "other"].includes(record.category) || !["finished", "week", "older"].includes(record.age)) invalid("Invalid storage cleanup selection");
+      return;
     case "protocol.handshake": {
       const compatibility = requireRecord(record.compatibility, "Handshake compatibility must be an object");
       const minimum = compatibility.minimum;
