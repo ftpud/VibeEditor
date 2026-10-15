@@ -1,9 +1,10 @@
+import { prepareLocalWorkspaceDirectory } from "./local-workspace.js";
 import { remoteNodeEnvironment } from "./remote-node.js";
 import { executeSshCommand as execute } from "./ssh-command.js";
 import { app, BrowserWindow, clipboard, dialog, ipcMain, nativeImage, powerMonitor, safeStorage, type IpcMainInvokeEvent } from "electron";
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { access, copyFile, mkdir, open, readFile, readdir, realpath, rm, stat, writeFile } from "node:fs/promises";
+import { access, copyFile, mkdir, open, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { Client } from "ssh2";
@@ -532,10 +533,8 @@ handleIpc("gateway:saveWorkspace", async (_event, input: Omit<Workspace, "id"> &
     const storedConnection = state.connections.find((item) => item.id === input.connectionId);
     if (!storedConnection) throw new Error("Connection was not found");
     if (storedConnection.kind === "local") {
-      if (!path.isAbsolute(directory)) throw new Error("The local project directory must be an absolute path");
-      const stats = await stat(directory).catch(() => undefined);
-      if (!stats?.isDirectory()) throw new Error("The local project directory does not exist or is not a directory");
-      const item = { ...input, name: input.name.trim(), directory: await realpath(directory), id: input.id ?? id() } as Workspace;
+      const preparedDirectory = await prepareLocalWorkspaceDirectory(directory);
+      const item = { ...input, name: input.name.trim(), directory: preparedDirectory, id: input.id ?? id() } as Workspace;
       state.workspaces = [...state.workspaces.filter((value) => value.id !== item.id), item]; return publicState(state);
     }
     validateWorkspaceDirectoryInput(directory);
@@ -578,8 +577,13 @@ handleIpc("gateway:cancelProvisioning", (_event, workspaceId: string) => { cance
 handleIpc("gateway:stopServer", async (_event, workspaceId: string) => workspaceOperations.run(workspaceId, "stop-server", async () => { if ((await workspaceAndStoredConnection(workspaceId)).connection.kind !== "local") return stopServer(workspaceId); await stopLocalServer(workspaceId); runtime(workspaceId, "idle", "Stopped"); }));
 handleIpc("gateway:startClient", async (_event, workspaceId: string) => workspaceOperations.run(workspaceId, "start-client", async () => (await workspaceAndStoredConnection(workspaceId)).connection.kind === "local" ? startLocalClient(workspaceId) : startClient(workspaceId)));
 
+handleIpc("gateway:window-fullscreen", (event) => BrowserWindow.fromWebContents(event.sender)?.isFullScreen() ?? false);
+
 function createWindow(): void {
-  const window = new BrowserWindow({ width: 1040, height: 720, minWidth: 820, minHeight: 560, icon: appIcon, backgroundColor: "#202124", webPreferences: { preload: path.join(directory, "preload.cjs"), contextIsolation: true, nodeIntegration: false } });
+  const window = new BrowserWindow({ width: 1040, height: 720, minWidth: 820, minHeight: 560, icon: appIcon, backgroundColor: "#f6f8fd", titleBarStyle: "hidden", trafficLightPosition: { x: 28, y: 28 }, ...(process.platform !== "darwin" ? { titleBarOverlay: { color: "#f6f8fd", symbolColor: "#52627e", height: 40 } } : {}), webPreferences: { preload: path.join(directory, "preload.cjs"), contextIsolation: true, nodeIntegration: false } });
+  const publishFullscreen = () => window.webContents.send("gateway:fullscreen-changed", window.isFullScreen());
+  window.on("enter-full-screen", publishFullscreen);
+  window.on("leave-full-screen", publishFullscreen);
   window.removeMenu(); const devUrl = process.env.VITE_DEV_SERVER_URL;
   window.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
   const guardNavigation = (event: { preventDefault(): void }, url: string) => { if (!isTrustedRendererUrl(url, rendererFilePath, devUrl)) event.preventDefault(); };

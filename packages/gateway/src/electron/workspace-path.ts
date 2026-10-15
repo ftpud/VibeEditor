@@ -31,10 +31,10 @@ export function workspaceUnregistrationCommand(directory: string): string {
   return `bash -lc ${quoteWorkspaceShellArgument(`set -eu; directory=${quoteWorkspaceShellArgument(value)}; registry=${remoteWorkspaceRegistry}; [ -f "$registry" ] || exit 0; temporary="$registry.tmp.$$"; trap 'rm -f -- "$temporary"' EXIT; while IFS= read -r child; do [ "$child" = "$directory" ] || printf '%s\\n' "$child"; done < "$registry" > "$temporary"; mv -- "$temporary" "$registry"; trap - EXIT`)}`;
 }
 
-/** Checks one manually entered directory without enumerating any parent or sibling paths. */
+/** Creates missing workspace directories and validates access without enumerating siblings. */
 export function workspaceValidationCommand(directory: string): string {
   const value = validateWorkspaceDirectoryInput(directory);
-  return `bash -lc ${quoteWorkspaceShellArgument(`set -eu; directory=${quoteWorkspaceShellArgument(value)}; [ -d "$directory" ] || { echo "Remote directory does not exist or is not a directory" >&2; exit 1; }; [ -r "$directory" ] && [ -x "$directory" ] || { echo "Remote directory is not accessible to this SSH user" >&2; exit 1; }; cd -- "$directory"; pwd -P`)}`;
+  return `bash -lc ${quoteWorkspaceShellArgument(`set -eu; directory=${quoteWorkspaceShellArgument(value)}; mkdir -p -- "$directory"; [ -d "$directory" ] || { echo "Remote directory does not exist or is not a directory" >&2; exit 1; }; [ -r "$directory" ] && [ -x "$directory" ] || { echo "Remote directory is not accessible to this SSH user" >&2; exit 1; }; cd -- "$directory"; pwd -P`)}`;
 }
 
 export function parseDiscoveredWorkspaceDirectories(output: string): string[] {
