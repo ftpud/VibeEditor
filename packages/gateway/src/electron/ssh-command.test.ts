@@ -47,3 +47,10 @@ test("retains remote command failure diagnostics", async () => {
   channel.emit("exit", 1); channel.emit("close");
   await assert.rejects(result, /Candidate failed; previous release restored/);
 });
+
+test("includes the exit status when activation output accompanies a nonzero close", async () => {
+  const { channel, result } = begin();
+  channel.emit("data", Buffer.from("VIBE_ACTIVATED:release\n"));
+  channel.emit("exit", 143); channel.emit("close", 143);
+  await assert.rejects(result, /Remote command exited with 143\nVIBE_ACTIVATED:release/);
+});

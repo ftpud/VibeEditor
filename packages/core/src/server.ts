@@ -116,11 +116,12 @@ export class WorkspaceWatchBatcher {
     else this.paths.add(relativePath);
     this.schedule();
   }
+  refresh(): void { this.overflow = true; this.schedule(); }
   degrade(message: string): void { this.degraded = message; this.overflow = true; this.schedule(); }
   flush(): void {
     if (this.timer) clearTimeout(this.timer);
     this.timer = undefined;
-    if (!this.paths.size && !this.degraded) return;
+    if (!this.paths.size && !this.degraded && !this.overflow) return;
     this.emit({ type: "filesystem.changed", payload: { rootId: this.rootId, paths: [...this.paths], overflow: this.overflow, health: this.degraded ? "degraded" : "healthy", ...(this.degraded ? { message: this.degraded } : {}) } });
     this.paths.clear(); this.overflow = false; this.degraded = undefined;
   }
@@ -437,7 +438,7 @@ export async function createServer(host: string, port: number, workspacePath: st
     const relativePath = path.relative(workspace, absolutePath).split(path.sep).join("/");
     if (relativePath && !relativePath.startsWith("..")) rootBatcher.change(relativePath);
   };
-  watcher.on("ready", () => rootBatcher.degrade("Workspace watcher initial scan completed; synchronizing files."));
+  watcher.on("ready", () => rootBatcher.refresh());
   watcher
     .on("add", broadcastChange).on("change", broadcastChange).on("unlink", broadcastChange).on("addDir", broadcastChange).on("unlinkDir", broadcastChange)
     .on("raw", (eventName) => { if (String(eventName).includes("OVERFLOW")) rootBatcher.degrade("Filesystem watcher overflow; synchronizing affected files."); })
@@ -545,7 +546,7 @@ export async function createServer(host: string, port: number, workspacePath: st
         const relativePath = path.relative(nextWorkspace, absolutePath).split(path.sep).join("/");
         if (relativePath && !relativePath.startsWith("..")) batcher.change(relativePath);
       };
-      switchedWatcher.on("ready", () => batcher.degrade("Workspace watcher initial scan completed; synchronizing files."));
+      switchedWatcher.on("ready", () => batcher.refresh());
       switchedWatcher.on("add", sendChange).on("change", sendChange).on("unlink", sendChange).on("addDir", sendChange).on("unlinkDir", sendChange)
         .on("raw", (eventName) => { if (String(eventName).includes("OVERFLOW")) batcher.degrade("Filesystem watcher overflow; synchronizing affected files."); })
         .on("error", (error) => batcher.degrade(`Filesystem watcher degraded: ${String(error)}`));

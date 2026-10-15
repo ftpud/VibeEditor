@@ -112,6 +112,45 @@ else
 fi`;
 }
 
+/** A marker is evidence to verify, never permission to replay activation. */
+export async function activateRelease(
+  release: string,
+  activate: (onOutput: (line: string) => void) => Promise<unknown>,
+  verify: () => Promise<unknown>,
+  onOutput?: (line: string) => void
+): Promise<void> {
+  let reported = false;
+  try {
+    await activate((line) => {
+      if (line.trim() === `VIBE_ACTIVATED:${release}`) reported = true;
+      onOutput?.(line);
+    });
+    if (!reported) throw new Error("Remote activation did not confirm the requested release");
+  } catch (error) {
+    if (!reported) throw error;
+    // The remote shell can lose its channel or exit nonzero after promotion.
+    // Reconnect and verify the committed release plus authenticated Core health.
+    try { await verify(); }
+    catch (verificationError) {
+      throw new Error(`Core reported activation, but its release and health could not be verified after reconnecting: ${verificationError instanceof Error ? verificationError.message : String(verificationError)}. Original activation result: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+}
+
+export function activatedReleaseVerificationCommand(workspaceId: string, port: number, release: string, environment: string): string {
+  if (!releasePattern.test(release) || !Number.isInteger(port) || port < 1 || port > 65535) throw new Error("Invalid release verification parameters");
+  return `set -eu
+${environment}
+${workspaceReleaseDirectory(workspaceId)}
+[ "$release" = ${shell(release)} ] || { echo 'Selected Core release does not match the requested activation' >&2; exit 1; }
+tokenfile="$HOME/.vibe-server-${workspaceId}.token"
+test ! -L "$tokenfile" || { echo 'Core token file must not be a symlink' >&2; exit 1; }
+SESSION_TOKEN=$(cat "$tokenfile")
+[[ "$SESSION_TOKEN" =~ ^[A-Za-z0-9_-]+$ ]] && [ "\${#SESSION_TOKEN}" -ge 32 ] && [ "\${#SESSION_TOKEN}" -le 256 ] || { echo 'Invalid Core session token file' >&2; exit 1; }
+cd "$release_directory"
+REMOTE_IDE_SESSION_TOKEN="$SESSION_TOKEN" node --input-type=commonjs -e ${shell(coreHealthProbe(port, 10_000))}`;
+}
+
 /** Resolve the release belonging to this workspace, with a legacy installation fallback. */
 export function workspaceReleaseDirectory(workspaceId: string): string {
   if (!/^[A-Za-z0-9_-]{1,200}$/.test(workspaceId)) throw new Error("Invalid workspace identity");

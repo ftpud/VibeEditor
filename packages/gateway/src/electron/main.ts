@@ -14,7 +14,7 @@ import { compatibleClient, readCompatibility, type Compatibility } from "./clien
 import { boundedProvisioningLog, classifyProvisioningFailure } from "./provisioning.js";
 import { buildConnectionDiagnostics } from "./diagnostics.js";
 import { SshTunnel } from "./ssh-tunnel.js";
-import { coreHealthProbe, parseProvisionedRelease, serverActivationCommand, serverStopCommand, workspaceReleaseDirectory, type ProvisionedRelease, WorkspaceOperations } from "./deployment.js";
+import { activateRelease, activatedReleaseVerificationCommand, coreHealthProbe, parseProvisionedRelease, serverActivationCommand, serverStopCommand, workspaceReleaseDirectory, type ProvisionedRelease, WorkspaceOperations } from "./deployment.js";
 import { isTrustedIpcFrame, isTrustedRendererUrl } from "./navigation-policy.js";
 import { JsonStateStore } from "./state-store.js";
 
@@ -269,7 +269,17 @@ async function startServer(workspaceId: string, repair = false): Promise<{ remot
     const run = serverActivationCommand(workspace.id, workspace.directory, workspace.remotePort, build.release, remoteNodeEnvironment);
     const activationLogs: string[] = [];
     runtime(workspaceId, "working", "Starting Core and waiting for protocol health…", { stage: "activation" });
-    await execute(client, `bash -lc ${shell(run)}`, (line) => {
+    await activateRelease(build.release, (onOutput) => execute(client, `bash -lc ${shell(run)}`, onOutput), async () => {
+      if (cancelledProvisioning.has(workspaceId)) throw new Error("Provisioning cancelled");
+      runtime(workspaceId, "working", "Reconnecting to verify the activated Core…", { stage: "activation", logs: boundedProvisioningLog(activationLogs) });
+      const verificationClient = await connect(connection);
+      provisioningClients.set(workspaceId, verificationClient);
+      try {
+        const verify = activatedReleaseVerificationCommand(workspace.id, workspace.remotePort, build.release, remoteNodeEnvironment);
+        await execute(verificationClient, `bash -lc ${shell(verify)}`);
+        if (cancelledProvisioning.has(workspaceId)) throw new Error("Provisioning cancelled");
+      } finally { verificationClient.end(); }
+    }, (line) => {
       activationLogs.push(line);
       runtime(workspaceId, "working", "Starting Core and waiting for protocol health…", { stage: "activation", logs: boundedProvisioningLog(activationLogs) });
     }); runtime(workspaceId, "server", `Server listening remotely on ${workspace.remotePort}${build.rebuilt ? " (rebuilt)" : " (build reused)"}`);

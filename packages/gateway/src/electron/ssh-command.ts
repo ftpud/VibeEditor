@@ -15,7 +15,7 @@ export function executeSshCommand(client: Client, command: string, onOutput?: (l
       if (status === 0) { resolve(stdout); return; }
       const output = [stdout.trim(), stderr.trim()].filter(Boolean).join("\n");
       if (status === undefined) reject(new Error(`SSH command interrupted: ${interruption ?? "channel closed without an exit status"}. The remote command may still be running or may have completed; reconnect and check its status before retrying.${output ? `\nLast remote output:\n${output.slice(-16000)}` : ""}`));
-      else reject(new Error(output || `Remote command exited with ${status}`));
+      else reject(new Error(`Remote command exited with ${status}${output ? `\n${output}` : ""}`));
     };
     const onError = (error: Error) => finish(undefined, error.message);
     const onClose = () => finish(undefined, "connection closed");

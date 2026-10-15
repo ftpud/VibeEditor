@@ -7,7 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import net from "node:net";
 import { createHash } from "node:crypto";
-import { WorkspaceOperations, coreHealthProbe, parseProvisionedRelease, serverActivationCommand, workspaceReleaseDirectory } from "./deployment.js";
+import { activateRelease, activatedReleaseVerificationCommand, WorkspaceOperations, coreHealthProbe, parseProvisionedRelease, serverActivationCommand, workspaceReleaseDirectory } from "./deployment.js";
 
 const exec = promisify(execFile);
 const oldRelease = `${"a".repeat(40)}-node137`;
@@ -22,6 +22,7 @@ test("parses a verified release and rejects malformed or mismatched identities",
 test("generated activation and workspace resolution commands are valid Bash", async () => {
   await exec("bash", ["-n", "-c", serverActivationCommand("test", "/workspace/it's a project", 7331, candidateRelease, "true")]);
   await exec("bash", ["-n", "-c", workspaceReleaseDirectory("test")]);
+  await exec("bash", ["-n", "-c", activatedReleaseVerificationCommand("test", 7331, candidateRelease, "true")]);
 });
 
 test("health probe performs a real WebSocket protocol handshake", async () => {
@@ -97,6 +98,12 @@ for (const healthy of [true, false]) {
       assert.equal(await readFile(selection, "utf8"), healthy ? candidateRelease : oldRelease);
       assert.equal(await readFile(path.join(home, ".vibe-deploy/releases", oldRelease, "packages/core/dist/index.js"), "utf8"), "");
       if (healthy) assert.equal(await readFile(`${selection}.previous`, "utf8"), oldRelease);
+      if (healthy) {
+        const environment = { ...process.env, HOME: home, PATH: `${bin}:${process.env.PATH}`, FAIL_RELEASE: "none" };
+        await exec("bash", ["-c", activatedReleaseVerificationCommand("test", 7331, candidateRelease, "true")], { env: environment });
+        await assert.rejects(exec("bash", ["-c", activatedReleaseVerificationCommand("test", 7331, oldRelease, "true")], { env: environment }), /does not match/);
+        await assert.rejects(exec("bash", ["-c", activatedReleaseVerificationCommand("test", 7331, candidateRelease, "true")], { env: { ...environment, FAIL_RELEASE: candidateRelease } }));
+      }
       await assert.rejects(readFile(path.join(home, ".vibe-deploy/activate-test.lock/pid")), { code: "ENOENT" });
     } finally {
       try { process.kill(Number(await readFile(pidfile, "utf8")), "SIGKILL"); } catch { /* No surviving server. */ }
@@ -132,4 +139,35 @@ test("coalesces duplicate workspace actions and releases failed operations", asy
   assert.equal(await first, 42);
   await assert.rejects(operations.run("project", "start", async () => { throw new Error("failed"); }), /failed/);
   assert.equal(await operations.run("project", "start", async () => 7), 7);
+});
+
+for (const reason of ["Remote command exited with 143", "SSH command interrupted: connection closed"]) {
+  test(`verifies activation after its marker and ${reason}`, async () => {
+    let activations = 0; let verifications = 0;
+    await activateRelease(candidateRelease, async (output) => {
+      activations++; output(`VIBE_ACTIVATED:${candidateRelease}`);
+      throw new Error(reason);
+    }, async () => { verifications++; });
+    assert.equal(activations, 1); assert.equal(verifications, 1);
+  });
+}
+
+test("does not verify or replay a failed activation without the matching release marker", async () => {
+  let verifications = 0;
+  await assert.rejects(activateRelease(candidateRelease, async (output) => {
+    output(`VIBE_ACTIVATED:${oldRelease}`); throw new Error("Activation failed");
+  }, async () => { verifications++; }), /Activation failed/);
+  assert.equal(verifications, 0);
+});
+
+test("retains failure when an activation marker cannot be verified", async () => {
+  await assert.rejects(activateRelease(candidateRelease, async (output) => {
+    output(`VIBE_ACTIVATED:${candidateRelease}`); throw new Error("Remote command exited with 143");
+  }, async () => { throw new Error("Core health check failed"); }), /could not be verified.*Core health check failed.*exited with 143/);
+});
+
+test("accepts a normal successful activation without reconnecting", async () => {
+  let verifications = 0;
+  await activateRelease(candidateRelease, async (output) => { output(`VIBE_ACTIVATED:${candidateRelease}`); }, async () => { verifications++; });
+  assert.equal(verifications, 0);
 });

@@ -40,6 +40,13 @@ describe("protocol handshake", () => {
 });
 
 describe("workspace watcher batching", () => {
+  it("requests a healthy refresh after the initial scan without an error message", () => {
+    const events: unknown[] = [];
+    const batcher = new WorkspaceWatchBatcher((event) => events.push(event), 60_000, 2);
+    batcher.refresh(); batcher.flush(); batcher.flush();
+    expect(events).toEqual([{ type: "filesystem.changed", payload: { rootId: "legacy", paths: [], overflow: true, health: "healthy" } }]);
+  });
+
   it("coalesces bursts and marks bounded batches as overflowed", () => {
     const events: unknown[] = [];
     const batcher = new WorkspaceWatchBatcher((event) => events.push(event), 60_000, 2);
