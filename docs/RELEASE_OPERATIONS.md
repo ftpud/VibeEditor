@@ -182,3 +182,70 @@ platform-appropriate packaged artifacts, signing/notarization checks, and
 extended crash/restart and workflow/timer soak tests remain release gates. The
 project has not certified a stable release; see the readiness document for the
 current status and broader outstanding work.
+
+## Isolated restart soak
+
+Build the application first, then run the restart check against a private fixture:
+
+```sh
+npm run build
+npm run test:release-soak -- --cycles 20 --output /tmp/vibe-soak.json
+npm run test:release-soak -- --minutes 30 --pause-ms 1000 --output /tmp/vibe-soak-30min.json
+```
+
+The check snapshots built Core, ACP, and Protocol code and uses a separate Git
+workspace, state directory, and session token. It alternates SIGTERM, SIGINT,
+and SIGKILL while options writes are pending, then verifies that acknowledged
+state survives each restart. Third-party dependencies are linked from the
+installed repository; leave dependency installations unchanged during a run.
+
+The JSON report records the artifact hash, protocol range, Node/platform,
+completed cycles, request latency, and sampled Core RSS. Each cycle starts a
+fresh Core process,
+so these memory samples do not measure leaks in a long-lived Core or workflow.
+The check does not exercise external AI providers, signing, GUI interaction, or
+host power loss. Successful runs remove their temporary fixture. Failed runs
+retain a private diagnostic directory and identify its location in the report.
+On Linux, failures also capture the test Core process status, I/O counters, and
+wait channel before cleanup. The default request deadline is thirty seconds, matching Desktop. Use
+`--request-timeout-ms 10000` for the stricter latency probe. The report records
+the selected deadline, and a timeout fails that run even when previous cycles
+preserved their acknowledged writes. CI
+runs twelve cycles on each configured Linux/macOS and Node 22/24 combination.
+
+## Timer and schedule state recovery
+
+Continuation timers, user schedules, and workspace options now coordinate their
+writes across Core processes with owned state-file locks. Their read/modify/write
+transactions preserve a validated last-good `.bak` and promote private synced
+files atomically. A malformed timer collection or record fails as a whole;
+invalid entries are not silently dropped. If the primary is missing or corrupt,
+a valid backup is used with a diagnostic. When both copies are unusable, the
+operation fails and preserves the original files for inspection.
+
+State locks use a private `<state-file>.lock` file with PID, host, and random
+ownership identity. A fully written candidate is published with an atomic hard
+link, and release unlinks it atomically; a killed writer cannot leave a partially
+created owner record. Confirmed dead local owners can be reclaimed under an
+exclusive `<state-file>.lock.recovery` marker. Live, foreign, or unknown owners,
+legacy directory locks, and abandoned recovery markers are preserved, with a
+bounded wait and diagnostic. Use the same inspection procedure described above
+before manually removing an unknown lock or recovery marker. Orphaned candidate
+`.tmp` files do not own the lock and do not block later writers.
+
+Schedule launches persist an ownership record before contacting a provider or
+starting a workflow. If that local owner dies before the outcome is recorded,
+recovery disables the schedule and explains that its outcome is unknown. Inspect
+existing tasks, sessions, and workflows before choosing Run now or re-enabling
+it. Recovery does not repeat uncertain external effects automatically. Foreign
+owners require inspection on their recorded host. Graceful shutdown waits for
+admitted launches and their state writes; forced kills can leave an outcome
+requiring this manual decision.
+
+These locks protect the covered state transactions; they do not establish
+exactly-once external provider effects, live cache synchronization across Core
+instances, or a complete consistency guarantee for every Core store.
+
+Local workflow event, command, and response directories are restricted to the
+Core user (0700); new publications use exclusive private files (0600), including
+temporary files. Core and its MCP processes must run as that same user.

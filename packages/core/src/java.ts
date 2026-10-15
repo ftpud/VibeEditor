@@ -39,6 +39,7 @@ export class JavaProjectService {
   private debugPaused = false;
   private inspectionQueue: Promise<unknown> = Promise.resolve();
   private pendingInspection?: { quiet?: boolean; resolve: (output: string) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> };
+  private pendingDebugAttach?: { resolve: () => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> };
   private dependencyTypes?: JavaTypeSuggestion[];
   private launchBuild?: { key: string; inputs: string; outputs: string; classpath: string };
 
@@ -366,6 +367,8 @@ export class JavaProjectService {
       this.debugging = true;
       this.invalidateDebugInspection();
       this.debugBuffer = "";
+      const attached = this.waitForDebugAttach();
+      void attached.catch(() => undefined);
       child.stdout.on("data", (data: Buffer) => this.consumeDebugOutput(data.toString()));
       child.stderr.on("data", (data: Buffer) => this.consumeDebugOutput(data.toString()));
       child.on("error", (error) => this.onProcessEvent({ type: "output", data: `${javaSpawnError(error, executable, "Java debugger").message}\n` }));
@@ -380,11 +383,17 @@ export class JavaProjectService {
         this.onProcessEvent({ type: "exit", exitCode, signal });
       });
       await new Promise<void>((resolve, reject) => { child.once("spawn", resolve); child.once("error", (error) => reject(javaSpawnError(error, executable, "Java debugger"))); });
+      await attached;
       ensureLaunching();
-      for (const breakpoint of this.debugBreakpoints) child.stdin.write(`stop at ${breakpoint.className}:${breakpoint.line}\n`);
+      this.debugPaused = true;
+      for (const breakpoint of this.debugBreakpoints) await this.runDebugCommand(`stop at ${breakpoint.className}:${breakpoint.line}`);
+      ensureLaunching();
+      this.invalidateDebugInspection();
       child.stdin.write("cont\n");
       this.emitDebugState({ status: "running", variables: [] });
     } catch (error) {
+      this.invalidateDebugInspection();
+      if (this.debugging) this.process?.kill("SIGTERM");
       this.debugTarget?.kill("SIGTERM");
       this.emitDebugState({ status: "stopped", variables: [] });
       throw error;
@@ -496,6 +505,16 @@ export class JavaProjectService {
     return this.runDebugCommand(`dump ${expression}`);
   }
 
+  private waitForDebugAttach(): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.pendingDebugAttach = undefined;
+        reject(new CoreError("JAVA_PROCESS_FAILED", "Java debugger did not suspend its initial thread within 15 seconds"));
+      }, 15_000);
+      this.pendingDebugAttach = { resolve, reject, timer };
+    });
+  }
+
   private runDebugCommand(command: string, quiet = false): Promise<string> {
     if (!this.debugPaused || !this.process) return Promise.reject(new CoreError("JAVA_PROCESS_FAILED", "Java debugger is no longer paused"));
     if (this.pendingInspection) return Promise.reject(new CoreError("JAVA_PROCESS_FAILED", "A debugger command is already pending"));
@@ -513,6 +532,11 @@ export class JavaProjectService {
   }
 
   private invalidateDebugInspection(): void {
+    if (this.pendingDebugAttach) {
+      clearTimeout(this.pendingDebugAttach.timer);
+      this.pendingDebugAttach.reject(new CoreError("JAVA_PROCESS_FAILED", "Debugger attachment was cancelled"));
+      this.pendingDebugAttach = undefined;
+    }
     this.debugGeneration++;
     this.debugPaused = false;
     this.debugReferences.clear();
@@ -807,6 +831,18 @@ export class JavaProjectService {
       return;
     }
     this.debugBuffer = (this.debugBuffer + data).slice(this.pendingInspection ? -1_000_000 : -20_000);
+    if (this.pendingDebugAttach) {
+      // The initial command prompt can precede VMStart suspension. Continuing
+      // before a thread prompt races that event on slower hosts.
+      if (/[\w$.-]+\[\d+\]\s*$/.test(this.debugBuffer)) {
+        const pending = this.pendingDebugAttach;
+        this.pendingDebugAttach = undefined;
+        clearTimeout(pending.timer);
+        this.debugBuffer = "";
+        pending.resolve();
+      }
+      return;
+    }
     if (this.pendingInspection) {
       if (/[\w$.-]+\[\d+\]\s*$/.test(this.debugBuffer)) {
         const pending = this.pendingInspection;

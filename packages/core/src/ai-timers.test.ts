@@ -1,10 +1,96 @@
 import os from "node:os";
 import path from "node:path";
-import { mkdtemp } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { describe, expect, it, vi } from "vitest";
-import { AiTimerService, AiTimerStore } from "./ai-timers.js";
+import { AiTimerService, AiTimerStore, type AiContinuationTimer } from "./ai-timers.js";
+
+function timerFile(root: string, state: string): string {
+  return path.join(state, `${createHash("sha256").update(root).digest("hex")}-ai-timers.json`);
+}
+
+function validTimer(overrides: Partial<AiContinuationTimer> = {}): AiContinuationTimer {
+  return { id: "timer-1", workspace: "/task", provider: "codex", prompt: "", createdAt: new Date().toISOString(), dueAt: new Date(Date.now() + 60_000).toISOString(), ...overrides };
+}
 
 describe("AI continuation timers", () => {
+  it("supports an absent file and a valid legacy empty timer list", async () => {
+    const state = await mkdtemp(path.join(os.tmpdir(), "vibe-empty-timer-store-"));
+    const store = new AiTimerStore("/workspace", state);
+    try {
+      await expect(store.list()).resolves.toEqual([]);
+      await writeFile(timerFile("/workspace", state), JSON.stringify({ timers: [] }));
+      await expect(store.list()).resolves.toEqual([]);
+    } finally { await rm(state, { recursive: true, force: true }); }
+  });
+
+  it.each([
+    ["non-array timer collection", JSON.stringify({ timers: { id: "timer-1" } })],
+    ["empty timer identity", JSON.stringify({ timers: [validTimer({ id: "" })] })],
+    ["duplicate timer identity", JSON.stringify({ timers: [validTimer(), validTimer()] })],
+    ["invalid timer record", JSON.stringify({ timers: [validTimer(), { id: "timer-2" }] })],
+    ["invalid optional workflow field", JSON.stringify({ timers: [validTimer({ workflowRunId: 42 as unknown as string })] })],
+    ["malformed due date", JSON.stringify({ timers: [validTimer({ dueAt: "not-a-date" })] })],
+    ["malformed creation date", JSON.stringify({ timers: [validTimer({ createdAt: "not-a-date" })] })],
+  ])("fails closed on %s without changing the original during list or mutation", async (_label, contents) => {
+    const state = await mkdtemp(path.join(os.tmpdir(), "vibe-invalid-timer-store-"));
+    const file = timerFile("/workspace", state);
+    const store = new AiTimerStore("/workspace", state);
+    await writeFile(file, contents);
+    try {
+      await expect(store.list()).rejects.toMatchObject({ code: "READ_FAILED" });
+      await expect(store.set("/new-task", "codex", "continue", 60)).rejects.toMatchObject({ code: "READ_FAILED" });
+      await expect(store.remove("timer-1")).rejects.toMatchObject({ code: "READ_FAILED" });
+      expect(await readFile(file, "utf8")).toBe(contents);
+      expect((await readdir(state)).some((name) => name.endsWith(".tmp"))).toBe(false);
+    } finally { await rm(state, { recursive: true, force: true }); }
+  });
+
+  it("recovers a valid backup and saves the validated previous state as the next backup", async () => {
+    const state = await mkdtemp(path.join(os.tmpdir(), "vibe-timer-backup-recovery-"));
+    const file = timerFile("/workspace", state);
+    const backup = `${file}.bak`;
+    const previous = validTimer({ id: "last-good", prompt: "" });
+    const corruptPrimary = "{broken primary";
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const store = new AiTimerStore("/workspace", state);
+    try {
+      await writeFile(file, corruptPrimary);
+      await writeFile(backup, `${JSON.stringify({ timers: [previous] })}\n`);
+      await expect(store.list()).resolves.toEqual([previous]);
+      expect(await readFile(file, "utf8")).toBe(corruptPrimary);
+      expect(warning).toHaveBeenCalledWith(expect.stringContaining("last-good backup"));
+
+      const next = await store.set("/new-task", "codex", "continue", 60);
+      await expect(store.list()).resolves.toEqual([previous, next]);
+      await expect(readFile(backup, "utf8").then(JSON.parse)).resolves.toEqual({ timers: [previous] });
+      await expect(readFile(file, "utf8").then(JSON.parse)).resolves.toEqual({ timers: [previous, next] });
+      for (const pathName of [file, backup]) expect((await stat(pathName)).mode & 0o777).toBe(0o600);
+      expect((await readdir(state)).some((name) => name.endsWith(".tmp"))).toBe(false);
+    } finally {
+      warning.mockRestore();
+      await rm(state, { recursive: true, force: true });
+    }
+  });
+
+  it("reads a valid backup when the primary is missing without restoring the primary", async () => {
+    const state = await mkdtemp(path.join(os.tmpdir(), "vibe-missing-timer-primary-"));
+    const file = timerFile("/workspace", state);
+    const backup = `${file}.bak`;
+    const previous = validTimer({ id: "backup-only" });
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const store = new AiTimerStore("/workspace", state);
+    try {
+      await writeFile(backup, JSON.stringify({ timers: [previous] }));
+      await expect(store.list()).resolves.toEqual([previous]);
+      await expect(readFile(file, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+      expect(warning).toHaveBeenCalledOnce();
+    } finally {
+      warning.mockRestore();
+      await rm(state, { recursive: true, force: true });
+    }
+  });
+
   it("suspends delivery handles while retaining durable timers for restart", async () => {
     const state = await mkdtemp(path.join(os.tmpdir(), "vibe-timer-suspend-"));
     const store = new AiTimerStore("/workspace", state);
@@ -123,22 +209,65 @@ describe("AI continuation timers", () => {
 
   it("sends the continuation prompt when the timer expires", async () => {
     vi.useFakeTimers();
+    let state: string | undefined;
+    let service: AiTimerService | undefined;
     try {
-      const state = await mkdtemp(path.join(os.tmpdir(), "vibe-ai-timers-"));
+      state = await mkdtemp(path.join(os.tmpdir(), "vibe-ai-timers-"));
       const store = new AiTimerStore("/workspace", state);
       const session = { status: "done", model: "gpt-5", reasoning: "low", configuration: { model: "gpt-5", reasoning: "low" }, messages: [] };
       const provider = { get: vi.fn(async () => session), send: vi.fn(async () => ({ ...session, status: "in_progress" })), steer: vi.fn() };
       const changed = vi.fn();
-      const service = new AiTimerService(store, { get: vi.fn(() => provider) } as never, "/workspace", changed);
+      service = new AiTimerService(store, { get: vi.fn(() => provider) } as never, "/workspace", changed);
       await service.schedule("/workspace/task", "codex", "Continue now", 1);
       await vi.advanceTimersByTimeAsync(1_000);
       await vi.waitFor(() => expect(provider.send).toHaveBeenCalledWith("/workspace/task", expect.objectContaining({ prompt: "Continue now", configuration: session.configuration, mcpServers: [expect.objectContaining({ name: "vibe-editor" })] })));
+      await service.suspend();
       await expect(store.list()).resolves.toEqual([]);
-    } finally { vi.useRealTimers(); }
+    } finally {
+      await service?.suspend();
+      if (state) await rm(state, { recursive: true, force: true });
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps a long timer durable across the maximum-timeout wake and fires at its due time", async () => {
+    vi.useFakeTimers();
+    let state: string | undefined;
+    let first: AiTimerService | undefined;
+    let restarted: AiTimerService | undefined;
+    try {
+      const startAt = Date.now();
+      state = await mkdtemp(path.join(os.tmpdir(), "vibe-long-timer-wake-"));
+      const store = new AiTimerStore("/workspace", state);
+      const session = { status: "done", model: "gpt-5", reasoning: "low", messages: [] };
+      const provider = { get: vi.fn(async () => session), send: vi.fn(async () => session), steer: vi.fn() };
+      const acp = { get: vi.fn(() => provider) } as never;
+      first = new AiTimerService(store, acp, "/workspace", vi.fn());
+      const dueAt = new Date(startAt + 30 * 24 * 60 * 60 * 1_000).toISOString();
+      const timer = await first.scheduleAt("/workspace/task", "codex", "Long wait", dueAt);
+
+      await vi.advanceTimersByTimeAsync(2_147_483_647);
+      await first.suspend();
+      await expect(store.list()).resolves.toEqual([timer]);
+      expect(provider.send).not.toHaveBeenCalled();
+
+      restarted = new AiTimerService(store, acp, "/workspace", vi.fn());
+      await restarted.start();
+      await vi.advanceTimersByTimeAsync(Date.parse(dueAt) - Date.now());
+      await restarted.suspend();
+      expect(provider.send).toHaveBeenCalledOnce();
+      await expect(store.list()).resolves.toEqual([]);
+    } finally {
+      await first?.suspend();
+      await restarted?.suspend();
+      if (state) await rm(state, { recursive: true, force: true });
+      vi.useRealTimers();
+    }
   });
 
   it("preserves typed MCP tools and the next five-minute timer across repeated cycles", async () => {
     const directory = await mkdtemp(path.join(os.tmpdir(), "flow-repeat-timer-")); const store = new AiTimerStore("/workspace", directory);
+    const startedAt = Date.now(); vi.useFakeTimers(); vi.setSystemTime(startedAt);
     let cycle = 1;
     const provider = { get: vi.fn(async () => ({ status: "done", messages: [] })), send: vi.fn(async () => {
       cycle += 1;
@@ -154,7 +283,7 @@ describe("AI continuation timers", () => {
       }
       expect(provider.send).toHaveBeenCalledTimes(2);
       expect(provider.send).toHaveBeenLastCalledWith("/workspace/agent", expect.objectContaining({ mcpServers: [expect.objectContaining({ env: expect.objectContaining({ VIBE_EDITOR_FLOW_TOOLS: "1" }) })] }));
-    } finally { await service.cancelWorkspace("/workspace/agent"); }
+    } finally { await service.cancelWorkspace("/workspace/agent"); vi.useRealTimers(); await rm(directory, { recursive: true, force: true }); }
   });
 
   it("cancels the next timer without delivering it", async () => {
@@ -191,4 +320,14 @@ describe("AI continuation timers", () => {
       await expect(store.list()).resolves.toEqual([]);
     } finally { vi.useRealTimers(); }
   });
+});
+
+it("rejects invalid new timer timestamps without corrupting an existing timer file", async () => {
+  const state = await mkdtemp(path.join(os.tmpdir(), "vibe-timer-invalid-new-"));
+  const store = new AiTimerStore("/workspace", state);
+  try {
+    const existing = await store.setAt("/task", "codex", "preserve", new Date(Date.now() + 60_000).toISOString());
+    await expect(store.setAt("/task", "codex", "invalid", "not-a-date")).rejects.toMatchObject({ code: "INVALID_REQUEST" });
+    expect(await store.list()).toEqual([existing]);
+  } finally { await rm(state, { recursive: true, force: true }); }
 });

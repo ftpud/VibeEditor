@@ -9,13 +9,18 @@ import { startWorkflow } from "./server.js";
 import { executeTaskControls } from "./workflow-task-controls.js";
 
 const directories: string[] = [];
-afterEach(async () => { await Promise.all(directories.splice(0).map((directory) => rm(directory, { recursive: true, force: true }))); });
+const runners: HarnessRunner[] = [];
+afterEach(async () => {
+  for (const runner of runners.splice(0)) { await runner.suspend(); await runner.drain(); }
+  await Promise.all(directories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
+});
 const session = (text: string): AiSession => ({ id: "session", status: "idle", model: "worker-model", reasoning: "high", configuration: { model: "worker-model", reasoning: "high" }, messages: [{ id: "reply", role: "assistant", text, timestamp: "now" }] } as AiSession);
 
 async function setup(type: "ai" | "chatbox" = "ai") {
   const directory = await mkdtemp(path.join(os.tmpdir(), "task-controls-")); directories.push(directory);
   const store = new HarnessStore(directory, directory);
   const runner = new HarnessRunner(store, () => {}, 1);
+  runners.push(runner);
   const created = await store.create("Tasks");
   const controls: HarnessBlock = { id: "controls", type: "task_controls", label: "Task controls", prompt: "", provider: "worker", model: "worker-model", reasoning: "high", position: { x: 280, y: 0 } };
   const definition = await store.update({ ...created, blocks: [{ id: "agent", type, label: "Controller", prompt: "Manage tasks", position: { x: 0, y: 0 } }, controls], edges: [{ id: "use", from: "agent", to: "controls", type: "use" }] });
@@ -70,7 +75,7 @@ it.each(["ai", "chatbox"] as const)("attaches task controls to %s with fixed des
     return session("Tasks managed");
   });
   const run = await runner.start(definition.id, "Manage", dispatch, "controller");
-  await vi.waitFor(async () => expect((await runner.readRun(run.id))?.status).toBe("succeeded"));
+  await vi.waitFor(async () => expect((await runner.readRun(run.id))?.status).toBe("succeeded"), { timeout: 10_000 });
   const saved = (await store.runs())[0]!;
   expect(saved.children).toEqual([expect.objectContaining({ taskId: "task-1", provider: "worker", blockId: "controls", workspace: "/root/task-1" })]);
   expect(saved.operations).toEqual(expect.arrayContaining([expect.objectContaining({ kind: "task_create", status: "succeeded" }), expect.objectContaining({ kind: "prompt_delivery", status: "succeeded" })]));

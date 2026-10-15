@@ -4,6 +4,7 @@ import path from "node:path";
 import { mkdir, open, readFile, rename, unlink } from "node:fs/promises";
 import type { JavaBreakpoint, JavaProjectOptions, JavaRunConfiguration, WorkspaceOptions, WorkspaceWorkflowDocument, WorkspaceSearchQuery, WorkspaceSearchQueries } from "@remote-ide/protocol";
 import { CoreError } from "./errors.js";
+import { serializedStateMutation } from "./root-mutation.js";
 
 const saveQueues = new Map<string, Promise<void>>();
 
@@ -43,7 +44,7 @@ export class WorkspaceStateStore {
 
   save(options: WorkspaceOptions): Promise<void> {
     const validated = validateWorkspaceOptions(options);
-    const pending = (saveQueues.get(this.stateFile) ?? Promise.resolve()).catch(() => undefined).then(() => this.write(validated));
+    const pending = (saveQueues.get(this.stateFile) ?? Promise.resolve()).catch(() => undefined).then(() => serializedStateMutation(this.stateFile, () => this.write(validated)));
     saveQueues.set(this.stateFile, pending);
     void pending.finally(() => { if (saveQueues.get(this.stateFile) === pending) saveQueues.delete(this.stateFile); }).catch(() => undefined);
     return pending;

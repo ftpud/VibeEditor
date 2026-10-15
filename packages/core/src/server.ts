@@ -466,8 +466,8 @@ export async function createServer(host: string, port: number, workspacePath: st
   const cleanupServices = () => cleanupPromise ??= (async () => {
     managedProcesses.off("changed", processesChanged);
     if (!managedProcesses.listenerCount("changed")) managedProcesses.close();
-    schedules.close(); rootBatcher.dispose(); terminalHost.closeAll();
-    const results = await Promise.allSettled([remoteTransfers.close(), workflowApps.closeAll(), watcher.close(), gitIndexWatcher.close(), runConfigWatcher.close(), appEventWatcher.close(), appCommandWatcher.close()]);
+    rootBatcher.dispose(); terminalHost.closeAll();
+    const results = await Promise.allSettled([schedules.close(), remoteTransfers.close(), workflowApps.closeAll(), watcher.close(), gitIndexWatcher.close(), runConfigWatcher.close(), appEventWatcher.close(), appCommandWatcher.close()]);
     const failures = results.filter((result): result is PromiseRejectedResult => result.status === "rejected");
     if (failures.length) throw new AggregateError(failures.map((result) => result.reason), "Core services could not be closed");
   })();
@@ -475,14 +475,15 @@ export async function createServer(host: string, port: number, workspacePath: st
   let shutdownPromise: Promise<void> | undefined;
   shutdownHandlers.set(server, () => shutdownPromise ??= (async () => {
     draining = true;
-    schedules.close(); const timersStopped = aiTimers.suspend();
+    const schedulesStopped = schedules.close(); const timersStopped = aiTimers.suspend();
+    void schedulesStopped.catch(() => undefined);
     void timersStopped.catch(() => undefined);
     const suspended = await Promise.allSettled([appCommandWatcher.close(), ...[...harnessRunners.values()].map((runner) => runner.suspend())]);
     const closed = new Promise<void>((resolve, reject) => server.close((error) => error && (error as NodeJS.ErrnoException).code !== "ERR_SERVER_NOT_RUNNING" ? reject(error) : resolve()));
     for (const socket of server.clients) socket.close(1001, "Core is shutting down");
     const forceClose = setTimeout(() => { for (const socket of server.clients) socket.terminate(); }, 500);
     try {
-      const providerResults = await Promise.allSettled([typeof acp.shutdown === "function" ? acp.shutdown() : Promise.resolve(), timersStopped]);
+      const providerResults = await Promise.allSettled([typeof acp.shutdown === "function" ? acp.shutdown() : Promise.resolve(), timersStopped, schedulesStopped]);
       if (inFlight) await new Promise<void>((resolve) => idleWaiters.add(resolve));
       await closed;
       const cleanupResults = await Promise.allSettled([...bridgeCommands, ...sessionCleanups, cleanupServices(), flushWorkspaceStateWrites(), ...[...harnessRunners.values()].map((runner) => runner.drain())]);

@@ -1,6 +1,6 @@
 import os from "node:os";
 import path from "node:path";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, realpath, rm, writeFile } from "node:fs/promises";
 import { afterEach, expect, it, vi } from "vitest";
 import type { AiSession, HarnessBlock } from "@remote-ide/protocol";
 import { WorkspaceTaskStore } from "./tasks.js";
@@ -13,10 +13,13 @@ import { prepareWorkflowSkills, executeWorkflowSkill, workflowSessionSkillIds } 
 const roots: string[] = [];
 const runners: { runner: HarnessRunner; store: HarnessStore }[] = [];
 afterEach(async () => {
-  for (const { runner, store } of runners.splice(0)) await vi.waitFor(async () => expect((await store.runs()).some((run) => runner.isActive(run.id))).toBe(false), { timeout: 5000 });
+  for (const { runner, store } of runners.splice(0)) {
+    await runner.drain();
+    expect((await store.runs()).some((run) => runner.isActive(run.id))).toBe(false);
+  }
   vi.unstubAllEnvs(); await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true }))); });
 async function setup(type: "ai" | "chatbox" = "ai") {
-  const root = await mkdtemp(path.join(os.tmpdir(), "workflow-skill-picker-")); roots.push(root);
+  const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "workflow-skill-picker-"))); roots.push(root);
   const workspace = path.join(root, "project"); await mkdir(workspace);
   const skills = new SkillsStore(path.join(root, "state"), workspace);
   await skills.write("workspace/review", workspace, "---\nname: Reviewer\ndescription: Review code changes\n---\n\nRead examples.txt. Keep {{example}} literal.\n");
@@ -53,11 +56,12 @@ it.each(["ai", "chatbox"] as const)("loads linked skills on demand for %s with c
     return { id: "session", status: "idle", messages: [{ id: "reply", role: "assistant", text: "Reviewed", timestamp: "now" }] } as AiSession;
   };
   const run = await runner.start(definition.id, "Review", dispatch, "codex", undefined, undefined, undefined, undefined, workspace, (definition) => prepareWorkflowSkills(definition, skills, workspace));
-  await vi.waitFor(async () => expect((await runner.readRun(run.id))?.status).toBe("succeeded"));
+  await runner.drain();
+  expect((await runner.readRun(run.id))?.status).toBe("succeeded");
   expect((await runner.readRun(run.id))!.definition!.blocks[1]).toMatchObject({ skillId: "workspace/review", prompt: "", description: "Review code changes" });
   expect((await store.read(definition.id)).blocks[1]).toMatchObject({ skillId: "workspace/review", prompt: "" });
   expect(load).toHaveBeenCalledWith(workspace, "workspace/review", preset);
-});
+}, 15_000);
 
 it("checks agent access and live revocation for linked skills", async () => {
   const { skills, workspace, definition } = await setup();
@@ -83,7 +87,8 @@ it("loads a linked skill through Core’s workflow dispatch", async () => {
   vi.stubEnv("REMOTE_IDE_STATE_DIR", state);
   const direct = await store.update({ ...definition, blocks: [definition.blocks[1]!], edges: [] });
   const run = await startWorkflow({ harnessId: direct.id, input: "Load skill", provider: "codex" }, { tasks: new WorkspaceTaskStore(workspace), harnessRunner: runner, rootWorkspace: workspace, workspacePath: workspace } as Parameters<typeof startWorkflow>[1]);
-  await vi.waitFor(async () => expect((await runner.readRun(run.id))?.status).toBe("succeeded"));
+  await runner.drain();
+  expect((await runner.readRun(run.id))?.status).toBe("succeeded");
   const loaded = JSON.parse((await runner.readRun(run.id))!.blocks[0]!.output!);
   expect(loaded).toMatchObject({ id: "workspace/review", baseDirectory: path.join(workspace, ".agents/skills/review") });
   expect(loaded.content).toContain("Keep {{example}} literal.");
@@ -105,6 +110,7 @@ it("passes linked skills to a workflow agent’s native provider catalogue", asy
   const provider = { descriptor: { id: "test", options: [] }, models: vi.fn(async () => []), get: vi.fn(async () => completed), startFreshSession: vi.fn(async (_workspace: string, _request: unknown) => completed) };
   const context = { tasks: new WorkspaceTaskStore(workspace), harnessRunner: runner, rootWorkspace: workspace, workspacePath: workspace, bridgeWorkspace: workspace, acp: { get: () => provider }, agents: { list: async () => [] }, aiTimers: { next: async () => undefined } } as unknown as Parameters<typeof startWorkflow>[1];
   const run = await startWorkflow({ harnessId: definition.id, input: "Review", provider: "test" }, context);
-  await vi.waitFor(async () => expect((await runner.readRun(run.id))?.status).toBe("succeeded"));
+  await runner.drain();
+  expect((await runner.readRun(run.id))?.status).toBe("succeeded");
   expect(provider.startFreshSession).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ skillIds: ["workspace/review"] }));
 });

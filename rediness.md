@@ -86,6 +86,44 @@ ignore late frames after finalization, and drain partial-file cleanup during
 Core shutdown. Download streams now retain correct FileHandle ownership.
 Expired unused tickets no longer block workspace operations indefinitely.
 
+Continuation timers and user schedules now validate complete stored documents,
+recover only from valid last-good backups, and use private synced atomic writes.
+Timer, schedule, and workspace-options transactions share conservative owned
+state-file locks across processes. Regression tests exercise independent writers
+and recovery from SIGKILL. Schedule firing rechecks fresh due/enabled state while
+claiming under that lock, and persists launch ownership before external effects.
+A dead local launch owner produces a paused schedule with an unknown-outcome
+message; automatic recovery does not repeat the action. Graceful shutdown drains
+scheduled background launches and their final writes.
+
+A repeatable isolated restart soak now snapshots built Core/ACP/Protocol code,
+uses a separate Git workspace and credentials, interrupts pending options writes
+with SIGTERM/SIGINT/SIGKILL, and verifies acknowledged state on restart. Its RSS
+samples describe separate short-lived Core processes, not long-running workflow
+memory stability. Current run results are recorded in the final implementation
+report when the run completes.
+
+Crash testing exposed an empty-owner window in directory-based state locks.
+State-file locks now publish a complete private ownership record with an atomic
+hard link and release it with an atomic unlink. Unknown legacy locks and
+abandoned recovery markers still require conservative manual inspection.
+Continuation timers beyond the native timeout limit retain their durable record
+when an early clamped timeout re-arms them.
+
+Core's local workflow bridge now restricts command/response/event directories to
+0700 and new files to 0600, including temporary publications. Java debugger
+startup waits for its suspended thread prompt before installing breakpoints and
+continuing; this addresses a startup race seen on the hosted macOS runner.
+
+The hosted matrix for `962cf25` passed on Linux with Node 22 and 24 but failed on
+macOS. Its annotations identified a canonical-path assertion and ACP/MCP fixture
+completion races as well as the debugger race. Those failures are being fixed
+and revalidated; the final report records the resulting hosted status. Strict
+ten-second restart probes have also failed on slow state saves under variable
+host I/O pressure. The soak now reports its selected request deadline, with a
+thirty-second default matching Desktop and an explicit ten-second probe option.
+These profiles and their failures must remain distinct in release evidence.
+
 The application is still not certified for stable distribution. Hosted macOS
 checks, the remaining cross-process Core-store review, runtime payload
 validation, signed artifacts, extended crash/restart tests, and overnight
