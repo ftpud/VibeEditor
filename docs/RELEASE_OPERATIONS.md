@@ -10,7 +10,10 @@ promoting a build.
 Core and Gateway hosts require Node.js **22.12 or newer**. Gateway checks the
 remote SSH user's Node version before provisioning. CI is configured for Node
 22 and 24 on Linux and macOS; use `npm ci`, build, both typechecks, dependency
-audit, and the full tests when validating a candidate.
+audit, and the full tests when validating a candidate. The implementation at
+`36181e0` passed all four hosted combinations, including twelve restart cycles
+per job: [verification run](https://github.com/ftpud/VibeEditor/actions/runs/38700222350).
+See [the final report](../report.md) for soak evidence and remaining release gates.
 
 The current Core wire compatibility range is **protocol 16–16**. A client is
 accepted only when its declared range overlaps Core's range. A protocol 15-only

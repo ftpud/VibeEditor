@@ -5,11 +5,12 @@ Implementation progress is tracked below; the original findings and check counts
 are retained as historical evidence.
 
 **Verdict: suitable for continued experimental use; not ready for a stable release.**
-The architecture and test coverage provide a substantial foundation. The main
-blockers are durable-state races, unreliable recovery after crashes, failing
-Core tests, mutable deployment, and unresolved dependency/security findings.
-This assessment is based on source tracing and local checks, not a completed
-Linux/macOS release certification or a security penetration test.
+The original review found state races, crash-recovery failures, failing tests,
+mutable deployment, and dependency advisories. The implementation below addresses
+those reproduced failures. Remaining gates include signed release artifacts,
+manual packaged-app validation, broader state/payload coverage, and extended
+realistic workflow measurement. This is not a security penetration test or
+completed release certification; see [the final report](report.md) for validation evidence.
 
 ## Hardening progress — 14 October 2026
 
@@ -28,8 +29,8 @@ atomic promotion, synced private temporary files, and last-good backups. A
 single-instance guard prevents separate Gateway writers for the same user data.
 Core workspace options preserve a last-good backup, report unrecoverable
 corruption instead of silently resetting state, and serialize saves across
-store instances within one process. Cross-process coordination of Core stores
-other than task registries remains a release gate.
+store instances. The later timer/schedule batch adds cross-process options
+locking; coordination and live cache behavior of other Core stores still need review.
 
 Startup uses lockfile-installed Codex runtimes by default. Latest-runtime
 updates now require `REMOTE_IDE_CODEX_AUTO_UPDATE=1`; disabling updates also
@@ -42,9 +43,9 @@ The dependency migration uses Electron 44, Vitest 4, and happy-dom 20; the host
 Node requirement is now **22.12+**. A fresh audit after compatible transitive
 updates reports **zero vulnerabilities**. Linux/macOS CI covers Node 22 and 24,
 clean installs, production builds, both typechecks, dependency auditing, and
-all workspace tests. These jobs have been configured, not certified on macOS
-from this Linux environment. The verification table below records the original
-assessment; it is not the result of these later fixes.
+all workspace tests. Hosted results are recorded in the final implementation
+report; automated checks do not certify packaged GUI behavior. The verification
+table below records the original assessment; it is not the result of these later fixes.
 
 ## Hardening progress — 15 October 2026
 
@@ -117,17 +118,23 @@ continuing; this addresses a startup race seen on the hosted macOS runner.
 
 The hosted matrix for `962cf25` passed on Linux with Node 22 and 24 but failed on
 macOS. Its annotations identified a canonical-path assertion and ACP/MCP fixture
-completion races as well as the debugger race. Those failures are being fixed
-and revalidated; the final report records the resulting hosted status. Strict
+completion races as well as the debugger race. Those issues have been fixed;
+the final report records the resulting hosted status, including subsequent
+portable Gateway token validation and explicit fixture synchronization. Strict
 ten-second restart probes have also failed on slow state saves under variable
 host I/O pressure. The soak now reports its selected request deadline, with a
 thirty-second default matching Desktop and an explicit ten-second probe option.
 These profiles and their failures must remain distinct in release evidence.
 
-The application is still not certified for stable distribution. Hosted macOS
-checks, the remaining cross-process Core-store review, runtime payload
-validation, signed artifacts, extended crash/restart tests, and overnight
-workflow measurement remain release gates.
+Final hosted verification of `36181e0` passed on Linux and macOS with Node 22
+and 24: clean installation, audit, build, typechecks, full tests, and twelve
+restart cycles per job. See [the run](https://github.com/ftpud/VibeEditor/actions/runs/38700222350)
+and [the final report](report.md) for scope and retained failure history.
+
+The application is still not certified for stable distribution. The remaining
+cross-process Core-store review, complete runtime payload schemas, signed
+artifacts, packaged GUI checks, stricter latency investigation, and extended
+realistic workflow measurement remain release gates.
 
 ## Original review verification (before hardening)
 
