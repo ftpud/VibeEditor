@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { once } from "node:events";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { realpath, mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -16,7 +16,7 @@ import * as output from "./websocket-output.js";
 
 for (const failure of ["buffer pressure", "asynchronous send error"] as const) {
   it(`disconnects on ${failure}, isolates healthy peers, and releases session services while preserving the PTY`, async () => {
-    const directory = await mkdtemp(path.join(os.tmpdir(), "vibe-output-integration-"));
+    const directory = await realpath(await mkdtemp(path.join(os.tmpdir(), "vibe-output-integration-")));
     const workspace = path.join(directory, "primary");
     const secondary = path.join(directory, "secondary");
     vi.stubEnv("REMOTE_IDE_STATE_DIR", path.join(directory, "state"));
@@ -123,7 +123,7 @@ for (const failure of ["buffer pressure", "asynchronous send error"] as const) {
 }
 
 it("closes services that finish initialization after an outbound failure", async () => {
-  const directory = await mkdtemp(path.join(os.tmpdir(), "vibe-output-startup-"));
+  const directory = await realpath(await mkdtemp(path.join(os.tmpdir(), "vibe-output-startup-")));
   const workspace = path.join(directory, "primary");
   vi.stubEnv("REMOTE_IDE_STATE_DIR", path.join(directory, "state"));
   let server: WebSocketServer | undefined;
@@ -135,7 +135,7 @@ it("closes services that finish initialization after an outbound failure", async
   try {
     await mkdir(workspace);
     await promisify(execFile)("git", ["-C", workspace, "init", "-q"]);
-    server = await createServer("127.0.0.1", 0, workspace, { outbound: { maxBufferedBytes: 128 } });
+    server = await createServer("127.0.0.1", 0, workspace, { outbound: { maxBufferedBytes: 1024 } });
     if (!server.address()) await once(server, "listening");
     const address = server.address();
     if (!address || typeof address === "string") throw new Error("Missing port");
@@ -145,9 +145,12 @@ it("closes services that finish initialization after an outbound failure", async
     const jdtClose = vi.spyOn(JdtLanguageService.prototype, "close");
     socket = new WebSocket(`ws://127.0.0.1:${address.port}`);
     await once(socket, "open");
-    await started;
     const closed = once(socket, "close");
     socket.send(JSON.stringify({ id: "handshake", type: "protocol.handshake", payload: { compatibility: protocolCompatibility } }));
+    await started;
+    const peer = [...server.clients][0]!;
+    Object.defineProperty(peer, "bufferedAmount", { configurable: true, get: () => 2048 });
+    socket.send(JSON.stringify({ id: "probe", type: "protocol.keepAlive", payload: {} }));
     await closed;
     release();
     await vi.waitFor(() => { expect(javaClose).toHaveBeenCalledOnce(); expect(jdtClose).toHaveBeenCalledOnce(); });

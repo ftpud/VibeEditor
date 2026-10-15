@@ -80,6 +80,11 @@ export class AiTimerStore {
 }
 
 export class AiTimerService {
+  private suspended = false;
+  private readonly pendingDeliveries = new Set<Promise<void>>();
+  /** Stop local delivery handles without deleting durable continuation timers. */
+  async suspend(): Promise<void> { this.suspended = true; for (const handle of this.handles.values()) clearTimeout(handle); this.handles.clear(); await Promise.all([...this.pendingDeliveries]); }
+
   private readonly handles = new Map<string, NodeJS.Timeout>();
   private readonly delivering = new Set<string>();
   private readonly timerCancellationEpochs = new Map<string, number>();
@@ -126,6 +131,7 @@ export class AiTimerService {
   }
 
   async fireById(id: string): Promise<boolean> {
+    if (this.suspended) return false;
     const timer = (await this.store.list()).find((item) => item.id === id);
     if (!timer) return false;
     await this.fire(timer, true);
@@ -148,6 +154,7 @@ export class AiTimerService {
   }
 
   async fireNext(workspace: string, provider?: AiProvider): Promise<boolean> {
+    if (this.suspended) return false;
     const timer = await this.store.next(workspace, provider);
     if (!timer) return false;
     await this.fire(timer, true);
@@ -166,12 +173,21 @@ export class AiTimerService {
   }
 
   private arm(timer: AiContinuationTimer): void {
+    if (this.suspended) return;
     this.handles.get(timer.id) && clearTimeout(this.handles.get(timer.id));
     const delay = Math.max(0, new Date(timer.dueAt).getTime() - Date.now());
     this.handles.set(timer.id, setTimeout(() => { void this.fire(timer).catch((error) => console.error(`[core] workflow timer journal failed: ${error instanceof Error ? error.message : String(error)}`)); }, Math.min(delay, 2_147_483_647)));
   }
 
-  private async fire(timer: AiContinuationTimer, immediately = false): Promise<void> {
+  private fire(timer: AiContinuationTimer, immediately = false): Promise<void> {
+    if (this.suspended) return Promise.resolve();
+    const pending = this.fireNow(timer, immediately);
+    this.pendingDeliveries.add(pending);
+    void pending.finally(() => this.pendingDeliveries.delete(pending)).catch(() => undefined);
+    return pending;
+  }
+
+  private async fireNow(timer: AiContinuationTimer, immediately = false): Promise<void> {
     const result = timer.workflowRunId && timer.workflowBlockId && this.workflowOperation
       ? await this.workflowOperation(timer, () => this.deliver(timer, immediately), () => this.reconcileDelivery(timer))
       : await this.deliver(timer, immediately);

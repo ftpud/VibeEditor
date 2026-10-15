@@ -47,6 +47,21 @@ describe("CoreClient streaming disconnects", () => {
   });
   afterEach(() => vi.unstubAllGlobals());
 
+  it("authenticates with the main-process token without persisting it", async () => {
+    const previous = window.desktop;
+    const token = "a".repeat(64);
+    window.desktop = { ...previous, connectionToken: vi.fn(async () => token) } as Window["desktop"];
+    const client = new CoreClient();
+    try {
+      const connected = client.connect("127.0.0.1", 7331);
+      const socket = FakeWebSocket.instances[0]!;
+      socket.open(); await connected;
+      const handshake = socket.sent.map((value) => JSON.parse(value)).find((value) => value.type === "protocol.handshake");
+      expect(handshake.payload.token).toBe(token);
+      expect(window.desktop!.connectionToken).toHaveBeenCalledWith("127.0.0.1", 7331);
+    } finally { client.disconnect(); window.desktop = previous; }
+  });
+
   it("reports the current transport and handshake operation", async () => {
     const client = new CoreClient();
     const progress = vi.fn();

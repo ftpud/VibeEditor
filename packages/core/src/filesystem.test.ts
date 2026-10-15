@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { access, mkdtemp, mkdir, readFile, symlink, writeFile } from "node:fs/promises";
+import { access, mkdtemp, mkdir, readdir, readFile, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -108,7 +108,9 @@ describe("WorkspaceFileSystem", () => {
     expect(preview.items[0]).toMatchObject({ caseOnlyRename: true });
     const result = await fs.transferApply("move", [{ source: "README.md", destination: "Readme.md" }], [], [], [], true);
     expect(result).toEqual({ completed: [{ source: "README.md", destination: "Readme.md" }], failures: [] });
-    await expect(access(path.join(root, "README.md"))).rejects.toMatchObject({ code: "ENOENT" });
+    const names = await readdir(root);
+    expect(names).toContain("Readme.md");
+    expect(names).not.toContain("README.md");
     await expect(access(path.join(root, "Readme.md"))).resolves.toBeUndefined();
   });
 

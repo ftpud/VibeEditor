@@ -32,6 +32,18 @@ export class HarnessRunner {
   private chatAdmissionQueue = Promise.resolve();
   private readonly flowAnswers = new Map<string, (answer: string) => void>();
   private readonly cancelled = new Set<string>();
+  private suspended = false;
+  private readonly executionTasks = new Set<Promise<void>>();
+  /** Freeze durable snapshots so restart recovery sees in-flight operations, not a false cancellation. */
+  async suspend(): Promise<void> { this.suspended = true; await this.updateQueue; }
+  async drain(): Promise<void> { await Promise.all([...this.executionTasks]); }
+  private launchExecution(...args: Parameters<HarnessRunner["execute"]>): void {
+    if (this.suspended) return;
+    const pending = this.execute(...args);
+    this.executionTasks.add(pending);
+    void pending.finally(() => this.executionTasks.delete(pending)).catch((error) => console.error("[core] Workflow finalization failed", error));
+  }
+
   private readonly activeRuns = new Set<string>();
   private readonly activeProviders = new Map<string, Set<string>>();
   private readonly executions = new Map<string, ActiveExecution>();
@@ -45,7 +57,7 @@ export class HarnessRunner {
 
   isFlowBlock(runId: string, blockId: string): boolean { return this.executions.get(runId)?.blocks.some((block) => block.id === blockId && ["ai", "chatbox"].includes(block.type)) ?? false; }
 
-  isActive(runId: string): boolean { return this.activeRuns.has(runId) && !this.cancelled.has(runId); }
+  isActive(runId: string): boolean { return !this.suspended && this.activeRuns.has(runId) && !this.cancelled.has(runId); }
 
   async registerChild(runId: string, child: Omit<HarnessChildTask, "recoveryAttempts">): Promise<void> {
     const execution = this.executions.get(runId);
@@ -210,6 +222,7 @@ export class HarnessRunner {
   }
 
   async start(harnessId: string, input: string, dispatch: Dispatch, defaultProvider = "codex", append?: Append, startBlockId?: string, rerunRunId?: string, testDefinition?: HarnessDefinition, workspace?: string, prepareDefinition?: (definition: HarnessDefinition) => Promise<HarnessDefinition>, binding?: HarnessRun["binding"]): Promise<HarnessRun> {
+    if (this.suspended) throw new CoreError("INVALID_REQUEST", "Core is shutting down");
     const source = rerunRunId ? (await this.store.runs()).find((run) => run.id === rerunRunId) : undefined;
     if (rerunRunId && !source) throw new CoreError("FILE_NOT_FOUND", "Workflow run does not exist");
     if (rerunRunId && !source?.definition) throw new CoreError("INVALID_REQUEST", "This workflow run has no frozen definition to rerun");
@@ -236,7 +249,7 @@ export class HarnessRunner {
     run.definition = structuredClone(harness);
     run.executionPlan = { version: 1, createdAt, definitionVersion: harness.version, order: [...validation.order], blocks: validation.order.map((blockId) => ({ blockId, incoming: harness.edges.filter((edge) => edge.to === blockId).map((edge) => edge.id), outgoing: harness.edges.filter((edge) => edge.from === blockId).map((edge) => edge.id) })) };
     await this.store.createRun(run, harness.settings?.maxActiveRuns ?? 4); this.changed(run.id);
-    this.activeRuns.add(run.id); void this.execute(run, harness.blocks, harness.edges, validation.order, dispatch, defaultProvider, append ?? (async () => { throw new Error("This workflow runtime cannot append to an active block session"); }), false, startBlockId);
+    this.activeRuns.add(run.id); this.launchExecution(run, harness.blocks, harness.edges, validation.order, dispatch, defaultProvider, append ?? (async () => { throw new Error("This workflow runtime cannot append to an active block session"); }), false, startBlockId);
     return run;
   }
 
@@ -286,7 +299,7 @@ export class HarnessRunner {
       state.status = "queued"; state.error = undefined; state.pendingPermission = undefined; state.question = undefined; state.pauseId = undefined; state.waitingUntil = undefined;
       await this.store.createRun(run, definition.settings?.maxActiveRuns ?? 4);
       this.changed(run.id); this.activeRuns.add(run.id);
-      void this.execute(run, definition.blocks, definition.edges, validation.order, dispatch, state.provider ?? defaultProvider, append, false, blockId);
+      this.launchExecution(run, definition.blocks, definition.edges, validation.order, dispatch, state.provider ?? defaultProvider, append, false, blockId);
       return structuredClone(run);
     } finally { this.resumingChats.delete(key); release(); }
   }
@@ -319,7 +332,7 @@ export class HarnessRunner {
       try {
         await this.reconcilePersistedRun(run, inspector);
         recovered.push(structuredClone(run));
-        void this.execute(run, definition.blocks, definition.edges, order, dispatch, defaultProvider, append ?? (async () => { throw new Error("This workflow runtime cannot append to an active block session"); }), true);
+        this.launchExecution(run, definition.blocks, definition.edges, order, dispatch, defaultProvider, append ?? (async () => { throw new Error("This workflow runtime cannot append to an active block session"); }), true);
       } catch (error) {
         this.activeRuns.delete(run.id);
         await this.failRecovery(run, `Workflow recovery could not inspect its persisted resources: ${error instanceof Error ? error.message : String(error)}`);
@@ -622,7 +635,7 @@ export class HarnessRunner {
       }
       await this.update(run);
       while (running.size || background.size || run.blocks.some((block) => isActiveStatus(block.status))) {
-        if (this.cancelled.has(run.id)) throw new Cancelled();
+        if (this.suspended || this.cancelled.has(run.id)) throw new Cancelled();
         let changed = false;
         for (const blockId of order) {
           if (running.size >= concurrency) break;
@@ -1103,6 +1116,7 @@ export class HarnessRunner {
   }
 
   private async update(run: HarnessRun): Promise<void> {
+    if (this.suspended) return;
     const limit = run.definition?.settings?.logLimitEntries ?? 500;
     for (const block of run.blocks) if (block.log && block.log.length > limit) block.log = block.log.slice(-limit);
     const snapshot = structuredClone(run); const next = this.updateQueue.then(async () => { await this.store.saveRun(snapshot); this.changed(run.id); });

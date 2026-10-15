@@ -1,8 +1,9 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App, ConnectionDialog, DiagnosticsCopyButton, GatewayErrorNotice, RepositoryDialog, WorkspaceDialog, gatewayErrorMessage } from "./App";
 
-afterEach(cleanup);
+beforeEach(() => { Object.defineProperty(window, "alert", { configurable: true, writable: true, value: vi.fn() }); });
+afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
 describe("Gateway dialogs", () => {
   it("discovers remote workspaces on open and fills the form from a selection", async () => {

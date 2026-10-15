@@ -1,4 +1,4 @@
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { access, lstat, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -10,6 +10,56 @@ import { WorkspaceStateStore } from "./workspace-state.js";
 const execFileAsync = promisify(execFile);
 
 describe("WorkspaceTaskStore", () => {
+  it("lists and selects tasks when the workspace has no Git repository", async () => {
+    const workspace = await mkdtemp(path.join(os.tmpdir(), "remote-ide-task-non-git-root-"));
+    const state = await mkdtemp(path.join(os.tmpdir(), "remote-ide-task-non-git-state-"));
+    const store = new WorkspaceTaskStore(workspace, state);
+
+    await expect(store.list()).resolves.toEqual({ tasks: [] });
+    await expect(store.select()).resolves.toEqual({ workspace, registry: { tasks: [] } });
+    await expect(store.list()).resolves.toEqual({ tasks: [] });
+  });
+
+  it("preserves overlapping registry updates from separate Core processes", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "remote-ide-task-concurrent-root-"));
+    const state = await mkdtemp(path.join(os.tmpdir(), "remote-ide-task-concurrent-state-"));
+    await execFileAsync("git", ["init", root]);
+    await execFileAsync("git", ["-C", root, "config", "user.name", "Test"]);
+    await execFileAsync("git", ["-C", root, "config", "user.email", "test@example.com"]);
+    await writeFile(path.join(root, "tracked.txt"), "root\n");
+    await execFileAsync("git", ["-C", root, "add", "tracked.txt"]);
+    await execFileAsync("git", ["-C", root, "commit", "-m", "initial"]);
+    const store = new WorkspaceTaskStore(root, state);
+    const [renameTask, selectedTask, archivedTask, metadataTask] = await Promise.all([
+      store.create("feature/concurrent-rename", false, false, false),
+      store.create("feature/concurrent-select", false, false, false),
+      store.create("feature/concurrent-archive", false, false, false),
+      store.create("feature/concurrent-metadata", false, false, false),
+    ]);
+
+    await Promise.all([
+      runTaskStoreOperation(root, state, { method: "create", args: ["feature/concurrent-create", false, false, false] }),
+      runTaskStoreOperation(root, state, { method: "rename", args: [renameTask.id, "Renamed concurrently"] }),
+      runTaskStoreOperation(root, state, { method: "select", args: [selectedTask.id] }),
+      runTaskStoreOperation(root, state, { method: "setArchived", args: [archivedTask.id, true] }),
+      runTaskStoreOperation(root, state, { method: "updateMetadata", args: [metadataTask.id, { name: "Updated concurrently", status: "finished", archived: true }] }),
+      runTaskStoreOperation(root, state, { method: "setStatus", args: [selectedTask.id, "finished"] }),
+    ]);
+
+    const registry = await store.list();
+    expect(registry.tasks).toHaveLength(5);
+    expect(registry.tasks).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: renameTask.id, name: "Renamed concurrently" }),
+      expect.objectContaining({ id: selectedTask.id, status: "finished" }),
+      expect.objectContaining({ id: archivedTask.id, archived: true }),
+      expect.objectContaining({ id: metadataTask.id, name: "Updated concurrently", status: "finished", archived: true }),
+      expect.objectContaining({ branch: "feature/concurrent-create" }),
+    ]));
+    expect(registry.selectedTaskId).toBe(selectedTask.id);
+
+    for (const task of registry.tasks) await store.delete(task.id);
+  });
+
   it("persists finished task status", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "remote-ide-task-status-root-"));
     const state = await mkdtemp(path.join(os.tmpdir(), "remote-ide-task-status-state-"));
@@ -195,9 +245,16 @@ describe("WorkspaceTaskStore", () => {
     expect((await execFileAsync("git", ["-C", selected.workspace, "status", "--short", "--branch"])).stdout).toContain("ahead 1");
     expect((await store.merge(task.id)).targetBranch).toBe(rootBranch);
     await expect(store.integrations()).resolves.toEqual([expect.objectContaining({ taskId: task.id, status: "completed", expectedHead: expect.any(String), candidateRevision: expect.any(String), test: expect.objectContaining({ exitCode: 0 }) })]);
+    const integrations = await store.integrations();
+    const additionalTask = await store.create("feature/preserve-integrations", false, false, false);
+    await expect(store.integrations()).resolves.toEqual(integrations);
     expect(await readFile(path.join(root, "tracked.txt"), "utf8")).toBe("task\n");
     expect((await store.select()).workspace).toBe(root);
+    await expect(store.integrations()).resolves.toEqual(integrations);
+    await store.delete(additionalTask.id);
+    await expect(store.integrations()).resolves.toEqual(integrations);
     await store.delete(task.id);
+    await expect(store.integrations()).resolves.toEqual(integrations);
     expect((await store.list()).tasks).toEqual([]);
     await expect(access(path.dirname(selected.workspace))).rejects.toMatchObject({ code: "ENOENT" });
     await expect(execFileAsync("git", ["-C", root, "show-ref", "--verify", "refs/heads/feature/task-one"])).rejects.toBeTruthy();
@@ -384,3 +441,19 @@ describe("WorkspaceTaskStore", () => {
     expect((await execFileAsync("git", ["-C", workspace, "diff", "--cached", "--name-only"])).stdout.trim()).toBe("tracked.txt");
   });
 });
+
+function runTaskStoreOperation(root: string, state: string, operation: { method: string; args: unknown[] }): Promise<void> {
+  const moduleUrl = new URL("./tasks.ts", import.meta.url).href;
+  const script = `import { WorkspaceTaskStore } from ${JSON.stringify(moduleUrl)};\nconst store = new WorkspaceTaskStore(process.env.TASK_ROOT, process.env.TASK_STATE);\nconst operation = JSON.parse(process.env.TASK_OPERATION);\nawait store[operation.method](...operation.args);`;
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script], {
+      cwd: process.cwd(),
+      env: { ...process.env, TASK_ROOT: root, TASK_STATE: state, TASK_OPERATION: JSON.stringify(operation) },
+      stdio: ["ignore", "ignore", "pipe"],
+    });
+    let stderr = "";
+    child.stderr.setEncoding("utf8").on("data", (chunk: string) => { stderr += chunk; });
+    child.once("error", reject);
+    child.once("close", (code) => code === 0 ? resolve() : reject(new Error(`Task store subprocess failed (${code}): ${stderr}`)));
+  });
+}

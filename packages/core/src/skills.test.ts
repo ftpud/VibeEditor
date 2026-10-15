@@ -38,6 +38,16 @@ describe("project skills", () => {
     expect(JSON.parse(await readFile(path.join(root, "state/skills/local", crypto.createHash("sha256").update(workspace).digest("hex"), "skills.json"), "utf8"))).toEqual({ allowed: ["local/review"], defaults: ["local/review"], scopeVersion: 2 });
   });
 
+  it("resolves aliased ancestors when the state directory does not exist yet", async () => {
+    const { root, workspace } = await setup();
+    const alias = path.join(root, "alias");
+    await symlink(root, alias, "dir");
+    const store = new SkillsStore(path.join(alias, "missing", "state"), workspace);
+    expect((await store.list(workspace)).skills).toEqual([]);
+    await store.write("local/review", workspace, review);
+    expect(await store.read("local/review", workspace)).toBe(review);
+  });
+
   it("reloads edited instructions and enforces revoked policy on every turn", async () => {
     const { workspace, store } = await setup();
     await store.write("local/review", workspace, review);

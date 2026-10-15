@@ -5,6 +5,19 @@ import { describe, expect, it, vi } from "vitest";
 import { AiTimerService, AiTimerStore } from "./ai-timers.js";
 
 describe("AI continuation timers", () => {
+  it("suspends delivery handles while retaining durable timers for restart", async () => {
+    const state = await mkdtemp(path.join(os.tmpdir(), "vibe-timer-suspend-"));
+    const store = new AiTimerStore("/workspace", state);
+    const provider = { get: vi.fn(async () => ({ status: "done", messages: [] })), send: vi.fn(), steer: vi.fn() };
+    const service = new AiTimerService(store, { get: () => provider } as never, "/workspace", vi.fn());
+    const timer = await service.schedule("/task", "codex", "Survive restart", 60);
+    await service.suspend();
+    await service.fireById(timer.id);
+    expect(provider.send).not.toHaveBeenCalled();
+    expect(await store.list()).toEqual([timer]);
+    await service.cancelAll();
+  });
+
   it("does not send a continuation if Stop races provider session lookup", async () => {
     const state = await mkdtemp(path.join(os.tmpdir(), "vibe-timer-cancel-race-"));
     const store = new AiTimerStore("/workspace", state);

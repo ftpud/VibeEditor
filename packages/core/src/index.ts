@@ -1,4 +1,6 @@
-import { createServer } from "./server.js";
+import { loadCoreSessionToken } from "./access-policy.js";
+import { installSignalShutdown } from "./signal-shutdown.js";
+import { createServer, shutdownCore } from "./server.js";
 import { updateCodexRuntime } from "./ai/providers/codex-runtime.js";
 
 function option(name: string, fallback: string): string {
@@ -20,7 +22,11 @@ if (!workspace) {
 
 try {
   await updateCodexRuntime();
-  await createServer(host, port, workspace);
+  const access = await loadCoreSessionToken(port);
+  if (access.file) console.log(`[core] session token file: ${access.file}`);
+  const allowedOrigins = process.env.REMOTE_IDE_ALLOWED_ORIGINS?.split(",").map((origin) => origin.trim()).filter(Boolean);
+  const server = await createServer(host, port, workspace, { access: { token: access.token, allowedOrigins } });
+  installSignalShutdown(() => shutdownCore(server));
 } catch (error) {
   console.error(`[core] failed to open workspace: ${error instanceof Error ? error.message : String(error)}`);
   process.exit(1);

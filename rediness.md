@@ -1,6 +1,8 @@
 # Stable release readiness
 
-Reviewed 14 October 2026, at commit `ecce9e2`.
+Original review: 14 October 2026, at commit `ecce9e2`.
+Implementation progress is tracked below; the original findings and check counts
+are retained as historical evidence.
 
 **Verdict: suitable for continued experimental use; not ready for a stable release.**
 The architecture and test coverage provide a substantial foundation. The main
@@ -9,7 +11,76 @@ Core tests, mutable deployment, and unresolved dependency/security findings.
 This assessment is based on source tracing and local checks, not a completed
 Linux/macOS release certification or a security penetration test.
 
-## Verification
+## Hardening progress — 14 October 2026
+
+The first implementation batch addresses the reproduced task-registry race,
+crashed-owner repository locks, atomic Gateway state transactions, workspace
+options recovery, streaming HTTP limits, and dependency advisories. Task
+registry operations now share a cross-process repository lock; every mutation
+preserves integration history and uses unique atomic temporary files. Locks
+record PID, host, and identity, reclaim confirmed dead local owners, and fail
+with a diagnostic after 30 seconds for live or unknown ownership. Unknown legacy
+locks and locks abandoned during reclamation require inspection rather than
+unsafe automatic deletion.
+
+Gateway uses one serialized state store for reads, mutations, and recovery, with
+atomic promotion, synced private temporary files, and last-good backups. A
+single-instance guard prevents separate Gateway writers for the same user data.
+Core workspace options preserve a last-good backup, report unrecoverable
+corruption instead of silently resetting state, and serialize saves across
+store instances within one process. Cross-process coordination of Core stores
+other than task registries remains a release gate.
+
+Startup uses lockfile-installed Codex runtimes by default. Latest-runtime
+updates now require `REMOTE_IDE_CODEX_AUTO_UPDATE=1`; disabling updates also
+ignores previously cached, unpinned runtimes. HTTP responses are bounded during
+streaming and oversized streams are cancelled. Skill scope checks resolve
+missing paths through canonical ancestors, and platform fixtures no longer
+assume Linux path aliases or case-sensitive rename semantics.
+
+The dependency migration uses Electron 44, Vitest 4, and happy-dom 20; the host
+Node requirement is now **22.12+**. A fresh audit after compatible transitive
+updates reports **zero vulnerabilities**. Linux/macOS CI covers Node 22 and 24,
+clean installs, production builds, both typechecks, dependency auditing, and
+all workspace tests. These jobs have been configured, not certified on macOS
+from this Linux environment. The verification table below records the original
+assessment; it is not the result of these later fixes.
+
+## Hardening progress — 15 October 2026
+
+Gateway provisioning now stages lockfile-installed builds in immutable
+commit/Node-ABI release directories, smoke-checks native and application
+imports, and preserves installed releases on failed builds. Repair creates a
+separate release. Per-workspace activation checks the authenticated Core
+protocol before promoting its selection; failed candidates restore and
+health-check the prior release. Duplicate workspace actions are coalesced and
+conflicting actions rejected. PID checks avoid stopping unrelated processes.
+
+Core's production entry point now loads an exclusive, private session token.
+Protocol 16 carries handshake authentication; exact Origin checks reject
+untrusted web pages before workspace session initialization. Desktop obtains
+its credential from the Electron main process, with Gateway transferring remote
+credentials through SSH and the child environment. Both Electron apps restrict
+navigation, popups, and IPC senders to their configured main renderer document.
+Core binds its listener after asynchronous initialization so early clients do
+not lose their handshake before the connection handler is installed.
+
+SIGTERM/SIGINT initiate a bounded 30-second drain: stop new requests and timer
+delivery, suspend workflow journals for restart reconciliation, stop owned
+provider processes, close terminals/apps/watchers, and await admitted requests
+and state writes. Pending timer records survive graceful shutdown. Ambiguous
+provider outcomes pause for explicit recovery rather than replaying prompts.
+Regression coverage includes signal subprocesses, gated writes, orphaned
+workflow recovery, authentication, release rollback, and concurrent actions.
+See [release operations](docs/RELEASE_OPERATIONS.md) for credentials, layouts,
+repair, lock diagnosis, and shutdown semantics.
+
+The application is still not certified for stable distribution. Hosted macOS
+checks, the remaining cross-process Core-store review, runtime payload
+validation, signed artifacts, extended crash/restart tests, and overnight
+workflow measurement remain release gates.
+
+## Original review verification (before hardening)
 
 | Check | Result |
 | --- | --- |
@@ -27,7 +98,7 @@ sandbox failures. The audit includes development dependencies: the critical
 findings include Vitest, tinypool, and happy-dom. Electron appears among the
 high-severity findings. These are advisory matches, not demonstrated exploits.
 
-## Fix before a stable release
+## Original findings to resolve before a stable release
 
 ### 1. Prevent task registry races and recover stale repository locks
 
@@ -171,5 +242,8 @@ Sources: `packages/core/src/server.ts:703`, `packages/core/src/http.ts:15`,
 6. Distribute a versioned release candidate; fix regressions found in real use
    before marking the same tested artifact stable.
 
-Build and typecheck success are useful gates, but the current failing Core suite
-and reproduced state race prevent a stable-release recommendation.
+Build and typecheck success are useful gates. Resolving the original failures
+and state race requires the broader release certification above before a
+stable-release recommendation.
+
+consider todo.md

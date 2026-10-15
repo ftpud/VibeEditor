@@ -27,5 +27,5 @@
     "typecheck": "npm run build -w @remote-ide/acp && npm run build -w @remote-ide/protocol && npm run typecheck -w @remote-ide/core && npm run typecheck -w @remote-ide/desktop",
     "test": "npm run test --workspaces --if-present"
   },
-  "engines": { "node": ">=20" }
+  "engines": { "node": ">=22.12.0" }
 }

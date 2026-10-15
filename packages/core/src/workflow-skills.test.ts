@@ -11,7 +11,10 @@ import { startWorkflow } from "./server.js";
 import { prepareWorkflowSkills, executeWorkflowSkill, workflowSessionSkillIds } from "./workflow-skills.js";
 
 const roots: string[] = [];
-afterEach(async () => { vi.unstubAllEnvs(); await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true }))); });
+const runners: { runner: HarnessRunner; store: HarnessStore }[] = [];
+afterEach(async () => {
+  for (const { runner, store } of runners.splice(0)) await vi.waitFor(async () => expect((await store.runs()).some((run) => runner.isActive(run.id))).toBe(false), { timeout: 5000 });
+  vi.unstubAllEnvs(); await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true }))); });
 async function setup(type: "ai" | "chatbox" = "ai") {
   const root = await mkdtemp(path.join(os.tmpdir(), "workflow-skill-picker-")); roots.push(root);
   const workspace = path.join(root, "project"); await mkdir(workspace);
@@ -19,7 +22,7 @@ async function setup(type: "ai" | "chatbox" = "ai") {
   await skills.write("workspace/review", workspace, "---\nname: Reviewer\ndescription: Review code changes\n---\n\nRead examples.txt. Keep {{example}} literal.\n");
   await writeFile(path.join(workspace, ".agents/skills/review/examples.txt"), "Examples");
   const store = new HarnessStore(workspace, path.join(root, "state"));
-  const runner = new HarnessRunner(store, () => {}, 1);
+  const runner = new HarnessRunner(store, () => {}, 1); runners.push({ runner, store });
   const created = await store.create("Review");
   const definition = await store.update({ ...created, blocks: [
     { id: "agent", type, label: "Agent", prompt: "Review", position: { x: 0, y: 0 } },

@@ -7,6 +7,8 @@ import { AiProviderError } from "@remote-ide/acp";
 import { classifyWorkflowFailure, connectedInput, HarnessRunner, nextWatchdogReset, isRecoverableWorkflowError } from "./harness-runner.js";
 import { HarnessStore } from "./harnesses.js";
 
+// Workflow journals use disk-backed queues; allow bounded disk latency under the full CI suite.
+
 describe("HarnessRunner", () => {
   it("reconciles a completed provider turn after restart without sending its prompt again", async () => {
     const state = await mkdtemp(path.join(os.tmpdir(), "workflow-restart-complete-")); const store = new HarnessStore("/workspace", state); const created = await store.create("Recovery");
@@ -14,7 +16,7 @@ describe("HarnessRunner", () => {
     await store.saveRun({ id: "recover-complete", harnessId: definition.id, harnessVersion: definition.version, definition, executionPlan: { version: 1, createdAt: "now", definitionVersion: definition.version, order: ["first", "second"], blocks: [{ blockId: "first", incoming: [], outgoing: ["next"] }, { blockId: "second", incoming: ["next"], outgoing: [] }] }, input: "request", status: "running", createdAt: "now", startedAt: "now", blocks: [{ blockId: "first", status: "running", provider: "codex", workspace: "/workflow/first", sessionId: "session-first", attempts: [{ id: "attempt-first", index: 1, status: "running", startedAt: "now", operationId: "attempt-operation" }] }, { blockId: "second", status: "waiting" }], operations: [{ id: "attempt-operation", idempotencyKey: "block-attempt:first:1", kind: "block_attempt", status: "intent", blockId: "first", attemptId: "attempt-first", createdAt: "now", updatedAt: "now" }, { id: "prompt-operation", idempotencyKey: "prompt:first:attempt-first", kind: "prompt_delivery", status: "intent", blockId: "first", attemptId: "attempt-first", createdAt: "now", updatedAt: "now" }] });
     const dispatch = vi.fn(async (block: HarnessBlock, prompt: string) => session(`${block.id}:${prompt}`)); const append = vi.fn();
     const runner = new HarnessRunner(store, () => undefined); await runner.recover(dispatch, "codex", append, { session: async () => ({ ...session("session-first"), messages: [{ id: "answer", role: "assistant", text: "recovered output", timestamp: "now" }] }), timer: async () => false });
-    await vi.waitFor(async () => expect((await store.runs())[0]?.status).toBe("succeeded"));
+    await vi.waitFor(async () => expect((await store.runs())[0]?.status).toBe("succeeded"), { timeout: 4_000 });
     const run = (await store.runs())[0]!; expect(dispatch).toHaveBeenCalledTimes(1); expect(dispatch.mock.calls[0]?.[0].id).toBe("second"); expect(dispatch.mock.calls[0]?.[1]).toContain("recovered output"); expect(append).not.toHaveBeenCalled();
     expect(run.blocks[0]).toMatchObject({ status: "succeeded", output: "recovered output" }); expect(run.operations?.filter((operation) => operation.blockId === "first").every((operation) => operation.status === "succeeded")).toBe(true);
   });
@@ -27,14 +29,14 @@ describe("HarnessRunner", () => {
     const recovered = await runner.recover(dispatch, "codex", append, { session: async () => undefined, timer: async () => false });
     expect(recovered[0]).toMatchObject({ status: "retry_scheduled", blocks: [{ status: "retry_scheduled", failureReason: "recovery_orphaned", error: expect.stringContaining("no longer exists") }] }); expect(dispatch).not.toHaveBeenCalled(); expect(append).not.toHaveBeenCalled();
     const pauseId = recovered[0]!.blocks[0]!.pauseId!; await runner.retryPause("recover-orphan", "worker", pauseId);
-    await vi.waitFor(async () => expect((await store.runs())[0]?.status).toBe("succeeded")); expect(append).toHaveBeenCalledOnce(); expect(append.mock.calls[0]?.[1]).toContain("Continue your interrupted work");
+    await vi.waitFor(async () => expect((await store.runs())[0]?.status).toBe("succeeded"), { timeout: 4_000 }); expect(append).toHaveBeenCalledOnce(); expect(append.mock.calls[0]?.[1]).toContain("Continue your interrupted work");
   });
 
   it("persists a versioned execution plan, attempts, and terminal operation journal", async () => {
     const state = await mkdtemp(path.join(os.tmpdir(), "workflow-journal-")); const store = new HarnessStore("/workspace", state); const definition = await store.create("Journal");
     await store.update({ ...definition, blocks: [{ id: "worker", type: "prompt", label: "Worker", prompt: "{{input}}", position: { x: 0, y: 0 } }], edges: [] });
     const runner = new HarnessRunner(store, () => undefined); await runner.start(definition.id, "work", async (_block, _prompt, runtime) => { await runtime.started("/workflow/worker"); return session("session-1"); });
-    await vi.waitFor(async () => expect((await store.runs())[0]?.status).toBe("succeeded"));
+    await vi.waitFor(async () => expect((await store.runs())[0]?.status).toBe("succeeded"), { timeout: 4_000 });
     const run = (await store.runs())[0]!; const attempt = run.blocks[0]!.attempts?.[0]!;
     expect(run.executionPlan).toMatchObject({ version: 1, definitionVersion: 2, order: ["worker"], blocks: [{ blockId: "worker", incoming: [], outgoing: [] }] });
     expect(attempt).toMatchObject({ index: 1, status: "succeeded", sessionId: "session-1", workspace: "/workflow/worker" });
@@ -48,9 +50,9 @@ describe("HarnessRunner", () => {
     const definition = await store.update({ ...created, settings: { maxActiveRuns: 1 }, blocks: [{ id: "worker", type: "prompt", label: "Worker", prompt: "{{input}}", position: { x: 0, y: 0 } }], edges: [] });
     let release!: () => void; const waiting = new Promise<void>((resolve) => { release = resolve; }); const runner = new HarnessRunner(store, () => undefined);
     await runner.start(definition.id, "first", async () => { await waiting; return session("done"); });
-    await vi.waitFor(async () => expect((await store.runs())[0]?.status).toBe("running"));
+    await vi.waitFor(async () => expect((await store.runs())[0]?.status).toBe("running"), { timeout: 4_000 });
     await expect(runner.start(definition.id, "second", async () => session("done"))).rejects.toThrow("limit is 1");
-    release(); await vi.waitFor(async () => expect((await store.runs())[0]?.status).toBe("succeeded"));
+    release(); await vi.waitFor(async () => expect((await store.runs())[0]?.status).toBe("succeeded"), { timeout: 4_000 });
   });
 
   it("does not dispatch a block after its persisted attempt limit is reached", async () => {
@@ -59,7 +61,7 @@ describe("HarnessRunner", () => {
     await store.saveRun({ id: "attempt-limit", harnessId: definition.id, harnessVersion: definition.version, definition, executionPlan: { version: 1, createdAt: "now", definitionVersion: definition.version, order: ["worker"], blocks: [{ blockId: "worker", incoming: [], outgoing: [] }] }, input: "work", status: "running", createdAt: "now", startedAt: "now", blocks: [{ blockId: "worker", status: "queued", attempts: [{ id: "first", index: 1, status: "failed", startedAt: "now", completedAt: "now", operationId: "first-operation" }] }] });
     const dispatch = vi.fn(async () => session("done")); const runner = new HarnessRunner(store, () => undefined);
     await runner.recover(dispatch);
-    await vi.waitFor(async () => expect((await store.runs())[0]?.status).toBe("failed"));
+    await vi.waitFor(async () => expect((await store.runs())[0]?.status).toBe("failed"), { timeout: 4_000 });
     expect(dispatch).not.toHaveBeenCalled();
     expect((await store.runs())[0]?.error).toContain("limit of 1 attempts");
   });
@@ -69,7 +71,7 @@ describe("HarnessRunner", () => {
     const definition = await store.update({ ...created, settings: { maxStackSize: 1 }, blocks: [{ id: "root", type: "prompt", label: "Root", prompt: "{{input}}", position: { x: 0, y: 0 } }, { id: "worker", type: "prompt", label: "Worker", prompt: "{{input}}", position: { x: 0, y: 0 } }], edges: [{ id: "next", from: "root", to: "worker" }] });
     const runner = new HarnessRunner(store, () => undefined); const dispatch = vi.fn(async (block: HarnessBlock, _prompt: string, runtime: { runId: string; blockId: string }) => { if (block.id === "root") await runner.runStack(runtime.runId, runtime.blockId, ["one", "two"]); return session("done"); });
     await runner.start(definition.id, "work", dispatch);
-    await vi.waitFor(async () => expect((await store.runs())[0]?.status).toBe("failed"));
+    await vi.waitFor(async () => expect((await store.runs())[0]?.status).toBe("failed"), { timeout: 4_000 });
     expect(dispatch).toHaveBeenCalledTimes(1);
     expect((await store.runs())[0]?.error).toContain("at most 1 input");
   });
@@ -79,7 +81,7 @@ describe("HarnessRunner", () => {
     await store.update({ ...definition, blocks: [{ id: "worker", type: "prompt", label: "Worker", prompt: "work", position: { x: 0, y: 0 } }], edges: [] });
     let releaseBlock!: () => void; const blockWaiting = new Promise<void>((resolve) => { releaseBlock = resolve; }); const runner = new HarnessRunner(store, () => undefined);
     const run = await runner.start(definition.id, "work", async () => { await blockWaiting; return session("done"); });
-    await vi.waitFor(async () => expect((await store.runs())[0]?.status).toBe("running"));
+    await vi.waitFor(async () => expect((await store.runs())[0]?.status).toBe("running"), { timeout: 4_000 });
     let releaseEffect!: () => void; const effectWaiting = new Promise<void>((resolve) => { releaseEffect = resolve; }); const effect = vi.fn(async () => { await effectWaiting; return { taskId: "task-1" }; });
     const first = runner.runOperation(run.id, "worker", "task_create", "create-task", { branch: "feature" }, effect); const replay = runner.runOperation(run.id, "worker", "task_create", "create-task", { branch: "feature" }, effect);
     releaseEffect(); expect(await Promise.all([first, replay])).toEqual([{ taskId: "task-1" }, { taskId: "task-1" }]); expect(effect).toHaveBeenCalledOnce();
@@ -90,7 +92,7 @@ describe("HarnessRunner", () => {
     const reconcile = vi.fn(async () => ({ taskId: "task-existing" }));
     await expect(runner.runOperation(run.id, "worker", "task_create", "uncertain-task", { branch: "uncertain" }, uncertain, reconcile)).resolves.toEqual({ taskId: "task-existing" });
     expect(uncertain).toHaveBeenCalledOnce(); expect(reconcile).toHaveBeenCalledOnce();
-    releaseBlock(); await vi.waitFor(async () => expect((await store.runs())[0]?.status).toBe("succeeded"));
+    releaseBlock(); await vi.waitFor(async () => expect((await store.runs())[0]?.status).toBe("succeeded"), { timeout: 4_000 });
   });
 
   it("persists feature prerequisites, refuses premature dispatch, and releases newly ready work after merge", async () => {
@@ -98,7 +100,7 @@ describe("HarnessRunner", () => {
     await store.update({ ...definition, blocks: [{ id: "planner", type: "task", label: "Planner", prompt: "plan", position: { x: 0, y: 0 } }], edges: [] });
     let release!: () => void; const pending = new Promise<void>((resolve) => { release = resolve; }); const runner = new HarnessRunner(store, () => undefined);
     const run = await runner.start(definition.id, "work", async () => { await pending; return session("planned"); });
-    await vi.waitFor(() => expect(runner.isActive(run.id)).toBe(true));
+    await vi.waitFor(() => expect(runner.isActive(run.id)).toBe(true), { timeout: 4_000 });
     const planned = await runner.planFeatures(run.id, [{ id: "foundation", prompt: "Build foundation" }, { id: "ui", prompt: "Build UI", prerequisites: ["foundation"] }]);
     expect(planned.map((feature) => feature.status)).toEqual(["planned", "planned"]);
     await expect(runner.dispatchFeature(run.id, "ui", "task-ui")).rejects.toThrow("foundation");
@@ -107,7 +109,7 @@ describe("HarnessRunner", () => {
     expect(completed.ready).toMatchObject([{ id: "ui", status: "planned" }]);
     await runner.dispatchFeature(run.id, "ui", "task-ui");
     await runner.completeFeature(run.id, "task-ui", "b".repeat(40));
-    release(); await vi.waitFor(async () => expect((await store.runs())[0]?.status).toBe("succeeded"));
+    release(); await vi.waitFor(async () => expect((await store.runs())[0]?.status).toBe("succeeded"), { timeout: 4_000 });
     expect((await store.runs())[0]?.features).toMatchObject([{ id: "foundation", status: "completed", commit: "a".repeat(40) }, { id: "ui", status: "completed", commit: "b".repeat(40) }]);
   });
 
@@ -123,7 +125,7 @@ describe("HarnessRunner", () => {
       const result = await runner.runOperation(`${kind}-${crash}`, "worker", kind, `${kind}-operation`, { fault: crash }, effect, reconcile);
       expect(result).toEqual(crash === "after" ? { id: `${kind}-existing` } : { id: `${kind}-created` }); expect(effect).toHaveBeenCalledTimes(crash === "after" ? 0 : 1); expect(reconcile).toHaveBeenCalledOnce();
       await runner.retryPause(`${kind}-${crash}`, "worker", pauseId);
-      await vi.waitFor(async () => expect((await store.runs())[0]?.status).toBe("succeeded"));
+      await vi.waitFor(async () => expect((await store.runs())[0]?.status).toBe("succeeded"), { timeout: 4_000 });
       const operation = (await store.runs())[0]!.operations?.find((item) => item.idempotencyKey === operationKey); expect(operation).toMatchObject({ status: "succeeded", result }); expect(dispatch).toHaveBeenCalledOnce();
     }
   });
@@ -135,7 +137,7 @@ describe("HarnessRunner", () => {
     let release!: () => void; const waiting = new Promise<void>((resolve) => { release = resolve; });
     const runner = new HarnessRunner(store, () => undefined);
     const run = await runner.start(definition.id, "work", async () => { await waiting; return session("done"); });
-    await vi.waitFor(() => expect(runner.isActive(run.id)).toBe(true));
+    await vi.waitFor(() => expect(runner.isActive(run.id)).toBe(true), { timeout: 4_000 });
     const child = { taskId: "child", blockId: "owner", provider: "codex", workspace: "/child" };
     try {
       await runner.registerChild(run.id, child); await runner.registerChild(run.id, child);
@@ -180,6 +182,7 @@ describe("HarnessRunner", () => {
     await store.update({ ...definition, blocks, edges: [] });
     let release!: () => void; const sleeping = new Promise<void>((resolve) => { release = resolve; });
     const runner = new HarnessRunner(store, () => undefined, 4, { maxAttempts: 2, transportBackoffMs: 200, jitterRatio: 0 });
+    const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now());
     const run = await runner.start(definition.id, "work", async (block) => {
       if (block.id === "watchdog") await sleeping;
       if (block.id === "transport") throw new Error("ETIMEDOUT");
@@ -187,15 +190,15 @@ describe("HarnessRunner", () => {
       return session("done");
     });
     try {
-      await vi.waitFor(async () => expect((await store.runs())[0]?.blocks.filter((block) => block.status === "failed" || block.status === "retry_scheduled")).toHaveLength(2));
+      await vi.waitFor(async () => expect((await store.runs())[0]?.blocks.filter((block) => block.status === "failed" || block.status === "retry_scheduled")).toHaveLength(2), { timeout: 4_000 });
       const current = (await store.runs())[0]!;
       expect(current.blocks.find((block) => block.blockId === "transport")?.failureReason).toBe("transient_transport");
       expect(current.blocks.find((block) => block.blockId === "transport")?.retryAt).toBeTruthy();
       expect(current.blocks.find((block) => block.blockId === "permission")?.failureReason).toBe("permission_required");
       expect(await runner.resumeFailed(run.id, "watchdog")).toEqual({ resumed: [] });
-      await new Promise((resolve) => setTimeout(resolve, 220));
+      clock.mockReturnValue(Date.parse(current.blocks.find((block) => block.blockId === "transport")!.retryAt!) + 1);
       expect(await runner.resumeFailed(run.id, "watchdog")).toEqual({ resumed: ["transport"] });
-    } finally { await runner.cancel(run.id, async () => release()); release(); }
+    } finally { clock.mockRestore(); await runner.cancel(run.id, async () => release()); release(); }
   });
 
   it("uses the workflow retry policy instead of the runner default", async () => {
@@ -207,9 +210,9 @@ describe("HarnessRunner", () => {
     let release!: () => void; const sleeping = new Promise<void>((resolve) => { release = resolve; }); const runner = new HarnessRunner(store, () => undefined, 4, { maxAttempts: 3, transportBackoffMs: 0, jitterRatio: 0 });
     const run = await runner.start(definition.id, "work", async (block) => { if (block.id === "watchdog") await sleeping; if (block.id === "worker") throw new Error("ETIMEDOUT"); return session("done"); });
     try {
-      await vi.waitFor(async () => expect((await store.runs())[0]?.blocks.find((block) => block.blockId === "worker")?.status).toBe("retry_scheduled"));
+      await vi.waitFor(async () => expect((await store.runs())[0]?.blocks.find((block) => block.blockId === "worker")?.status).toBe("retry_scheduled"), { timeout: 4_000 });
       expect(await runner.resumeFailed(run.id, "watchdog")).toEqual({ resumed: ["worker"] });
-      await vi.waitFor(async () => expect((await store.runs())[0]?.blocks.find((block) => block.blockId === "worker")?.attempts).toHaveLength(2));
+      await vi.waitFor(async () => expect((await store.runs())[0]?.blocks.find((block) => block.blockId === "worker")?.attempts).toHaveLength(2), { timeout: 4_000 });
       expect(await runner.resumeFailed(run.id, "watchdog")).toEqual({ resumed: [] });
     } finally { await runner.cancel(run.id, async () => release()); release(); }
   });
@@ -222,7 +225,7 @@ describe("HarnessRunner", () => {
     ], edges: [{ id: "next", from: "first", to: "second" }] });
     const longOutput = "x".repeat(1_500); const dispatch = vi.fn(async (block: HarnessBlock, prompt: string) => session(block.id === "first" ? longOutput : prompt));
     const runner = new HarnessRunner(store, () => undefined); await runner.start(definition.id, "request", dispatch);
-    await vi.waitFor(async () => expect((await store.runs())[0]?.status).toBe("succeeded"));
+    await vi.waitFor(async () => expect((await store.runs())[0]?.status).toBe("succeeded"), { timeout: 4_000 });
     const run = (await store.runs())[0]!; expect(run.blocks.find((block) => block.blockId === "first")?.output).toHaveLength(1_000); expect(dispatch.mock.calls.find((call) => call[0].id === "second")?.[1]).toHaveLength(1_000);
   });
 
@@ -231,7 +234,7 @@ describe("HarnessRunner", () => {
     await store.update({ ...definition, settings: { promptLimitChars: 1_000 }, blocks: [{ id: "worker", type: "prompt", label: "Worker", prompt: "{{input}}", position: { x: 0, y: 0 } }], edges: [] });
     const dispatch = vi.fn(async () => session("done")); const runner = new HarnessRunner(store, () => undefined);
     await runner.start(definition.id, "x".repeat(1_001), dispatch);
-    await vi.waitFor(async () => expect((await store.runs())[0]?.status).toBe("failed"));
+    await vi.waitFor(async () => expect((await store.runs())[0]?.status).toBe("failed"), { timeout: 4_000 });
     expect(dispatch).not.toHaveBeenCalled();
     expect((await store.runs())[0]?.error).toContain("exceeding its 1,000 character limit");
   });
@@ -240,7 +243,7 @@ describe("HarnessRunner", () => {
     const state = await mkdtemp(path.join(os.tmpdir(), "workflow-token-budget-")); const store = new HarnessStore("/workspace", state); const definition = await store.create("Token budget");
     await store.update({ ...definition, settings: { tokenBudget: 1_000 }, blocks: [{ id: "worker", type: "prompt", label: "worker", prompt: "work", position: { x: 0, y: 0 } }], edges: [] });
     const runner = new HarnessRunner(store, () => undefined); await runner.start(definition.id, "work", async () => ({ ...session("done"), tokens: { total: 1_001, input: 500, output: 501 } }));
-    await vi.waitFor(async () => expect((await store.runs())[0]?.status).toBe("failed"));
+    await vi.waitFor(async () => expect((await store.runs())[0]?.status).toBe("failed"), { timeout: 4_000 });
     const run = (await store.runs())[0]!; expect(run.error).toContain("token budget"); expect(run.blocks[0]?.tokens?.total).toBe(1_001);
   });
 
@@ -250,7 +253,7 @@ describe("HarnessRunner", () => {
     const runner = new HarnessRunner(store, () => undefined); let clock: ReturnType<typeof vi.spyOn> | undefined;
     await runner.start(definition.id, "work", async () => { const now = Date.now(); clock = vi.spyOn(Date, "now").mockReturnValue(now + 60_001); return session("done"); });
     try {
-      await vi.waitFor(async () => expect((await store.runs())[0]?.status).toBe("failed"));
+      await vi.waitFor(async () => expect((await store.runs())[0]?.status).toBe("failed"), { timeout: 4_000 });
       expect((await store.runs())[0]?.error).toContain("run duration");
     } finally { clock?.mockRestore(); }
   });
@@ -264,7 +267,7 @@ describe("HarnessRunner", () => {
     ], edges: [] });
     const runner = new HarnessRunner(store, () => undefined, 4, { maxAttempts: 5, transportBackoffMs: 1_000, maxElapsedMs: 500, jitterRatio: 0 });
     await runner.start(definition.id, "work", async (block, _prompt, runtime) => block.watchdog ? runner.watch(runtime.runId, block.id, async () => ({ supported: false })) : Promise.reject(new AiProviderError({ kind: "transient_transport", message: "provider unavailable" })));
-    await vi.waitFor(async () => expect((await store.runs())[0]?.status).toBe("failed"));
+    await vi.waitFor(async () => expect((await store.runs())[0]?.status).toBe("failed"), { timeout: 4_000 });
     const worker = (await store.runs())[0]!.blocks.find((block) => block.blockId === "worker")!;
     expect(worker).toMatchObject({ status: "failed", failureReason: "transient_transport" });
     expect(worker.recoveryAttempts).toBeUndefined(); expect(worker.retryAt).toBeUndefined();
@@ -277,12 +280,12 @@ describe("HarnessRunner", () => {
     await store.update({ ...definition, blocks: [{ id: "worker", type: "prompt", label: "Worker", prompt: "work", outputSchema: { type: "object", required: ["summary"], properties: { summary: { type: "string" } } }, position: { x: 0, y: 0 } }], edges: [] });
     let calls = 0; const runner = new HarnessRunner(store, () => undefined);
     const run = await runner.start(definition.id, "work", async () => session(++calls === 1 ? "not JSON" : '{"summary":"fixed"}'));
-    await vi.waitFor(async () => expect((await store.runs())[0]?.status).toBe("retry_scheduled"));
+    await vi.waitFor(async () => expect((await store.runs())[0]?.status).toBe("retry_scheduled"), { timeout: 4_000 });
     const blocked = (await store.runs())[0]!; const worker = blocked.blocks[0]!;
     expect(worker).toMatchObject({ status: "retry_scheduled", failureReason: "schema_validation" });
     expect(worker.structuredOutput).toBeUndefined();
     await runner.retryPause(run.id, "worker", worker.pauseId!);
-    await vi.waitFor(async () => expect((await store.runs())[0]?.status).toBe("succeeded"));
+    await vi.waitFor(async () => expect((await store.runs())[0]?.status).toBe("succeeded"), { timeout: 4_000 });
     expect((await store.runs())[0]?.blocks[0]?.structuredOutput).toEqual({ summary: "fixed" });
   });
 
@@ -293,7 +296,7 @@ describe("HarnessRunner", () => {
     const runner = new HarnessRunner(store, () => undefined);
     const usage = vi.fn(async () => ({ supported: false }));
     const run = await runner.start(definition.id, "work", async (block, _prompt, runtime) => block.watchdog ? runner.watch(runtime.runId, block.id, usage) : session("complete"));
-    await vi.waitFor(async () => expect((await store.runs())[0]?.status).toBe("succeeded"));
+    await vi.waitFor(async () => expect((await store.runs())[0]?.status).toBe("succeeded"), { timeout: 4_000 });
     const completed = (await store.runs())[0]!;
     expect(completed.blocks.find((b) => b.blockId === "main")?.status).toBe("succeeded");
     const watchdog = completed.blocks.find((b) => b.blockId === "watchdog")!;
@@ -301,7 +304,7 @@ describe("HarnessRunner", () => {
     expect(watchdog.waitingUntil).toBeUndefined();
     expect(watchdog.sessionId).toBeUndefined();
     expect(watchdog.log?.some((entry) => entry.message === "Core watchdog stopped because delivery reached a terminal state")).toBe(true);
-    await vi.waitFor(() => expect(runner.isActive(run.id)).toBe(false));
+    await vi.waitFor(() => expect(runner.isActive(run.id)).toBe(false), { timeout: 4_000 });
     expect(usage).toHaveBeenCalledOnce();
   });
 
@@ -317,11 +320,11 @@ describe("HarnessRunner", () => {
       if (block.watchdog) return runner.watch(runtime.runId, block.id, async () => ({ supported: false }));
       throw new Error("Invalid delivery request");
     });
-    await vi.waitFor(async () => expect((await store.runs())[0]?.status).toBe("failed"));
+    await vi.waitFor(async () => expect((await store.runs())[0]?.status).toBe("failed"), { timeout: 4_000 });
     const completed = (await store.runs())[0]!;
     expect(completed.blocks.find((block) => block.blockId === "watchdog")?.status).toBe("succeeded");
     expect(completed.blocks.find((block) => block.blockId === "main")?.failureReason).toBe("permanent");
-    await vi.waitFor(() => expect(runner.isActive(run.id)).toBe(false));
+    await vi.waitFor(() => expect(runner.isActive(run.id)).toBe(false), { timeout: 4_000 });
   });
 
   it("runs the pipeline beside a sleeping watchdog and resumes failures without replaying completed stages", async () => {
@@ -340,11 +343,11 @@ describe("HarnessRunner", () => {
     const append = vi.fn(async () => session("recovered"));
     const run = await runner.start(definition.id, "request", dispatch, "test", append);
     try {
-      await vi.waitFor(async () => expect((await store.runs())[0]?.blocks.find((b) => b.blockId === "implement")?.status).toBe("retry_scheduled"));
+      await vi.waitFor(async () => expect((await store.runs())[0]?.blocks.find((b) => b.blockId === "implement")?.status).toBe("retry_scheduled"), { timeout: 4_000 });
       expect((await store.runs())[0]?.status).toBe("retry_scheduled");
       expect(await runner.resumeFailed(run.id, "watchdog")).toEqual({ resumed: ["implement"] });
       expect(await runner.resumeFailed(run.id, "watchdog")).toEqual({ resumed: [] });
-      await vi.waitFor(async () => expect((await store.runs())[0]?.blocks.find((b) => b.blockId === "report")?.status).toBe("succeeded"));
+      await vi.waitFor(async () => expect((await store.runs())[0]?.blocks.find((b) => b.blockId === "report")?.status).toBe("succeeded"), { timeout: 4_000 });
       expect(append).toHaveBeenCalledOnce();
       expect(append.mock.calls[0]).toEqual(expect.arrayContaining([expect.objectContaining({ workspace: "/session/implement" })]));
       expect(dispatch.mock.calls.filter(([b]) => b.id === "plan")).toHaveLength(1);
@@ -357,7 +360,7 @@ describe("HarnessRunner", () => {
     await store.update({ ...definition, blocks: [{ id: "one", type: "prompt", label: "One", prompt: "Plan {{input}}", position: { x: 0, y: 0 } }, { id: "two", type: "prompt", label: "Two", prompt: "Build {{input}}", position: { x: 1, y: 1 } }], edges: [{ id: "edge", from: "one", to: "two" }] });
     const dispatch = vi.fn(async (_block, prompt: string) => ({ id: prompt, model: "test", reasoning: "low", status: "done" as const, messages: [{ id: prompt, role: "assistant" as const, text: prompt.startsWith("Plan feature") ? "the plan" : "complete", timestamp: "now" }] }));
     const runner = new HarnessRunner(store, () => undefined); const started = await runner.start(definition.id, "feature", dispatch, "test");
-    for (let tries = 0; tries < 30; tries += 1) { const current = (await store.runs())[0]; if (current?.status === "succeeded") break; await new Promise((resolve) => setTimeout(resolve, 10)); }
+    await vi.waitFor(async () => expect((await store.runs())[0]?.status).toBe("succeeded"), { timeout: 4_000 });
     const completed = (await store.runs())[0]!;
     expect(completed.status).toBe("succeeded"); expect(dispatch.mock.calls.map((call) => call[1].split("\n\nWorkflow runtime")[0])).toEqual(["Plan feature", "Build the plan"]); expect(completed.id).toBe(started.id);
   });
@@ -373,7 +376,7 @@ describe("HarnessRunner", () => {
       return session(prompt);
     });
     await runner.start(definition.id, "feature", dispatch, "test", append);
-    await vi.waitFor(async () => expect((await store.runs())[0]?.status).toBe("succeeded"));
+    await vi.waitFor(async () => expect((await store.runs())[0]?.status).toBe("succeeded"), { timeout: 4_000 });
     expect(dispatch.mock.calls.map((call) => call[0].id)).toEqual(["draft", "review"]);
     expect(append).toHaveBeenCalledWith(expect.objectContaining({ id: "draft" }), "Address the review", expect.objectContaining({ workspace: "/sessions/draft" }));
   });
@@ -404,8 +407,8 @@ describe("HarnessRunner", () => {
       return session(`${block.id} complete`);
     });
     await runner.start(definition.id, "go", dispatch, "test", append);
-    await vi.waitFor(async () => { const current = (await store.runs())[0]; if (current?.status === "failed") throw new Error(current.error); expect(current?.status).toBe("succeeded"); });
-    await vi.waitFor(() => expect(dispatch.mock.calls.map((call) => call[0].id)).toContain("exit"));
+    await vi.waitFor(async () => { const current = (await store.runs())[0]; if (current?.status === "failed") throw new Error(current.error); expect(current?.status).toBe("succeeded"); }, { timeout: 4_000 });
+    await vi.waitFor(() => expect(dispatch.mock.calls.map((call) => call[0].id)).toContain("exit"), { timeout: 4_000 });
     expect({ starts, checks }).toEqual({ starts: 2, checks: 3 });
     expect(append.mock.calls.map((call) => call[0].id)).toEqual(["start", "check", "start", "check"]);
     expect(dispatch.mock.calls.map((call) => call[0].id)).toEqual(["start", "check", "exit"]);
@@ -422,10 +425,10 @@ describe("HarnessRunner", () => {
       return session(block.id);
     });
     const run = await runner.start(definition.id, "feature", dispatch, "test");
-    await vi.waitFor(async () => expect((await store.runs())[0]?.blocks.find((block) => block.blockId === "planner")?.status).toBe("succeeded"));
+    await vi.waitFor(async () => expect((await store.runs())[0]?.blocks.find((block) => block.blockId === "planner")?.status).toBe("succeeded"), { timeout: 4_000 });
     expect(toolResult).toEqual({ blocks: [{ blockId: "worker", output: "" }] });
     expect((await store.runs())[0]?.status).toBe("running");
-    release(); await vi.waitFor(async () => expect((await store.runs())[0]?.status).toBe("succeeded"));
+    release(); await vi.waitFor(async () => expect((await store.runs())[0]?.status).toBe("succeeded"), { timeout: 4_000 });
     expect(dispatch.mock.calls.map((call) => call[0].id)).toEqual(["planner", "worker"]); expect(runner.isActive(run.id)).toBe(false);
   });
 
@@ -472,10 +475,10 @@ describe("HarnessRunner", () => {
     await store.update({ ...definition, blocks: [{ id: "worker", type: "prompt", label: "Worker", prompt: "work", position: { x: 0, y: 0 } }], edges: [] });
     let release!: () => void; const waiting = new Promise<void>((resolve) => { release = resolve; });
     const runner = new HarnessRunner(store, () => undefined); const run = await runner.start(definition.id, "work", async () => { await waiting; return session("late-success"); });
-    await vi.waitFor(async () => expect((await store.runs())[0]?.blocks[0]?.status).toBe("running"));
+    await vi.waitFor(async () => expect((await store.runs())[0]?.blocks[0]?.status).toBe("running"), { timeout: 4_000 });
 
     await runner.cancel(run.id, async () => release());
-    await vi.waitFor(() => expect(runner.isActive(run.id)).toBe(false));
+    await vi.waitFor(() => expect(runner.isActive(run.id)).toBe(false), { timeout: 4_000 });
 
     const cancelled = (await store.runs())[0]!;
     expect(cancelled).toMatchObject({ status: "cancelled", blocks: [{ status: "cancelled" }] });
@@ -491,12 +494,12 @@ describe("HarnessRunner", () => {
     await expect(runner.runTimerOperation(run.id, "worker", "timer-fire:once", { timerId: "once" }, async () => { throw new Error("timer reply lost"); })).rejects.toThrow("timer reply lost");
     let releaseReconcile!: () => void; const reconciling = new Promise<void>((resolve) => { releaseReconcile = resolve; }); const fire = vi.fn(async () => true);
     const resumed = runner.runTimerOperation(run.id, "worker", "timer-fire:once", { timerId: "once" }, fire, async () => { await reconciling; return null; });
-    await vi.waitFor(async () => expect((await store.runs())[0]?.operations?.find((operation) => operation.idempotencyKey === "worker:timer-fire:once")?.status).toBe("intent"));
+    await vi.waitFor(async () => expect((await store.runs())[0]?.operations?.find((operation) => operation.idempotencyKey === "worker:timer-fire:once")?.status).toBe("intent"), { timeout: 4_000 });
     await runner.cancel(run.id, async () => releaseTurn());
     releaseReconcile();
     await expect(resumed).rejects.toThrow();
     expect(fire).not.toHaveBeenCalled();
-    await vi.waitFor(() => expect(runner.isActive(run.id)).toBe(false));
+    await vi.waitFor(() => expect(runner.isActive(run.id)).toBe(false), { timeout: 4_000 });
   });
 
   it("does not dispatch a stack target after cancellation races its launch", async () => {
@@ -511,7 +514,7 @@ describe("HarnessRunner", () => {
     const run = await runner.start(definition.id, "work", dispatch, "test");
     await workerClaim;
     await runner.cancel(run.id, async () => releaseRoot());
-    await vi.waitFor(() => expect(runner.isActive(run.id)).toBe(false));
+    await vi.waitFor(() => expect(runner.isActive(run.id)).toBe(false), { timeout: 4_000 });
     expect(dispatch.mock.calls.filter((call) => call[0].id === "worker")).toHaveLength(0);
   });
 
@@ -525,11 +528,11 @@ describe("HarnessRunner", () => {
       if (block.id === "worker") { attempts += 1; throw new AiProviderError({ kind: "transient_transport", message: "offline" }); }
       return session("watchdog");
     });
-    await vi.waitFor(async () => expect((await store.runs())[0]?.blocks.find((block) => block.blockId === "worker")?.status).toBe("retry_scheduled"));
+    await vi.waitFor(async () => expect((await store.runs())[0]?.blocks.find((block) => block.blockId === "worker")?.status).toBe("retry_scheduled"), { timeout: 4_000 });
     const wake = runner.resumeFailed(run.id, "watchdog");
     await runner.cancel(run.id, async () => releaseWatchdog());
     await wake;
-    await vi.waitFor(() => expect(runner.isActive(run.id)).toBe(false));
+    await vi.waitFor(() => expect(runner.isActive(run.id)).toBe(false), { timeout: 4_000 });
     expect(attempts).toBe(1);
   });
 
@@ -540,7 +543,7 @@ describe("HarnessRunner", () => {
     let active = 0; let maxActive = 0; const completed: string[] = [];
     const dispatch = vi.fn(async (block: HarnessBlock) => { active += 1; maxActive = Math.max(maxActive, active); if (block.id === "left" || block.id === "right") await new Promise((resolve) => setTimeout(resolve, 15)); active -= 1; completed.push(block.id); return { id: block.id, model: "test", reasoning: "low", status: "done" as const, messages: [{ id: block.id, role: "assistant" as const, text: block.id, timestamp: "now" }] }; });
     await new HarnessRunner(store, () => undefined).start(definition.id, "go", dispatch, "test");
-    for (let tries = 0; tries < 50 && (await store.runs())[0]?.status !== "succeeded"; tries += 1) await new Promise((resolve) => setTimeout(resolve, 10));
+    await vi.waitFor(async () => expect((await store.runs())[0]?.status).toBe("succeeded"), { timeout: 4_000 });
     expect(maxActive).toBe(2); expect(completed.at(-1)).toBe("join");
   });
 
@@ -556,7 +559,7 @@ describe("HarnessRunner", () => {
       active -= 1; return session(block.id);
     });
     await runner.start(definition.id, "go", dispatch, "test");
-    await vi.waitFor(async () => expect((await store.runs())[0]?.status).toBe("succeeded"));
+    await vi.waitFor(async () => expect((await store.runs())[0]?.status).toBe("succeeded"), { timeout: 4_000 });
     expect(maxActive).toBe(1); expect(dispatch.mock.calls.map((call) => call[0].id).sort()).toEqual(["left", "right", "root"]);
   });
 
@@ -567,7 +570,7 @@ describe("HarnessRunner", () => {
     let active = 0; let maxActive = 0; const runner = new HarnessRunner(store, () => undefined, 1);
     const run = await runner.start(definition.id, "initial", async (_block, _prompt, runtime) => { active += 1; maxActive = Math.max(maxActive, active); await runtime.started("/session/root"); started(); await waiting; active -= 1; return session("initial"); }, "test", async () => { active += 1; maxActive = Math.max(maxActive, active); await new Promise((resolve) => setTimeout(resolve, 15)); active -= 1; return session("appended"); });
     await ready; await runner.appendInput(run.id, "follow-up"); release();
-    await vi.waitFor(async () => expect((await store.runs())[0]?.status).toBe("succeeded"));
+    await vi.waitFor(async () => expect((await store.runs())[0]?.status).toBe("succeeded"), { timeout: 4_000 });
     const completed = (await store.runs())[0]!; expect(maxActive).toBe(1); expect(completed.blocks[0]?.output).toBe("appended");
   });
 
@@ -595,7 +598,7 @@ describe("HarnessRunner", () => {
     await rootReady;
     await runner.appendInput(run.id, "follow-up");
     releaseRoot();
-    await vi.waitFor(async () => expect((await store.runs())[0]?.status).toBe("succeeded"));
+    await vi.waitFor(async () => expect((await store.runs())[0]?.status).toBe("succeeded"), { timeout: 4_000 });
     expect(maxActive).toBeLessThanOrEqual(2);
     expect(maxRootWrites).toBe(1);
     expect(Object.fromEntries(dispatches)).toEqual({ root: 1, left: 1, right: 1 });
@@ -608,7 +611,7 @@ describe("HarnessRunner", () => {
     await store.update({ ...definition, blocks, edges: [{ id: "left-edge", from: "router", to: "left", label: "left" }, { id: "right-edge", from: "router", to: "right", label: "right" }] });
     const runner = new HarnessRunner(store, () => undefined); const dispatch = vi.fn(async (block: HarnessBlock, _prompt: string, runtime: { runId: string; blockId: string }) => { if (block.id === "router") await runner.runStack(runtime.runId, runtime.blockId, ["selected work"], "right"); return { id: block.id, model: "test", reasoning: "low", status: "done" as const, messages: [{ id: block.id, role: "assistant" as const, text: "finished", timestamp: "now" }] }; });
     await runner.start(definition.id, "go", dispatch, "test");
-    for (let tries = 0; tries < 50 && (await store.runs())[0]?.status !== "succeeded"; tries += 1) await new Promise((resolve) => setTimeout(resolve, 10));
+    await vi.waitFor(async () => expect((await store.runs())[0]?.status).toBe("succeeded"), { timeout: 4_000 });
     const run = (await store.runs())[0]!;
     expect(dispatch.mock.calls.map((call) => call[0].id)).toEqual(["router", "right"]);
     expect(run.blocks.find((block) => block.blockId === "router")?.selectedRoute).toBe("right");
@@ -621,7 +624,7 @@ describe("HarnessRunner", () => {
     await store.update({ ...definition, blocks, edges: [{ id: "rs", from: "root", to: "slow" }, { id: "rf", from: "root", to: "fast" }, { id: "sj", from: "slow", to: "join" }, { id: "fj", from: "fast", to: "join" }] });
     const events: string[] = []; const dispatch = vi.fn(async (block: HarnessBlock, prompt: string) => { events.push(`${block.id}-start`); if (block.id === "slow") await new Promise((resolve) => setTimeout(resolve, 150)); if (block.id === "fast") await new Promise((resolve) => setTimeout(resolve, 5)); events.push(`${block.id}-done`); return { id: block.id, model: "test", reasoning: "low", status: "done" as const, messages: [{ id: block.id, role: "assistant" as const, text: block.id, timestamp: "now" }] }; });
     await new HarnessRunner(store, () => undefined).start(definition.id, "go", dispatch, "test");
-    for (let tries = 0; tries < 50 && (await store.runs())[0]?.status !== "succeeded"; tries += 1) await new Promise((resolve) => setTimeout(resolve, 10));
+    await vi.waitFor(async () => expect((await store.runs())[0]?.status).toBe("succeeded"), { timeout: 4_000 });
     expect(events.indexOf("join-start")).toBeLessThan(events.indexOf("slow-done"));
     expect(dispatch.mock.calls.find((call) => call[0].id === "join")?.[1]).toBe("Join fast");
   });
@@ -633,7 +636,7 @@ describe("HarnessRunner", () => {
     const runner = new HarnessRunner(store, () => undefined); const calls: Array<{ id: string; prompt: string }> = []; let toolResult: unknown; const dispatch = vi.fn(async (block: HarnessBlock, prompt: string, runtime: { runId: string; blockId: string; started(workspace: string): Promise<void> }) => { calls.push({ id: block.id, prompt }); if (block.id === "planner") toolResult = await runner.runStack(runtime.runId, runtime.blockId, ["research user prompt", "implement user prompt", "review user prompt"]); if (block.id === "worker") await runtime.started("/sessions/worker"); const text = block.id === "planner" ? `I reviewed the stack results: ${JSON.stringify(toolResult)}` : block.id === "worker" ? `result ${calls.filter((call) => call.id === "worker").length}` : "done"; return { id: `${block.id}-${calls.length}`, model: "test", reasoning: "low", status: "done" as const, messages: [{ id: block.id, role: "assistant" as const, text, timestamp: "now" }] }; });
     const append = vi.fn(async (block: HarnessBlock, prompt: string) => { calls.push({ id: block.id, prompt }); return session(`result ${calls.filter((call) => call.id === "worker").length}`); });
     await runner.start(definition.id, "Create 3 stacks for downstream flow with the user prompt", dispatch, "test", append);
-    for (let tries = 0; tries < 50 && (await store.runs())[0]?.status !== "succeeded"; tries += 1) await new Promise((resolve) => setTimeout(resolve, 10));
+    await vi.waitFor(async () => expect((await store.runs())[0]?.status).toBe("succeeded"), { timeout: 4_000 });
     const run = (await store.runs())[0]!; const workerCalls = calls.filter((call) => call.id === "worker"); const finishCall = calls.find((call) => call.id === "finish");
     expect(calls[0]?.prompt).toContain("workflow_run_stack"); expect(calls[0]?.prompt).toContain("appended to that same session"); expect(calls[0]?.prompt).toContain("timer_set");
     expect(workerCalls).toHaveLength(3); expect(workerCalls.map((call) => call.prompt.split("\n\nWorkflow runtime")[0])).toEqual(["Work 1: research user prompt", "Work 2: implement user prompt", "Work 3: review user prompt"]);
@@ -652,7 +655,7 @@ describe("HarnessRunner", () => {
       return session(block.id);
     });
     await runner.start(definition.id, "build", dispatch, "test", append);
-    for (let tries = 0; tries < 150 && (await store.runs())[0]?.status !== "succeeded"; tries += 1) await new Promise((resolve) => setTimeout(resolve, 10));
+    await vi.waitFor(async () => expect((await store.runs())[0]?.status).toBe("succeeded"), { timeout: 4_000 });
     expect(append).toHaveBeenCalledWith(expect.objectContaining({ id: "worker" }), "follow-up", expect.objectContaining({ workspace: "/sessions/worker" }));
   });
 
@@ -673,7 +676,7 @@ describe("HarnessRunner", () => {
     }, "test");
     const configure = vi.fn(async (_provider, _workspace, _sessionId, enabled) => ({ ...running, configuration: { autopilot: enabled } }));
     try {
-      await vi.waitFor(async () => expect((await runner.readRun(run.id))?.status).toBe("awaiting_permission"));
+      await vi.waitFor(async () => expect((await runner.readRun(run.id))?.status).toBe("awaiting_permission"), { timeout: 4_000 });
       await expect(runner.setAutopilot(run.id, "chat", "stale", true, configure)).rejects.toThrow("no longer available");
       expect(configure).not.toHaveBeenCalled();
       const resumed = await runner.setAutopilot(run.id, "chat", "owned", true, configure);
@@ -683,7 +686,7 @@ describe("HarnessRunner", () => {
       expect(resumed.definition?.blocks[0]?.autopilot).toBe(false);
       expect((await runner.setAutopilot(run.id, "chat", "owned", false, configure)).blocks[0]?.autopilot).toBe(false);
     } finally { release(); }
-    await vi.waitFor(async () => expect((await runner.readRun(run.id))?.status).toBe("succeeded"));
+    await vi.waitFor(async () => expect((await runner.readRun(run.id))?.status).toBe("succeeded"), { timeout: 4_000 });
     expect((await runner.setAutopilot(run.id, "chat", "owned", true, configure)).blocks[0]?.autopilot).toBe(true);
   });
 
@@ -697,14 +700,14 @@ describe("HarnessRunner", () => {
       await runtime.activity({ id: "session-1", model: "test", reasoning: "low", status: "in_progress", pendingPermission: { id: "permission-1", title: "Run command", toolCallId: "tool-1", options: [{ optionId: "allow", name: "Allow", kind: "allow_once" }] }, messages: [] });
       await waiting; return session("session-1");
     });
-    await vi.waitFor(async () => expect((await store.runs())[0]?.status).toBe("awaiting_permission"));
+    await vi.waitFor(async () => expect((await store.runs())[0]?.status).toBe("awaiting_permission"), { timeout: 4_000 });
     const pauseId = (await store.runs())[0]!.blocks[0]!.pauseId!;
     await expect(runner.resolvePermission(run.id, "worker", "wrong-session", pauseId, "permission-1", "allow", vi.fn())).rejects.toThrow("different workflow session");
     const resolve = vi.fn(async () => ({ id: "session-1", model: "test", reasoning: "low", status: "in_progress" as const, messages: [] }));
     const resumed = await runner.resolvePermission(run.id, "worker", "session-1", pauseId, "permission-1", "allow", resolve);
     expect(resolve).toHaveBeenCalledWith("codex", "/workflow/worker", "permission-1", "allow");
     expect(resumed.status).toBe("running"); expect(resumed.blocks[0]).toMatchObject({ status: "running", sessionId: "session-1" }); expect(resumed.blocks[0]?.pendingPermission).toBeUndefined();
-    release(); await vi.waitFor(async () => expect((await store.runs())[0]?.status).toBe("succeeded"));
+    release(); await vi.waitFor(async () => expect((await store.runs())[0]?.status).toBe("succeeded"), { timeout: 4_000 });
   });
 
   it("delivers an answer to the exact workflow session and records it", async () => {
@@ -717,14 +720,14 @@ describe("HarnessRunner", () => {
       await runtime.activity({ id: "session-2", model: "test", reasoning: "low", status: "user_prompt", messages: [{ id: "question", role: "assistant", text: "Which branch?", timestamp: "now" }] });
       await waiting; return session("session-2");
     });
-    await vi.waitFor(async () => expect((await store.runs())[0]?.status).toBe("awaiting_user_input"));
+    await vi.waitFor(async () => expect((await store.runs())[0]?.status).toBe("awaiting_user_input"), { timeout: 4_000 });
     const pauseId = (await store.runs())[0]!.blocks[0]!.pauseId!;
     const answer = vi.fn(async () => ({ id: "session-2", model: "test", reasoning: "low", status: "in_progress" as const, messages: [] }));
     const resumed = await runner.answerQuestion(run.id, "worker", "session-2", pauseId, " feature/auth ", answer);
     expect(answer).toHaveBeenCalledWith("codex", "/workflow/worker", "feature/auth");
     expect(resumed.blocks[0]?.log?.at(-1)?.message).toBe("Provider resumed work");
     expect(resumed.blocks[0]?.log?.some((entry) => entry.message === "User answer: feature/auth")).toBe(true);
-    release(); await vi.waitFor(async () => expect((await store.runs())[0]?.status).toBe("succeeded"));
+    release(); await vi.waitFor(async () => expect((await store.runs())[0]?.status).toBe("succeeded"), { timeout: 4_000 });
   });
 
   it("fires the timer for the exact paused attempt", async () => {
@@ -735,12 +738,12 @@ describe("HarnessRunner", () => {
       await runtime.started("/workflow/worker"); await runtime.activity({ id: "session-timer", model: "test", reasoning: "low", status: "done", messages: [] }, "2099-01-01T00:00:00.000Z");
       await waiting; return session("session-timer");
     });
-    await vi.waitFor(async () => expect((await store.runs())[0]?.status).toBe("waiting_timer"));
+    await vi.waitFor(async () => expect((await store.runs())[0]?.status).toBe("waiting_timer"), { timeout: 4_000 });
     const pauseId = (await store.runs())[0]!.blocks[0]!.pauseId!; const fire = vi.fn().mockResolvedValue(true);
     await expect(runner.resumeTimer(run.id, "worker", "stale-pause", fire)).rejects.toThrow("different paused attempt");
     const resumed = await runner.resumeTimer(run.id, "worker", pauseId, fire);
     expect(fire).toHaveBeenCalledWith("codex", "/workflow/worker"); expect(resumed).toMatchObject({ status: "running", blocks: [{ status: "running", pauseId: undefined }] });
-    release(); await vi.waitFor(async () => expect((await store.runs())[0]?.status).toBe("succeeded"));
+    release(); await vi.waitFor(async () => expect((await store.runs())[0]?.status).toBe("succeeded"), { timeout: 4_000 });
   });
 
   it("retries the exact scheduled attempt immediately", async () => {
@@ -749,10 +752,10 @@ describe("HarnessRunner", () => {
     let release!: () => void; const waiting = new Promise<void>((resolve) => { release = resolve; }); let attempts = 0; const runner = new HarnessRunner(store, () => undefined, 4, { maxAttempts: 3, transportBackoffMs: 60_000 });
     const run = await runner.start(definition.id, "work", async (block) => { if (block.watchdog) { await waiting; return session("watchdog"); } attempts += 1; throw new Error("ETIMEDOUT"); });
     try {
-      await vi.waitFor(async () => expect((await store.runs())[0]?.blocks.find((item) => item.blockId === "worker")?.status).toBe("retry_scheduled"));
+      await vi.waitFor(async () => expect((await store.runs())[0]?.blocks.find((item) => item.blockId === "worker")?.status).toBe("retry_scheduled"), { timeout: 4_000 });
       const pauseId = (await store.runs())[0]!.blocks.find((item) => item.blockId === "worker")!.pauseId!;
       await expect(runner.retryPause(run.id, "worker", "stale-pause")).rejects.toThrow("different paused attempt");
-      await runner.retryPause(run.id, "worker", pauseId); await vi.waitFor(() => expect(attempts).toBe(2));
+      await runner.retryPause(run.id, "worker", pauseId); await vi.waitFor(() => expect(attempts).toBe(2), { timeout: 4_000 });
     } finally { await runner.cancel(run.id, async () => release()); release(); }
   });
 
@@ -764,7 +767,7 @@ describe("HarnessRunner", () => {
       await runtime.started("/workflow/worker"); await runtime.activity({ id: "session-cancel", model: "test", reasoning: "low", status: "user_prompt", messages: [{ id: "q", role: "assistant", text: "Continue?", timestamp: "now" }] });
       await waiting; return session("session-cancel");
     });
-    await vi.waitFor(async () => expect((await store.runs())[0]?.status).toBe("awaiting_user_input"));
+    await vi.waitFor(async () => expect((await store.runs())[0]?.status).toBe("awaiting_user_input"), { timeout: 4_000 });
     const pauseId = (await store.runs())[0]!.blocks[0]!.pauseId!; const interrupt = vi.fn(async () => release());
     const cancelled = await runner.cancelPause(run.id, "worker", pauseId, interrupt);
     expect(cancelled.status).toBe("cancelled"); expect(interrupt).toHaveBeenCalledWith("codex", { runId: run.id, blockId: "worker", workspace: "/workflow/worker" });
@@ -785,7 +788,7 @@ describe("HarnessRunner", () => {
       const revision = block.review!.revision;
       return { ...session(`review-${reviewCalls}`), messages: [{ id: `review-${reviewCalls}`, role: "assistant" as const, text: JSON.stringify({ revision, findings: reviewCalls === 1 ? [{ id: "missing-test", message: "Add a regression test", ownerBlockId: "implement" }] : [] }), timestamp: "now" }] };
     }, "test", append);
-    await vi.waitFor(async () => expect((await store.runs())[0]?.status).toBe("succeeded"));
+    await vi.waitFor(async () => expect((await store.runs())[0]?.status).toBe("succeeded"), { timeout: 4_000 });
     const run = (await store.runs())[0]!;
     expect(reviewCalls).toBe(2); expect(append).toHaveBeenCalledWith(expect.objectContaining({ id: "implement" }), expect.stringContaining("missing-test"), expect.anything());
     expect(run.corrections).toMatchObject([{ status: "corrected", revision: oldRevision, correctedRevision: newRevision, findings: [{ ownerBlockId: "implement", revision: oldRevision }] }]);

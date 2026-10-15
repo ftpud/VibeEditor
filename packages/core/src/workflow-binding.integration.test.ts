@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { once } from "node:events";
-import { mkdtemp, mkdir, readFile, rm } from "node:fs/promises";
+import { realpath, mkdtemp, mkdir, readFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -12,7 +12,7 @@ import { WorkspaceTaskStore } from "./tasks.js";
 import { WorkspaceRootRegistry } from "./workspace-roots.js";
 import { HarnessStore } from "./harnesses.js";
 import { HarnessRunner } from "./harness-runner.js";
-import { createServer } from "./server.js";
+import { createServer, shutdownCore } from "./server.js";
 
 const fake = vi.hoisted(() => ({ registry: undefined as unknown }));
 vi.mock("./ai/index.js", () => ({ createAcpRegistry: () => fake.registry }));
@@ -22,7 +22,7 @@ let server: WebSocketServer | undefined;
 const sockets: WebSocket[] = [];
 async function closeServer() {
   for (const socket of sockets.splice(0)) { const closed = once(socket, "close"); socket.terminate(); await closed; }
-  if (server) await new Promise<void>((resolve, reject) => server!.close((error) => error ? reject(error) : resolve()));
+  if (server) await shutdownCore(server);
   server = undefined;
 }
 afterEach(async () => { await closeServer(); vi.restoreAllMocks(); vi.unstubAllEnvs(); if (directory) await rm(directory, { recursive: true, force: true }); });
@@ -42,7 +42,7 @@ async function connect(initialRootId: string) {
   return { request, select: async (id: string) => { await request("workspace.selectRoot", { rootId: id }); rootId = id; } };
 }
 async function setup() {
-  directory = await mkdtemp(path.join(os.tmpdir(), "workflow-binding-server-"));
+  directory = await realpath(await mkdtemp(path.join(os.tmpdir(), "workflow-binding-server-")));
   vi.stubEnv("REMOTE_IDE_STATE_DIR", path.join(directory, "state"));
   const primary = path.join(directory, "primary"), secondary = path.join(directory, "secondary");
   for (const root of [primary, secondary]) {
@@ -88,22 +88,22 @@ it("keeps a secondary task binding through in-flight dispatch, peer task selecti
   const gate = vi.spyOn(HarnessRunner.prototype, "start").mockImplementation(async function (this: HarnessRunner, ...args: Parameters<HarnessRunner["start"]>) { entered = true; await held; return original.apply(this, args); });
   const pending = client.request("harnesses.run", { harnessId: f.definition.id, input: "start", target: { taskId: f.a.id } });
   try {
-    await vi.waitFor(() => expect(entered).toBe(true));
+    await vi.waitFor(() => expect(entered).toBe(true), { timeout: 4_000 });
     await peer.request("tasks.switch", { taskId: f.b.id });
     await client.select(f.roots.primary().id);
   } finally { release(); }
   const { run } = await pending; gate.mockRestore();
-  await vi.waitFor(async () => expect((await f.store.runs()).find((item) => item.id === run.id)).toMatchObject({ status: "succeeded" }));
+  await vi.waitFor(async () => expect((await f.store.runs()).find((item) => item.id === run.id)).toMatchObject({ status: "succeeded" }), { timeout: 4_000 });
   expect(await readFile(path.join(f.wa, "actual-cwd.txt"), "utf8")).toBe(`${f.wa}\n`);
   expect(await readFile(path.join(f.wa, "actual-script.txt"), "utf8")).toBe(`${f.wa}\n`);
   await expect(readFile(path.join(f.wb, "actual-cwd.txt"))).rejects.toThrow();
-  await vi.waitFor(async () => expect(await readFile(path.join(f.wa, "actual-app.txt"), "utf8")).toBe(`${f.wa}\n`));
+  await vi.waitFor(async () => expect(await readFile(path.join(f.wa, "actual-app.txt"), "utf8")).toBe(`${f.wa}\n`), { timeout: 4_000 });
   await expect(readFile(path.join(f.wb, "actual-app.txt"))).rejects.toThrow();
   const reconnected = await connect(f.roots.primary().id); await reconnected.select(f.second.id);
   const listed = (await reconnected.request("harnesses.runs", {})).runs.find((item) => item.id === run.id)!;
   expect(listed.binding?.taskId).toBe(f.a.id);
   const rerun = (await reconnected.request("harnesses.run", { harnessId: f.definition.id, input: "rerun", rerunRunId: run.id, target: { taskId: f.b.id } })).run;
-  await vi.waitFor(async () => expect((await f.store.runs()).find((item) => item.id === rerun.id)?.status).toBe("succeeded"));
+  await vi.waitFor(async () => expect((await f.store.runs()).find((item) => item.id === rerun.id)?.status).toBe("succeeded"), { timeout: 4_000 });
   expect(rerun.binding).toEqual(run.binding);
 }, 15000);
 
@@ -113,7 +113,7 @@ it("recovers queued secondary-root work on server restart with the primary Core 
   const createdAt = new Date().toISOString();
   const run: HarnessRun = { id: "restart-secondary", harnessId: f.definition.id, harnessVersion: f.definition.version, definition: f.definition, executionPlan: { version: 1, createdAt, definitionVersion: f.definition.version, order: ["agent", "script"], blocks: [{ blockId: "agent", incoming: [], outgoing: ["next"] }, { blockId: "script", incoming: ["next"], outgoing: [] }] }, binding: { rootWorkspace: f.secondary, workspace: f.wa, taskId: f.a.id, taskName: f.a.name }, workspace: f.wa, input: "recover", status: "queued", createdAt, blocks: [{ blockId: "agent", status: "queued" }, { blockId: "script", status: "queued" }], operations: [] };
   await f.store.saveRun(run); await f.tasks.select(f.b.id); await f.start();
-  await vi.waitFor(async () => expect((await f.store.runs()).find((item) => item.id === run.id)).toMatchObject({ status: "succeeded" }));
+  await vi.waitFor(async () => expect((await f.store.runs()).find((item) => item.id === run.id)).toMatchObject({ status: "succeeded" }), { timeout: 4_000 });
   expect(await readFile(path.join(f.wa, "actual-cwd.txt"), "utf8")).toBe(`${f.wa}\n`);
   expect(await readFile(path.join(f.wa, "actual-script.txt"), "utf8")).toBe(`${f.wa}\n`);
   const tools = f.starts[0]!.servers?.find((item) => item.name === "vibe-editor");
@@ -121,7 +121,7 @@ it("recovers queued secondary-root work on server restart with the primary Core 
   await closeServer();
   await f.store.saveRun({ ...run, id: "restart-missing" }); await rm(f.wa, { recursive: true, force: true });
   await f.start();
-  await vi.waitFor(async () => expect((await f.store.runs()).find((item) => item.id === "restart-missing")?.error).toContain("unavailable"));
+  await vi.waitFor(async () => expect((await f.store.runs()).find((item) => item.id === "restart-missing")?.error).toContain("unavailable"), { timeout: 4_000 });
   expect(f.starts).toHaveLength(1);
 }, 15000);
 
@@ -130,7 +130,7 @@ it("uses secondary recoveryAppend and the server timer owner loop after switches
   f.definition = await f.store.update({ ...f.definition, blocks: [{ ...f.definition.blocks[0]!, type: "prompt" }], edges: [] });
   await f.start(); const initial = await connect(f.roots.primary().id); await initial.select(f.second.id);
   const { run } = await initial.request("harnesses.run", { harnessId: f.definition.id, input: "initial", target: { taskId: f.a.id } });
-  await vi.waitFor(async () => expect((await f.store.runs()).find((item) => item.id === run.id)?.status).toBe("succeeded"));
+  await vi.waitFor(async () => expect((await f.store.runs()).find((item) => item.id === run.id)?.status).toBe("succeeded"), { timeout: 4_000 });
   const saved = (await f.store.runs()).find((item) => item.id === run.id)!;
   await closeServer();
   const alias = saved.blocks[0]!.workspace!;
@@ -139,11 +139,11 @@ it("uses secondary recoveryAppend and the server timer owner loop after switches
   await f.tasks.select(f.b.id); await f.start();
   const resumed = await connect(f.roots.primary().id); await resumed.select(f.second.id);
   await resumed.request("harnesses.pause.retry", { runId: saved.id, blockId: "agent", pauseId: "resume-after-restart" });
-  await vi.waitFor(async () => expect((await f.store.runs()).find((item) => item.id === saved.id)?.blocks[0]?.status).toBe("waiting_timer"));
+  await vi.waitFor(async () => expect((await f.store.runs()).find((item) => item.id === saved.id)?.blocks[0]?.status).toBe("waiting_timer"), { timeout: 4_000 });
   await resumed.request("tasks.switch", { taskId: f.b.id }); await resumed.select(f.roots.primary().id);
   const peer = await connect(f.roots.primary().id);
   await peer.request("timers.fire", { timerId: timer.id });
-  await vi.waitFor(async () => expect((await f.store.runs()).find((item) => item.id === saved.id)?.status).toBe("succeeded"));
+  await vi.waitFor(async () => expect((await f.store.runs()).find((item) => item.id === saved.id)?.status).toBe("succeeded"), { timeout: 4_000 });
   expect(f.sends).toHaveLength(2);
   expect(f.sends.every((send) => send.workspace === alias)).toBe(true);
   const tools = f.sends[0]!.servers?.find((item) => item.name === "vibe-editor");

@@ -36,6 +36,25 @@ async function settle(provider: StdioAcpProvider, workspace: string): Promise<Ai
 }
 
 describe("ACP integration", () => {
+  it("stops provider processes, flushes interrupted sessions and refuses new work during shutdown", async () => {
+    const state = await mkdtemp(path.join(os.tmpdir(), "acp-shutdown-"));
+    const workspace = process.cwd();
+    const turns = { begin: vi.fn(async () => "shutdown-checkpoint"), complete: vi.fn(async () => {}) };
+    const provider = new FakeProvider(() => undefined, state, { FAKE_SLOW: "on" }, undefined, turns);
+    try {
+      await provider.send(workspace, { prompt: "Work until stopped", configuration: { model: "model-a" } });
+      expect((await provider.get(workspace)).status).toBe("in_progress");
+      const stopped = provider.shutdown();
+      expect(provider.shutdown()).toBe(stopped);
+      await stopped;
+      expect(turns.complete.mock.calls[0]?.slice(0, 3)).toEqual([workspace, expect.arrayContaining(["shutdown-checkpoint"]), "interrupted"]);
+      const restored = await new FakeProvider(() => undefined, state).get(workspace);
+      expect(restored.status).toBe("idle");
+      expect(restored.messages.some((message) => message.text.includes("Core is shutting down"))).toBe(true);
+      await expect(provider.send(workspace, { prompt: "Too late", configuration: { model: "model-a" } })).rejects.toThrow("shutting down");
+    } finally { await provider.shutdown(); }
+  });
+
   it("reuses persisted session labels after restart and rebuilds damaged or stale indexes", async () => {
     const state = await mkdtemp(path.join(os.tmpdir(), "acp-summary-index-"));
     const workspace = "/workspace";
@@ -396,6 +415,9 @@ describe("ACP integration", () => {
     await provider.send(workspace, { prompt: "first", configuration: { model: "model-a" } });
     const steered = await provider.steer(workspace, "second");
     expect(steered.steering).toBe(true);
+    // Steering acknowledgement does not wait for the asynchronous transcript
+    // notification. Observe it before cancellation intentionally drops late output.
+    await vi.waitFor(async () => expect((await provider.get(workspace)).messages.some((message) => message.text.includes("[steered: second]"))).toBe(true), { timeout: 4_000 });
     await provider.interrupt(workspace);
     const session = await provider.get(workspace);
     expect(session.messages.some((message) => message.text.includes("[steered: second]"))).toBe(true);

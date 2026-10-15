@@ -83,6 +83,8 @@ export abstract class AcpProvider {
   async setSkills(_workspace: string, _ids: string[], _sessionId?: string, _agentPreset?: AiAgentPreset | null): Promise<AiSession> { throw new Error("This provider does not support skills"); }
   abstract send(workspace: string, request: AcpSendRequest): Promise<AiSession>;
   abstract interrupt(workspace: string): Promise<AiSession>;
+  /** Stop owned processes and flush durable session state during Core shutdown. */
+  async shutdown(): Promise<void> {}
   abstract resolvePermission(workspace: string, requestId: string, optionId?: string): Promise<AiSession>;
   /** Adds input to a turn that is already running, optionally forcing a distinct follow-up turn. */
   abstract steer(workspace: string, prompt: string, options?: { senderModel?: string; queue?: boolean }): Promise<AiSession>;

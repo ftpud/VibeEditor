@@ -20,9 +20,11 @@ async function setup(blocks: HarnessBlock[], edges: HarnessEdge[], concurrency =
   const created = await store.create("Flow");
   const definition = await store.update({ ...created, blocks, edges });
   const runner = new HarnessRunner(store, () => {}, concurrency, undefined, undefined, steer);
-  const finished = async () => { await vi.waitFor(async () => expect((await store.runs())[0]?.status).toMatch(/^(succeeded|failed|cancelled)$/)); return (await store.runs())[0]!; };
+  const finished = async () => { await vi.waitFor(async () => expect((await store.runs())[0]?.status).toMatch(/^(succeeded|failed|cancelled)$/), { timeout: 4_000 }); return (await store.runs())[0]!; };
   return { store, definition, runner, finished };
 }
+
+// Workflow journals use disk-backed queues; allow bounded disk latency under the full CI suite.
 
 describe("typed workflows", () => {
   it("exposes Terminal Control through Use connections and forwards structured arguments", async () => {
@@ -175,7 +177,7 @@ describe("typed workflows", () => {
     };
     try {
       await runner.start(definition.id, "hello", dispatch, "provider", undefined, "parent");
-      await vi.waitFor(() => expect(parentFinished).toBe(true));
+      await vi.waitFor(() => expect(parentFinished).toBe(true), { timeout: 4_000 });
       expect((await store.runs())[0]?.status).not.toBe("succeeded");
       expect((await store.runs())[0]?.blocks.find((item) => item.blockId === "child")?.status).toBe("running");
     } finally { release(); }
@@ -202,7 +204,7 @@ describe("typed workflows", () => {
       }
       try {
         for (const block_id of ["first", "second"]) expect(await runner.flowTool(runtime.runId, "parent", "workflow_use_block", { block_id, action: "start", input: "Work" })).toMatchObject({ status: "started" });
-        await vi.waitFor(() => expect(active.size).toBe(2));
+        await vi.waitFor(() => expect(active.size).toBe(2), { timeout: 4_000 });
         expect(await runner.flowTool(runtime.runId, "parent", "workflow_use_block", { block_id: "first", action: "status" })).toMatchObject({ block_status: "running", messages: [] });
         expect(await runner.flowTool(runtime.runId, "parent", "workflow_use_block", { block_id: "second", action: "tail", lines: 1 })).toMatchObject({ messages: [{ text: "second working" }] });
         expect(await runner.flowTool(runtime.runId, "parent", "workflow_use_block", { block_id: "first", action: "tail", lines: 1 })).toMatchObject({ messages: [{ text: "first working" }] });
@@ -212,7 +214,7 @@ describe("typed workflows", () => {
         await expect(runner.flowTool(runtime.runId, "parent", "workflow_use_block", { block_id: "other", action: "status" })).rejects.toThrow("connected block");
         await expect(runner.flowTool(runtime.runId, "parent", "workflow_use_block", { block_id: "first", action: "tail", lines: 0 })).rejects.toThrow("lines");
         release();
-        await vi.waitFor(async () => expect(await runner.flowTool(runtime.runId, "parent", "workflow_use_block", { block_id: "first", action: "status" })).toMatchObject({ block_status: "succeeded" }));
+        await vi.waitFor(async () => expect(await runner.flowTool(runtime.runId, "parent", "workflow_use_block", { block_id: "first", action: "status" })).toMatchObject({ block_status: "succeeded" }), { timeout: 4_000 });
         expect(await runner.flowTool(runtime.runId, "parent", "workflow_use_block", { block_id: "first", action: "tail", lines: 1 })).toMatchObject({ messages: [{ text: "first done" }] });
         await expect(runner.flowTool(runtime.runId, "parent", "workflow_use_block", { block_id: "first", action: "steer", input: "Late" })).rejects.toThrow("running connected AI");
         return session("Parent done");
@@ -315,11 +317,11 @@ describe("typed workflows", () => {
     const dispatch = vi.fn(async (_block: HarnessBlock, _prompt: string, runtime: Parameters<Parameters<HarnessRunner["start"]>[2]>[2]) => { await runtime.started("/chat/session"); await pending; runtime.assertActive(); return session("reply"); });
     const append = vi.fn(async () => session("Resumed"));
     const run = await runner.start(definition.id, "Hello", dispatch, "provider", append, "chat");
-    await vi.waitFor(async () => expect((await store.runs())[0]?.blocks[0]?.workspace).toBe("/chat/session"));
+    await vi.waitFor(async () => expect((await store.runs())[0]?.blocks[0]?.workspace).toBe("/chat/session"), { timeout: 4_000 });
     await expect(runner.continueChat(run.id, "chat", "Too soon", dispatch, "provider", append)).rejects.toThrow("current workflow turn");
     await runner.cancel(run.id, async () => {}); release();
-    await finished(); await vi.waitFor(() => expect(runner.isActive(run.id)).toBe(false));
-    await vi.waitFor(() => runner.continueChat(run.id, "chat", "Try again", dispatch, "provider", append));
+    await finished(); await vi.waitFor(() => expect(runner.isActive(run.id)).toBe(false), { timeout: 4_000 });
+    await vi.waitFor(() => runner.continueChat(run.id, "chat", "Try again", dispatch, "provider", append), { timeout: 4_000 });
     expect((await finished()).blocks[0]?.chatMessages?.at(-1)?.text).toBe("Resumed");
   });
 
@@ -344,9 +346,9 @@ describe("typed workflows", () => {
     const append = vi.fn(async () => session("Follow-up reply"));
     const run = await runner.start(definition.id, "Start", dispatch, "provider", append, "first");
     try {
-      await vi.waitFor(async () => expect((await runner.readRun(run.id))?.blocks.find((item) => item.blockId === "chat")?.status).toBe("skipped"));
+      await vi.waitFor(async () => expect((await runner.readRun(run.id))?.blocks.find((item) => item.blockId === "chat")?.status).toBe("skipped"), { timeout: 4_000 });
       await runner.continueChat(run.id, "chat", "Hello", dispatch, "provider", append);
-      await vi.waitFor(() => expect(held).toBe(true));
+      await vi.waitFor(() => expect(held).toBe(true), { timeout: 4_000 });
       const next = runner.continueChat(run.id, "chat", "Follow up", dispatch, "provider", append);
       await Promise.resolve();
       expect(append).not.toHaveBeenCalled();
@@ -374,11 +376,11 @@ describe("typed workflows", () => {
     const run = await runner.start(definition.id, "First input", dispatch, "provider", append, "first");
     // A submission immediately after start must not duplicate its queued turn.
     if (firstType === "chatbox") await expect(runner.continueChat(run.id, "first", "duplicate", dispatch, "provider", append)).rejects.toThrow("current workflow turn");
-    await vi.waitFor(async () => expect((await store.runs())[0]?.blocks.find((state) => state.blockId === "first")?.workspace).toBe("/session/first"));
+    await vi.waitFor(async () => expect((await store.runs())[0]?.blocks.find((state) => state.blockId === "first")?.workspace).toBe("/session/first"), { timeout: 4_000 });
     await runner.continueChat(run.id, "second", "Second input", dispatch, "provider", append);
-    await vi.waitFor(async () => expect((await store.runs())[0]?.blocks.find((state) => state.blockId === "second")?.status).toBe("succeeded"));
+    await vi.waitFor(async () => expect((await store.runs())[0]?.blocks.find((state) => state.blockId === "second")?.status).toBe("succeeded"), { timeout: 4_000 });
     await runner.continueChat(run.id, "second", "Second follow-up", dispatch, "provider", append);
-    await vi.waitFor(async () => expect((await store.runs())[0]?.blocks.find((state) => state.blockId === "second")?.output).toBe("Second follow-up reply"));
+    await vi.waitFor(async () => expect((await store.runs())[0]?.blocks.find((state) => state.blockId === "second")?.output).toBe("Second follow-up reply"), { timeout: 4_000 });
     const active = (await store.runs())[0]!;
     expect(active.status).toBe("running"); expect(active.completedAt).toBeUndefined(); expect(runner.isActive(run.id)).toBe(true);
     expect(active.input).toBe("First input"); expect(active.blocks.find((state) => state.blockId === "first")?.status).toBe("running");
@@ -395,7 +397,7 @@ describe("typed workflows", () => {
     const { runner, definition, store, finished } = await setup([block("first", "chatbox"), block("second", "chatbox")], [], 2);
     const dispatch = vi.fn(async (target: HarnessBlock, _prompt: string, runtime: Parameters<Parameters<HarnessRunner["start"]>[2]>[2]) => { await runtime.started(`/session/${target.id}`); return session("Original reply"); });
     const original = await runner.start(definition.id, "Original", dispatch, "provider", async () => session("unused"), "first");
-    await finished(); await vi.waitFor(() => expect(runner.isActive(original.id)).toBe(false));
+    await finished(); await vi.waitFor(() => expect(runner.isActive(original.id)).toBe(false), { timeout: 4_000 });
     let fail!: () => void; let release!: () => void;
     const failure = new Promise<void>((resolve) => { fail = resolve; }); const gate = new Promise<void>((resolve) => { release = resolve; });
     const append = vi.fn(async () => { await failure; throw new Error("Entry failed deliberately"); });
@@ -406,9 +408,9 @@ describe("typed workflows", () => {
       runner.continueChat(original.id, "first", "Duplicate turn", independent, "provider", append),
     ]);
     expect(turns.map((turn) => turn.status)).toEqual(["fulfilled", "fulfilled", "rejected"]);
-    await vi.waitFor(async () => expect((await store.runs())[0]?.blocks.find((state) => state.blockId === "second")?.workspace).toBe("/session/second"));
+    await vi.waitFor(async () => expect((await store.runs())[0]?.blocks.find((state) => state.blockId === "second")?.workspace).toBe("/session/second"), { timeout: 4_000 });
     fail();
-    await vi.waitFor(async () => expect((await store.runs())[0]?.blocks.find((state) => state.blockId === "first")?.status).toBe("failed"));
+    await vi.waitFor(async () => expect((await store.runs())[0]?.blocks.find((state) => state.blockId === "first")?.status).toBe("failed"), { timeout: 4_000 });
     const active = (await store.runs())[0]!;
     expect(active.status).toBe("running"); expect(active.blocks.find((state) => state.blockId === "second")?.status).toBe("running");
     await expect(runner.continueChat(original.id, "second", "Duplicate second", independent, "provider", append)).rejects.toThrow("current workflow turn");
@@ -455,7 +457,7 @@ describe("typed workflows", () => {
         };
         expect(await use("start")).toMatchObject({ status: "running" });
         expect(await use("status")).toMatchObject({ status: "running" });
-        await vi.waitFor(async () => expect(await use("tail")).toMatchObject({ output: expect.stringContaining("ready") }));
+        await vi.waitFor(async () => expect(await use("tail")).toMatchObject({ output: expect.stringContaining("ready") }), { timeout: 4_000 });
         expect(await use("kill")).toMatchObject({ status: "exited" });
         return session("Managed app");
       }, "provider");
@@ -473,7 +475,7 @@ describe("typed workflows", () => {
         const connected = await runner.flowTool(runtime.runId, "chat", "workflow_connections", {}) as { block_id: string }[];
         expect(connected[0]?.block_id).toBe("app");
         await use("start");
-        await vi.waitFor(async () => expect((await use("tail", 2)).app.output).toBe("second\nthird"));
+        await vi.waitFor(async () => expect((await use("tail", 2)).app.output).toBe("second\nthird"), { timeout: 4_000 });
         const [status, tail] = await Promise.all([use("status"), use("tail", 1)]);
         expect(status.app.status).toBe("running");
         expect(tail.app.output).toBe("third");
@@ -548,7 +550,7 @@ describe("typed workflows", () => {
   it("waits for a user answer and sends that answer to the next block", async () => {
     const { runner, definition, store, finished } = await setup([block("start", "start_input"), block("question", "user_prompt", { prompt: "What next for {{input}}?" }), block("after", "text")], [edge("start", "question"), edge("question", "after")]);
     const run = await runner.start(definition.id, "project", vi.fn(), "provider", undefined, "start");
-    await vi.waitFor(async () => expect((await store.runs())[0]?.status).toBe("awaiting_user_input"));
+    await vi.waitFor(async () => expect((await store.runs())[0]?.status).toBe("awaiting_user_input"), { timeout: 4_000 });
     const paused = (await store.runs())[0]!.blocks.find((state) => state.blockId === "question")!;
     expect(paused.question).toBe("What next for project?");
     await runner.answerQuestion(run.id, "question", paused.sessionId!, paused.pauseId!, "build", vi.fn());
@@ -569,7 +571,7 @@ describe("typed workflows", () => {
       return session(`User said: ${answer}`);
     });
     const run = await runner.start(definition.id, "Ask the user", dispatch, "provider", undefined, "chat");
-    await vi.waitFor(async () => expect((await store.runs())[0]?.blocks.find((item) => item.blockId === "question")?.status).toBe("awaiting_user_input"));
+    await vi.waitFor(async () => expect((await store.runs())[0]?.blocks.find((item) => item.blockId === "question")?.status).toBe("awaiting_user_input"), { timeout: 4_000 });
     const paused = (await store.runs())[0]!.blocks.find((item) => item.blockId === "question")!;
     await runner.answerQuestion(run.id, "question", paused.sessionId!, paused.pauseId!, answer, providerAnswer);
     const result = await finished();
@@ -583,7 +585,7 @@ describe("typed workflows", () => {
   it.each(["yes", "no"])("validates a Yes/No answer and passes %s to followers", async (answer) => {
     const { runner, definition, store, finished } = await setup([block("start", "start_input"), block("question", "yes_no_prompt"), block("after", "text")], [edge("start", "question"), edge("question", "after")]);
     const run = await runner.start(definition.id, "Push?", vi.fn(), "provider", undefined, "start");
-    await vi.waitFor(async () => expect((await store.runs())[0]?.status).toBe("awaiting_user_input"));
+    await vi.waitFor(async () => expect((await store.runs())[0]?.status).toBe("awaiting_user_input"), { timeout: 4_000 });
     const paused = (await store.runs())[0]!.blocks.find((state) => state.blockId === "question")!;
     await expect(runner.answerQuestion(run.id, "question", paused.sessionId!, paused.pauseId!, "maybe", vi.fn())).rejects.toThrow("Choose Yes or No");
     await runner.answerQuestion(run.id, "question", paused.sessionId!, paused.pauseId!, answer, vi.fn());
@@ -599,7 +601,7 @@ describe("typed workflows", () => {
       return session(`Answer: ${(response as { output: string }).output}`);
     });
     const run = await runner.start(definition.id, "Ask", dispatch, "provider", undefined, "chat");
-    await vi.waitFor(async () => expect((await store.runs())[0]?.blocks.find((item) => item.blockId === "question")?.status).toBe("awaiting_user_input"));
+    await vi.waitFor(async () => expect((await store.runs())[0]?.blocks.find((item) => item.blockId === "question")?.status).toBe("awaiting_user_input"), { timeout: 4_000 });
     await new Promise((resolve) => setTimeout(resolve, 50));
     const paused = (await store.runs())[0]!.blocks.find((item) => item.blockId === "question")!;
     const answer = type === "yes_no_prompt" ? "yes" : "Continue with the preview";
@@ -618,10 +620,10 @@ describe("typed workflows", () => {
       return session("Cancelled");
     };
     const run = await runner.start(definition.id, "Ask", dispatch, "provider", undefined, "chat");
-    await vi.waitFor(async () => expect((await store.runs())[0]?.blocks.find((item) => item.blockId === "question")?.status).toBe("awaiting_user_input"));
+    await vi.waitFor(async () => expect((await store.runs())[0]?.blocks.find((item) => item.blockId === "question")?.status).toBe("awaiting_user_input"), { timeout: 4_000 });
     const paused = (await store.runs())[0]!.blocks.find((item) => item.blockId === "question")!;
     await runner.cancelPause(run.id, "question", paused.pauseId!, vi.fn());
-    await vi.waitFor(() => expect(rejected).toBe(true));
+    await vi.waitFor(() => expect(rejected).toBe(true), { timeout: 4_000 });
     expect((await finished()).status).toBe("cancelled");
     await expect(runner.answerQuestion(run.id, "question", paused.sessionId!, paused.pauseId!, "Late", vi.fn())).rejects.toThrow("active");
   });
@@ -631,7 +633,7 @@ describe("typed workflows", () => {
     const openDocument = vi.fn();
     const runner = new HarnessRunner(store, () => {}, 1, undefined, openDocument);
     const run = await runner.start(definition.id, "# Report\n\nCommitted changes.", vi.fn(), "provider", undefined, "start");
-    await vi.waitFor(async () => expect((await store.runs())[0]?.status).toBe("succeeded"));
+    await vi.waitFor(async () => expect((await store.runs())[0]?.status).toBe("succeeded"), { timeout: 4_000 });
     expect(openDocument).toHaveBeenCalledOnce();
     expect(openDocument).toHaveBeenCalledWith({ runId: run.id, blockId: "report", title: "Report.md", content: "# Report\n\nCommitted changes." });
     expect((await store.runs())[0]?.blocks.find((state) => state.blockId === "after")?.output).toBe("# Report\n\nCommitted changes.");
@@ -641,7 +643,7 @@ describe("typed workflows", () => {
   it("cancels a timer without launching its follower", async () => {
     const { runner, definition, store, finished } = await setup([block("start", "start_input"), block("timer", "timer", { seconds: 60 }), block("after", "ai")], [edge("start", "timer"), edge("timer", "after")]);
     const dispatch = vi.fn(); const run = await runner.start(definition.id, "wait", dispatch, "provider", undefined, "start");
-    await vi.waitFor(async () => expect((await store.runs())[0]?.status).toBe("waiting_timer"));
+    await vi.waitFor(async () => expect((await store.runs())[0]?.status).toBe("waiting_timer"), { timeout: 4_000 });
     await runner.cancel(run.id, vi.fn()); await finished(); expect(dispatch).not.toHaveBeenCalled();
   });
 
@@ -708,7 +710,7 @@ describe("typed workflows", () => {
   it("rejects a stale user answer after cancellation", async () => {
     const { runner, definition, store, finished } = await setup([block("start", "start_input"), block("question", "user_prompt")], [edge("start", "question")]);
     const run = await runner.start(definition.id, "question", vi.fn(), "provider", undefined, "start");
-    await vi.waitFor(async () => expect((await store.runs())[0]?.status).toBe("awaiting_user_input"));
+    await vi.waitFor(async () => expect((await store.runs())[0]?.status).toBe("awaiting_user_input"), { timeout: 4_000 });
     const state = (await store.runs())[0]!.blocks.find((state) => state.blockId === "question")!;
     await runner.cancel(run.id, vi.fn());
     await expect(runner.answerQuestion(run.id, "question", state.sessionId!, state.pauseId!, "too late", vi.fn())).rejects.toThrow("active");
@@ -756,7 +758,7 @@ describe("typed workflows", () => {
       expect(Date.parse(result.due_at) - Date.now()).toBeGreaterThan(299_000);
       return session("done");
     }, "provider", undefined, "start");
-    await vi.waitFor(async () => expect((await store.runs())[0]?.blocks.find((state) => state.blockId === "agent")?.status).toBe("succeeded"));
+    await vi.waitFor(async () => expect((await store.runs())[0]?.blocks.find((state) => state.blockId === "agent")?.status).toBe("succeeded"), { timeout: 4_000 });
     const timer = (await store.runs())[0]!.blocks.find((state) => state.blockId === "timer")!;
     expect((await store.runs())[0]?.blocks.find((state) => state.blockId === "after")?.status).toBe("queued");
     expect((await store.runs())[0]?.connectionTraces?.some((trace) => trace.edgeId === "timer-after-follow")).toBe(false);

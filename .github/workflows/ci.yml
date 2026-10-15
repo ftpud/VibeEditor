@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Verify (${{ matrix.os }}, Node ${{ matrix.node }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+        node:
+          - 22
+          - 24
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      - name: Set up Java toolchain
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Audit locked dependencies
+        run: npm audit --audit-level=moderate
+
+      - name: Build
+        run: npm run build
+
+      - name: Typecheck root workspaces
+        run: npm run typecheck
+
+      - name: Typecheck Gateway
+        run: npm run typecheck -w @remote-ide/gateway
+
+      - name: Run full test suite
+        run: npm test

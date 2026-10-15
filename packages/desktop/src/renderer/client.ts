@@ -91,7 +91,9 @@ export class CoreClient {
         opened = true;
         void (async () => {
           this.onConnectionProgress?.("Checking Desktop and Core compatibility…");
-          const result = await this.request("protocol.handshake", { compatibility: protocolCompatibility, clientVersion: "0.1.0" });
+          const token = typeof window !== "undefined" && window.desktop?.connectionToken ? await window.desktop.connectionToken(host, port) : undefined;
+          ensureCurrent();
+          const result = await this.request("protocol.handshake", { compatibility: protocolCompatibility, clientVersion: "0.1.0", ...(token ? { token } : {}) });
           ensureCurrent();
           if (!result.compatible) throw new Error(result.message ?? "Desktop and Core protocol versions are incompatible");
           this.onConnectionProgress?.("Finding workspace roots…");

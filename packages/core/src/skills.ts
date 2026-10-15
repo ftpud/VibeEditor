@@ -46,21 +46,10 @@ export class SkillsStore {
   /** Reject symlink escapes, including paths used for new files. */
   private async checked(target: string, workspace: string, scope: SkillScope): Promise<string> {
     const boundary = scope === "workspace" ? path.resolve(workspace) : path.resolve(this.stateDirectory);
-    const root = await realpath(boundary).catch((error: NodeJS.ErrnoException) => { if (error.code === "ENOENT") return boundary; throw error; });
-    let ancestor = target;
-    while (true) {
-      try {
-        const resolved = await realpath(ancestor);
-        const effective = path.resolve(resolved, path.relative(ancestor, target));
-        if (effective !== root && !effective.startsWith(`${root}${path.sep}`)) throw new CoreError("INVALID_REQUEST", "Skill path escapes its scope");
-        return target;
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-        const parent = path.dirname(ancestor);
-        if (parent === ancestor) throw error;
-        ancestor = parent;
-      }
-    }
+    const root = await canonicalFuturePath(boundary);
+    const effective = await canonicalFuturePath(target);
+    if (effective !== root && !effective.startsWith(`${root}${path.sep}`)) throw new CoreError("INVALID_REQUEST", "Skill path escapes its scope");
+    return target;
   }
 
   async read(id: string, workspace: string): Promise<string> {
@@ -187,5 +176,19 @@ export class SkillsStore {
     if (!skill || !skillAllowedForAgent(catalog.policy, id, agent)) throw new CoreError("INVALID_REQUEST", "Skill is missing or no longer allowed for this agent");
     const content = await this.read(id, workspace);
     return { id, revision: crypto.createHash("sha256").update(`${skill.path}\0${content}`).digest("hex"), baseDirectory: path.dirname(skill.path), content };
+  }
+}
+
+/** Resolve existing ancestors as well as the missing suffix (e.g. macOS /var aliases). */
+async function canonicalFuturePath(target: string): Promise<string> {
+  let ancestor = path.resolve(target);
+  for (;;) {
+    try { return path.resolve(await realpath(ancestor), path.relative(ancestor, target)); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      const parent = path.dirname(ancestor);
+      if (parent === ancestor) throw error;
+      ancestor = parent;
+    }
   }
 }

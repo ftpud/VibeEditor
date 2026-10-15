@@ -12,8 +12,25 @@ export async function executeHttpRequest(method: string, rawUrl: string, headers
   const controller = new AbortController(); const timeout = setTimeout(() => controller.abort(), 30_000); const started = performance.now();
   try {
     const response = await fetch(url, { method, headers, ...(body !== undefined && method !== "GET" && method !== "HEAD" ? { body } : {}), signal: controller.signal, redirect: "follow" });
-    const buffer = Buffer.from(await response.arrayBuffer());
-    if (buffer.length > MAX_RESPONSE_BYTES) throw new CoreError("FILE_TOO_LARGE", "HTTP response exceeds 2 MB");
+    const chunks: Uint8Array[] = [];
+    let received = 0;
+    const reader = response.body?.getReader();
+    if (reader) {
+      try {
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          received += value.byteLength;
+          if (received > MAX_RESPONSE_BYTES) {
+            controller.abort();
+            await reader.cancel().catch(() => undefined);
+            throw new CoreError("FILE_TOO_LARGE", "HTTP response exceeds 2 MB");
+          }
+          chunks.push(value);
+        }
+      } finally { reader.releaseLock(); }
+    }
+    const buffer = Buffer.concat(chunks, received);
     return { status: response.status, statusText: response.statusText, headers: Object.fromEntries(response.headers.entries()), body: buffer.toString("utf8"), durationMs: Math.round(performance.now() - started) };
   } catch (error) {
     if (error instanceof CoreError) throw error;

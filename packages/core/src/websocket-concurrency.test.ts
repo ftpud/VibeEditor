@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { once } from "node:events";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { realpath, mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -12,7 +12,7 @@ import { WorkspaceTaskStore } from "./tasks.js";
 import { createServer } from "./server.js";
 
 it("delivers independent responses and real terminal output while a file read is held", async () => {
-  const directory = await mkdtemp(path.join(os.tmpdir(), "vibe-ws-concurrency-"));
+  const directory = await realpath(await mkdtemp(path.join(os.tmpdir(), "vibe-ws-concurrency-")));
   const workspace = path.join(directory, "project");
   let server: WebSocketServer | undefined;
   let socket: WebSocket | undefined;

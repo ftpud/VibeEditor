@@ -81,6 +81,54 @@ export abstract class StdioAcpProvider extends AcpProvider {
   protected abstract command(configuration: AiConfiguration): { command: string; args: string[]; env?: NodeJS.ProcessEnv };
   protected abstract fallbackModels(): Promise<AiModel[]>;
   protected supportsUnlistedModel(_model: string): boolean { return false; }
+  private shuttingDown = false;
+  private shutdownPromise?: Promise<void>;
+  private readonly ownedChildren = new Set<ChildProcessWithoutNullStreams>();
+
+  override shutdown(): Promise<void> { return this.shutdownPromise ??= this.shutdownOwnedResources(); }
+
+  private async shutdownOwnedResources(): Promise<void> {
+    this.shuttingDown = true;
+    const runtimes = [...this.runtimes];
+    for (const [workspace, runtime] of runtimes) {
+      runtime.generation += 1; runtime.running = false; runtime.pending = [];
+      this.freshSessions.delete(workspace); this.cancelPermissionWaiters(workspace);
+      runtime.session.pendingPermission = undefined;
+      if (runtime.session.status === "in_progress" || runtime.session.status === "user_prompt") {
+        runtime.session.status = "idle";
+        runtime.session.messages.push(this.message("activity", "Interrupted because Core is shutting down"));
+      }
+    }
+    const children = [...this.ownedChildren];
+    const ownedPids = new Set(children.flatMap((child) => child.pid ? [child.pid] : []));
+    let inspectionError: unknown;
+    const rows = ownedPids.size ? await managedProcesses.list().catch((error) => { inspectionError = error; return []; }) : [];
+    let expanded = true;
+    while (expanded) {
+      expanded = false;
+      for (const row of rows) if (row.parentPid !== undefined && ownedPids.has(row.parentPid) && !ownedPids.has(row.pid)) { ownedPids.add(row.pid); expanded = true; }
+    }
+    const descendants = rows.filter((row) => ownedPids.has(row.pid) && !children.some((child) => child.pid === row.pid));
+    const stopped = children.map((child) => new Promise<void>((resolve) => {
+      if (child.exitCode !== null || child.signalCode !== null) { resolve(); return; }
+      const force = setTimeout(() => child.kill("SIGKILL"), 1_000);
+      const done = () => { clearTimeout(force); child.off("exit", done); child.off("close", done); resolve(); };
+      child.once("exit", done); child.once("close", done);
+    }));
+    await Promise.all(runtimes.map(([workspace]) => this.closeRuntime(workspace)));
+    for (const child of children) { child.stdin.end(); child.kill("SIGTERM"); }
+    await Promise.all(stopped);
+    // Revalidate recorded process identities before stopping descendants that
+    // survived their launcher. Never signal a recycled PID.
+    await Promise.all(descendants.map((row) => managedProcesses.kill(row.id, async () => true)));
+    await Promise.all(runtimes.map(async ([workspace, runtime]) => {
+      await this.completeCheckpoints(workspace, runtime, "interrupted");
+      await this.save(workspace, runtime.session);
+    }));
+    await Promise.all([...this.queues.values(), ...this.saveQueues.values()]);
+    if (inspectionError) throw new Error("Could not verify provider descendant cleanup", { cause: inspectionError });
+  }
+
   private readonly runtimes = new Map<string, Runtime>();
   private readonly queues = new Map<string, Promise<void>>();
   private readonly freshSessions = new Map<string, AcpSendRequest>();
@@ -534,6 +582,7 @@ export abstract class StdioAcpProvider extends AcpProvider {
   }
 
   private async ensureRuntime(workspace: string, session: AiSession, servers?: AcpSendRequest["mcpServers"]): Promise<Runtime> {
+    if (this.shuttingDown) throw new CoreError("INVALID_REQUEST", "Core is shutting down");
     let existing = this.runtimes.get(workspace);
     const mcpKey = JSON.stringify(this.mcpServers(servers));
     if (existing && servers !== undefined && existing.mcpKey !== mcpKey) { await this.closeRuntime(workspace); existing = undefined; }
@@ -552,6 +601,7 @@ export abstract class StdioAcpProvider extends AcpProvider {
     }
     this.lastWorkspace = workspace;
     const connected = await this.connect(workspace, session.configuration ?? {}, servers, session.threadId);
+    if (this.shuttingDown) { connected.child.stdin.end(); connected.child.kill("SIGTERM"); throw new CoreError("INVALID_REQUEST", "Core is shutting down"); }
     // A fresh provider session has no prior prompt context, even when the local
     // transcript still records which preset the previous session received.
     if (!connected.resumed) { session.agent = undefined; session.skillCatalogue = undefined; }
@@ -576,9 +626,13 @@ export abstract class StdioAcpProvider extends AcpProvider {
 
   /** Spawns the agent, performs the ACP handshake and opens a session. */
   private async connect(workspace: string, configuration: AiConfiguration, servers?: AcpSendRequest["mcpServers"], savedSessionId?: string): Promise<Connected> {
+    if (this.shuttingDown) throw new CoreError("INVALID_REQUEST", "Core is shutting down");
     const launch = this.command(configuration);
     const processContext = { workspace, rootWorkspace: await this.projectRoot(workspace), provider: this.descriptor.id, kind: "agent" as const };
+    if (this.shuttingDown) throw new CoreError("INVALID_REQUEST", "Core is shutting down");
     const child = managedProcesses.launch(processContext, (env) => spawn(launch.command, launch.args, { cwd: workspace, env: { ...env, ...launch.env }, stdio: "pipe" }));
+    this.ownedChildren.add(child);
+    child.once("close", () => this.ownedChildren.delete(child));
     // Spawn failures (most commonly an optional provider CLI missing from PATH)
     // are emitted asynchronously. Listen before constructing the ACP transport so
     // ENOENT rejects discovery instead of becoming an unhandled process error.

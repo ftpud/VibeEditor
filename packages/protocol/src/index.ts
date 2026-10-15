@@ -16,7 +16,7 @@ export type FileRevision = { identity: string; version: string };
  * Desktop can prove it is safe to talk to a newly deployed Core.
  */
 export type ProtocolCompatibility = { minimum: number; maximum: number };
-export const protocolCompatibility: ProtocolCompatibility = { minimum: 15, maximum: 15 };
+export const protocolCompatibility: ProtocolCompatibility = { minimum: 16, maximum: 16 };
 
 export function protocolRangeIsValid(range: ProtocolCompatibility): boolean {
   return Number.isInteger(range.minimum) && Number.isInteger(range.maximum) && range.minimum > 0 && range.minimum <= range.maximum;
@@ -318,7 +318,7 @@ export type SearchReplaceApplyResult = { applied: { path: string; revision: File
 
 export type ProtocolOperations = {
   "protocol.keepAlive": { payload: Record<string, never>; result: Record<string, never> };
-  "protocol.handshake": { payload: { compatibility: ProtocolCompatibility; clientVersion?: string }; result: { compatible: boolean; compatibility: ProtocolCompatibility; message?: string } };
+  "protocol.handshake": { payload: { compatibility: ProtocolCompatibility; clientVersion?: string; token?: string }; result: { compatible: boolean; compatibility: ProtocolCompatibility; message?: string } };
   "workspace.roots": { payload: Record<string, never>; result: { roots: WorkspaceRoot[]; selectedRootId: WorkspaceRootId } };
   "workspace.addRoot": { payload: { path: string; alias: string }; result: { root: WorkspaceRoot; roots: WorkspaceRoot[] } };
   "workspace.selectRoot": { payload: { rootId: WorkspaceRootId; includeIgnored?: boolean; preserveTaskSelection?: boolean }; result: { root: WorkspaceRoot; workspace: string; projectName: string; tree: FileTreeNode[]; options: WorkspaceOptions } };

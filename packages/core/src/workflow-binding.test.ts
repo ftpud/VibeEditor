@@ -17,13 +17,20 @@ const exec = promisify(execFile);
 let directory: string;
 let apps: WorkflowAppService;
 let timers: AiTimerService;
+const runners = new Set<HarnessRunner>();
 afterEach(async () => {
-  await timers?.cancelAll(); await apps?.closeAll(); vi.unstubAllEnvs();
+  for (const runner of runners) await runner.suspend();
+  await timers?.cancelAll(); await apps?.closeAll();
+  await Promise.all([...runners].map((runner) => runner.drain()));
+  // drain waits for executions; suspend again to await the last durable snapshot they queued.
+  for (const runner of runners) await runner.suspend();
+  runners.clear();
+  vi.unstubAllEnvs();
   if (directory) await rm(directory, { recursive: true, force: true });
 });
 const block = (id: string, type: HarnessBlock["type"], extra: Partial<HarnessBlock> = {}): HarnessBlock => ({ id, type, label: id, prompt: "{{input}}", position: { x: 0, y: 0 }, ...extra });
 async function setup() {
-  directory = await mkdtemp(path.join(os.tmpdir(), "workflow-binding-"));
+  directory = await realpath(await mkdtemp(path.join(os.tmpdir(), "workflow-binding-")));
   const root = path.join(directory, "root"); await mkdir(root);
   vi.stubEnv("REMOTE_IDE_STATE_DIR", path.join(directory, "state"));
   await exec("git", ["init", "-q", root]);
@@ -31,7 +38,7 @@ async function setup() {
   const tasks = new WorkspaceTaskStore(root);
   const a = await tasks.create("task-a"), b = await tasks.create("task-b");
   const wa = tasks.taskPath(a.id), wb = tasks.taskPath(b.id);
-  const store = new HarnessStore(root), runner = new HarnessRunner(store, () => {});
+  const store = new HarnessStore(root), runner = new HarnessRunner(store, () => {}); runners.add(runner);
   apps = new WorkflowAppService();
   const sessions = new Map<string, AiSession>();
   const deliver = async (workspace: string, input: { prompt: string }) => {
@@ -57,11 +64,11 @@ it("applies a Chatbox's saved Autopilot preference and defaults new workflow ses
   const created = await f.store.create("Autopilot");
   let definition = await f.store.update({ ...created, blocks: [block("chat", "chatbox", { prompt: "", autopilot: false })], edges: [] });
   let run = await startWorkflow({ harnessId: definition.id, input: "manual", startBlockId: "chat", provider: "test", target: {} }, f.context);
-  await vi.waitFor(async () => expect((await f.runner.readRun(run.id))?.status).toBe("succeeded"));
+  await vi.waitFor(async () => expect((await f.runner.readRun(run.id))?.status).toBe("succeeded"), { timeout: 4_000 });
   expect(f.provider.startFreshSession).toHaveBeenLastCalledWith(expect.any(String), expect.objectContaining({ configuration: { autoApprove: false } }));
   definition = await f.store.update({ ...definition, blocks: [block("chat", "chatbox", { prompt: "" })] });
   run = await startWorkflow({ harnessId: definition.id, input: "automatic", startBlockId: "chat", provider: "test", target: {} }, f.context);
-  await vi.waitFor(async () => expect((await f.runner.readRun(run.id))?.status).toBe("succeeded"));
+  await vi.waitFor(async () => expect((await f.runner.readRun(run.id))?.status).toBe("succeeded"), { timeout: 4_000 });
   expect(f.provider.startFreshSession).toHaveBeenLastCalledWith(expect.any(String), expect.objectContaining({ configuration: { autoApprove: true } }));
 });
 
@@ -70,24 +77,24 @@ it("captures task A while selection is B, preserves agent cwd, script/app effect
   const definition = await f.store.update({ ...created, blocks: [block("agent", "ai"), block("script", "script", { command: 'pwd > script-effects.txt; sleep 0.1' }), block("app", "run_app", { command: 'pwd > app-effects.txt; exec sleep 300', app: { name: "bound", actions: ["start"] } })], edges: [{ id: "one", from: "agent", to: "script", type: "follow" }, { id: "two", from: "script", to: "app", type: "follow" }] });
   const run = await startWorkflow({ harnessId: definition.id, input: "run", target: { taskId: f.a.id }, provider: "test" }, f.context);
   await f.tasks.select(f.b.id);
-  await vi.waitFor(async () => expect((await f.runner.readRun(run.id))?.status).toBe("succeeded"));
+  await vi.waitFor(async () => expect((await f.runner.readRun(run.id))?.status).toBe("succeeded"), { timeout: 4_000 });
   expect(run.binding).toMatchObject({ taskId: f.a.id, taskName: "task-a", workspace: f.wa, rootWorkspace: f.root });
   expect(await realpath(f.provider.startFreshSession.mock.calls[0]![0])).toBe(f.wa);
   for (const file of ["agent-effects.txt", "script-effects.txt", "app-effects.txt"]) {
-    await vi.waitFor(async () => expect(await readFile(path.join(f.wa, file), "utf8")).toContain(f.wa));
+    await vi.waitFor(async () => expect(await readFile(path.join(f.wa, file), "utf8")).toContain(f.wa), { timeout: 4_000 });
     await expect(readFile(path.join(f.wb, file))).rejects.toThrow();
     await expect(readFile(path.join(f.root, file))).rejects.toThrow();
   }
   const rerun = await startWorkflow({ harnessId: definition.id, input: "ignored", rerunRunId: run.id, target: { taskId: f.b.id }, provider: "test" }, { ...f.context, workspacePath: f.root });
-  await vi.waitFor(async () => expect((await f.runner.readRun(rerun.id))?.status).toBe("succeeded"));
+  await vi.waitFor(async () => expect((await f.runner.readRun(rerun.id))?.status).toBe("succeeded"), { timeout: 4_000 });
   expect(rerun.binding).toEqual(run.binding);
   const legacy = { ...(await f.runner.readRun(run.id))!, id: "legacy-alias-run", binding: undefined, workspace: undefined };
   await f.store.saveRun(legacy);
   const legacyRerun = await startWorkflow({ harnessId: definition.id, input: "legacy", rerunRunId: legacy.id, target: { taskId: f.b.id }, provider: "test" }, f.context);
-  await vi.waitFor(async () => expect((await f.runner.readRun(legacyRerun.id))?.status).toBe("succeeded"));
+  await vi.waitFor(async () => expect((await f.runner.readRun(legacyRerun.id))?.status).toBe("succeeded"), { timeout: 4_000 });
   expect(legacyRerun.binding?.taskId).toBe(f.a.id);
   const rootRun = await startWorkflow({ harnessId: definition.id, input: "root", target: {}, provider: "test" }, f.context);
-  await vi.waitFor(async () => expect((await f.runner.readRun(rootRun.id))?.status).toBe("succeeded"));
+  await vi.waitFor(async () => expect((await f.runner.readRun(rootRun.id))?.status).toBe("succeeded"), { timeout: 4_000 });
   expect(rootRun.binding?.workspace).toBe(f.root); expect(rootRun.binding?.taskId).toBeUndefined();
 });
 
@@ -95,14 +102,14 @@ it("continues a Chatbox and fires its delayed timer in A after switching to B an
   const f = await setup(); const created = await f.store.create("Chat");
   const definition = await f.store.update({ ...created, blocks: [block("chat", "chatbox")], edges: [] });
   const run = await startWorkflow({ harnessId: definition.id, input: "first", startBlockId: "chat", target: { taskId: f.a.id }, provider: "test" }, f.context);
-  await vi.waitFor(async () => expect((await f.runner.readRun(run.id))?.status).toBe("succeeded"));
+  await vi.waitFor(async () => expect((await f.runner.readRun(run.id))?.status).toBe("succeeded"), { timeout: 4_000 });
   const saved = (await f.runner.readRun(run.id))!; const alias = saved.blocks[0]!.workspace!;
   const timer = await timers.schedule(alias, "test", "delayed", 3600, { runId: run.id, blockId: "chat" });
   await f.tasks.select(f.b.id);
   await timers.fireById(timer.id);
-  const reconnected = new HarnessRunner(new HarnessStore(f.root), () => {});
+  const reconnected = new HarnessRunner(new HarnessStore(f.root), () => {}); runners.add(reconnected);
   const continued = await startWorkflow({ harnessId: definition.id, input: "continued", startBlockId: "chat", chatRunId: run.id, target: { taskId: f.b.id }, provider: "test" }, { ...f.context, harnessRunner: reconnected });
-  await vi.waitFor(async () => expect((await reconnected.readRun(run.id))?.status).toBe("succeeded"));
+  await vi.waitFor(async () => expect((await reconnected.readRun(run.id))?.status).toBe("succeeded"), { timeout: 4_000 });
   expect(continued.binding).toEqual(run.binding);
   expect(f.provider.send.mock.calls.every(([workspace]) => workspace === alias)).toBe(true);
   expect((await readFile(path.join(f.wa, "agent-effects.txt"), "utf8")).trim().split("\n")).toEqual([f.wa, f.wa, f.wa]);
@@ -138,7 +145,7 @@ it("loads skills and verifies and reviews the selected task's actual files and c
   const created = await f.store.create("Gates");
   const definition = await f.store.update({ ...created, blocks: [block("skill", "skill", { skillId: "workspace/check" }), block("verify", "verification", { verification: { command: "pwd > verification-effects.txt; cat review-only.txt", revision } }), block("review", "review", { review: { revision } })], edges: [{ id: "verify", from: "skill", to: "verify", type: "follow" }, { id: "review", from: "verify", to: "review", type: "follow" }] });
   const run = await startWorkflow({ harnessId: definition.id, input: "check", provider: "test", target: { taskId: f.a.id } }, f.context);
-  await vi.waitFor(async () => expect((await f.runner.readRun(run.id))?.status).toBe("succeeded"));
+  await vi.waitFor(async () => expect((await f.runner.readRun(run.id))?.status).toBe("succeeded"), { timeout: 4_000 });
   const saved = (await f.runner.readRun(run.id))!;
   expect(saved.blocks.find((block) => block.blockId === "skill")?.output).toContain("Instructions from A");
   expect(saved.blocks.find((block) => block.blockId === "skill")?.output).toContain(f.wa);

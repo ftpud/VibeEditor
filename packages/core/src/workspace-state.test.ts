@@ -1,4 +1,4 @@
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, readdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -15,6 +15,22 @@ describe("WorkspaceStateStore", () => {
     await store.save({ openFiles: [], workflowDocuments: [] });
     expect((await store.load()).workflowDocuments).toEqual([]);
     expect(() => validateWorkspaceOptions({ openFiles: [], workflowDocuments: [{ ...workflowDocuments[0], position: -1 }] })).toThrow("Invalid workflow document tab");
+  });
+
+  it("restores the last good options after corruption and refuses an unrecoverable store", async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), "workspace-recovery-"));
+    const store = new WorkspaceStateStore("/workspace/recovery", directory);
+    await store.save({ openFiles: ["first.ts"] });
+    await store.save({ openFiles: ["second.ts"] });
+    const file = path.join(directory, (await readdir(directory)).find((name) => name.endsWith(".json"))!);
+    await writeFile(file, "{interrupted");
+    expect(await store.load()).toEqual({ openFiles: ["first.ts"] });
+    await store.save({ openFiles: ["restored.ts"] });
+    expect(await store.load()).toEqual({ openFiles: ["restored.ts"] });
+    await writeFile(file, "{broken");
+    await writeFile(`${file}.bak`, "{broken too");
+    await expect(store.load()).rejects.toMatchObject({ code: "READ_FAILED" });
+    await expect(store.save({ openFiles: [] })).rejects.toMatchObject({ code: "WRITE_FAILED" });
   });
 
   it("saves and restores workspace options", async () => {

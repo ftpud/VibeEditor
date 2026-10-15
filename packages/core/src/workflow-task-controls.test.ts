@@ -14,7 +14,7 @@ const session = (text: string): AiSession => ({ id: "session", status: "idle", m
 
 async function setup(type: "ai" | "chatbox" = "ai") {
   const directory = await mkdtemp(path.join(os.tmpdir(), "task-controls-")); directories.push(directory);
-  const store = new HarnessStore("/root", directory);
+  const store = new HarnessStore(directory, directory);
   const runner = new HarnessRunner(store, () => {}, 1);
   const created = await store.create("Tasks");
   const controls: HarnessBlock = { id: "controls", type: "task_controls", label: "Task controls", prompt: "", provider: "worker", model: "worker-model", reasoning: "high", position: { x: 280, y: 0 } };
@@ -34,7 +34,7 @@ async function setup(type: "ai" | "chatbox" = "ai") {
   };
   const acp = { get: vi.fn((provider: string) => { if (provider !== "worker") throw new Error(`Unexpected provider ${provider}`); return worker; }), list: vi.fn(() => [{ id: "worker", name: "Worker" }]) };
   const commitMessageChanged = vi.fn(async () => {});
-  const context = { onCommitMessageChanged: commitMessageChanged, acp, tasks, agents: { list: vi.fn(async () => []) }, harnessRunner: runner, aiTimers: { next: vi.fn(async () => undefined) }, rootWorkspace: "/root", bridgeWorkspace: "/root", workspacePath: "/root", defaultProvider: "controller" } as unknown as Parameters<typeof executeTaskControls>[2];
+  const context = { onCommitMessageChanged: commitMessageChanged, acp, tasks, agents: { list: vi.fn(async () => []) }, harnessRunner: runner, aiTimers: { next: vi.fn(async () => undefined) }, rootWorkspace: directory, bridgeWorkspace: directory, workspacePath: directory, defaultProvider: "controller" } as unknown as Parameters<typeof executeTaskControls>[2];
   const runtime = { runId: "run", blockId: controls.id, assertActive: () => {}, started: async () => {}, activity: async () => {}, attemptId: "attempt", iteration: 1 } as Parameters<typeof executeTaskControls>[3];
   return { runner, store, controls, definition, context, runtime, worker, tasks, acp, commitMessageChanged };
 }

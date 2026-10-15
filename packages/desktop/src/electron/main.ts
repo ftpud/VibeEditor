@@ -1,12 +1,15 @@
-import { app, BrowserWindow, clipboard, dialog, ipcMain, nativeImage, shell } from "electron";
+import { app, BrowserWindow, clipboard, dialog, ipcMain, nativeImage, shell, type IpcMainEvent, type IpcMainInvokeEvent } from "electron";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { SettingsStore } from "./settings-store.js";
 import { registerProjectTransferIpc } from "./project-transfer.js";
 import { restoreWindowInputFocus } from "./window-focus.js";
+import { isTrustedIpcFrame, isTrustedRendererUrl } from "./navigation-policy.js";
+import { connectionToken } from "./connection-token.js";
 
 const directory = path.dirname(fileURLToPath(import.meta.url));
 const appIcon = path.join(directory, "../assets/app-icon.png");
+const rendererFilePath = path.resolve(directory, "../dist-renderer/index.html");
 let hasDirtyTabs = false;
 let allowClose = false;
 
@@ -27,21 +30,41 @@ app.setAppUserModelId("com.vibe-editor.desktop");
 app.commandLine.appendSwitch("class", "VibeEditor");
 
 const settings = new SettingsStore(path.join(app.getPath("userData"), "settings.json"));
-registerProjectTransferIpc();
-ipcMain.on("desktop:settings-load", (event) => { event.returnValue = settings.all(); });
-ipcMain.on("desktop:settings-write", (_event, key: unknown, value: unknown) => settings.set(key, value));
+function assertTrustedIpcSender(event: IpcMainInvokeEvent | IpcMainEvent): void {
+  const frame = event.senderFrame;
+  if (!isTrustedIpcFrame(frame ? { url: frame.url, isMainFrame: frame.parent === null } : null, Boolean(BrowserWindow.fromWebContents(event.sender)), rendererFilePath, process.env.VITE_DEV_SERVER_URL)) {
+    throw new Error("IPC request rejected from an untrusted renderer frame");
+  }
+}
+function handleIpc(channel: string, listener: (event: IpcMainInvokeEvent, ...args: any[]) => any): void {
+  ipcMain.handle(channel, (event, ...args) => { assertTrustedIpcSender(event); return listener(event, ...args); });
+}
+function onIpc(channel: string, listener: (event: IpcMainEvent, ...args: any[]) => void): void {
+  ipcMain.on(channel, (event, ...args) => {
+    if (!isTrustedIpcEvent(event)) { event.returnValue = undefined; return; }
+    listener(event, ...args);
+  });
+}
+function isTrustedIpcEvent(event: IpcMainInvokeEvent | IpcMainEvent): boolean {
+  const frame = event.senderFrame;
+  return isTrustedIpcFrame(frame ? { url: frame.url, isMainFrame: frame.parent === null } : null, Boolean(BrowserWindow.fromWebContents(event.sender)), rendererFilePath, process.env.VITE_DEV_SERVER_URL);
+}
+registerProjectTransferIpc(assertTrustedIpcSender);
+handleIpc("desktop:connection-token", (_event, host: unknown, port: unknown) => connectionToken(host, port, launchConfig));
+onIpc("desktop:settings-load", (event) => { event.returnValue = settings.all(); });
+onIpc("desktop:settings-write", (_event, key: unknown, value: unknown) => settings.set(key, value));
 app.on("before-quit", () => settings.flush());
 
-ipcMain.on("editor:dirty-state", (_event, dirty: boolean) => { hasDirtyTabs = dirty; });
-ipcMain.handle("desktop:clipboard-read", () => clipboard.readText());
-ipcMain.handle("desktop:restore-input-focus", (event) => restoreWindowInputFocus(BrowserWindow.fromWebContents(event.sender)));
-ipcMain.handle("desktop:clipboard-write", (_event, text: unknown) => { if (typeof text === "string" && text.length <= 2_000_000) clipboard.writeText(text); });
-ipcMain.handle("desktop:open-external", async (_event, value: unknown) => {
+onIpc("editor:dirty-state", (_event, dirty: boolean) => { hasDirtyTabs = dirty; });
+handleIpc("desktop:clipboard-read", () => clipboard.readText());
+handleIpc("desktop:restore-input-focus", (event) => restoreWindowInputFocus(BrowserWindow.fromWebContents(event.sender)));
+handleIpc("desktop:clipboard-write", (_event, text: unknown) => { if (typeof text === "string" && text.length <= 2_000_000) clipboard.writeText(text); });
+handleIpc("desktop:open-external", async (_event, value: unknown) => {
   if (typeof value !== "string" || value.length > 4096) return;
   const url = new URL(value); if (url.protocol !== "http:" && url.protocol !== "https:") return;
   await shell.openExternal(url.toString());
 });
-ipcMain.on("editor:open-window", (_event, options: unknown) => {
+onIpc("editor:open-window", (_event, options: unknown) => {
   if (!options || typeof options !== "object") return;
   const value = options as Record<string, unknown>;
   if (typeof value.host !== "string" || typeof value.port !== "string" || (value.type !== "file" && value.type !== "useful") || typeof value.path !== "string" || value.path.length > 1000) return;
@@ -65,6 +88,13 @@ function createWindow(extraQuery: Record<string, string> = {}): void {
     }
   });
   window.removeMenu();
+  window.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+  window.webContents.on("will-navigate", (event, url) => {
+    if (!isTrustedRendererUrl(url, rendererFilePath, process.env.VITE_DEV_SERVER_URL)) event.preventDefault();
+  });
+  window.webContents.on("will-redirect", (event, url) => {
+    if (!isTrustedRendererUrl(url, rendererFilePath, process.env.VITE_DEV_SERVER_URL)) event.preventDefault();
+  });
   window.webContents.on("did-fail-load", (_event, code, description, url) => {
     console.error(`[desktop] failed to load ${url}: ${code} ${description}`);
   });
@@ -93,13 +123,13 @@ function createWindow(extraQuery: Record<string, string> = {}): void {
         for (const [key, value] of Object.entries(query)) url.searchParams.set(key, value);
         return window.loadURL(url.toString());
       })()
-    : window.loadFile(path.join(directory, "../dist-renderer/index.html"), { query });
+    : window.loadFile(rendererFilePath, { query });
   void load.catch((error: unknown) => console.error("[desktop] page load failed", error));
 }
 
 app.whenReady().then(() => {
   app.setName("Vibe Editor"); process.title = "Vibe Editor";
-  if (process.platform === "darwin") app.dock.setIcon(nativeImage.createFromPath(appIcon));
+  if (process.platform === "darwin") app.dock?.setIcon(nativeImage.createFromPath(appIcon));
   createWindow();
 });
 app.on("window-all-closed", () => { if (process.platform !== "darwin") app.quit(); });

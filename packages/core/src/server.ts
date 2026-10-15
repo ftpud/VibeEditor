@@ -1,3 +1,4 @@
+import { coreAccessPolicy, type CoreAccessOptions } from "./access-policy.js";
 import { executeTerminalControl } from "./workflow-terminal.js";
 import { RequestAdmission, requestAdmissionLimit, type RequestAdmissionOptions } from "./request-admission.js";
 import { configureWebSocketOutput, sendWebSocketData, sendWebSocketPong, websocketOutboundLimits, type WebSocketOutboundOptions } from "./websocket-output.js";
@@ -19,7 +20,7 @@ import { CoreError } from "./errors.js";
 import { WorkspaceFileSystem } from "./filesystem.js";
 import { TerminalSessionHost } from "./process-manager.js";
 import { GitService } from "./git.js";
-import { WorkspaceStateStore } from "./workspace-state.js";
+import { WorkspaceStateStore, flushWorkspaceStateWrites } from "./workspace-state.js";
 import { WorkspaceSearch } from "./search.js";
 import { JavaProjectService } from "./java.js";
 import { JdtLanguageService } from "./jdtls.js";
@@ -133,9 +134,16 @@ export function protocolHandshake(compatibility: { minimum: number; maximum: num
     : { compatible, compatibility: coreProtocolCompatibility, message: `Core supports protocol ${coreProtocolCompatibility.minimum}-${coreProtocolCompatibility.maximum}; this Desktop supports ${compatibility.minimum}-${compatibility.maximum}` };
 }
 
-export type CoreConnectionOptions = WebSocketLivenessOptions & { outbound?: WebSocketOutboundOptions; admission?: RequestAdmissionOptions };
+const shutdownHandlers = new WeakMap<WebSocketServer, () => Promise<void>>();
+export function shutdownCore(server: WebSocketServer): Promise<void> {
+  const shutdown = shutdownHandlers.get(server);
+  return shutdown ? shutdown() : new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+}
+
+export type CoreConnectionOptions = WebSocketLivenessOptions & { outbound?: WebSocketOutboundOptions; admission?: RequestAdmissionOptions; access?: CoreAccessOptions };
 
 export async function createServer(host: string, port: number, workspacePath: string, options: CoreConnectionOptions = {}): Promise<WebSocketServer> {
+  const access = coreAccessPolicy(host, options.access);
   const liveness = websocketLivenessThresholds(options);
   const outbound = websocketOutboundLimits(options.outbound);
   const admissionLimit = requestAdmissionLimit(options.admission);
@@ -185,9 +193,12 @@ export async function createServer(host: string, port: number, workspacePath: st
     watcher.once("ready", resolve);
     watcher.once("error", reject);
   });
-  const server = new WebSocketServer({ host, port, autoPong: false });
+  let draining = false;
+  let inFlight = 0;
+  const idleWaiters = new Set<() => void>();
+  const sessionCleanups = new Set<Promise<void>>();
+  const bridgeCommands = new Set<Promise<void>>();
   const socketMonitors = new Set<() => void>();
-  server.once("close", () => { for (const dispose of socketMonitors) dispose(); socketMonitors.clear(); });
   const remoteTransfers = new RemoteTransferService();
   const activeSessions = new Set<WebSocket>();
   const liveRootSelections = new LiveRootSelections<WebSocket>();
@@ -259,6 +270,7 @@ export async function createServer(host: string, port: number, workspacePath: st
   }, async (target) => { const rootId = await ownerRootId(target); return rootId ? roots.get(rootId).path : rootWorkspace; }, rootWorkspace);
   const harnessRunners = new Map<string, HarnessRunner>();
   const harnessRunner = (rootId: string) => {
+    if (draining) throw new CoreError("INVALID_REQUEST", "Core is shutting down");
     let runner = harnessRunners.get(rootId);
     if (!runner) {
       runner = new HarnessRunner(contextFor(rootId).harnesses, (runId) => {
@@ -388,7 +400,8 @@ export async function createServer(host: string, port: number, workspacePath: st
   await new Promise<void>((resolve, reject) => { appCommandWatcher.once("ready", resolve); appCommandWatcher.once("error", reject); });
   appCommandWatcher.on("add", (file) => {
     if (!file.endsWith(".json")) return;
-    void appEvents.consumeCommand(file, async (command) => {
+    const pending = appEvents.consumeCommand(file, async (command) => {
+      if (draining) throw new CoreError("INVALID_REQUEST", "Core is shutting down");
       const currentWorkspace = command.currentWorkspace ?? rootWorkspace;
       const workflowRootId = command.workflowRunId ? [...harnessRunners].find(([, runner]) => runner.isActive(command.workflowRunId!))?.[0] : undefined;
       const rootId = workflowRootId ?? await ownerRootId(currentWorkspace) ?? roots.primary().id; const root = roots.get(rootId); const context = contextFor(rootId);
@@ -418,6 +431,8 @@ export async function createServer(host: string, port: number, workspacePath: st
         return new SkillsStore(undefined, root.path).load(currentWorkspace, id, session);
       }).call(command.name, command.args);
     });
+    bridgeCommands.add(pending);
+    void pending.finally(() => bridgeCommands.delete(pending)).catch((error) => console.error("[core] App command cleanup failed", error));
   });
   const gitIndexWatcher = chokidar.watch(await gitIndexPath(workspace), { ignoreInitial: true });
   gitIndexWatcher.on("all", () => {
@@ -436,9 +451,47 @@ export async function createServer(host: string, port: number, workspacePath: st
     .on("add", broadcastChange).on("change", broadcastChange).on("unlink", broadcastChange).on("addDir", broadcastChange).on("unlinkDir", broadcastChange)
     .on("raw", (eventName) => { if (String(eventName).includes("OVERFLOW")) rootBatcher.degrade("Filesystem watcher overflow; synchronizing affected files."); })
     .on("error", (error) => { console.error(`[core] watcher error: ${String(error)}`); rootBatcher.degrade(`Filesystem watcher degraded: ${String(error)}`); });
-  server.on("close", () => { managedProcesses.off("changed", processesChanged); if (!managedProcesses.listenerCount("changed")) managedProcesses.close(); schedules.close(); rootBatcher.dispose(); void workflowApps.closeAll().catch((error) => console.error("[core] Could not stop workflow apps", error)); terminalHost.closeAll(); void watcher.close(); void gitIndexWatcher.close(); void runConfigWatcher.close(); void appEventWatcher.close(); void appCommandWatcher.close(); });
+  // Bind only after asynchronous startup, so an early client cannot connect
+  // before the protocol connection handler is installed.
+  const server = new WebSocketServer({ host, port, autoPong: false, verifyClient: ({ origin }: { origin?: string }, done: (accepted: boolean, code?: number, message?: string) => void) => done(access.allowsOrigin(origin || undefined), 403, "Origin not allowed") });
+  server.once("close", () => { for (const dispose of socketMonitors) dispose(); socketMonitors.clear(); });
+  const listening = new Promise<void>((resolve, reject) => {
+    const ready = () => { server.off("error", failed); resolve(); };
+    const failed = (error: Error) => { server.off("listening", ready); reject(error); };
+    server.once("listening", ready); server.once("error", failed);
+  });
+  void listening.catch(() => undefined);
+  let cleanupPromise: Promise<void> | undefined;
+  const cleanupServices = () => cleanupPromise ??= (async () => {
+    managedProcesses.off("changed", processesChanged);
+    if (!managedProcesses.listenerCount("changed")) managedProcesses.close();
+    schedules.close(); rootBatcher.dispose(); terminalHost.closeAll();
+    const results = await Promise.allSettled([workflowApps.closeAll(), watcher.close(), gitIndexWatcher.close(), runConfigWatcher.close(), appEventWatcher.close(), appCommandWatcher.close()]);
+    const failures = results.filter((result): result is PromiseRejectedResult => result.status === "rejected");
+    if (failures.length) throw new AggregateError(failures.map((result) => result.reason), "Core services could not be closed");
+  })();
+  server.on("close", () => { void cleanupServices().catch((error) => console.error("[core] Service cleanup failed", error)); });
+  let shutdownPromise: Promise<void> | undefined;
+  shutdownHandlers.set(server, () => shutdownPromise ??= (async () => {
+    draining = true;
+    schedules.close(); const timersStopped = aiTimers.suspend();
+    void timersStopped.catch(() => undefined);
+    const suspended = await Promise.allSettled([appCommandWatcher.close(), ...[...harnessRunners.values()].map((runner) => runner.suspend())]);
+    const closed = new Promise<void>((resolve, reject) => server.close((error) => error && (error as NodeJS.ErrnoException).code !== "ERR_SERVER_NOT_RUNNING" ? reject(error) : resolve()));
+    for (const socket of server.clients) socket.close(1001, "Core is shutting down");
+    const forceClose = setTimeout(() => { for (const socket of server.clients) socket.terminate(); }, 500);
+    try {
+      const providerResults = await Promise.allSettled([typeof acp.shutdown === "function" ? acp.shutdown() : Promise.resolve(), timersStopped]);
+      if (inFlight) await new Promise<void>((resolve) => idleWaiters.add(resolve));
+      await closed;
+      const cleanupResults = await Promise.allSettled([...bridgeCommands, ...sessionCleanups, cleanupServices(), flushWorkspaceStateWrites(), ...[...harnessRunners.values()].map((runner) => runner.drain())]);
+      const failures = [...suspended, ...providerResults, ...cleanupResults].filter((result): result is PromiseRejectedResult => result.status === "rejected");
+      if (failures.length) throw new AggregateError(failures.map((result) => result.reason), "Core shutdown did not finish cleanly");
+    } finally { clearTimeout(forceClose); }
+  })());
   server.on("listening", () => console.log(`[core] listening on ws://${host}:${port}`));
   server.on("connection", (socket, request) => {
+    if (draining) { socket.close(1001, "Core is shutting down"); return; }
     configureWebSocketOutput(socket, outbound);
     socket.on("ping", (data) => sendWebSocketPong(socket, data));
     if (remoteTransfers.accepts(request.url)) { void remoteTransfers.attach(socket, request.url); return; }
@@ -475,7 +528,7 @@ export async function createServer(host: string, port: number, workspacePath: st
       if (socket.readyState !== WebSocket.OPEN) { java.close(); jdt.close(); throw new CoreError("INVALID_REQUEST", "Session closed while services were being prepared"); }
       return { workspacePath: nextWorkspace, filesystem, search, git, java, jdt, workspaceState, checkpoints };
     };
-    let servicesPromise: Promise<SessionServices>;
+    let servicesPromise: Promise<SessionServices> | undefined;
     /** Resolves once no task switch is in flight for this connection. */
     let switching: Promise<void> = Promise.resolve();
     const switchedWatches = new Map<string, SwitchedWatch>();
@@ -538,19 +591,19 @@ export async function createServer(host: string, port: number, workspacePath: st
     // post-sleep socket must be routed to that selected worktree before workspace.open runs.
     // Otherwise the renderer restores the selected task label while requests still hit the old
     // startup workspace until another explicit task switch happens.
-    servicesPromise = (async () => {
+    const initializeServices = async () => {
       const registry = await tasks.list();
       admission.assertOpen();
       const selectedWorkspace = registry.selectedTaskId ? tasks.taskPath(registry.selectedTaskId) : rootWorkspace;
       terminalSubscriptions.set(socket, { rootId: selectedRoot.id, workspace: selectedWorkspace, terminalIds: new Set() });
       await commitSwitchedWatch(selectedRoot.id, await prepareSwitchedWatch(selectedWorkspace));
       return makeServices(selectedWorkspace);
-    })();
-    // Initialization can outlive a failed handshake send; requests still observe its error.
-    void servicesPromise.catch(() => undefined);
+    };
     const client = request.socket.remoteAddress ?? "unknown";
     console.log(`[core] connected: ${client}`);
     socket.on("message", async (data) => {
+      if (draining) { socket.close(1001, "Core is shutting down"); return; }
+      inFlight += 1;
       let id = "unknown";
       let releaseAdmission: (() => void) | undefined;
       try {
@@ -560,11 +613,17 @@ export async function createServer(host: string, port: number, workspacePath: st
         console.log(`[core] request ${parsed.id}: ${parsed.type}`);
         if (parsed.type === "protocol.handshake") {
           if (protocolAccepted) throw new CoreError("INVALID_REQUEST", "Protocol handshake has already completed");
+          try { access.authenticate(parsed.payload.token); }
+          catch (error) { setTimeout(() => socket.close(1008, "Authentication failed"), 0); throw error; }
           const result = protocolHandshake(parsed.payload.compatibility);
           const compatible = result.compatible;
           sendWebSocketData(socket, JSON.stringify({ id, ok: true, result } satisfies Response));
           if (!compatible) setTimeout(() => socket.close(1008, "Incompatible protocol"), 0);
-          else protocolAccepted = true;
+          else {
+            protocolAccepted = true;
+            servicesPromise = initializeServices();
+            void servicesPromise.catch(() => undefined);
+          }
           return;
         }
         if (!protocolAccepted) throw new CoreError("INVALID_REQUEST", "Complete protocol.handshake before sending requests");
@@ -630,7 +689,7 @@ export async function createServer(host: string, port: number, workspacePath: st
         let services: SessionServices;
         let rootSelectionResult: { root: WorkspaceRoot; workspace: string; projectName: string; tree: FileTreeNode[]; options: WorkspaceOptions } | undefined;
         try {
-          services = await servicesPromise;
+          services = await servicesPromise!;
           admission.assertOpen();
           if (parsed.type === "workspace.selectRoot") {
             const nextRoot = roots.get(parsed.payload.rootId);
@@ -668,7 +727,7 @@ export async function createServer(host: string, port: number, workspacePath: st
             const selected = await rootContext.tasks.select(parsed.type === "tasks.switch" ? parsed.payload.taskId : undefined);
             services.java.close(); services.jdt.close();
             servicesPromise = makeServices(selected.workspace);
-            services = await servicesPromise;
+            services = await servicesPromise!;
             terminalSubscriptions.set(socket, { rootId: selectedRoot.id, workspace: selected.workspace, terminalIds: new Set() });
             await commitSwitchedWatch(selectedRoot.id, await prepareSwitchedWatch(selected.workspace));
           }
@@ -691,20 +750,32 @@ export async function createServer(host: string, port: number, workspacePath: st
         const coreError = error instanceof CoreError ? error : new CoreError("INVALID_REQUEST", error instanceof Error ? error.message : "Invalid request");
         console.error(`[core] error ${id}: ${coreError.code} ${coreError.message}`);
         sendWebSocketData(socket, JSON.stringify({ id, ok: false, error: { code: coreError.code, message: coreError.message } } satisfies Response));
-      } finally { releaseAdmission?.(); }
+      } finally {
+        releaseAdmission?.(); inFlight -= 1;
+        if (!inFlight) { for (const resolve of idleWaiters) resolve(); idleWaiters.clear(); }
+      }
     });
     socket.on("close", () => {
       activeSessions.delete(socket);
       liveRootSelections.disconnect(socket);
       terminalSubscriptions.delete(socket);
       for (const [id, owner] of terminalOwners) if (owner.socket === socket) terminalOwners.delete(id);
-      for (const [rootId, subscription] of switchedWatches) void closeSwitchedWatch(rootId, subscription);
-      void servicesPromise.then((services) => { services.java.close(); services.jdt.close(); }, () => undefined);
+      const cleanup = (async () => {
+        await Promise.all([...switchedWatches].map(([rootId, subscription]) => closeSwitchedWatch(rootId, subscription)));
+        const services = await servicesPromise?.catch(() => undefined);
+        services?.java.close(); services?.jdt.close();
+      })();
+      sessionCleanups.add(cleanup);
+      void cleanup.finally(() => sessionCleanups.delete(cleanup)).catch((error) => console.error("[core] Session cleanup failed", error));
       console.log(`[core] disconnected: ${client}`);
     });
     socket.on("error", (error) => console.error(`[core] socket error: ${error.message}`));
   });
-  await schedules.start();
+  try { await listening; await schedules.start(); }
+  catch (error) {
+    await shutdownCore(server).catch((cleanupError) => console.error("[core] Startup cleanup failed", cleanupError));
+    throw error;
+  }
   return server;
 }
 

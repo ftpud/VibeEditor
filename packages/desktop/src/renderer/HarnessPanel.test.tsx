@@ -1,9 +1,10 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { HarnessBlock, HarnessDefinition, HarnessRun } from "@remote-ide/protocol";
 import { alignBlocks, autoLayoutBlocks, BlockRunDetails, dragPosition, edgePath, fitCanvasViewport, HarnessPanel, minimapScrollPosition, minimapViewport, responsePreview, parseWorkflowDefinitionImport, workflowDefinitionExport, workflowRunExport } from "./HarnessPanel";
 
-afterEach(cleanup);
+beforeEach(() => { Object.defineProperty(window, "confirm", { configurable: true, writable: true, value: vi.fn() }); });
+afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
 function renderEditor(ui: Parameters<typeof render>[0]) {
   const view = render(ui);

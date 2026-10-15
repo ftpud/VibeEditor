@@ -1,6 +1,6 @@
 # Vibe Editor repository guide
 
-Node 20+ npm-workspaces monorepo. Core runs remotely and owns workspace files,
+Node 22.12+ npm-workspaces monorepo. Core runs remotely and owns workspace files,
 processes, and durable state; Electron clients own interaction. Read and change
 `packages/*/src`, never generated output.
 
