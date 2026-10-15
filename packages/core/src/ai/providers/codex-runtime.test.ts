@@ -73,11 +73,12 @@ describe("Codex startup runtime updates", () => {
     expect(resolveCodexRuntime("@agentclientprotocol/codex-acp")).not.toContain(directory);
   });
 
-  it("does not check the registry by default", async () => {
+  it("checks for and selects the latest runtime by default", async () => {
     delete process.env.REMOTE_IDE_CODEX_AUTO_UPDATE;
     const npm = registry();
     await updateCodexRuntime(directory, npm);
-    expect(npm).not.toHaveBeenCalled();
-    expect(resolveCodexRuntime("@agentclientprotocol/codex-acp")).not.toContain(directory);
+    expect(npm.mock.calls.filter(([args]) => args[0] === "view")).toHaveLength(2);
+    expect(resolveCodexRuntime("@agentclientprotocol/codex-acp")).toContain(directory);
+    expect(resolveCodexRuntime("@openai/codex/bin/codex.js")).toContain(directory);
   });
 });

@@ -31,8 +31,8 @@ export async function updateCodexRuntime(
   npm: RunNpm = runNpm
 ): Promise<void> {
   runtimeRequire = bundledRequire;
-  // Stable startup uses exactly the runtime installed from the lockfile.
-  if (process.env.REMOTE_IDE_CODEX_AUTO_UPDATE !== "1") return;
+  // Prefer the latest published runtime unless updates are explicitly disabled.
+  if (process.env.REMOTE_IDE_CODEX_AUTO_UPDATE === "0") return;
   let current: { directory: string; adapter: string; codex: string } | undefined;
   const load = (directory: string) => {
     const require = createRequire(path.join(directory, "package.json"));
