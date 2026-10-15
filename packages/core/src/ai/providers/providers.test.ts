@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { mkdtemp, mkdir, readFile, writeFile, rename } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, writeFile, rename, rm } from "node:fs/promises";
 import crypto from "node:crypto";
 import os from "node:os";
 import path from "node:path";
@@ -347,14 +347,17 @@ describe("ACP integration", () => {
   });
   it.each([false, true])("skips helper snapshots for sends and steering (live steering: %s) and preserves regular checkpoints", async (liveSteering) => {
     const state = await mkdtemp(path.join(os.tmpdir(), "remote-ide-ai-snapshots-"));
+    const releaseFile = path.join(state, "release-prompt");
     const turns = { begin: vi.fn(async () => crypto.randomUUID()), complete: vi.fn(async () => {}) };
-    const provider = new FakeProvider(() => undefined, state, { FAKE_SLOW: "on", ...(liveSteering ? { FAKE_STEERING: "on" } : {}) }, undefined, turns);
+    const provider = new FakeProvider(() => undefined, state, { FAKE_SLOW: "on", FAKE_PROMPT_RELEASE_FILE: releaseFile, ...(liveSteering ? { FAKE_STEERING: "on" } : {}) }, undefined, turns);
     const workspace = process.cwd();
     const completedTurns = (count: number) => (session: AiSession) => session.status === "done"
       && session.messages.filter((message) => message.text.startsWith("working")).length === count;
 
     await provider.startFreshSession(workspace, { prompt: "helper assignment", configuration: { model: "model-a" }, captureSnapshots: false });
+    await vi.waitFor(async () => expect((await provider.get(workspace)).messages.some((message) => message.text.startsWith("working"))).toBe(true), { timeout: 5_000 });
     await provider.steer(workspace, "helper steering");
+    await writeFile(releaseFile, "release");
     const helperTurns = liveSteering ? 1 : 2;
     const helper = await settle(provider, workspace, completedTurns(helperTurns), 15_000);
     expect(helper.messages.filter((message) => message.role === "user").map((message) => message.text)).toEqual(["helper assignment", "helper steering"]);
@@ -363,8 +366,15 @@ describe("ACP integration", () => {
     expect(turns.begin).not.toHaveBeenCalled();
     expect(turns.complete).not.toHaveBeenCalled();
 
+    await rm(releaseFile);
     await provider.startFreshSession(workspace, { prompt: "regular prompt", configuration: { model: "model-a" } });
+    await vi.waitFor(async () => {
+      const current = await provider.get(workspace);
+      expect(current.id).not.toBe(helper.id);
+      expect(current.messages.some((message) => message.text.startsWith("working"))).toBe(true);
+    }, { timeout: 5_000 });
     await provider.steer(workspace, "regular steering");
+    await writeFile(releaseFile, "release");
     await settle(provider, workspace, completedTurns(liveSteering ? 1 : 2), 15_000);
     expect(turns.begin).toHaveBeenCalledTimes(2);
     expect(turns.complete).toHaveBeenCalled();
