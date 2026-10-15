@@ -15,8 +15,14 @@ import { serializedStateMutation } from ${JSON.stringify(rootMutationUrl)};
 const [mode, file, iterations] = process.argv.slice(1);
 if (mode === "hold") {
   await serializedStateMutation(file, async () => {
+    // An unresolved promise alone does not keep a Node process alive.
+    const keepAlive = setInterval(() => {}, 1000);
     console.log("LEASED");
-    await new Promise(() => {});
+    try {
+      await new Promise(() => {});
+    } finally {
+      clearInterval(keepAlive);
+    }
   });
 } else {
   for (let index = 0; index < Number(iterations); index += 1) {
