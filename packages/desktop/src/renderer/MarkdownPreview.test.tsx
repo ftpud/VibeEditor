@@ -40,6 +40,18 @@ describe("MarkdownPreview task checkboxes", () => {
 });
 
 describe("MarkdownPreview link clicks", () => {
+  it("resolves skill references and their sibling links relative to the skill bundle", () => {
+    const openFile = vi.fn();
+    const view = render(<MarkdownPreview sourcePath="SKILL.md" onOpenFile={openFile} onOpenExternal={vi.fn()}>[Blocks](references/blocks.md)</MarkdownPreview>);
+    fireEvent.click(screen.getByRole("link", { name: "Blocks" }));
+    expect(openFile).toHaveBeenLastCalledWith("references/blocks.md");
+    view.rerender(<MarkdownPreview sourcePath="references/blocks.md" onOpenFile={openFile} onOpenExternal={vi.fn()}>[Commands](commands.md) [Skill](../SKILL.md)</MarkdownPreview>);
+    fireEvent.click(screen.getByRole("link", { name: "Commands" }));
+    expect(openFile).toHaveBeenLastCalledWith("references/commands.md");
+    fireEvent.click(screen.getByRole("link", { name: "Skill" }));
+    expect(openFile).toHaveBeenLastCalledWith("SKILL.md");
+  });
+
   it("opens relative files in the editor without navigating the renderer", () => {
     const openFile = vi.fn();
     const openExternal = vi.fn();

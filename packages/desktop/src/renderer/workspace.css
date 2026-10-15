@@ -17,8 +17,10 @@ input::placeholder, textarea::placeholder { color: var(--text-muted); opacity: 1
 .titlebar-actions > .titlebar-spacer { flex: 1; min-width: 12px; }
 .titlebar-actions .workspace-settings-button { width: auto; height: 32px; padding: 0 10px; display: flex; align-items: center; justify-content: center; line-height: 1; white-space: nowrap; gap: 7px; border: 1px solid transparent; border-radius: 8px; color: var(--text-secondary); background: transparent; font-size: 12px; }
 .titlebar-actions .workspace-settings-button:hover, .titlebar-actions .workspace-settings-button[aria-expanded="true"] { background: var(--surface-panel); border-color: var(--border-subtle); color: var(--text-heading); }
-.top-java-run { padding: 3px; border: 1px solid var(--border-subtle); border-radius: 8px; background: var(--glass); }
-.top-java-run select { max-width: 155px; border: 0; background: transparent; color: var(--text-secondary); }
+.titlebar-actions .top-java-run { height: 38px; padding: 2px; gap: 3px; border: 1px solid var(--border-subtle); border-radius: 10px; background: var(--glass); flex: 0 1 auto; }
+.titlebar-actions .top-java-run button { width: 32px; height: 32px; flex: 0 0 32px; padding: 0; display: grid; place-items: center; border: 0; border-radius: 6px; background: transparent; line-height: 1; }
+.titlebar-actions .top-java-run button:hover:not(:disabled) { background: var(--surface-hover); }
+.titlebar-actions .top-java-run select { width: 260px; min-width: 140px; max-width: 26vw; height: 32px; padding: 0 24px 0 8px; border: 0; border-left: 1px solid var(--border-subtle); border-radius: 0; background: transparent; color: var(--text-secondary); font-size: 12px; }
 
 /* A compact, searchable branch switcher directly beside the workspace identity. */
 .branch-picker, .connection-menu, .settings-anchor { position: relative; min-width: 0; }
@@ -256,8 +258,8 @@ input::placeholder, textarea::placeholder { color: var(--text-muted); opacity: 1
 .status-toast { top: 60px; border-radius: 9px; box-shadow: var(--shadow-popover); background: var(--surface-raised); }
 :root[data-native-window="true"] :is(.connection-screen, .detached-editor, .detached-error) { padding-top: 52px; }
 :root[data-native-window="true"] :is(.connection-screen, .detached-editor, .detached-error)::before { content: "Vibe Editor"; position: absolute; top: 0; left: 0; right: 0; height: 48px; padding: 17px 155px 0 92px; color: var(--text-muted); font-size: 12px; -webkit-app-region: drag; }
-@media (max-width: 1100px) { .titlebar-actions { gap: 7px; } .branch-picker, .branch-picker-trigger { max-width: 170px; } .top-java-run select { max-width: 110px; } }
-@media (max-width: 850px) { .workspace-settings-button > span { display: none; } .titlebar-actions .workspace-settings-button { padding: 0 7px; } .connection-menu-trigger > span:nth-child(2) { display: none; } .top-java-run select { max-width: 75px; } .titlebar-actions > .workspace-identity { max-width: 120px; } .branch-picker, .branch-picker-trigger { max-width: 130px; } }
+@media (max-width: 1100px) { .titlebar-actions { gap: 7px; } .branch-picker, .branch-picker-trigger { max-width: 170px; } .titlebar-actions .top-java-run select { width: 200px; max-width: 22vw; } }
+@media (max-width: 850px) { .workspace-settings-button > span { display: none; } .titlebar-actions .workspace-settings-button { padding: 0 7px; } .connection-menu-trigger > span:nth-child(2) { display: none; } .titlebar-actions .top-java-run select { width: 160px; min-width: 100px; max-width: 20vw; } .titlebar-actions > .workspace-identity { max-width: 120px; } .branch-picker, .branch-picker-trigger { max-width: 130px; } }
 @media (max-height: 600px) { .workspace-welcome { gap: 8px; } .workspace-welcome > svg { width: 52px; height: 52px; padding: 13px; } .workspace-welcome h1 { margin-top: 0; } .workspace-welcome p { margin-bottom: 0; } }
 /* Shared button variants; native browser bevels are never part of the UI. */
 button { appearance: none; -webkit-appearance: none; border-style: solid; border-width: 1px; border-color: var(--border-subtle); background-color: var(--surface-panel); color: var(--text-secondary); box-shadow: none; }

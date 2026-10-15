@@ -23,6 +23,26 @@ async function loadedInstructions(store: SkillsStore, workspace: string, ids: st
 }
 
 describe("project skills", () => {
+  it("reads linked supporting files within a skill and rejects traversal and symlink escapes", async () => {
+    const { root, workspace, store } = await setup();
+    await store.write("global/review", workspace, review);
+    const skill = (await store.list(workspace)).skills.find((item) => item.id === "global/review")!;
+    const directory = path.dirname(skill.path);
+    await mkdir(path.join(directory, "references"));
+    await writeFile(path.join(directory, "references/guide.md"), "Supporting guidance");
+    expect(await store.readResource(skill.id, workspace)).toBe(review);
+    expect(await store.readResource(skill.id, workspace, "references/guide.md")).toBe("Supporting guidance");
+    for (const resource of ["../SKILL.md", "/etc/passwd", "references/../../outside.md", "references\\guide.md", ""]) {
+      await expect(store.readResource(skill.id, workspace, resource)).rejects.toThrow("relative path");
+    }
+    const outside = path.join(root, "outside.md");
+    await writeFile(outside, "Private data");
+    await symlink(outside, path.join(directory, "references/escape.md"));
+    await expect(store.readResource(skill.id, workspace, "references/escape.md")).rejects.toThrow("escapes");
+    await writeFile(path.join(directory, "references/large.md"), "x".repeat(256 * 1024 + 1));
+    await expect(store.readResource(skill.id, workspace, "references/large.md")).rejects.toThrow("256 KB");
+  });
+
   it("discovers separate global/local skills and persists a project allowlist with defaults", async () => {
     const { root, workspace, store } = await setup();
     expect(await store.list(workspace)).toEqual({ skills: [], policy: { allowed: [], defaults: [] }, policyStorage: "local" });

@@ -25,6 +25,8 @@ export type EditorTab = {
   markdownMode?: "edit" | "preview";
   usefulScope?: "global" | "local";
   skillId?: string;
+  /** Relative supporting-document path; supporting files are read-only. */
+  skillPath?: string;
   agentScope?: "global" | "local";
   runConfigScope?: "global" | "local";
 };

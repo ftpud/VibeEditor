@@ -60,6 +60,22 @@ export class SkillsStore {
     return readFile(target, "utf8");
   }
 
+  /** Read a supporting document without exposing files outside the skill bundle. */
+  async readResource(id: string, workspace: string, resource = "SKILL.md"): Promise<string> {
+    if (typeof resource !== "string" || resource.length > 1000 || resource.includes("\\") || resource.includes("\0") || resource.split("/").some((part) => !part || part === "." || part === "..")) {
+      throw new CoreError("INVALID_REQUEST", "Skill resource must be a relative path within its skill directory");
+    }
+    if (resource === "SKILL.md") return this.read(id, workspace);
+    const directory = path.dirname(await this.checked(this.target(id, workspace), workspace, id.split("/", 1)[0] as SkillScope));
+    const boundary = await realpath(directory);
+    const target = await realpath(path.join(directory, resource));
+    if (!target.startsWith(`${boundary}${path.sep}`)) throw new CoreError("INVALID_REQUEST", "Skill resource escapes its skill directory");
+    const info = await stat(target);
+    if (!info.isFile()) throw new CoreError("INVALID_REQUEST", "Skill resource must be a file");
+    if (info.size > MAX_BYTES) throw new CoreError("FILE_TOO_LARGE", "Skill resource exceeds 256 KB");
+    return readFile(target, "utf8");
+  }
+
   async list(workspace: string): Promise<SkillCatalog> {
     const skills: SkillFile[] = [];
     for (const scope of ["global", "local", "workspace"] as const) {

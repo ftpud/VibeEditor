@@ -370,7 +370,7 @@ export type ProtocolOperations = {
   "ai.models": { payload: { provider?: AiProvider }; result: { models: AiModel[] } };
   "ai.configure": { payload: { provider?: AiProvider; model?: string; reasoning?: string; configuration?: AiConfiguration }; result: { session: AiSession } };
   "skills.list": { payload: Record<string, never>; result: SkillCatalog };
-  "skills.read": { payload: { id: string }; result: { content: string } };
+  "skills.read": { payload: { id: string; path?: string }; result: { content: string } };
   "skills.write": { payload: { id: string; content: string }; result: Record<string, never> };
   "skills.delete": { payload: { id: string }; result: Record<string, never> };
   "skills.policy": { payload: SkillPolicy; result: Record<string, never> };
