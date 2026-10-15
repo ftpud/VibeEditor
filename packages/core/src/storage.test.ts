@@ -1,7 +1,7 @@
 import { execFile, spawn } from "node:child_process";
 import { once } from "node:events";
 import { promisify } from "node:util";
-import { mkdtemp, mkdir, readFile, rm, symlink, utimes, writeFile, access, rename } from "node:fs/promises";
+import { realpath, mkdtemp, mkdir, readFile, rm, symlink, utimes, writeFile, access, rename } from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
 import crypto from "node:crypto";
@@ -16,7 +16,8 @@ const temporary: string[] = [];
 afterEach(async () => { await Promise.all(temporary.splice(0).map((entry) => rm(entry, { recursive: true, force: true }))); });
 const hash = (value: string) => crypto.createHash("sha256").update(value).digest("hex");
 async function fixture() {
-  const home = await mkdtemp(path.join(os.tmpdir(), "vibe-storage-")); temporary.push(home);
+  // macOS temp paths may use /var, a symlink; keep the cleanup fixtures canonical.
+  const home = await realpath(await mkdtemp(path.join(os.tmpdir(), "vibe-storage-"))); temporary.push(home);
   const stateDirectory = path.join(home, ".remote-ide", "workspaces"); await mkdir(stateDirectory, { recursive: true });
   const root = path.join(home, "project"); await mkdir(root);
   const service = new ServerStorage({ home, stateDirectory, roots: () => [root], isBusy: async () => false });

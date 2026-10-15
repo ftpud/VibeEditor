@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, writeFile, readFile, rm, access, symlink } from "node:fs/promises";
+import { realpath, mkdtemp, mkdir, writeFile, readFile, rm, access, symlink } from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -8,7 +8,8 @@ import { StorageProcesses, type StorageProcess } from "./storage-processes.js";
 const temporary: string[] = [];
 afterEach(async () => { await Promise.all(temporary.splice(0).map((entry) => rm(entry, { recursive: true, force: true }))); });
 async function fixture() {
-  const home = await mkdtemp(path.join(os.tmpdir(), "vibe-versions-")); temporary.push(home);
+  // macOS temp paths may use /var, a symlink; keep the cleanup fixtures canonical.
+  const home = await realpath(await mkdtemp(path.join(os.tmpdir(), "vibe-versions-"))); temporary.push(home);
   const runtimeDirectory = path.join(home, ".remote-ide", "codex-runtime");
   const currentRuntime = path.join(runtimeDirectory, "installation-current"), oldRuntime = path.join(runtimeDirectory, "installation-old");
   const deployment = path.join(home, ".vibe-deploy");
