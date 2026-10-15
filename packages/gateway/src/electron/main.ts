@@ -164,6 +164,7 @@ async function startLocalServer(workspaceId: string): Promise<{ remotePort: numb
   const { workspace } = await workspaceAndStoredConnection(workspaceId);
   const { coreMain } = localArtifactPaths();
   await access(coreMain).catch(() => { throw new Error("Local Core is not built. Run npm run build before starting a local workspace."); });
+  await prepareLocalWorkspaceDirectory(workspace.directory);
   await stopLocalServer(workspaceId);
   runtime(workspaceId, "working", "Starting local Core...");
   const logDirectory = path.join(app.getPath("userData"), "logs");
@@ -260,6 +261,8 @@ async function startServer(workspaceId: string, repair = false): Promise<{ remot
   const client = await connect(connection); provisioningClients.set(workspaceId, client); cancelledProvisioning.delete(workspaceId);
   try {
     const build = await provision(workspaceId, client, (await readState()).repository, repair);
+    runtime(workspaceId, "working", "Preparing workspace directory and Git repository…", { stage: "workspace" });
+    await execute(client, workspaceValidationCommand(workspace.directory));
     const portScript = `const net=require("net");const preferred=${workspace.remotePort};let fallback=false;const open=port=>{const server=net.createServer();server.unref();server.once("error",error=>{if(error.code==="EADDRINUSE"&&!fallback){fallback=true;open(0);return}throw error});server.listen(port,"127.0.0.1",()=>{console.log(server.address().port);server.close()})};open(preferred)`;
     const selectedPort = Number((await execute(client, `bash -lc ${shell(`${remoteNodeEnvironment}; node -e ${shell(portScript)}`)}`)).trim());
     if (!Number.isInteger(selectedPort) || selectedPort < 1) throw new Error("Could not allocate a remote Core port");
