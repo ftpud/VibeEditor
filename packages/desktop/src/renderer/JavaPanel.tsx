@@ -70,17 +70,19 @@ export function JavaPanel({ height, log, running, options, debugState, onConfigu
       event.preventDefault();
       onHeightChange?.(Math.max(140, Math.min(window.innerHeight - 150, height + (event.key === "ArrowUp" ? 1 : -1) * (event.shiftKey ? 30 : 10))));
     }} />
-    <aside className="java-actions">
-      <button title="Build Maven project" disabled={running} onClick={onBuild}><Hammer size={16} /></button>
-      <button title="Run selected configuration" disabled={running || !options.selectedRunConfigurationId} onClick={onRun}><Play size={16} /></button>
-      <button title="Debug selected configuration" disabled={running || !options.selectedRunConfigurationId} onClick={onDebug}><Bug size={16} /></button>
-      <button title="Stop Java process" disabled={!running} onClick={onStop}><Square size={15} /></button>
-      <button title="Edit Java run/debug configuration" onClick={onConfigure}><Settings size={16} /></button>
-      <span />
-      <button title="Clear build log" onClick={onClear}><Trash2 size={15} /></button>
-    </aside>
     <div className="java-log-wrap">
-      <header><span>Build Output</span><span className={running ? "running" : ""}>{running ? "Running" : "Idle"}</span></header>
+      <header className="panel-header java-panel-header">
+        <span>Build Output</span>
+        <span className={`java-process-status ${running ? "running" : ""}`}>{running ? "Running" : "Idle"}</span>
+        <div className="panel-header-actions java-actions" role="toolbar" aria-label="Java controls">
+          <button title="Build Maven project" disabled={running} onClick={onBuild}><Hammer size={16} /></button>
+          <button title="Run selected configuration" disabled={running || !options.selectedRunConfigurationId} onClick={onRun}><Play size={16} /></button>
+          <button title="Debug selected configuration" disabled={running || !options.selectedRunConfigurationId} onClick={onDebug}><Bug size={16} /></button>
+          <button title="Stop Java process" disabled={!running} onClick={onStop}><Square size={15} /></button>
+          <button title="Edit Java run/debug configuration" onClick={onConfigure}><Settings size={16} /></button>
+          <button title="Clear build log" onClick={onClear}><Trash2 size={15} /></button>
+        </div>
+      </header>
       <pre ref={logRef}>{log || "Java build output will appear here."}</pre>
     </div>
     {debugState.status !== "stopped" && <aside className="debug-view" style={{ width: debugWidth }}>
@@ -89,13 +91,13 @@ export function JavaPanel({ height, log, running, options, debugState, onConfigu
         event.preventDefault();
         setDebugWidth(Math.max(180, Math.min((panelRef.current?.clientWidth || 1000) - 140, debugWidth + (event.key === "ArrowLeft" ? 1 : -1) * (event.shiftKey ? 30 : 10))));
       }} />
-      <header><span>Debugger</span><span>{debugState.status}</span></header>
-      <div className="debug-controls">
+      <header className="panel-header java-panel-header"><span>Debugger</span><span className="java-process-status">{debugState.status}</span>
+      <div className="panel-header-actions debug-controls" role="toolbar" aria-label="Debugger controls">
         <button title="Continue" disabled={debugState.status !== "paused" || busy} onClick={() => onDebugCommand("continue")}><ArrowRight size={14} /></button>
         <button title="Step over" disabled={debugState.status !== "paused" || busy} onClick={() => onDebugCommand("stepOver")}><CornerDownRight size={14} /></button>
         <button title="Step into" disabled={debugState.status !== "paused" || busy} onClick={() => onDebugCommand("stepInto")}><ArrowDownToLine size={14} /></button>
         <button title="Step out" disabled={debugState.status !== "paused" || busy} onClick={() => onDebugCommand("stepOut")}><ArrowUpFromLine size={14} /></button>
-      </div>
+      </div></header>
       <button className="debug-apply" disabled={debugState.status !== "paused" || busy} title="Save edits, compile, and reload changed method bodies without restarting" onClick={() => void applyChanges()}><RefreshCw size={13} />{busy ? "Applying code changes…" : "Apply code changes"}</button>
       <details className="debug-hot-swap-hint"><summary>HotSwap limitations</summary>Pause to apply method-body edits. Changes to fields or methods may require a restart. Active calls keep their previous code until they return.</details>
       {applyError && <div className="debug-inspect-message" role="alert">{applyError}</div>}

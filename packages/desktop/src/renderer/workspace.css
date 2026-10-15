@@ -465,3 +465,54 @@ button.danger:hover:not(:disabled) { background: var(--danger-soft); border-colo
 .focus-dock-bottom.enabled.auto-hide > .focus-dock-content { flex: 1; }
 .focus-dock-bottom.enabled.auto-hide .focus-dock-inner { max-width: none; }
 .focus-dock-bottom.enabled.auto-hide .bottom-tool-bar { flex: 1; width: auto; max-width: none; border-radius: 0; }
+
+/* Java output and debugger use the same title row as the side panels. */
+.java-log-wrap > .java-panel-header,
+.debug-view > .java-panel-header {
+  height: var(--panel-title-height);
+  min-height: var(--panel-title-height);
+  max-height: var(--panel-title-height);
+  flex: 0 0 var(--panel-title-height);
+  display: flex;
+  align-items: center;
+  padding: 0 12px;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-heading);
+}
+.java-panel-header > span:first-child { flex-shrink: 0; }
+.java-panel-header .java-process-status { flex-shrink: 0; color: var(--text-muted); font-size: 11px; font-weight: 400; text-transform: capitalize; }
+.java-panel-header .java-process-status.running { color: var(--success); }
+.java-panel-header .java-actions,
+.java-panel-header .debug-controls {
+  width: auto;
+  height: 100%;
+  min-width: 0;
+  flex: 0 1 auto;
+  flex-direction: row;
+  align-items: center;
+  margin-left: auto;
+  padding: 0;
+  gap: 3px;
+  border: 0;
+  background: transparent;
+}
+.java-panel-header :is(.java-actions, .debug-controls) > button {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  line-height: 1;
+}
+.java-panel-header :is(.java-actions, .debug-controls) > button:hover:not(:disabled) { background: var(--surface-hover); }
+.java-log-wrap, .debug-view { container-type: inline-size; }
+@container (max-width: 360px) {
+  .java-panel-header .java-process-status { display: none; }
+}
+@container (max-width: 300px) {
+  .java-log-wrap > .java-panel-header > span:first-child { display: none; }
+}
+@container (max-width: 240px) {
+  .debug-view > .java-panel-header > span:first-child { display: none; }
+}

@@ -9,7 +9,10 @@ import { HarnessStore } from "./harnesses.js";
 import { WorkspaceTaskStore } from "./tasks.js";
 import { ConfigurationService } from "./configuration.js";
 import { CONFIGURATION_SKILL, ensureSelfConfiguration } from "./self-configuration.js";
-import { AppToolService, appToolDefinitions } from "./app-tools.js";
+import { CONFIGURATION_REFERENCES } from "./self-configuration-reference.js";
+import { validateHarness } from "./harness-graph.js";
+import { isHarnessDefinition } from "./harnesses.js";
+import { AppToolService, appToolDefinitions, flowToolDefinitions } from "./app-tools.js";
 import type { AcpRegistry } from "./ai/acp.js";
 
 const temporary: string[] = [];
@@ -114,14 +117,53 @@ describe("logical configuration documents", () => {
 });
 
 describe("global configuration defaults", () => {
+  it("upgrades the latest shipped skill and installs readable linked references", async () => {
+    const { state, stores, workspace, service } = await fixture();
+    const directory = path.join(state, "skills/global/vibe-self-configuration");
+    await mkdir(directory, { recursive: true });
+    const previous = CONFIGURATION_SKILL.split("\n\n## Detailed reference")[0]! + "\n";
+    await writeFile(path.join(directory, "SKILL.md"), previous);
+    await ensureSelfConfiguration(state);
+    expect(await stores.skills.read("global/vibe-self-configuration", workspace)).toBe(CONFIGURATION_SKILL);
+    for (const [name, content] of Object.entries(CONFIGURATION_REFERENCES)) {
+      expect(CONFIGURATION_SKILL).toContain(`references/${name}`);
+      expect(await readFile(path.join(directory, "references", name), "utf8")).toBe(content);
+    }
+    expect((await service.read("skills/global/vibe-self-configuration/SKILL.md")).baseDirectory).toBe(directory);
+    const custom = path.join(directory, "references/blocks.md");
+    await writeFile(custom, "Custom block guidance");
+    await ensureSelfConfiguration(state);
+    expect(await readFile(custom, "utf8")).toBe("Custom block guidance");
+  });
+
+  it("documents all protocol block types and exact app and flow command schemas", async () => {
+    const protocol = await readFile(new URL("../../protocol/src/index.ts", import.meta.url), "utf8");
+    const union = /export type HarnessBlock = \{ id: string; type: ([^;]+);/.exec(protocol)![1]!;
+    for (const match of union.matchAll(/"([a-z_]+)"/g)) {
+      expect(CONFIGURATION_REFERENCES["blocks.md"]).toContain(`### ${match[1]} —`);
+    }
+    for (const tool of [...appToolDefinitions, ...flowToolDefinitions]) {
+      expect(CONFIGURATION_REFERENCES["commands.md"]).toContain(`## ${tool.name}\n`);
+      expect(CONFIGURATION_REFERENCES["commands.md"]).toContain(JSON.stringify(tool.inputSchema, null, 2));
+    }
+    const source = CONFIGURATION_REFERENCES["blocks.md"]!;
+    const example = JSON.parse(/~~~json\n([\s\S]*?)\n~~~/.exec(source)![1]!);
+    const definition = { ...example, id: "example", version: 1, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+    expect(isHarnessDefinition(definition)).toBe(true);
+    expect(validateHarness(definition)).toMatchObject({ valid: true, issues: [] });
+    const { service } = await fixture();
+    expect((await service.write("workflows/new.json", JSON.stringify(example), null)).validation?.valid).toBe(true);
+  });
+
   it("upgrades the unedited shipped skill when project-local scopes change", async () => {
     const { state, stores, workspace } = await fixture();
-    const previous = CONFIGURATION_SKILL
+    const previous = CONFIGURATION_SKILL.split("\n\n## Detailed reference")[0]! + "\n";
+    const legacy = previous
       .replace("local agents, local skills, skill policy,\nuseful files and workflows belong to its root project and are shared by every task, while\nworkspace agents and workspace skills belong to the invoking checkout.", "local agents, useful files\nand workflows belong to its root project, while workspace agents, local skills\nand skill policy belong to the invoking checkout.")
       .replace("Use skills/local/{name}/SKILL.md for skills shared by all tasks in this project,\nskills/workspace/{name}/SKILL.md for checkout files and skills/global/{name}/SKILL.md\nfor host-wide skills. All three scopes can be created and edited through the tools.\n\n", "");
     const directory = path.join(state, "skills/global/vibe-self-configuration");
     await mkdir(directory, { recursive: true });
-    await writeFile(path.join(directory, "SKILL.md"), previous);
+    await writeFile(path.join(directory, "SKILL.md"), legacy);
     await ensureSelfConfiguration(state);
     expect(await stores.skills.read("global/vibe-self-configuration", workspace)).toBe(CONFIGURATION_SKILL);
   });

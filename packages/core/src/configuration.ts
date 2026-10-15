@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import path from "node:path";
 import type { AcpRegistry } from "./ai/acp.js";
 import type { AgentFileScope, HarnessDefinition, SkillPolicy, SkillScope } from "@remote-ide/protocol";
 import { AgentsStore } from "./agents.js";
@@ -9,7 +10,7 @@ import { validateHarness } from "./harness-graph.js";
 import type { WorkspaceTaskStore } from "./tasks.js";
 import { CoreError } from "./errors.js";
 
-export type ConfigurationDocument = { resource: string; exists: boolean; content: string; revision: string | null };
+export type ConfigurationDocument = { resource: string; exists: boolean; content: string; revision: string | null; baseDirectory?: string };
 type Resource = { kind: "agents"; scope: AgentFileScope; name: string } | { kind: "skills"; scope: SkillScope; name: string } | { kind: "useful"; scope: "global" | "local"; name: string } | { kind: "policy" } | { kind: "workflows"; id: string } | { kind: "tasks"; id: string };
 const queues = new Map<string, Promise<unknown>>();
 const json = (value: unknown) => `${JSON.stringify(value, null, 2)}\n`;
@@ -57,13 +58,17 @@ export class ConfigurationService {
 
   async read(resource: string): Promise<ConfigurationDocument> {
     const target = parseResource(resource);
-    let content = ""; let exists = false;
+    let content = ""; let exists = false; let baseDirectory: string | undefined;
     if (target.kind === "agents") {
       exists = (await this.stores.agents.list(this.workspace)).some((file) => file.scope === target.scope && file.name === target.name);
       if (exists) content = await this.stores.agents.read(target.scope, target.name, this.workspace);
     } else if (target.kind === "skills") {
-      exists = (await this.stores.skills.list(this.workspace)).skills.some((file) => file.id === `${target.scope}/${target.name}`);
-      if (exists) content = await this.stores.skills.read(`${target.scope}/${target.name}`, this.workspace);
+      const skill = (await this.stores.skills.list(this.workspace)).skills.find((file) => file.id === `${target.scope}/${target.name}`);
+      exists = !!skill;
+      if (skill) {
+        content = await this.stores.skills.read(skill.id, this.workspace);
+        baseDirectory = path.dirname(skill.path);
+      }
     } else if (target.kind === "useful") {
       exists = (await this.stores.useful.list()).some((file) => file.scope === target.scope && file.name === target.name);
       if (exists) content = await this.stores.useful.read(target.scope, target.name);
@@ -77,7 +82,7 @@ export class ConfigurationService {
       if (!task) throw new CoreError("FILE_NOT_FOUND", "Task does not exist; use task_create to create its worktree");
       exists = true; content = json({ name: task.name, status: task.status, archived: task.archived ?? false });
     }
-    return { resource, exists, content, revision: exists ? crypto.createHash("sha256").update(content).digest("hex") : null };
+    return { resource, exists, content, ...(baseDirectory ? { baseDirectory } : {}), revision: exists ? crypto.createHash("sha256").update(content).digest("hex") : null };
   }
 
   async write(resource: string, content: string, expectedRevision: string | null) {
