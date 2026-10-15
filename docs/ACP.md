@@ -31,11 +31,37 @@ Copilot discovers models from ACP configuration metadata, including the premium-
 
 ## Common request extensions
 
-`ai.send` accepts typed `content` blocks (text, base64 images, embedded text resources, and resource links) plus optional `mcpServers` and `agent` fields. MCP supports stdio, HTTP, and SSE records. Environment variables and HTTP headers may contain secrets, so callers should retrieve them from secure local storage and must not persist them in workspace settings. Provider options live in the session's `configuration` map and are rendered from the option schema. Boolean options marked `permissionApproval` are handled by the ACP client and can change while the provider is working. Workflow AI and Chatbox blocks enable Autopilot by default when the provider exposes it; block design can disable that default, and the Chatbox run header can toggle it for the existing conversation.
+`ai.send` accepts typed `content` blocks (text, base64 images, embedded text resources, and resource links) plus optional `mcpServers` and `agent` fields. MCP supports stdio, HTTP, and SSE records. Environment variables and HTTP headers may contain secrets, so callers should retrieve them from secure local storage and must not persist them in workspace settings. Provider options live in the session's `configuration` map and are rendered from the option schema. Boolean options marked `permissionApproval` are handled by the ACP client and can change while the provider is working. Workflow AI and Chatbox blocks enable Autopilot by default when the provider exposes it; block design can disable that default, and the Chatbox settings panel can toggle it for the existing conversation.
 
 Core disables workspace snapshots for workflow AI blocks connected as helpers through incoming `use` edges. This applies to their initial prompts, follow-up prompts, and steering, including after workflow recovery. The lead and ordinary AI-tab sessions retain snapshots; helper transcripts and workflow operation records are still saved. The internal `AcpSendRequest.captureSnapshots` flag controls snapshot creation, is retained for follow-ups in the live session, and defaults to enabled for new sessions.
 
 `StdioAcpProvider` is a real Agent Client Protocol v1 NDJSON transport. It surfaces blocking permission requests through `ai.permission.resolve`, stores complete dynamic command snapshots for slash completion, renders rich image/resource output, resumes saved sessions, and applies session-scoped configuration without restarting the process. Launch-scoped changes restart the process and resume the saved session when supported.
+
+## Context inspector
+
+Click the context pie beside the AI chat session control, or in a workflow
+Chatbox header, to expand the context inspector beneath the header. The pie and
+usage history show ACP-reported context tokens, independently of account quotas.
+The history retains the latest 120 usage updates, including decreases, and uses
+an automatic vertical scale. Hover a history bar for its timestamp and values.
+When usage is unavailable, the neutral pie still opens the captured history.
+
+Colored segments break down captured instructions, prompts/replies, file text,
+tool activity and reported reasoning. Click a segment or legend to inspect recent
+items, largest first. These are estimates based on four characters per token,
+not a reconstruction of the model's current input. Core counts retained message
+text (up to 1,000 messages), records injected agent instructions and skill
+catalogues, and keeps up to 12 previews of 1,600 characters per category. Tool
+updates replace their previous captured contribution rather than adding another
+copy. Images and unresolved resource links have no text token estimate. Capture
+does not fetch files or add anything to the model prompt.
+
+Provider system instructions, hidden tool schemas, unreported file reads and the
+exact history retained after compaction are unavailable through this view.
+Captured history can therefore exceed or fall short of reported current usage.
+Compaction notifications are counted when supplied by the adapter. Data is saved
+with the session and propagated into workflow block state; fresh sessions start
+new usage histories. Existing sessions begin collecting details on new activity.
 
 ## Starting tasks through the Vibe Editor MCP server
 

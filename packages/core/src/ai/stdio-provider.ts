@@ -1,3 +1,4 @@
+import { captureContextInstructions, refreshContext } from "./context.js";
 import { retryProcessSpawn } from "../process-spawn.js";
 import { managedProcesses } from "../managed-processes.js";
 import crypto from "node:crypto";
@@ -15,7 +16,7 @@ import { SkillsStore } from "../skills.js";
 import { CoreError } from "../errors.js";
 import { agentFingerprint } from "../agent-profile.js";
 
-type ToolState = { title: string; name?: string; status?: string; command?: string; body: string[]; content: AiContentBlock[]; completion?: string; terminalId?: string };
+type ToolState = { kind?: string; title: string; name?: string; status?: string; command?: string; body: string[]; content: AiContentBlock[]; completion?: string; terminalId?: string };
 type Runtime = {
   child: ChildProcessWithoutNullStreams;
   connection: ClientSideConnection;
@@ -63,7 +64,7 @@ function stamp(session: AiSession): number { return Date.parse(session.updatedAt
 /** Everything the session picker needs to label a conversation, without its transcript. */
 function summarize(session: AiSession): AiSession {
   const first = session.messages?.find((message) => message.role === "user");
-  return { ...session, pendingPermission: undefined, availableCommands: undefined, availableOptions: undefined, messages: first ? [{ id: first.id, role: first.role, text: first.text.slice(0, 2000), timestamp: first.timestamp }] : [] };
+  return { ...session, context: undefined, pendingPermission: undefined, availableCommands: undefined, availableOptions: undefined, messages: first ? [{ id: first.id, role: first.role, text: first.text.slice(0, 2000), timestamp: first.timestamp }] : [] };
 }
 
 const MODEL_CACHE_MS = 5 * 60_000;
@@ -396,6 +397,7 @@ export abstract class StdioAcpProvider extends AcpProvider {
     const text = previous
       ? `Vibe skill catalogue changes: ${JSON.stringify({ added, updated, removed })}. Remove disabled skills from use. Reload updated skills with skill_load before applying them.`
       : `Vibe skill catalogue: ${JSON.stringify({ available: entries })}. Use skill_load(id) on the vibe-skills MCP server to load instructions only when relevant, before following a skill. Supporting files are relative to the returned base directory. Reuse loaded instructions until that skill is updated or removed. Only catalogue skills are enabled; ignore earlier Vibe skill instructions for skills outside this catalogue. Changes will be sent as additions, updates and removals.`;
+    captureContextInstructions(session, "Skill catalogue", text);
     session.skillCatalogue = { threadId: session.threadId!, entries };
     session.skillContext = true;
     const first = content.findIndex((block) => block.type === "text");
@@ -425,6 +427,7 @@ export abstract class StdioAcpProvider extends AcpProvider {
     session.agentPreset = preset;
     if (session.agent?.fingerprint === fingerprint) return content;
     session.agent = { name: agent.name, fingerprint };
+    if (agent.instructions.trim()) captureContextInstructions(session, `Agent: ${agent.name}`, agent.instructions.trim());
     return this.withAgent(content, agent);
   }
 
@@ -605,7 +608,7 @@ export abstract class StdioAcpProvider extends AcpProvider {
     if (this.shuttingDown) { connected.child.stdin.end(); connected.child.kill("SIGTERM"); throw new CoreError("INVALID_REQUEST", "Core is shutting down"); }
     // A fresh provider session has no prior prompt context, even when the local
     // transcript still records which preset the previous session received.
-    if (!connected.resumed) { session.agent = undefined; session.skillCatalogue = undefined; }
+    if (!connected.resumed) { session.agent = undefined; session.skillCatalogue = undefined; session.context = undefined; session.contextUsed = undefined; session.contextLimit = undefined; }
     if (connected.resumeFailed) session.messages.push(this.message("activity", "The saved ACP session could not be resumed; a new agent session was started."));
     const runtime: Runtime = { child: connected.child, connection: connected.connection, sessionId: connected.sessionId, running: false, stderr: connected.stderr(), session, tools: new Map(), anchors: {}, generation: 0, steering: connected.steering, pending: [], checkpointIds: [], captureSnapshots: true, configOptions: connected.configOptions, modes: connected.modes, mcpKey };
     connected.bind(runtime);
@@ -798,15 +801,16 @@ export abstract class StdioAcpProvider extends AcpProvider {
       }
       case "tool_call": {
         runtime.anchors = {};
-        const tool: ToolState = { title: update.title, name: update.name ?? undefined, status: update.status ?? undefined, ...toolBody(update) };
+        const tool: ToolState = { kind: update.kind, title: update.title, name: update.name ?? undefined, status: update.status ?? undefined, ...toolBody(update) };
         runtime.tools.set(update.toolCallId, tool);
-        session.messages.push({ id: update.toolCallId, role: "activity", text: renderTool(tool), content: tool.content, timestamp: new Date().toISOString(), ...(tool.terminalId ? { terminalId: tool.terminalId } : {}) });
+        session.messages.push({ id: update.toolCallId, role: "activity", contextKind: tool.kind === "read" ? "files" : "tools", text: renderTool(tool), content: tool.content, timestamp: new Date().toISOString(), ...(tool.terminalId ? { terminalId: tool.terminalId } : {}) });
         appendTaskCompletion(session, update.toolCallId, tool);
         break;
       }
       case "tool_call_update": {
         const tool = runtime.tools.get(update.toolCallId) ?? { title: update.title ?? "Tool call", body: [], content: [] };
         if (update.title) tool.title = update.title;
+        if (update.kind) tool.kind = update.kind;
         if (update.status) tool.status = update.status;
         const next = toolBody(update);
         if (next.command) tool.command = next.command;
@@ -816,8 +820,8 @@ export abstract class StdioAcpProvider extends AcpProvider {
         if (next.terminalId) tool.terminalId = next.terminalId;
         runtime.tools.set(update.toolCallId, tool);
         const existing = session.messages.find((message) => message.id === update.toolCallId);
-        if (existing) { existing.text = renderTool(tool); existing.content = tool.content; existing.terminalId = tool.terminalId; }
-        else session.messages.push({ id: update.toolCallId, role: "activity", text: renderTool(tool), content: tool.content, timestamp: new Date().toISOString(), ...(tool.terminalId ? { terminalId: tool.terminalId } : {}) });
+        if (existing) { existing.contextKind = tool.kind === "read" ? "files" : "tools"; existing.text = renderTool(tool); existing.content = tool.content; existing.terminalId = tool.terminalId; }
+        else session.messages.push({ id: update.toolCallId, role: "activity", contextKind: tool.kind === "read" ? "files" : "tools", text: renderTool(tool), content: tool.content, timestamp: new Date().toISOString(), ...(tool.terminalId ? { terminalId: tool.terminalId } : {}) });
         appendTaskCompletion(session, update.toolCallId, tool);
         break;
       }
@@ -836,8 +840,12 @@ export abstract class StdioAcpProvider extends AcpProvider {
         break;
       }
       case "available_commands_update": session.availableCommands = update.availableCommands.map((command) => ({ name: command.name, description: command.description, inputHint: command.input?.hint })); break;
-      case "usage_update": session.contextUsed = update.used; if (update.size != null) { session.contextLimit = update.size; this.rememberContextWindow(session.model, update.size); } break;
-      case "compaction_update": session.messages.push(this.message("activity", "Compacting conversation history")); break;
+      case "usage_update": session.contextUsed = update.used; if (update.size != null) { session.contextLimit = update.size; this.rememberContextWindow(session.model, update.size); } refreshContext(session, true); break;
+      case "compaction_update": {
+        refreshContext(session);
+        session.context!.compactions++;
+        session.messages.push(this.message("activity", "Compacting conversation history")); break;
+      }
       default: break;
     }
     await this.save(workspace, session); this.onChanged(workspace);
@@ -923,7 +931,7 @@ export abstract class StdioAcpProvider extends AcpProvider {
     const existing = anchor ? session.messages.find((message) => message.id === anchor && message.role === role) : undefined;
     if (existing) { existing.text += text; return existing.id; }
     const id = anchor ?? crypto.randomUUID();
-    session.messages.push({ id, role, text: heading ? `${heading}\n${text}` : text, timestamp: new Date().toISOString(), ...(role === "assistant" ? { model: session.model, reasoning: session.reasoning } : {}) });
+    session.messages.push({ id, role, ...(heading === "Reasoning" ? { contextKind: "reasoning" as const } : {}), text: heading ? `${heading}\n${text}` : text, timestamp: new Date().toISOString(), ...(role === "assistant" ? { model: session.model, reasoning: session.reasoning } : {}) });
     return id;
   }
 
@@ -956,6 +964,7 @@ export abstract class StdioAcpProvider extends AcpProvider {
   private message(role: AiMessage["role"], text: string, session?: AiSession): AiMessage { return { id: crypto.randomUUID(), role, text, timestamp: new Date().toISOString(), ...(role === "assistant" && session ? { model: session.model, reasoning: session.reasoning } : {}) }; }
   private file(workspace: string): string { return path.join(this.stateDirectory, `${crypto.createHash("sha256").update(workspace).digest("hex")}-${this.descriptor.id}.json`); }
   private async save(workspace: string, session: AiSession): Promise<void> {
+    refreshContext(session);
     const serialized = `${JSON.stringify({ ...session, messages: session.messages.slice(-1000), ...(session.status === "in_progress" ? { _ownerPid: process.pid } : {}) }, null, 2)}\n`;
     const previous = this.saveQueues.get(workspace) ?? Promise.resolve();
     const next = previous.catch(() => undefined).then(async () => {

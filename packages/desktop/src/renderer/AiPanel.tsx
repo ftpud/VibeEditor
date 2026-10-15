@@ -1,16 +1,17 @@
 import { Check, ChevronDown, ListPlus, MessageSquare, Paperclip, Plus, Send, Settings2, Square, Trash2, X } from "lucide-react";
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { findAutopilotOption } from "@remote-ide/acp";
 import type { SkillFile, AiConfiguration, AiContentBlock, AiModel, AiProvider, AiProviderDescriptor, AiSession, AiUsage } from "@remote-ide/protocol";
 import { SkillChatChips, SkillChatControls } from "./SkillChatControls";
+import { ContextInspector, ContextUsageIndicator } from "./ContextInspector";
+export { ContextUsageIndicator, contextUsage, type ContextUsage } from "./ContextInspector";
 import { ModelPicker } from "./ModelPicker";
 import { PermissionRequestActions, type PermissionRequestOwner } from "./PermissionRequestActions";
 
 export type AiAttachment = { id: string; name: string; path?: string; content?: string; data?: string; mimeType?: string };
 
-export type ContextUsage = { used: number; limit: number; percent: number };
 
 type AiLink = { type: "external"; url: string } | { type: "file"; path: string; line?: number; column?: number } | { type: "unsupported" };
 
@@ -47,21 +48,6 @@ export function resolveAiLink(href: string, workspacePath = ""): AiLink {
   return { type: "file", path, ...(location ? { line: Number(location[1]), ...(location[2] ? { column: Number(location[2]) } : {}) } : {}) };
 }
 
-/** Context accounting belongs to the active agent session, never account-rate quotas. */
-export function contextUsage(session: AiSession): ContextUsage | undefined {
-  const { contextUsed: used, contextLimit: limit } = session;
-  if (!Number.isFinite(used) || !Number.isFinite(limit) || used! < 0 || limit! <= 0) return undefined;
-  return { used: used!, limit: limit!, percent: Math.min(100, Math.max(0, (used! / limit!) * 100)) };
-}
-
-export function ContextUsageIndicator({ session }: { session: AiSession }) {
-  const value = contextUsage(session);
-  if (!value) return null;
-  const percent = Math.round(value.percent);
-  const label = `Context window: ${percent}% used (${value.used.toLocaleString()} of ${value.limit.toLocaleString()} tokens)`;
-  return <span className={`ai-context-usage${percent >= 80 ? " near-full" : ""}`} role="img" aria-label={label} title={label} style={{ "--context-usage": `${value.percent}%` } as React.CSSProperties} />;
-}
-
 export function AiPanel({ skills = [], onSkillsChange, onOpenSkills, provider, providers, session, sessions, models, usage, attachments, draft = "", workspacePath = "", permissionOwner, permissionActionsDisabled, sessionChangesDisabled, onProviderChange, onConfigurationChange, onAttachmentsChange, onDraftChange = () => undefined, onSend, onSendAsTask, onSteer, onInterrupt, onNewSession, onSwitchSession, onRemoveSession, onResolvePermission, onOpenFile = () => undefined, onOpenExternal = () => undefined }: { skills?: SkillFile[]; onSkillsChange?(ids: string[]): Promise<void>; onOpenSkills?(): void; provider: AiProvider; providers: AiProviderDescriptor[]; session: AiSession; sessions: AiSession[]; models: AiModel[]; usage?: AiUsage; attachments: AiAttachment[]; draft?: string; workspacePath?: string; permissionOwner: PermissionRequestOwner; permissionActionsDisabled?: boolean; sessionChangesDisabled?: boolean; onProviderChange(provider: AiProvider): void; onConfigurationChange(configuration: AiConfiguration): void; onAttachmentsChange(attachments: AiAttachment[]): void; onDraftChange?(draft: string): void; onSend(prompt: string, configuration: AiConfiguration, attachments: AiAttachment[]): Promise<void>; onSendAsTask?: (prompt: string, configuration: AiConfiguration, attachments: AiAttachment[]) => Promise<void>; onSteer(prompt: string): Promise<void>; onInterrupt(): void; onNewSession(): void; onSwitchSession(session: AiSession): void; onRemoveSession(session: AiSession): void; onResolvePermission(owner: PermissionRequestOwner, requestId: string, optionId?: string): Promise<void>; onOpenFile?(path: string, line?: number, column?: number): void; onOpenExternal?(url: string): void }) {
   const [prompt, setPrompt] = useState(draft);
   const promptRevision = useRef(0);
@@ -77,6 +63,9 @@ export function AiPanel({ skills = [], onSkillsChange, onOpenSkills, provider, p
   const [configuration, setConfiguration] = useState<AiConfiguration>(session.configuration ?? {});
   const [composerHeight, setComposerHeight] = useState(104);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [contextOpen, setContextOpen] = useState(false);
+  const contextId = useId();
+  useEffect(() => setContextOpen(false), [session.id]);
   const [sessionsOpen, setSessionsOpen] = useState(false);
   const [attachmentError, setAttachmentError] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -174,8 +163,9 @@ export function AiPanel({ skills = [], onSkillsChange, onOpenSkills, provider, p
       {autopilot && <div className="ai-autopilot" title={`${autopilot.option.name}: approve every action without asking.`}><span>Auto</span><label className="ai-switch"><input type="checkbox" aria-label="Autopilot" disabled={busy} checked={autopilotOn} onChange={(event) => updateConfiguration({ [autopilot.option.id]: event.target.checked ? autopilot.on : autopilot.off })} /><span /></label></div>}
       {skillsAvailable && onSkillsChange && onOpenSkills && <SkillChatControls skills={skills} selected={session.skillIds ?? []} running={running} disabled={submitting || permissionActionsDisabled} onChange={onSkillsChange} onOpen={onOpenSkills} />}
       <button className={settingsOpen ? "active" : ""} title={`${providerName} settings`} aria-expanded={settingsOpen} disabled={submitting} onClick={() => setSettingsOpen((open) => !open)}><Settings2 size={14} /><ChevronDown className="ai-settings-chevron" size={12} /></button>
-      <div className="ai-session-control">{running ? <button className="ai-interrupt" title={`Stop ${providerName}`} onClick={onInterrupt}><Square size={12} fill="currentColor" /></button> : <button className={sessionsOpen ? "active" : ""} title="Manage sessions" aria-expanded={sessionsOpen} disabled={submitting} onClick={() => { setSettingsOpen(false); setSessionsOpen((open) => !open); }}><MessageSquare size={14} /></button>}<ContextUsageIndicator session={session} /></div>
+      <div className="ai-session-control">{running ? <button className="ai-interrupt" title={`Stop ${providerName}`} onClick={onInterrupt}><Square size={12} fill="currentColor" /></button> : <button className={sessionsOpen ? "active" : ""} title="Manage sessions" aria-expanded={sessionsOpen} disabled={submitting} onClick={() => { setSettingsOpen(false); setSessionsOpen((open) => !open); }}><MessageSquare size={14} /></button>}<ContextUsageIndicator session={session} onClick={() => setContextOpen((open) => !open)} expanded={contextOpen} controls={contextId} /></div>
     </div>
+    {contextOpen && <ContextInspector key={session.id} id={contextId} session={session} />}
     {skillsAvailable && onSkillsChange && <SkillChatChips skills={skills} selected={session.skillIds ?? []} disabled={submitting || permissionActionsDisabled} onChange={onSkillsChange} />}
     {sessionsOpen && <section className="ai-sessions">
       <header><strong>Sessions</strong><button disabled={sessionControlsDisabled} title={sessionChangesDisabled ? "Cancel or run the active task timer before changing sessions" : undefined} onClick={() => { setSessionsOpen(false); onNewSession(); }}><Plus size={13} /> New</button></header>

@@ -275,6 +275,18 @@ describe("typed workflows", () => {
     expect(run.blocks.map((item) => item.blockId)).toEqual(["ai", "tool"]);
   });
 
+  it("publishes context-only activity changes and retains the final Chatbox usage", async () => {
+    const { runner, definition, store, finished } = await setup([block("chat", "chatbox")], []);
+    await runner.start(definition.id, "Hello", async (_block, _prompt, runtime) => {
+      await runtime.started("/chat/session");
+      await runtime.activity({ ...session("Reply"), contextUsed: 10, contextLimit: 100 });
+      await runtime.activity({ ...session("Reply"), contextUsed: 20, contextLimit: 100 });
+      expect((await store.runs())[0]?.blocks[0]?.contextUsed).toBe(20);
+      return { ...session("Reply"), contextUsed: 30, contextLimit: 100 };
+    }, "provider", undefined, "chat");
+    expect((await finished()).blocks[0]).toMatchObject({ contextUsed: 30, contextLimit: 100 });
+  });
+
   it("starts a Chatbox with overrides without changing its frozen definition", async () => {
     const { runner, definition, finished } = await setup([block("chat", "chatbox", { provider: "original", model: "old" })], []);
     const dispatch = vi.fn(async () => session("Reply"));

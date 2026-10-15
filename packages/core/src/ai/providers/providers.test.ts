@@ -167,6 +167,9 @@ describe("ACP integration", () => {
     expect(session.status).toBe("done");
     expect(session.contextUsed).toBe(120);
     expect(session.contextLimit).toBe(1000);
+    expect(session.context?.history.at(-1)).toMatchObject({ used: 120, limit: 1000 });
+    expect(session.context?.sections.find((section) => section.id === "tools")?.entries[0]?.preview).toBe("Run echo\n$ echo hi\nhi");
+    expect(session.context?.sections.find((section) => section.id === "reasoning")?.characters).toBeGreaterThan(0);
     expect(session.tokens).toEqual({ total: 30, input: 20, output: 10, thought: 4 });
     await provider.clear(workspace);
   });
@@ -331,6 +334,8 @@ describe("ACP integration", () => {
     expect(prompts[2]!.text).toContain("<agent_instructions>");
     expect(prompts[2]!.text).toContain("Coordinate without waiting.");
     expect(session.agent?.name).toBe("Dispatcher");
+    const instructions = session.context?.sections.find((section) => section.id === "instructions");
+    expect(instructions?.entries.filter((item) => item.label === "Agent: Dispatcher").map((item) => item.preview)).toEqual(["Delegate bounded tasks.", "Coordinate without waiting."]);
     await provider.clear(workspace);
   });
 

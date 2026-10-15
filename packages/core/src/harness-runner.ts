@@ -298,6 +298,7 @@ export class HarnessRunner {
         if (changed) {
           state.sessionId = undefined;
           state.workspace = undefined;
+          state.context = undefined; state.contextUsed = undefined; state.contextLimit = undefined;
         }
         state.chatSettings = { ...settings, provider, model };
         state.provider = provider;
@@ -1146,6 +1147,7 @@ export class HarnessRunner {
           context.sessionId = state.sessionId;
           for (const [id, hash] of deliveredOutputs) context.outputs.set(id, hash);
           state.tokens = settled.tokens;
+          state.context = settled.context; state.contextUsed = settled.contextUsed; state.contextLimit = settled.contextLimit;
           this.assertTokenBudget(run);
           await this.finishOperation(run, promptOperation, "succeeded", { sessionId: settled.id, workspace: state.workspace, status: settled.status });
           await this.recordCompletedOperation(run, "session_binding", `session:${attemptId}`, block.id, { sessionId: settled.id, workspace: state.workspace }, attemptId);
@@ -1281,12 +1283,14 @@ export class HarnessRunner {
     const chatChanged = chatText !== undefined && chatText !== chatReply?.text;
     const lastUser = state.chatMessages ? session.messages.findIndex((message) => message.id === this.chatTurnUsers.get(state)) : session.messages.map((message) => message.role).lastIndexOf("user");
     const agentActivity = session.messages.slice(lastUser + 1).filter((message) => message.role === "activity").slice(-50).map((message) => ({ id: message.id, timestamp: message.timestamp, text: (message.text || message.content?.filter((item) => item.type === "text").map((item) => item.text).join("\n") || "Agent activity").slice(-8000) }));
+    const contextChanged = state.contextUsed !== session.contextUsed || state.contextLimit !== session.contextLimit || JSON.stringify(state.context) !== JSON.stringify(session.context);
+    if (contextChanged) { state.context = session.context; state.contextUsed = session.contextUsed; state.contextLimit = session.contextLimit; }
     const activityChanged = JSON.stringify(state.agentActivity ?? []) !== JSON.stringify(agentActivity);
     if (activityChanged) state.agentActivity = agentActivity;
     if (chatChanged) chatReply!.text = chatText!;
     const responseChanged = response !== undefined && response !== state.output;
     const pauseId = status === "running" ? undefined : state.status === status ? state.pauseId ?? crypto.randomUUID() : crypto.randomUUID();
-    if (state.autopilot === autopilot && state.status === status && state.waitingUntil === waitingUntil && state.question === question && JSON.stringify(state.pendingPermission) === JSON.stringify(permission) && state.sessionId === session.id && state.pauseId === pauseId && !responseChanged && !chatChanged && !activityChanged) return;
+    if (state.autopilot === autopilot && state.status === status && state.waitingUntil === waitingUntil && state.question === question && JSON.stringify(state.pendingPermission) === JSON.stringify(permission) && state.sessionId === session.id && state.pauseId === pauseId && !responseChanged && !chatChanged && !activityChanged && !contextChanged) return;
     state.autopilot = autopilot;
     if (responseChanged) { state.output = response; this.log(state, "response", response!); }
     const previous = state.status; state.status = status; state.sessionId = session.id; state.waitingUntil = waitingUntil; state.question = question; state.pendingPermission = permission;

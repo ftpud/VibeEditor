@@ -3,6 +3,7 @@ import { useCallback, useEffect, useLayoutEffect, useId, useMemo, useRef, useSta
 import { ArrowLeftRight, ArrowUpDown, AlignStartHorizontal, AlignCenterHorizontal, AlignEndHorizontal, AlignStartVertical, AlignCenterVertical, AlignEndVertical, Bot, ClipboardPaste, Clock, Copy, Download, Eye, FileText, GripHorizontal, LayoutGrid, List, Map as MapIcon, Maximize, MessageSquare, Pencil, Play, Plus, Redo2, RotateCcw, Save, Send, Settings2, Square, Terminal, Trash2, Undo2, Upload, Workflow, X, ZoomIn, ZoomOut } from "lucide-react";
 import type { AgentFile, AiModel, AiProvider, AiProviderDescriptor, HarnessBlock, HarnessChatSettings, HarnessOperation, HarnessAppState, HarnessDataSchema, HarnessDefinition, HarnessRun, HarnessLogEntry, HarnessStateDiagnostic, HarnessValidationIssue, SkillCatalog } from "@remote-ide/protocol";
 import { useWorkflowTraces } from "./workflow-tracing";
+import { ContextInspector, ContextUsageIndicator } from "./ContextInspector";
 import { ModelPicker } from "./ModelPicker";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -740,6 +741,8 @@ function WorkflowAppOutput({ onRead, refresh }: { onRead(): Promise<HarnessAppSt
 
 function WorkflowChatbox({ providers = [], defaultProvider, onLoadModels, block, run, state, onClose, onSend, onSteer, onStop, onAutopilot, definition }: { block: HarnessBlock; run?: HarnessRun; state?: HarnessRun["blocks"][number]; onClose(): void; onSend?(input: string, settings?: HarnessChatSettings): Promise<void>; onSteer?(input: string): Promise<void>; onStop?(): Promise<void>; onAutopilot?(enabled: boolean): Promise<void>; definition?: HarnessDefinition } & ChatboxOptions) {
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [contextOpen, setContextOpen] = useState(false);
+  const contextId = useId();
   const [providerOverride, setProviderOverride] = useState(state?.chatSettings?.provider ?? "");
   const [modelOverride, setModelOverride] = useState(state?.chatSettings?.model ?? "");
   const [models, setModels] = useState<AiModel[]>([]);
@@ -779,7 +782,8 @@ function WorkflowChatbox({ providers = [], defaultProvider, onLoadModels, block,
     } catch (reason) { if (messageRevision.current === revision) setMessage(input); setError(reason instanceof Error ? reason.message : "Could not send message"); } finally { setSending(false); }
   };
   return <section className="harness-run-details workflow-chatbox" aria-label={`${block.label} run details`}>
-    <header><div><span className="harness-detail-icon"><MessageSquare size={16} aria-hidden="true" /></span><div className="harness-detail-title"><strong>{block.label}</strong><small>Chatbox · {busy ? "Working" : "Ready"}</small></div></div><div className="harness-detail-actions"><button type="button" aria-label="Chatbox settings" title="Chatbox settings" aria-expanded={settingsOpen} onClick={() => setSettingsOpen((open) => !open)}><Settings2 size={16} /></button><button title="Close run details" aria-label="Close run details" onClick={onClose}><X size={16} /></button></div></header>
+    <header><div><span className="harness-detail-icon"><MessageSquare size={16} aria-hidden="true" /></span><div className="harness-detail-title"><strong>{block.label}</strong><small>Chatbox · {busy ? "Working" : "Ready"}</small></div></div><div className="harness-detail-actions"><ContextUsageIndicator session={state ?? {}} onClick={() => setContextOpen((open) => !open)} expanded={contextOpen} controls={contextId} /><button type="button" aria-label="Chatbox settings" title="Chatbox settings" aria-expanded={settingsOpen} onClick={() => setSettingsOpen((open) => !open)}><Settings2 size={16} /></button><button title="Close run details" aria-label="Close run details" onClick={onClose}><X size={16} /></button></div></header>
+    {contextOpen && <ContextInspector key={state?.sessionId} id={contextId} session={state ?? {}} />}
     {settingsOpen && <div className="workflow-chat-settings" role="group" aria-label="Chatbox settings">
       <label>Provider override<select aria-label="Chatbox provider override" disabled={busy} value={providerOverride} onChange={(event) => { setProviderOverride(event.target.value); setModelOverride(""); }}><option value="">Workflow default</option>{providers.map((provider) => <option key={provider.id} value={provider.id}>{provider.name}</option>)}</select></label>
       <label>Model override<ModelPicker label="Chatbox model override" models={[{ id: "", name: "Provider / workflow default", defaultReasoning: "", reasoningLevels: [] }, ...models]} value={modelOverride} disabled={busy || !effectiveProvider} onChange={setModelOverride} /></label>
