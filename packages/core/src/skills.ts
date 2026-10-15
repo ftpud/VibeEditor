@@ -8,6 +8,8 @@ import type { AiSession, AiSkillSummary } from "@remote-ide/acp";
 import { parseAgent } from "./agents.js";
 import { CoreError } from "./errors.js";
 
+const loadedSkills = new WeakMap<NonNullable<AiSession["skillCatalogue"]>, Map<string, string>>();
+
 const MAX_BYTES = 256 * 1024;
 export const SKILL_TEMPLATE = "---\nname: New Skill\ndescription: Describe when to use this skill.\n---\n\nDescribe the workflow and instructions here.\n";
 
@@ -158,10 +160,16 @@ export class SkillsStore {
     return Promise.all(enabled.map(async (skill) => ({ id: skill.id, name: skill.title.slice(0, 200), ...(skill.description ? { description: skill.description.slice(0, 1000) } : {}), revision: crypto.createHash("sha256").update(`${skill.path}\0${await this.read(skill.id, workspace)}`).digest("hex") })));
   }
 
-  async load(workspace: string, id: string, session: AiSession): Promise<{ id: string; revision: string; baseDirectory: string; content: string }> {
+  async load(workspace: string, id: string, session: AiSession): Promise<{ id: string; revision: string; baseDirectory: string; content: string; unchanged?: boolean; message?: string }> {
     const catalogue = session.skillCatalogue;
     if (!catalogue || catalogue.threadId !== session.threadId || !catalogue.entries.some((skill) => skill.id === id)) throw new CoreError("INVALID_REQUEST", "Skill is not available in this conversation's current turn");
-    return this.loadAllowed(workspace, id, session.agentPreset);
+    const loaded = await this.loadAllowed(workspace, id, session.agentPreset);
+    let cache = loadedSkills.get(catalogue);
+    if (!cache) { cache = new Map(); loadedSkills.set(catalogue, cache); }
+    const key = JSON.stringify([workspace, id]);
+    if (cache.get(key) === loaded.revision) return { ...loaded, content: "", unchanged: true, message: "Skill already loaded in this conversation; reuse its instructions." };
+    cache.set(key, loaded.revision);
+    return loaded;
   }
 
   /** Workflow references are enabled by the graph, with the same live project/agent policy. */

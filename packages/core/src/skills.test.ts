@@ -150,7 +150,7 @@ describe("project skills", () => {
   });
 
   it("loads only advertised skills and rechecks policy, agent scope and conversation identity", async () => {
-    const { workspace, store } = await setup();
+    const { root, workspace, store } = await setup();
     await store.write("local/review", workspace, review);
     await store.write("local/other", workspace, "Hidden instructions");
     const entries = await store.available(workspace, ["local/review"]);
@@ -158,6 +158,8 @@ describe("project skills", () => {
     expect(JSON.stringify(entries)).not.toContain("Check regressions");
     const session = { model: "test", reasoning: "", status: "in_progress" as const, messages: [], threadId: "thread", skillCatalogue: { threadId: "thread", entries } };
     expect(await store.load(workspace, "local/review", session)).toMatchObject({ content: review, revision: entries[0]!.revision });
+    expect(await new SkillsStore(path.join(root, "state"), workspace).load(workspace, "local/review", { ...session })).toMatchObject({ content: "", unchanged: true });
+    expect(await store.load(workspace, "local/review", { ...session, skillCatalogue: { threadId: "thread", entries } })).toMatchObject({ content: review });
     await expect(store.load(workspace, "local/other", session)).rejects.toThrow("not available");
     await expect(store.load(workspace, "local/review", { ...session, threadId: "other" })).rejects.toThrow("not available");
     await store.write("local/review", workspace, "Updated instructions");

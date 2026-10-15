@@ -171,7 +171,7 @@ describe("typed workflows", () => {
       expect(result).toMatchObject({ status: "timed_out", timeout_seconds: 0.1, block_status: "running", messages: [{ role: "user", text: "Do the work" }, { role: "assistant", text: "Still working" }] });
       await expect(runner.flowTool(runtime.runId, "parent", "workflow_block_messages", { block_id: "unconnected" })).rejects.toThrow("connected block");
       await expect(runner.flowTool(runtime.runId, "parent", "workflow_block_messages", { block_id: "child", count: 0 })).rejects.toThrow("message count");
-      expect(await runner.flowTool(runtime.runId, "parent", "workflow_block_messages", { block_id: "child", count: 1 })).toMatchObject({ block_status: "running", messages: [{ text: "Still working" }] });
+      expect(await runner.flowTool(runtime.runId, "parent", "workflow_block_messages", { block_id: "child", count: 1 })).toMatchObject({ block_status: "running", messages: [] });
       parentFinished = true;
       return session("Parent can continue");
     };

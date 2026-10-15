@@ -1,57 +1,70 @@
-# Workflow context review
+# Workflow context limits
 
-Workflow blocks keep separate provider sessions. A connected AI or Chatbox
-continues its existing session when invoked again; it does not receive the
-parent's whole conversation. Follow connections carry the source's output.
-Joining graph branches combines their direct predecessor outputs.
+Workflow blocks keep separate provider sessions. Invoking a connected AI or
+Chatbox continues its session without copying the parent's conversation.
+New sessions receive block instructions and a connected tool catalogue; later
+turns omit the runtime manual and static instructions. Dynamic templates still
+receive new input, with the following bounds.
 
-## Fixed accumulation sources
+## Context transfers
 
-- New sessions receive the block instructions and connected tool catalogue.
-  Continued sessions receive the new input and any dynamic block templates,
-  without repeating the runtime manual or static block instructions. Review
-  blocks, which create fresh sessions, still receive the complete instructions.
-- An `{{input}}` template supplies the input once. Core adds an input section
-  only when the block prompt does not already interpolate it. Tool metadata is
-  appended after rendering, so templates in another block's description cannot
-  expand into copies of the caller's input or upstream outputs.
-- Connected descriptions are previews of at most 512 characters, explicitly
-  marked when shortened. Executing the block still uses its full instructions.
-  Skills expose their descriptions and load their instructions on demand.
-- `workflow_use_block` returns app state/logs under `app`, task results under
-  `task_controls`, and linked skill content under `skill`. These structured
-  responses omit the second escaped JSON copy in `output`. Ordinary text,
-  script, and AI outputs retain the `output` field. Persisted block outputs
-  retain the full original result.
-- `workflow_block_messages` returns recent messages and activity instead of
-  also returning a duplicate full output. The existing 8,000-character message
-  tails now indicate truncation. Identical polls by the same caller return
-  `unchanged: true`; `include_unchanged: true` explicitly rereads the snapshot.
-  Snapshot fingerprints live only for the execution and contain no transcript.
-- Connection listings and progress reads no longer create durable operation
-  journal entries. Execution and other state-changing tools remain journalled.
+- Dynamic `{{blocks.ID.output}}` references receive bounded previews: at most
+  8,000 characters per referenced output and 20,000 characters across expanded
+  output references. Unchanged outputs become short references to the earlier
+  result in that caller's session. Changed outputs are sent again. Fingerprints
+  are recorded from the data actually available when the prompt was rendered.
+- AI and Chatbox inputs are capped at 20,000 characters. Fan-in joins divide
+  that budget among direct predecessors, retaining each source's label.
+  Declared structured input schemas retain their exact input and the existing
+  rendered-prompt limit; document and script data are not shortened.
+- Workflow tool results have a 20,000-character serialized result limit.
+  Large strings become head/tail previews with truncation notices; large
+  collections receive a bounded JSON preview if their structure cannot fit.
+  App, terminal and task results keep their structured shape when possible
+  and avoid duplicating the same result in an escaped `output` string.
+- `workflow_block_output` reads retained output from a connected block without
+  invoking it. Pass `block_id`, `offset` (default 0) and `limit` (1–8,000).
+  Follow `nextOffset` to inspect further pages. This exposes the existing
+  retained output, subject to run-state retention limits, not an unlimited
+  archive. Linked skills must use the normal skill loader to check live policy.
+- Polling messages retain at most 8,000 characters each, within the aggregate
+  result limit. Repeated identical polls and direct tails return
+  `unchanged: true`. Changed snapshots omit individual messages and activity
+  already delivered to that caller. `include_unchanged: true` on
+  `workflow_block_messages` explicitly rereads the snapshot. Read-only AI polls,
+  output reads and connection listings do not add operation journal entries.
+- Skill instructions are delivered intact on their first load. Repeated
+  unchanged loads return a compact acknowledgement. Native skill loading
+  always checks current policy and content revision first; a new catalogue or
+  conversation reloads instructions. Workflow skill loads likewise validate
+  policy before suppressing an identical result.
 
-## Existing protections and remaining growth
+Previews are deterministic truncation, not semantic summaries. Outputs remain
+in workflow state under the existing output retention policy. Agents should
+request concise worker reports and send new facts rather than forwarding
+previous reports repeatedly. Terminal Control is for long-running apps and
+services; agents should list and reuse terminals whenever possible, avoid
+unnecessary new terminals, and never spawn agents inside them.
 
-App status/start/kill results contain process metadata, not log history. Tail
-requests default to 100 lines, accept a requested line count, and return at most
-30,000 characters with a truncation flag. UI app logs and terminal replay are
-separate from the model's tool results. Repeated explicit tail requests can still
-repeat the same log window: an incremental log cursor would reduce that further.
+## Long-lived conversations
 
-Dynamic `{{blocks.ID.output}}` templates and large branch joins can intentionally
-carry substantial output into later turns. Core preserves these inputs and
-checks the configured rendered prompt limit; it does not silently summarize
-them. Workflows should reference the relevant block results and ask for concise
-agent outputs when full evidence is unnecessary.
+`settings.contextBudgetChars` bounds cumulative context delivered through a
+workflow block. It defaults to 400,000 characters per block per run and accepts
+1,000–10,000,000. Core persists `deliveredContextChars` alongside block state,
+counting prompts, assistant reports and projected workflow tool results,
+including polling. Reaching the budget stops delivery with an explicit error
+instructing the user to start a new run with a concise handoff or increase the
+budget. The conversation is preserved. This is a conservative character budget,
+not a provider token estimate; provider-native tool traffic is outside this
+counter. Existing prompt, attempt, run-duration and token budgets still apply.
 
-Provider conversations still grow with useful user turns and tool calls.
-Core's local transcript retention (1,000 provider messages, 200 Chatbox messages)
-is not a model context-window limit. Compaction belongs to the provider; Core
-does not reset sessions or discard task context automatically. An optional
-context-aware handoff/compaction policy is a separate follow-up, because it must
-preserve provider capabilities, block instructions, permissions, and recovery.
+Core does not automatically reset provider history or attempt provider-specific
+compaction. The local transcript retention of 1,000 provider messages and 200
+Chatbox messages is separate from model context capacity. Provider compaction
+can still occur. After a Core restart, context fingerprints may be rebuilt and
+an unchanged value may be delivered once again; the persisted cumulative budget
+still applies.
 
-The operation journal still grows with actual workflow actions. Removing
-read-only polls addresses avoidable growth, but journal retention must preserve
-idempotency and recovery evidence rather than deleting old entries blindly.
+The operation journal grows with actual workflow actions. Recovery and
+idempotency evidence are retained rather than deleting old actions to reduce
+conversation context.
