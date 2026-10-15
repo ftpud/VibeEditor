@@ -151,7 +151,7 @@ export function AiPanel({ skills = [], onSkillsChange, onOpenSkills, provider, p
     event.currentTarget.setPointerCapture(event.pointerId);
     const startY = event.clientY;
     const startHeight = composerHeight;
-    const move = (moveEvent: PointerEvent) => setComposerHeight(Math.max(78, Math.min(Math.min(420, window.innerHeight * 0.55), startHeight + startY - moveEvent.clientY)));
+    const move = (moveEvent: PointerEvent) => setComposerHeight(Math.max(104, Math.min(Math.min(420, window.innerHeight * 0.55), startHeight + startY - moveEvent.clientY)));
     const end = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", end); };
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", end);
@@ -186,10 +186,12 @@ export function AiPanel({ skills = [], onSkillsChange, onOpenSkills, provider, p
     </div>
     <div className="ai-composer-resize-handle" onPointerDown={beginComposerResize} />
     <form className="ai-composer" style={{ height: composerHeight }} onSubmit={(event) => { event.preventDefault(); void send(); }}>
-      {attachmentError && <div className="ai-attachment-error">{attachmentError}</div>}
       {matchingCommands.length > 0 && <div className="ai-command-menu">{matchingCommands.map((command) => <button type="button" key={command.name} onClick={() => { const value = `/${command.name.replace(/^\//, "")} `; changePrompt(value); }}><strong>/{command.name.replace(/^\//, "")}</strong><span>{command.description}{command.inputHint ? ` · ${command.inputHint}` : ""}</span></button>)}</div>}
-      {attachments.length > 0 && <div className="ai-attachments">{attachments.map((attachment) => <span className="ai-attachment" key={attachment.id} title={attachment.path ?? attachment.name}><span>{attachment.path ?? attachment.name}</span><button type="button" title={`Remove ${attachment.name}`} onClick={() => onAttachmentsChange(attachments.filter((item) => item.id !== attachment.id))}><X size={12} /></button></span>)}</div>}
-      <textarea value={prompt} placeholder={submitting ? `Connecting to ${providerName}...` : running ? (session.steering ? `Steer ${providerName} while it works...` : `Queue a follow-up for ${providerName}...`) : `Ask ${providerName}...`} onChange={(event) => changePrompt(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void send(); } }} />
+      <div className="ai-composer-body">
+        {attachmentError && <div className="ai-attachment-error">{attachmentError}</div>}
+        {attachments.length > 0 && <div className="ai-attachments">{attachments.map((attachment) => <span className="ai-attachment" key={attachment.id} title={attachment.path ?? attachment.name}><span>{attachment.path ?? attachment.name}</span><button type="button" title={`Remove ${attachment.name}`} onClick={() => onAttachmentsChange(attachments.filter((item) => item.id !== attachment.id))}><X size={12} /></button></span>)}</div>}
+        <textarea value={prompt} placeholder={submitting ? `Connecting to ${providerName}...` : running ? (session.steering ? `Steer ${providerName} while it works...` : `Queue a follow-up for ${providerName}...`) : `Ask ${providerName}...`} onChange={(event) => changePrompt(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void send(); } }} />
+      </div>
       <div className="ai-composer-actions"><input ref={fileInputRef} type="file" multiple onChange={(event) => void addFiles(event.target.files)} /><button type="button" title="Attach files" disabled={busy} onClick={() => fileInputRef.current?.click()}><Paperclip size={15} /></button>{onSendAsTask && <button type="button" title={taskSubmitting ? "Creating task..." : "Send prompt as a new task"} disabled={submitting || taskSubmitting || (!prompt.trim() && attachments.length === 0)} onClick={() => void sendAsTask()}><ListPlus size={15} /></button>}<button title={submitting ? `Connecting to ${providerName}` : running ? (session.steering ? "Add input to the running turn" : "Queue this for the next turn") : "Send prompt"} disabled={submitting || taskSubmitting || (!prompt.trim() && (running || attachments.length === 0))}><Send size={15} /></button></div>
     </form>
   </div>;

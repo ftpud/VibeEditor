@@ -1,6 +1,8 @@
 interface Window {
   desktop?: {
     connectionToken?(host: string, port: number): Promise<string | undefined>;
+    onFullscreenChange?(listener: (fullscreen: boolean) => void): () => void;
+    setWindowTheme?(theme: "light" | "dark"): void;
     setDirtyState(dirty: boolean): void;
     openEditorWindow(options: { host: string; port: string; type: "file" | "useful"; path: string; scope?: "global" | "local" }): void;
     readClipboard(): Promise<string>;

@@ -1,0 +1,14 @@
+# Icon generation drafts
+
+The built-in image generation tool produced style drafts using these prompts.
+The installed icons were then rebuilt from SVG for exact flat colors and clean
+transparent edges; see [APP_ICONS.md](APP_ICONS.md) for the final source assets.
+
+## Editor
+
+Use case: logo-brand. Create one finished macOS-style Vibe Editor app icon. This must be a WHITE ROUNDED-SQUARE APP TILE with a FLAT SYMBOL INSIDE, using the composition of Telegram or VS Code macOS icons, without copying their symbols. Transparent canvas outside the tile, real alpha at the four corners and outer padding. The opaque pure white tile occupies 82% of the square canvas, centered, with generous smooth squircle corner radii. Inside the white tile, center a completely FLAT, clean vector-style indigo #5268e8 workflow symbol. Faithful Lucide Workflow topology: two equal rounded-square OUTLINE nodes, upper left and lower right, connected by a rounded elbow stroke running from bottom center of first node down and then right into left center of second. Uniform bold line weight, white interiors, impeccable optical balance. Symbol occupies about 58% of the tile width. Absolutely solid color on the symbol: NO gradients, NO highlights, NO bevels, NO glossy or inflated surfaces, NO 3D. White tile is also flat and clean. No text, no letters, no extra nodes, no device mockup, no decorative scene, no watermark. Output one square high-resolution PNG with a transparent exterior, white rounded tile, flat indigo symbol.
+
+## Gateway
+
+Use case: logo-brand. Create ONE finished macOS-style Vibe Gateway app icon. WHITE ROUNDED-SQUARE APP TILE with a completely FLAT indigo branching network symbol inside. Use the white squircle tile proportions of Safari, Telegram or VS Code macOS icons, but do not copy their symbols. True transparent background outside the white tile, real alpha in the corners and outer padding. The opaque pure white tile occupies 82% of the square canvas, centered. Broad smooth squircle corners, flat surface. Inside: an elegant, balanced TREE diagram built from SEVEN equal small rounded-square OUTLINE nodes: one root at top center, two children on the middle row, four leaves on the bottom row. Each parent connects to its two children via clean orthogonal branching lines with rounded joins. All nodes visibly connected. Use uniform bold indigo #5268e8 outlines and strokes, clean white openings, consistent node sizes, no crossing connectors, strict bilateral symmetry. Diagram occupies about 60% of tile width and height with generous breathing room. Clean vector-like edges and strong small-size legibility. Symbol must be SOLID FLAT COLOR: absolutely no gradients, metallic effects, highlights, bevels, glossy or inflated material, or 3D. No text, no letters, no arrows, no decorative scene, no mockup, no watermark. Deliver one square high-resolution PNG with transparent exterior, opaque white rounded tile and flat indigo network.
+

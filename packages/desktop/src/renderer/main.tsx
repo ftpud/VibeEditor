@@ -10,16 +10,24 @@ import { App } from "./App";
 import { readSetting, readSettingNumber } from "./settings";
 import { DetachedEditor } from "./DetachedEditor";
 import { installNativeDialogFocusRecovery } from "./native-dialog-focus";
+import "./design-tokens.css";
 import "./styles.css";
+import "./workspace.css";
+
+document.documentElement.dataset.fullscreen = "false";
+const removeFullscreenListener = window.desktop?.onFullscreenChange?.((fullscreen) => { document.documentElement.dataset.fullscreen = String(fullscreen); });
+if (import.meta.hot && removeFullscreenListener) import.meta.hot.dispose(removeFullscreenListener);
 
 const removeDialogFocusRecovery = installNativeDialogFocusRecovery(window);
 if (import.meta.hot) import.meta.hot.dispose(removeDialogFocusRecovery);
 
-document.documentElement.dataset.theme = readSetting("theme") === "light" ? "light" : "dark";
+document.documentElement.dataset.theme = readSetting("theme") === "dark" ? "dark" : "light";
+window.desktop?.setWindowTheme?.(document.documentElement.dataset.theme as "light" | "dark");
 document.documentElement.dataset.platform = navigator.platform.toLowerCase().includes("win") ? "windows" : navigator.platform.toLowerCase().includes("mac") ? "mac" : "linux";
 document.documentElement.style.setProperty("--ui-font-family", readSetting("uiFontFamily") === "jetbrains" ? '"JetBrains Mono Variable"' : '"Inter Variable"');
 document.documentElement.style.setProperty("--ui-font-weight", String(readSettingNumber("uiFontWeight", 450, 350, 600)));
 document.documentElement.style.setProperty("--ui-font-size", `${readSettingNumber("uiFontSize", 13, 10, 20)}px`);
 document.documentElement.style.setProperty("--ui-line-height", String(readSettingNumber("uiLineHeight", 1.2, 1, 2)));
+document.documentElement.dataset.nativeWindow = window.desktop ? "true" : "false";
 const detached = new URLSearchParams(window.location.search).get("detached") === "1";
 ReactDOM.createRoot(document.getElementById("root")!).render(<React.StrictMode>{detached ? <DetachedEditor /> : <App />}</React.StrictMode>);

@@ -8,6 +8,11 @@ describe("editor highlighting themes", () => {
     expect(monacoTheme("dark", "ftpud")).toBe("ftpud-dark");
   });
 
+  it("uses the workspace canvas for default light and dark editors", () => {
+    expect(monacoTheme("light", "default")).toBe("vibe-light");
+    expect(monacoTheme("dark", "default")).toBe("vibe-dark");
+  });
+
   it("defines dark class backgrounds and bold function names", () => {
     const themes = new Map<string, { rules: { token: string; background?: string; fontStyle?: string }[] }>();
     const monaco = {

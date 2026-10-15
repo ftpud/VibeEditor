@@ -1,3 +1,4 @@
+import { workspacePalette } from "./workspace-palette";
 import { installSelectionHighlight } from "./selection-highlight";
 import { installEditorFontMeasurements } from "./editor-fonts";
 import type { Monaco } from "@monaco-editor/react";
@@ -7,7 +8,9 @@ export type AppTheme = "dark" | "light";
 export type HighlightTheme = "default" | "ftpud";
 
 export function currentTheme(): AppTheme {
-  return readSetting("theme") === "light" ? "light" : "dark";
+  const active = typeof document !== "undefined" ? document.documentElement.dataset.theme : undefined;
+  if (active === "light" || active === "dark") return active;
+  return readSetting("theme") === "dark" ? "dark" : "light";
 }
 
 export function currentHighlightTheme(): HighlightTheme {
@@ -15,8 +18,8 @@ export function currentHighlightTheme(): HighlightTheme {
   return value === "ftpud" || value === "ftpud-dark" ? "ftpud" : "default";
 }
 
-export function monacoTheme(appTheme = currentTheme(), highlightTheme = currentHighlightTheme()): "light" | "vs-dark" | "ftpud" | "ftpud-dark" {
-  return highlightTheme === "ftpud" ? (appTheme === "dark" ? "ftpud-dark" : "ftpud") : appTheme === "light" ? "light" : "vs-dark";
+export function monacoTheme(appTheme = currentTheme(), highlightTheme = currentHighlightTheme()): "vibe-light" | "vibe-dark" | "ftpud" | "ftpud-dark" {
+  return highlightTheme === "ftpud" ? (appTheme === "dark" ? "ftpud-dark" : "ftpud") : appTheme === "light" ? "vibe-light" : "vibe-dark";
 }
 
 export function configureMonacoThemes(monaco: Monaco): void {
@@ -56,12 +59,34 @@ export function configureMonacoThemes(monaco: Monaco): void {
       }
     });
   }
+  const surfaceColors = (mode: AppTheme) => {
+    const p = workspacePalette[mode];
+    return {
+      "editor.background": p.background, "editor.foreground": p.foreground,
+      "editorGutter.background": p.background, "editor.lineHighlightBackground": p.line,
+      "editorLineNumber.foreground": p.muted, "editorLineNumber.activeForeground": p.active,
+      "editor.selectionBackground": p.selection, "editor.inactiveSelectionBackground": p.selection,
+      "editorIndentGuide.background1": p.border, "editorIndentGuide.activeBackground1": p.muted,
+      "editorWidget.background": p.widget, "editorWidget.border": p.border,
+      "editorSuggestWidget.background": p.widget, "editorSuggestWidget.border": p.border,
+      "editorSuggestWidget.foreground": p.foreground, "editorSuggestWidget.selectedBackground": p.selection,
+      "editorHoverWidget.background": p.widget, "editorHoverWidget.border": p.border,
+      "editorOverviewRuler.border": p.border, "editorCursor.foreground": p.accent,
+      "input.background": p.background, "input.foreground": p.foreground, "input.border": p.border,
+      "list.hoverBackground": p.line, "list.activeSelectionBackground": p.selection,
+      "focusBorder": p.accent, "menu.background": p.widget, "menu.foreground": p.foreground,
+      "menu.border": p.border, "menu.selectionBackground": p.selection,
+    };
+  };
+  for (const mode of ["light", "dark"] as const) monaco.editor.defineTheme(`vibe-${mode}`, {
+    base: mode === "light" ? "vs" : "vs-dark", inherit: true, rules: [], colors: surfaceColors(mode),
+  });
   monaco.editor.defineTheme("ftpud", {
     base: "vs",
     inherit: true,
     rules: [
       // Palette from the Ftpud Java editor reference.
-      { token: "", foreground: "000000", background: "FFFFFF" },
+      { token: "", foreground: "25324D", background: "F8FAFF" },
       { token: "identifier", foreground: "000000" },
       { token: "keyword", foreground: "000080", fontStyle: "bold" },
       { token: "number", foreground: "0000FF" },
@@ -104,18 +129,10 @@ export function configureMonacoThemes(monaco: Monaco): void {
       { token: "invalid", foreground: "000000", background: "FF0000" }
     ],
     colors: {
-      "editor.background": "#FFFFFF",
-      "editor.foreground": "#000000",
-      "editor.lineHighlightBackground": "#FFF9E2",
-      "editorLineNumber.foreground": "#AEB3C2",
-      "editorLineNumber.activeForeground": "#767A8A",
-      "editor.selectionBackground": "#A6D2FF",
-      "editor.inactiveSelectionBackground": "#D7E9FB",
-      "editorIndentGuide.background1": "#EBECF0",
-      "editorIndentGuide.activeBackground1": "#AEB3C2",
+
       "editorRuler.foreground": "#DDDDDD",
       "editorWhitespace.foreground": "#D4D4D4",
-      "editorGutter.background": "#FFFFFF",
+
       "editor.foldBackground": "#E9F5E6",
       "editorBracketMatch.background": "#C9ECEC",
       "editorBracketMatch.border": "#62B3B3",
@@ -128,14 +145,15 @@ export function configureMonacoThemes(monaco: Monaco): void {
       "diffEditor.removedTextBackground": "#D9DBE0",
       "editorError.background": "#FF1100",
       "editorError.foreground": "#FF0000",
-      "editorOverviewRuler.errorForeground": "#CF5B56"
+      "editorOverviewRuler.errorForeground": "#CF5B56",
+      ...surfaceColors("light")
     }
   });
   monaco.editor.defineTheme("ftpud-dark", {
     base: "vs-dark",
     inherit: true,
     rules: [
-      { token: "", foreground: "D4D4D4", background: "1E1F22" },
+      { token: "", foreground: "DCE4F5", background: "171E2E" },
       { token: "identifier", foreground: "D4D4D4" },
       { token: "keyword", foreground: "7AA2F7" },
       { token: "number", foreground: "8DB6FF" },
@@ -171,23 +189,15 @@ export function configureMonacoThemes(monaco: Monaco): void {
       { token: "invalid", background: "8B3037" }
     ],
     colors: {
-      "editor.background": "#1E1F22",
-      "editor.foreground": "#D4D4D4",
-      "editor.lineHighlightBackground": "#26282D",
-      "editorLineNumber.foreground": "#60636B",
-      "editorLineNumber.activeForeground": "#A4A7AE",
-      "editor.selectionBackground": "#365880",
-      "editor.inactiveSelectionBackground": "#2B405B",
-      "editorIndentGuide.background1": "#34363B",
-      "editorIndentGuide.activeBackground1": "#5A5D65",
-      "editorGutter.background": "#1E1F22",
+
       "editor.foldBackground": "#294333",
       "editorBracketMatch.background": "#31595B",
       "editorBracketMatch.border": "#65AEB0",
       "diffEditor.insertedLineBackground": "#203B2A88",
       "diffEditor.removedLineBackground": "#41272B88",
       "diffEditor.insertedTextBackground": "#315B3C99",
-      "diffEditor.removedTextBackground": "#66343A99"
+      "diffEditor.removedTextBackground": "#66343A99",
+      ...surfaceColors("dark")
     }
   });
 }

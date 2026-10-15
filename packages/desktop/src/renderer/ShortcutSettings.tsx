@@ -1,3 +1,4 @@
+import { RotateCcw } from "lucide-react";
 import { useState, type KeyboardEvent } from "react";
 import {
   formatShortcut,
@@ -56,7 +57,7 @@ export function ShortcutSettings({
     >
       <div className="shortcut-settings-header">
         <strong id="shortcut-settings-title">Keyboard shortcuts</strong>
-        <button onClick={onReset}>Reset all</button>
+        <button className="settings-reset icon-button" aria-label="Reset all shortcuts" title="Reset all shortcuts" onClick={onReset}><RotateCcw size={14} /></button>
       </div>
       <small>
         Choose a command, then press a shortcut. Backspace clears it.
