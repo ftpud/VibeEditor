@@ -1,7 +1,11 @@
 export type Panel = { id: string; type: "explorer" | "editor" | "terminal" | "java" | "problems" | "gitlog" };
-export type EditorTab = { workflowRunId?: string; workflowBlockId?: string;
+export type EditorTab = {
+  workflowId?: string;
+  workflowTaskId?: string;
+  workflowRunId?: string;
+  workflowBlockId?: string;
   id: string;
-  type: "file" | "diff" | "useful" | "agent" | "skill" | "runConfig" | "workflowDocument";
+  type: "file" | "diff" | "useful" | "agent" | "skill" | "runConfig" | "workflowDocument" | "workflow";
   title: string;
   path: string;
   /** Stable owner for every workspace-relative path held by this tab. */
@@ -21,6 +25,8 @@ export type EditorTab = { workflowRunId?: string; workflowBlockId?: string;
   markdownMode?: "edit" | "preview";
   usefulScope?: "global" | "local";
   skillId?: string;
+  /** Relative supporting-document path; supporting files are read-only. */
+  skillPath?: string;
   agentScope?: "global" | "local";
   runConfigScope?: "global" | "local";
 };

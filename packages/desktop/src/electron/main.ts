@@ -55,6 +55,19 @@ onIpc("desktop:settings-load", (event) => { event.returnValue = settings.all(); 
 onIpc("desktop:settings-write", (_event, key: unknown, value: unknown) => settings.set(key, value));
 app.on("before-quit", () => settings.flush());
 
+onIpc("desktop:fullscreen-state", (event) => {
+  const owner = BrowserWindow.fromWebContents(event.sender);
+  if (owner) event.sender.send("desktop:fullscreen-changed", owner.isFullScreen());
+});
+
+onIpc("desktop:window-theme", (event, theme: unknown) => {
+  if (theme !== "light" && theme !== "dark") return;
+  const owner = BrowserWindow.fromWebContents(event.sender);
+  if (!owner) return;
+  owner.setBackgroundColor(theme === "dark" ? "#141927" : "#f6f8fd");
+  if (process.platform !== "darwin") owner.setTitleBarOverlay({ color: theme === "dark" ? "#141927" : "#edf1fc", symbolColor: theme === "dark" ? "#dce4f5" : "#25324d", height: 48 });
+});
+
 onIpc("editor:dirty-state", (_event, dirty: boolean) => { hasDirtyTabs = dirty; });
 handleIpc("desktop:clipboard-read", () => clipboard.readText());
 handleIpc("desktop:restore-input-focus", (event) => restoreWindowInputFocus(BrowserWindow.fromWebContents(event.sender)));
@@ -79,7 +92,10 @@ function createWindow(extraQuery: Record<string, string> = {}): void {
     height: 800,
     minWidth: 760,
     minHeight: 480,
-    backgroundColor: "#181818",
+    backgroundColor: "#f6f8fd",
+    titleBarStyle: "hidden",
+    trafficLightPosition: { x: 16, y: 18 },
+    ...(process.platform !== "darwin" ? { titleBarOverlay: { color: "#edf1fc", symbolColor: "#25324d", height: 48 } } : {}),
     webPreferences: {
       preload: path.join(directory, "preload.cjs"),
       contextIsolation: true,
@@ -87,6 +103,9 @@ function createWindow(extraQuery: Record<string, string> = {}): void {
       webSecurity: true
     }
   });
+  const publishFullscreen = () => window.webContents.send("desktop:fullscreen-changed", window.isFullScreen());
+  window.on("enter-full-screen", publishFullscreen);
+  window.on("leave-full-screen", publishFullscreen);
   window.removeMenu();
   window.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
   window.webContents.on("will-navigate", (event, url) => {

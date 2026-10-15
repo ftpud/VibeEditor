@@ -1,6 +1,15 @@
 const { contextBridge, ipcRenderer } = require("electron") as typeof import("electron");
 
 contextBridge.exposeInMainWorld("gateway", {
+  platform: process.platform,
+  onFullscreenChange(listener: (fullscreen: boolean) => void): () => void {
+    let disposed = false;
+    let receivedEvent = false;
+    const handler = (_event: unknown, fullscreen: unknown) => { if (typeof fullscreen === "boolean") { receivedEvent = true; listener(fullscreen); } };
+    ipcRenderer.on("gateway:fullscreen-changed", handler);
+    void ipcRenderer.invoke("gateway:window-fullscreen").then((fullscreen: unknown) => { if (!disposed && !receivedEvent && typeof fullscreen === "boolean") listener(fullscreen); }).catch(() => undefined);
+    return () => { disposed = true; ipcRenderer.removeListener("gateway:fullscreen-changed", handler); };
+  },
   get: () => ipcRenderer.invoke("gateway:get"),
   saveRepository: (value: unknown) => ipcRenderer.invoke("gateway:saveRepository", value),
   refreshStatuses: (connectionId?: string) => ipcRenderer.invoke("gateway:refreshStatuses", connectionId),

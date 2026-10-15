@@ -57,7 +57,9 @@ describe("workflow apps", () => {
     expect((await execute("start", { command: script })).pid).toBe(started.pid);
     expect((await execute("status")).status).toBe("running");
     expect(await execute("kill")).toMatchObject({ status: "exited", signal: "SIGKILL" });
-    expect((await execute("tail")).output).toBe(tail.output);
+    // The shell can append a background-job notification before it is stopped.
+    // Retain the earlier output without assuming the last two lines are frozen.
+    expect((await execute("tail", { app: { name: "server", action: "tail", lines: 10 } })).output).toContain(tail.output);
     expect((await execute("kill")).status).toBe("exited");
     const restarted = await execute("start", { command: "exec sleep 300" });
     expect(restarted.pid).not.toBe(started.pid);

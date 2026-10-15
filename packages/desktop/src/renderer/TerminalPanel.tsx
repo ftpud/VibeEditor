@@ -1,7 +1,10 @@
+import { ContextMenu } from "./ContextMenu";
+import { workspacePalette } from "./workspace-palette";
+import { menuPosition } from "./menu-position";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { Terminal } from "@xterm/xterm";
-import { ClipboardPaste, Copy, Pencil, Plus, X } from "lucide-react";
+import { ClipboardPaste, Copy, Pencil, Plus, SquareTerminal, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { createTerminalOutput, terminalBufferText } from "./terminal-output";
 import type { CoreClient } from "./client";
@@ -59,6 +62,13 @@ export function TerminalTabButton({ tab, rootAlias, active, highlighted, onActiv
   const [draft, setDraft] = useState(tab.title);
   const renameInputRef = useRef<HTMLInputElement>(null);
   useEffect(() => { if (renaming) renameInputRef.current?.select(); }, [renaming]);
+  useEffect(() => {
+    if (!menu) return;
+    const close = () => setMenu(undefined);
+    const escape = (event: KeyboardEvent) => { if (event.key === "Escape") close(); };
+    window.addEventListener("mousedown", close); window.addEventListener("keydown", escape); window.addEventListener("blur", close);
+    return () => { window.removeEventListener("mousedown", close); window.removeEventListener("keydown", escape); window.removeEventListener("blur", close); };
+  }, [menu]);
   const beginRename = () => { setMenu(undefined); setDraft(tab.title); setRenaming(true); };
   const finishRename = () => {
     if (!renaming) return;
@@ -85,16 +95,16 @@ export function TerminalTabButton({ tab, rootAlias, active, highlighted, onActiv
     onDragStart={(event) => { event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/plain", tab.id); }}
     onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = "move"; }}
     onDrop={(event) => { event.preventDefault(); const sourceId = event.dataTransfer.getData("text/plain"); if (sourceId && sourceId !== tab.id) onMove?.(sourceId, tab.id); }}
-    onContextMenu={(event) => { event.preventDefault(); setMenu({ x: Math.min(event.clientX, window.innerWidth - 160), y: Math.min(event.clientY, window.innerHeight - 74) }); }}
+    onContextMenu={(event) => { event.preventDefault(); setMenu({ x: menuPosition(event.clientX, event.clientY, 200, 90, window.innerWidth, window.innerHeight).x, y: menuPosition(event.clientX, event.clientY, 200, 90, window.innerWidth, window.innerHeight).y }); }}
   >
-    <span>{tab.title}{rootAlias && <small className="root-badge">{rootAlias}</small>}{visibleStatus}</span>
+    <SquareTerminal size={14} className="terminal-tab-icon" /><span className="terminal-tab-label">{tab.title}{rootAlias && <small className="root-badge">{rootAlias}</small>}{visibleStatus}</span>
     {tab.hasUnreadOutput && <span className="terminal-activity-dot" role="img" aria-label="New terminal output" />}
-    <span className="close" title={`Close ${tab.title}`} onClick={(event) => { event.stopPropagation(); onClose(tab); }}><X size={13} /></span>
+    <span className="close" role="button" tabIndex={0} aria-label={`Close ${tab.title}`} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); event.stopPropagation(); onClose(tab); } }} title={`Close ${tab.title}`} onClick={(event) => { event.stopPropagation(); onClose(tab); }}><X size={13} /></span>
   </button>}
-    {menu && <div className="terminal-context-menu terminal-tab-menu" style={{ left: menu.x, top: menu.y }} onMouseDown={(event) => event.stopPropagation()}>
+    {menu && <ContextMenu className="terminal-context-menu terminal-tab-menu" style={{ left: menu.x, top: menu.y }} onMouseDown={(event) => event.stopPropagation()}>
       <button onClick={beginRename}><Pencil size={14} /><span>Rename</span></button>
       <button onClick={() => { setMenu(undefined); onDuplicate?.(tab); }}><Copy size={14} /><span>Duplicate</span></button>
-    </div>}
+    </ContextMenu>}
   </>;
 }
 
@@ -141,7 +151,7 @@ function TerminalView({ theme, fontFamily, fontSize, lineHeight, client, tab, ac
       fontSize,
       lineHeight,
       scrollback: 5000,
-      theme: theme === "light" ? { background: "#ffffff", foreground: "#2b2d30", cursor: "#2b2d30", selectionBackground: "#b9d7ff" } : { background: "#1e1f22", foreground: "#d4d4d4", cursor: "#d4d4d4", selectionBackground: "#4d5157" }
+      theme: { background: workspacePalette[theme].background, foreground: workspacePalette[theme].foreground, cursor: workspacePalette[theme].accent, selectionBackground: workspacePalette[theme].selection }
     });
     const fit = new FitAddon();
     terminal.loadAddon(fit);
@@ -203,8 +213,8 @@ function TerminalView({ theme, fontFamily, fontSize, lineHeight, client, tab, ac
   }, [contextMenu]);
 
   return <><div ref={containerRef} className={`terminal-instance ${active ? "active" : ""}`} onContextMenu={(event) => { event.preventDefault(); setContextMenu({ x: Math.min(event.clientX, window.innerWidth - 150), y: Math.min(event.clientY, window.innerHeight - 42) }); }} />
-    {contextMenu && <div className="terminal-context-menu" style={{ left: contextMenu.x, top: contextMenu.y }} onMouseDown={(event) => event.stopPropagation()}>
+    {contextMenu && <ContextMenu className="terminal-context-menu" style={{ left: contextMenu.x, top: contextMenu.y }} onMouseDown={(event) => event.stopPropagation()}>
       <button onClick={() => { setContextMenu(undefined); void window.desktop?.readClipboard().then(paste); }}><ClipboardPaste size={14} /><span>Paste</span></button>
-    </div>}
+    </ContextMenu>}
   </>;
 }

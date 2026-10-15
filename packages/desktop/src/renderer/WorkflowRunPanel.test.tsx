@@ -15,6 +15,22 @@ const run: HarnessRun = { id: "run", harnessId: workflow.id, harnessVersion: 1, 
 const props = () => ({ harnesses: [workflow], runs: [], onRun: vi.fn().mockResolvedValue(run), onCancelRun: vi.fn().mockResolvedValue(undefined), onError: vi.fn() });
 
 describe("Workflow run library", () => {
+  it("opens the chosen workflow in an editor tab", () => {
+    const onOpenWorkflow = vi.fn();
+    render(<WorkflowRunPanel {...props()} onOpenWorkflow={onOpenWorkflow} />);
+    fireEvent.click(screen.getByRole("button", { name: "Open Workspace check in editor tab" }));
+    expect(onOpenWorkflow).toHaveBeenCalledWith(workflow);
+    expect(screen.getByRole("button", { name: "Show Workspace check" }).getAttribute("aria-expanded")).toBe("false");
+  });
+
+  it("opens editor views expanded with live run controls and no nested tab button", () => {
+    render(<WorkflowRunPanel {...props()} editorView runs={[run]} />);
+    expect(screen.getByRole("button", { name: "Stop run run" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Inspect: running" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Show Workspace check" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Open Workspace check in editor tab" })).toBeNull();
+  });
+
   it("loads full run details only when the workflow is opened", async () => {
     const summary: HarnessRun = { ...run, summary: true, definition: undefined, input: "", blocks: run.blocks.map(({ blockId, status }) => ({ blockId, status })) };
     let resolve!: (run: HarnessRun) => void;
@@ -471,6 +487,18 @@ describe("Workflow run library", () => {
     fireEvent.click(screen.getByRole("button", { name: "Show raw prompt" }));
     expect(document.querySelector(".workflow-message-raw")?.textContent).toBe("Check workspace");
     expect(callbacks.onRun).not.toHaveBeenCalled();
+  });
+
+  it("opens saved designs in a tab and asks users to save edits first", () => {
+    const onOpenWorkflow = vi.fn();
+    render(<HarnessPanel {...props()} designOnly onOpenWorkflow={onOpenWorkflow} providers={[]} agents={[]} onCreate={vi.fn()} onSave={vi.fn()} onDelete={vi.fn()} />);
+    const open = screen.getByRole("button", { name: "Open workflow in editor tab" }) as HTMLButtonElement;
+    fireEvent.click(open);
+    expect(onOpenWorkflow).toHaveBeenCalledWith(workflow);
+    fireEvent.change(screen.getByLabelText("Workflow name"), { target: { value: "Unsaved name" } });
+    expect(open.disabled).toBe(true);
+    fireEvent.click(open);
+    expect(onOpenWorkflow).toHaveBeenCalledTimes(1);
   });
 
   it("locks Workflow design to editing and hides launch controls", () => {

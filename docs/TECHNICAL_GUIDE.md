@@ -53,6 +53,11 @@ An `npm install` without `VIBE_SKIP_JDTLS=1` attempts to download the pinned JDT
 npm run install:jdtls
 ```
 
+Gateway automatically runs this installer when provisioning a remote server release,
+including when reusing a cached release. Its progress appears as `install-java-tools`
+in the provisioning log. Installed versions are reused; a failed installation stops
+provisioning before switching Core, so retrying can finish the download.
+
 The bundled JRE installer supports Windows, macOS, and Linux on x64 or ARM64.
 
 ## Development
@@ -69,7 +74,7 @@ Then start Desktop in another terminal:
 npm run dev:desktop -- --host 127.0.0.1 --port 7331
 ```
 
-Desktop connects automatically only when both options are supplied; otherwise it opens the connection screen. Core defaults to `127.0.0.1:7331`, but `--workspace` has no default. The development launchers compile Electron code, start Vite (`5173` for Desktop and `5174` for Gateway), and launch Electron. Core uses `tsx watch`.
+Desktop connects automatically only when both options are supplied; otherwise it opens the connection screen. Core defaults to `127.0.0.1:7331`, but `--workspace` has no default. The development launchers compile Electron code, start Vite (`5173` for Desktop and `5174` for Gateway), and launch Electron. Core uses `tsx watch`. Its development launcher allows the exact Desktop origins `http://localhost:5173` and `http://127.0.0.1:5173` in addition to any configured `REMOTE_IDE_ALLOWED_ORIGINS`; session authentication remains required.
 
 Run Gateway in development with:
 

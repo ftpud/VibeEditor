@@ -924,7 +924,7 @@ async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStor
       return { workspace: workspacePath, projectName: path.basename(path.resolve(rootWorkspace)), tree: await filesystem.listTree(request.payload.includeIgnored === true), options: await workspaceState.load(), ...registry };
     }
     case "skills.list": return new SkillsStore(undefined, rootWorkspace).list(workspacePath);
-    case "skills.read": return { content: await new SkillsStore(undefined, rootWorkspace).read(request.payload.id, workspacePath) };
+    case "skills.read": return { content: await new SkillsStore(undefined, rootWorkspace).readResource(request.payload.id, workspacePath, request.payload.path) };
     case "skills.write": await new SkillsStore(undefined, rootWorkspace).write(request.payload.id, workspacePath, request.payload.content); return {};
     case "skills.delete": await new SkillsStore(undefined, rootWorkspace).delete(request.payload.id, workspacePath); return {};
     case "skills.policy.moveToLocal": await new SkillsStore(undefined, rootWorkspace).movePolicyToLocal(workspacePath); return {};

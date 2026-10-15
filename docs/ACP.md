@@ -256,6 +256,11 @@ file is recreated at startup. Choose the agent in the chatbox to configure the a
 with natural language. Its `mcpServers: [vibe-editor]` preset grants access to the
 built-in app tools. The agent reads the configuration skill through the same
 configuration interface; projects can also allow/enable the skill in the Skills panel.
+The skill links supporting references covering every workflow block and connection,
+document formats and examples, and the complete app/flow command schemas. Core
+installs these beside the skill; agents read them relative to its `baseDirectory`.
+Terminal Control guidance reserves persistent terminals for work that may need
+interaction, with Script for finite commands and Run App for managed services.
 
 Three generic MCP tools expose logical configuration documents instead of private
 registry paths:
@@ -263,6 +268,7 @@ registry paths:
 - `configuration_list` lists document resource names, formats and provider metadata.
   Set `include_models: true` when choosing provider/model settings for AI workflows.
 - `configuration_read` returns `content`, `exists` and a `revision` for a resource.
+  Existing skill documents also include `baseDirectory` for resolving supporting files.
 - `configuration_write` accepts `resource`, full-text `content`, and
   `expected_revision`. Supply the revision from the read; use JSON `null` to create
   a new agent, skill or useful file. A stale revision is rejected. Writes through
