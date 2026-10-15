@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AiSession } from "@remote-ide/protocol";
 import { AiPanel, ContextUsageIndicator, contextUsage, resolveAiLink } from "./AiPanel";
@@ -91,5 +91,38 @@ describe("activity output", () => {
     expect(screen.getByText("Build succeeded")).toBeTruthy();
     expect(summary.querySelector("button, a")).toBeNull();
     expect(screen.queryByTitle("Open this activity's terminal")).toBeNull();
+  });
+});
+
+describe("composer drafts", () => {
+  function props() {
+    return { provider: "codex", providers: [], session: session("draft-session", "Hello"), sessions: [], models: [], attachments: [], permissionOwner: { provider: "codex" }, onProviderChange: vi.fn(), onConfigurationChange: vi.fn(), onAttachmentsChange: vi.fn(), onDraftChange: vi.fn(), onSend: vi.fn(async () => {}), onSteer: vi.fn(), onInterrupt: vi.fn(), onNewSession: vi.fn(), onSwitchSession: vi.fn(), onRemoveSession: vi.fn(), onResolvePermission: vi.fn() };
+  }
+  it("keeps the latest keystrokes when a parent render echoes an older draft", () => {
+    const handlers = props();
+    const view = render(<AiPanel {...handlers} draft="" />);
+    const input = screen.getByRole("textbox");
+    fireEvent.change(input, { target: { value: "h" } });
+    fireEvent.change(input, { target: { value: "he" } });
+    fireEvent.change(input, { target: { value: "hello" } });
+    view.rerender(<AiPanel {...handlers} draft="h" />);
+    expect(input).toHaveProperty("value", "hello");
+    view.rerender(<AiPanel {...handlers} draft="he" />);
+    expect(input).toHaveProperty("value", "hello");
+    view.rerender(<AiPanel {...handlers} draft="External review request" />);
+    expect(input).toHaveProperty("value", "External review request");
+  });
+  it.each(["success", "failure"])("keeps text written while an earlier send completes with %s", async (outcome) => {
+    const handlers = props();
+    let resolve!: () => void; let reject!: (error: Error) => void;
+    handlers.onSend.mockImplementation(() => new Promise<void>((done, failed) => { resolve = done; reject = failed; }));
+    render(<AiPanel {...handlers} />);
+    const input = screen.getByRole("textbox");
+    fireEvent.change(input, { target: { value: "First message" } });
+    fireEvent.click(screen.getByTitle("Send prompt"));
+    fireEvent.change(input, { target: { value: "Next message" } });
+    await act(async () => { if (outcome === "success") resolve(); else reject(new Error("SSH disconnected")); });
+    expect(input).toHaveProperty("value", "Next message");
+    expect(handlers.onDraftChange).toHaveBeenLastCalledWith("Next message");
   });
 });

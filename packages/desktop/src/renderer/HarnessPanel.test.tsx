@@ -1104,3 +1104,16 @@ describe("HarnessPanel", () => {
     await waitFor(() => expect(onRetryPause).toHaveBeenCalledWith("run-1", "a", "pause-4"));
   });
 });
+
+it.each(["success", "failure"])("keeps a Chatbox draft typed while its previous message completes with %s", async (outcome) => {
+  const block: HarnessBlock = { id: "chat", type: "chatbox", label: "Chat", prompt: "", position: { x: 0, y: 0 } };
+  let resolve!: () => void; let reject!: (error: Error) => void;
+  const onChat = vi.fn(() => new Promise<void>((done, failed) => { resolve = done; reject = failed; }));
+  render(<BlockRunDetails block={block} onClose={vi.fn()} onChat={onChat} />);
+  const input = screen.getByLabelText("Message Chat");
+  fireEvent.change(input, { target: { value: "First message" } });
+  fireEvent.click(screen.getByRole("button", { name: "Send chat message" }));
+  fireEvent.change(input, { target: { value: "Next message" } });
+  await act(async () => { if (outcome === "success") resolve(); else reject(new Error("SSH disconnected")); });
+  expect(input).toHaveProperty("value", "Next message");
+});

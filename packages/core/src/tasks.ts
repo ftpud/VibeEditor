@@ -6,9 +6,11 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { CoreError } from "./errors.js";
 import { WorkspaceStateStore } from "./workspace-state.js";
+import { retryProcessSpawn } from "./process-spawn.js";
 import { serializedRootMutation } from "./root-mutation.js";
 
 const execFileAsync = promisify(execFile);
+const taskGit = (workspace: string, args: string[]) => retryProcessSpawn(() => execFileAsync("git", ["-C", workspace, ...args], { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 }));
 export type WorkspaceTask = { id: string; name: string; branch: string; baseBranch: string; status: "active" | "finished"; archived: boolean };
 export type TaskCommitMessageUpdate = { task: WorkspaceTask; message: string; overwritten: boolean };
 export type TaskGitCommitMessageUpdate = { task: WorkspaceTask; previousCommit: string; commit: string; previousMessage: string; message: string };
@@ -22,6 +24,7 @@ type Registry = { selectedTaskId?: string; tasks: WorkspaceTask[]; integrations?
 export class WorkspaceTaskStore {
   private readonly directory: string;
   private readonly registryFile: string;
+  private readonly checkedDependencyLinks = new Set<string>();
 
   constructor(private readonly rootWorkspace: string, private readonly stateDirectory = process.env.REMOTE_IDE_STATE_DIR ?? path.join(os.homedir(), ".remote-ide", "workspaces")) {
     const key = crypto.createHash("sha256").update(rootWorkspace).digest("hex");
@@ -42,7 +45,10 @@ export class WorkspaceTaskStore {
       const tasks = validTasks.map((task) => ({ ...task, baseBranch: task.baseBranch || fallbackBaseBranch, status: task.status ?? "active", archived: task.archived ?? false }));
       for (const task of tasks) {
         await this.migrateLegacyCopy(task);
-        await this.removeSharedNodeModules(this.taskPath(task.id));
+        if (!this.checkedDependencyLinks.has(task.id)) {
+          await this.removeSharedNodeModules(this.taskPath(task.id));
+          this.checkedDependencyLinks.add(task.id);
+        }
       }
       const integrations = Array.isArray(value.integrations) ? value.integrations.filter(isIntegrationRecord) : [];
       const registry = { tasks, ...(integrations.length ? { integrations } : {}), ...(value.selectedTaskId && tasks.some((task) => task.id === value.selectedTaskId) ? { selectedTaskId: value.selectedTaskId } : {}) };
@@ -73,16 +79,16 @@ export class WorkspaceTaskStore {
       let createdBranch = false;
       try {
         await mkdir(path.dirname(destination), { recursive: true });
-        await execFileAsync("git", ["-C", this.rootWorkspace, "worktree", "add", "--detach", destination, task.baseBranch], { encoding: "utf8" });
+        await taskGit(this.rootWorkspace, ["worktree", "add", "--quiet", "--detach", destination, task.baseBranch]);
         if (remote) {
-          await execFileAsync("git", ["-C", destination, "switch", "--track", "-c", name, requested], { encoding: "utf8" });
+          await taskGit(destination, ["switch", "--quiet", "--track", "-c", name, requested]);
           createdBranch = true;
-        } else if (existing) await execFileAsync("git", ["-C", destination, "switch", name], { encoding: "utf8" });
+        } else if (existing) await taskGit(destination, ["switch", "--quiet", name]);
         else {
-          await execFileAsync("git", ["-C", destination, "switch", "-C", name], { encoding: "utf8" });
-          const upstream = await this.taskUpstream(task.baseBranch);
-          if (upstream) await execFileAsync("git", ["-C", destination, "branch", "--set-upstream-to", upstream, name], { encoding: "utf8" });
+          await taskGit(destination, ["switch", "--quiet", "-C", name]);
           createdBranch = true;
+          const upstream = await this.taskUpstream(task.baseBranch);
+          if (upstream) await taskGit(destination, ["branch", "--set-upstream-to", upstream, name]);
         }
         await this.copyWorkspaceState(this.rootWorkspace, destination);
         await this.save({ ...registry, tasks: [...registry.tasks, task], ...(select ? { selectedTaskId: task.id } : {}) });
@@ -431,20 +437,20 @@ export class WorkspaceTaskStore {
   }
 
   private async copyWorkspaceState(source: string, destination: string): Promise<void> {
-    const stagedPatch = (await execFileAsync("git", ["-C", source, "diff", "--cached", "--binary"], { encoding: "buffer", maxBuffer: 100 * 1024 * 1024 })).stdout;
-    const deleted = (await execFileAsync("git", ["-C", source, "ls-files", "--deleted", "-z"], { encoding: "utf8" })).stdout.split("\0").filter(Boolean);
-    await cp(source, destination, { recursive: true, force: true, filter: (item) => item !== path.join(source, ".git") && !isNodeModulesPath(source, item) });
+    const stagedPatch = (await retryProcessSpawn(() => execFileAsync("git", ["-C", source, "diff", "--cached", "--binary"], { encoding: "buffer", maxBuffer: 100 * 1024 * 1024 }))).stdout;
+    const deleted = (await taskGit(source, ["ls-files", "--deleted", "-z"])).stdout.split("\0").filter(Boolean);
+    await cp(source, destination, { recursive: true, force: true, verbatimSymlinks: true, filter: (item) => item !== path.join(source, ".git") && !isNodeModulesPath(source, item) });
     for (const relative of deleted) await rm(path.join(destination, relative), { recursive: true, force: true });
     if (!stagedPatch.length) return;
     const patchFile = path.join(path.dirname(destination), `staged-${process.pid}-${crypto.randomUUID()}.patch`);
     await writeFile(patchFile, stagedPatch);
-    try { await execFileAsync("git", ["-C", destination, "apply", "--cached", "--binary", patchFile], { maxBuffer: 100 * 1024 * 1024 }); }
+    try { await retryProcessSpawn(() => execFileAsync("git", ["-C", destination, "apply", "--cached", "--binary", patchFile], { maxBuffer: 100 * 1024 * 1024 })); }
     finally { await rm(patchFile, { force: true }); }
   }
 
   private async branchExists(branch: string): Promise<boolean> {
-    try { await execFileAsync("git", ["-C", this.rootWorkspace, "show-ref", "--verify", "--quiet", `refs/heads/${branch}`]); return true; }
-    catch { return false; }
+    try { await taskGit(this.rootWorkspace, ["show-ref", "--verify", "--quiet", `refs/heads/${branch}`]); return true; }
+    catch (error) { if ((error as { code?: unknown }).code === 1) return false; throw error; }
   }
 
   private async removeSharedNodeModules(workspace: string): Promise<void> {
@@ -476,7 +482,7 @@ export class WorkspaceTaskStore {
 
   private async rootBranch(): Promise<string> {
     try {
-      return (await execFileAsync("git", ["-C", this.rootWorkspace, "branch", "--show-current"], { encoding: "utf8" })).stdout.trim() || "HEAD";
+      return (await taskGit(this.rootWorkspace, ["branch", "--show-current"])).stdout.trim() || "HEAD";
     }
     catch (error) { throw new CoreError("GIT_FAILED", `Could not determine task base branch: ${gitError(error)}`); }
   }
@@ -484,9 +490,9 @@ export class WorkspaceTaskStore {
   private async taskUpstream(baseBranch: string): Promise<string | undefined> {
     if (baseBranch === "HEAD") return undefined;
     try {
-      const inherited = (await execFileAsync("git", ["-C", this.rootWorkspace, "rev-parse", "--abbrev-ref", "--symbolic-full-name", `${baseBranch}@{upstream}`], { encoding: "utf8" })).stdout.trim();
+      const inherited = (await taskGit(this.rootWorkspace, ["rev-parse", "--abbrev-ref", "--symbolic-full-name", `${baseBranch}@{upstream}`])).stdout.trim();
       if (inherited && inherited !== "HEAD") return inherited;
-    } catch { /* A local-only base branch has no configured upstream. */ }
+    } catch (error) { if (typeof (error as { code?: unknown }).code !== "number") throw error; /* A local-only base branch has no configured upstream. */ }
     return baseBranch;
   }
 

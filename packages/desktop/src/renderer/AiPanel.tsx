@@ -64,6 +64,14 @@ export function ContextUsageIndicator({ session }: { session: AiSession }) {
 
 export function AiPanel({ skills = [], onSkillsChange, onOpenSkills, provider, providers, session, sessions, models, usage, attachments, draft = "", workspacePath = "", permissionOwner, permissionActionsDisabled, sessionChangesDisabled, onProviderChange, onConfigurationChange, onAttachmentsChange, onDraftChange = () => undefined, onSend, onSendAsTask, onSteer, onInterrupt, onNewSession, onSwitchSession, onRemoveSession, onResolvePermission, onOpenFile = () => undefined, onOpenExternal = () => undefined }: { skills?: SkillFile[]; onSkillsChange?(ids: string[]): Promise<void>; onOpenSkills?(): void; provider: AiProvider; providers: AiProviderDescriptor[]; session: AiSession; sessions: AiSession[]; models: AiModel[]; usage?: AiUsage; attachments: AiAttachment[]; draft?: string; workspacePath?: string; permissionOwner: PermissionRequestOwner; permissionActionsDisabled?: boolean; sessionChangesDisabled?: boolean; onProviderChange(provider: AiProvider): void; onConfigurationChange(configuration: AiConfiguration): void; onAttachmentsChange(attachments: AiAttachment[]): void; onDraftChange?(draft: string): void; onSend(prompt: string, configuration: AiConfiguration, attachments: AiAttachment[]): Promise<void>; onSendAsTask?: (prompt: string, configuration: AiConfiguration, attachments: AiAttachment[]) => Promise<void>; onSteer(prompt: string): Promise<void>; onInterrupt(): void; onNewSession(): void; onSwitchSession(session: AiSession): void; onRemoveSession(session: AiSession): void; onResolvePermission(owner: PermissionRequestOwner, requestId: string, optionId?: string): Promise<void>; onOpenFile?(path: string, line?: number, column?: number): void; onOpenExternal?(url: string): void }) {
   const [prompt, setPrompt] = useState(draft);
+  const promptRevision = useRef(0);
+  const localDrafts = useRef(new Set([draft]));
+  const changePrompt = (value: string) => {
+    promptRevision.current++;
+    localDrafts.current.add(value);
+    if (localDrafts.current.size > 64) localDrafts.current.delete(localDrafts.current.values().next().value!);
+    setPrompt(value); onDraftChange(value);
+  };
   const [model, setModel] = useState(session.model);
   const [reasoning, setReasoning] = useState(session.reasoning);
   const [configuration, setConfiguration] = useState<AiConfiguration>(session.configuration ?? {});
@@ -77,7 +85,13 @@ export function AiPanel({ skills = [], onSkillsChange, onOpenSkills, provider, p
   const pinnedRef = useRef(true);
   const shownSessionRef = useRef(session.id);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  useEffect(() => { setPrompt(draft); }, [draft]);
+  useEffect(() => {
+    // Parent renders can echo a draft captured before the latest keystroke.
+    if (localDrafts.current.has(draft)) return;
+    promptRevision.current++;
+    localDrafts.current = new Set([draft]);
+    setPrompt(draft);
+  }, [draft]);
   useEffect(() => { setModel(session.model); setReasoning(session.reasoning); setConfiguration(session.configuration ?? {}); }, [session.model, session.reasoning, session.configuration]);
   const lastMessage = session.messages[session.messages.length - 1];
   // `scrollIntoView` on a trailing anchor scrolls whichever ancestor it finds first, which after a
@@ -115,19 +129,21 @@ export function AiPanel({ skills = [], onSkillsChange, onOpenSkills, provider, p
   const send = async () => {
     if (submitting || taskSubmitting || (!prompt.trim() && (attachments.length === 0 || running))) return;
     const value = prompt;
-    setPrompt("");
+    const revision = promptRevision.current;
+    localDrafts.current.add(""); setPrompt(""); onDraftChange("");
     setSubmitting(true);
-    try { if (running) await onSteer(value); else { await onSend(value, { ...configuration, model, reasoning }, attachments); onAttachmentsChange([]); } onDraftChange(""); }
-    catch { setPrompt(value); }
+    try { if (running) await onSteer(value); else { await onSend(value, { ...configuration, model, reasoning }, attachments); onAttachmentsChange([]); } }
+    catch { if (promptRevision.current === revision) changePrompt(value); }
     finally { setSubmitting(false); }
   };
   const sendAsTask = async () => {
     if (!onSendAsTask || submitting || taskSubmitting || (!prompt.trim() && attachments.length === 0)) return;
     const value = prompt;
-    setPrompt("");
+    const revision = promptRevision.current;
+    localDrafts.current.add(""); setPrompt(""); onDraftChange("");
     setTaskSubmitting(true);
-    try { await onSendAsTask(value, { ...configuration, model, reasoning }, attachments); onAttachmentsChange([]); onDraftChange(""); }
-    catch { setPrompt(value); }
+    try { await onSendAsTask(value, { ...configuration, model, reasoning }, attachments); onAttachmentsChange([]); }
+    catch { if (promptRevision.current === revision) changePrompt(value); }
     finally { setTaskSubmitting(false); }
   };
   const addFiles = async (files: FileList | null) => {
@@ -181,9 +197,9 @@ export function AiPanel({ skills = [], onSkillsChange, onOpenSkills, provider, p
     <div className="ai-composer-resize-handle" onPointerDown={beginComposerResize} />
     <form className="ai-composer" style={{ height: composerHeight }} onSubmit={(event) => { event.preventDefault(); void send(); }}>
       {attachmentError && <div className="ai-attachment-error">{attachmentError}</div>}
-      {matchingCommands.length > 0 && <div className="ai-command-menu">{matchingCommands.map((command) => <button type="button" key={command.name} onClick={() => { const value = `/${command.name.replace(/^\//, "")} `; setPrompt(value); onDraftChange(value); }}><strong>/{command.name.replace(/^\//, "")}</strong><span>{command.description}{command.inputHint ? ` · ${command.inputHint}` : ""}</span></button>)}</div>}
+      {matchingCommands.length > 0 && <div className="ai-command-menu">{matchingCommands.map((command) => <button type="button" key={command.name} onClick={() => { const value = `/${command.name.replace(/^\//, "")} `; changePrompt(value); }}><strong>/{command.name.replace(/^\//, "")}</strong><span>{command.description}{command.inputHint ? ` · ${command.inputHint}` : ""}</span></button>)}</div>}
       {attachments.length > 0 && <div className="ai-attachments">{attachments.map((attachment) => <span className="ai-attachment" key={attachment.id} title={attachment.path ?? attachment.name}><span>{attachment.path ?? attachment.name}</span><button type="button" title={`Remove ${attachment.name}`} onClick={() => onAttachmentsChange(attachments.filter((item) => item.id !== attachment.id))}><X size={12} /></button></span>)}</div>}
-      <textarea value={prompt} placeholder={submitting ? `Connecting to ${providerName}...` : running ? (session.steering ? `Steer ${providerName} while it works...` : `Queue a follow-up for ${providerName}...`) : `Ask ${providerName}...`} onChange={(event) => { setPrompt(event.target.value); onDraftChange(event.target.value); }} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void send(); } }} />
+      <textarea value={prompt} placeholder={submitting ? `Connecting to ${providerName}...` : running ? (session.steering ? `Steer ${providerName} while it works...` : `Queue a follow-up for ${providerName}...`) : `Ask ${providerName}...`} onChange={(event) => changePrompt(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void send(); } }} />
       <div className="ai-composer-actions"><input ref={fileInputRef} type="file" multiple onChange={(event) => void addFiles(event.target.files)} /><button type="button" title="Attach files" disabled={busy} onClick={() => fileInputRef.current?.click()}><Paperclip size={15} /></button>{onSendAsTask && <button type="button" title={taskSubmitting ? "Creating task..." : "Send prompt as a new task"} disabled={submitting || taskSubmitting || (!prompt.trim() && attachments.length === 0)} onClick={() => void sendAsTask()}><ListPlus size={15} /></button>}<button title={submitting ? `Connecting to ${providerName}` : running ? (session.steering ? "Add input to the running turn" : "Queue this for the next turn") : "Send prompt"} disabled={submitting || taskSubmitting || (!prompt.trim() && (running || attachments.length === 0))}><Send size={15} /></button></div>
     </form>
   </div>;

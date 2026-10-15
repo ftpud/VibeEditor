@@ -10,6 +10,7 @@ import { managedProcesses } from "./managed-processes.js";
 import type { RawData } from "ws";
 import { WebSocket, WebSocketServer } from "ws";
 import chokidar from "chokidar";
+import { workspaceWatchOptions } from "./workspace-watch.js";
 import path from "node:path";
 import os from "node:os";
 import crypto from "node:crypto";
@@ -178,22 +179,10 @@ export async function createServer(host: string, port: number, workspacePath: st
   await validation.initialize(workspacePath);
   const workspace = validation.getWorkspace();
   const workspaceState = new WorkspaceStateStore(workspace, process.env.REMOTE_IDE_STATE_DIR);
-  const watcher = chokidar.watch(workspace, {
-    ignoreInitial: true,
-    ignored: (watchPath) => path.relative(workspace, watchPath).split(path.sep).some((part) => part === ".git" || part === "node_modules"),
-    // chokidar 4 falls back to kqueue-backed fs.watch on macOS, which retains a
-    // descriptor for every file. A root plus its task worktree can then leave
-    // enough descriptors in flight for later Git/node-pty spawns to fail with
-    // EBADF. Polling trades a little latency for a bounded descriptor count.
-    usePolling: process.platform === "darwin",
-    interval: 1_000,
-    binaryInterval: 1_500,
-    awaitWriteFinish: { stabilityThreshold: 150, pollInterval: 50 }
-  });
-  await new Promise<void>((resolve, reject) => {
-    watcher.once("ready", resolve);
-    watcher.once("error", reject);
-  });
+  const watcher = chokidar.watch(workspace, await workspaceWatchOptions(workspace));
+  // A large initial scan must not block protocol health or crash Core on a
+  // native watch limit. The filesystem is queried directly by workspace.open.
+  watcher.on("error", (error) => console.error(`[core] watcher initialization: ${String(error)}`));
   let draining = false;
   let inFlight = 0;
   const idleWaiters = new Set<() => void>();
@@ -448,6 +437,7 @@ export async function createServer(host: string, port: number, workspacePath: st
     const relativePath = path.relative(workspace, absolutePath).split(path.sep).join("/");
     if (relativePath && !relativePath.startsWith("..")) rootBatcher.change(relativePath);
   };
+  watcher.on("ready", () => rootBatcher.degrade("Workspace watcher initial scan completed; synchronizing files."));
   watcher
     .on("add", broadcastChange).on("change", broadcastChange).on("unlink", broadcastChange).on("addDir", broadcastChange).on("unlinkDir", broadcastChange)
     .on("raw", (eventName) => { if (String(eventName).includes("OVERFLOW")) rootBatcher.degrade("Filesystem watcher overflow; synchronizing affected files."); })
@@ -549,26 +539,13 @@ export async function createServer(host: string, port: number, workspacePath: st
     };
     const prepareSwitchedWatch = async (nextWorkspace: string, ownerRootId = selectedRoot.id): Promise<SwitchedWatch | undefined> => {
       if (nextWorkspace === workspace) return undefined;
-      const switchedWatcher = chokidar.watch(nextWorkspace, {
-        ignoreInitial: true,
-        ignored: (watchPath) => path.relative(nextWorkspace, watchPath).split(path.sep).some((part) => part === ".git" || part === "node_modules"),
-        usePolling: process.platform === "darwin",
-        interval: 1_000,
-        binaryInterval: 1_500,
-        awaitWriteFinish: { stabilityThreshold: 150, pollInterval: 50 }
-      });
-      // Subscribe immediately: on a small/cached worktree chokidar can become ready while
-      // gitIndexPath() below is still running. Registering after that await misses the one-shot
-      // event and leaves tasks.switch (and the renderer's switching state) pending forever.
-      const watcherReady = new Promise<void>((resolve, reject) => {
-        switchedWatcher.once("ready", resolve);
-        switchedWatcher.once("error", reject);
-      });
+      const switchedWatcher = chokidar.watch(nextWorkspace, await workspaceWatchOptions(nextWorkspace));
       const batcher = new WorkspaceWatchBatcher(ownerRootId, (event) => sendWebSocketData(socket, JSON.stringify(event)));
       const sendChange = (absolutePath: string) => {
         const relativePath = path.relative(nextWorkspace, absolutePath).split(path.sep).join("/");
         if (relativePath && !relativePath.startsWith("..")) batcher.change(relativePath);
       };
+      switchedWatcher.on("ready", () => batcher.degrade("Workspace watcher initial scan completed; synchronizing files."));
       switchedWatcher.on("add", sendChange).on("change", sendChange).on("unlink", sendChange).on("addDir", sendChange).on("unlinkDir", sendChange)
         .on("raw", (eventName) => { if (String(eventName).includes("OVERFLOW")) batcher.degrade("Filesystem watcher overflow; synchronizing affected files."); })
         .on("error", (error) => batcher.degrade(`Filesystem watcher degraded: ${String(error)}`));
@@ -578,7 +555,6 @@ export async function createServer(host: string, port: number, workspacePath: st
         switchedGitIndexWatcher.on("all", () => {
           sendWebSocketData(socket, JSON.stringify({ type: "git.changed", payload: { rootId: ownerRootId } } satisfies ServerEvent));
         });
-        await watcherReady;
         return { watcher: switchedWatcher, gitWatcher: switchedGitIndexWatcher, batcher };
       } catch (error) {
         batcher.dispose(); await switchedWatcher.close(); await switchedGitIndexWatcher?.close(); throw error;

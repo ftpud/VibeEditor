@@ -14,6 +14,6 @@ export function classifyProvisioningFailure(error: unknown): ProvisioningFailure
   const message = error instanceof Error ? error.message : String(error);
   if (/cancelled/i.test(message)) return { message: "Provisioning cancelled", retryable: true, repairable: false };
   if (/node-pty|npm (install|rebuild)|build|dist\//i.test(message)) return { message, retryable: true, repairable: true };
-  if (/timed out|ECONNRESET|connection.*closed|SSH unavailable|not found/i.test(message)) return { message, retryable: true, repairable: false };
+  if (/timed out|ECONNRESET|connection.*closed|SSH unavailable|SSH command interrupted|not found/i.test(message)) return { message, retryable: true, repairable: false };
   return { message, retryable: false, repairable: false };
 }

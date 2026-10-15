@@ -10,6 +10,7 @@ import { randomUUID } from "node:crypto";
 import { CoreError } from "./errors.js";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { retryProcessSpawn } from "./process-spawn.js";
 
 const queues = new Map<string, Promise<void>>();
 const execFileAsync = promisify(execFile);
@@ -108,7 +109,7 @@ async function acquireStateFileLock(lock: string): Promise<string> {
 async function acquireRepositoryLock(workspace: string, fallbackDirectory?: string): Promise<string> {
   let directory: string;
   try {
-    const { stdout } = await execFileAsync("git", ["-C", workspace, "rev-parse", "--git-common-dir"], { encoding: "utf8", env: { ...process.env, LC_ALL: "C" } });
+    const { stdout } = await retryProcessSpawn(() => execFileAsync("git", ["-C", workspace, "rev-parse", "--git-common-dir"], { encoding: "utf8", env: { ...process.env, LC_ALL: "C" } }));
     directory = path.resolve(workspace, stdout.trim());
   } catch (error) {
     if (!fallbackDirectory || !(error as { stderr?: string }).stderr?.includes("not a git repository")) throw error;

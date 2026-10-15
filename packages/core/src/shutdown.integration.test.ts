@@ -219,3 +219,33 @@ it.each(["SIGTERM", "SIGINT"] as const)("flushes saved workspace state and exits
     await rm(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
   }
 }, 25_000);
+
+it.skipIf(process.platform === "win32")("accepts protocol traffic while npm runtime updates are stalled", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "core-slow-runtime-"));
+  const workspace = await makeGitWorkspace(directory);
+  const bin = path.join(directory, "bin");
+  await mkdir(bin);
+  const marker = path.join(directory, "npm-started");
+  await writeFile(path.join(bin, "npm"), `#!${process.execPath}\nrequire('node:fs').writeFileSync(process.env.VIBE_TEST_NPM_MARKER, 'started'); setInterval(() => {}, 1000);\n`, { mode: 0o755 });
+  const port = await freePort();
+  const index = fileURLToPath(new URL("./index.ts", import.meta.url));
+  const tokenFile = path.join(directory, "session.token");
+  const environment = { ...process.env, PATH: `${bin}:${process.env.PATH}`, REMOTE_IDE_STATE_DIR: path.join(directory, "state"), REMOTE_IDE_CODEX_RUNTIME_DIR: path.join(directory, "runtime"), REMOTE_IDE_SESSION_TOKEN: "", REMOTE_IDE_SESSION_TOKEN_FILE: tokenFile, REMOTE_IDE_CODEX_AUTO_UPDATE: "1", VIBE_TEST_NPM_MARKER: marker };
+  const child = spawn(process.execPath, ["--import", "tsx", index, "--host", "127.0.0.1", "--port", String(port), "--workspace", workspace], { cwd: path.resolve(path.dirname(index), ".."), env: environment, detached: true, stdio: ["ignore", "pipe", "pipe"] });
+  let output = "";
+  child.stdout.on("data", (data) => { output += String(data); }); child.stderr.on("data", (data) => { output += String(data); });
+  const exited = once(child, "exit");
+  let socket: WebSocket | undefined;
+  try {
+    await waitForReady(child, () => output, port);
+    await vi.waitFor(async () => expect(await readFile(marker, "utf8")).toBe("started"));
+    socket = await openSocket(port);
+    const token = (await readFile(tokenFile, "utf8")).trim();
+    expect(await request(socket, "health", "protocol.handshake", { token, compatibility: protocolCompatibility })).toMatchObject({ ok: true, result: { compatible: true } });
+  } finally {
+    socket?.terminate();
+    if (child.pid) { try { process.kill(-child.pid, "SIGKILL"); } catch { /* Already exited. */ } }
+    await within(exited, 5_000, "Could not clean up stalled npm test").catch(() => undefined);
+    await rm(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
+  }
+}, 20_000);

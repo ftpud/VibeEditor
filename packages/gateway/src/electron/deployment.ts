@@ -9,11 +9,12 @@ export function parseProvisionedRelease(output: string): ProvisionedRelease {
 }
 
 /** A successful probe proves the candidate accepts the versioned Core protocol. */
-export function coreHealthProbe(port: number): string {
+export function coreHealthProbe(port: number, timeoutMs = 180_000): string {
+  if (!Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 600_000) throw new Error("Invalid Core health timeout");
   return `const {WebSocket}=require('ws');
 (async()=>{
  const {protocolCompatibility}=await import('./packages/protocol/dist/index.js');
- const deadline=Date.now()+30000;
+ const deadline=Date.now()+${timeoutMs};
  const probe=()=>new Promise(resolve=>{
   const socket=new WebSocket('ws://127.0.0.1:${port}');
   let finished=false;
@@ -24,7 +25,7 @@ export function coreHealthProbe(port: number): string {
   socket.on('message',data=>{try{const value=JSON.parse(String(data));if(value.id==='gateway-health')done(value.ok===true&&value.result?.compatible===true)}catch{done(false)}});
  });
  while(Date.now()<deadline){if(await probe())return;await new Promise(resolve=>setTimeout(resolve,200))}
- throw new Error('Core did not pass its protocol health check within 30 seconds');
+ throw new Error('Core did not pass its protocol health check within ${timeoutMs / 1000} seconds');
 })().catch(error=>{console.error(error.message);process.exitCode=1});`;
 }
 

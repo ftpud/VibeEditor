@@ -741,6 +741,7 @@ function WorkflowChatbox({ block, run, state, onClose, onSend, onSteer, onStop, 
   const autopilot = autopilotOverride ?? state?.autopilot ?? (state?.pendingPermission ? false : block.autopilot ?? true);
   useEffect(() => setAutopilotOverride(undefined), [state?.autopilot, state?.sessionId]);
   const [message, setMessage] = useState("");
+  const messageRevision = useRef(0);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState("");
   const transcript = useRef<HTMLDivElement>(null);
@@ -754,8 +755,10 @@ function WorkflowChatbox({ block, run, state, onClose, onSend, onSteer, onStop, 
     const action = busy ? (state?.status === "running" ? onSteer : undefined) : onSend;
     if (!action || sending || !message.trim()) return;
     const input = message;
+    const revision = messageRevision.current;
+    setMessage("");
     setSending(true); setError(""); followMessages.current = true;
-    try { await action(input); setMessage(""); } catch (reason) { setError(reason instanceof Error ? reason.message : "Could not send message"); } finally { setSending(false); }
+    try { await action(input); } catch (reason) { if (messageRevision.current === revision) setMessage(input); setError(reason instanceof Error ? reason.message : "Could not send message"); } finally { setSending(false); }
   };
   return <section className="harness-run-details workflow-chatbox" aria-label={`${block.label} run details`}>
     <header><div><span className="harness-detail-icon"><MessageSquare size={16} aria-hidden="true" /></span><div className="harness-detail-title"><strong>{block.label}</strong><small>Chatbox · {busy ? "Working" : "Ready"}</small></div></div><div className="harness-detail-actions"><button type="button" className="workflow-autopilot" aria-label="Autopilot" aria-pressed={autopilot} title="Approve tool permission requests automatically for this Chatbox" disabled={!onAutopilot || changingAutopilot} onClick={() => { if (!onAutopilot) return; const enabled = !autopilot; setChangingAutopilot(true); setError(""); void onAutopilot(enabled).then(() => setAutopilotOverride(enabled)).catch((reason) => setError(reason instanceof Error ? reason.message : "Could not change Autopilot")).finally(() => setChangingAutopilot(false)); }}>Autopilot {autopilot ? "On" : "Off"}</button><button title="Close run details" aria-label="Close run details" onClick={onClose}><X size={16} /></button></div></header>
@@ -767,7 +770,7 @@ function WorkflowChatbox({ block, run, state, onClose, onSend, onSteer, onStop, 
     </div>
     <WorkflowChatActivity block={block} run={run} state={state} busy={busy} />
     <form className="workflow-chat-composer" onSubmit={(event) => { event.preventDefault(); void send(); }}>
-      <textarea aria-label={`Message ${block.label}`} placeholder={busy ? "Steer this Chatbox while it works…" : "Message this Chatbox…"} rows={3} value={message} disabled={!onSend && !onSteer} onChange={(event) => setMessage(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void send(); } }} />
+      <textarea aria-label={`Message ${block.label}`} placeholder={busy ? "Steer this Chatbox while it works…" : "Message this Chatbox…"} rows={3} value={message} disabled={!onSend && !onSteer} onChange={(event) => { messageRevision.current++; setMessage(event.target.value); }} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void send(); } }} />
       <div><span role="status">{busy ? "Working with your workflow…" : "Enter to send · Shift+Enter for a new line"}</span>{busy && onStop ? <button type="button" aria-label="Stop chat response" onClick={() => { setError(""); void onStop().catch((reason) => setError(reason instanceof Error ? reason.message : "Could not stop response")); }}><Square size={13} aria-hidden="true" /> Stop</button> : null}<button type="submit" aria-label={busy ? "Steer chat response" : "Send chat message"} disabled={sending || !message.trim() || (busy ? !onSteer || state?.status !== "running" : !onSend)}><Send size={14} aria-hidden="true" /> {busy ? "Steer" : "Send"}</button></div>
       {error && <p className="workflow-chat-error" role="alert">{error}</p>}
     </form>

@@ -1,3 +1,4 @@
+import { retryProcessSpawn } from "../process-spawn.js";
 import { managedProcesses } from "../managed-processes.js";
 import crypto from "node:crypto";
 import os from "node:os";
@@ -630,9 +631,14 @@ export abstract class StdioAcpProvider extends AcpProvider {
     const launch = this.command(configuration);
     const processContext = { workspace, rootWorkspace: await this.projectRoot(workspace), provider: this.descriptor.id, kind: "agent" as const };
     if (this.shuttingDown) throw new CoreError("INVALID_REQUEST", "Core is shutting down");
-    const child = managedProcesses.launch(processContext, (env) => spawn(launch.command, launch.args, { cwd: workspace, env: { ...env, ...launch.env }, stdio: "pipe" }));
-    this.ownedChildren.add(child);
-    child.once("close", () => this.ownedChildren.delete(child));
+    const child = await retryProcessSpawn(() => new Promise<ChildProcessWithoutNullStreams>((resolve, reject) => {
+      if (this.shuttingDown) { reject(new CoreError("INVALID_REQUEST", "Core is shutting down")); return; }
+      const child = managedProcesses.launch(processContext, (env) => spawn(launch.command, launch.args, { cwd: workspace, env: { ...env, ...launch.env }, stdio: "pipe" }));
+      this.ownedChildren.add(child);
+      child.once("close", () => this.ownedChildren.delete(child));
+      child.once("error", reject);
+      child.once("spawn", () => { child.off("error", reject); resolve(child); });
+    }));
     // Spawn failures (most commonly an optional provider CLI missing from PATH)
     // are emitted asynchronously. Listen before constructing the ACP transport so
     // ENOENT rejects discovery instead of becoming an unhandled process error.

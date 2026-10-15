@@ -1,3 +1,4 @@
+import { executeSshCommand as execute } from "./ssh-command.js";
 import { app, BrowserWindow, clipboard, dialog, ipcMain, nativeImage, powerMonitor, safeStorage, type IpcMainInvokeEvent } from "electron";
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -131,21 +132,6 @@ function connectWithConfig(config: Parameters<Client["connect"]>[0]): Promise<Cl
   });
 }
 async function connect(connection: ConnectionDetails): Promise<Client> { return connectWithConfig(await connectionConfig(connection, readFile)); }
-function execute(client: Client, command: string, onOutput?: (line: string) => void): Promise<string> {
-  return new Promise((resolve, reject) => client.exec(command, (error, stream) => {
-    if (error) { reject(error); return; }
-    let stdout = ""; let stderr = "";
-    let pending = "";
-    const receive = (data: Buffer) => { const text = data.toString(); stdout += text; pending += text; const lines = pending.split(/\r?\n/); pending = lines.pop() ?? ""; for (const line of lines) onOutput?.(line); };
-    stream.on("data", receive);
-    stream.stderr.on("data", receive);
-    stream.on("close", (code: number) => {
-      if (code === 0) { resolve(stdout); return; }
-      const output = [stdout.trim(), stderr.trim()].filter(Boolean).join("\n");
-      reject(new Error(output || `Remote command exited with ${code}`));
-    });
-  }));
-}
 async function withWorkspace(workspaceId: string): Promise<{ workspace: Workspace; connection: Connection }> {
   const state = await readState(); const workspace = state.workspaces.find((item) => item.id === workspaceId);
   if (!workspace) throw new Error("Workspace was not found");
@@ -281,7 +267,12 @@ async function startServer(workspaceId: string, repair = false): Promise<{ remot
       workspace.remotePort = selectedPort;
     }
     const run = serverActivationCommand(workspace.id, workspace.directory, workspace.remotePort, build.release, remoteNodeEnvironment);
-    await execute(client, `bash -lc ${shell(run)}`); runtime(workspaceId, "server", `Server listening remotely on ${workspace.remotePort}${build.rebuilt ? " (rebuilt)" : " (build reused)"}`);
+    const activationLogs: string[] = [];
+    runtime(workspaceId, "working", "Starting Core and waiting for protocol health…", { stage: "activation" });
+    await execute(client, `bash -lc ${shell(run)}`, (line) => {
+      activationLogs.push(line);
+      runtime(workspaceId, "working", "Starting Core and waiting for protocol health…", { stage: "activation", logs: boundedProvisioningLog(activationLogs) });
+    }); runtime(workspaceId, "server", `Server listening remotely on ${workspace.remotePort}${build.rebuilt ? " (rebuilt)" : " (build reused)"}`);
     return { remotePort: workspace.remotePort };
   } catch (error) {
     const failure = classifyProvisioningFailure(cancelledProvisioning.has(workspaceId) ? new Error("Provisioning cancelled") : error);

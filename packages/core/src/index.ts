@@ -21,7 +21,9 @@ if (!workspace) {
 }
 
 try {
-  await updateCodexRuntime();
+  // Registry checks and installs must not hold the Gateway health check hostage.
+  // Existing sessions retain their launch command; new sessions see atomic updates.
+  void updateCodexRuntime().catch((error) => console.warn(`[core] runtime update failed: ${String(error)}`));
   const access = await loadCoreSessionToken(port);
   if (access.file) console.log(`[core] session token file: ${access.file}`);
   const allowedOrigins = process.env.REMOTE_IDE_ALLOWED_ORIGINS?.split(",").map((origin) => origin.trim()).filter(Boolean);

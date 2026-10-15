@@ -28,6 +28,7 @@ test("health probe performs a real WebSocket protocol handshake", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "vibe-health-"));
   const sockets = new Set<net.Socket>();
   let handshake: unknown;
+  const token = "gateway-probe-test-token-01234567890123456789";
   const server = net.createServer((socket) => {
     sockets.add(socket); socket.on("close", () => sockets.delete(socket));
     let upgraded = false;
@@ -62,8 +63,8 @@ test("health probe performs a real WebSocket protocol handshake", async () => {
     await writeFile(path.join(root, "node_modules/ws/index.js"), `module.exports=require(${JSON.stringify(wsRoot)});`);
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
     const address = server.address() as net.AddressInfo;
-    await exec(process.execPath, ["--input-type=commonjs", "-e", coreHealthProbe(address.port)], { cwd: root, timeout: 10_000 });
-    assert.deepEqual(handshake, { id: "gateway-health", type: "protocol.handshake", payload: { compatibility: { minimum: 15, maximum: 15 } } });
+    await exec(process.execPath, ["--input-type=commonjs", "-e", coreHealthProbe(address.port)], { cwd: root, timeout: 10_000, env: { ...process.env, REMOTE_IDE_SESSION_TOKEN: token } });
+    assert.deepEqual(handshake, { id: "gateway-health", type: "protocol.handshake", payload: { compatibility: { minimum: 15, maximum: 15 }, token } });
   } finally {
     for (const socket of sockets) socket.destroy();
     await new Promise<void>((resolve) => server.close(() => resolve()));
