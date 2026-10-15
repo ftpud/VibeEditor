@@ -95,7 +95,7 @@ it("does not expose its listener until startup can accept protocol handshakes", 
     release(); socket?.terminate();
     if (startup) await shutdownCore(await startup);
     recovery.mockRestore(); vi.unstubAllEnvs();
-    await rm(directory, { recursive: true, force: true });
+    await rm(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
   }
 }, 15_000);
 

@@ -13,5 +13,7 @@ for (let index = 0; index < lines.length && sections < 16; index++) {
 }
 for (let index = Math.max(0, lines.length - 40); index < lines.length; index++) selected.add(index);
 const details = [...selected].sort((a, b) => a - b).map((index) => lines[index]).join("\n").slice(-30_000);
-const escaped = details.replaceAll("%", "%25").replaceAll("\r", "%0D").replaceAll("\n", "%0A");
-console.log(`::error title=Workspace test failure details::${escaped}`);
+for (let start = 0; start < details.length; start += 3_000) {
+  const escaped = details.slice(start, start + 3_000).replaceAll("%", "%25").replaceAll("\r", "%0D").replaceAll("\n", "%0A");
+  console.log(`::error title=Workspace test failure details (part ${start / 3_000 + 1})::${escaped}`);
+}

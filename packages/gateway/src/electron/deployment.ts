@@ -61,7 +61,7 @@ if [ ! -f "$tokenfile" ]; then
 fi
 test ! -L "$tokenfile" || { echo 'Core token file must not be a symlink' >&2; exit 1; }
 SESSION_TOKEN=$(cat "$tokenfile")
-[[ "$SESSION_TOKEN" =~ ^[A-Za-z0-9_-]{32,256}$ ]] || { echo 'Invalid Core session token file' >&2; exit 1; }
+[[ "$SESSION_TOKEN" =~ ^[A-Za-z0-9_-]+$ ]] && [ "\${#SESSION_TOKEN}" -ge 32 ] && [ "\${#SESSION_TOKEN}" -le 256 ] || { echo 'Invalid Core session token file' >&2; exit 1; }
 previous=$(cat "$selection" 2>/dev/null || true)
 if [ -n "$previous" ] && ! [[ "$previous" =~ ^[0-9a-f]{40,64}-node[0-9]+(-repair-[a-zA-Z0-9]+)?$ ]]; then echo 'Stored release reference is invalid; inspect the release sidecar before retrying' >&2; exit 1; fi
 ${serverStopFunctions(workspaceId, workspace)}

@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { access, mkdtemp, mkdir, readdir, readFile, symlink, writeFile } from "node:fs/promises";
+import { access, mkdtemp, mkdir, readdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -175,10 +175,15 @@ describe("WorkspaceFileSystem", () => {
 describe("workspace tree producer limits", () => {
   it.each([false, true])("allows trees beyond the former default path and Git output limits (Git=%s)", async (git) => {
     const root = await mkdtemp(path.join(tmpdir(), "tree-unlimited-"));
-    if (git) await execFileAsync("git", ["-C", root, "init", "-q"]);
-    for (let i = 0; i < 5200; i++) await writeFile(path.join(root, `${i}${"x".repeat(220)}`), "x");
-    expect(await new WorkspaceFileSystem().open(root)).toHaveLength(5200);
-  });
+    try {
+      if (git) await execFileAsync("git", ["-C", root, "init", "-q"]);
+      // Bound open files while avoiding thousands of serial APFS round trips.
+      for (let start = 0; start < 5200; start += 64) {
+        await Promise.all(Array.from({ length: Math.min(64, 5200 - start) }, (_, offset) => writeFile(path.join(root, `${start + offset}${"x".repeat(220)}`), "x")));
+      }
+      expect(await new WorkspaceFileSystem().open(root)).toHaveLength(5200);
+    } finally { await rm(root, { recursive: true, force: true, maxRetries: 5 }); }
+  }, 15_000);
 
   it("honors configured environment limits while leaving other limits unlimited", async () => {
     vi.stubEnv("VIBE_TREE_MAX_NODES", "1");

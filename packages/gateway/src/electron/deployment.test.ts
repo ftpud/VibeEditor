@@ -85,7 +85,7 @@ for (const healthy of [true, false]) {
       await mkdir(bin);
       await writeFile(path.join(bin, "node"), `#!/bin/bash\nif [ "$1" = 'packages/core/dist/index.js' ]; then exec -a "node packages/core/dist/index.js --gateway-workspace-id test --workspace /workspace/it's a project" sleep 60; fi\nif [ "$1" = '--input-type=commonjs' ]; then [ "$(basename "$PWD")" != "$FAIL_RELEASE" ]; exit $?; fi\nexit 99\n`, { mode: 0o755 });
       await writeFile(selection, oldRelease);
-      await writeFile(path.join(home, ".vibe-server-test.token"), "c".repeat(64), { mode: 0o600 });
+      await writeFile(path.join(home, ".vibe-server-test.token"), "c".repeat(healthy ? 256 : 32), { mode: 0o600 });
       let failed = false;
       try {
         await exec("bash", ["-c", serverActivationCommand("test", "/workspace/it's a project", 7331, candidateRelease, "true")], {
@@ -103,6 +103,21 @@ for (const healthy of [true, false]) {
     }
   });
 }
+
+test("rejects malformed or out-of-range activation credentials before launching Core", async () => {
+  const home = await mkdtemp(path.join(os.tmpdir(), "vibe-invalid-activation-token-"));
+  try {
+    for (const token of ["c".repeat(31), "c".repeat(257), `${"c".repeat(63)}!`]) {
+      await writeFile(path.join(home, ".vibe-server-test.token"), token, { mode: 0o600 });
+      await assert.rejects(exec("bash", ["-c", serverActivationCommand("test", "/workspace", 7331, candidateRelease, "true")], {
+        env: { ...process.env, HOME: home }, timeout: 5_000,
+      }), (error: unknown) => {
+        assert.match(String((error as { stderr?: string }).stderr), /Invalid Core session token file/);
+        return true;
+      });
+    }
+  } finally { await rm(home, { recursive: true, force: true }); }
+});
 
 test("coalesces duplicate workspace actions and releases failed operations", async () => {
   const operations = new WorkspaceOperations();

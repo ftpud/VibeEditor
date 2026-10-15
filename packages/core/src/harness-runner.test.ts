@@ -540,10 +540,20 @@ describe("HarnessRunner", () => {
     const state = await mkdtemp(path.join(os.tmpdir(), "remote-ide-harness-fanout-")); const store = new HarnessStore("/workspace", state); const definition = await store.create("Fan out");
     const blocks = ["root", "left", "right", "join"].map((id) => ({ id, type: "prompt" as const, label: id, prompt: "{{input}}", position: { x: 0, y: 0 } }));
     await store.update({ ...definition, blocks, edges: [{ id: "rl", from: "root", to: "left" }, { id: "rr", from: "root", to: "right" }, { id: "lj", from: "left", to: "join" }, { id: "rj", from: "right", to: "join" }] });
-    let active = 0; let maxActive = 0; const completed: string[] = [];
-    const dispatch = vi.fn(async (block: HarnessBlock) => { active += 1; maxActive = Math.max(maxActive, active); if (block.id === "left" || block.id === "right") await new Promise((resolve) => setTimeout(resolve, 15)); active -= 1; completed.push(block.id); return { id: block.id, model: "test", reasoning: "low", status: "done" as const, messages: [{ id: block.id, role: "assistant" as const, text: block.id, timestamp: "now" }] }; });
-    await new HarnessRunner(store, () => undefined).start(definition.id, "go", dispatch, "test");
-    await vi.waitFor(async () => expect((await store.runs())[0]?.status).toBe("succeeded"), { timeout: 4_000 });
+    let active = 0; let maxActive = 0; let siblingsStarted = 0; const completed: string[] = [];
+    let releaseSiblings!: () => void;
+    const siblingsWaiting = new Promise<void>((resolve) => { releaseSiblings = resolve; });
+    const dispatch = vi.fn(async (block: HarnessBlock) => {
+      active += 1; maxActive = Math.max(maxActive, active);
+      if (block.id === "left" || block.id === "right") { siblingsStarted += 1; await siblingsWaiting; }
+      active -= 1; completed.push(block.id);
+      return { id: block.id, model: "test", reasoning: "low", status: "done" as const, messages: [{ id: block.id, role: "assistant" as const, text: block.id, timestamp: "now" }] };
+    });
+    const runner = new HarnessRunner(store, () => undefined);
+    await runner.start(definition.id, "go", dispatch, "test");
+    try { await vi.waitFor(() => expect(siblingsStarted).toBe(2), { timeout: 4_000 }); }
+    finally { releaseSiblings(); await runner.drain(); }
+    expect((await store.runs())[0]?.status).toBe("succeeded");
     expect(maxActive).toBe(2); expect(completed.at(-1)).toBe("join");
   });
 
