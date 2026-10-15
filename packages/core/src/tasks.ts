@@ -56,6 +56,9 @@ export class WorkspaceTaskStore {
   }
 
   async create(branch: string, existing = false, remote = false, select = true): Promise<WorkspaceTask> {
+    if (typeof branch !== "string" || typeof existing !== "boolean" || typeof remote !== "boolean" || typeof select !== "boolean") {
+      throw new CoreError("INVALID_REQUEST", "Task branch and creation options are invalid");
+    }
     const requested = branch.trim();
     const name = remote ? requested.split("/").slice(1).join("/") : requested;
     if (!name || name.length > 200 || !/^[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(name) || name.includes("..") || name.endsWith("/") || name.endsWith(".")) throw new CoreError("INVALID_REQUEST", "Invalid Git branch name");
@@ -94,6 +97,7 @@ export class WorkspaceTaskStore {
   }
 
   async createRandom(select = true): Promise<WorkspaceTask> {
+    if (typeof select !== "boolean") throw new CoreError("INVALID_REQUEST", "Task selection option must be a boolean");
     for (let attempt = 0; attempt < 10; attempt += 1) {
       const branch = `task/${crypto.randomUUID().slice(0, 8)}`;
       if (!await this.branchExists(branch)) return this.create(branch, false, false, select);
@@ -379,7 +383,12 @@ export class WorkspaceTaskStore {
     }, this.directory);
   }
 
-  taskPath(taskId: string): string { return path.join(this.directory, taskId, "workspace"); }
+  taskPath(taskId: string): string {
+    if (typeof taskId !== "string" || !taskId || taskId === "." || taskId === ".." || /[/\\\0]/.test(taskId)) {
+      throw new CoreError("INVALID_REQUEST", "Invalid task ID");
+    }
+    return path.join(this.directory, taskId, "workspace");
+  }
 
   private async migrateLegacyCopy(task: WorkspaceTask): Promise<void> {
     const destination = this.taskPath(task.id);

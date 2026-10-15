@@ -1,5 +1,6 @@
 import { execFile, spawn } from "node:child_process";
-import { access, lstat, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import crypto from "node:crypto";
+import { access, lstat, mkdir, mkdtemp, readFile, readdir, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -18,6 +19,44 @@ describe("WorkspaceTaskStore", () => {
     await expect(store.list()).resolves.toEqual({ tasks: [] });
     await expect(store.select()).resolves.toEqual({ workspace, registry: { tasks: [] } });
     await expect(store.list()).resolves.toEqual({ tasks: [] });
+  });
+
+  it("rejects unsafe task path IDs while accepting safe opaque legacy IDs", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "remote-ide-task-path-root-"));
+    const state = await mkdtemp(path.join(os.tmpdir(), "remote-ide-task-path-state-"));
+    const store = new WorkspaceTaskStore(root, state);
+    expect(store.taskPath("legacy-task_42")).toBe(path.join(state, `${crypto.createHash("sha256").update(root).digest("hex")}-tasks`, "legacy-task_42", "workspace"));
+
+    for (const id of ["", ".", "..", "../outside", "nested/task", "nested\\task", "bad\0id", undefined, null, 42]) {
+      let error: unknown;
+      try { store.taskPath(id as string); } catch (caught) { error = caught; }
+      expect(error).toMatchObject({ code: "INVALID_REQUEST" });
+    }
+  });
+
+  it("rejects malformed task creation values before creating a worktree or branch", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "remote-ide-task-invalid-create-root-"));
+    const state = await mkdtemp(path.join(os.tmpdir(), "remote-ide-task-invalid-create-state-"));
+    await execFileAsync("git", ["init", root]);
+    await writeFile(path.join(root, "tracked.txt"), "root\n");
+    await execFileAsync("git", ["-C", root, "add", "tracked.txt"]);
+    await execFileAsync("git", ["-C", root, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "initial"]);
+    const store = new WorkspaceTaskStore(root, state);
+    const branchesBefore = (await execFileAsync("git", ["-C", root, "branch", "--list", "--format=%(refname:short)"])).stdout;
+    const worktreesBefore = (await execFileAsync("git", ["-C", root, "worktree", "list", "--porcelain"])).stdout;
+    const invalid: Array<[unknown, unknown, unknown, unknown]> = [
+      [42, false, false, false],
+      ["feature/invalid-existing-flag", "false", false, false],
+      ["feature/invalid-remote-flag", false, 0, false],
+      ["feature/invalid-select-flag", false, false, "false"],
+    ];
+    for (const [branch, existing, remote, select] of invalid) {
+      await expect(store.create(branch as string, existing as boolean, remote as boolean, select as boolean)).rejects.toMatchObject({ code: "INVALID_REQUEST" });
+    }
+
+    expect((await execFileAsync("git", ["-C", root, "branch", "--list", "--format=%(refname:short)"])).stdout).toBe(branchesBefore);
+    expect((await execFileAsync("git", ["-C", root, "worktree", "list", "--porcelain"])).stdout).toBe(worktreesBefore);
+    await expect(readdir(path.join(state, `${crypto.createHash("sha256").update(root).digest("hex")}-tasks`))).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("preserves overlapping registry updates from separate Core processes", async () => {

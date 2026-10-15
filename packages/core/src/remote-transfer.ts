@@ -1,18 +1,23 @@
 import { randomBytes } from "node:crypto";
-import { constants, createReadStream, createWriteStream } from "node:fs";
+import { constants, createWriteStream } from "node:fs";
 import { chmod, link, lstat, mkdir, open, rename, rm } from "node:fs/promises";
 import path from "node:path";
 import type { WebSocket } from "ws";
 import { remoteTransferDefaultLimit, type RemoteTransferDirection, type RemoteTransferTicket } from "@remote-ide/protocol";
 import { CoreError } from "./errors.js";
 
-type Entry = { token: string; workspace: string; target: string; relative: string; direction: RemoteTransferDirection; size: number; maxBytes: number; overwrite: boolean; mode: number; expiresAt: number; socket?: WebSocket; partial?: string; cancelled: boolean };
+type Entry = { token: string; workspace: string; target: string; relative: string; direction: RemoteTransferDirection; size: number; maxBytes: number; overwrite: boolean; mode: number; expiresAt: number; socket?: WebSocket; partial?: string; cancelled: boolean; stop?: () => Promise<void> };
 
 export class RemoteTransferService {
   private readonly entries = new Map<string, Entry>();
+  private readonly attaching = new Set<Promise<void>>();
+  private closed = false;
   constructor(private readonly maxBytes = remoteTransferDefaultLimit, private readonly ttlMs = 60_000) {}
 
   async begin(workspace: string, input: { direction: RemoteTransferDirection; path: string; size?: number; overwrite?: boolean; mode?: number }): Promise<RemoteTransferTicket> {
+    if (this.closed) throw new CoreError("INVALID_REQUEST", "File transfers are shutting down");
+    if (input.overwrite !== undefined && typeof input.overwrite !== "boolean") throw new CoreError("INVALID_REQUEST", "overwrite must be a boolean");
+    this.pruneExpired();
     if (input.direction !== "upload" && input.direction !== "download") throw new CoreError("INVALID_REQUEST", "Transfer direction must be upload or download");
     const relative = normalizeRelative(input.path);
     const target = path.resolve(workspace, relative);
@@ -32,22 +37,59 @@ export class RemoteTransferService {
     if (size > this.maxBytes) throw new CoreError("INVALID_REQUEST", `Transfer exceeds the ${formatBytes(this.maxBytes)} limit`);
     const mode = input.mode === undefined ? 0o644 : input.mode;
     if (!Number.isInteger(mode) || mode < 0 || mode > 0o777 || (mode & 0o700) === 0) throw new CoreError("INVALID_REQUEST", "File permissions must be an owner-accessible mode between 000 and 777");
+    if (this.closed) throw new CoreError("INVALID_REQUEST", "File transfers are shutting down");
     const token = randomBytes(32).toString("base64url");
     const expiresAt = Date.now() + this.ttlMs;
     this.entries.set(token, { token, workspace: path.resolve(workspace), target, relative, direction: input.direction, size, maxBytes: this.maxBytes, overwrite: Boolean(input.overwrite), mode, expiresAt, cancelled: false });
     return { token, direction: input.direction, name: path.basename(relative), size, maxBytes: this.maxBytes, expiresAt: new Date(expiresAt).toISOString() };
   }
 
-  cancel(token: string): boolean { const entry = this.entries.get(token); if (!entry) return false; entry.cancelled = true; entry.socket?.close(4000, "Transfer cancelled"); void this.cleanup(entry); this.entries.delete(token); return true; }
-  hasWorkspace(workspace: string): boolean { const target = path.resolve(workspace); return [...this.entries.values()].some((entry) => entry.workspace === target); }
+  private pruneExpired(): void {
+    for (const [token, entry] of this.entries) if (!entry.socket && entry.expiresAt < Date.now()) this.entries.delete(token);
+  }
+  cancel(token: string): boolean {
+    const entry = this.entries.get(token); if (!entry) return false;
+    entry.cancelled = true; entry.socket?.close(4000, "Transfer cancelled");
+    if (entry.stop) void entry.stop().catch(() => undefined);
+    else if (!entry.socket) this.entries.delete(token);
+    return true;
+  }
+  hasWorkspace(workspace: string): boolean { this.pruneExpired(); const target = path.resolve(workspace); return [...this.entries.values()].some((entry) => entry.workspace === target); }
   accepts(url: string | undefined): boolean { return Boolean(url?.startsWith("/project-transfer?")); }
-  async attach(socket: WebSocket, requestUrl: string | undefined): Promise<void> {
+  attach(socket: WebSocket, requestUrl: string | undefined): Promise<void> {
+    const pending = this.attachNow(socket, requestUrl);
+    this.attaching.add(pending);
+    void pending.finally(() => this.attaching.delete(pending)).catch(() => undefined);
+    return pending;
+  }
+  private async attachNow(socket: WebSocket, requestUrl: string | undefined): Promise<void> {
     const token = new URL(requestUrl ?? "", "ws://core").searchParams.get("token") ?? "";
     const entry = this.entries.get(token);
-    if (!entry || entry.expiresAt < Date.now() || entry.socket) { socket.close(1008, "Invalid or expired transfer ticket"); return; }
+    if (this.closed || !entry || entry.expiresAt < Date.now() || entry.socket) {
+      if (entry && !entry.socket) this.entries.delete(token);
+      socket.close(1008, "Invalid or expired transfer ticket"); return;
+    }
     entry.socket = socket;
-    if (entry.direction === "download") return this.download(entry, socket);
-    await this.upload(entry, socket);
+    // Hold binary frames until all asynchronous upload setup and listeners are
+    // ready. A fast sender may otherwise finish before the message handler exists.
+    socket.pause();
+    try {
+      if (entry.direction === "download") await this.download(entry, socket);
+      else await this.upload(entry, socket);
+      if (entry.cancelled || this.closed || socket.readyState !== socket.OPEN) {
+        await entry.stop?.(); await this.cleanup(entry); this.entries.delete(token);
+      }
+    } catch {
+      await entry.stop?.().catch(() => undefined);
+      await this.cleanup(entry); this.entries.delete(token);
+      if (socket.readyState === socket.OPEN) socket.close(1011, "Could not prepare file transfer");
+    } finally { socket.resume(); }
+  }
+  async close(): Promise<void> {
+    this.closed = true;
+    for (const entry of this.entries.values()) { entry.cancelled = true; entry.socket?.close(1001, "Core is shutting down"); }
+    await Promise.allSettled([...this.attaching]);
+    await Promise.all([...this.entries.values()].map(async (entry) => { await entry.stop?.(); await this.cleanup(entry); this.entries.delete(entry.token); }));
   }
   private async download(entry: Entry, socket: WebSocket): Promise<void> {
     let handle;
@@ -58,7 +100,9 @@ export class RemoteTransferService {
     } catch {
       await handle?.close(); this.entries.delete(entry.token); socket.close(1008, "Workspace file changed; start the download again"); return;
     }
-    const stream = createReadStream(entry.target, { fd: handle.fd, autoClose: true });
+    const stream = handle.createReadStream({ autoClose: true });
+    const closed = new Promise<void>((resolve) => stream.once("close", resolve));
+    entry.stop = async () => { stream.destroy(); await closed; this.entries.delete(entry.token); };
     const abort = () => stream.destroy(new Error("Transfer cancelled"));
     socket.once("close", abort);
     stream.on("data", (chunk) => {
@@ -73,44 +117,52 @@ export class RemoteTransferService {
   private async upload(entry: Entry, socket: WebSocket): Promise<void> {
     await mkdir(path.dirname(entry.target), { recursive: true });
     await rejectSymlinkPath(entry.workspace, entry.target, true);
+    if (entry.cancelled || this.closed || socket.readyState !== socket.OPEN) return;
     entry.partial = path.join(path.dirname(entry.target), `.${path.basename(entry.target)}.vibe-part-${randomBytes(8).toString("hex")}`);
     const file = createWriteStream(entry.partial, { flags: "wx", mode: 0o600 });
-    let received = 0; let settled = false;
-    const fail = async (reason: string) => { if (settled) return; settled = true; file.destroy(); await this.cleanup(entry); if (socket.readyState === socket.OPEN) socket.close(1009, reason); };
-    const commit = async () => {
-      if (settled) return;
-      if (received !== entry.size) { await fail("Upload ended before the approved size was received"); return; }
-      settled = true;
+    const closed = new Promise<void>((resolve) => file.once("close", resolve));
+    let received = 0;
+    let finalization: Promise<void> | undefined;
+    const finish = (reason?: string, code = 1009): Promise<void> => finalization ??= (async () => {
       try {
-        await new Promise<void>((resolve, reject) => file.end((error?: Error | null) => error ? reject(error) : resolve()));
-        await rejectSymlinkPath(entry.workspace, entry.target, true);
-        await chmod(entry.partial!, entry.mode);
-        if (entry.overwrite) await rename(entry.partial!, entry.target);
-        else { await link(entry.partial!, entry.target); await rm(entry.partial!); }
-        entry.partial = undefined; this.entries.delete(entry.token);
-        if (socket.readyState === socket.OPEN) socket.close(1000, "Transfer complete");
+        if (reason) { file.destroy(); await closed; }
+        else {
+          await new Promise<void>((resolve, reject) => file.end((error?: Error | null) => error ? reject(error) : resolve()));
+          await closed;
+          await rejectSymlinkPath(entry.workspace, entry.target, true);
+          await chmod(entry.partial!, entry.mode);
+          if (entry.overwrite) await rename(entry.partial!, entry.target);
+          else { await link(entry.partial!, entry.target); await rm(entry.partial!); }
+          entry.partial = undefined;
+        }
+        await this.cleanup(entry);
+        if (socket.readyState === socket.OPEN) socket.close(reason ? code : 1000, reason ?? "Transfer complete");
       } catch (error) {
-        await this.cleanup(entry); this.entries.delete(entry.token);
+        file.destroy(); await closed; await this.cleanup(entry);
         if (socket.readyState === socket.OPEN) socket.close(1008, (error as NodeJS.ErrnoException).code === "EEXIST" ? "A workspace file appeared at the destination; upload was not applied" : "Could not commit uploaded file");
-      }
-    };
+      } finally { this.entries.delete(entry.token); }
+    })();
+    entry.stop = () => finish("Transfer interrupted", 1001);
+    // WriteStream emits errors independently of end/write callbacks. Always
+    // listen, including errors opening the partial file and disk-full failures.
+    file.on("error", () => { void finish("Could not write uploaded file", 1011); });
     socket.on("message", (data, binary) => {
-      if (!binary || entry.cancelled) { void fail(entry.cancelled ? "Transfer cancelled" : "Only binary file data is accepted"); return; }
+      if (finalization) return;
+      if (!binary || entry.cancelled) { void finish(entry.cancelled ? "Transfer cancelled" : "Only binary file data is accepted"); return; }
       const chunk = rawDataBuffer(data);
-      if (chunk.length === 0) { void commit(); return; }
+      if (chunk.length === 0) { void finish(received === entry.size ? undefined : "Upload ended before the approved size was received"); return; }
       received += chunk.length;
-      if (received > entry.size || received > entry.maxBytes) { void fail("Transfer size limit exceeded"); return; }
+      if (received > entry.size || received > entry.maxBytes) { void finish("Transfer size limit exceeded"); return; }
       if (!file.write(chunk)) socket.pause();
     });
-    file.on("drain", () => socket.resume());
-    socket.once("error", () => { if (!settled) void fail("Transfer interrupted"); });
-    socket.on("close", async (code) => {
-      this.entries.delete(entry.token);
-      if (settled) return;
-      await fail(code === 4000 ? "Transfer cancelled" : "Transfer interrupted");
-    });
+    file.on("drain", () => { if (!finalization && socket.readyState === socket.OPEN) socket.resume(); });
+    socket.once("error", () => { void finish("Transfer interrupted"); });
+    socket.once("close", (code) => { void finish(code === 4000 ? "Transfer cancelled" : "Transfer interrupted"); });
+    await new Promise<void>((resolve, reject) => { file.once("open", () => resolve()); file.once("error", reject); });
   }
-  private async cleanup(entry: Entry): Promise<void> { if (entry.partial) await rm(entry.partial, { force: true }).catch(() => undefined); }
+  private async cleanup(entry: Entry): Promise<void> {
+    if (entry.partial) await rm(entry.partial, { force: true }).catch((error) => console.error("[core] Could not remove incomplete upload:", entry.partial, error instanceof Error ? error.message : String(error)));
+  }
 }
 
 function normalizeRelative(value: string): string { if (typeof value !== "string" || !value || value.includes("\0") || path.isAbsolute(value)) throw new CoreError("INVALID_REQUEST", "Choose a destination inside the current workspace"); const normalized = path.normalize(value); if (normalized === ".." || normalized.startsWith(`..${path.sep}`)) throw new CoreError("INVALID_REQUEST", "Workspace path traversal is not allowed"); return normalized; }

@@ -232,6 +232,7 @@ export class WorkspaceFileSystem {
   }
 
   async transferApply(kind: FilesystemTransferKind, requests: FilesystemTransferRequest[], overwritePaths: string[] = [], openFiles: string[] = [], dirtyFiles: string[] = [], confirmed = false): Promise<FilesystemTransferResult> {
+    if (typeof confirmed !== "boolean") throw new CoreError("INVALID_REQUEST", "Transfer confirmation must be a boolean");
     const preview = await this.transferPreflight(kind, requests, overwritePaths, openFiles, dirtyFiles);
     if (preview.dirtyFiles.length) throw new CoreError("WRITE_FAILED", `Save or discard changes before ${kind === "move" ? "moving" : "overwriting"}: ${preview.dirtyFiles.join(", ")}`);
     if (preview.items.some((item) => item.collision && !item.overwrite)) throw new CoreError("WRITE_FAILED", "Destination collisions require explicit overwrite selection");

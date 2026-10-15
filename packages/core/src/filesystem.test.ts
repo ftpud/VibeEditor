@@ -100,6 +100,20 @@ describe("WorkspaceFileSystem", () => {
     expect(await readFile(path.join(root, "target", "index.ts"), "utf8")).toContain("value = 1");
   });
 
+  it("rejects nonboolean transfer confirmation before preflight or destructive changes", async () => {
+    await fs.open(root);
+    await writeFile(path.join(root, "source.txt"), "source contents\n");
+    await writeFile(path.join(root, "destination.txt"), "destination contents\n");
+    const preflight = vi.spyOn(fs, "transferPreflight");
+
+    await expect(fs.transferApply("move", [{ source: "source.txt", destination: "destination.txt" }], ["destination.txt"], [], [], "false" as unknown as boolean))
+      .rejects.toMatchObject({ code: "INVALID_REQUEST" });
+
+    expect(preflight).not.toHaveBeenCalled();
+    await expect(readFile(path.join(root, "source.txt"), "utf8")).resolves.toBe("source contents\n");
+    await expect(readFile(path.join(root, "destination.txt"), "utf8")).resolves.toBe("destination contents\n");
+  });
+
   it("moves multiple paths, reports dirty blockers, and supports case-only names", async () => {
     await fs.open(root);
     await fs.createFile("README.md");

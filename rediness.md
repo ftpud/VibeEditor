@@ -75,6 +75,17 @@ workflow recovery, authentication, release rollback, and concurrent actions.
 See [release operations](docs/RELEASE_OPERATIONS.md) for credentials, layouts,
 repair, lock diagnosis, and shutdown semantics.
 
+Targeted runtime payload validation now rejects malformed destructive transfer
+and task flags, unsafe task IDs, and malformed ACP prompt/configuration records
+before dispatch. Attachment-only prompts remain supported. Unknown providers
+are resolved before task worktrees are created, and unknown tasks cannot cancel
+another workspace's timers. Rejection responses retain their request IDs.
+
+Binary uploads pause input during asynchronous setup, handle file-stream errors,
+ignore late frames after finalization, and drain partial-file cleanup during
+Core shutdown. Download streams now retain correct FileHandle ownership.
+Expired unused tickets no longer block workspace operations indefinitely.
+
 The application is still not certified for stable distribution. Hosted macOS
 checks, the remaining cross-process Core-store review, runtime payload
 validation, signed artifacts, extended crash/restart tests, and overnight

@@ -156,7 +156,11 @@ restart to confirm the result. This recovery is not an exactly-once guarantee
 for external side effects, and a forced process kill or host crash may interrupt
 an operation before its result is journaled.
 
-Core shutdown also closes managed terminals and workflow apps. Do not assume
+Core shutdown also closes managed terminals and workflow apps. Active binary
+file transfers are interrupted; incomplete uploads are removed after closing
+their file streams. Uploads become visible through atomic publication only
+after their approved byte count is received. Restart an interrupted transfer
+from Desktop; transfer resumption is not implemented. Do not assume
 terminal or app processes survive a graceful Core shutdown. Restart Core before
 expecting scheduled or recovered work to continue.
 

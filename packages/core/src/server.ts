@@ -1,3 +1,4 @@
+import { validateRequestPayload } from "./request-validation.js";
 import { coreAccessPolicy, type CoreAccessOptions } from "./access-policy.js";
 import { executeTerminalControl } from "./workflow-terminal.js";
 import { RequestAdmission, requestAdmissionLimit, type RequestAdmissionOptions } from "./request-admission.js";
@@ -466,7 +467,7 @@ export async function createServer(host: string, port: number, workspacePath: st
     managedProcesses.off("changed", processesChanged);
     if (!managedProcesses.listenerCount("changed")) managedProcesses.close();
     schedules.close(); rootBatcher.dispose(); terminalHost.closeAll();
-    const results = await Promise.allSettled([workflowApps.closeAll(), watcher.close(), gitIndexWatcher.close(), runConfigWatcher.close(), appEventWatcher.close(), appCommandWatcher.close()]);
+    const results = await Promise.allSettled([remoteTransfers.close(), workflowApps.closeAll(), watcher.close(), gitIndexWatcher.close(), runConfigWatcher.close(), appEventWatcher.close(), appCommandWatcher.close()]);
     const failures = results.filter((result): result is PromiseRejectedResult => result.status === "rejected");
     if (failures.length) throw new AggregateError(failures.map((result) => result.reason), "Core services could not be closed");
   })();
@@ -494,7 +495,13 @@ export async function createServer(host: string, port: number, workspacePath: st
     if (draining) { socket.close(1001, "Core is shutting down"); return; }
     configureWebSocketOutput(socket, outbound);
     socket.on("ping", (data) => sendWebSocketPong(socket, data));
-    if (remoteTransfers.accepts(request.url)) { void remoteTransfers.attach(socket, request.url); return; }
+    if (remoteTransfers.accepts(request.url)) {
+      void remoteTransfers.attach(socket, request.url).catch((error) => {
+        console.error("[core] File transfer failed:", error instanceof Error ? error.message : String(error));
+        if (socket.readyState === WebSocket.OPEN) socket.close(1011, "File transfer failed");
+      });
+      return;
+    }
     const admission = new RequestAdmission(admissionLimit, () => socket.readyState === WebSocket.OPEN);
     socket.once("close", () => admission.close());
     const disposeMonitor = monitorWebSocket(socket, liveness);
@@ -610,6 +617,8 @@ export async function createServer(host: string, port: number, workspacePath: st
         admission.assertOpen();
         const parsed = parseRequest(data);
         id = parsed.id;
+        if (parsed.rootId !== undefined && (typeof parsed.rootId !== "string" || !parsed.rootId)) throw new CoreError("INVALID_REQUEST", "rootId must be a nonempty string");
+        validateRequestPayload(parsed.type, parsed.payload);
         console.log(`[core] request ${parsed.id}: ${parsed.type}`);
         if (parsed.type === "protocol.handshake") {
           if (protocolAccepted) throw new CoreError("INVALID_REQUEST", "Protocol handshake has already completed");
@@ -840,10 +849,11 @@ async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStor
     case "tasks.create": return { task: await tasks.create(request.payload.branch, request.payload.existing, request.payload.remote) };
     case "tasks.createFromPrompt": {
       if (workspacePath !== rootWorkspace) throw new CoreError("INVALID_REQUEST", "New tasks can only be started from the root workspace");
+      const provider = acp.get(request.payload.provider);
       const task = await tasks.createRandom(false);
       try {
         const appTools = withAppTools(rootWorkspace, tasks.taskPath(task.id), request.payload.mcpServers, request.payload.agent, request.payload.provider, bridgeWorkspace);
-        await acp.get(request.payload.provider).send(tasks.taskPath(task.id), {
+        await provider.send(tasks.taskPath(task.id), {
           prompt: request.payload.prompt,
           content: request.payload.content,
           configuration: request.payload.configuration,
@@ -908,6 +918,7 @@ async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStor
     case "tasks.rename": return { task: await tasks.rename(request.payload.taskId, request.payload.name) };
     case "tasks.archive": return { task: await tasks.setArchived(request.payload.taskId, request.payload.archived) };
     case "tasks.delete": {
+      if (!(await tasks.list()).tasks.some((task) => task.id === request.payload.taskId)) throw new CoreError("INVALID_REQUEST", "Task does not exist");
       await aiTimers.cancelWorkspace(tasks.taskPath(request.payload.taskId));
       const result = await tasks.delete(request.payload.taskId);
       terminalHost.closeWorkspace(tasks.taskPath(request.payload.taskId));
