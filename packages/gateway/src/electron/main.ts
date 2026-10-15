@@ -1,3 +1,4 @@
+import { remoteNodeEnvironment } from "./remote-node.js";
 import { executeSshCommand as execute } from "./ssh-command.js";
 import { app, BrowserWindow, clipboard, dialog, ipcMain, nativeImage, powerMonitor, safeStorage, type IpcMainInvokeEvent } from "electron";
 import { spawn } from "node:child_process";
@@ -31,7 +32,6 @@ type ConnectionRuntimeSnapshot = ConnectionRuntime & { updatedAt: string; stage:
 const directory = path.dirname(fileURLToPath(import.meta.url));
 const rendererFilePath = path.join(directory, "../dist-renderer/index.html");
 const appIcon = path.join(directory, "../assets/app-icon.png");
-const remoteNodeEnvironment = `export PATH="$HOME/.local/bin:$HOME/.volta/bin:$HOME/.fnm:$HOME/.nvm/versions/node/current/bin:/usr/local/bin:$PATH"; export NVM_DIR="$HOME/.nvm"; if [ -s "$NVM_DIR/nvm.sh" ]; then . "$NVM_DIR/nvm.sh"; fi; command -v npm >/dev/null 2>&1 || { echo "npm was not found on the SSH host. Install Node.js 22.12+ for this user or configure NVM in ~/.bashrc." >&2; exit 127; }; node -e 'const [major, minor] = process.versions.node.split(".").map(Number); if (major < 22 || (major === 22 && minor < 12)) { console.error("Node.js 22.12+ is required on the SSH host."); process.exit(1); }'`;
 const runtimes = new Map<string, Runtime>();
 const tunnels = new Map<string, SshTunnel>();
 const portTunnelRuntimes = new Map<string, TunnelRuntime>();

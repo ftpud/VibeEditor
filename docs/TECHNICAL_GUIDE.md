@@ -111,6 +111,15 @@ The root `typecheck` script builds ACP and Protocol, then checks Core and Deskto
 
 ## Remote connections
 
+Gateway loads the remote user's NVM without activating its default alias, then
+selects an installed Node 24 for Vibe's builds, Core launches, and health checks.
+If Node 24 is absent, it tries NVM's newest installed Node and requires 22.12+.
+Your default can remain Node 20: Gateway changes only the environment of its own
+remote commands and never changes NVM aliases or installs Node automatically.
+Run `nvm install 24` once on the remote host to provide the preferred runtime.
+An existing `NVM_DIR` is respected; otherwise Gateway uses `~/.nvm`.
+Hosts without NVM can still use a Node 22.12+ installation available on PATH.
+
 For direct network access, bind Core beyond loopback only on a trusted private network:
 
 ```bash
