@@ -1,3 +1,4 @@
+import { WorkflowError } from "./WorkflowError";
 import { useCallback, useEffect, useLayoutEffect, useId, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type SetStateAction } from "react";
 import { ArrowLeftRight, ArrowUpDown, AlignStartHorizontal, AlignCenterHorizontal, AlignEndHorizontal, AlignStartVertical, AlignCenterVertical, AlignEndVertical, Bot, ClipboardPaste, Clock, Copy, Download, Eye, FileText, GripHorizontal, LayoutGrid, List, Map as MapIcon, Maximize, MessageSquare, Pencil, Play, Plus, Redo2, RotateCcw, Save, Send, Settings2, Square, Terminal, Trash2, Undo2, Upload, Workflow, X, ZoomIn, ZoomOut } from "lucide-react";
 import type { AgentFile, AiModel, AiProvider, AiProviderDescriptor, HarnessBlock, HarnessOperation, HarnessAppState, HarnessDataSchema, HarnessDefinition, HarnessRun, HarnessLogEntry, HarnessStateDiagnostic, HarnessValidationIssue, SkillCatalog } from "@remote-ide/protocol";
@@ -588,8 +589,8 @@ export function HarnessPanel({ designOnly = false, harnesses, runs, diagnostics 
       </div>}
       {block && mode === "edit" && <section className="harness-input-help" aria-label="Workflow execution preview"><strong>Execution preview</strong><p>{executionBehavior(block, draft.edges)}</p><pre aria-label="Rendered prompt preview">{previewPrompt(block.prompt, input)}</pre></section>}
       {!designOnly && run && pausedBlock && <PauseResolution run={run} block={pausedBlock} yesNo={blockById.get(pausedBlock.blockId)?.type === "yes_no_prompt"} label={blockById.get(pausedBlock.blockId)?.label ?? pausedBlock.blockId} onResolvePermission={onResolvePermission} onAnswerQuestion={onAnswerQuestion} onResumePause={onResumePause} onRetryPause={onRetryPause} onCancelPause={onCancelPause} onError={onError} />}
-      {!designOnly && !draft.blocks.some((item) => item.type === "start_button" || item.type === "start_input") && <div className="harness-run"><textarea aria-label="Workflow input" rows={3} placeholder={activeRuns.length ? "Append another prompt to the active dispatcher…" : "Describe the task for this workflow…"} value={input} onChange={(event) => setInput(event.target.value)} />{runActions}<small className={run?.status === "failed" || run?.cleanupErrors?.length ? "error" : ""}>{dirty ? "Save changes before running." : validationIssues.length ? "Fix validation issues before running." : activeRuns.length ? pausedBlock ? `${pausedBlock.blockId} is waiting for your response.` : "The dispatcher session is active. New prompts are appended without restarting it." : run ? `Last run: ${run.status}${run.error ? ` — ${run.error}` : ""}${run.cleanupErrors?.length ? ` — Cleanup: ${run.cleanupErrors.join("; ")}` : ""}` : "Use Autopilot in block settings to run without tool permission prompts."}</small></div>}
-      {!designOnly && draft.blocks.some((item) => item.type === "start_button" || item.type === "start_input") && <div className="harness-run">{runActions}<small>{dirty ? "Save changes before starting." : run ? `Run: ${run.status}${run.error ? ` — ${run.error}` : ""}` : "Switch to View to start a flow from its start blocks."}</small></div>}
+      {!designOnly && !draft.blocks.some((item) => item.type === "start_button" || item.type === "start_input") && <div className="harness-run"><textarea aria-label="Workflow input" rows={3} placeholder={activeRuns.length ? "Append another prompt to the active dispatcher…" : "Describe the task for this workflow…"} value={input} onChange={(event) => setInput(event.target.value)} />{runActions}<small className={run?.status === "failed" || run?.cleanupErrors?.length ? "error" : ""}>{dirty ? "Save changes before running." : validationIssues.length ? "Fix validation issues before running." : activeRuns.length ? pausedBlock ? `${pausedBlock.blockId} is waiting for your response.` : "The dispatcher session is active. New prompts are appended without restarting it." : run ? `Last run: ${run.status}` : "Use Autopilot in block settings to run without tool permission prompts."}</small>{run?.error && <WorkflowError message={run.error} />}{!!run?.cleanupErrors?.length && <WorkflowError message={run.cleanupErrors.join("; ")} label="Cleanup error" />}</div>}
+      {!designOnly && draft.blocks.some((item) => item.type === "start_button" || item.type === "start_input") && <div className="harness-run">{runActions}<small>{dirty ? "Save changes before starting." : run ? `Run: ${run.status}` : "Switch to View to start a flow from its start blocks."}</small>{run?.error && <WorkflowError message={run.error} />}{!!run?.cleanupErrors?.length && <WorkflowError message={run.cleanupErrors.join("; ")} label="Cleanup error" />}</div>}
     </>}
   </div>;
 }
@@ -648,7 +649,7 @@ export function PauseResolution({ run, block, yesNo, compactTimer = false, label
     </div>
   </section>;
   if (block.status === "waiting_timer") return <section className="harness-pause" aria-label={`${label} timer pause`}><strong>{label} is waiting for a timer</strong>{block.waitingUntil && <span>Scheduled for {new Date(block.waitingUntil).toLocaleString()}</span>}<div><button className="allow" disabled={!identified || submitting || !onResumePause} onClick={() => void submit(() => onResumePause!(run.id, block.blockId, block.pauseId!))}>Resume now</button>{cancel}</div></section>;
-  if (block.status === "retry_scheduled") return <section className="harness-pause" aria-label={`${label} retry pause`}><strong>{label} is waiting to retry</strong>{block.error && <p>{block.error}</p>}{block.retryAt && <span>Scheduled for {new Date(block.retryAt).toLocaleString()}</span>}<div><button className="allow" disabled={!identified || submitting || !onRetryPause} onClick={() => void submit(() => onRetryPause!(run.id, block.blockId, block.pauseId!))}>Retry now</button>{cancel}</div></section>;
+  if (block.status === "retry_scheduled") return <section className="harness-pause" aria-label={`${label} retry pause`}><strong>{label} is waiting to retry</strong>{block.error && <WorkflowError message={block.error} />}{block.retryAt && <span>Scheduled for {new Date(block.retryAt).toLocaleString()}</span>}<div><button className="allow" disabled={!identified || submitting || !onRetryPause} onClick={() => void submit(() => onRetryPause!(run.id, block.blockId, block.pauseId!))}>Retry now</button>{cancel}</div></section>;
   return null;
 }
 
@@ -766,13 +767,13 @@ function WorkflowChatbox({ block, run, state, onClose, onSend, onSteer, onStop, 
     <div className="workflow-chat-messages" ref={transcript} role="log" aria-label={`${block.label} conversation`} aria-live="off" onScroll={() => { const element = transcript.current; if (element) followMessages.current = element.scrollHeight - element.scrollTop - element.clientHeight < 60; }}>
       {!messages.length && <div className="workflow-chat-empty"><MessageSquare size={28} aria-hidden="true" /><strong>Start a conversation</strong><p>Ask a question or put the connected blocks to work.</p></div>}
       {messages.map((item) => <article key={item.id} className={`workflow-chat-message ${item.role}`}><strong>{item.role === "user" ? "You" : block.label}</strong>{item.text ? item.role === "assistant" ? <WorkflowMarkdown>{item.text}</WorkflowMarkdown> : <p>{item.text}</p> : <span className="workflow-chat-thinking">{busy ? "Thinking…" : "No response"}</span>}</article>)}
-      {state?.error && <p className="workflow-chat-error" role="alert">{state.error}</p>}
+      {state?.error && <WorkflowError message={state.error} />}
     </div>
     <WorkflowChatActivity block={block} run={run} state={state} busy={busy} />
     <form className="workflow-chat-composer" onSubmit={(event) => { event.preventDefault(); void send(); }}>
       <textarea aria-label={`Message ${block.label}`} placeholder={busy ? "Steer this Chatbox while it works…" : "Message this Chatbox…"} rows={3} value={message} disabled={!onSend && !onSteer} onChange={(event) => { messageRevision.current++; setMessage(event.target.value); }} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void send(); } }} />
       <div><span role="status">{busy ? "Working with your workflow…" : "Enter to send · Shift+Enter for a new line"}</span>{busy && onStop ? <button type="button" aria-label="Stop chat response" onClick={() => { setError(""); void onStop().catch((reason) => setError(reason instanceof Error ? reason.message : "Could not stop response")); }}><Square size={13} aria-hidden="true" /> Stop</button> : null}<button type="submit" aria-label={busy ? "Steer chat response" : "Send chat message"} disabled={sending || !message.trim() || (busy ? !onSteer || state?.status !== "running" : !onSend)}><Send size={14} aria-hidden="true" /> {busy ? "Steer" : "Send"}</button></div>
-      {error && <p className="workflow-chat-error" role="alert">{error}</p>}
+      {error && <WorkflowError message={error} />}
     </form>
   </section>;
 }
@@ -850,7 +851,7 @@ function WorkflowMarkdown({ children }: { children: string }) {
       const followLink = (event: ReactMouseEvent<HTMLAnchorElement>) => { event.preventDefault(); event.stopPropagation(); void openLink(url); };
       return <a href={url} title={title} target="_blank" rel="noopener noreferrer" onClick={followLink} onAuxClick={(event) => { if (event.button === 1) followLink(event); }}>{label}</a>;
     },
-  }}>{children}</ReactMarkdown>{linkError && <p className="workflow-chat-error" role="alert">{linkError}</p>}</div>;
+  }}>{children}</ReactMarkdown>{linkError && <WorkflowError message={linkError} />}</div>;
 }
 
 export function WorkflowMessage({ title, value }: { title: string; value: string }) {
@@ -866,11 +867,11 @@ export function WorkflowMessage({ title, value }: { title: string; value: string
 }
 
 function LogSection({ title, value, error }: { title: string; value: string; error?: boolean }) {
-  return <section className={`harness-log${error ? " error" : ""}`}><strong>{title}</strong><pre>{value}</pre></section>;
+  return error ? <WorkflowError message={value} label={title} /> : <section className="harness-log"><strong>{title}</strong><pre>{value}</pre></section>;
 }
 
 function LogEntry({ entry }: { entry: HarnessLogEntry }) {
-  return <details className={`harness-log-entry ${entry.kind}`} open={entry.kind === "error"}><summary><time>{new Date(entry.timestamp).toLocaleTimeString()}</time><span>{entry.kind}</span></summary><pre>{entry.message}</pre></details>;
+  return <details className={`harness-log-entry ${entry.kind}`}><summary><time>{new Date(entry.timestamp).toLocaleTimeString()}</time><span>{entry.kind}</span></summary><pre>{entry.message}</pre></details>;
 }
 
 const BLOCK_WIDTH = 176;

@@ -8,18 +8,20 @@ import type { StorageAge, StorageCategory, StorageCleanup, StorageSnapshot, Stor
 import { CoreError } from "./errors.js";
 import { WorkspaceTaskStore } from "./tasks.js";
 import { HarnessStore } from "./harnesses.js";
+import { StorageVersions, type VersionOptions } from "./storage-versions.js";
+import { storageProcessSnapshot } from "./storage-processes.js";
 
 const exec = promisify(execFile);
 const keyFor = (workspace: string) => crypto.createHash("sha256").update(workspace).digest("hex");
 const terminalRun = new Set(["succeeded", "failed", "cancelled", "blocked"]);
 const definitions: [StorageCategory, string, string][] = [
-  ["tasks", "Task workspaces", "Finished cleanup preserves branches. Selected, busy and dirty tasks are skipped. Unregistered workspaces are retained for review."],
+  ["tasks", "Task workspaces", "Keep root & active removes finished tasks and leftover task/integration folders. Root, active, selected and busy workspaces stay. Branches are preserved; discarding uncommitted changes requires acknowledgement."],
   ["sessions", "AI conversations & sessions", "Archived conversations can be removed by age. Current conversations and session indexes are retained."],
   ["workflows", "Workflow execution history", "Removes ended runs by completion date and old temporary files. Age shares and reclaimable sizes are estimates; totals measure disk usage. Definitions and active runs are retained."],
   ["checkpoints", "Checkpoints & file snapshots", "Complete snapshot stores for inactive finished tasks can be removed by age. Active and unidentified stores are retained."],
   ["logs", "Server & tool logs", "Old rotated server logs can be removed. Current logs and command bridge state are retained."],
   ["provider", "Provider data", "Native session logs, databases, settings and credentials. Retained: provider databases and their linked histories must be managed together."],
-  ["runtime", "Runtimes & deployment files", "Installed runtimes, releases and caches are retained because other Core processes may be using them."],
+  ["runtime", "Runtimes & deployments", "Keep current version removes obsolete agent runtimes, Core/Desktop releases and rebuildable source caches. It first closes other Vibe sessions for this SSH account. This connection and the current versions stay."],
   ["other", "Settings & other state", "Workspace settings, schedules, definitions and unrecognized state are retained."],
 ];
 export function storageCutoffs(now: number): { today: number; week: number } {
@@ -30,8 +32,8 @@ export function storageAge(stamp: number, now: number): StorageAge {
   const cutoffs = storageCutoffs(now);
   return stamp >= cutoffs.today ? "today" : stamp >= cutoffs.week ? "week" : "older";
 }
-type Candidate = { category: StorageCategory; stamp: number; bytes: number; label?: string; group?: string; remove: (cutoff: number) => Promise<void> };
-type StorageOptions = { home?: string; stateDirectory?: string; roots: () => string[]; isBusy: (workspace: string) => Promise<boolean>; changed?: () => void };
+type Candidate = { category: StorageCategory; stamp: number; bytes: number; label?: string; group?: string; mode?: "inactive" | "versions"; remove: (cutoff: number) => Promise<void> };
+type StorageOptions = { home?: string; stateDirectory?: string; roots: () => string[]; isBusy: (workspace: string) => Promise<boolean>; changed?: () => void; versions?: Omit<VersionOptions, "home" | "runtimeDirectory"> };
 
 /** One bounded job per Core server. Paths and deletion candidates never come from the client. */
 export class ServerStorage {
@@ -39,6 +41,7 @@ export class ServerStorage {
   private readonly stateDirectory: string;
   private readonly providerDirectory: string;
   private readonly runtimeDirectory: string;
+  private readonly versions: StorageVersions;
   private candidates: Candidate[] = [];
   private job?: Promise<void>;
   private readonly warnings = new Set<string>();
@@ -48,11 +51,12 @@ export class ServerStorage {
     this.stateDirectory = path.resolve(options.stateDirectory ?? process.env.REMOTE_IDE_STATE_DIR ?? path.join(this.home, ".remote-ide", "workspaces"));
     this.providerDirectory = path.resolve((!options.home && process.env.CODEX_HOME) || path.join(this.home, ".codex"));
     this.runtimeDirectory = path.resolve((!options.home && process.env.REMOTE_IDE_CODEX_RUNTIME_DIR) || path.join(this.home, ".remote-ide", "codex-runtime"));
+    this.versions = new StorageVersions({ home: this.home, runtimeDirectory: this.runtimeDirectory, ...options.versions });
     this.snapshot = { id: "", phase: "idle", updatedAt: new Date().toISOString(), server: os.hostname(), paths: [this.stateDirectory, this.providerDirectory, this.runtimeDirectory, path.join(this.home, ".vibe-deploy"), path.join(this.home, ".vibe-server-*.log*")], categories: [], totalBytes: 0, scannedFiles: 0, message: "Open storage to calculate usage", warnings: [] };
   }
   status(): StorageSnapshot {
     const snapshot = structuredClone(this.snapshot);
-    const order = ["active", "finished", "today", "week", "older", "retained"];
+    const order = ["current", "active", "finished", "unregistered", "obsolete", "today", "week", "older", "retained"];
     for (const row of snapshot.categories) row.segments.sort((left, right) => order.indexOf(left.id) - order.indexOf(right.id));
     return snapshot;
   }
@@ -63,9 +67,11 @@ export class ServerStorage {
   }
   cleanup(request: StorageCleanup): StorageSnapshot {
     if (this.job || this.snapshot.phase !== "ready" || request.scanId !== this.snapshot.id) throw new CoreError("INVALID_REQUEST", "Refresh storage and wait for the current scan to finish");
-    if (!definitions.some(([id]) => id === request.category) || !["finished", "week", "older"].includes(request.age) || (request.category === "tasks") !== (request.age === "finished")) throw new CoreError("INVALID_REQUEST", "Invalid storage cleanup selection");
+    if (!definitions.some(([id]) => id === request.category) || !["finished", "week", "older", "inactive", "versions"].includes(request.age) || (request.category === "tasks") !== ["finished", "inactive"].includes(request.age) || (request.category === "runtime") !== (request.age === "versions")) throw new CoreError("INVALID_REQUEST", "Invalid storage cleanup selection");
+    if (request.age === "inactive" && request.discardChanges !== true) throw new CoreError("INVALID_REQUEST", "Acknowledge discarding inactive workspace changes before removing them");
+    if (request.age === "versions" && request.closeOtherSessions !== true) throw new CoreError("INVALID_REQUEST", "Confirm closing other Vibe sessions before removing versions");
     const cutoff = request.age === "older" ? storageCutoffs(Date.now()).week : storageCutoffs(Date.now()).today;
-    const candidates = this.candidates.filter((item) => item.category === request.category && (request.age === "finished" || item.stamp < cutoff));
+    const candidates = this.candidates.filter((item) => item.category === request.category && (item.mode ? item.mode === request.age : !["inactive", "versions"].includes(request.age) && (request.age === "finished" || item.stamp < cutoff)));
     if (!candidates.length) throw new CoreError("INVALID_REQUEST", "There is no eligible data in this selection");
     this.snapshot.phase = "cleaning";
     this.snapshot.message = `Cleaning ${candidates.length} stored items…`;
@@ -101,13 +107,14 @@ export class ServerStorage {
   private add(id: StorageCategory, bytes: number, segment: string, count = 1): void {
     const row = this.usage(id); row.bytes += bytes; row.count += count;
     let part = row.segments.find((item) => item.id === segment);
-    if (!part) { part = { id: segment, label: { active: "Active", finished: "Finished", retained: "Retained", today: "Today", week: "Previous 7 days", older: "Older" }[segment] ?? segment, bytes: 0 }; row.segments.push(part); }
+    if (!part) { part = { id: segment, label: { current: "Current", obsolete: "Obsolete", unregistered: "Unregistered", active: "Active", finished: "Finished", retained: "Retained", today: "Today", week: "Previous 7 days", older: "Older" }[segment] ?? segment, bytes: 0 }; row.segments.push(part); }
     part.bytes += bytes; this.snapshot.totalBytes += bytes; this.snapshot.scannedFiles += count;
     this.snapshot.updatedAt = new Date().toISOString();
   }
   private candidate(candidate: Candidate): void {
     this.candidates.push(candidate); const row = this.usage(candidate.category);
-    if (candidate.category === "tasks") row.cleanable.finished += candidate.bytes;
+    if (candidate.mode) row.cleanable[candidate.mode] = (row.cleanable[candidate.mode] ?? 0) + candidate.bytes;
+    else if (candidate.category === "tasks") row.cleanable.finished += candidate.bytes;
     else {
       const cutoffs = storageCutoffs(Date.now());
       if (candidate.stamp < cutoffs.today) row.cleanable.week += candidate.bytes;
@@ -200,13 +207,32 @@ export class ServerStorage {
     }
     return false;
   }
+  private async rootPaths(): Promise<string[]> {
+    const roots = new Set(this.options.roots().map((root) => path.resolve(root)));
+    if (process.platform === "linux") for (const row of await storageProcessSnapshot()) {
+      if (!row.core) continue;
+      const index = row.argv.indexOf("--workspace"); const workspace = row.argv[index + 1];
+      if (index >= 0 && workspace && path.isAbsolute(workspace)) roots.add(path.resolve(workspace));
+    }
+    for (const directory of [this.stateDirectory, path.join(this.home, ".remote-ide", "workspace-groups")]) {
+      for (const name of (await this.names(directory)).filter((name) => /^roots-[a-f0-9]+\.json$/.test(name))) {
+        const value = JSON.parse(await readFile(path.join(directory, name), "utf8"));
+        if (!Array.isArray(value.roots)) throw new Error("Cannot verify workspace root registry");
+        for (const root of value.roots) if (typeof root.path === "string" && path.isAbsolute(root.path)) roots.add(path.resolve(root.path));
+      }
+    }
+    return [...roots];
+  }
+  private async protectRoots(container: string): Promise<void> {
+    if ((await this.rootPaths()).some((root) => root === container || root.startsWith(`${container}${path.sep}`))) throw new Error("Workspace contains a registered project root");
+  }
   private async calculate(): Promise<void> {
     this.candidates = []; this.warnings.clear();
     this.snapshot = { ...this.snapshot, id: crypto.randomUUID(), phase: "scanning", totalBytes: 0, scannedFiles: 0, warnings: [], updatedAt: new Date().toISOString(), message: "Measuring server storage…", categories: definitions.map(([id, label, description]) => ({ id, label, description, bytes: 0, count: 0, segments: [], cleanable: { finished: 0, week: 0, older: 0 } })) };
     const disk = await statfs(this.stateDirectory).catch(() => undefined);
     this.snapshot.disk = disk ? { total: disk.blocks * disk.bsize, available: disk.bavail * disk.bsize } : undefined;
     const names = await this.names(this.stateDirectory);
-    const roots = new Map(this.options.roots().map((root) => [keyFor(root), root]));
+    const roots = new Map((await this.rootPaths()).map((root) => [keyFor(root), root]));
     const finished = new Map<string, { workspace: string; root: string }>();
     const currentSessionIds = new Set<string>();
     const currentSessionFiles = new Set<string>();
@@ -222,7 +248,8 @@ export class ServerStorage {
         let root = roots.get(name.slice(0, 64));
         if (!root) {
           // Existing worktrees carry the original root identity; verify its hash before trusting it.
-          for (const task of registry.tasks) {
+          const possibleTasks = [...registry.tasks, ...(await this.names(directory)).filter((name) => /^[\w-]+$/.test(name)).map((id) => ({ id }))];
+          for (const task of possibleTasks) {
             if (typeof task.id !== "string" || !/^[\w-]+$/.test(task.id)) continue;
             const workspace = path.join(directory, task.id, "workspace");
             const common = await exec("git", ["-C", workspace, "rev-parse", "--path-format=absolute", "--git-common-dir"]).catch(() => undefined);
@@ -235,16 +262,35 @@ export class ServerStorage {
           if (typeof task.id !== "string" || !/^[\w-]+$/.test(task.id)) { this.warn(`Invalid task identity in ${name}`); continue; }
           known.add(task.id); const container = path.join(directory, task.id); const workspace = path.join(container, "workspace");
           const bytes = await this.size(container); const isFinished = task.status === "finished";
-          this.add("tasks", bytes, isFinished ? "finished" : "active");
-          if (root && isFinished) {
+          const isRoot = [...roots.values()].some((registered) => registered === container || registered.startsWith(`${container}${path.sep}`));
+          this.add("tasks", bytes, isRoot ? "retained" : isFinished ? "finished" : "active");
+          (this.usage("tasks").entries ??= []).push({ path: workspace, label: String(task.name ?? task.id), bytes, state: isRoot ? "Root workspace" : isFinished ? "Finished" : "Active" });
+          if (root && isFinished && !isRoot) {
             finished.set(keyFor(workspace), { root, workspace });
             if (registry.selectedTaskId !== task.id) {
               const store = new WorkspaceTaskStore(root, this.stateDirectory);
-              this.candidate({ category: "tasks", bytes, label: String(task.name ?? task.id).slice(0, 200), stamp: 0, remove: async () => { await this.assertSafe(workspace); await store.cleanupFinished(task.id, (target) => this.isBusy(target)); } });
+              this.candidate({ category: "tasks", bytes, label: String(task.name ?? task.id).slice(0, 200), stamp: 0, remove: async () => { await this.assertSafe(workspace); await this.protectRoots(container); await store.cleanupFinished(task.id, (target) => this.isBusy(target)); } });
+              this.candidate({ category: "tasks", mode: "inactive", bytes, label: String(task.name ?? task.id), stamp: 0, remove: async () => { await this.assertSafe(workspace); await this.protectRoots(container); await this.protectRoots(path.join(this.stateDirectory, `${keyFor(workspace)}-task-history`)); await store.cleanupFinished(task.id, (target) => this.isBusy(target), true); } });
             }
           }
         }
-        for (const entry of await this.names(directory)) if (!known.has(entry)) await this.retain(path.join(directory, entry), "tasks", "retained");
+        for (const entry of await this.names(directory)) if (!known.has(entry)) {
+          const children = entry === "integrations" ? await this.names(path.join(directory, entry)) : [entry];
+          for (const id of children) {
+            const integration = entry === "integrations"; const container = path.join(directory, ...(integration ? ["integrations", id] : [id]));
+            const meta = await lstat(container).catch(() => undefined);
+            if (!meta?.isDirectory() || meta.isSymbolicLink() || !/^[\w-]+$/.test(id)) { await this.retain(container, "tasks", "retained"); continue; }
+            const bytes = await this.size(container); const workspace = path.join(container, "workspace");
+            const active = integration && registry.integrations?.some((record: { id: string; status: string }) => record.id === id && ["preparing", "testing", "applying"].includes(record.status));
+            const isRoot = [...roots.values()].some((registered) => registered === container || registered.startsWith(`${container}${path.sep}`));
+            this.add("tasks", bytes, isRoot ? "retained" : active ? "active" : "unregistered");
+            (this.usage("tasks").entries ??= []).push({ path: workspace, label: integration ? `Integration ${id}` : `Leftover task ${id}`, bytes, state: isRoot ? "Root workspace" : active ? "Active" : "Unregistered" });
+            if (root && !active && !isRoot) {
+              const store = new WorkspaceTaskStore(root, this.stateDirectory);
+              this.candidate({ category: "tasks", mode: "inactive", bytes, label: id, stamp: 0, remove: async () => { await this.assertSafe(container); await this.protectRoots(container); await this.protectRoots(path.join(this.stateDirectory, `${keyFor(workspace)}-task-history`)); await store.cleanupUnregistered(id, integration, (target) => this.isBusy(target)); } });
+            }
+          }
+        }
         await this.retain(path.join(directory, "tasks.json"), "other", "retained");
       } catch (error) { this.warn(`Task storage ${name}: ${this.message(error)}`); }
     }
@@ -267,7 +313,7 @@ export class ServerStorage {
           if (await this.isBusy(owner.workspace) || await this.newest(file) >= cutoff) throw new Error("Snapshot store is active or has recent files");
           const registry = await new WorkspaceTaskStore(owner.root, this.stateDirectory).list();
           if (registry.tasks.some((task) => keyFor(path.join(this.stateDirectory, `${keyFor(owner.root)}-tasks`, task.id, "workspace")) === name.slice(0, 64) && task.status !== "finished")) throw new Error("Task is no longer finished");
-          await this.assertSafe(file); await rm(file, { recursive: true });
+          await this.assertSafe(file); await this.protectRoots(file); await rm(file, { recursive: true });
         } });
       } else if (name === "harnesses") {
         for (const key of await this.names(file)) {
@@ -307,10 +353,22 @@ export class ServerStorage {
       else if (/^[a-f0-9]{64}-.+\.json(?:\.bak)?$/.test(name)) await this.retain(file, name.includes("sessions") || currentSessionFiles.has(name.replace(/\.bak$/, "")) ? "sessions" : "other");
       else await this.retain(file, "other", "retained");
     }
-    const covered = [this.stateDirectory];
-    for (const [directory, category] of [[this.providerDirectory, "provider"], [this.runtimeDirectory, "runtime"], [path.join(this.home, ".vibe-deploy"), "runtime"]] as const) {
-      if (!covered.some((parent) => directory === parent || directory.startsWith(`${parent}${path.sep}`))) { await this.retain(directory, category, "retained"); covered.push(directory); }
+    await this.retain(this.providerDirectory, "provider", "retained");
+    const versionEntries = await this.versions.entries(); const obsolete: string[] = []; let obsoleteBytes = 0;
+    for (const entry of versionEntries) {
+      const isRoot = [...roots.values()].some((root) => root === entry.path || root.startsWith(`${entry.path}${path.sep}`));
+      const bytes = await this.size(entry.path); this.add("runtime", bytes, entry.current ? "current" : isRoot ? "retained" : "obsolete");
+      (this.usage("runtime").entries ??= []).push({ path: entry.path, label: entry.label, bytes, state: entry.current ? "Current" : isRoot ? "Root workspace" : "Obsolete" });
+      if (!entry.current && !isRoot) { obsolete.push(entry.path); obsoleteBytes += bytes; }
     }
+    // Metadata and unrecognized files remain visible and protected, without measuring version trees twice.
+    for (const directory of [this.runtimeDirectory, path.join(this.home, ".vibe-deploy")]) for (const name of await this.names(directory)) {
+      const file = path.join(directory, name);
+      if (versionEntries.some((entry) => entry.path === file)) continue;
+      if (["releases", "sources"].includes(name) && directory.endsWith(".vibe-deploy")) { for (const child of await this.names(file)) if (!versionEntries.some((entry) => entry.path === path.join(file, child))) await this.retain(path.join(file, child), "runtime", "retained"); }
+      else await this.retain(file, "runtime", "retained");
+    }
+    if (obsolete.length && this.versions.supported) this.candidate({ category: "runtime", mode: "versions", bytes: obsoleteBytes, stamp: 0, remove: () => this.versions.keepCurrent(obsolete, () => this.rootPaths(), (message) => { this.snapshot.message = message; }) });
     for (const name of await this.names(this.home)) if (/^\.vibe-server-[\w-]+\.log(?:\.previous)?$/.test(name)) await this.removableFile(path.join(this.home, name), "logs", name.endsWith(".previous"));
     this.snapshot.phase = "ready"; this.snapshot.updatedAt = new Date().toISOString();
     this.snapshot.message = "Usage calculated. Cleanup rechecks eligibility and refreshes totals.";

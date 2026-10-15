@@ -2535,3 +2535,26 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 :root[data-theme="light"] .storage-error { color: #b52b3a; }
 @media (max-width: 680px) { .storage-overlay { padding: 10px; } .storage-panel { max-height: calc(100vh - 20px); } .storage-categories { grid-template-columns: 1fr; } .storage-header, .storage-scroll { padding: 16px; } .storage-overview { align-items: flex-start; flex-direction: column; } .storage-footer { flex-wrap: wrap; padding: 12px 16px; } }
 @media (prefers-reduced-motion: reduce) { .storage-segment { transition: none; } .storage-spin { animation: none; } }
+
+/* Text actions must override the surrounding titlebar's fixed icon-button width. */
+.settings-menu button { width: auto; max-width: 100%; min-width: max-content; height: auto; min-height: 27px; flex-shrink: 0; padding: 5px 9px; white-space: nowrap; }
+.settings-menu .settings-row { flex-wrap: wrap; }
+.settings-menu .settings-choice > div:first-child { flex: 1 1 150px; }
+.settings-menu .settings-choice small { white-space: normal; overflow-wrap: anywhere; }
+.settings-menu .settings-control { flex: 0 1 auto; flex-wrap: wrap; justify-content: flex-end; }
+.workflow-error { flex: 0 0 auto; min-width: 0; width: 100%; margin: 6px 0; color: #ef9ba2; font-size: 11px; box-sizing: border-box; }
+.workflow-error > summary { display: flex; align-items: center; gap: 6px; cursor: pointer; min-width: 0; padding: 5px 2px; }
+.workflow-error > summary::before { content: '›'; flex: 0 0 auto; }
+.workflow-error[open] > summary::before { transform: rotate(90deg); }
+.workflow-error > summary > svg { flex-shrink: 0; }
+.workflow-error > summary > span { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.workflow-error > pre { margin: 4px 0; padding: 9px; max-height: min(180px, 25vh); overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; background: #ba444411; border: 1px solid #bd657b44; border-radius: 5px; font: inherit; line-height: 1.5; }
+.workflow-error summary:focus-visible { outline: 1px solid currentColor; outline-offset: 2px; }
+:root[data-theme="light"] .workflow-error { color: #9f292f; }
+.storage-current { background: #60c69c; }
+.storage-obsolete { background: #aa8de4; }
+.storage-unregistered { background: #e1b464; }
+.storage-ack { display: flex; align-items: flex-start; gap: 8px; font-size: 12px; line-height: 1.5; margin: 14px 0; }
+.storage-ack input { flex-shrink: 0; margin-top: 3px; }
+.storage-panel button { width: auto; max-width: 100%; height: auto; white-space: normal; }
+.storage-details li { margin: 6px 0; }

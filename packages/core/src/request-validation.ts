@@ -14,7 +14,9 @@ export function validateRequestPayload(type: RequestType, payload: unknown): voi
   switch (type) {
     case "storage.cleanup":
       requireNonEmptyString(record.scanId, "Storage scan ID is required");
-      if (typeof record.category !== "string" || typeof record.age !== "string" || !["tasks", "sessions", "workflows", "checkpoints", "logs", "provider", "runtime", "other"].includes(record.category) || !["finished", "week", "older"].includes(record.age)) invalid("Invalid storage cleanup selection");
+      optionalBoolean(record, "closeOtherSessions", "Session closing flag must be a boolean");
+      optionalBoolean(record, "discardChanges", "Discard changes flag must be a boolean");
+      if (typeof record.category !== "string" || typeof record.age !== "string" || !["tasks", "sessions", "workflows", "checkpoints", "logs", "provider", "runtime", "other"].includes(record.category) || !["finished", "week", "older", "inactive", "versions"].includes(record.age)) invalid("Invalid storage cleanup selection");
       return;
     case "protocol.handshake": {
       const compatibility = requireRecord(record.compatibility, "Handshake compatibility must be an object");

@@ -12,7 +12,7 @@ describe("SettingsMenu", () => {
     const onStorage = vi.fn();
     render(<SettingsMenu {...shortcutProps} onStorage={onStorage} workspace="/project" sideLayout="classic" onSideLayoutChange={vi.fn()} values={values} isWorkspaceOverride={() => false} onChange={vi.fn()} onReset={vi.fn()} />);
     fireEvent.change(screen.getByRole("textbox", { name: "Search settings" }), { target: { value: "cleanup" } });
-    fireEvent.click(screen.getByRole("button", { name: "Cleanup…" }));
+    fireEvent.click(screen.getByRole("button", { name: "Storage…" }));
     expect(onStorage).toHaveBeenCalledOnce();
     expect(screen.queryByText(/No desktop settings match/)).toBeNull();
   });

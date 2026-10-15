@@ -108,17 +108,18 @@ describe("typed workflows", () => {
     });
     try {
       await submission;
+      await steering; // Durable acceptance must not wait for the ACP acknowledgement below.
       expect((await store.runs()).find((item) => item.id === run.id)?.blocks[0]?.chatMessages?.some((item) => item.text === "Focus on tests")).toBe(true);
       await activity(live);
       let state = (await store.runs()).find((item) => item.id === run.id)!.blocks[0]!;
       expect(state.agentActivity).toEqual([expect.objectContaining({ id: "reasoning", text: "Reasoning\nInvestigating" })]);
-      expect(state.chatMessages?.at(-1)?.text).toBe("Working");
+      expect(state.chatMessages?.map((message) => message.text)).toEqual(["Initial", "Working", "Focus on tests", ""]);
       live.messages.push({ id: "continued", role: "assistant", text: "Continued", timestamp: "now" });
       await activity(live);
       state = (await store.runs()).find((item) => item.id === run.id)!.blocks[0]!;
-      expect(state.chatMessages?.at(-1)?.text).toBe("Working\n\nContinued");
+      expect(state.chatMessages?.at(-1)?.text).toBe("Continued");
     } finally { acknowledge(); await steering; release(); }
-    expect((await finished()).blocks[0]?.chatMessages?.at(-1)?.text).toBe("Working\n\nContinued");
+    expect((await finished()).blocks[0]?.chatMessages?.at(-1)?.text).toBe("Continued");
   });
 
   it.each(["ai", "chatbox"] as const)("loads connected skills on demand for %s without dispatching another agent", async (type) => {

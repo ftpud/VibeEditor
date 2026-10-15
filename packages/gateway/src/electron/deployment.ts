@@ -37,6 +37,12 @@ ${environment}
 umask 077
 base="$HOME/.vibe-deploy"
 mkdir -p "$base"
+assert_no_storage_maintenance() {
+if [ -e "$base/maintenance.lock" ] || [ -L "$base/maintenance.lock" ]; then
+node -e ${shell("const fs=require('node:fs'),os=require('node:os'),p=process.env.HOME+'/.vibe-deploy/maintenance.lock';try{const raw=fs.readFileSync(p,'utf8'),owner=JSON.parse(raw);if(owner.hostname!==os.hostname()||!Number.isSafeInteger(owner.pid)||owner.pid<1)throw Error('Unknown storage maintenance owner');try{process.kill(owner.pid,0);throw Error('Storage maintenance is running; retry when it finishes')}catch(e){if(e.code!=='ESRCH')throw e}if(fs.readFileSync(p,'utf8')===raw)fs.unlinkSync(p)}catch(e){if(e.code!=='ENOENT'){console.error(e.message);process.exit(1)}}")}
+fi
+}
+assert_no_storage_maintenance
 lock="$base/activate-${workspaceId}.lock"
 if ! mkdir "$lock" 2>/dev/null; then
   owner=$(cat "$lock/pid" 2>/dev/null || true)
@@ -50,6 +56,7 @@ if ! mkdir "$lock" 2>/dev/null; then
 fi
 printf '%s' "$$" > "$lock/pid"
 trap 'rm -rf "$lock"' EXIT
+assert_no_storage_maintenance
 pidfile="$HOME/.vibe-server-${workspaceId}.pid"
 logfile="$HOME/.vibe-server-${workspaceId}.log"
 selection="$HOME/.vibe-server-${workspaceId}.release"

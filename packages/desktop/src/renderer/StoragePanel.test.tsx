@@ -11,6 +11,22 @@ const snapshot = (): StorageSnapshot => ({ id: "scan-1", phase: "ready", updated
 ] });
 
 describe("server storage panel", () => {
+  it("requires explicit acknowledgement before closing sessions or discarding workspace changes", async () => {
+    const data = snapshot(); data.categories[0]!.cleanable.inactive = 1000;
+    data.categories.push({ id: "runtime", label: "Runtimes", description: "Runtime details", count: 2, bytes: 2000, segments: [], cleanable: { older: 0, week: 0, finished: 0, versions: 1000 } });
+    const request = vi.fn(async () => data);
+    render(<StoragePanel client={{ request } as unknown as CoreClient} onClose={vi.fn()} />); await act(async () => {});
+    fireEvent.click(screen.getByRole("button", { name: "Keep current version" }));
+    expect(screen.getByRole("button", { name: "Remove data" }).hasAttribute("disabled")).toBe(true);
+    fireEvent.click(screen.getByRole("checkbox", { name: "Close other Vibe sessions for this SSH account" }));
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Remove data" })); });
+    expect(request).toHaveBeenCalledWith("storage.cleanup", { scanId: "scan-1", category: "runtime", age: "versions", closeOtherSessions: true });
+    fireEvent.click(screen.getByRole("button", { name: "Keep root & active" }));
+    expect(screen.getByRole("button", { name: "Remove data" }).hasAttribute("disabled")).toBe(true);
+    fireEvent.click(screen.getByRole("checkbox", { name: "Discard uncommitted changes in inactive workspaces" }));
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Remove data" })); });
+    expect(request).toHaveBeenCalledWith("storage.cleanup", { scanId: "scan-1", category: "tasks", age: "inactive", discardChanges: true });
+  });
   it("calculates on open, previews cleanup, and renders refreshed totals after deletion", async () => {
     const initial = snapshot(); const smaller = { ...snapshot(), id: "scan-2", totalBytes: 2000, message: "Cleanup complete", categories: snapshot().categories.map((row) => row.id === "sessions" ? { ...row, bytes: 0, segments: [], cleanable: { older: 0, week: 0, finished: 0 } } : row) };
     const request = vi.fn(async (type: string) => type === "storage.cleanup" ? smaller : initial);
@@ -18,16 +34,16 @@ describe("server storage panel", () => {
     const view = render(<StoragePanel client={client} onClose={vi.fn()} />);
     await act(async () => {});
     expect(request).toHaveBeenCalledWith("storage.scan", {});
-    expect(screen.getByText("remote-server · All projects stored by Vibe on this server")).toBeTruthy();
+    expect(screen.getByText("remote-server · Shared Vibe storage for this SSH account")).toBeTruthy();
     expect(view.baseElement.querySelector(".storage-active")).toBeTruthy();
     expect(view.baseElement.querySelector(".storage-finished")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Cleanup older" }));
+    fireEvent.click(screen.getByRole("button", { name: "Remove older than 7 days" }));
     expect(request).not.toHaveBeenCalledWith("storage.cleanup", expect.anything());
     const confirm = screen.getByRole("alertdialog", { name: "Confirm storage cleanup" });
-    await act(async () => { fireEvent.click(within(confirm).getByRole("button", { name: "Confirm cleanup" })); });
+    await act(async () => { fireEvent.click(within(confirm).getByRole("button", { name: "Remove data" })); });
     expect(request).toHaveBeenCalledWith("storage.cleanup", { scanId: "scan-1", category: "sessions", age: "older" });
     expect(screen.getByText("Cleanup complete")).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Cleanup older" }).hasAttribute("disabled")).toBe(true);
+    expect(screen.getByRole("button", { name: "Remove older than 7 days" }).hasAttribute("disabled")).toBe(true);
     view.rerender(<StoragePanel client={client} onClose={vi.fn()} />);
     expect(request.mock.calls.filter(([type]) => type === "storage.scan")).toHaveLength(1);
   });
@@ -36,10 +52,10 @@ describe("server storage panel", () => {
     const request = vi.fn(async (type: string) => type === "storage.scan" ? { ...initial, phase: "scanning" } : initial);
     const onClose = vi.fn(); const view = render(<StoragePanel client={{ request } as unknown as CoreClient} onClose={onClose} />);
     await act(async () => {});
-    expect(screen.getByRole("button", { name: "Cleanup finished" }).hasAttribute("disabled")).toBe(true);
+    expect(screen.getByRole("button", { name: "Remove finished" }).hasAttribute("disabled")).toBe(true);
     await act(async () => { await vi.advanceTimersByTimeAsync(800); });
     expect(request).toHaveBeenCalledWith("storage.status", {});
-    expect(screen.getByRole("button", { name: "Cleanup finished" }).hasAttribute("disabled")).toBe(false);
+    expect(screen.getByRole("button", { name: "Remove finished" }).hasAttribute("disabled")).toBe(false);
     fireEvent.keyDown(document, { key: "Escape" }); expect(onClose).toHaveBeenCalledOnce();
     view.unmount(); const count = request.mock.calls.length;
     await vi.advanceTimersByTimeAsync(5000); expect(request).toHaveBeenCalledTimes(count);

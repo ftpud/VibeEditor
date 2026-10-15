@@ -131,4 +131,28 @@ describe("server storage", () => {
     await expect(access(archived)).resolves.toBeUndefined();
     expect(f.service.status().warnings.some((warning) => warning.includes("active workflow"))).toBe(true);
   });
+  it("removes inactive and unregistered workspaces only after acknowledgement, retaining active tasks and roots", async () => {
+    const f = await fixture();
+    await exec("git", ["-C", f.root, "init"]);
+    await exec("git", ["-C", f.root, "-c", "user.email=test@example.com", "-c", "user.name=Test", "commit", "--allow-empty", "-m", "initial"]);
+    const store = new WorkspaceTaskStore(f.root, f.stateDirectory);
+    const finished = await store.create("finished", false, false, false); await store.setStatus(finished.id, "finished");
+    await writeFile(path.join(store.taskPath(finished.id), "uncommitted"), "explicitly discarded");
+    const orphan = await store.create("orphan", false, false, false);
+    const rootTask = await store.create("registered-root", false, false, false); await store.setStatus(rootTask.id, "finished");
+    const active = await store.create("active", false, false, false);
+    const legacy = path.join(f.stateDirectory, `${hash(f.root)}-tasks`, "legacy-copy", "workspace");
+    await mkdir(path.dirname(legacy), { recursive: true }); await exec("git", ["clone", f.root, legacy]);
+    const registryFile = path.join(f.stateDirectory, `${hash(f.root)}-tasks`, "tasks.json");
+    const registry = JSON.parse(await readFile(registryFile, "utf8")); registry.tasks = registry.tasks.filter((task: { id: string }) => task.id !== orphan.id); await writeFile(registryFile, JSON.stringify(registry));
+    const rootsFile = path.join(f.stateDirectory, "roots-1234.json"); await writeFile(rootsFile, JSON.stringify({ roots: [{ path: f.root }, { path: store.taskPath(rootTask.id) }] }));
+    const snapshot = await f.scan(); expect(snapshot.categories.find((row) => row.id === "tasks")?.segments.some((segment) => segment.id === "unregistered")).toBe(true);
+    expect(() => f.service.cleanup({ scanId: snapshot.id, category: "tasks", age: "inactive" })).toThrow("Acknowledge");
+    f.service.cleanup({ scanId: snapshot.id, category: "tasks", age: "inactive", discardChanges: true }); await f.service.drain();
+    expect(f.service.status().phase).toBe("ready");
+    for (const task of [finished, orphan]) await expect(access(store.taskPath(task.id))).rejects.toThrow();
+    for (const workspace of [f.root, store.taskPath(rootTask.id), store.taskPath(active.id)]) await expect(access(workspace)).resolves.toBeUndefined();
+    expect((await exec("git", ["-C", f.root, "branch", "--list", "orphan"])).stdout).toContain("orphan");
+    expect((await exec("git", ["-C", f.root, "branch", "--list", "recovered/legacy-copy/HEAD"])).stdout).toContain("recovered/legacy-copy/HEAD");
+  });
 });

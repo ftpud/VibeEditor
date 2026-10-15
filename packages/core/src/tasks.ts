@@ -389,18 +389,38 @@ export class WorkspaceTaskStore {
     }, this.directory);
   }
 
-  /** Storage cleanup preserves branches and independently managed history. */
-  async cleanupFinished(taskId: string, isBusy: (workspace: string) => Promise<boolean>): Promise<void> {
+  /** Branches are retained; explicit discard also removes the task's snapshots. */
+  async cleanupFinished(taskId: string, isBusy: (workspace: string) => Promise<boolean>, discardChanges = false): Promise<void> {
     return serializedRootMutation(this.rootWorkspace, async () => {
       const registry = await this.listUnlocked();
       const task = registry.tasks.find((item) => item.id === taskId);
       const workspace = this.taskPath(taskId);
       if (!task || task.status !== "finished" || registry.selectedTaskId === taskId || await isBusy(workspace)) throw new CoreError("INVALID_REQUEST", "Task is active, selected, or no longer finished");
       const status = await taskGit(workspace, ["status", "--porcelain", "--untracked-files=all", "--ignore-submodules=none"]);
-      if (status.stdout.trim()) throw new CoreError("INVALID_REQUEST", "Task has uncommitted or untracked files");
+      if (status.stdout.trim() && !discardChanges) throw new CoreError("INVALID_REQUEST", "Task has uncommitted or untracked files");
       await taskGit(this.rootWorkspace, ["worktree", "remove", "--force", workspace]);
       await rm(path.dirname(workspace), { recursive: true, force: true });
+      if (discardChanges) await rm(path.join(this.stateDirectory, `${crypto.createHash("sha256").update(workspace).digest("hex")}-task-history`), { recursive: true, force: true });
       await this.save({ ...registry, tasks: registry.tasks.filter((item) => item.id !== taskId) });
+    }, this.directory);
+  }
+
+  async cleanupUnregistered(taskId: string, integration: boolean, isBusy: (workspace: string) => Promise<boolean>): Promise<void> {
+    this.taskPath(taskId); // Reuse opaque ID validation.
+    return serializedRootMutation(this.rootWorkspace, async () => {
+      const registry = await this.listUnlocked();
+      const workspace = integration ? path.join(this.directory, "integrations", taskId, "workspace") : this.taskPath(taskId);
+      if ((!integration && registry.tasks.some((task) => task.id === taskId)) || (integration && registry.integrations?.some((record) => record.id === taskId && ["preparing", "testing", "applying"].includes(record.status))) || await isBusy(workspace)) throw new CoreError("INVALID_REQUEST", "Workspace is registered or in use");
+      const worktrees = (await taskGit(this.rootWorkspace, ["worktree", "list", "--porcelain"])).stdout;
+      if (worktrees.split("\n").includes(`worktree ${workspace}`)) await taskGit(this.rootWorkspace, ["worktree", "remove", "--force", workspace]);
+      else {
+        const git = await lstat(path.join(workspace, ".git")).catch(() => undefined);
+        if (git?.isDirectory()) await taskGit(this.rootWorkspace, ["fetch", "--no-tags", "--no-write-fetch-head", "--no-recurse-submodules", workspace, `HEAD:refs/heads/recovered/${taskId}/HEAD`, `refs/heads/*:refs/heads/recovered/${taskId}/*`]);
+        else if (git) throw new CoreError("INVALID_REQUEST", "Unregistered worktree belongs to another repository; recover it before removing");
+      }
+      await rm(path.dirname(workspace), { recursive: true, force: true });
+      await rm(path.join(this.stateDirectory, `${crypto.createHash("sha256").update(workspace).digest("hex")}-task-history`), { recursive: true, force: true });
+      if (integration) await this.save({ ...registry, integrations: registry.integrations?.filter((record) => record.id !== taskId) });
     }, this.directory);
   }
 

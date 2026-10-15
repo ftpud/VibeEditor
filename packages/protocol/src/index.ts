@@ -1,8 +1,8 @@
 export type StorageAge = "today" | "week" | "older";
 export type StorageCategory = "tasks" | "sessions" | "workflows" | "checkpoints" | "logs" | "provider" | "runtime" | "other";
-export type StorageUsage = { id: StorageCategory; label: string; description: string; bytes: number; count: number; segments: { id: string; label: string; bytes: number }[]; cleanable: { finished: number; week: number; older: number } };
+export type StorageUsage = { id: StorageCategory; label: string; description: string; bytes: number; count: number; segments: { id: string; label: string; bytes: number }[]; entries?: { path: string; label: string; bytes: number; state: string }[]; cleanable: { finished: number; week: number; older: number; inactive?: number; versions?: number } };
 export type StorageSnapshot = { id: string; phase: "idle" | "scanning" | "cleaning" | "ready" | "error"; updatedAt: string; server: string; paths: string[]; categories: StorageUsage[]; totalBytes: number; scannedFiles: number; message: string; warnings: string[]; disk?: { total: number; available: number } };
-export type StorageCleanup = { scanId: string; category: StorageCategory; age: "finished" | "older" | "week" };
+export type StorageCleanup = { scanId: string; category: StorageCategory; age: "finished" | "older" | "week" | "inactive" | "versions"; closeOtherSessions?: boolean; discardChanges?: boolean };
 
 export type FileTreeNode = {
   name: string;
@@ -22,7 +22,7 @@ export type FileRevision = { identity: string; version: string };
  * Desktop can prove it is safe to talk to a newly deployed Core.
  */
 export type ProtocolCompatibility = { minimum: number; maximum: number };
-export const protocolCompatibility: ProtocolCompatibility = { minimum: 17, maximum: 17 };
+export const protocolCompatibility: ProtocolCompatibility = { minimum: 18, maximum: 18 };
 
 export function protocolRangeIsValid(range: ProtocolCompatibility): boolean {
   return Number.isInteger(range.minimum) && Number.isInteger(range.maximum) && range.minimum > 0 && range.minimum <= range.maximum;

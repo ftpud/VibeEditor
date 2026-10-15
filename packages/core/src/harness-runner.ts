@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import type { HarnessDefinition, HarnessBlock, HarnessConnectionTrace, HarnessBlockAttempt, HarnessBlockIteration, HarnessEdge, HarnessRun, HarnessLogEntry, HarnessChildTask, HarnessFailureReason, HarnessPauseStatus, HarnessOperation, HarnessOperationKind, HarnessFeature, HarnessReviewFinding, HarnessCorrectionCycle, AiSession } from "@remote-ide/protocol";
+import type { HarnessDefinition, HarnessBlock, HarnessConnectionTrace, HarnessBlockAttempt, HarnessBlockIteration, HarnessBlockRun, HarnessEdge, HarnessRun, HarnessLogEntry, HarnessChildTask, HarnessFailureReason, HarnessPauseStatus, HarnessOperation, HarnessOperationKind, HarnessFeature, HarnessReviewFinding, HarnessCorrectionCycle, AiSession } from "@remote-ide/protocol";
 import { AiProviderError, findAutopilotOption, normalizeAiFailure, type AiFailure } from "@remote-ide/acp";
 import { CoreError } from "./errors.js";
 import { harnessExecutionEdges, isHarnessFlow, HarnessSchemaError, parseHarnessData, validateHarness, renderHarnessPrompt } from "./harness-graph.js";
@@ -31,6 +31,9 @@ export class HarnessRunner {
   private readonly resumingChats = new Set<string>();
   // Steering adds user messages inside a turn; it must not move the transcript boundary.
   private readonly chatTurnUsers = new WeakMap<HarnessRun["blocks"][number], string | null>();
+  private readonly latestChatResponse = new WeakMap<HarnessBlockRun, string>();
+  private readonly chatResponsePrefix = new WeakMap<HarnessBlockRun, string>();
+  private readonly chatSteeringDeliveries = new WeakMap<HarnessBlockRun, Promise<void>>();
   private chatAdmissionQueue = Promise.resolve();
   private readonly flowAnswers = new Map<string, (answer: string) => void>();
   private readonly cancelled = new Set<string>();
@@ -400,14 +403,36 @@ export class HarnessRunner {
       this.assertActive(runId);
       if (state.status !== "running" || state.sessionId !== sessionId) throw new CoreError("INVALID_REQUEST", "Chatbox session changed");
       // Publish the input while provider acknowledgement is still pending.
-      const reply = state.chatMessages?.pop();
-      state.chatMessages = [...state.chatMessages ?? [], { id: crypto.randomUUID(), role: "user" as const, text: value, timestamp: new Date().toISOString() }, ...(reply ? [reply] : [])].slice(-200);
+      this.appendChatSteering(state, value);
       this.log(state, "prompt", `User steering: ${value}`);
       await this.update(execution.run);
-      await steer(state.provider!, state.workspace!, value);
-      this.assertActive(runId);
+      const startedAt = state.startedAt; const provider = state.provider!; const workspace = state.workspace!;
+      const delivery = (this.chatSteeringDeliveries.get(state) ?? Promise.resolve()).then(async () => {
+        if (!this.isActive(runId) || state.sessionId !== sessionId || state.startedAt !== startedAt || state.status !== "running") throw new CoreError("INVALID_REQUEST", "Chatbox turn ended before queued steering could be delivered");
+        await steer(provider, workspace, value);
+      }).catch(async (error) => {
+        this.log(state, "error", `Steering delivery failed: ${error instanceof Error ? error.message : String(error)}`);
+        if (state.sessionId === sessionId && state.startedAt === startedAt) state.error = `Steering delivery failed: ${error instanceof Error ? error.message : String(error)}`;
+        await this.update(execution.run);
+      });
+      this.chatSteeringDeliveries.set(state, delivery);
+      this.executionTasks.add(delivery);
+      void delivery.finally(() => { this.executionTasks.delete(delivery); if (this.chatSteeringDeliveries.get(state) === delivery) this.chatSteeringDeliveries.delete(state); }).catch((error) => console.error("[core] Could not persist steering failure", error));
     });
     return structuredClone(execution.run);
+  }
+
+  private appendChatSteering(state: HarnessBlockRun, input: string): void {
+    this.chatResponsePrefix.set(state, this.latestChatResponse.get(state) ?? "");
+    const timestamp = new Date().toISOString();
+    const messages = [...state.chatMessages ?? []];
+    if (messages.at(-1)?.role === "assistant" && !messages.at(-1)?.text) messages.pop();
+    state.chatMessages = [...messages, { id: crypto.randomUUID(), role: "user", text: input, timestamp }, { id: crypto.randomUUID(), role: "assistant", text: "", timestamp }].slice(-200) as NonNullable<HarnessBlockRun["chatMessages"]>;
+  }
+  private chatReplyText(state: HarnessBlockRun, session: AiSession): string {
+    const full = chatResponse(session, this.chatTurnUsers.get(state)); this.latestChatResponse.set(state, full);
+    const prefix = this.chatResponsePrefix.get(state);
+    return prefix && full.startsWith(prefix) ? full.slice(prefix.length).replace(/^\n\n/, "") : full;
   }
 
   async appendInput(runId: string, input: string): Promise<HarnessRun> {
@@ -809,8 +834,7 @@ export class HarnessRunner {
           if (child.status !== "running") throw new Error("Connected AI session is no longer running");
           this.chargeContext(execution.run, child, steeringInput.length);
           if (target.type === "chatbox") {
-            const reply = child.chatMessages?.pop();
-            child.chatMessages = [...child.chatMessages ?? [], { id: crypto.randomUUID(), role: "user" as const, text: steeringInput, timestamp: new Date().toISOString() }, ...(reply ? [reply] : [])].slice(-200);
+            this.appendChatSteering(child, steeringInput);
           }
           this.log(child, "prompt", `Agent steering: ${steeringInput}`);
           await this.update(execution.run);
@@ -931,6 +955,7 @@ export class HarnessRunner {
         const timestamp = new Date().toISOString();
         state.agentActivity = [];
         this.chatTurnUsers.delete(state);
+        this.latestChatResponse.delete(state); this.chatResponsePrefix.delete(state);
         state.chatMessages = [...state.chatMessages ?? [], { id: crypto.randomUUID(), role: "user", text: input, timestamp }, { id: crypto.randomUUID(), role: "assistant", text: "", timestamp }].slice(-200) as NonNullable<typeof state.chatMessages>;
       }
       run.status = this.runActivityStatus(run); await this.update(run);
@@ -1092,7 +1117,7 @@ export class HarnessRunner {
               : dispatch(this.effectiveBlock(run, block), prompt, { runId: run.id, blockId: block.id, attemptId, iteration: index + 1, started, activity, assertActive: () => this.assertActive(run.id) });
           });
           this.assertActive(run.id);
-          if (block.type === "chatbox") state.chatMessages!.at(-1)!.text = chatResponse(settled, this.chatTurnUsers.get(state));
+          if (block.type === "chatbox") state.chatMessages!.at(-1)!.text = this.chatReplyText(state, settled);
           state.sessionId = settled.id; attempt.sessionId = settled.id; if (iteration) iteration.sessionId = settled.id;
           context.sessionId = state.sessionId;
           for (const [id, hash] of deliveredOutputs) context.outputs.set(id, hash);
@@ -1228,7 +1253,7 @@ export class HarnessRunner {
     const response = waitingUntil || !state.chatMessages ? session.messages.filter((message) => message.role === "assistant").at(-1)?.text.slice(-200_000) : undefined;
     if (state.chatMessages && !this.chatTurnUsers.has(state)) this.chatTurnUsers.set(state, session.messages.filter((message) => message.role === "user").at(-1)?.id ?? null);
     const chatReply = state.chatMessages?.at(-1);
-    const chatText = chatReply?.role === "assistant" ? chatResponse(session, this.chatTurnUsers.get(state)) : undefined;
+    const chatText = chatReply?.role === "assistant" ? this.chatReplyText(state, session) : undefined;
     const chatChanged = chatText !== undefined && chatText !== chatReply?.text;
     const lastUser = state.chatMessages ? session.messages.findIndex((message) => message.id === this.chatTurnUsers.get(state)) : session.messages.map((message) => message.role).lastIndexOf("user");
     const agentActivity = session.messages.slice(lastUser + 1).filter((message) => message.role === "activity").slice(-50).map((message) => ({ id: message.id, timestamp: message.timestamp, text: (message.text || message.content?.filter((item) => item.type === "text").map((item) => item.text).join("\n") || "Agent activity").slice(-8000) }));

@@ -4,9 +4,12 @@ import { createRequire } from "node:module";
 import { mkdir, mkdtemp, readFile, rename, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { serializedStateMutation } from "../../root-mutation.js";
 
 const bundledRequire = createRequire(import.meta.url);
 let runtimeRequire = bundledRequire;
+let selectedDirectory: string | undefined;
+export function currentCodexRuntimeDirectory(): string | undefined { return selectedDirectory; }
 const execute = promisify(execFile);
 type RunNpm = (args: string[]) => Promise<string>;
 function parseVersion(text: string): string {
@@ -30,7 +33,12 @@ export async function updateCodexRuntime(
   directory = process.env.REMOTE_IDE_CODEX_RUNTIME_DIR ?? path.join(os.homedir(), ".remote-ide", "codex-runtime"),
   npm: RunNpm = runNpm
 ): Promise<void> {
+  return serializedStateMutation(path.join(directory, "maintenance"), () => updateRuntime(directory, npm));
+}
+
+async function updateRuntime(directory: string, npm: RunNpm): Promise<void> {
   runtimeRequire = bundledRequire;
+  selectedDirectory = undefined;
   // Prefer the latest published runtime unless updates are explicitly disabled.
   if (process.env.REMOTE_IDE_CODEX_AUTO_UPDATE === "0") return;
   let current: { directory: string; adapter: string; codex: string } | undefined;
@@ -42,7 +50,7 @@ export async function updateCodexRuntime(
   };
   try {
     current = JSON.parse(await readFile(path.join(directory, "current.json"), "utf8"));
-    if (current) runtimeRequire = load(current.directory);
+    if (current) { runtimeRequire = load(current.directory); selectedDirectory = path.resolve(current.directory); }
   } catch { current = undefined; }
   try {
     console.log("[core] checking for Codex ACP and Codex runtime updates");
@@ -63,6 +71,7 @@ export async function updateCodexRuntime(
     await writeFile(temporary, JSON.stringify({ directory: candidate, adapter, codex }));
     await rename(temporary, path.join(directory, "current.json"));
     runtimeRequire = require;
+    selectedDirectory = path.resolve(candidate);
     console.log(`[core] using updated Codex ACP ${adapter}, Codex ${codex}`);
   } catch (error) {
     console.warn(`[core] Codex update failed; using ${current ? "cached" : "bundled"} runtime: ${error instanceof Error ? error.message : String(error)}`);

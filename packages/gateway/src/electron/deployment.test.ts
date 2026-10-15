@@ -25,6 +25,25 @@ test("generated activation and workspace resolution commands are valid Bash", as
   await exec("bash", ["-n", "-c", activatedReleaseVerificationCommand("test", 7331, candidateRelease, "true")]);
 });
 
+test("activation refuses live storage maintenance and recovers a stale maintenance owner", async () => {
+  const home = await mkdtemp(path.join(os.tmpdir(), "vibe-maintenance-activation-"));
+  const lock = path.join(home, ".vibe-deploy", "maintenance.lock");
+  try {
+    await mkdir(path.dirname(lock), { recursive: true });
+    await writeFile(lock, JSON.stringify({ pid: process.pid, hostname: os.hostname(), token: "live" }));
+    await assert.rejects(exec("bash", ["-c", serverActivationCommand("test", "/workspace", 7331, candidateRelease, "true")], { env: { ...process.env, HOME: home }, timeout: 5000 }), (error: unknown) => {
+      assert.match(String((error as { stderr: string }).stderr), /Storage maintenance is running/); return true;
+    });
+    // An impossible Linux PID makes this deterministic without targeting a process.
+    await writeFile(lock, JSON.stringify({ pid: 2147483647, hostname: os.hostname(), token: "stale" }));
+    await writeFile(path.join(home, ".vibe-server-test.token"), "invalid");
+    await assert.rejects(exec("bash", ["-c", serverActivationCommand("test", "/workspace", 7331, candidateRelease, "true")], { env: { ...process.env, HOME: home }, timeout: 5000 }), (error: unknown) => {
+      assert.match(String((error as { stderr: string }).stderr), /Invalid Core session token file/); return true;
+    });
+    await assert.rejects(readFile(lock), { code: "ENOENT" });
+  } finally { await rm(home, { recursive: true, force: true }); }
+});
+
 test("health probe performs a real WebSocket protocol handshake", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "vibe-health-"));
   const sockets = new Set<net.Socket>();
