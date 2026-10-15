@@ -18,17 +18,34 @@ describe("HarnessPanel", () => {
     const state = { blockId: "chat", status: "awaiting_permission", sessionId: "session", autopilot: false } as const;
     const onAutopilot = vi.fn().mockResolvedValue(undefined);
     const view = render(<BlockRunDetails block={block} state={state} onClose={vi.fn()} onAutopilot={onAutopilot} />);
-    const toggle = screen.getByRole("button", { name: "Autopilot" });
-    expect(toggle.getAttribute("aria-pressed")).toBe("false");
+    fireEvent.click(screen.getByRole("button", { name: "Chatbox settings" }));
+    const toggle = screen.getByRole("switch", { name: "Autopilot" });
+    expect((toggle as HTMLInputElement).checked).toBe(false);
     fireEvent.click(toggle);
-    await waitFor(() => expect(toggle.getAttribute("aria-pressed")).toBe("true"));
+    await waitFor(() => expect((toggle as HTMLInputElement).checked).toBe(true));
     expect(onAutopilot).toHaveBeenCalledWith(true);
     onAutopilot.mockRejectedValueOnce(new Error("Session changed"));
     fireEvent.click(toggle);
     expect((await screen.findByRole("alert")).textContent).toBe("Session changed");
-    expect(toggle.getAttribute("aria-pressed")).toBe("true");
+    expect((toggle as HTMLInputElement).checked).toBe(true);
     view.rerender(<BlockRunDetails block={block} state={{ ...state, sessionId: "new", autopilot: false }} onClose={vi.fn()} onAutopilot={onAutopilot} />);
-    await waitFor(() => expect(toggle.getAttribute("aria-pressed")).toBe("false"));
+    await waitFor(() => expect((toggle as HTMLInputElement).checked).toBe(false));
+  });
+
+  it("sends provider and model overrides with the first Chatbox message", async () => {
+    const block: HarnessBlock = { id: "chat", type: "chatbox", label: "Chat", prompt: "", provider: "old", model: "old-model", position: { x: 0, y: 0 } };
+    const onChat = vi.fn().mockResolvedValue(undefined);
+    const onLoadModels = vi.fn().mockResolvedValue([{ id: "new-model", name: "New model", defaultReasoning: "", reasoningLevels: [] }]);
+    render(<BlockRunDetails block={block} onClose={vi.fn()} onChat={onChat} providers={[{ id: "new", name: "New provider", options: [], capabilities: {} } as unknown as Parameters<typeof HarnessPanel>[0]["providers"][number]]} onLoadModels={onLoadModels} />);
+    fireEvent.click(screen.getByRole("button", { name: "Chatbox settings" }));
+    fireEvent.change(screen.getByLabelText("Chatbox provider override"), { target: { value: "new" } });
+    await waitFor(() => expect(onLoadModels).toHaveBeenLastCalledWith("new"));
+    fireEvent.click(screen.getByRole("button", { name: "Chatbox model override" }));
+    fireEvent.click(await screen.findByRole("option", { name: /New model/ }));
+    fireEvent.click(screen.getByRole("switch", { name: "Autopilot" }));
+    fireEvent.change(screen.getByLabelText("Message Chat"), { target: { value: "Hello" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send chat message" }));
+    await waitFor(() => expect(onChat).toHaveBeenCalledWith("Hello", { provider: "new", model: "new-model", autopilot: false }));
   });
 
   it("links an existing skill from the catalogue and can return to custom instructions", async () => {

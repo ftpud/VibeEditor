@@ -37,9 +37,10 @@ describe("Workflow run library", () => {
     render(<WorkflowRunPanel {...props()} harnesses={[chatWorkflow]} runs={[chatRun]} onAutopilot={onAutopilot} />);
     fireEvent.click(screen.getByRole("button", { name: "Show Workspace check" }));
     fireEvent.click(screen.getByRole("button", { name: "Assistant: awaiting permission" }));
-    fireEvent.click(screen.getByRole("button", { name: "Autopilot" }));
+    fireEvent.click(screen.getByRole("button", { name: "Chatbox settings" }));
+    fireEvent.click(screen.getByRole("switch", { name: "Autopilot" }));
     await waitFor(() => expect(onAutopilot).toHaveBeenCalledWith("run", "chat", "owned-session", true));
-    await waitFor(() => expect(screen.getByRole("button", { name: "Autopilot" }).getAttribute("aria-pressed")).toBe("true"));
+    await waitFor(() => expect((screen.getByRole("switch", { name: "Autopilot" }) as HTMLInputElement).checked).toBe(true));
   });
 
   it("sends steering to the selected Chatbox session and retains stop", async () => {
@@ -172,11 +173,11 @@ describe("Workflow run library", () => {
     fireEvent.keyDown(input, { key: "Enter", shiftKey: true });
     expect(onChat).not.toHaveBeenCalled();
     fireEvent.keyDown(input, { key: "Enter" });
-    await waitFor(() => expect(onChat).toHaveBeenCalledWith("flow", "chat", "Hello", undefined));
+    await waitFor(() => expect(onChat).toHaveBeenCalledWith("flow", "chat", "Hello", undefined, expect.objectContaining({ autopilot: true })));
     expect(await screen.findByText("Hello back", { selector: "strong" })).toBeTruthy();
     fireEvent.change(screen.getByLabelText("Message Assistant"), { target: { value: "Next message" } });
     fireEvent.click(screen.getByRole("button", { name: "Send chat message" }));
-    await waitFor(() => expect(onChat).toHaveBeenLastCalledWith("flow", "chat", "Next message", "run"));
+    await waitFor(() => expect(onChat).toHaveBeenLastCalledWith("flow", "chat", "Next message", "run", expect.objectContaining({ autopilot: true })));
     view.rerender(<WorkflowRunPanel {...callbacks} runs={[{ ...chatRun, status: "running", blocks: [{ ...chatRun.blocks[0]!, status: "running" }] }]} />);
     fireEvent.click(screen.getByRole("button", { name: "Stop chat response" }));
     await waitFor(() => expect(callbacks.onCancelRun).toHaveBeenCalledWith("run"));
@@ -497,7 +498,7 @@ describe("workflow chat links", () => {
     expect((screen.getByRole("button", { name: "Send chat message" }) as HTMLButtonElement).disabled).toBe(false);
     fireEvent.click(screen.getByRole("button", { name: "Send chat message" }));
     fireEvent.submit(screen.getByLabelText("Message Assistant").closest("form")!);
-    expect(onChat).toHaveBeenCalledTimes(1); expect(onChat).toHaveBeenCalledWith("Independent input");
+    expect(onChat).toHaveBeenCalledTimes(1); expect(onChat).toHaveBeenCalledWith("Independent input", expect.objectContaining({ autopilot: true }));
     release(); await waitFor(() => expect((screen.getByLabelText("Message Assistant") as HTMLTextAreaElement).value).toBe(""));
     view.rerender(<BlockRunDetails block={chat} run={activeRun} state={{ ...idle, status: "running" }} onClose={vi.fn()} onChat={onChat} />);
     fireEvent.change(screen.getByLabelText("Message Assistant"), { target: { value: "Duplicate" } });

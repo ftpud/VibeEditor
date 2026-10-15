@@ -226,7 +226,7 @@ export class HarnessRunner {
     return live ? structuredClone(live) : (await this.store.runs()).find((run) => run.id === runId);
   }
 
-  async start(harnessId: string, input: string, dispatch: Dispatch, defaultProvider = "codex", append?: Append, startBlockId?: string, rerunRunId?: string, testDefinition?: HarnessDefinition, workspace?: string, prepareDefinition?: (definition: HarnessDefinition) => Promise<HarnessDefinition>, binding?: HarnessRun["binding"]): Promise<HarnessRun> {
+  async start(harnessId: string, input: string, dispatch: Dispatch, defaultProvider = "codex", append?: Append, startBlockId?: string, rerunRunId?: string, testDefinition?: HarnessDefinition, workspace?: string, prepareDefinition?: (definition: HarnessDefinition) => Promise<HarnessDefinition>, binding?: HarnessRun["binding"], chatSettings?: { blockId: string; settings: import("@remote-ide/protocol").HarnessChatSettings }): Promise<HarnessRun> {
     if (this.suspended) throw new CoreError("INVALID_REQUEST", "Core is shutting down");
     const source = rerunRunId ? (await this.store.runs()).find((run) => run.id === rerunRunId) : undefined;
     if (rerunRunId && !source) throw new CoreError("FILE_NOT_FOUND", "Workflow run does not exist");
@@ -251,6 +251,11 @@ export class HarnessRunner {
     }
     const createdAt = new Date().toISOString();
     const run: HarnessRun = { binding: source?.binding ?? binding, workspace: binding?.workspace ?? source?.workspace ?? workspace, id: crypto.randomUUID(), harnessId, harnessVersion: harness.version, input: input.trim(), status: "queued", createdAt, blocks: validation.order.map((blockId) => ({ blockId, status: "queued" })), operations: [] };
+    if (chatSettings) {
+      const state = run.blocks.find((item) => item.blockId === chatSettings.blockId);
+      const block = harness.blocks.find((item) => item.id === chatSettings.blockId);
+      if (state && block?.type === "chatbox") state.chatSettings = { ...chatSettings.settings, model: chatSettings.settings.model === undefined ? block.model : chatSettings.settings.model || undefined };
+    }
     run.definition = structuredClone(harness);
     run.executionPlan = { version: 1, createdAt, definitionVersion: harness.version, order: [...validation.order], blocks: validation.order.map((blockId) => ({ blockId, incoming: harness.edges.filter((edge) => edge.to === blockId).map((edge) => edge.id), outgoing: harness.edges.filter((edge) => edge.from === blockId).map((edge) => edge.id) })) };
     await this.store.createRun(run, harness.settings?.maxActiveRuns ?? 4); this.changed(run.id);
@@ -258,7 +263,7 @@ export class HarnessRunner {
     return run;
   }
 
-  async continueChat(runId: string, blockId: string, input: string, dispatch: Dispatch, defaultProvider: string, append: Append, binding?: HarnessRun["binding"]): Promise<HarnessRun> {
+  async continueChat(runId: string, blockId: string, input: string, dispatch: Dispatch, defaultProvider: string, append: Append, binding?: HarnessRun["binding"], settings?: import("@remote-ide/protocol").HarnessChatSettings): Promise<HarnessRun> {
     const key = `${runId}:${blockId}`;
     if (this.resumingChats.has(key)) throw new CoreError("INVALID_REQUEST", "Wait for the current workflow turn on this Chatbox to finish before sending another message");
     this.resumingChats.add(key);
@@ -284,9 +289,24 @@ export class HarnessRunner {
       const validation = validateHarness(definition);
       if (!validation.valid) throw new CoreError("INVALID_REQUEST", "This saved workflow definition is invalid");
       const state = run.blocks.find((item) => item.blockId === blockId)!;
+      const applySettings = () => {
+        if (!settings) return;
+        const provider = settings.provider ?? block.provider ?? state.provider ?? defaultProvider;
+        const model = settings.model === undefined ? block.model : settings.model || undefined;
+        const previousModel = state.chatSettings ? state.chatSettings.model : block.model;
+        const changed = provider !== (state.provider ?? block.provider ?? defaultProvider) || model !== previousModel;
+        if (changed) {
+          state.sessionId = undefined;
+          state.workspace = undefined;
+        }
+        state.chatSettings = { ...settings, provider, model };
+        state.provider = provider;
+        if (settings.autopilot !== undefined) state.autopilot = settings.autopilot;
+      };
       if (execution) {
         const invoke = this.flowInvocations.get(runId);
         if (!this.isActive(runId) || !isActiveStatus(run.status) || !invoke || execution.flowBusy?.has(blockId) || isActiveStatus(state.status)) throw new CoreError("INVALID_REQUEST", "Wait for the current workflow turn on this Chatbox to finish before sending another message");
+        applySettings();
         // invoke claims the block synchronously, before its first persistence await.
         // The flow drains background turns before recording the aggregate outcome.
         let pending!: Promise<void>;
@@ -300,6 +320,7 @@ export class HarnessRunner {
         return structuredClone(run);
       }
       if (this.activeRuns.has(runId) || isActiveStatus(run.status)) throw new CoreError("INVALID_REQUEST", "The previous workflow turn is still active");
+      applySettings();
       run.input = input.trim(); run.status = "queued"; run.error = undefined; run.completedAt = undefined; run.startedAt = undefined;
       state.status = "queued"; state.error = undefined; state.pendingPermission = undefined; state.question = undefined; state.pauseId = undefined; state.waitingUntil = undefined;
       await this.store.createRun(run, definition.settings?.maxActiveRuns ?? 4);
@@ -946,8 +967,11 @@ export class HarnessRunner {
       this.assertActive(run.id);
       if (busy.has(id)) throw new Error("This block is already active; recursive tool calls are not allowed");
       if (++steps > 1000) throw new Error("Flow exceeded 1000 block executions");
-      const block = blocks.find((item) => item.id === id)!;
+      const originalBlock = blocks.find((item) => item.id === id)!;
       const state = run.blocks.find((item) => item.blockId === id)!;
+      const settings = state.chatSettings;
+      const block = settings ? { ...originalBlock, ...settings, model: settings.model } : originalBlock;
+      if (settings && ((settings.provider ?? originalBlock.provider ?? execution.defaultProvider) !== (originalBlock.provider ?? execution.defaultProvider) || settings.model !== originalBlock.model)) block.reasoning = undefined;
       let published!: () => void;
       finishing.set(id, new Promise<void>((resolve) => { published = resolve; }));
       busy.add(id); state.error = undefined; state.status = "running"; state.startedAt = new Date().toISOString(); state.completedAt = undefined; state.selectedRoute = undefined;

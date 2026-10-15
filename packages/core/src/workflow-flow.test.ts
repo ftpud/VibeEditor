@@ -275,6 +275,41 @@ describe("typed workflows", () => {
     expect(run.blocks.map((item) => item.blockId)).toEqual(["ai", "tool"]);
   });
 
+  it("starts a Chatbox with overrides without changing its frozen definition", async () => {
+    const { runner, definition, finished } = await setup([block("chat", "chatbox", { provider: "original", model: "old" })], []);
+    const dispatch = vi.fn(async () => session("Reply"));
+    await runner.start(definition.id, "Hello", dispatch, "original", undefined, "chat", undefined, undefined, undefined, undefined, undefined, { blockId: "chat", settings: { provider: "other", model: "", autopilot: false } });
+    const run = await finished();
+    expect(dispatch).toHaveBeenCalledWith(expect.objectContaining({ provider: "other", model: undefined, autopilot: false }), expect.any(String), expect.any(Object));
+    expect(run.definition).toEqual(definition);
+    expect(run.blocks[0]?.chatSettings).toMatchObject({ provider: "other", autopilot: false });
+  });
+
+  it("applies Chatbox overrides to the next turn and keeps the saved workflow unchanged", async () => {
+    const { runner, definition, store, finished } = await setup([block("chat", "chatbox", { provider: "original", model: "old", reasoning: "high" })], []);
+    const dispatch = vi.fn(async (_block: HarnessBlock, _prompt: string, runtime: Parameters<Parameters<HarnessRunner["start"]>[2]>[2]) => {
+      await runtime.started("/chat/session");
+      return session("Reply");
+    });
+    const append = vi.fn(async () => session("Continued"));
+    const run = await runner.start(definition.id, "Hello", dispatch, "original", append, "chat");
+    await finished();
+    await runner.continueChat(run.id, "chat", "Switch", dispatch, "original", append, undefined, { provider: "other", model: "new", autopilot: false });
+    const changed = await finished();
+    expect(dispatch).toHaveBeenLastCalledWith(expect.objectContaining({ provider: "other", model: "new", autopilot: false, reasoning: undefined }), expect.any(String), expect.any(Object));
+    expect(append).not.toHaveBeenCalled();
+    expect(changed.blocks[0]?.chatMessages?.filter((item) => item.role === "user").map((item) => item.text)).toEqual(["Hello", "Switch"]);
+    expect((await store.read(definition.id)).blocks[0]).toMatchObject({ provider: "original", model: "old", reasoning: "high" });
+    expect(changed.definition).toEqual(definition);
+    expect(changed.blocks[0]?.chatSettings).toMatchObject({ provider: "other", model: "new", autopilot: false });
+    await runner.continueChat(run.id, "chat", "Continue", dispatch, "original", append, undefined, { provider: "other", model: "new", autopilot: false });
+    await finished();
+    expect(append).toHaveBeenCalledOnce();
+    await runner.continueChat(run.id, "chat", "Default model", dispatch, "original", append, undefined, { provider: "other", model: "", autopilot: false });
+    await finished();
+    expect(dispatch).toHaveBeenLastCalledWith(expect.objectContaining({ provider: "other", model: undefined }), expect.any(String), expect.any(Object));
+  });
+
   it("keeps Chatbox conversations and sessions across turns and exposes every connected block", async () => {
     const { runner, definition, store, finished } = await setup([
       block("chat", "chatbox", { prompt: "" }), block("tool", "text", { prompt: "Tool: {{input}}" }), block("unused", "text", { prompt: "Never called" }),

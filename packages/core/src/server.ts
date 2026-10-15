@@ -1057,7 +1057,7 @@ async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStor
       if (payload.runId && (!existing || existing.harnessId !== payload.harnessId)) throw new CoreError("INVALID_REQUEST", "Chat run does not belong to this workflow");
       const definition = existing?.definition ?? await harnesses.read(payload.harnessId);
       if (definition.blocks.find((block) => block.id === payload.blockId)?.type !== "chatbox") throw new CoreError("INVALID_REQUEST", "Select a Chatbox block");
-      return { run: await startWorkflow({ harnessId: payload.harnessId, input: payload.input, startBlockId: payload.blockId, chatRunId: payload.runId, target: payload.target, provider: existing?.blocks.find((block) => block.blockId === payload.blockId)?.provider ?? payload.provider }, { acp, tasks, agents, harnessRunner, workflowApps, aiTimers, rootWorkspace, bridgeWorkspace, workspacePath }) };
+      return { run: await startWorkflow({ harnessId: payload.harnessId, input: payload.input, startBlockId: payload.blockId, chatRunId: payload.runId, chatSettings: payload.settings, target: payload.target, provider: existing?.blocks.find((block) => block.blockId === payload.blockId)?.provider ?? payload.provider }, { acp, tasks, agents, harnessRunner, workflowApps, aiTimers, rootWorkspace, bridgeWorkspace, workspacePath }) };
     }
     case "harnesses.autopilot": return { run: await harnessRunner.setAutopilot(request.payload.runId, request.payload.blockId, request.payload.sessionId, request.payload.enabled, async (providerId, target, sessionId, enabled) => {
       const provider = acp.get(providerId);
@@ -1325,7 +1325,7 @@ async function resolveWorkflowCommit(workspace: string, reference: string): Prom
 
 function boundedWorkflowOutput(value: string, limit = 200_000): string { return value.length <= limit ? value : `${value.slice(0, limit)}\n… output truncated by Core`; }
 
-export async function startWorkflow(input: ProtocolOperations["harnesses.run"]["payload"] & { chatRunId?: string; testDefinition?: HarnessDefinition }, context: {
+export async function startWorkflow(input: ProtocolOperations["harnesses.run"]["payload"] & { chatRunId?: string; chatSettings?: import("@remote-ide/protocol").HarnessChatSettings; testDefinition?: HarnessDefinition }, context: {
   acp: AcpRegistry; tasks: WorkspaceTaskStore; agents: AgentsStore; harnessRunner: HarnessRunner; workflowApps: WorkflowAppService;
   aiTimers: AiTimerService; rootWorkspace: string; bridgeWorkspace: string; workspacePath: string;
 }): Promise<import("@remote-ide/protocol").HarnessRun> {
@@ -1393,8 +1393,8 @@ export async function startWorkflow(input: ProtocolOperations["harnesses.run"]["
       return settleWorkflowSession(provider, runtime.workspace, aiTimers, block.watchdog ? runtime : undefined, () => harnessRunner.isActive(runtime.runId), runtime.activity);
     });
   return input.chatRunId
-    ? harnessRunner.continueChat(input.chatRunId, input.startBlockId!, input.input, dispatch, input.provider ?? "codex", append, binding)
-    : harnessRunner.start(input.harnessId, input.input, dispatch, input.provider, append, input.startBlockId, input.rerunRunId, input.testDefinition, workspacePath, (definition) => prepareWorkflowSkills(definition, new SkillsStore(undefined, rootWorkspace), workspacePath), binding);
+    ? harnessRunner.continueChat(input.chatRunId, input.startBlockId!, input.input, dispatch, input.provider ?? "codex", append, binding, input.chatSettings)
+    : harnessRunner.start(input.harnessId, input.input, dispatch, input.provider, append, input.startBlockId, input.rerunRunId, input.testDefinition, workspacePath, (definition) => prepareWorkflowSkills(definition, new SkillsStore(undefined, rootWorkspace), workspacePath), binding, input.chatSettings && input.startBlockId ? { blockId: input.startBlockId, settings: input.chatSettings } : undefined);
 }
 
 /** Helpers connected through use edges share the lead's workspace snapshot coverage. */
