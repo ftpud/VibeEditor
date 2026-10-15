@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { access, mkdtemp, mkdir, readFile, symlink, writeFile } from "node:fs/promises";
+import { access, mkdtemp, mkdir, readdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -100,6 +100,20 @@ describe("WorkspaceFileSystem", () => {
     expect(await readFile(path.join(root, "target", "index.ts"), "utf8")).toContain("value = 1");
   });
 
+  it("rejects nonboolean transfer confirmation before preflight or destructive changes", async () => {
+    await fs.open(root);
+    await writeFile(path.join(root, "source.txt"), "source contents\n");
+    await writeFile(path.join(root, "destination.txt"), "destination contents\n");
+    const preflight = vi.spyOn(fs, "transferPreflight");
+
+    await expect(fs.transferApply("move", [{ source: "source.txt", destination: "destination.txt" }], ["destination.txt"], [], [], "false" as unknown as boolean))
+      .rejects.toMatchObject({ code: "INVALID_REQUEST" });
+
+    expect(preflight).not.toHaveBeenCalled();
+    await expect(readFile(path.join(root, "source.txt"), "utf8")).resolves.toBe("source contents\n");
+    await expect(readFile(path.join(root, "destination.txt"), "utf8")).resolves.toBe("destination contents\n");
+  });
+
   it("moves multiple paths, reports dirty blockers, and supports case-only names", async () => {
     await fs.open(root);
     await fs.createFile("README.md");
@@ -108,7 +122,9 @@ describe("WorkspaceFileSystem", () => {
     expect(preview.items[0]).toMatchObject({ caseOnlyRename: true });
     const result = await fs.transferApply("move", [{ source: "README.md", destination: "Readme.md" }], [], [], [], true);
     expect(result).toEqual({ completed: [{ source: "README.md", destination: "Readme.md" }], failures: [] });
-    await expect(access(path.join(root, "README.md"))).rejects.toMatchObject({ code: "ENOENT" });
+    const names = await readdir(root);
+    expect(names).toContain("Readme.md");
+    expect(names).not.toContain("README.md");
     await expect(access(path.join(root, "Readme.md"))).resolves.toBeUndefined();
   });
 
@@ -159,10 +175,15 @@ describe("WorkspaceFileSystem", () => {
 describe("workspace tree producer limits", () => {
   it.each([false, true])("allows trees beyond the former default path and Git output limits (Git=%s)", async (git) => {
     const root = await mkdtemp(path.join(tmpdir(), "tree-unlimited-"));
-    if (git) await execFileAsync("git", ["-C", root, "init", "-q"]);
-    for (let i = 0; i < 5200; i++) await writeFile(path.join(root, `${i}${"x".repeat(220)}`), "x");
-    expect(await new WorkspaceFileSystem().open(root)).toHaveLength(5200);
-  });
+    try {
+      if (git) await execFileAsync("git", ["-C", root, "init", "-q"]);
+      // Bound open files while avoiding thousands of serial APFS round trips.
+      for (let start = 0; start < 5200; start += 64) {
+        await Promise.all(Array.from({ length: Math.min(64, 5200 - start) }, (_, offset) => writeFile(path.join(root, `${start + offset}${"x".repeat(220)}`), "x")));
+      }
+      expect(await new WorkspaceFileSystem().open(root)).toHaveLength(5200);
+    } finally { await rm(root, { recursive: true, force: true, maxRetries: 5 }); }
+  }, 15_000);
 
   it("honors configured environment limits while leaving other limits unlimited", async () => {
     vi.stubEnv("VIBE_TREE_MAX_NODES", "1");

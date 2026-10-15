@@ -21,9 +21,9 @@ Codex discovers model and reasoning metadata from its local model cache, which a
 
 Codex ACP may lag the Codex CLI release. The root npm override keeps ACP's bundled CLI on a version that can run GPT-6 Sol even when ACP's model catalogue has not advertised it yet.
 
-At Core process startup, Vibe checks npm's `latest` versions of `@agentclientprotocol/codex-acp` and `@openai/codex` before accepting connections. Changed versions are installed into a new directory under `~/.remote-ide/codex-runtime`; a completed installation is selected atomically without changing the project's dependencies or lockfile. Both ACP sessions and quota reads use this runtime. Registry requests have a 15-second fetch timeout and each npm command has a 60-second limit. An offline or failed update logs a warning and retains the previous cached runtime, or the bundled dependency on first startup. Set `REMOTE_IDE_CODEX_AUTO_UPDATE=0` to skip updates, or `REMOTE_IDE_CODEX_RUNTIME_DIR` to relocate the cache. An explicit `CODEX_PATH` still overrides the Codex binary for ACP sessions. Updating removes a source of stale model catalogues; model access still depends on the account and what the agent advertises.
+Core checks npm's `latest` versions of `@agentclientprotocol/codex-acp` and `@openai/codex` in the background during startup by default, so registry requests and installation do not delay the Core listener or Gateway health checks. Sessions started before an update completes use the cached or bundled runtime; later sessions use the completed update. Set `REMOTE_IDE_CODEX_AUTO_UPDATE=0` to disable updates and use the bundled runtime installed from the project lockfile. With updates enabled, changed versions are installed into a new directory under `~/.remote-ide/codex-runtime`; a completed installation is selected atomically. Both ACP sessions and quota reads use the selected runtime. Registry requests have a 15-second fetch timeout and each npm command has a 60-second limit. An offline or failed update logs a warning and retains the previous cached runtime, or the bundled dependency on first startup. `REMOTE_IDE_CODEX_RUNTIME_DIR` relocates the cache. An explicit `CODEX_PATH` still overrides the Codex binary for ACP sessions. Model access depends on the account and what the agent advertises.
 
-Copilot discovers models from ACP configuration metadata, including the premium-request multiplier, cost tier, and availability published in the model option's `_meta`. Stored model and reasoning choices are passed at server launch and are also applied when their dynamic ACP options arrive. A per-session AI-credit ceiling remains available. Copilot documents quota details in interactive `/usage`; the shared usage view displays the context and latest-turn token data ACP reports.
+Copilot discovers models from ACP configuration metadata, including the premium-request multiplier, cost tier, and availability published in the model option's `_meta`. Stored model and reasoning choices are passed at server launch and are also applied when their dynamic ACP options arrive. Copilot exposes a client-owned Autopilot toggle. When enabled, Core selects an advertised allow option for ACP tool permission requests; it prefers allow-once so disabling Autopilot restores prompting for subsequent requests. Enabling it during a pending permission request also approves that request without restarting the session. A per-session AI-credit ceiling remains available. Copilot documents quota details in interactive `/usage`; the shared usage view displays the context and latest-turn token data ACP reports.
 
 ## Model catalogue metadata
 
@@ -31,9 +31,37 @@ Copilot discovers models from ACP configuration metadata, including the premium-
 
 ## Common request extensions
 
-`ai.send` accepts typed `content` blocks (text, base64 images, embedded text resources, and resource links) plus optional `mcpServers` and `agent` fields. MCP supports stdio, HTTP, and SSE records. Environment variables and HTTP headers may contain secrets, so callers should retrieve them from secure local storage and must not persist them in workspace settings. Provider options live in the session's `configuration` map and are rendered from the option schema.
+`ai.send` accepts typed `content` blocks (text, base64 images, embedded text resources, and resource links) plus optional `mcpServers` and `agent` fields. MCP supports stdio, HTTP, and SSE records. Environment variables and HTTP headers may contain secrets, so callers should retrieve them from secure local storage and must not persist them in workspace settings. Provider options live in the session's `configuration` map and are rendered from the option schema. Boolean options marked `permissionApproval` are handled by the ACP client and can change while the provider is working. Workflow AI and Chatbox blocks enable Autopilot by default when the provider exposes it; block design can disable that default, and the Chatbox settings panel can toggle it for the existing conversation.
+
+Core disables workspace snapshots for workflow AI blocks connected as helpers through incoming `use` edges. This applies to their initial prompts, follow-up prompts, and steering, including after workflow recovery. The lead and ordinary AI-tab sessions retain snapshots; helper transcripts and workflow operation records are still saved. The internal `AcpSendRequest.captureSnapshots` flag controls snapshot creation, is retained for follow-ups in the live session, and defaults to enabled for new sessions.
 
 `StdioAcpProvider` is a real Agent Client Protocol v1 NDJSON transport. It surfaces blocking permission requests through `ai.permission.resolve`, stores complete dynamic command snapshots for slash completion, renders rich image/resource output, resumes saved sessions, and applies session-scoped configuration without restarting the process. Launch-scoped changes restart the process and resume the saved session when supported.
+
+## Context inspector
+
+Click the context pie beside the AI chat session control, or in a workflow
+Chatbox header, to expand the context inspector beneath the header. The pie and
+usage history show ACP-reported context tokens, independently of account quotas.
+The history retains the latest 120 usage updates, including decreases, and uses
+an automatic vertical scale. Hover a history bar for its timestamp and values.
+When usage is unavailable, the neutral pie still opens the captured history.
+
+Colored segments break down captured instructions, prompts/replies, file text,
+tool activity and reported reasoning. Click a segment or legend to inspect recent
+items, largest first. These are estimates based on four characters per token,
+not a reconstruction of the model's current input. Core counts retained message
+text (up to 1,000 messages), records injected agent instructions and skill
+catalogues, and keeps up to 12 previews of 1,600 characters per category. Tool
+updates replace their previous captured contribution rather than adding another
+copy. Images and unresolved resource links have no text token estimate. Capture
+does not fetch files or add anything to the model prompt.
+
+Provider system instructions, hidden tool schemas, unreported file reads and the
+exact history retained after compaction are unavailable through this view.
+Captured history can therefore exceed or fall short of reported current usage.
+Compaction notifications are counted when supplied by the adapter. Data is saved
+with the session and propagated into workflow block state; fresh sessions start
+new usage histories. Existing sessions begin collecting details on new activity.
 
 ## Starting tasks through the Vibe Editor MCP server
 
@@ -228,6 +256,11 @@ file is recreated at startup. Choose the agent in the chatbox to configure the a
 with natural language. Its `mcpServers: [vibe-editor]` preset grants access to the
 built-in app tools. The agent reads the configuration skill through the same
 configuration interface; projects can also allow/enable the skill in the Skills panel.
+The skill links supporting references covering every workflow block and connection,
+document formats and examples, and the complete app/flow command schemas. Core
+installs these beside the skill; agents read them relative to its `baseDirectory`.
+Terminal Control guidance reserves persistent terminals for work that may need
+interaction, with Script for finite commands and Run App for managed services.
 
 Three generic MCP tools expose logical configuration documents instead of private
 registry paths:
@@ -235,6 +268,7 @@ registry paths:
 - `configuration_list` lists document resource names, formats and provider metadata.
   Set `include_models: true` when choosing provider/model settings for AI workflows.
 - `configuration_read` returns `content`, `exists` and a `revision` for a resource.
+  Existing skill documents also include `baseDirectory` for resolving supporting files.
 - `configuration_write` accepts `resource`, full-text `content`, and
   `expected_revision`. Supply the revision from the read; use JSON `null` to create
   a new agent, skill or useful file. A stale revision is rejected. Writes through

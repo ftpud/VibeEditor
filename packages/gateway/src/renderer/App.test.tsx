@@ -1,8 +1,9 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { App, ConnectionDialog, DiagnosticsCopyButton, GatewayErrorNotice, RepositoryDialog, WorkspaceDialog, gatewayErrorMessage } from "./App";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { App, ConnectionDialog, DiagnosticsCopyButton, GatewayErrorNotice, RepositoryDialog, WorkspaceDialog, ProvisioningLog, gatewayErrorMessage } from "./App";
 
-afterEach(cleanup);
+beforeEach(() => { Object.defineProperty(window, "alert", { configurable: true, writable: true, value: vi.fn() }); });
+afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
 describe("Gateway dialogs", () => {
   it("discovers remote workspaces on open and fills the form from a selection", async () => {
@@ -136,7 +137,7 @@ describe("Gateway error presentation", () => {
     window.gateway = gateway;
     const alertSpy = vi.spyOn(window, "alert");
     render(<App />);
-    await screen.findByText("Project");
+    await screen.findByRole("heading", { name: "Project", level: 2 });
 
     fireEvent.click(screen.getByRole("button", { name: /Start server/ }));
     await waitFor(() => expect(screen.getByRole("alert").textContent).toContain("provisioning password=[redacted] failed"));
@@ -152,5 +153,51 @@ describe("Gateway error presentation", () => {
     await waitFor(() => expect(screen.getByRole("alert").textContent).toContain("Unexpected Gateway error: render loop failed"));
     expect(unexpected.defaultPrevented).toBe(true);
     expect(alertSpy).not.toHaveBeenCalled();
+  });
+});
+
+
+describe("Gateway workspace page", () => {
+  it("keeps many workspaces and long provisioning output in separate named regions", async () => {
+    const workspaces = Array.from({ length: 40 }, (_, index) => ({ id: `w${index}`, connectionId: "local", name: `Project ${index}`, directory: `/Projects/project-${index}`, remotePort: 7331 + index }));
+    window.gateway = {
+      get: vi.fn().mockResolvedValue({ state: { connections: [{ id: "local", kind: "local", name: "This Mac" }], workspaces, portTunnels: [] }, runtimes: { w0: { status: "working", message: "Installing", logs: ["FIRST OUTPUT", ...Array.from({ length: 1000 }, (_, index) => `line ${index}`)] }, w39: { status: "server", message: "Ready", logs: ["LAST OUTPUT"] } }, connectionRuntimes: {}, tunnelRuntimes: {} }),
+      onStatus: vi.fn(() => () => undefined), onTunnelStatus: vi.fn(() => () => undefined), onConnectionStatus: vi.fn(() => () => undefined),
+    } as unknown as Window["gateway"];
+    const view = render(<App />);
+    const list = await screen.findByRole("region", { name: "Workspaces" });
+    expect(within(list).getAllByRole("article")).toHaveLength(40);
+    expect(within(list).queryByText(/FIRST OUTPUT/)).toBeNull();
+    expect(screen.getByRole("region", { name: "Provisioning output for Project 0" }).textContent).toContain("line 999");
+    fireEvent.click(screen.getByRole("button", { name: "View provisioning log for Project 39" }));
+    expect(screen.getByRole("region", { name: "Provisioning output for Project 39" }).textContent).toBe("LAST OUTPUT");
+    expect(view.container.querySelector(".topbar")).toBeNull();
+  });
+
+  it.each([false, true])("accepts a manually entered missing workspace directory (local=%s)", async (local) => {
+    const onSave = vi.fn().mockResolvedValue(undefined);
+    render(<WorkspaceDialog value={{ remotePort: 7331 }} connectionId="connection" local={local} onClose={vi.fn()} onSave={onSave} onFailure={vi.fn()} />);
+    fireEvent.change(screen.getByRole("textbox", { name: "Name" }), { target: { value: "New project" } });
+    fireEvent.change(screen.getByRole("textbox", { name: local ? "Local project directory" : "Remote directory" }), { target: { value: "/new/parent/project" } });
+    expect(screen.getByText(/Missing folders, including parent folders, are created when you save/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Save workspace" }));
+    await waitFor(() => expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ directory: "/new/parent/project", name: "New project" })));
+  });
+
+  it("preserves the reader's scroll position when new log lines arrive", () => {
+    const workspace = { id: "w", connectionId: "c", name: "Project", directory: "/project", remotePort: 7331 };
+    const runtime = { status: "working" as const, message: "Installing", logs: ["first"] };
+    const view = render(<ProvisioningLog workspace={workspace} workspaces={[workspace]} runtime={runtime} onSelect={vi.fn()} />);
+    const output = screen.getByRole("region", { name: "Provisioning output for Project" });
+    Object.defineProperty(output, "scrollHeight", { configurable: true, value: 1000 });
+    Object.defineProperty(output, "clientHeight", { configurable: true, value: 200 });
+    output.scrollTop = 100;
+    fireEvent.scroll(output);
+    view.rerender(<ProvisioningLog workspace={workspace} workspaces={[workspace]} runtime={{ ...runtime, logs: ["first", "second"] }} onSelect={vi.fn()} />);
+    expect(output.scrollTop).toBe(100);
+    output.scrollTop = 800;
+    fireEvent.scroll(output);
+    view.rerender(<ProvisioningLog workspace={workspace} workspaces={[workspace]} runtime={{ ...runtime, logs: ["first", "second", "third"] }} onSelect={vi.fn()} />);
+    expect(output.scrollTop).toBe(1000);
   });
 });

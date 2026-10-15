@@ -1,0 +1,43 @@
+:root {
+  --surface-base: #141927; --surface-panel: #1c2334; --surface-raised: #252d42;
+  --surface-hover: #29334b; --surface-sunken: #171e2e; --input: #171e2e;
+  --border-subtle: #303b54; --border-strong: #455372;
+  --text-primary: #dce4f5; --text-heading: #f0f4ff; --text-secondary: #bbc6dc; --text-muted: #93a1bc;
+  --accent: #8299ff; --accent-hover: #9badff; --selection: #2d3e65; --accent-soft: #263653;
+  --on-accent: #ffffff; --success: #78c9a6; --success-soft: #203c36; --success-border: #365b4e;
+  --warning: #e6bc76; --warning-soft: #3a3226; --warning-border: #665239;
+  --danger: #f28b99; --danger-soft: #402a37; --danger-border: #6a3c4b;
+  --purple: #b4a1f3; --purple-soft: #352d4b; --purple-border: #574771;
+  --cyan: #75c9d2; --cyan-soft: #203a46; --cyan-border: #365c6b;
+  --pink: #dfa0cc; --pink-soft: #3b2c41; --pink-border: #664966;
+  --glass: #1c2334e6; --editor-background: #171e2e;
+  --shell-background: radial-gradient(ellipse at 40% 0%, #35446b55, transparent 65%), #141927;
+  --shadow-panel: 0 2px 8px #070e1c0d; --shadow-control: 0 1px 3px #070e1c0a;
+  --shadow-popover: 0 16px 48px #050b2440, 0 2px 8px #050b2426;
+  --radius-control: 7px; --radius-panel: 12px;
+}
+:root[data-theme="light"] {
+  color-scheme: light;
+  --surface-base: #f6f8fd; --surface-panel: #ffffff; --surface-raised: #ffffff;
+  --surface-hover: #edf1f9; --surface-sunken: #f3f6fc; --input: #f3f6fc;
+  --border-subtle: #e0e6f1; --border-strong: #c7d2e6;
+  --text-primary: #25324d; --text-heading: #142039; --text-secondary: #52627e; --text-muted: #71809b;
+  --accent: #5268e8; --accent-hover: #4058dc; --selection: #eaf0ff; --accent-soft: #edf1ff;
+  --success: #298566; --success-soft: #eaf7f0; --success-border: #b9dfcc;
+  --warning: #9a6a21; --warning-soft: #fff6e7; --warning-border: #e9d4ad;
+  --danger: #c3425b; --danger-soft: #fff0f3; --danger-border: #efc7d0;
+  --purple: #8761be; --purple-soft: #f2edfb; --purple-border: #d8c9ed;
+  --cyan: #237f93; --cyan-soft: #eaf7fa; --cyan-border: #b9e0e8;
+  --pink: #af568d; --pink-soft: #fbedf6; --pink-border: #e8c6dd;
+  --glass: #ffffffd9; --editor-background: #f8faff;
+  --shell-background: radial-gradient(ellipse at 30% 0%, #dce6ff9c, transparent 65%), linear-gradient(130deg, #edf1fc, #eff5fc 65%, #e8edfc);
+  --shadow-panel: 0 2px 8px #344b8008; --shadow-control: 0 1px 3px #344b8008;
+  --shadow-popover: 0 16px 48px #243a6721, 0 2px 8px #243a670f;
+}
+:root {
+  --context-menu-surface: var(--surface-raised); --context-menu-text: var(--text-primary);
+  --context-menu-border: var(--border-subtle); --context-menu-divider: var(--border-subtle);
+  --context-menu-hover: var(--selection); --context-menu-shadow: var(--shadow-popover);
+  --border: var(--border-subtle); --muted: var(--text-muted); --panel-bg: var(--surface-panel);
+  --input-background: var(--input);
+}

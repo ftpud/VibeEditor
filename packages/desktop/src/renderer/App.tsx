@@ -1,3 +1,11 @@
+import { flushSync } from "react-dom";
+import { FocusDock } from "./FocusDock";
+import { FocusModeButton } from "./FocusModeButton";
+import { openWorkflowEditor } from "./workflow-tabs";
+import { ContextMenu } from "./ContextMenu";
+import { BranchPicker } from "./BranchPicker";
+import { ConnectionMenu } from "./ConnectionMenu";
+import { startBackgroundLoading } from "./background-loading";
 import { javaConfigurationPath, resolveSkillIds, skillAllowedForAgent } from "@remote-ide/protocol";
 import { DiffEditor, type Monaco } from "@monaco-editor/react";
 import { Archive, ArrowDown, ArrowUp, ArrowUpRight, Bot, Bug, Check, ChevronDown, ChevronRight, CircleAlert, Clock, ClipboardCopy, Coffee, Columns2, Eye, EyeOff, File, FileCode2, FileDiff, FileText, Folder, FolderOpen, GitBranch, GitCompareArrows, GitMerge, Library, ListTodo, ListTree, LoaderCircle, LogOut, MoreVertical, Package, Palette, Pencil, Pin, PinOff, Play, Plus, RefreshCw, Save, Search, Settings, ShieldAlert, Square, SquareTerminal, Trash2, Workflow, X } from "lucide-react";
@@ -14,9 +22,11 @@ import { recoverEditorGroups, workspaceRestorationGuard } from "./workspace-reco
 import { remoteUploadDestination, treeContainsPath } from "./remote-transfer";
 import { hasWorkspaceSetting, readSetting, readSettingNumber, readWorkspaceSetting, resetWorkspaceSetting, workspaceSettingKey, writeSetting, writeWorkspaceSetting } from "./settings";
 import { SettingsMenu, type DesktopSettings } from "./SettingsMenu";
+import { StoragePanel } from "./StoragePanel";
 import { readAiPromptDraft, writeAiPromptDraft } from "./ai-prompt-drafts";
 import { editorTabLabel, initialLayout, type EditorTab, type LayoutModel, type Panel } from "./model";
 import { TerminalPanel } from "./TerminalPanel";
+import { clearViewedTerminalActivity, markTerminalActivity } from "./terminal-activity";
 import { JavaConfigurationDialog } from "./JavaConfigurationDialog";
 import { attachDebugEditor } from "./debug-editor";
 import { JavaPanel } from "./JavaPanel";
@@ -124,19 +134,20 @@ export function App() {
     if (workspaceDefaultsRef.current.has(key as keyof DesktopSettings)) writeSetting(key, value);
     else writeWorkspaceSetting(workspaceKeyRef.current, key, value);
   };
-  const [theme, setTheme] = useState<"dark" | "light">(() => readSetting("theme") === "light" ? "light" : "dark");
+  const [theme, setTheme] = useState<"dark" | "light">(() => readSetting("theme") === "dark" ? "dark" : "light");
   const [highlightTheme, setHighlightTheme] = useState<HighlightTheme>(() => { const value = readSetting("highlightTheme"); return value === "ftpud" || value === "ftpud-dark" ? "ftpud" : "default"; });
-  const [uiFontFamily, setUiFontFamily] = useState<"jetbrains" | "inter">(() => readSetting("uiFontFamily") === "inter" ? "inter" : "jetbrains");
+  const [uiFontFamily, setUiFontFamily] = useState<"jetbrains" | "inter">(() => readSetting("uiFontFamily") === "jetbrains" ? "jetbrains" : "inter");
   const [uiFontWeight, setUiFontWeight] = useState(() => readSettingNumber("uiFontWeight", 450, 350, 600));
   const [uiFontSize, setUiFontSize] = useState(() => readSettingNumber("uiFontSize", 13, 10, 20));
   const [uiLineHeight, setUiLineHeight] = useState(() => readSettingNumber("uiLineHeight", 1.2, 1, 2));
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [storageOpen, setStorageOpen] = useState(false);
   const platform = useMemo(desktopPlatform, []);
   const [shortcutBindings, setShortcutBindings] = useState(() => { const stored = readSetting(KEYBOARD_SHORTCUTS_SETTING); const migrated = migrateShortcutSetting(stored, desktopPlatform()); if (migrated) writeSetting(KEYBOARD_SHORTCUTS_SETTING, migrated); return parseShortcutSetting(stored, desktopPlatform()); });
   const changeShortcut = (id: CommandId, shortcut?: string) => setShortcutBindings((current) => { const next = updateShortcut(current, id, shortcut); writeSetting(KEYBOARD_SHORTCUTS_SETTING, serializeShortcutSetting(next)); return next; });
   const resetShortcuts = () => { const next = defaultShortcutBindings(platform); setShortcutBindings(next); writeSetting(KEYBOARD_SHORTCUTS_SETTING, serializeShortcutSetting(next)); };
   const [, setSettingsRevision] = useState(0);
-  useEffect(() => { document.documentElement.dataset.theme = theme; document.documentElement.style.colorScheme = theme; wsSave("theme", theme); }, [theme]);
+  useEffect(() => { document.documentElement.dataset.theme = theme; window.desktop?.setWindowTheme?.(theme); document.documentElement.style.colorScheme = theme; wsSave("theme", theme); }, [theme]);
   useEffect(() => { wsSave("highlightTheme", highlightTheme); }, [highlightTheme]);
   useEffect(() => { const value = uiFontFamily === "jetbrains" ? '"JetBrains Mono Variable"' : '"Inter Variable"'; document.documentElement.style.setProperty("--ui-font-family", value); wsSave("uiFontFamily", uiFontFamily); }, [uiFontFamily]);
   useEffect(() => { document.documentElement.style.setProperty("--ui-font-weight", String(uiFontWeight)); wsSave("uiFontWeight", String(uiFontWeight)); }, [uiFontWeight]);
@@ -165,6 +176,15 @@ export function App() {
   const [showIgnored, setShowIgnored] = useState(() => readSetting("showIgnoredFiles") === "true");
   const showIgnoredRef = useRef(showIgnored);
   const [layout, setLayout] = useState<LayoutModel>(initialLayout);
+  const [focusMode, setFocusMode] = useState(() => readSetting("focusMode") === "true");
+  const changeFocusMode = (active: boolean) => {
+    const update = () => { writeSetting("focusMode", String(active)); setFocusMode(active); setSettingsOpen(false); setBranchMenu(undefined); };
+    if (document.startViewTransition && !window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+      const transition = document.startViewTransition(() => flushSync(update));
+      void transition.ready.catch(() => undefined);
+      void transition.finished.catch(() => undefined);
+    } else update();
+  };
   const [sideLayout, setSideLayout] = useState<"classic" | "ai-focused">(() => readSetting("sideLayout") === "classic" ? "classic" : "ai-focused");
   const [leftSidebarWidth, setLeftSidebarWidth] = useState(520);
   const [rightSidebarWidth, setRightSidebarWidth] = useState(360);
@@ -202,7 +222,7 @@ export function App() {
   const taskSwitchSequence = useRef(0);
   const taskSwitchActive = useRef(false);
   const queuedTaskSwitch = useRef<string | undefined | null>(null);
-  const switchTaskRef = useRef<(taskId?: string) => void>(() => undefined);
+  const switchTaskRef = useRef<(taskId?: string) => Promise<void>>(async () => undefined);
   const [terminalHeight, setTerminalHeight] = useState(240);
   const [usefulFiles, setUsefulFiles] = useState<UsefulFile[]>([]);
   const [runConfigs, setRunConfigs] = useState<RunConfig[]>([]);
@@ -398,8 +418,16 @@ export function App() {
   const projectGitStatuses = useMemo(() => Object.fromEntries(gitEntries.map((entry) => [entry.path, entry.indexStatus === "?" || entry.indexStatus === "A" ? "C" : "M"] as const)), [gitEntries]);
 
   useEffect(() => {
-    document.title = status === "connected" && projectName ? `${projectName} — Vibe Editor` : "Vibe Editor";
-  }, [projectName, status]);
+    const connected = status === "connected";
+    const taskName = tasks.find((task) => task.id === selectedTaskId)?.name;
+    const titleParts = [
+      connected && activeTab?.type === "file" ? editorTabLabel(activeTab) : undefined,
+      connected ? taskName || projectName : undefined,
+      connected && gitBranch !== "HEAD" ? gitBranch : undefined,
+      "Vibe Editor"
+    ];
+    document.title = titleParts.filter(Boolean).join(" — ");
+  }, [activeTab?.id, activeTab?.path, activeTab?.title, gitBranch, projectName, selectedTaskId, status, tasks]);
   useEffect(() => {
     const version = ++projectContentFilterVersion.current;
     const searchQuery = projectFilter.trim();
@@ -481,6 +509,9 @@ export function App() {
     terminalWriters.current.set(terminalId, writer);
     const buffered = terminalBuffers.current.get(terminalId);
     if (buffered) writer(buffered, true);
+  }, []);
+  const markUnreadTerminalOutput = useCallback((terminalId: string) => {
+    setLayout((current) => markTerminalActivity(current, terminalId));
   }, []);
 
   const refreshGit = useCallback(async (client = clientRef.current) => {
@@ -574,7 +605,7 @@ export function App() {
     const provider = aiProviderRef.current;
     const workspace = activeWorkspaceRef.current;
     const sessions = (await client.request("ai.sessions", { provider })).sessions;
-    if (canApply() && provider === aiProviderRef.current && workspace === activeWorkspaceRef.current) setAiSessions(sessions);
+    if (canApply() && clientRef.current === client && provider === aiProviderRef.current && workspace === activeWorkspaceRef.current) setAiSessions(sessions);
   }, []);
   const refreshUsefulFiles = useCallback(async (client = clientRef.current, canApply: () => boolean = () => true) => { if (!client) return; const rootId = client.getRoot(); const files = (await client.request("useful.list", {})).files; if (canApply() && clientRef.current === client && client.isConnected() && client.getRoot() === rootId) setUsefulFiles(files); }, []);
   const refreshRunConfigs = useCallback(async (client = clientRef.current, canApply: () => boolean = () => true) => { if (!client) return; const rootId = client.getRoot(); const configs = (await client.request("runConfig.list", {})).configs; if (canApply() && client.getRoot() === rootId) setRunConfigs(configs); }, []);
@@ -612,16 +643,49 @@ export function App() {
     const saved = workspaceKeyRef.current ? readSetting(workspaceSettingKey(workspaceKeyRef.current, aiAgentTaskKey(taskId))) ?? "" : "";
     setSelectedAgentKey(next.some((agent) => agentKey(agent) === saved) ? saved : "");
   }, [refreshSkills]);
+  const [harnessesLoading, setHarnessesLoading] = useState(false);
+  const [harnessRunsLoading, setHarnessRunsLoading] = useState(false);
   const refreshHarnesses = useCallback(async (client = clientRef.current, canApply: () => boolean = () => true) => {
-    if (!client) return; const rootId = client.getRoot(); const result = await client.request("harnesses.list", {});
-    if (canApply() && clientRef.current === client && client.isConnected() && client.getRoot() === rootId) { setHarnesses(result.harnesses); setHarnessDiagnostics(result.diagnostics); }
+    if (!client) return;
+    const rootId = client.getRoot();
+    const current = () => canApply() && clientRef.current === client && client.isConnected() && client.getRoot() === rootId;
+    try {
+      const result = await client.request("harnesses.list", {});
+      if (current()) { setHarnesses(result.harnesses); setHarnessDiagnostics(result.diagnostics); }
+    } finally { if (current()) setHarnessesLoading(false); }
   }, []);
   const refreshHarnessRuns = useCallback(async (client = clientRef.current, canApply: () => boolean = () => true) => {
     if (!client) return;
     const rootId = client.getRoot();
     const baseline = harnessRunsRef.current;
-    const { runs } = await client.request("harnesses.runs", {});
-    if (canApply() && clientRef.current === client && client.getRoot() === rootId) setHarnessRuns((current) => mergeWorkflowHistory(current, runs, baseline));
+    const current = () => canApply() && clientRef.current === client && client.isConnected() && client.getRoot() === rootId;
+    try {
+      const { runs } = await client.request("harnesses.runs", { summary: true });
+      if (current()) setHarnessRuns((existing) => mergeWorkflowHistory(existing, runs, baseline));
+    } finally { if (current()) setHarnessRunsLoading(false); }
+  }, []);
+  const pendingHarnessDetails = useRef(new Map<string, { client: CoreClient; promise: Promise<HarnessRun> }>());
+  const readHarnessRun = useCallback((runId: string): Promise<HarnessRun> => {
+    const client = clientRef.current;
+    if (!client) return Promise.reject(new Error("Backend is disconnected"));
+    const rootId = client.getRoot();
+    const key = `${rootId}:${runId}`;
+    const pending = pendingHarnessDetails.current.get(key);
+    if (pending?.client === client) return pending.promise;
+    const baseline = harnessRunsRef.current.find((run) => run.id === runId);
+    const promise = client.request("harnesses.runs", { runId }).then(({ runs }) => {
+      if (clientRef.current !== client || client.getRoot() !== rootId) throw new Error("Workspace changed while loading run details");
+      const run = runs[0];
+      if (!run) throw new Error("Workflow run is no longer available");
+      setHarnessRuns((current) => {
+        const existing = current.find((item) => item.id === runId);
+        if (existing && existing !== baseline && !existing.summary) return current;
+        return [run, ...current.filter((item) => item.id !== runId)];
+      });
+      return run;
+    }).finally(() => { if (pendingHarnessDetails.current.get(key)?.promise === promise) pendingHarnessDetails.current.delete(key); });
+    pendingHarnessDetails.current.set(key, { client, promise });
+    return promise;
   }, []);
   const createHarness = useCallback(async (name: string, template?: "five-minute-check-in" | "git-review-commit") => {
     const result = await clientRef.current!.request("harnesses.create", { name, template }); setHarnesses((current) => [result.harness, ...current]); return result.harness;
@@ -639,7 +703,17 @@ export function App() {
   const readHarnessApp = useCallback(async (harnessId: string, blockId: string, runId?: string) => (await clientRef.current!.request("harnesses.app.read", { harnessId, blockId, runId })).app, []);
   const killHarnessApp = useCallback(async (harnessId: string, blockId: string, runId?: string) => { await clientRef.current!.request("harnesses.app.kill", { harnessId, blockId, runId }); }, []);
   const runHarness = useCallback(async (harnessId: string, input: string, startBlockId?: string, rerunRunId?: string) => { const result = await clientRef.current!.request("harnesses.run", { harnessId, input, startBlockId, rerunRunId, provider: aiProviderRef.current, target: { taskId: selectedTaskIdRef.current } }); setHarnessRuns((current) => [result.run, ...current.filter((item) => item.id !== result.run.id)]); return result.run; }, []);
-  const chatHarness = useCallback(async (harnessId: string, blockId: string, input: string, runId?: string) => { const result = await clientRef.current!.request("harnesses.chat", { harnessId, blockId, input, runId, provider: aiProviderRef.current, target: { taskId: selectedTaskIdRef.current } }); setHarnessRuns((current) => [result.run, ...current.filter((item) => item.id !== result.run.id)]); return result.run; }, []);
+  const chatHarness = useCallback(async (harnessId: string, blockId: string, input: string, runId?: string, settings?: import("@remote-ide/protocol").HarnessChatSettings) => { const result = await clientRef.current!.request("harnesses.chat", { harnessId, blockId, input, runId, settings, provider: aiProviderRef.current, target: { taskId: selectedTaskIdRef.current } }); setHarnessRuns((current) => [result.run, ...current.filter((item) => item.id !== result.run.id)]); return result.run; }, []);
+  const steerHarnessChat = useCallback(async (runId: string, blockId: string, sessionId: string, input: string) => {
+    const { run } = await clientRef.current!.request("harnesses.steer", { runId, blockId, sessionId, input });
+    setHarnessRuns((current) => current.map((item) => item.id === runId ? run : item));
+    return run;
+  }, []);
+  const setHarnessAutopilot = useCallback(async (runId: string, blockId: string, sessionId: string, enabled: boolean) => {
+    const { run } = await clientRef.current!.request("harnesses.autopilot", { runId, blockId, sessionId, enabled });
+    setHarnessRuns((current) => current.map((item) => item.id === runId ? run : item));
+    return run;
+  }, []);
   const appendHarnessRun = useCallback(async (runId: string, input: string) => { const result = await clientRef.current!.request("harnesses.append", { runId, input }); setHarnessRuns((current) => current.map((item) => item.id === runId ? result.run : item)); return result.run; }, []);
   const resolveHarnessPermission = useCallback(async (runId: string, blockId: string, sessionId: string, pauseId: string, requestId: string, optionId?: string) => { const result = await clientRef.current!.request("harnesses.permission.resolve", { runId, blockId, sessionId, pauseId, requestId, optionId }); setHarnessRuns((current) => current.map((item) => item.id === runId ? result.run : item)); return result.run; }, []);
   const answerHarnessQuestion = useCallback(async (runId: string, blockId: string, sessionId: string, pauseId: string, input: string) => { const result = await clientRef.current!.request("harnesses.answer", { runId, blockId, sessionId, pauseId, input }); setHarnessRuns((current) => current.map((item) => item.id === runId ? result.run : item)); return result.run; }, []);
@@ -683,14 +757,21 @@ export function App() {
     const carriedDocuments = existingGroup?.tabs.filter((tab) => tab.type === "workflowDocument" && (!tab.rootId || tab.rootId === rootId)) ?? [];
     if (options.workflowDocuments?.length || carriedDocuments.length) {
       try {
-        const { runs } = await client.request("harnesses.runs", {});
+        const runIds = [...new Set([...(options.workflowDocuments ?? []).map((document) => document.runId), ...carriedDocuments.flatMap((tab) => tab.workflowRunId ? [tab.workflowRunId] : [])])];
+        const runs = (await Promise.all(runIds.map((runId) => client.request("harnesses.runs", { runId })))).flatMap((result) => result.runs);
         ensureCurrent();
         const restored = restoreWorkflowDocuments(tabs, options.workflowDocuments, runs, rootId, existingGroup?.tabs, existingGroup?.activeTabId);
         tabs = orderPinnedTabs(restored.tabs); activeDocumentId = restored.activeTabId;
       } catch (error) { ensureCurrent(); tabs = orderPinnedTabs([...tabs, ...carriedDocuments]); activeDocumentId = carriedDocuments.find((tab) => tab.id === existingGroup?.activeTabId)?.id; setStatusMessage(error instanceof Error ? error.message : "Could not restore workflow documents"); }
     }
-    const activeTabId = activeDocumentId ?? tabs.find((tab) => tab.type === "file" && tab.path === options.activeFile)?.id ?? tabs[0]?.id;
-    const restoredTerminals = await Promise.all((options.terminal?.tabs ?? []).map(async (saved, index) => {
+    const workflowTabs = existingGroup?.tabs.filter((tab) => tab.type === "workflow" && tab.rootId === rootId) ?? [];
+    tabs.push(...workflowTabs);
+    const activeTabId = workflowTabs.find((tab) => tab.id === existingGroup?.activeTabId && tab.workflowTaskId === selectedTaskIdRef.current)?.id ?? activeDocumentId ?? tabs.find((tab) => tab.type === "file" && tab.path === options.activeFile)?.id ?? tabs[0]?.id;
+    const discovered = (await client.request("terminal.list", {})).terminals.filter((session) => session.displayName);
+    ensureCurrent();
+    const savedTerminals = [...(options.terminal?.tabs ?? [])];
+    for (const session of discovered) if (!savedTerminals.some((tab) => tab.terminalId === session.terminalId)) savedTerminals.push({ terminalId: session.terminalId, displayName: session.displayName! });
+    const restoredTerminals = await Promise.all(savedTerminals.map(async (saved, index) => {
       try {
         const { session, reattached } = await restoreTerminal(client, saved.terminalId, recovery);
         ensureCurrent();
@@ -712,7 +793,7 @@ export function App() {
       || ((savedBottomPanel === "java" || savedBottomPanel === "problems") && Boolean(options.javaProject));
     const bottomPanel: BottomPanelType | undefined = validBottomPanel
       ? savedBottomPanel as BottomPanelType
-      : savedBottomPanel === null && options.terminal?.panelOpen && restoredTerminals.length > 0 ? "terminal" : undefined;
+      : savedBottomPanel === null && (options.terminal?.panelOpen || discovered.length > 0) && restoredTerminals.length > 0 ? "terminal" : undefined;
     setLayout((layout) => current() ? ({
       ...layout,
       panels: recovery ? layout.panels : [...layout.panels.filter((panel) => !["terminal", "java", "problems", "gitlog"].includes(panel.type)), ...(bottomPanel ? [{ id: bottomPanel, type: bottomPanel }] : [])],
@@ -729,9 +810,14 @@ export function App() {
     clientRef.current?.disconnect();
     clientRef.current = undefined;
     setWorkspaceOptionsReady(false);
-    setStatus("connecting"); setStatusMessage("Connecting...");
+    setHarnesses([]); setHarnessRuns([]); setHarnessesLoading(true); setHarnessRunsLoading(true);
+    setAgents([]); setSelectedAgentKey(""); setUsefulFiles([]); setRunConfigs([]);
+    setSkillCatalog({ skills: [], policy: { allowed: [], defaults: [] } });
+    setAiStatuses({ root: emptyAiSummary, tasks: {} }); setActiveTimers([]); setSchedules([]);
+    setStatus("connecting"); setStatusMessage(`Opening connection to ${host.trim()}:${port}…`);
     const client = new CoreClient();
     clientRef.current = client;
+    client.onConnectionProgress = (message) => { if (clientRef.current === client) setStatusMessage(message); };
     let connectionReady = false;
     let recoverySelection: RecoverySelection | undefined;
     const recovery = new ConnectionRecovery(async (signal) => {
@@ -747,7 +833,7 @@ export function App() {
       setProjectName(result.projectName); setTree(result.tree); setJavaOptions(result.options.javaProject);
       await restoreWorkspaceOptions(result.options, client, client.getRoot(), true, signal);
       ensureCurrent();
-      await Promise.all([refreshTasks(client, stillCurrent), refreshGit(client), refreshAi(client, stillCurrent), refreshAiSessions(client, stillCurrent), refreshUsefulFiles(client, stillCurrent), refreshRunConfigs(client, stillCurrent), refreshAgents(client, expected.taskId, stillCurrent), refreshHarnesses(client, stillCurrent), refreshHarnessRuns(client, stillCurrent)]);
+      await Promise.all([refreshTasks(client, stillCurrent), refreshGit(client), refreshAi(client, stillCurrent), refreshUsefulFiles(client, stillCurrent), refreshRunConfigs(client, stillCurrent), refreshAgents(client, expected.taskId, stillCurrent), refreshHarnesses(client, stillCurrent)]);
       ensureCurrent();
       if (!client.isConnected()) throw new Error("Connection lost during recovery");
       if (selectedTaskIdRef.current !== expected.taskId) throw new Error("Saved task selection changed during recovery");
@@ -755,6 +841,7 @@ export function App() {
       setStatus("connected");
       recoverySelection = undefined;
       showStatus("Backend connection restored", "success");
+      startBackgroundLoading([() => refreshAiSessions(client, stillCurrent), () => refreshHarnessRuns(client, stillCurrent)], stillCurrent, () => showStatus("Session history could not load. Refresh the panel to retry.", "error"));
     }, (error) => {
       if (clientRef.current !== client) return;
       if (recoverySelection && (client.getRoot() !== recoverySelection.rootId || activeWorkspaceRef.current !== recoverySelection.workspace)) {
@@ -805,8 +892,12 @@ export function App() {
       const runIds = [...pendingWorkflowRuns];
       pendingWorkflowRuns.clear();
       for (const runId of runIds) {
-        const { runs } = await client.request("harnesses.runs", { runId });
+        const summary = harnessRunsRef.current.find((run) => run.id === runId)?.summary !== undefined || !harnessRunsRef.current.some((run) => run.id === runId);
+        const { runs } = await client.request("harnesses.runs", { runId, summary });
         if (!canApply() || clientRef.current !== client || client.getRoot() !== rootId) return;
+        if (runs[0]?.summary && harnessRunsRef.current.some((run) => run.id === runId && !run.summary)) {
+          pendingWorkflowRuns.add(runId); workflowRefresh.trigger(); continue;
+        }
         setHarnessRuns((current) => [...runs, ...current.filter((run) => !runs.some((updated) => updated.id === run.id))]);
       }
     });
@@ -817,6 +908,10 @@ export function App() {
         const changed = new Set(event.payload.paths); updateGroup((tabs, active) => ({ tabs: tabs.map((tab) => tab.rootId === event.payload.rootId && tab.type === "file" && (event.payload.overflow || changed.has(tab.path)) ? { ...tab, error: "Changed in its remote root; activate this tab to reconcile" } : tab), activeTabId: active })); return;
       }
       if (event.payload.rootId !== client.getRoot() && event.type !== "terminal.output" && event.type !== "terminal.exit") return;
+      if (event.type === "terminal.opened") {
+        if (event.payload.workspace === activeWorkspaceRef.current && event.payload.session.displayName) void openTerminalReference(event.payload.session.terminalId, event.payload.session.displayName).catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : "Could not open workflow terminal"));
+        return;
+      }
       if (event.type === "terminal.output") {
         terminalBuffers.current.set(event.payload.terminalId, ((terminalBuffers.current.get(event.payload.terminalId) ?? "") + event.payload.data).slice(-1_000_000));
         const writer = terminalWriters.current.get(event.payload.terminalId);
@@ -829,6 +924,7 @@ export function App() {
         const writer = terminalWriters.current.get(event.payload.terminalId);
         writer?.(exitMessage);
         updateTerminalGroup((current) => ({ ...current, tabs: current.tabs.map((tab) => tab.terminalId === event.payload.terminalId ? { ...tab, status: "exited", exitCode: event.payload.exitCode } : tab) }));
+        markUnreadTerminalOutput(event.payload.terminalId);
         return;
       }
       if (event.type === "java.semantic.changed") { refreshJavaSemanticRef.current?.(); return; }
@@ -922,7 +1018,9 @@ export function App() {
       await client.connect(host.trim(), Number(port));
       if (clientRef.current !== client) return;
       try {
+        setStatusMessage("Loading workspace roots…");
         const rootRegistry = await client.request("workspace.roots", {}); client.setRoot(rootRegistry.selectedRootId); setWorkspaceRoots(rootRegistry.roots); setSelectedRootId(rootRegistry.selectedRootId);
+        setStatusMessage("Opening workspace and reading files…");
         const result = await client.request("workspace.open", { includeIgnored: showIgnoredRef.current });
         if (clientRef.current !== client) return;
         setActiveWorkspace(result.workspace); activeWorkspaceRef.current = result.workspace;
@@ -961,13 +1059,17 @@ export function App() {
         const savedJavaHeight = Number(setting("bottom.javaHeight")); if (savedJavaHeight >= 140 && savedJavaHeight <= 1200) setJavaPanelHeight(savedJavaHeight);
         const savedProblemsHeight = Number(setting("bottom.problemsHeight")); if (savedProblemsHeight >= 120 && savedProblemsHeight <= 520) setProblemsHeight(savedProblemsHeight);
         const savedGitLogHeight = Number(setting("bottom.gitLogHeight")); if (savedGitLogHeight >= 180 && savedGitLogHeight <= 650) setGitLogHeight(savedGitLogHeight);
+        setStatusMessage("Discovering AI providers…");
         const providerResult = await client.request("ai.providers", {});
         setAiProviders(providerResult.providers);
         setJavaOptions(result.options.javaProject);
         if (result.options.javaProject) {
+          setStatusMessage("Loading Java project…");
           try { setJavaTree((await client.request("java.getProjectTree", {})).tree); } catch { setJavaTree([]); }
         } else setJavaTree([]);
+        setStatusMessage("Restoring editors and terminals…");
         await restoreWorkspaceOptions(result.options, client);
+        setStatusMessage("Loading tasks…");
         const taskResult = await client.request("tasks.list", {});
         setTasks(taskResult.tasks); setSelectedTaskId(taskResult.selectedTaskId); selectedTaskIdRef.current = taskResult.selectedTaskId; activeTaskRef.current = taskResult.tasks.find((task) => task.id === taskResult.selectedTaskId);
         const initialPanel = initialTaskPanel(sideLayout, taskResult.selectedTaskId, setting);
@@ -980,7 +1082,9 @@ export function App() {
         const provider = known(taskProvider) ? taskProvider! : known(wsProvider) ? wsProvider! : (providerResult.providers[0]?.id ?? "codex");
         aiProviderRef.current = provider; setAiProvider(provider);
         wsSave(aiProviderTaskKey(taskResult.selectedTaskId), provider);
+        setStatusMessage(`Loading ${providerResult.providers.find((item) => item.id === provider)?.name ?? provider} models…`);
         const modelResult = await client.request("ai.models", { provider });
+        setStatusMessage("Restoring AI session…");
         let session = (await client.request("ai.get", { provider })).session;
         const savedModel = setting(`ai.${provider}.model`);
         const savedReasoning = setting(`ai.${provider}.reasoning`);
@@ -989,11 +1093,20 @@ export function App() {
           const reasoning = savedReasoning && model.reasoningLevels.includes(savedReasoning) ? savedReasoning : model.defaultReasoning;
           if (session.model !== savedModel || session.reasoning !== reasoning) session = (await client.request("ai.configure", { provider, model: savedModel, reasoning })).session;
         }
-        setAiModels(modelResult.models); setAiSession(session); setAiUsage((await client.request("ai.usage", { provider })).usage);
-        setAiSessions((await client.request("ai.sessions", { provider })).sessions);
-        await refreshAiStatuses(client);
-        await Promise.all([refreshUsefulFiles(client), refreshRunConfigs(client), refreshAgents(client, taskResult.selectedTaskId), refreshHarnesses(client), refreshHarnessRuns(client)]);
+        setAiModels(modelResult.models); setAiSession(session); setAiSessions([session]); setAiUsage(undefined);
         setTree(result.tree); connectionReady = true; setStatus("connected"); setStatusMessage("");
+        const backgroundRoot = client.getRoot();
+        const backgroundWorkspace = result.workspace;
+        const backgroundRevision = taskSwitchSequence.current;
+        const canApply = () => clientRef.current === client && client.isConnected() && client.getRoot() === backgroundRoot
+          && activeWorkspaceRef.current === backgroundWorkspace && taskSwitchSequence.current === backgroundRevision;
+        // History and auxiliary panels hydrate independently of the usable workspace.
+        startBackgroundLoading([
+          () => client.request("ai.usage", { provider }).then(({ usage }) => { if (canApply() && provider === aiProviderRef.current) setAiUsage(usage); }),
+          () => refreshAiSessions(client, canApply), () => refreshAiStatuses(client, canApply), () => refreshUsefulFiles(client, canApply),
+          () => refreshRunConfigs(client, canApply), () => refreshAgents(client, taskResult.selectedTaskId, canApply),
+          () => refreshHarnesses(client, canApply), () => refreshHarnessRuns(client, canApply)
+        ], canApply, () => showStatus("Some background panels could not load. Use their refresh button to retry.", "error"));
         void refreshGit(client); void refreshTaskGit(activeTaskRef.current, client);
         writeSetting("connection", JSON.stringify({ host, port }));
       } catch (error) {
@@ -1038,6 +1151,8 @@ export function App() {
   const persistedFileTabs = group.tabs.filter((tab) => tab.type === "file" && (!tab.rootId || tab.rootId === selectedRootId));
   const persistedActiveTab = activeTab?.type === "file" && (!activeTab.rootId || activeTab.rootId === selectedRootId) ? activeTab : undefined;
   const terminalPanelOpen = layout.panels.some((panel) => panel.type === "terminal");
+  const hasUnreadTerminalOutput = layout.terminalGroup.tabs.some((tab) => tab.hasUnreadOutput);
+  useEffect(() => { setLayout(clearViewedTerminalActivity); }, [terminalPanelOpen, layout.terminalGroup]);
   const activeTerminalIndex = layout.terminalGroup.tabs.findIndex((tab) => tab.id === layout.terminalGroup.activeTabId);
   const terminalOptions: NonNullable<WorkspaceOptions["terminal"]> = { tabs: layout.terminalGroup.tabs.map((tab) => ({ displayName: tab.title, terminalId: tab.terminalId })), ...(activeTerminalIndex >= 0 ? { activeTabIndex: activeTerminalIndex } : {}), panelOpen: terminalPanelOpen };
   const pinnedFiles = pinnedFilePaths(persistedFileTabs);
@@ -1129,8 +1244,12 @@ export function App() {
 
   const activateEditorTab = useCallback(async (tab: EditorTab) => {
     if (tab.rootId && tab.rootId !== selectedRootIdRef.current) await selectWorkspaceRootRef.current(tab.rootId);
+    if (tab.type === "workflow" && tab.workflowTaskId !== selectedTaskIdRef.current) {
+      await switchTaskRef.current(tab.workflowTaskId);
+      if (tab.workflowTaskId !== selectedTaskIdRef.current) return;
+    }
     updateGroup((tabs) => ({ tabs, activeTabId: tab.id }));
-    if (!clientRef.current || tab.loading || tab.dirty || tab.type === "workflowDocument") return;
+    if (!clientRef.current || tab.loading || tab.dirty || tab.type === "workflowDocument" || tab.type === "workflow") return;
     try {
       if (tab.type === "diff") {
         const result = tab.diffRef
@@ -1142,7 +1261,7 @@ export function App() {
         }));
         return;
       }
-      const result = tab.type === "useful" ? await clientRef.current.request("useful.read", { scope: tab.usefulScope!, name: tab.path }) : tab.type === "runConfig" ? { content: (await clientRef.current.request("runConfig.read", { scope: tab.runConfigScope!, name: tab.path })).config.commands } : tab.type === "agent" ? await clientRef.current.request("agents.read", { scope: tab.agentScope!, name: tab.path }) : tab.type === "skill" ? await clientRef.current.request("skills.read", { id: tab.skillId! }) : await clientRef.current.request("filesystem.readFile", { path: tab.path });
+      const result = tab.type === "useful" ? await clientRef.current.request("useful.read", { scope: tab.usefulScope!, name: tab.path }) : tab.type === "runConfig" ? { content: (await clientRef.current.request("runConfig.read", { scope: tab.runConfigScope!, name: tab.path })).config.commands } : tab.type === "agent" ? await clientRef.current.request("agents.read", { scope: tab.agentScope!, name: tab.path }) : tab.type === "skill" ? await clientRef.current.request("skills.read", { id: tab.skillId!, path: tab.skillPath }) : await clientRef.current.request("filesystem.readFile", { path: tab.path });
       updateGroup((tabs, active) => ({
         tabs: tabs.map((item) => item.id === tab.id && !item.dirty ? { ...item, content: result.content, savedContent: result.content, error: undefined } : item),
         activeTabId: active
@@ -1190,22 +1309,22 @@ export function App() {
     catch (error) { updateGroup((tabs, active) => ({ tabs: tabs.map((item) => item.id === tab.id ? { ...item, loading: false, error: error instanceof Error ? error.message : "Could not read agent" } : item), activeTabId: active })); }
   };
 
-  const openSkillFile = async (id: string, mode: "edit" | "preview") => {
+  const openSkillFile = async (id: string, mode: "edit" | "preview", resource = "SKILL.md") => {
     const client = clientRef.current;
     if (!client) throw new Error("Backend is disconnected");
     const rootId = client.getRoot();
-    const existing = group.tabs.find((tab) => tab.type === "skill" && tab.skillId === id && (id.startsWith("global/") || tab.rootId === rootId));
+    const existing = group.tabs.find((tab) => tab.type === "skill" && tab.skillId === id && (tab.skillPath ?? "SKILL.md") === resource && (id.startsWith("global/") || tab.rootId === rootId));
     if (existing) {
       await activateEditorTab(existing);
       updateGroup((tabs, active) => ({ tabs: tabs.map((tab) => tab.id === existing.id ? { ...tab, markdownMode: mode } : tab), activeTabId: active }));
       return;
     }
     const name = id.slice(id.indexOf("/") + 1);
-    const path = id.startsWith("workspace/") ? `.agents/skills/${name}/SKILL.md` : `${name}/SKILL.md`;
-    const tab: EditorTab = { id: crypto.randomUUID(), type: "skill", rootId, title: `${name}/SKILL.md`, path, skillId: id, dirty: false, content: "", savedContent: "", loading: true, markdownMode: mode };
+    const path = id.startsWith("workspace/") ? `.agents/skills/${name}/${resource}` : `${name}/${resource}`;
+    const tab: EditorTab = { id: crypto.randomUUID(), type: "skill", rootId, title: `${name}/${resource}`, path, skillId: id, skillPath: resource, dirty: false, content: "", savedContent: "", loading: true, markdownMode: mode };
     updateGroup((tabs) => ({ tabs: [...tabs, tab], activeTabId: tab.id }));
     try {
-      const result = await client.request("skills.read", { id });
+      const result = await client.request("skills.read", { id, path: resource });
       updateGroup((tabs, active) => ({ tabs: tabs.map((item) => item.id === tab.id ? { ...item, content: result.content, savedContent: result.content, loading: false } : item), activeTabId: active }));
     } catch (error) {
       updateGroup((tabs, active) => ({ tabs: tabs.map((item) => item.id === tab.id ? { ...item, loading: false, error: error instanceof Error ? error.message : "Could not read skill" } : item), activeTabId: active }));
@@ -1439,7 +1558,7 @@ export function App() {
 
   const openTabInWindow = async (tab: EditorTab) => {
     setTabContextMenu(undefined);
-    if (tab.type === "diff" || tab.type === "agent" || tab.type === "skill" || tab.type === "runConfig" || tab.type === "workflowDocument") return;
+    if (tab.type === "diff" || tab.type === "agent" || tab.type === "skill" || tab.type === "runConfig" || tab.type === "workflowDocument" || tab.type === "workflow") return;
     if (tab.dirty) await saveFileTab(tab);
     const options = { host, port, type: tab.type, path: tab.path, ...(tab.type === "useful" ? { scope: tab.usefulScope } : {}) } as const;
     if (window.desktop?.openEditorWindow) window.desktop.openEditorWindow(options);
@@ -1464,6 +1583,7 @@ export function App() {
   };
 
   const saveFileTab = useCallback(async (current: EditorTab) => {
+    if (current.type === "skill" && current.skillPath && current.skillPath !== "SKILL.md") return !current.dirty;
     if ((current.type !== "file" && current.type !== "useful" && current.type !== "runConfig" && current.type !== "agent" && current.type !== "skill") || current.loading || current.error || !current.dirty || !clientRef.current) return !current.dirty;
     const content = current.content;
     try {
@@ -1582,7 +1702,7 @@ export function App() {
       }
     }
   }, [aiProviders, fileColors, gitCommitMessage, refreshAgents, refreshAi, refreshAiSessions, refreshGit, refreshTaskGit, restoreWorkspaceOptions, saveFileTab, searchQueries, javaBreakpoints, switchAiProvider]);
-  switchTaskRef.current = (taskId) => { void switchTask(taskId); };
+  switchTaskRef.current = switchTask;
 
   const selectClassicSideView = useCallback((view: ClassicTaskPanel) => {
     setClassicSideView(view);
@@ -1955,24 +2075,24 @@ export function App() {
       const attached = await clientRef.current.request("terminal.attach", { terminalId });
       if (attached.state === "stale") { setStatusMessage("That terminal is no longer available."); return false; }
       terminalBuffers.current.set(attached.session.terminalId, attached.session.output);
-      updateTerminalGroup((current) => { const id = crypto.randomUUID(); return { ...current, tabs: [...current.tabs, { id, rootId: selectedRootIdRef.current, terminalId: attached.session.terminalId, title, status: attached.session.status === "running" ? "running" : "exited", ...(attached.session.exitCode === undefined ? {} : { exitCode: attached.session.exitCode }), ...(attached.session.status === "running" ? { recovery: "reattached" as const } : {}) }], activeTabId: id }; });
+      updateTerminalGroup((current) => { const alreadyOpen = current.tabs.find((tab) => tab.terminalId === attached.session.terminalId); if (alreadyOpen) return { ...current, activeTabId: alreadyOpen.id }; const id = crypto.randomUUID(); return { ...current, tabs: [...current.tabs, { id, rootId: selectedRootIdRef.current, terminalId: attached.session.terminalId, title, status: attached.session.status === "running" ? "running" : "exited", ...(attached.session.exitCode === undefined ? {} : { exitCode: attached.session.exitCode }), ...(attached.session.status === "running" ? { recovery: "reattached" as const } : {}) }], activeTabId: id }; });
     } else updateTerminalGroup((current) => ({ ...current, activeTabId: existing.id }));
     setLayout((current) => ({ ...current, panels: [...current.panels.filter((panel) => !["terminal", "java", "problems", "gitlog"].includes(panel.type)), { id: "terminal", type: "terminal" }] }));
     return true;
+  };
+
+  const openHarnessAppTerminal = async (harnessId: string, blockId: string, runId?: string) => {
+    const client = clientRef.current;
+    if (!client) throw new Error("Backend is disconnected");
+    const terminal = await client.request("harnesses.app.terminal", { harnessId, blockId, runId });
+    const label = harnesses.find((item) => item.id === harnessId)?.blocks.find((item) => item.id === blockId)?.label ?? "App";
+    if (!await openTerminalReference(terminal.terminalId, `${label} output`)) throw new Error("App output terminal is unavailable");
   };
 
   const openRunConfigTerminal = async (config: RunConfig) => {
     if (!config.terminalId || !clientRef.current) return;
     await openTerminalReference(config.terminalId, config.name);
   };
-  useEffect(() => {
-    const listener = (event: Event) => {
-      const { terminalId, resolve } = (event as CustomEvent<{ terminalId: string; resolve(opened: boolean): void }>).detail;
-      void openTerminalReference(terminalId, "AI activity").then(resolve);
-    };
-    window.addEventListener("vibe:open-terminal", listener);
-    return () => window.removeEventListener("vibe:open-terminal", listener);
-  });
   const runConfigAction = async (config: RunConfig, action: "run" | "stop" | "restart" | "openTerminal") => {
     setRunConfigMenu(undefined);
     try { const next = (await clientRef.current!.request(`runConfig.${action}` as "runConfig.run", { scope: config.scope, name: config.name })).config; setRunConfigs((items) => items.map((item) => item.scope === next.scope && item.name === next.name ? next : item)); if (action !== "stop") await openRunConfigTerminal(next); }
@@ -2686,7 +2806,7 @@ export function App() {
   };
 
   const editorFontFamily = "JetBrains Mono";
-  const terminalFontFamily = uiFontFamily === "jetbrains" ? "JetBrains Mono Variable" : "Inter Variable";
+  const terminalFontFamily = "JetBrains Mono Variable";
   const editorLineHeight = Math.round(uiFontSize * uiLineHeight);
   const normalizedTaskFilter = taskFilter.trim().toLowerCase();
   const filteredTasks = useMemo(() => tasks.filter((task) => {
@@ -2777,10 +2897,14 @@ export function App() {
   }, [commands, commandContext, quickOpen, shortcutBindings, workspaceSymbolsOpen]);
 
   const taskHarnessRuns = workflowRunsForContext(harnessRuns, workspaceRoots.find((root) => root.id === selectedRootId)?.path, activeWorkspace, selectedTaskId);
-  const workflowDesignPanel = <HarnessPanel skillCatalog={skillCatalog} onRefreshSkills={refreshSkills} designOnly harnesses={harnesses} runs={taskHarnessRuns} diagnostics={harnessDiagnostics} providers={aiProviders} agents={agents} defaultProvider={aiProvider} onLoadModels={loadHarnessModels} onValidate={validateHarnessDefinition} onCreate={createHarness} onRead={readHarness} onSave={saveHarness} onDelete={deleteHarness} onRun={runHarness} onTestBlock={testHarnessBlock} onKillApp={killHarnessApp} onReadApp={readHarnessApp} onChat={chatHarness} onAppendRun={appendHarnessRun} onResolvePermission={resolveHarnessPermission} onAnswerQuestion={answerHarnessQuestion} onResumePause={resumeHarnessPause} onRetryPause={retryHarnessPause} onCancelPause={cancelHarnessPause} onCancelRun={cancelHarnessRun} onDeleteRun={deleteHarnessRun} onError={setStatusMessage} />;
+  const openWorkflowTab = (workflow: HarnessDefinition) => {
+    updateGroup((tabs) => openWorkflowEditor(tabs, workflow, selectedRootId, selectedTaskId));
+  };
+  const workflowDesignPanel = <HarnessPanel onOpenWorkflow={openWorkflowTab} skillCatalog={skillCatalog} onRefreshSkills={refreshSkills} designOnly harnesses={harnesses} runs={taskHarnessRuns} diagnostics={harnessDiagnostics} providers={aiProviders} agents={agents} defaultProvider={aiProvider} onLoadModels={loadHarnessModels} onValidate={validateHarnessDefinition} onCreate={createHarness} onRead={readHarness} onSave={saveHarness} onDelete={deleteHarness} onRun={runHarness} onTestBlock={testHarnessBlock} onKillApp={killHarnessApp} onReadApp={readHarnessApp} onReadRun={readHarnessRun} onChat={chatHarness} onSteerChat={steerHarnessChat} onAutopilot={setHarnessAutopilot} onOpenAppTerminal={openHarnessAppTerminal} onAppendRun={appendHarnessRun} onResolvePermission={resolveHarnessPermission} onAnswerQuestion={answerHarnessQuestion} onResumePause={resumeHarnessPause} onRetryPause={retryHarnessPause} onCancelPause={cancelHarnessPause} onCancelRun={cancelHarnessRun} onDeleteRun={deleteHarnessRun} onError={setStatusMessage} />;
   const showWorkflowDesign = sideLayout === "classic" ? classicSideView === "harness" : workflowPanelMode === "design";
-  const workflowRunPanel = <WorkflowRunPanel key={`${selectedRootId}:${selectedTaskId ?? "root"}`} harnesses={harnesses} runs={taskHarnessRuns} diagnostics={harnessDiagnostics} onValidate={validateHarnessDefinition} onRun={runHarness} onKillApp={killHarnessApp} onReadApp={readHarnessApp} onChat={chatHarness} onCancelRun={cancelHarnessRun} onResolvePermission={resolveHarnessPermission} onAnswerQuestion={answerHarnessQuestion} onResumePause={resumeHarnessPause} onRetryPause={retryHarnessPause} onCancelPause={cancelHarnessPause} onError={setStatusMessage} />;
-  const workflowPanels = <div className="workflow-mode-panels"><div hidden={!showWorkflowDesign}>{workflowDesignPanel}</div><div hidden={showWorkflowDesign}>{workflowRunPanel}</div></div>;
+  const renderWorkflowPanel = (tab?: EditorTab) => <WorkflowRunPanel onOpenWorkflow={tab ? undefined : openWorkflowTab} editorView={!!tab} providers={aiProviders} defaultProvider={aiProvider} onLoadModels={loadHarnessModels} key={tab?.id ?? `${selectedRootId}:${selectedTaskId ?? "root"}`} harnesses={tab ? harnesses.filter((workflow) => workflow.id === tab.workflowId) : harnesses} runs={tab ? workflowRunsForContext(harnessRuns, workspaceRoots.find((root) => root.id === selectedRootId)?.path, activeWorkspace, tab.workflowTaskId) : taskHarnessRuns} diagnostics={harnessDiagnostics} onValidate={validateHarnessDefinition} onRun={runHarness} onKillApp={killHarnessApp} onReadApp={readHarnessApp} onReadRun={readHarnessRun} onChat={chatHarness} onSteerChat={steerHarnessChat} onAutopilot={setHarnessAutopilot} onOpenAppTerminal={openHarnessAppTerminal} onCancelRun={cancelHarnessRun} onResolvePermission={resolveHarnessPermission} onAnswerQuestion={answerHarnessQuestion} onResumePause={resumeHarnessPause} onRetryPause={retryHarnessPause} onCancelPause={cancelHarnessPause} onError={setStatusMessage} />;
+  const workflowRunPanel = renderWorkflowPanel();
+  const workflowPanels = harnessesLoading || harnessRunsLoading ? <p role="status">Loading workflows…</p> : <div className="workflow-mode-panels"><div hidden={!showWorkflowDesign}>{workflowDesignPanel}</div><div hidden={showWorkflowDesign}>{workflowRunPanel}</div></div>;
   const processesPanel = <ProcessesPanel key={selectedRootId} processes={managedProcessList} loading={processLoading} error={processError} disabled={status !== "connected" || taskSwitching} onRefresh={() => refreshProcesses()} onKill={async (processId) => {
     const client = clientRef.current; if (!client) throw new Error("Backend is disconnected. Reconnect and try again.");
     await client.request("processes.kill", { processId }); await refreshProcesses();
@@ -2805,7 +2929,7 @@ export function App() {
   // Keep live buffers mounted during automatic recovery; commands still see disconnected.
   if (status !== "connected" && status !== "disconnected") return <ConnectionScreen {...{ host, port, status, statusMessage, setHost, setPort, connect }} />;
 
-  return <div className="ide-shell"><ModalFocusManager />
+  return <div className={`ide-shell${focusMode ? " focus-mode" : ""}`}><ModalFocusManager />
     {statusMessage && <div className={`status-toast ${statusKind}`} role={statusKind === "error" ? "alert" : "status"} aria-live={statusKind === "error" ? "assertive" : "polite"}>
       {statusKind === "progress" ? <LoaderCircle className="status-toast-spinner" size={16} /> : statusKind === "success" ? <Check size={16} /> : <CircleAlert size={16} />}
       <span>{statusMessage}</span>
@@ -2814,18 +2938,31 @@ export function App() {
       {lastDeleted && statusKind === "success" && <button onClick={() => void restoreLastDeleted()}>Undo</button>}
       {statusKind !== "progress" && <button title="Dismiss" aria-label="Dismiss status message" onClick={() => setStatusMessageState("")}><X size={14} /></button>}
     </div>}
+    <header className="titlebar-actions" aria-label="Workspace toolbar">
+      <div className="workspace-identity" title={activeWorkspace}><Workflow size={20} /><span>{projectName}</span></div>
+      <BranchPicker current={gitBranch} menu={branchMenu} onToggle={() => void toggleBranchMenu()} onClose={() => setBranchMenu(undefined)} onRefresh={() => void loadBranchMenu()} onCreate={() => void createBranch()} onCheckout={checkoutBranch} onRename={renameBranch} onDelete={deleteBranch} onPublish={publishBranch} onSetUpstream={setBranchUpstream} />
+      <div className="titlebar-spacer" />
+      {javaOptions && <div className="top-java-run" role="toolbar" aria-label="Java run controls">
+        <button aria-label="Run selected Java configuration" title="Run selected Java configuration" disabled={javaRunning || !javaOptions.selectedRunConfigurationId} onClick={() => void runJavaAction("java.run")}><Play size={14} /></button>
+        <button aria-label="Debug selected Java configuration" title="Debug selected Java configuration" disabled={javaRunning || !javaOptions.selectedRunConfigurationId} onClick={() => void debugJava()}><Bug size={14} /></button>
+        <button aria-label="Stop Java process" title="Stop Java process" disabled={!javaRunning} onClick={() => void stopJava()}><Square size={13} /></button>
+        <button aria-label="Edit Java run/debug configuration" title="Edit Java run/debug configuration" onClick={() => setShowRunConfigurationDialog(true)}><Settings size={14} /></button>
+        <select aria-label="Java run configuration" value={javaOptions.selectedRunConfigurationId ?? ""} onChange={(event) => event.target.value === "__create__" ? setShowRunConfigurationDialog(true) : void selectRunConfiguration(event.target.value)}><option value="" disabled>Select run configuration</option>{javaOptions.runConfigurations.map((configuration) => <option key={configuration.id} value={configuration.id}>{configuration.name}</option>)}<option value="__create__">Edit configurations…</option></select>
+      </div>}
+      {storageOpen && clientRef.current && <StoragePanel client={clientRef.current} onClose={() => setStorageOpen(false)} />}<div className="workspace-utilities"><FocusModeButton active={focusMode} onChange={changeFocusMode} /><span className="workspace-utility-divider" aria-hidden="true" /><ConnectionMenu host={host} port={port} connected={status === "connected"} onDisconnect={disconnect} /><div className="settings-anchor"><button className="workspace-settings-button" aria-label="Settings" title="Settings" aria-expanded={settingsOpen} onClick={() => setSettingsOpen((open) => !open)}><Settings size={16} /><span>Settings</span></button>{settingsOpen && <SettingsMenu onClose={() => setSettingsOpen(false)} onStorage={() => { setSettingsOpen(false); setStorageOpen(true); }} workspace={activeWorkspace} sideLayout={sideLayout} onSideLayoutChange={changeSideLayout} commands={commands} shortcutBindings={shortcutBindings} platform={platform} onShortcutChange={changeShortcut} onShortcutsReset={resetShortcuts} values={{ theme, highlightTheme, uiFontFamily, uiFontWeight, uiFontSize, uiLineHeight }} isWorkspaceOverride={(setting) => hasWorkspaceSetting(activeWorkspace, setting)} onChange={(setting, value) => { workspaceDefaultsRef.current.delete(setting); if (setting === "theme") setTheme(value as DesktopSettings["theme"]); else if (setting === "highlightTheme") setHighlightTheme(value as DesktopSettings["highlightTheme"]); else if (setting === "uiFontFamily") setUiFontFamily(value as DesktopSettings["uiFontFamily"]); else if (setting === "uiFontWeight") setUiFontWeight(value as number); else if (setting === "uiFontSize") setUiFontSize(value as number); else setUiLineHeight(value as number); }} onReset={(setting) => { resetWorkspaceSetting(activeWorkspace, setting); workspaceDefaultsRef.current.add(setting); const value = readSetting(setting); if (setting === "theme") setTheme(value === "dark" ? "dark" : "light"); else if (setting === "highlightTheme") setHighlightTheme(value === "ftpud" || value === "ftpud-dark" ? "ftpud" : "default"); else if (setting === "uiFontFamily") setUiFontFamily(value === "jetbrains" ? "jetbrains" : "inter"); else if (setting === "uiFontWeight") setUiFontWeight(readSettingNumber(setting, 450, 350, 600)); else if (setting === "uiFontSize") setUiFontSize(readSettingNumber(setting, 13, 10, 20)); else setUiLineHeight(readSettingNumber(setting, 1.2, 1, 2)); setSettingsRevision((revision) => revision + 1); }} />}</div></div>
+    </header>
     <div className="workspace-row">
       {sideLayout === "ai-focused" ? <>
-      <nav className="tool-stripe" aria-label="Left tool windows">
+      <FocusDock edge="left" active={focusMode}><nav className="tool-stripe" aria-label="Left tool windows">
         <button className={`tool-stripe-button ${leftPanels.tasks ? "active" : ""}`} title={leftPanels.tasks ? "Hide Tasks" : "Show Tasks"} onClick={() => setLeftPanels((current) => ({ ...current, tasks: !current.tasks }))}><ListTodo size={15} /><span>Tasks</span>{tasks.length > 0 && <span className="tool-badge">{tasks.length > 99 ? "99+" : tasks.length}</span>}</button>
         <button className={`tool-stripe-button ${leftPanels.ai ? "active" : ""}`} title={leftPanels.ai ? "Hide AI" : "Show AI"} onClick={() => setLeftPanels((current) => { if (!current.ai) void refreshAi(); return { ...current, ai: !current.ai, harness: false, timers: false, proc: false }; })}><Bot size={15} /><span>AI</span>{aiSession.status === "in_progress" && <span className="tool-badge">...</span>}</button>
         <button className={`tool-stripe-button ${leftPanels.harness && workflowPanelMode === "run" ? "active" : ""}`} title="Workflows · View / Run" onClick={() => { setWorkflowPanelMode("run"); setLeftPanels((current) => ({ ...current, harness: true, ai: false, timers: false, proc: false })); void Promise.all([refreshHarnesses(), refreshHarnessRuns()]); }}><Play size={15} /><span>Workflows</span></button>
         <div className="tool-stripe-bottom">
           <button className={`tool-stripe-button ${leftPanels.harness && workflowPanelMode === "design" ? "active" : ""}`} title="Workflow design" onClick={() => { setWorkflowPanelMode("design"); setLeftPanels((current) => ({ ...current, harness: true, ai: false, timers: false, proc: false })); void refreshHarnesses(); }}><Workflow size={15} /><span>Workflow design</span></button>
           <button className={`tool-stripe-button ${leftPanels.timers ? "active" : ""}`} title={leftPanels.timers ? "Hide Timers" : "Show Timers"} onClick={() => setLeftPanels((current) => ({ ...current, timers: !current.timers, proc: false, ai: false, harness: false }))}><Clock size={15} /><span>Timers</span>{(activeTimers.length + schedules.filter((item) => item.enabled).length) > 0 && <span className="tool-badge">{activeTimers.length + schedules.filter((item) => item.enabled).length}</span>}</button>
-          <button className={`tool-stripe-button ${leftPanels.proc ? "active" : ""}`} title={leftPanels.proc ? "Hide Proc" : "Show Proc"} onClick={() => { setLeftPanels((current) => ({ ...current, proc: !current.proc, ai: false, harness: false, timers: false })); void refreshProcesses(); }}><SquareTerminal size={15} /><span>Proc</span>{managedProcessList.length > 0 && <span className="tool-badge">{managedProcessList.length}</span>}</button>
+          <button className={`tool-stripe-button ${leftPanels.proc ? "active" : ""}`} title={leftPanels.proc ? "Hide Processes" : "Show Processes"} onClick={() => { setLeftPanels((current) => ({ ...current, proc: !current.proc, ai: false, harness: false, timers: false })); void refreshProcesses(); }}><SquareTerminal size={15} /><span>Proc</span>{managedProcessList.length > 0 && <span className="tool-badge">{managedProcessList.length}</span>}</button>
         </div>
-      </nav>
+      </nav></FocusDock>
       {(leftPanels.tasks || leftPanels.ai || leftPanels.harness || leftPanels.timers || leftPanels.proc) && <><aside className="side-panel side-panel-left" style={{ width: leftSidebarWidth }}><ResizablePanelStack workspace={activeWorkspace} setting="focused.leftSizes" ids={[...(leftPanels.tasks ? ["tasks"] : []), ...((leftPanels.ai || leftPanels.harness || leftPanels.timers || leftPanels.proc) ? ["ai"] : [])]}>
         {leftPanels.tasks && <section key="tasks" className="stacked-panel"><header className="panel-header"><span>Tasks</span><button title="Create task" disabled={taskSwitching} onClick={() => setShowCreateTaskDialog(true)}><Plus size={15} /></button></header><div className="task-filters"><QuickFilter value={taskFilter} placeholder="Filter tasks" label="Filter tasks" onChange={setTaskFilter} /><select aria-label="Task lifecycle filter" value={taskLifecycleFilter} onChange={(event) => setTaskLifecycleFilter(event.target.value as typeof taskLifecycleFilter)}><option value="active">Active</option><option value="finished">Finished</option><option value="archived">Archived</option><option value="all">All</option></select></div><div className="tasks-list">
           {showRootTask && <TaskRow icon={<Folder size={15} />} name="Root workspace" summary={aiStatuses.root} selected={selectedTaskId === undefined} disabled={taskSwitching} onClick={() => openTask(undefined, aiStatuses.root.pendingPermission)} onCancelTimer={() => void timerAction(undefined, "cancel")} onFireTimer={() => void timerAction(undefined, "fire")} />}
@@ -2838,7 +2975,7 @@ export function App() {
         {leftPanels.timers && <section key="timers" className="stacked-panel">{timersPanel}</section>}
       </ResizablePanelStack></aside><div className="resize-handle" role="separator" aria-label="Resize left sidebar" aria-orientation="vertical" aria-valuemin={280} aria-valuemax={Math.round(Math.min(900, window.innerWidth * .65))} aria-valuenow={Math.round(leftSidebarWidth)} tabIndex={0} onKeyDown={(event) => keyboardResize(event, leftSidebarWidth, setLeftSidebarWidth, 280, Math.min(900, window.innerWidth * .65))} onPointerDown={beginLeftSidebarResize} /></>}
       </> : <>
-      <nav className="tool-stripe" aria-label="Left tool windows">
+      <FocusDock edge="left" active={focusMode}><nav className="tool-stripe" aria-label="Left tool windows">
         <button className={`tool-stripe-button ${classicSideView === "project" ? "active" : ""}`} title="Project" onClick={() => selectClassicSideView("project")}><Folder size={15} /><span>Project</span></button>
         <button className={`tool-stripe-button ${classicSideView === "git" ? "active" : ""}`} title="Git changes" onClick={() => { selectClassicSideView("git"); void refreshGit(); }}><GitBranch size={15} /><span>Git</span>{gitEntries.length > 0 && <span className="tool-badge">{gitEntries.length > 99 ? "99+" : gitEntries.length}</span>}</button>
         {selectedTaskId && <button className={`tool-stripe-button ${classicSideView === "taskGit" ? "active" : ""}`} title="Changes from task base branch" onClick={() => { selectClassicSideView("taskGit"); void refreshTaskGit(); }}><GitCompareArrows size={15} /><span>Task Git</span>{taskGitEntries.length > 0 && <span className="tool-badge">{taskGitEntries.length > 99 ? "99+" : taskGitEntries.length}</span>}</button>}
@@ -2850,9 +2987,9 @@ export function App() {
         <div className="tool-stripe-bottom">
           <button className={`tool-stripe-button ${classicSideView === "harness" ? "active" : ""}`} title="Workflow design" onClick={() => { selectClassicSideView("harness"); void refreshHarnesses(); }}><Workflow size={15} /><span>Workflow design</span></button>
           <button className={`tool-stripe-button ${classicSideView === "timers" ? "active" : ""}`} title="Timers" onClick={() => selectClassicSideView("timers")}><Clock size={15} /><span>Timers</span>{(activeTimers.length + schedules.filter((item) => item.enabled).length) > 0 && <span className="tool-badge">{activeTimers.length + schedules.filter((item) => item.enabled).length}</span>}</button>
-          <button className={`tool-stripe-button ${classicSideView === "proc" ? "active" : ""}`} title="Proc" onClick={() => { selectClassicSideView("proc"); void refreshProcesses(); }}><SquareTerminal size={15} /><span>Proc</span>{managedProcessList.length > 0 && <span className="tool-badge">{managedProcessList.length}</span>}</button>
+          <button className={`tool-stripe-button ${classicSideView === "proc" ? "active" : ""}`} title="Processes" onClick={() => { selectClassicSideView("proc"); void refreshProcesses(); }}><SquareTerminal size={15} /><span>Proc</span>{managedProcessList.length > 0 && <span className="tool-badge">{managedProcessList.length}</span>}</button>
         </div>
-      </nav>
+      </nav></FocusDock>
       <aside className="side-panel classic-left-panel" style={{ width: classicLeftWidth }}>
         {classicSideView === "proc" ? processesPanel : classicSideView === "timers" ? timersPanel : classicSideView === "project" ? <>
           <header className="panel-header"><span>Project</span><div className="panel-header-actions"><button title={showIgnored ? "Hide ignored files" : "Show all files (including Git-ignored)"} className={showIgnored ? "active" : ""} onClick={toggleShowIgnored}>{showIgnored ? <Eye size={14} /> : <EyeOff size={14} />}</button><button title="Synchronize files" onClick={() => void refreshTree()}><RefreshCw size={14} /></button></div></header>
@@ -2867,20 +3004,9 @@ export function App() {
       </aside><div className="resize-handle" role="separator" aria-label="Resize left sidebar" aria-orientation="vertical" aria-valuemin={180} aria-valuemax={500} aria-valuenow={Math.round(classicLeftWidth)} tabIndex={0} onKeyDown={(event) => keyboardResize(event, classicLeftWidth, setClassicLeftWidth, 180, 500)} onPointerDown={beginClassicLeftResize} />
       </>}
       <main className="workbench">
-        <div className="titlebar-actions">
-          <div className="branch-selector"><button className="branch-selector-button" title="Git branches" onClick={() => void toggleBranchMenu()}><GitBranch size={14} /><span>{gitBranch}</span><ChevronDown size={12} /></button>{branchMenu && <div className="branch-menu"><header><span>Git Branches</span><span className="branch-menu-actions"><button title="Create local branch" onClick={() => void createBranch()}><Plus size={13} /></button><button title="Refresh branches" onClick={() => void loadBranchMenu()}><RefreshCw size={13} /></button></span></header>{branchMenu.loading ? <div className="branch-menu-empty">Loading branches...</div> : <div className="branch-groups"><BranchSelectorGroup title="Local" branches={branchMenu.branches.filter((branch) => !branch.remote)} selected={branchMenu.selected} onSelect={(name) => setBranchMenu((current) => current ? { ...current, selected: current.selected === name ? undefined : name } : current)} onCheckout={checkoutBranch} onRename={renameBranch} onDelete={deleteBranch} onPublish={publishBranch} onSetUpstream={setBranchUpstream} /><BranchSelectorGroup title="Remote" branches={branchMenu.branches.filter((branch) => branch.remote)} selected={branchMenu.selected} onSelect={(name) => setBranchMenu((current) => current ? { ...current, selected: current.selected === name ? undefined : name } : current)} onCheckout={checkoutBranch} onRename={renameBranch} onDelete={deleteBranch} onPublish={publishBranch} onSetUpstream={setBranchUpstream} /></div>}</div>}</div>
-          {javaOptions && <div className="top-java-run">
-            <button title="Run selected Java configuration" disabled={javaRunning || !javaOptions.selectedRunConfigurationId} onClick={() => void runJavaAction("java.run")}><Play size={14} /></button>
-            <button title="Debug selected Java configuration" disabled={javaRunning || !javaOptions.selectedRunConfigurationId} onClick={() => void debugJava()}><Bug size={14} /></button>
-            <button title="Stop Java process" disabled={!javaRunning} onClick={() => void stopJava()}><Square size={13} /></button>
-            <button title="Edit Java run/debug configuration" onClick={() => setShowRunConfigurationDialog(true)}><Settings size={14} /></button>
-            <select aria-label="Java run configuration" value={javaOptions.selectedRunConfigurationId ?? ""} onChange={(event) => event.target.value === "__create__" ? setShowRunConfigurationDialog(true) : void selectRunConfiguration(event.target.value)}><option value="" disabled>Select run configuration</option>{javaOptions.runConfigurations.map((configuration) => <option key={configuration.id} value={configuration.id}>{configuration.name}</option>)}<option value="__create__">Edit configurations…</option></select>
-          </div>}
-          <span className="connection-dot" />{host}:{port}<div className="settings-anchor"><button title="Settings" onClick={() => setSettingsOpen((open) => !open)}><Settings size={15} /></button>{settingsOpen && <SettingsMenu workspace={activeWorkspace} sideLayout={sideLayout} onSideLayoutChange={changeSideLayout} commands={commands} shortcutBindings={shortcutBindings} platform={platform} onShortcutChange={changeShortcut} onShortcutsReset={resetShortcuts} values={{ theme, highlightTheme, uiFontFamily, uiFontWeight, uiFontSize, uiLineHeight }} isWorkspaceOverride={(setting) => hasWorkspaceSetting(activeWorkspace, setting)} onChange={(setting, value) => { workspaceDefaultsRef.current.delete(setting); if (setting === "theme") setTheme(value as DesktopSettings["theme"]); else if (setting === "highlightTheme") setHighlightTheme(value as DesktopSettings["highlightTheme"]); else if (setting === "uiFontFamily") setUiFontFamily(value as DesktopSettings["uiFontFamily"]); else if (setting === "uiFontWeight") setUiFontWeight(value as number); else if (setting === "uiFontSize") setUiFontSize(value as number); else setUiLineHeight(value as number); }} onReset={(setting) => { resetWorkspaceSetting(activeWorkspace, setting); workspaceDefaultsRef.current.add(setting); const value = readSetting(setting); if (setting === "theme") setTheme(value === "light" ? "light" : "dark"); else if (setting === "highlightTheme") setHighlightTheme(value === "ftpud" || value === "ftpud-dark" ? "ftpud" : "default"); else if (setting === "uiFontFamily") setUiFontFamily(value === "inter" ? "inter" : "jetbrains"); else if (setting === "uiFontWeight") setUiFontWeight(readSettingNumber(setting, 450, 350, 600)); else if (setting === "uiFontSize") setUiFontSize(readSettingNumber(setting, 13, 10, 20)); else setUiLineHeight(readSettingNumber(setting, 1.2, 1, 2)); setSettingsRevision((revision) => revision + 1); }} />}</div><button title="Disconnect" onClick={disconnect}><LogOut size={15} /></button>
-        </div>
         <div className="tabs" role="tablist" aria-label="Open editors">
           {group.tabs.map((tab) => { const label = editorTabLabel(tab); return <div className={`tab ${tab.pinned ? "pinned" : ""} ${tab.id === group.activeTabId ? "active" : ""} ${tab.id === draggedTabId ? "dragging" : ""}`} role="tab" aria-selected={tab.id === group.activeTabId} aria-label={tab.pinned ? `${label} (pinned)` : label} tabIndex={tab.id === group.activeTabId ? 0 : -1} title={`${label}${tab.pinned ? " · Pinned" : ""} · Ctrl+Tab to switch · Ctrl/Cmd+W to close`} key={tab.id} draggable onDragStart={(event) => { setDraggedTabId(tab.id); event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/plain", tab.id); }} onDragEnd={() => setDraggedTabId(undefined)} onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = "move"; }} onDrop={(event) => { event.preventDefault(); moveTab(tab.id); }} onContextMenu={(event) => { event.preventDefault(); setTabContextMenu({ x: Math.min(event.clientX, window.innerWidth - 220), y: Math.min(event.clientY, window.innerHeight - 125), tab }); }} onMouseDown={(event) => { if (event.button === 1) event.preventDefault(); }} onAuxClick={(event) => { if (event.button === 1) { event.preventDefault(); closeTab(tab); } }} onClick={() => void activateEditorTab(tab)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); void activateEditorTab(tab); } }}>
-            {tab.type === "diff" ? <GitCompareArrows size={14} /> : <File size={14} />}<span className={tab.type === "file" && tab.rootId === selectedRootId && projectGitStatuses[tab.path] ? `tab-file-name git-${projectGitStatuses[tab.path] === "C" ? "created" : "modified"}` : "tab-file-name"}>{label}</span>{tab.dirty && <span className="dirty" title="Unsaved changes" />}<button type="button" className="close" aria-label={`Close ${label}`} title={`Close ${label}`} onClick={(event) => { event.stopPropagation(); closeTab(tab); }}><X size={13} /></button>
+            {tab.type === "workflow" ? <Workflow size={14} /> : tab.type === "diff" ? <GitCompareArrows size={14} /> : <File size={14} />}<span className={tab.type === "file" && tab.rootId === selectedRootId && projectGitStatuses[tab.path] ? `tab-file-name git-${projectGitStatuses[tab.path] === "C" ? "created" : "modified"}` : "tab-file-name"}>{label}</span>{tab.dirty && <span className="dirty" title="Unsaved changes" />}<button type="button" className="close" aria-label={`Close ${label}`} title={`Close ${label}`} onClick={(event) => { event.stopPropagation(); closeTab(tab); }}><X size={13} /></button>
           </div>; })}
           <div className="tab-spacer" />
           {activeTab?.type === "diff" && <div className="editor-mode-switch" aria-label="Diff layout">
@@ -2900,11 +3026,12 @@ export function App() {
           const hasSelection = Boolean(selection && !selection.isEmpty());
           setEditorGitMenu({ x: Math.min(event.clientX, window.innerWidth - 245), y: Math.min(event.clientY, window.innerHeight - 85), path: activeTab.path, ...(hasSelection ? { startLine: selection!.startLineNumber, endLine: selection!.endLineNumber } : {}) });
         }}>
-          {!activeTab ? <div className="empty-editor">Open a file from Project</div> : activeTab.loading ? <div className="empty-editor">Loading {activeTab.title}...</div> : activeTab.error && !activeTab.content ? <div className="editor-error">{activeTab.error}</div> : <>
+          {group.tabs.filter((tab) => tab.type === "workflow" && tab.rootId === selectedRootId).map((tab) => <div className="workflow-editor-tab" key={tab.id} hidden={tab.id !== group.activeTabId}>{taskSwitching ? <p role="status">Switching workspace…</p> : tab.workflowTaskId !== selectedTaskId ? <div className="harness-empty"><Workflow size={30} /><strong>This workflow belongs to another task</strong><button onClick={() => void activateEditorTab(tab)}>Switch to workflow task</button></div> : harnessesLoading ? <p role="status">Loading workflow…</p> : !harnesses.some((workflow) => workflow.id === tab.workflowId) ? <div className="harness-empty"><Workflow size={30} /><strong>Workflow unavailable</strong><span>This workflow may have been deleted.</span></div> : renderWorkflowPanel(tab)}</div>)}
+          {!activeTab ? <div className="empty-editor"><div className="workspace-welcome"><Workflow size={40} /><h1>Your workspace,<br /><span>ready.</span></h1><p>Explore your project, build with an agent, or run a workflow.</p><button onClick={() => setQuickOpen(true)}><Folder size={18} /><span>Open a file</span><ChevronRight size={16} /></button><button onClick={() => setCommandPaletteOpen(true)}><Search size={18} /><span>Find a command</span><ChevronRight size={16} /></button></div></div> : activeTab.loading ? <div className="empty-editor">Loading {activeTab.title}...</div> : activeTab.error && !activeTab.content ? <div className="editor-error">{activeTab.error}</div> : <>
             {activeTab.error && <div className="inline-error">{activeTab.error}</div>}
-            {activeTab.type === "diff" ? <><DiffEditor key={`${activeTab.id}:${activeTab.diffMode ?? "unified"}`} original={activeTab.originalContent ?? ""} modified={activeTab.content} language={languageByExtension[activeTab.path.split(".").pop()?.toLowerCase() ?? ""] ?? "plaintext"} beforeMount={configureMonacoThemes} theme={monacoTheme(theme, highlightTheme)} onMount={mountWorkingDiff} options={{ automaticLayout: true, readOnly: false, originalEditable: false, renderMarginRevertIcon: true, renderSideBySide: activeTab.diffMode === "split", useInlineViewWhenSpaceIsLimited: false, minimap: { enabled: false }, fontFamily: editorFontFamily, fontWeight: "normal", fontSize: uiFontSize, lineHeight: editorLineHeight, scrollBeyondLastLine: false }} /><DiffNavigation editorRef={monacoDiffEditorRef} /></> : activeTab.markdownMode === "preview" ? <div className="markdown-preview"><MarkdownPreview sourcePath={activeTab.path} workspacePath={activeWorkspace} renderPre={renderMarkdownPre} onOpenFile={(path) => void openFile({ name: path.split("/").pop() ?? path, path, type: "file" })} onOpenExternal={(url) => { void window.desktop?.openExternal(url).catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : "Could not open external link")); }} onChange={activeTab.type === "workflowDocument" ? undefined : (content) => updateGroup((tabs, active) => ({ tabs: tabs.map((tab) => tab.id === activeTab.id ? { ...tab, content, dirty: content !== tab.savedContent, error: undefined } : tab), activeTabId: active }))}>{activeTab.content}</MarkdownPreview></div> : <StableEditor key={`${activeTab.type}:${activeTab.usefulScope ?? activeTab.runConfigScope ?? activeTab.agentScope ?? activeTab.skillId ?? "workspace"}:${activeTab.path}`} path={activeTab.type === "workflowDocument" ? `${activeTab.id}.md` : activeTab.type === "useful" ? `useful-${activeTab.usefulScope}/${activeTab.path}` : activeTab.type === "runConfig" ? `run-config-${activeTab.runConfigScope}/${activeTab.path}.sh` : activeTab.type === "agent" ? `agent-${activeTab.agentScope}/${activeTab.path}` : activeTab.type === "skill" ? `skill-${activeTab.skillId}/SKILL.md` : activeTab.path} language={activeTab.type === "runConfig" ? "shell" : languageByExtension[activeTab.path.split(".").pop()?.toLowerCase() ?? ""] ?? "plaintext"} value={activeTab.content} beforeMount={configureMonacoThemes} theme={monacoTheme(theme, highlightTheme)} onMount={mountEditor} options={{ readOnly: activeTab.type === "workflowDocument", automaticLayout: true, contextmenu: false, minimap: { enabled: false }, glyphMargin: activeTab.type === "file" || /\.http$/i.test(activeTab.path), fontFamily: editorFontFamily, fontWeight: "normal", fontSize: uiFontSize, lineHeight: editorLineHeight, scrollBeyondLastLine: false, padding: { top: 10 } }} onChange={(value) => updateGroup((tabs, active) => ({ tabs: tabs.map((tab) => tab.id === activeTab.id ? { ...tab, content: value, dirty: value !== tab.savedContent, error: undefined } : tab), activeTabId: active }))} />}
+            {activeTab.type === "workflow" ? null : activeTab.type === "diff" ? <><DiffEditor key={`${activeTab.id}:${activeTab.diffMode ?? "unified"}`} original={activeTab.originalContent ?? ""} modified={activeTab.content} language={languageByExtension[activeTab.path.split(".").pop()?.toLowerCase() ?? ""] ?? "plaintext"} beforeMount={configureMonacoThemes} theme={monacoTheme(theme, highlightTheme)} onMount={mountWorkingDiff} options={{ automaticLayout: true, readOnly: false, originalEditable: false, renderMarginRevertIcon: true, renderSideBySide: activeTab.diffMode === "split", useInlineViewWhenSpaceIsLimited: false, minimap: { enabled: false }, fontFamily: editorFontFamily, fontWeight: "normal", fontSize: uiFontSize, lineHeight: editorLineHeight, scrollBeyondLastLine: false }} /><DiffNavigation editorRef={monacoDiffEditorRef} /></> : activeTab.markdownMode === "preview" ? <div className="markdown-preview"><MarkdownPreview sourcePath={activeTab.type === "skill" ? activeTab.skillPath ?? "SKILL.md" : activeTab.path} workspacePath={activeTab.type === "skill" ? undefined : activeWorkspace} renderPre={renderMarkdownPre} onOpenFile={(path) => activeTab.type === "skill" ? void openSkillFile(activeTab.skillId!, "preview", path) : void openFile({ name: path.split("/").pop() ?? path, path, type: "file" })} onOpenExternal={(url) => { void window.desktop?.openExternal(url).catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : "Could not open external link")); }} onChange={activeTab.type === "workflowDocument" || (activeTab.type === "skill" && !!activeTab.skillPath && activeTab.skillPath !== "SKILL.md") ? undefined : (content) => updateGroup((tabs, active) => ({ tabs: tabs.map((tab) => tab.id === activeTab.id ? { ...tab, content, dirty: content !== tab.savedContent, error: undefined } : tab), activeTabId: active }))}>{activeTab.content}</MarkdownPreview></div> : <StableEditor key={`${activeTab.type}:${activeTab.usefulScope ?? activeTab.runConfigScope ?? activeTab.agentScope ?? activeTab.skillId ?? "workspace"}:${activeTab.path}`} path={activeTab.type === "workflowDocument" ? `${activeTab.id}.md` : activeTab.type === "useful" ? `useful-${activeTab.usefulScope}/${activeTab.path}` : activeTab.type === "runConfig" ? `run-config-${activeTab.runConfigScope}/${activeTab.path}.sh` : activeTab.type === "agent" ? `agent-${activeTab.agentScope}/${activeTab.path}` : activeTab.type === "skill" ? `skill-${activeTab.skillId}/${activeTab.skillPath ?? "SKILL.md"}` : activeTab.path} language={activeTab.type === "runConfig" ? "shell" : languageByExtension[activeTab.path.split(".").pop()?.toLowerCase() ?? ""] ?? "plaintext"} value={activeTab.content} beforeMount={configureMonacoThemes} theme={monacoTheme(theme, highlightTheme)} onMount={mountEditor} options={{ readOnly: activeTab.type === "workflowDocument" || (activeTab.type === "skill" && !!activeTab.skillPath && activeTab.skillPath !== "SKILL.md"), automaticLayout: true, contextmenu: false, minimap: { enabled: false }, glyphMargin: activeTab.type === "file" || /\.http$/i.test(activeTab.path), fontFamily: editorFontFamily, fontWeight: "normal", fontSize: uiFontSize, lineHeight: editorLineHeight, scrollBeyondLastLine: false, padding: { top: 10 } }} onChange={(value) => updateGroup((tabs, active) => ({ tabs: tabs.map((tab) => tab.id === activeTab.id ? { ...tab, content: value, dirty: value !== tab.savedContent, error: undefined } : tab), activeTabId: active }))} />}
           </>}
-          <EditorStatusBar ref={editorStatusBarRef} active={Boolean(activeTab && !activeTab.loading && !(activeTab.error && !activeTab.content) && activeTab.markdownMode !== "preview")} />
+          <EditorStatusBar ref={editorStatusBarRef} active={Boolean(activeTab && activeTab.type !== "workflow" && !activeTab.loading && !(activeTab.error && !activeTab.content) && activeTab.markdownMode !== "preview")} />
         </div>
         {httpResult && <section className="http-response-panel"><header><span>{httpResult.request.method} {httpResult.request.url}</span>{httpResult.loading ? <small>Sending...</small> : httpResult.response ? <small className={httpResult.response.status >= 400 ? "error" : "success"}>{httpResult.response.status} {httpResult.response.statusText} · {httpResult.response.durationMs} ms</small> : null}<button title="Close response" onClick={() => setHttpResult(undefined)}><X size={14} /></button></header>{httpResult.error ? <div className="http-response-error">{httpResult.error}</div> : httpResult.response ? <div className="http-response-content"><pre className="http-response-headers">{Object.entries(httpResult.response.headers).map(([name, value]) => `${name}: ${value}`).join("\n")}</pre><pre className="http-response-body">{httpResult.response.body}</pre></div> : <div className="http-response-loading">Waiting for response...</div>}</section>}
       </main>
@@ -2930,7 +3057,7 @@ export function App() {
         {rightPanels.agents && <section key="agents" className="stacked-panel"><AgentsPanel agents={agents} activeTab={activeTab} onRefresh={() => void refreshAgents()} onOpen={(file) => void openAgentFile(file)} onCreate={(scope) => setAgentDialog({ mode: "create", scope })} onRename={(file) => { if (file.scope !== "workspace") setAgentDialog({ mode: "rename", scope: file.scope, file }); }} onDelete={(file) => void deleteAgent(file)} /></section>}
         {rightPanels.skills && <section key="skills" className="stacked-panel"><SkillsPanel key={activeWorkspace} catalog={skillCatalog} agents={agents} agentPreset={selectedAgentReference} selected={selectedSkillIds} running={aiSession.status === "in_progress"} disabled={taskSwitching} onRefresh={() => refreshSkills()} onSelection={selectSkills} onOpen={openSkillFile} activeSkillId={activeTab?.type === "skill" ? activeTab.skillId : undefined} actions={skillActions} /></section>}
       </ResizablePanelStack></aside></>}
-      <nav className="right-tool-stripe" aria-label="Right tool windows">
+      <FocusDock edge="right" active={focusMode}><nav className="right-tool-stripe" aria-label="Right tool windows">
         <button className={`tool-stripe-button right ${rightPanels.project ? "active" : ""}`} title={rightPanels.project ? "Hide Project" : "Show Project"} onClick={() => setRightPanels((current) => ({ ...current, project: !current.project }))}><Folder size={15} /><span>Project</span></button>
         <button className={`tool-stripe-button right ${rightPanels.git ? "active" : ""}`} title={rightPanels.git ? "Hide Git changes" : "Show Git changes"} onClick={() => setRightPanels((current) => { if (!current.git) void refreshGit(); return { ...current, git: !current.git }; })}><GitBranch size={15} /><span>Git</span>{gitEntries.length > 0 && <span className="tool-badge">{gitEntries.length > 99 ? "99+" : gitEntries.length}</span>}</button>
         {selectedTaskId && <button className={`tool-stripe-button right ${rightPanels.taskGit ? "active" : ""}`} title={rightPanels.taskGit ? "Hide Task Git" : "Show Task Git"} onClick={toggleFocusedTaskGit}><GitCompareArrows size={15} /><span>Task Git</span>{taskGitEntries.length > 0 && <span className="tool-badge">{taskGitEntries.length > 99 ? "99+" : taskGitEntries.length}</span>}</button>}
@@ -2939,7 +3066,7 @@ export function App() {
         <button className={`tool-stripe-button right ${rightPanels.useful ? "active" : ""}`} title={rightPanels.useful ? "Hide Useful Files" : "Show Useful Files"} onClick={() => setRightPanels((current) => { if (!current.useful) void refreshUsefulFiles(); return { ...current, useful: !current.useful }; })}><Library size={15} /><span>Useful</span></button>
         <button className={`tool-stripe-button right ${rightPanels.agents ? "active" : ""}`} title={rightPanels.agents ? "Hide Agents" : "Show Agents"} onClick={() => setRightPanels((current) => { if (!current.agents) void refreshAgents(); return { ...current, agents: !current.agents }; })}><Bot size={15} /><span>Agents</span></button>
         <button className={`tool-stripe-button right ${rightPanels.skills ? "active" : ""}`} title={rightPanels.skills ? "Hide Skills" : "Show Skills"} onClick={() => setRightPanels((current) => { if (!current.skills) void refreshSkills(); return { ...current, skills: !current.skills }; })}><Library size={15} /><span>Skills</span></button>
-      </nav>
+      </nav></FocusDock>
       </> : <>
       {(classicTasksOpen || classicAiOpen || rightPanels.skills || (rightPanels.promptHistory && selectedTaskId)) && <><div className="right-resize-handle" role="separator" aria-label="Resize right sidebar" aria-orientation="vertical" aria-valuemin={240} aria-valuemax={Math.round(Math.min(960, window.innerWidth * .72))} aria-valuenow={Math.round(classicRightWidth)} tabIndex={0} onKeyDown={(event) => keyboardResize(event, classicRightWidth, setClassicRightWidth, 240, Math.min(960, window.innerWidth * .72), true)} onPointerDown={beginClassicRightResize} /><aside className="side-panel classic-right-panel" style={{ width: classicRightWidth }}>
         {classicTasksOpen && <section className="stacked-panel" style={classicAiOpen ? { flex: `0 0 ${classicSplit}%` } : undefined}><header className="panel-header"><span>Tasks</span><button title="Create task" disabled={taskSwitching} onClick={() => setShowCreateTaskDialog(true)}><Plus size={15} /></button></header><div className="task-filters"><QuickFilter value={taskFilter} placeholder="Filter tasks" label="Filter tasks" onChange={setTaskFilter} /><select aria-label="Task lifecycle filter" value={taskLifecycleFilter} onChange={(event) => setTaskLifecycleFilter(event.target.value as typeof taskLifecycleFilter)}><option value="active">Active</option><option value="finished">Finished</option><option value="archived">Archived</option><option value="all">All</option></select></div><div className="tasks-list">
@@ -2952,22 +3079,22 @@ export function App() {
         {rightPanels.skills && <section className="stacked-panel"><SkillsPanel key={activeWorkspace} catalog={skillCatalog} agents={agents} agentPreset={selectedAgentReference} selected={selectedSkillIds} running={aiSession.status === "in_progress"} disabled={taskSwitching} onRefresh={() => refreshSkills()} onSelection={selectSkills} onOpen={openSkillFile} activeSkillId={activeTab?.type === "skill" ? activeTab.skillId : undefined} actions={skillActions} /></section>}
         {rightPanels.promptHistory && selectedTaskId && <TaskCheckpointHistory checkpoints={taskCheckpoints} onOpen={openCheckpointDiff} onReview={reviewCheckpointFile} onRestore={restoreCheckpoint} onFollowUp={followUpCheckpoint} onClose={() => setRightPanels((current) => ({ ...current, promptHistory: false }))} />}
       </aside></>}
-      <nav className="right-tool-stripe" aria-label="Right tool windows"><button className={`tool-stripe-button right ${classicTasksOpen ? "active" : ""}`} title={classicTasksOpen ? "Hide Tasks" : "Show Tasks"} onClick={() => setClassicTasksOpen((open) => !open)}><ListTodo size={15} /><span>Tasks</span>{tasks.length > 0 && <span className="tool-badge">{tasks.length > 99 ? "99+" : tasks.length}</span>}</button><button className={`tool-stripe-button right ${classicAiOpen ? "active" : ""}`} title={classicAiOpen ? "Hide AI" : "Show AI"} onClick={() => { setClassicAiOpen((open) => { if (!open) void refreshAi(); return !open; }); }}><Bot size={15} /><span>AI</span>{aiSession.status === "in_progress" && <span className="tool-badge">...</span>}</button><button className={`tool-stripe-button right ${rightPanels.skills ? "active" : ""}`} title={rightPanels.skills ? "Hide Skills" : "Show Skills"} onClick={() => { setRightPanels((current) => ({ ...current, skills: !current.skills })); void refreshSkills(); }}><Library size={15} /><span>Skills</span></button></nav>
+      <FocusDock edge="right" active={focusMode}><nav className="right-tool-stripe" aria-label="Right tool windows"><button className={`tool-stripe-button right ${classicTasksOpen ? "active" : ""}`} title={classicTasksOpen ? "Hide Tasks" : "Show Tasks"} onClick={() => setClassicTasksOpen((open) => !open)}><ListTodo size={15} /><span>Tasks</span>{tasks.length > 0 && <span className="tool-badge">{tasks.length > 99 ? "99+" : tasks.length}</span>}</button><button className={`tool-stripe-button right ${classicAiOpen ? "active" : ""}`} title={classicAiOpen ? "Hide AI" : "Show AI"} onClick={() => { setClassicAiOpen((open) => { if (!open) void refreshAi(); return !open; }); }}><Bot size={15} /><span>AI</span>{aiSession.status === "in_progress" && <span className="tool-badge">...</span>}</button><button className={`tool-stripe-button right ${rightPanels.skills ? "active" : ""}`} title={rightPanels.skills ? "Hide Skills" : "Show Skills"} onClick={() => { setRightPanels((current) => ({ ...current, skills: !current.skills })); void refreshSkills(); }}><Library size={15} /><span>Skills</span></button></nav></FocusDock>
       </>}
     </div>
-    {layout.panels.some((panel) => panel.type === "terminal") && <TerminalPanel theme={theme} fontFamily={terminalFontFamily} fontSize={uiFontSize} lineHeight={uiLineHeight} client={clientRef.current!} group={layout.terminalGroup} height={terminalHeight} highlightedTerminalIds={new Set(runConfigs.filter((config) => ["starting", "running", "stopping"].includes(config.status)).flatMap((config) => config.terminalId ? [config.terminalId] : []))} onActivate={activateTerminalTab} onCreate={() => void createTerminal()} onClose={closeTerminal} onRename={renameTerminal} onDuplicate={(tab) => void duplicateTerminal(tab)} onMove={moveTerminal} onRecoveryShown={(tabId) => updateTerminalGroup((group) => ({ ...group, tabs: group.tabs.map((tab) => tab.id === tabId ? { ...tab, recovery: undefined } : tab) }))} onResizeStart={beginTerminalResize} registerWriter={registerTerminalWriter} />}
+    {layout.terminalGroup.tabs.length > 0 && <TerminalPanel visible={terminalPanelOpen} onActivity={markUnreadTerminalOutput} theme={theme} fontFamily={terminalFontFamily} fontSize={uiFontSize} lineHeight={uiLineHeight} client={clientRef.current!} group={layout.terminalGroup} height={terminalHeight} highlightedTerminalIds={new Set(runConfigs.filter((config) => ["starting", "running", "stopping"].includes(config.status)).flatMap((config) => config.terminalId ? [config.terminalId] : []))} onActivate={activateTerminalTab} onCreate={() => void createTerminal()} onClose={closeTerminal} onRename={renameTerminal} onDuplicate={(tab) => void duplicateTerminal(tab)} onMove={moveTerminal} onRecoveryShown={(tabId) => updateTerminalGroup((group) => ({ ...group, tabs: group.tabs.map((tab) => tab.id === tabId ? { ...tab, recovery: undefined } : tab) }))} onResizeStart={beginTerminalResize} registerWriter={registerTerminalWriter} />}
     {layout.panels.some((panel) => panel.type === "java") && javaOptions && <JavaPanel key={`java-panel:${selectedRootId}`} height={javaPanelHeight} log={javaLog} running={javaRunning} options={javaOptions} debugState={javaDebugState} onConfigure={() => setShowRunConfigurationDialog(true)} onApplyChanges={applyJavaChanges} onInspect={(reference, start) => clientRef.current!.request("java.debug.variables", { reference, start })} onBuild={() => void runJavaAction("java.build")} onRun={() => void runJavaAction("java.run")} onDebug={() => void debugJava()} onStop={() => void stopJava()} onDebugCommand={(command) => void commandJavaDebugger(command)} onClear={() => setJavaLog("")} onResizeStart={beginJavaResize} onHeightChange={setJavaPanelHeight} />}
     {layout.panels.some((panel) => panel.type === "problems") && javaOptions && <ProblemsPanel height={problemsHeight} diagnostics={javaDiagnostics} checking={javaChecking} onRefresh={() => void checkJava()} onOpen={(diagnostic) => void openDiagnostic(diagnostic)} onResizeStart={beginProblemsResize} />}
     {layout.panels.some((panel) => panel.type === "gitlog") && <GitLogPanel client={clientRef.current!} height={gitLogHeight} onResizeStart={beginGitLogResize} onRepositoryChanged={() => { void Promise.all([refreshGit(), refreshTree()]); }} onMergeConflict={() => { void clientRef.current?.request("git.conflicts", {}).then((conflicts) => setGitConflictPath(conflicts.files[0]?.path ?? "")); }} />}
-    <footer className="bottom-tool-bar">
-      <button className={`bottom-tool-button ${layout.panels.some((panel) => panel.type === "terminal") ? "active" : ""}`} onClick={toggleTerminalPanel}><SquareTerminal size={14} /><span>Terminal</span>{layout.terminalGroup.tabs.length > 0 && <span className="bottom-tool-count">{layout.terminalGroup.tabs.length}</span>}</button>
+    <FocusDock edge="bottom" active={focusMode}><footer className="bottom-tool-bar">
+      <button className={`bottom-tool-button ${layout.panels.some((panel) => panel.type === "terminal") ? "active" : ""}`} onClick={toggleTerminalPanel}><SquareTerminal size={14} /><span>Terminal</span>{hasUnreadTerminalOutput && <span className="terminal-activity-dot" role="img" aria-label="New terminal output" />}{layout.terminalGroup.tabs.length > 0 && <span className="bottom-tool-count">{layout.terminalGroup.tabs.length}</span>}</button>
       {javaOptions && <button className={`bottom-tool-button ${layout.panels.some((panel) => panel.type === "java") ? "active" : ""}`} onClick={toggleJavaPanel}><Coffee size={14} /><span>Java</span>{javaRunning && <span className="running-indicator" />}</button>}
       {javaOptions && <button className={`bottom-tool-button ${layout.panels.some((panel) => panel.type === "problems") ? "active" : ""}`} onClick={toggleProblemsPanel}><CircleAlert size={14} /><span>Problems</span>{javaDiagnostics.length > 0 && <span className="bottom-tool-count">{javaDiagnostics.length}</span>}</button>}
       <button className={`bottom-tool-button ${layout.panels.some((panel) => panel.type === "gitlog") ? "active" : ""}`} onClick={toggleGitLogPanel}><GitBranch size={14} /><span>Git</span></button>
       {runConfigs.map((config, index) => <button key={`${config.scope}:${config.name}`} className={`bottom-tool-button run-config-entry ${index === 0 ? "first" : ""} ${["starting", "running", "stopping"].includes(config.status) ? "active-run" : ""}`} aria-label={`${config.name}, ${config.scope}, ${config.status}`} title={`${config.scope} Run Config: ${config.name} (${config.status})`} onClick={() => void runConfigAction(config, config.terminalId ? "openTerminal" : "run")} onContextMenu={(event) => { event.preventDefault(); setRunConfigMenu({ x: Math.min(event.clientX, window.innerWidth - 218), y: Math.min(event.clientY, window.innerHeight - 126), config }); }}><Play size={12} /><span>{config.name}</span><span className={`run-config-indicator ${config.status}`} aria-hidden="true" /></button>)}
-    </footer>
+    </footer></FocusDock>
       {treeContextMenu && <div className="context-menu-layer" onMouseDown={() => setTreeContextMenu(undefined)}>
-      <div className="context-menu" aria-label={`Actions for ${treeContextMenu.nodes.length} selected item${treeContextMenu.nodes.length === 1 ? "" : "s"}`} style={{ left: treeContextMenu.x, top: treeContextMenu.y }} onMouseDown={(event) => event.stopPropagation()}>
+      <ContextMenu className="context-menu" aria-label={`Actions for ${treeContextMenu.nodes.length} selected item${treeContextMenu.nodes.length === 1 ? "" : "s"}`} style={{ left: treeContextMenu.x, top: treeContextMenu.y }} onMouseDown={(event) => event.stopPropagation()}>
         <button disabled={treeContextMenu.nodes.length !== 1} onClick={() => openSearchForNode(treeContextMenu.nodes[0]!)}><Search size={14} /><span>Find in Files</span></button>
         <div className="context-menu-separator" role="separator" />
         <button role="menuitem" disabled={treeContextMenu.nodes.length !== 1} onClick={() => { runProjectTreeAction("createFile", treeContextMenu.nodes); setTreeContextMenu(undefined); }}><File size={14} /><span>New File...</span></button>
@@ -2981,18 +3108,18 @@ export function App() {
         <button onClick={() => { runProjectTreeAction("copyTo", treeContextMenu.nodes); setTreeContextMenu(undefined); }}><ClipboardCopy size={14} /><span>Copy to...</span></button>
         <button onClick={() => { runProjectTreeAction("moveTo", treeContextMenu.nodes); setTreeContextMenu(undefined); }}><ArrowUpRight size={14} /><span>Move to...</span></button>
         <div className="context-menu-separator" role="separator" />
-        <div className="context-submenu-trigger"><button role="menuitem" aria-haspopup="menu" aria-label="Copy paths"><ClipboardCopy size={14} /><span>Copy Paths</span><ChevronRight size={13} /></button><div className="context-menu context-submenu copy-submenu" role="menu" aria-label="Copy path actions">{copyProjectTreeActions.map(({ action, label }) => <button key={action} role="menuitem" onClick={() => { runProjectTreeAction(action, treeContextMenu.nodes); setTreeContextMenu(undefined); }}><ClipboardCopy size={14} /><span>{label}</span></button>)}</div></div>
+        <div className="context-submenu-trigger"><button role="menuitem" aria-haspopup="menu" aria-label="Copy paths"><ClipboardCopy size={14} /><span>Copy Paths</span><ChevronRight size={13} /></button><ContextMenu className="context-menu context-submenu copy-submenu" role="menu" aria-label="Copy path actions">{copyProjectTreeActions.map(({ action, label }) => <button key={action} role="menuitem" onClick={() => { runProjectTreeAction(action, treeContextMenu.nodes); setTreeContextMenu(undefined); }}><ClipboardCopy size={14} /><span>{label}</span></button>)}</ContextMenu></div>
         <div className="context-menu-separator" role="separator" />
         {treeContextMenu.nodes.length === 1 && treeContextMenu.nodes[0]?.type === "file" && treeContextMenu.nodes[0].name === "pom.xml" && <button onClick={() => void loadMavenProject(treeContextMenu.nodes[0]!.path)}><Package size={14} /><span>Load as Maven Project</span></button>}
         {treeContextMenu.nodes.length === 1 && javaOptions && treeContextMenu.nodes[0]?.type === "directory" && treeContextMenu.nodes[0].path && <button onClick={() => void addJavaSourceRoot(treeContextMenu.nodes[0]!.path)}><Coffee size={14} /><span>Mark as Sources Root</span></button>}
-        {treeContextMenu.nodes.length === 1 && treeContextMenu.nodes[0]?.path && <div className="context-submenu-trigger"><button><Palette size={14} /><span>Color</span><ChevronRight size={13} /></button><div className="context-menu context-submenu color-submenu">{fileColorChoices.map((color) => <button key={color.id} onClick={() => { const target = treeContextMenu.nodes[0]!.path; setFileColors((current) => ({ ...current, [target]: color.id })); setTreeContextMenu(undefined); }}><span className={`file-color-swatch ${color.id}`} /><span>{color.label}</span>{fileColors[treeContextMenu.nodes[0]!.path] === color.id && <Check size={13} />}</button>)}<button disabled={!fileColors[treeContextMenu.nodes[0]!.path]} onClick={() => { const target = treeContextMenu.nodes[0]!.path; setFileColors((current) => { const next = { ...current }; delete next[target]; return next; }); setTreeContextMenu(undefined); }}><X size={14} /><span>Clear Color</span></button></div></div>}
+        {treeContextMenu.nodes.length === 1 && treeContextMenu.nodes[0]?.path && <div className="context-submenu-trigger"><button><Palette size={14} /><span>Color</span><ChevronRight size={13} /></button><ContextMenu className="context-menu context-submenu color-submenu">{fileColorChoices.map((color) => <button key={color.id} onClick={() => { const target = treeContextMenu.nodes[0]!.path; setFileColors((current) => ({ ...current, [target]: color.id })); setTreeContextMenu(undefined); }}><span className={`file-color-swatch ${color.id}`} /><span>{color.label}</span>{fileColors[treeContextMenu.nodes[0]!.path] === color.id && <Check size={13} />}</button>)}<button disabled={!fileColors[treeContextMenu.nodes[0]!.path]} onClick={() => { const target = treeContextMenu.nodes[0]!.path; setFileColors((current) => { const next = { ...current }; delete next[target]; return next; }); setTreeContextMenu(undefined); }}><X size={14} /><span>Clear Color</span></button></ContextMenu></div>}
         <button className="danger" disabled={treeContextMenu.nodes.length !== 1} onClick={() => { runProjectTreeAction("delete", treeContextMenu.nodes); setTreeContextMenu(undefined); }}><Trash2 size={14} /><span>Delete...</span></button>
-      </div>
+      </ContextMenu>
     </div>}
-    {editorGitMenu && <div className="context-menu-layer" onMouseDown={() => setEditorGitMenu(undefined)}><div className="context-menu editor-git-menu" style={{ left: editorGitMenu.x, top: editorGitMenu.y }} onMouseDown={(event) => event.stopPropagation()}><button onClick={() => attachWorkspaceFile(editorGitMenu.path)}><Bot size={14} /><span>Attach to AI</span></button><div className="context-submenu-trigger"><button><GitBranch size={14} /><span>Git</span><ChevronRight size={13} /></button><div className="context-menu context-submenu"><button onClick={() => { setGitHistory({ path: editorGitMenu.path }); setEditorGitMenu(undefined); }}><FileDiff size={14} /><span>Show file changes</span></button><button disabled={editorGitMenu.startLine === undefined} onClick={() => { setGitHistory({ path: editorGitMenu.path, startLine: editorGitMenu.startLine, endLine: editorGitMenu.endLine }); setEditorGitMenu(undefined); }}><ListTree size={14} /><span>Show selection changes</span></button></div></div></div></div>}
-    {gitRollbackMenu && <div className="context-menu-layer" onMouseDown={() => setGitRollbackMenu(undefined)}><div className="context-menu" style={{ left: gitRollbackMenu.x, top: gitRollbackMenu.y }} onMouseDown={(event) => event.stopPropagation()}>{!gitRollbackMenu.taskRef && (gitRollbackMenu.entry.states.includes("conflict") ? <button onClick={() => { setGitConflictPath(gitRollbackMenu.entry.path); setGitRollbackMenu(undefined); }}><GitBranch size={14} /><span>Resolve Conflict</span></button> : <><button disabled={gitOperationRunning || !gitRollbackMenu.entry.states.includes("worktree") && !gitRollbackMenu.entry.states.includes("untracked")} onClick={() => void updateGitIndex("stage", gitRollbackMenu.entry.path)}><Check size={14} /><span>Stage File</span></button><button disabled={gitOperationRunning || !gitRollbackMenu.entry.states.includes("index")} onClick={() => void updateGitIndex("unstage", gitRollbackMenu.entry.path)}><X size={14} /><span>Unstage File</span></button></>)}<button className="danger" disabled={gitOperationRunning} onClick={() => void rollbackFile(gitRollbackMenu.entry, gitRollbackMenu.taskRef)}><RefreshCw size={14} /><span>Rollback</span></button></div></div>}
-    {tabContextMenu && <div className="context-menu-layer" onMouseDown={() => setTabContextMenu(undefined)}><div className="context-menu tab-context-menu" style={{ left: tabContextMenu.x, top: tabContextMenu.y }} onMouseDown={(event) => event.stopPropagation()}>{tabContextMenu.tab.type === "file" && <button onClick={() => toggleTabPin(tabContextMenu.tab)}>{tabContextMenu.tab.pinned ? <PinOff size={14} /> : <Pin size={14} />}<span>{tabContextMenu.tab.pinned ? "Unpin Tab" : "Pin Tab"}</span></button>}<button onClick={() => closeTabs(tabContextMenu.tab, "all")}><X size={14} /><span>Close All Unpinned</span></button><button disabled={!group.tabs.slice(group.tabs.findIndex((tab) => tab.id === tabContextMenu.tab.id) + 1).some((tab) => !tab.pinned)} onClick={() => closeTabs(tabContextMenu.tab, "right")}><ArrowUpRight className="close-right-icon" size={14} /><span>Close Unpinned to the Right</span></button><button disabled={tabContextMenu.tab.type === "diff" || tabContextMenu.tab.type === "agent" || tabContextMenu.tab.type === "skill" || tabContextMenu.tab.type === "runConfig" || tabContextMenu.tab.type === "workflowDocument"} onClick={() => void openTabInWindow(tabContextMenu.tab)}><Columns2 size={14} /><span>Open in New Window</span></button></div></div>}
-    {runConfigMenu && <div className="context-menu-layer" onMouseDown={() => setRunConfigMenu(undefined)}><div className="context-menu" style={{ left: runConfigMenu.x, top: runConfigMenu.y }} onMouseDown={(event) => event.stopPropagation()}><button disabled={!runConfigMenu.config.terminalId} onClick={() => void runConfigAction(runConfigMenu.config, "openTerminal")}><SquareTerminal size={14} /><span>Open Terminal</span></button><button disabled={["starting", "running", "stopping"].includes(runConfigMenu.config.status)} onClick={() => void runConfigAction(runConfigMenu.config, "run")}><Play size={14} /><span>Run</span></button><button disabled={!['starting', 'running'].includes(runConfigMenu.config.status)} onClick={() => void runConfigAction(runConfigMenu.config, "stop")}><Square size={14} /><span>Stop</span></button><button disabled={runConfigMenu.config.status === "stopping"} onClick={() => void runConfigAction(runConfigMenu.config, "restart")}><RefreshCw size={14} /><span>Restart</span></button></div></div>}
+    {editorGitMenu && <div className="context-menu-layer" onMouseDown={() => setEditorGitMenu(undefined)}><ContextMenu className="context-menu editor-git-menu" style={{ left: editorGitMenu.x, top: editorGitMenu.y }} onMouseDown={(event) => event.stopPropagation()}><button onClick={() => attachWorkspaceFile(editorGitMenu.path)}><Bot size={14} /><span>Attach to AI</span></button><div className="context-submenu-trigger"><button><GitBranch size={14} /><span>Git</span><ChevronRight size={13} /></button><ContextMenu className="context-menu context-submenu"><button onClick={() => { setGitHistory({ path: editorGitMenu.path }); setEditorGitMenu(undefined); }}><FileDiff size={14} /><span>Show file changes</span></button><button disabled={editorGitMenu.startLine === undefined} onClick={() => { setGitHistory({ path: editorGitMenu.path, startLine: editorGitMenu.startLine, endLine: editorGitMenu.endLine }); setEditorGitMenu(undefined); }}><ListTree size={14} /><span>Show selection changes</span></button></ContextMenu></div></ContextMenu></div>}
+    {gitRollbackMenu && <div className="context-menu-layer" onMouseDown={() => setGitRollbackMenu(undefined)}><ContextMenu className="context-menu" style={{ left: gitRollbackMenu.x, top: gitRollbackMenu.y }} onMouseDown={(event) => event.stopPropagation()}>{!gitRollbackMenu.taskRef && (gitRollbackMenu.entry.states.includes("conflict") ? <button onClick={() => { setGitConflictPath(gitRollbackMenu.entry.path); setGitRollbackMenu(undefined); }}><GitBranch size={14} /><span>Resolve Conflict</span></button> : <><button disabled={gitOperationRunning || !gitRollbackMenu.entry.states.includes("worktree") && !gitRollbackMenu.entry.states.includes("untracked")} onClick={() => void updateGitIndex("stage", gitRollbackMenu.entry.path)}><Check size={14} /><span>Stage File</span></button><button disabled={gitOperationRunning || !gitRollbackMenu.entry.states.includes("index")} onClick={() => void updateGitIndex("unstage", gitRollbackMenu.entry.path)}><X size={14} /><span>Unstage File</span></button></>)}<button className="danger" disabled={gitOperationRunning} onClick={() => void rollbackFile(gitRollbackMenu.entry, gitRollbackMenu.taskRef)}><RefreshCw size={14} /><span>Rollback</span></button></ContextMenu></div>}
+    {tabContextMenu && <div className="context-menu-layer" onMouseDown={() => setTabContextMenu(undefined)}><ContextMenu className="context-menu tab-context-menu" style={{ left: tabContextMenu.x, top: tabContextMenu.y }} onMouseDown={(event) => event.stopPropagation()}>{tabContextMenu.tab.type === "file" && <button onClick={() => toggleTabPin(tabContextMenu.tab)}>{tabContextMenu.tab.pinned ? <PinOff size={14} /> : <Pin size={14} />}<span>{tabContextMenu.tab.pinned ? "Unpin Tab" : "Pin Tab"}</span></button>}<button onClick={() => closeTabs(tabContextMenu.tab, "all")}><X size={14} /><span>Close All Unpinned</span></button><button disabled={!group.tabs.slice(group.tabs.findIndex((tab) => tab.id === tabContextMenu.tab.id) + 1).some((tab) => !tab.pinned)} onClick={() => closeTabs(tabContextMenu.tab, "right")}><ArrowUpRight className="close-right-icon" size={14} /><span>Close Unpinned to the Right</span></button><button disabled={tabContextMenu.tab.type === "diff" || tabContextMenu.tab.type === "agent" || tabContextMenu.tab.type === "skill" || tabContextMenu.tab.type === "runConfig" || (tabContextMenu.tab.type === "workflowDocument" || tabContextMenu.tab.type === "workflow")} onClick={() => void openTabInWindow(tabContextMenu.tab)}><Columns2 size={14} /><span>Open in New Window</span></button></ContextMenu></div>}
+    {runConfigMenu && <div className="context-menu-layer" onMouseDown={() => setRunConfigMenu(undefined)}><ContextMenu className="context-menu" style={{ left: runConfigMenu.x, top: runConfigMenu.y }} onMouseDown={(event) => event.stopPropagation()}><button disabled={!runConfigMenu.config.terminalId} onClick={() => void runConfigAction(runConfigMenu.config, "openTerminal")}><SquareTerminal size={14} /><span>Open Terminal</span></button><button disabled={["starting", "running", "stopping"].includes(runConfigMenu.config.status)} onClick={() => void runConfigAction(runConfigMenu.config, "run")}><Play size={14} /><span>Run</span></button><button disabled={!['starting', 'running'].includes(runConfigMenu.config.status)} onClick={() => void runConfigAction(runConfigMenu.config, "stop")}><Square size={14} /><span>Stop</span></button><button disabled={runConfigMenu.config.status === "stopping"} onClick={() => void runConfigAction(runConfigMenu.config, "restart")}><RefreshCw size={14} /><span>Restart</span></button></ContextMenu></div>}
     {projectPathDialog && <ProjectPathDialog mode={projectPathDialog.mode} initialName={projectPathDialog.mode === "rename" ? projectPathDialog.node.name : ""} parentPath={projectPathDialog.parentPath} onClose={() => setProjectPathDialog(undefined)} onSave={saveProjectPathDialog} />}
     {workspaceRootDialogOpen && <WorkspaceRootDialog onClose={() => setWorkspaceRootDialogOpen(false)} onSave={addWorkspaceRoot} />}
     {searchScope !== undefined && <FindInFilesDialog client={clientRef.current!} rootAlias={workspaceRoots.find((root) => root.id === selectedRootId)?.alias ?? projectName} rootIds={workspaceRoots.map((root) => root.id)} rootAliases={Object.fromEntries(workspaceRoots.map((root) => [root.id, root.alias]))} scope={searchScope} queries={searchQueries} onQueriesChange={setSearchQueries} onClose={() => setSearchScope(undefined)} onNavigate={(result, matchLength) => void navigateToSearchResult(result, matchLength)} />}
@@ -3047,38 +3174,13 @@ function reviewOutcome(action: string, result: { applied: string[]; alreadyAppli
   return parts.join("; ");
 }
 
-export function BranchSelectorGroup({ title, branches, selected, onSelect, onCheckout, onRename, onDelete, onPublish, onSetUpstream }: { title: string; branches: GitBranchInfo[]; selected?: string; onSelect(name: string): void; onCheckout(branch: GitBranchInfo): void; onRename(branch: GitBranchInfo): void; onDelete(branch: GitBranchInfo): void; onPublish(branch: GitBranchInfo): void; onSetUpstream(branch: GitBranchInfo): void }) {
-  const nodes = useMemo(() => buildBranchPathTree(branches), [branches]);
-  const currentPaths = branches.filter((branch) => branch.current).flatMap((branch) => { const parts = branch.name.split("/"); return parts.slice(0, -1).map((_, index) => parts.slice(0, index + 1).join("/")); });
-  const currentPathsKey = currentPaths.join("\0");
-  const [expanded, setExpanded] = useState<Set<string>>(() => new Set(currentPaths));
-  useEffect(() => { if (currentPaths.some((path) => !expanded.has(path))) setExpanded((current) => new Set([...current, ...currentPaths])); }, [currentPathsKey]);
-  const renderBranch = (branch: GitBranchInfo, label: string, depth: number) => { const open = selected === branch.name; return <div className={`branch-selector-item ${open ? "open" : ""}`} key={`branch:${branch.name}`}><button className={`branch-selector-row ${branch.current ? "current" : ""} ${open ? "selected" : ""}`} title={branch.name} style={{ paddingLeft: 10 + depth * 15 }} onClick={() => onSelect(branch.name)}><GitBranch size={13} /><span>{label}</span>{branch.current && <span className="branch-current-label">Current</span>}<ChevronRight className={open ? "expanded" : ""} size={12} /></button>{open && <div className="branch-action-menu"><button disabled={branch.current} onClick={() => void onCheckout(branch)}><GitBranch size={13} /><span>Checkout</span></button><button disabled={branch.remote || branch.current} onClick={() => void onRename(branch)}><Pencil size={13} /><span>Rename</span></button><button disabled={branch.current} onClick={() => void onDelete(branch)}><Trash2 size={13} /><span>Delete</span></button>{!branch.remote && <><button onClick={() => void onPublish(branch)}><ArrowUp size={13} /><span>Publish</span></button><button onClick={() => void onSetUpstream(branch)}><GitCompareArrows size={13} /><span>Upstream</span></button></>}</div>}</div>; };
-  const renderNodes = (items: BranchPathNode[], depth: number): ReactNode => items.map((node) => { if (node.children.length === 0 && node.branch) return renderBranch(node.branch, node.segment, depth); const open = expanded.has(node.path); return <div className="branch-path-group" key={`path:${node.path}`}><button className="branch-path-row" style={{ paddingLeft: 9 + depth * 15 }} aria-expanded={open} onClick={() => setExpanded((current) => { const next = new Set(current); open ? next.delete(node.path) : next.add(node.path); return next; })}>{open ? <ChevronDown size={12} /> : <ChevronRight size={12} />}{open ? <FolderOpen size={13} /> : <Folder size={13} />}<span>{node.segment}</span><small>{countBranchPathLeaves(node)}</small></button>{open && <div>{node.branch && renderBranch(node.branch, node.segment, depth + 1)}{renderNodes(node.children, depth + 1)}</div>}</div>; });
-  return <section className="branch-selector-group"><header>{title}<small>{branches.length}</small></header>{branches.length === 0 ? <div className="branch-menu-empty">No {title.toLowerCase()} branches</div> : renderNodes(nodes, 0)}</section>;
-}
-
-type BranchPathNode = { segment: string; path: string; branch?: GitBranchInfo; children: BranchPathNode[] };
-
-function buildBranchPathTree(branches: GitBranchInfo[]): BranchPathNode[] {
-  const root: BranchPathNode[] = [];
-  for (const branch of branches) {
-    let children = root; let currentPath = ""; const parts = branch.name.split("/");
-    parts.forEach((segment, index) => { currentPath = currentPath ? `${currentPath}/${segment}` : segment; let node = children.find((item) => item.segment === segment); if (!node) { node = { segment, path: currentPath, children: [] }; children.push(node); } if (index === parts.length - 1) node.branch = branch; children = node.children; });
-  }
-  const sort = (nodes: BranchPathNode[]) => { nodes.sort((left, right) => Number(right.children.length > 0) - Number(left.children.length > 0) || left.segment.localeCompare(right.segment)); for (const node of nodes) sort(node.children); };
-  sort(root); return root;
-}
-
-function countBranchPathLeaves(node: BranchPathNode): number { return (node.branch ? 1 : 0) + node.children.reduce((total, child) => total + countBranchPathLeaves(child), 0); }
-
 function ConnectionScreen(props: { host: string; port: string; status: ConnectionStatus; statusMessage: string; setHost(value: string): void; setPort(value: string): void; connect(): Promise<void> }) {
   const connecting = props.status === "connecting";
   return <main className="connection-screen"><form className="connection-form" onSubmit={(event) => { event.preventDefault(); void props.connect(); }}>
     <h1>Vibe Editor</h1><p>Connect to a core backend</p>
     <label>Host<input autoFocus value={props.host} onChange={(event) => props.setHost(event.target.value)} placeholder="192.168.1.50" required /></label>
     <label>Port<input value={props.port} onChange={(event) => props.setPort(event.target.value)} type="number" min="1" max="65535" required /></label>
-    {props.statusMessage && <div className={`connection-message ${props.status}`}>{props.statusMessage}</div>}
+    {props.statusMessage && <div role="status" aria-live="polite" className={`connection-message ${props.status}`}>{props.statusMessage}</div>}
     <button className="primary" disabled={connecting}>{connecting ? "Connecting..." : "Connect"}</button>
   </form></main>;
 }
@@ -3152,7 +3254,7 @@ function JavaProjectTree({ nodes, activePath, onOpen }: { nodes: JavaProjectNode
     const open = expanded.has(node.path);
     return <div key={node.path}>
       <button className={`tree-row ${node.type === "sourceRoot" ? "java-source-root" : ""}`} style={{ paddingLeft: 7 + depth * 13 }} onClick={() => setExpanded((current) => { const next = new Set(current); open ? next.delete(node.path) : next.add(node.path); return next; })}>
-        {open ? <ChevronDown size={13} /> : <ChevronRight size={13} />}{node.type === "sourceRoot" ? <FolderOpen className={`folder-kind-icon java-root-${node.sourceKind ?? "source"}`} size={14} /> : <Package size={14} color="#b5a36a" />}<span className="tree-file-name">{node.name}</span>
+        {open ? <ChevronDown size={13} /> : <ChevronRight size={13} />}{node.type === "sourceRoot" ? <FolderOpen className={`folder-kind-icon java-root-${node.sourceKind ?? "source"}`} size={14} /> : <Package size={14} color="var(--warning)" />}<span className="tree-file-name">{node.name}</span>
       </button>
       {open && render(node.children ?? [], depth + 1)}
     </div>;
@@ -3179,7 +3281,7 @@ export function TaskRow({ icon, name, branch, summary, finished = false, archive
     <span className="task-content"><span className="task-title"><strong>{name}</strong>{finished && <small className="task-finished-status">Finished</small>}{archived && <small className="task-finished-status">Archived</small>}{(summary.additions > 0 || summary.deletions > 0) && <span className="task-diff-stat"><small>+{summary.additions}</small><small>-{summary.deletions}</small></span>}{summary.pendingPermission ? <small className="task-ai-status permission"><ShieldAlert size={13} /> Permission needed</small> : summary.status !== "idle" && <small className={`task-ai-status ${summary.status}`}>{summary.status === "in_progress" && <LoaderCircle className="task-progress-spinner" size={13} />}{waiting ?? formatAiStatus(summary.status)}</small>}</span>{branch && branch !== name && <span className="task-branch">{branch}</span>}<span className="task-preview"><TaskPreviewMarkdown>{preview}</TaskPreviewMarkdown></span></span>
     {selected && <Check className="task-check" size={13} />}
   </button>{hasActions && <button className="task-actions" title={`Actions for ${name}`} disabled={disabled} onClick={(event) => { event.stopPropagation(); const bounds = event.currentTarget.getBoundingClientRect(); openMenu(bounds.right - 180, bounds.bottom + 2); }}><MoreVertical size={14} /></button>}
-    {menu && <div className="context-menu-layer" onMouseDown={() => setMenu(undefined)}><div className="context-menu task-actions-menu" style={{ left: menu.x, top: menu.y }} onMouseDown={(event) => event.stopPropagation()}>
+    {menu && <div className="context-menu-layer" onMouseDown={() => setMenu(undefined)}><ContextMenu className="context-menu task-actions-menu" style={{ left: menu.x, top: menu.y }} onMouseDown={(event) => event.stopPropagation()}>
       {onSetFinished && <button onClick={() => { setMenu(undefined); onSetFinished(); }}><Check size={14} /><span>{finished ? "Restore task" : "Mark as Finished"}</span></button>}
       {onRename && <button onClick={() => { setMenu(undefined); onRename(); }}><Pencil size={14} /><span>Rename task</span></button>}
       {onSetArchived && <button onClick={() => { setMenu(undefined); onSetArchived(); }}><Archive size={14} /><span>{archived ? "Unarchive task" : "Archive task"}</span></button>}
@@ -3187,7 +3289,7 @@ export function TaskRow({ icon, name, branch, summary, finished = false, archive
       {hasTimer && <button onClick={() => { setMenu(undefined); onCancelTimer?.(); }}><Square size={14} /><span>Cancel timer</span></button>}
       {onMerge && <button onClick={() => { setMenu(undefined); onMerge(); }}><GitMerge size={14} /><span>Merge to main workspace</span></button>}
       {onDelete && <button className="danger" onClick={() => { setMenu(undefined); onDelete(); }}><Trash2 size={14} /><span>Delete task</span></button>}
-    </div></div>}
+    </ContextMenu></div>}
   </div>;
 }
 

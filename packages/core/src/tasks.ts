@@ -6,9 +6,11 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { CoreError } from "./errors.js";
 import { WorkspaceStateStore } from "./workspace-state.js";
+import { retryProcessSpawn } from "./process-spawn.js";
 import { serializedRootMutation } from "./root-mutation.js";
 
 const execFileAsync = promisify(execFile);
+const taskGit = (workspace: string, args: string[]) => retryProcessSpawn(() => execFileAsync("git", ["-C", workspace, ...args], { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 }));
 export type WorkspaceTask = { id: string; name: string; branch: string; baseBranch: string; status: "active" | "finished"; archived: boolean };
 export type TaskCommitMessageUpdate = { task: WorkspaceTask; message: string; overwritten: boolean };
 export type TaskGitCommitMessageUpdate = { task: WorkspaceTask; previousCommit: string; commit: string; previousMessage: string; message: string };
@@ -22,6 +24,7 @@ type Registry = { selectedTaskId?: string; tasks: WorkspaceTask[]; integrations?
 export class WorkspaceTaskStore {
   private readonly directory: string;
   private readonly registryFile: string;
+  private readonly checkedDependencyLinks = new Set<string>();
 
   constructor(private readonly rootWorkspace: string, private readonly stateDirectory = process.env.REMOTE_IDE_STATE_DIR ?? path.join(os.homedir(), ".remote-ide", "workspaces")) {
     const key = crypto.createHash("sha256").update(rootWorkspace).digest("hex");
@@ -30,6 +33,10 @@ export class WorkspaceTaskStore {
   }
 
   async list(): Promise<Registry> {
+    return serializedRootMutation(this.rootWorkspace, () => this.listUnlocked(), this.directory);
+  }
+
+  private async listUnlocked(): Promise<Registry> {
     try {
       const value = JSON.parse(await readFile(this.registryFile, "utf8")) as Registry;
       if (!Array.isArray(value.tasks)) throw new Error("Invalid task registry");
@@ -38,7 +45,10 @@ export class WorkspaceTaskStore {
       const tasks = validTasks.map((task) => ({ ...task, baseBranch: task.baseBranch || fallbackBaseBranch, status: task.status ?? "active", archived: task.archived ?? false }));
       for (const task of tasks) {
         await this.migrateLegacyCopy(task);
-        await this.removeSharedNodeModules(this.taskPath(task.id));
+        if (!this.checkedDependencyLinks.has(task.id)) {
+          await this.removeSharedNodeModules(this.taskPath(task.id));
+          this.checkedDependencyLinks.add(task.id);
+        }
       }
       const integrations = Array.isArray(value.integrations) ? value.integrations.filter(isIntegrationRecord) : [];
       const registry = { tasks, ...(integrations.length ? { integrations } : {}), ...(value.selectedTaskId && tasks.some((task) => task.id === value.selectedTaskId) ? { selectedTaskId: value.selectedTaskId } : {}) };
@@ -52,42 +62,48 @@ export class WorkspaceTaskStore {
   }
 
   async create(branch: string, existing = false, remote = false, select = true): Promise<WorkspaceTask> {
+    if (typeof branch !== "string" || typeof existing !== "boolean" || typeof remote !== "boolean" || typeof select !== "boolean") {
+      throw new CoreError("INVALID_REQUEST", "Task branch and creation options are invalid");
+    }
     const requested = branch.trim();
     const name = remote ? requested.split("/").slice(1).join("/") : requested;
     if (!name || name.length > 200 || !/^[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(name) || name.includes("..") || name.endsWith("/") || name.endsWith(".")) throw new CoreError("INVALID_REQUEST", "Invalid Git branch name");
-    const registry = await this.list();
-    if (registry.tasks.some((task) => task.branch === name)) throw new CoreError("INVALID_REQUEST", `A task already uses branch ${name}`);
-    const exists = await this.branchExists(name);
-    if (!existing && exists) throw new CoreError("INVALID_REQUEST", `Git branch ${name} already exists. Select it from the existing branches list.`);
-    if (existing && !remote && !exists) throw new CoreError("INVALID_REQUEST", `Git branch ${name} no longer exists`);
-    const task: WorkspaceTask = { id: crypto.randomUUID(), name, branch: name, baseBranch: await this.rootBranch(), status: "active", archived: false };
-    const destination = this.taskPath(task.id);
-    let createdBranch = false;
-    try {
-      await mkdir(path.dirname(destination), { recursive: true });
-      await execFileAsync("git", ["-C", this.rootWorkspace, "worktree", "add", "--detach", destination, task.baseBranch], { encoding: "utf8" });
-      if (remote) {
-        await execFileAsync("git", ["-C", destination, "switch", "--track", "-c", name, requested], { encoding: "utf8" });
-        createdBranch = true;
-      } else if (existing) await execFileAsync("git", ["-C", destination, "switch", name], { encoding: "utf8" });
-      else {
-        await execFileAsync("git", ["-C", destination, "switch", "-C", name], { encoding: "utf8" });
-        const upstream = await this.taskUpstream(task.baseBranch);
-        if (upstream) await execFileAsync("git", ["-C", destination, "branch", "--set-upstream-to", upstream, name], { encoding: "utf8" });
-        createdBranch = true;
+    return serializedRootMutation(this.rootWorkspace, async () => {
+      const registry = await this.listUnlocked();
+      if (registry.tasks.some((task) => task.branch === name)) throw new CoreError("INVALID_REQUEST", `A task already uses branch ${name}`);
+      const exists = await this.branchExists(name);
+      if (!existing && exists) throw new CoreError("INVALID_REQUEST", `Git branch ${name} already exists. Select it from the existing branches list.`);
+      if (existing && !remote && !exists) throw new CoreError("INVALID_REQUEST", `Git branch ${name} no longer exists`);
+      const task: WorkspaceTask = { id: crypto.randomUUID(), name, branch: name, baseBranch: await this.rootBranch(), status: "active", archived: false };
+      const destination = this.taskPath(task.id);
+      let createdBranch = false;
+      try {
+        await mkdir(path.dirname(destination), { recursive: true });
+        await taskGit(this.rootWorkspace, ["worktree", "add", "--quiet", "--detach", destination, task.baseBranch]);
+        if (remote) {
+          await taskGit(destination, ["switch", "--quiet", "--track", "-c", name, requested]);
+          createdBranch = true;
+        } else if (existing) await taskGit(destination, ["switch", "--quiet", name]);
+        else {
+          await taskGit(destination, ["switch", "--quiet", "-C", name]);
+          createdBranch = true;
+          const upstream = await this.taskUpstream(task.baseBranch);
+          if (upstream) await taskGit(destination, ["branch", "--set-upstream-to", upstream, name]);
+        }
+        await this.copyWorkspaceState(this.rootWorkspace, destination);
+        await this.save({ ...registry, tasks: [...registry.tasks, task], ...(select ? { selectedTaskId: task.id } : {}) });
+        return task;
+      } catch (error) {
+        await this.removeWorktree(destination);
+        if (createdBranch && await this.branchExists(name)) await execFileAsync("git", ["-C", this.rootWorkspace, "branch", "-D", name], { encoding: "utf8" }).catch(() => undefined);
+        await rm(path.dirname(destination), { recursive: true, force: true });
+        throw new CoreError("GIT_FAILED", `Could not create task worktree: ${gitError(error)}`);
       }
-      await this.copyWorkspaceState(this.rootWorkspace, destination);
-      await this.save({ tasks: [...registry.tasks, task], ...(select ? { selectedTaskId: task.id } : registry.selectedTaskId ? { selectedTaskId: registry.selectedTaskId } : {}) });
-      return task;
-    } catch (error) {
-      await this.removeWorktree(destination);
-      if (createdBranch && await this.branchExists(name)) await execFileAsync("git", ["-C", this.rootWorkspace, "branch", "-D", name], { encoding: "utf8" }).catch(() => undefined);
-      await rm(path.dirname(destination), { recursive: true, force: true });
-      throw new CoreError("GIT_FAILED", `Could not create task worktree: ${gitError(error)}`);
-    }
+    }, this.directory);
   }
 
   async createRandom(select = true): Promise<WorkspaceTask> {
+    if (typeof select !== "boolean") throw new CoreError("INVALID_REQUEST", "Task selection option must be a boolean");
     for (let attempt = 0; attempt < 10; attempt += 1) {
       const branch = `task/${crypto.randomUUID().slice(0, 8)}`;
       if (!await this.branchExists(branch)) return this.create(branch, false, false, select);
@@ -96,132 +112,145 @@ export class WorkspaceTaskStore {
   }
 
   async select(taskId?: string): Promise<{ workspace: string; registry: Registry }> {
-    const registry = await this.list();
-    if (taskId && !registry.tasks.some((task) => task.id === taskId)) throw new CoreError("INVALID_REQUEST", "Task does not exist");
-    const next = { tasks: registry.tasks, ...(taskId ? { selectedTaskId: taskId } : {}) };
-    await this.save(next);
-    return { workspace: taskId ? this.taskPath(taskId) : this.rootWorkspace, registry: next };
+    return serializedRootMutation(this.rootWorkspace, async () => {
+      const registry = await this.listUnlocked();
+      if (taskId && !registry.tasks.some((task) => task.id === taskId)) throw new CoreError("INVALID_REQUEST", "Task does not exist");
+      const next: Registry = { ...registry, ...(taskId ? { selectedTaskId: taskId } : {}) };
+      if (!taskId) delete next.selectedTaskId;
+      await this.save(next);
+      return { workspace: taskId ? this.taskPath(taskId) : this.rootWorkspace, registry: next };
+    }, this.directory);
   }
 
   async setStatus(taskId: string, status: WorkspaceTask["status"]): Promise<WorkspaceTask> {
-    const registry = await this.list();
-    const task = registry.tasks.find((item) => item.id === taskId);
-    if (!task) throw new CoreError("INVALID_REQUEST", "Task does not exist");
-    if (status !== "active" && status !== "finished") throw new CoreError("INVALID_REQUEST", "Invalid task status");
-    const updated = { ...task, status };
-    await this.save({ ...registry, tasks: registry.tasks.map((item) => item.id === taskId ? updated : item) });
-    return updated;
+    return serializedRootMutation(this.rootWorkspace, async () => {
+      const registry = await this.listUnlocked();
+      const task = registry.tasks.find((item) => item.id === taskId);
+      if (!task) throw new CoreError("INVALID_REQUEST", "Task does not exist");
+      if (status !== "active" && status !== "finished") throw new CoreError("INVALID_REQUEST", "Invalid task status");
+      const updated = { ...task, status };
+      await this.save({ ...registry, tasks: registry.tasks.map((item) => item.id === taskId ? updated : item) });
+      return updated;
+    }, this.directory);
   }
 
   async updateMetadata(taskId: string, metadata: Pick<WorkspaceTask, "name" | "status" | "archived">): Promise<WorkspaceTask> {
     const name = metadata.name.trim();
     if (!name || name.length > 200 || name.includes("\0") || !["active", "finished"].includes(metadata.status) || typeof metadata.archived !== "boolean") throw new CoreError("INVALID_REQUEST", "Invalid task metadata");
     return serializedRootMutation(this.rootWorkspace, async () => {
-      const registry = await this.list(); const task = registry.tasks.find((item) => item.id === taskId);
+      const registry = await this.listUnlocked(); const task = registry.tasks.find((item) => item.id === taskId);
       if (!task) throw new CoreError("FILE_NOT_FOUND", "Task does not exist");
       const updated = { ...task, name, status: metadata.status, archived: metadata.archived };
       await this.save({ ...registry, tasks: registry.tasks.map((item) => item.id === taskId ? updated : item) }); return updated;
-    });
+    }, this.directory);
   }
 
   async rename(taskId: string, name: string): Promise<WorkspaceTask> {
     const normalized = name.trim();
     if (!normalized || normalized.length > 200 || normalized.includes("\0")) throw new CoreError("INVALID_REQUEST", "Task name must contain between 1 and 200 non-NUL characters");
-    const registry = await this.list();
-    const task = registry.tasks.find((item) => item.id === taskId);
-    if (!task) throw new CoreError("INVALID_REQUEST", "Task does not exist");
-    const updated = { ...task, name: normalized };
-    await this.save({ ...registry, tasks: registry.tasks.map((item) => item.id === taskId ? updated : item) });
-    return updated;
+    return serializedRootMutation(this.rootWorkspace, async () => {
+      const registry = await this.listUnlocked();
+      const task = registry.tasks.find((item) => item.id === taskId);
+      if (!task) throw new CoreError("INVALID_REQUEST", "Task does not exist");
+      const updated = { ...task, name: normalized };
+      await this.save({ ...registry, tasks: registry.tasks.map((item) => item.id === taskId ? updated : item) });
+      return updated;
+    }, this.directory);
   }
 
   async setArchived(taskId: string, archived: boolean): Promise<WorkspaceTask> {
-    const registry = await this.list();
-    const task = registry.tasks.find((item) => item.id === taskId);
-    if (!task) throw new CoreError("INVALID_REQUEST", "Task does not exist");
-    const updated = { ...task, archived };
-    await this.save({ ...registry, tasks: registry.tasks.map((item) => item.id === taskId ? updated : item) });
-    return updated;
+    return serializedRootMutation(this.rootWorkspace, async () => {
+      const registry = await this.listUnlocked();
+      const task = registry.tasks.find((item) => item.id === taskId);
+      if (!task) throw new CoreError("INVALID_REQUEST", "Task does not exist");
+      const updated = { ...task, archived };
+      await this.save({ ...registry, tasks: registry.tasks.map((item) => item.id === taskId ? updated : item) });
+      return updated;
+    }, this.directory);
   }
 
   async setCommitMessage(workspace: string, message: string): Promise<TaskCommitMessageUpdate> {
     if (typeof message !== "string" || !message.trim()) throw new CoreError("INVALID_REQUEST", "Commit message must contain at least one non-whitespace character");
     if (message.length > 10_000) throw new CoreError("INVALID_REQUEST", "Commit message must be at most 10000 characters");
-    const registry = await this.list();
-    const resolvedWorkspace = path.resolve(workspace);
-    const task = registry.tasks.find((item) => path.resolve(this.taskPath(item.id)) === resolvedWorkspace);
-    if (!task) throw new CoreError("INVALID_REQUEST", "set_commit_message requires a current Vibe Editor task workspace");
-    const state = new WorkspaceStateStore(this.taskPath(task.id), this.stateDirectory);
-    const options = await state.load();
-    const overwritten = options.gitCommitMessage !== undefined;
-    await state.save({ ...options, gitCommitMessage: message });
-    return { task, message, overwritten };
+    return serializedRootMutation(this.rootWorkspace, async () => {
+      const registry = await this.listUnlocked();
+      const resolvedWorkspace = path.resolve(workspace);
+      const task = registry.tasks.find((item) => path.resolve(this.taskPath(item.id)) === resolvedWorkspace);
+      if (!task) throw new CoreError("INVALID_REQUEST", "set_commit_message requires a current Vibe Editor task workspace");
+      const state = new WorkspaceStateStore(this.taskPath(task.id), this.stateDirectory);
+      const options = await state.load();
+      const overwritten = options.gitCommitMessage !== undefined;
+      await state.save({ ...options, gitCommitMessage: message });
+      return { task, message, overwritten };
+    }, this.directory);
   }
 
   async updateGitCommitMessage(taskId: string, message: string): Promise<TaskGitCommitMessageUpdate> {
     validateCommitMessage(message);
-    const registry = await this.list();
-    const task = registry.tasks.find((item) => item.id === taskId);
-    if (!task) throw new CoreError("INVALID_REQUEST", `Task '${taskId}' does not exist`);
-    const workspace = this.taskPath(task.id);
-    try {
-      const branch = (await execFileAsync("git", ["-C", workspace, "branch", "--show-current"], { encoding: "utf8" })).stdout.trim();
-      if (branch !== task.branch) throw new CoreError("GIT_FAILED", `Task '${taskId}' worktree is not on its registered branch '${task.branch}'`);
-
-      let previousCommit: string;
-      try { previousCommit = (await execFileAsync("git", ["-C", workspace, "rev-parse", "--verify", "HEAD"], { encoding: "utf8" })).stdout.trim(); }
-      catch { throw new CoreError("INVALID_REQUEST", `Task '${taskId}' has no commit to update`); }
-
-      const taskCommitCount = Number((await execFileAsync("git", ["-C", workspace, "rev-list", "--count", `${task.baseBranch}..HEAD`], { encoding: "utf8" })).stdout.trim());
-      if (!taskCommitCount) throw new CoreError("INVALID_REQUEST", `Task '${taskId}' has no task commit to update`);
-
-      if (await gitRefExists(workspace, "@{upstream}")) {
-        try {
-          await execFileAsync("git", ["-C", workspace, "merge-base", "--is-ancestor", "HEAD", "@{upstream}"], { encoding: "utf8" });
-          throw new CoreError("INVALID_REQUEST", `Task '${taskId}' tip is already published to its upstream; refusing to rewrite it`);
-        } catch (error) {
-          if (error instanceof CoreError) throw error;
-          if ((error as { code?: number }).code !== 1) throw error;
-        }
-      }
-
-      const [tree, parents, author, previousMessage] = await Promise.all([
-        execFileAsync("git", ["-C", workspace, "show", "-s", "--format=%T", "HEAD"], { encoding: "utf8" }),
-        execFileAsync("git", ["-C", workspace, "show", "-s", "--format=%P", "HEAD"], { encoding: "utf8" }),
-        execFileAsync("git", ["-C", workspace, "show", "-s", "--format=%an%x00%ae%x00%aI", "HEAD"], { encoding: "utf8" }),
-        execFileAsync("git", ["-C", workspace, "show", "-s", "--format=%B", "HEAD"], { encoding: "utf8" })
-      ]);
-      const [authorName, authorEmail, authorDate] = author.stdout.trimEnd().split("\0");
-      if (!authorName || !authorEmail || !authorDate) throw new Error("Could not read the current commit author");
-      const messageFile = path.join(path.dirname(workspace), `commit-message-${process.pid}-${crypto.randomUUID()}.txt`);
-      await writeFile(messageFile, message, "utf8");
-      let commit: string;
+    return serializedRootMutation(this.rootWorkspace, async () => {
+      const registry = await this.listUnlocked();
+      const task = registry.tasks.find((item) => item.id === taskId);
+      if (!task) throw new CoreError("INVALID_REQUEST", `Task '${taskId}' does not exist`);
+      const workspace = this.taskPath(task.id);
       try {
-        const parentArgs = parents.stdout.trim().split(/\s+/).filter(Boolean).flatMap((parent) => ["-p", parent]);
-        commit = (await execFileAsync("git", ["-C", workspace, "commit-tree", tree.stdout.trim(), ...parentArgs, "-F", messageFile], {
-          encoding: "utf8",
-          env: { ...process.env, GIT_AUTHOR_NAME: authorName, GIT_AUTHOR_EMAIL: authorEmail, GIT_AUTHOR_DATE: authorDate }
-        })).stdout.trim();
-      } finally {
-        await rm(messageFile, { force: true });
+        const branch = (await execFileAsync("git", ["-C", workspace, "branch", "--show-current"], { encoding: "utf8" })).stdout.trim();
+        if (branch !== task.branch) throw new CoreError("GIT_FAILED", `Task '${taskId}' worktree is not on its registered branch '${task.branch}'`);
+
+        let previousCommit: string;
+        try { previousCommit = (await execFileAsync("git", ["-C", workspace, "rev-parse", "--verify", "HEAD"], { encoding: "utf8" })).stdout.trim(); }
+        catch { throw new CoreError("INVALID_REQUEST", `Task '${taskId}' has no commit to update`); }
+
+        const taskCommitCount = Number((await execFileAsync("git", ["-C", workspace, "rev-list", "--count", `${task.baseBranch}..HEAD`], { encoding: "utf8" })).stdout.trim());
+        if (!taskCommitCount) throw new CoreError("INVALID_REQUEST", `Task '${taskId}' has no task commit to update`);
+
+        if (await gitRefExists(workspace, "@{upstream}")) {
+          try {
+            await execFileAsync("git", ["-C", workspace, "merge-base", "--is-ancestor", "HEAD", "@{upstream}"], { encoding: "utf8" });
+            throw new CoreError("INVALID_REQUEST", `Task '${taskId}' tip is already published to its upstream; refusing to rewrite it`);
+          } catch (error) {
+            if (error instanceof CoreError) throw error;
+            if ((error as { code?: number }).code !== 1) throw error;
+          }
+        }
+
+        const [tree, parents, author, previousMessage] = await Promise.all([
+          execFileAsync("git", ["-C", workspace, "show", "-s", "--format=%T", "HEAD"], { encoding: "utf8" }),
+          execFileAsync("git", ["-C", workspace, "show", "-s", "--format=%P", "HEAD"], { encoding: "utf8" }),
+          execFileAsync("git", ["-C", workspace, "show", "-s", "--format=%an%x00%ae%x00%aI", "HEAD"], { encoding: "utf8" }),
+          execFileAsync("git", ["-C", workspace, "show", "-s", "--format=%B", "HEAD"], { encoding: "utf8" })
+        ]);
+        const [authorName, authorEmail, authorDate] = author.stdout.trimEnd().split("\0");
+        if (!authorName || !authorEmail || !authorDate) throw new Error("Could not read the current commit author");
+        const messageFile = path.join(path.dirname(workspace), `commit-message-${process.pid}-${crypto.randomUUID()}.txt`);
+        await writeFile(messageFile, message, "utf8");
+        let commit: string;
+        try {
+          const parentArgs = parents.stdout.trim().split(/\s+/).filter(Boolean).flatMap((parent) => ["-p", parent]);
+          commit = (await execFileAsync("git", ["-C", workspace, "commit-tree", tree.stdout.trim(), ...parentArgs, "-F", messageFile], {
+            encoding: "utf8",
+            env: { ...process.env, GIT_AUTHOR_NAME: authorName, GIT_AUTHOR_EMAIL: authorEmail, GIT_AUTHOR_DATE: authorDate }
+          })).stdout.trim();
+        } finally {
+          await rm(messageFile, { force: true });
+        }
+        await execFileAsync("git", ["-C", workspace, "update-ref", "-m", "vibe-editor: update task commit message", `refs/heads/${task.branch}`, commit, previousCommit], { encoding: "utf8" });
+        return { task, previousCommit, commit, previousMessage: previousMessage.stdout.replace(/\n+$/, ""), message };
+      } catch (error) {
+        if (error instanceof CoreError) throw error;
+        throw new CoreError("GIT_FAILED", `Could not update commit message for task '${taskId}': ${gitError(error)}`);
       }
-      await execFileAsync("git", ["-C", workspace, "update-ref", "-m", "vibe-editor: update task commit message", `refs/heads/${task.branch}`, commit, previousCommit], { encoding: "utf8" });
-      return { task, previousCommit, commit, previousMessage: previousMessage.stdout.replace(/\n+$/, ""), message };
-    } catch (error) {
-      if (error instanceof CoreError) throw error;
-      throw new CoreError("GIT_FAILED", `Could not update commit message for task '${taskId}': ${gitError(error)}`);
-    }
+    }, this.directory);
   }
 
   async merge(taskId: string, strategy: "merge" | "smart" = "smart"): Promise<{ targetBranch: string }> {
-    return serializedRootMutation(this.rootWorkspace, () => this.mergeIsolated(taskId, strategy));
+    return serializedRootMutation(this.rootWorkspace, () => this.mergeIsolated(taskId, strategy), this.directory);
   }
 
   /** Durable integration diagnostics survive a Core restart and point at any retained conflict worktree or stash. */
   async integrations(): Promise<TaskIntegrationRecord[]> { return structuredClone((await this.list()).integrations ?? []); }
 
   private async mergeIsolated(taskId: string, strategy: "merge" | "smart"): Promise<{ targetBranch: string }> {
-    const registry = await this.list();
+    const registry = await this.listUnlocked();
     const task = registry.tasks.find((item) => item.id === taskId);
     if (!task) throw new CoreError("INVALID_REQUEST", "Task does not exist");
     const taskWorkspace = this.taskPath(taskId);
@@ -309,7 +338,7 @@ export class WorkspaceTaskStore {
     try { await lstat(path.join(workspace, "package.json")); }
     catch {
       integration.test = { command, exitCode: 0, output: "No package.json in this repository; no combined npm suite is configured." };
-      integration.updatedAt = new Date().toISOString(); const registry = await this.list(); await this.saveIntegration(registry, integration);
+      integration.updatedAt = new Date().toISOString(); const registry = await this.listUnlocked(); await this.saveIntegration(registry, integration);
       return;
     }
     try {
@@ -319,10 +348,10 @@ export class WorkspaceTaskStore {
       const detail = error as { stdout?: string; stderr?: string; code?: number };
       integration.test = { command, exitCode: typeof detail.code === "number" ? detail.code : 1, output: `${detail.stdout ?? ""}\n${detail.stderr ?? ""}`.slice(-200_000) };
       integration.status = "failed"; integration.updatedAt = new Date().toISOString(); integration.error = "The isolated integration suite failed."; integration.recovery = `Inspect test output and candidate worktree at ${workspace}; the root was not changed.`;
-      const registry = await this.list(); await this.saveIntegration(registry, integration);
+      const registry = await this.listUnlocked(); await this.saveIntegration(registry, integration);
       throw new CoreError("GIT_FAILED", `${integration.error} ${integration.recovery}`);
     }
-    integration.updatedAt = new Date().toISOString(); const registry = await this.list(); await this.saveIntegration(registry, integration);
+    integration.updatedAt = new Date().toISOString(); const registry = await this.listUnlocked(); await this.saveIntegration(registry, integration);
   }
 
   private async saveIntegration(registry: Registry, integration: TaskIntegrationRecord): Promise<void> {
@@ -341,23 +370,66 @@ export class WorkspaceTaskStore {
   }
 
   async delete(taskId: string): Promise<Registry> {
-    const registry = await this.list();
-    const task = registry.tasks.find((item) => item.id === taskId);
-    if (!task) throw new CoreError("INVALID_REQUEST", "Task does not exist");
-    const next = { tasks: registry.tasks.filter((item) => item.id !== taskId), ...(registry.selectedTaskId && registry.selectedTaskId !== taskId ? { selectedTaskId: registry.selectedTaskId } : {}) };
-    try {
-      await this.removeWorktree(this.taskPath(taskId));
-      if (await this.branchExists(task.branch)) await execFileAsync("git", ["-C", this.rootWorkspace, "branch", "-D", task.branch], { encoding: "utf8" });
-      await rm(path.dirname(this.taskPath(taskId)), { recursive: true, force: true });
-      await rm(path.join(this.stateDirectory, `${crypto.createHash("sha256").update(path.resolve(this.taskPath(taskId))).digest("hex")}-task-history`), { recursive: true, force: true });
-      await this.save(next);
-      return next;
-    } catch (error) {
-      throw new CoreError("GIT_FAILED", `Could not delete task worktree: ${gitError(error)}`);
-    }
+    return serializedRootMutation(this.rootWorkspace, async () => {
+      const registry = await this.listUnlocked();
+      const task = registry.tasks.find((item) => item.id === taskId);
+      if (!task) throw new CoreError("INVALID_REQUEST", "Task does not exist");
+      const next: Registry = { ...registry, tasks: registry.tasks.filter((item) => item.id !== taskId) };
+      if (registry.selectedTaskId === taskId) delete next.selectedTaskId;
+      try {
+        await this.removeWorktree(this.taskPath(taskId));
+        if (await this.branchExists(task.branch)) await execFileAsync("git", ["-C", this.rootWorkspace, "branch", "-D", task.branch], { encoding: "utf8" });
+        await rm(path.dirname(this.taskPath(taskId)), { recursive: true, force: true });
+        await rm(path.join(this.stateDirectory, `${crypto.createHash("sha256").update(path.resolve(this.taskPath(taskId))).digest("hex")}-task-history`), { recursive: true, force: true });
+        await this.save(next);
+        return next;
+      } catch (error) {
+        throw new CoreError("GIT_FAILED", `Could not delete task worktree: ${gitError(error)}`);
+      }
+    }, this.directory);
   }
 
-  taskPath(taskId: string): string { return path.join(this.directory, taskId, "workspace"); }
+  /** Branches are retained; explicit discard also removes the task's snapshots. */
+  async cleanupFinished(taskId: string, isBusy: (workspace: string) => Promise<boolean>, discardChanges = false): Promise<void> {
+    return serializedRootMutation(this.rootWorkspace, async () => {
+      const registry = await this.listUnlocked();
+      const task = registry.tasks.find((item) => item.id === taskId);
+      const workspace = this.taskPath(taskId);
+      if (!task || task.status !== "finished" || registry.selectedTaskId === taskId || await isBusy(workspace)) throw new CoreError("INVALID_REQUEST", "Task is active, selected, or no longer finished");
+      const status = await taskGit(workspace, ["status", "--porcelain", "--untracked-files=all", "--ignore-submodules=none"]);
+      if (status.stdout.trim() && !discardChanges) throw new CoreError("INVALID_REQUEST", "Task has uncommitted or untracked files");
+      await taskGit(this.rootWorkspace, ["worktree", "remove", "--force", workspace]);
+      await rm(path.dirname(workspace), { recursive: true, force: true });
+      if (discardChanges) await rm(path.join(this.stateDirectory, `${crypto.createHash("sha256").update(workspace).digest("hex")}-task-history`), { recursive: true, force: true });
+      await this.save({ ...registry, tasks: registry.tasks.filter((item) => item.id !== taskId) });
+    }, this.directory);
+  }
+
+  async cleanupUnregistered(taskId: string, integration: boolean, isBusy: (workspace: string) => Promise<boolean>): Promise<void> {
+    this.taskPath(taskId); // Reuse opaque ID validation.
+    return serializedRootMutation(this.rootWorkspace, async () => {
+      const registry = await this.listUnlocked();
+      const workspace = integration ? path.join(this.directory, "integrations", taskId, "workspace") : this.taskPath(taskId);
+      if ((!integration && registry.tasks.some((task) => task.id === taskId)) || (integration && registry.integrations?.some((record) => record.id === taskId && ["preparing", "testing", "applying"].includes(record.status))) || await isBusy(workspace)) throw new CoreError("INVALID_REQUEST", "Workspace is registered or in use");
+      const worktrees = (await taskGit(this.rootWorkspace, ["worktree", "list", "--porcelain"])).stdout;
+      if (worktrees.split("\n").includes(`worktree ${workspace}`)) await taskGit(this.rootWorkspace, ["worktree", "remove", "--force", workspace]);
+      else {
+        const git = await lstat(path.join(workspace, ".git")).catch(() => undefined);
+        if (git?.isDirectory()) await taskGit(this.rootWorkspace, ["fetch", "--no-tags", "--no-write-fetch-head", "--no-recurse-submodules", workspace, `HEAD:refs/heads/recovered/${taskId}/HEAD`, `refs/heads/*:refs/heads/recovered/${taskId}/*`]);
+        else if (git) throw new CoreError("INVALID_REQUEST", "Unregistered worktree belongs to another repository; recover it before removing");
+      }
+      await rm(path.dirname(workspace), { recursive: true, force: true });
+      await rm(path.join(this.stateDirectory, `${crypto.createHash("sha256").update(workspace).digest("hex")}-task-history`), { recursive: true, force: true });
+      if (integration) await this.save({ ...registry, integrations: registry.integrations?.filter((record) => record.id !== taskId) });
+    }, this.directory);
+  }
+
+  taskPath(taskId: string): string {
+    if (typeof taskId !== "string" || !taskId || taskId === "." || taskId === ".." || /[/\\\0]/.test(taskId)) {
+      throw new CoreError("INVALID_REQUEST", "Invalid task ID");
+    }
+    return path.join(this.directory, taskId, "workspace");
+  }
 
   private async migrateLegacyCopy(task: WorkspaceTask): Promise<void> {
     const destination = this.taskPath(task.id);
@@ -400,20 +472,20 @@ export class WorkspaceTaskStore {
   }
 
   private async copyWorkspaceState(source: string, destination: string): Promise<void> {
-    const stagedPatch = (await execFileAsync("git", ["-C", source, "diff", "--cached", "--binary"], { encoding: "buffer", maxBuffer: 100 * 1024 * 1024 })).stdout;
-    const deleted = (await execFileAsync("git", ["-C", source, "ls-files", "--deleted", "-z"], { encoding: "utf8" })).stdout.split("\0").filter(Boolean);
-    await cp(source, destination, { recursive: true, force: true, filter: (item) => item !== path.join(source, ".git") && !isNodeModulesPath(source, item) });
+    const stagedPatch = (await retryProcessSpawn(() => execFileAsync("git", ["-C", source, "diff", "--cached", "--binary"], { encoding: "buffer", maxBuffer: 100 * 1024 * 1024 }))).stdout;
+    const deleted = (await taskGit(source, ["ls-files", "--deleted", "-z"])).stdout.split("\0").filter(Boolean);
+    await cp(source, destination, { recursive: true, force: true, verbatimSymlinks: true, filter: (item) => item !== path.join(source, ".git") && !isNodeModulesPath(source, item) });
     for (const relative of deleted) await rm(path.join(destination, relative), { recursive: true, force: true });
     if (!stagedPatch.length) return;
     const patchFile = path.join(path.dirname(destination), `staged-${process.pid}-${crypto.randomUUID()}.patch`);
     await writeFile(patchFile, stagedPatch);
-    try { await execFileAsync("git", ["-C", destination, "apply", "--cached", "--binary", patchFile], { maxBuffer: 100 * 1024 * 1024 }); }
+    try { await retryProcessSpawn(() => execFileAsync("git", ["-C", destination, "apply", "--cached", "--binary", patchFile], { maxBuffer: 100 * 1024 * 1024 })); }
     finally { await rm(patchFile, { force: true }); }
   }
 
   private async branchExists(branch: string): Promise<boolean> {
-    try { await execFileAsync("git", ["-C", this.rootWorkspace, "show-ref", "--verify", "--quiet", `refs/heads/${branch}`]); return true; }
-    catch { return false; }
+    try { await taskGit(this.rootWorkspace, ["show-ref", "--verify", "--quiet", `refs/heads/${branch}`]); return true; }
+    catch (error) { if ((error as { code?: unknown }).code === 1) return false; throw error; }
   }
 
   private async removeSharedNodeModules(workspace: string): Promise<void> {
@@ -445,7 +517,7 @@ export class WorkspaceTaskStore {
 
   private async rootBranch(): Promise<string> {
     try {
-      return (await execFileAsync("git", ["-C", this.rootWorkspace, "branch", "--show-current"], { encoding: "utf8" })).stdout.trim() || "HEAD";
+      return (await taskGit(this.rootWorkspace, ["branch", "--show-current"])).stdout.trim() || "HEAD";
     }
     catch (error) { throw new CoreError("GIT_FAILED", `Could not determine task base branch: ${gitError(error)}`); }
   }
@@ -453,17 +525,21 @@ export class WorkspaceTaskStore {
   private async taskUpstream(baseBranch: string): Promise<string | undefined> {
     if (baseBranch === "HEAD") return undefined;
     try {
-      const inherited = (await execFileAsync("git", ["-C", this.rootWorkspace, "rev-parse", "--abbrev-ref", "--symbolic-full-name", `${baseBranch}@{upstream}`], { encoding: "utf8" })).stdout.trim();
+      const inherited = (await taskGit(this.rootWorkspace, ["rev-parse", "--abbrev-ref", "--symbolic-full-name", `${baseBranch}@{upstream}`])).stdout.trim();
       if (inherited && inherited !== "HEAD") return inherited;
-    } catch { /* A local-only base branch has no configured upstream. */ }
+    } catch (error) { if (typeof (error as { code?: unknown }).code !== "number") throw error; /* A local-only base branch has no configured upstream. */ }
     return baseBranch;
   }
 
   private async save(registry: Registry): Promise<void> {
     await mkdir(this.directory, { recursive: true });
-    const temporary = `${this.registryFile}.${process.pid}.tmp`;
-    await writeFile(temporary, `${JSON.stringify(registry, null, 2)}\n`, "utf8");
-    await rename(temporary, this.registryFile);
+    const temporary = `${this.registryFile}.${process.pid}.${crypto.randomUUID()}.tmp`;
+    try {
+      await writeFile(temporary, `${JSON.stringify(registry, null, 2)}\n`, { encoding: "utf8", flag: "wx" });
+      await rename(temporary, this.registryFile);
+    } finally {
+      await rm(temporary, { force: true }).catch(() => undefined);
+    }
   }
 }
 

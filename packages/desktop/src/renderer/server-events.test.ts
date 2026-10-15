@@ -8,6 +8,7 @@ const examples = {
   "timers.changed": { type: "timers.changed", payload: {} },
   "workflow.document": { type: "workflow.document", payload: { rootId: "root", runId: "run", blockId: "block", title: "", content: "markdown" } },
   "filesystem.changed": { type: "filesystem.changed", payload: { rootId: "root", paths: ["file.txt"], overflow: false, health: "healthy", message: "ready" } },
+  "terminal.opened": { type: "terminal.opened", payload: { rootId: "root", workspace: "/workspace/task", session: { terminalId: "terminal", status: "running", output: "", displayName: "Server" } } },
   "terminal.output": { type: "terminal.output", payload: { rootId: "root", terminalId: "terminal", data: "" } },
   "terminal.exit": { type: "terminal.exit", payload: { rootId: "root", terminalId: "terminal", exitCode: 0 } },
   "git.changed": { type: "git.changed", payload: { rootId: "root" } },

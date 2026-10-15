@@ -40,7 +40,7 @@ export class ManagedProcesses extends EventEmitter {
   constructor(private readonly snapshot: () => Promise<Row[]> = processSnapshot,
     private readonly signal: (pid: number) => void = (pid) => process.kill(pid, "SIGKILL")) { super(); }
 
-  track(child: ChildProcess, context: Context, launchId: string): void {
+  track(child: { pid?: number; once(event: "exit" | "error" | "spawn", listener: () => void): unknown }, context: Context, launchId: string): void {
     const register = () => {
       if (!child.pid) return;
       this.roots.set(child.pid, { context, launchId });

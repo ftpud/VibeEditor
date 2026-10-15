@@ -221,3 +221,28 @@ it("refreshes language metadata only after a successful explicit Java Build", as
   await vi.waitFor(() => expect(events).toContainEqual(expect.objectContaining({ type: "exit", exitCode: 1 })));
   expect(refresh).toHaveBeenCalledTimes(1);
 });
+
+
+it("waits for the initial suspended thread prompt before issuing debugger commands", async () => {
+  const { service } = await createMavenWorkspace();
+  const debuggerService = service as unknown as {
+    waitForDebugAttach(): Promise<void>;
+    consumeDebugOutput(data: string): void;
+    invalidateDebugInspection(): void;
+  };
+  let attached = false;
+  const ready = debuggerService.waitForDebugAttach().then(() => { attached = true; });
+  debuggerService.consumeDebugOutput("Initializing jdb ...\n> ");
+  await Promise.resolve();
+  expect(attached).toBe(false);
+  debuggerService.consumeDebugOutput("VM Started: > \nma");
+  await Promise.resolve();
+  expect(attached).toBe(false);
+  debuggerService.consumeDebugOutput("in[1] ");
+  await ready;
+  expect(attached).toBe(true);
+  const cancelled = debuggerService.waitForDebugAttach();
+  const rejected = expect(cancelled).rejects.toThrow("attachment was cancelled");
+  debuggerService.invalidateDebugInspection();
+  await rejected;
+});

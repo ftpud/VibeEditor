@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <title>Vibe Editor</title>
+  <rect x="100" y="100" width="824" height="824" rx="180" fill="#fff" stroke="#e8eaf0" stroke-width="1.5"/>
+  <g transform="translate(200 200) scale(26)" fill="none" stroke="#5268e8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <rect x="3" y="3" width="8" height="8" rx="2"/>
+    <path d="M7 11v4a2 2 0 0 0 2 2h4"/>
+    <rect x="13" y="13" width="8" height="8" rx="2"/>
+  </g>
+</svg>

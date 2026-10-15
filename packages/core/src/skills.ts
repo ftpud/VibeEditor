@@ -8,6 +8,8 @@ import type { AiSession, AiSkillSummary } from "@remote-ide/acp";
 import { parseAgent } from "./agents.js";
 import { CoreError } from "./errors.js";
 
+const loadedSkills = new WeakMap<NonNullable<AiSession["skillCatalogue"]>, Map<string, string>>();
+
 const MAX_BYTES = 256 * 1024;
 export const SKILL_TEMPLATE = "---\nname: New Skill\ndescription: Describe when to use this skill.\n---\n\nDescribe the workflow and instructions here.\n";
 
@@ -46,26 +48,31 @@ export class SkillsStore {
   /** Reject symlink escapes, including paths used for new files. */
   private async checked(target: string, workspace: string, scope: SkillScope): Promise<string> {
     const boundary = scope === "workspace" ? path.resolve(workspace) : path.resolve(this.stateDirectory);
-    const root = await realpath(boundary).catch((error: NodeJS.ErrnoException) => { if (error.code === "ENOENT") return boundary; throw error; });
-    let ancestor = target;
-    while (true) {
-      try {
-        const resolved = await realpath(ancestor);
-        const effective = path.resolve(resolved, path.relative(ancestor, target));
-        if (effective !== root && !effective.startsWith(`${root}${path.sep}`)) throw new CoreError("INVALID_REQUEST", "Skill path escapes its scope");
-        return target;
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-        const parent = path.dirname(ancestor);
-        if (parent === ancestor) throw error;
-        ancestor = parent;
-      }
-    }
+    const root = await canonicalFuturePath(boundary);
+    const effective = await canonicalFuturePath(target);
+    if (effective !== root && !effective.startsWith(`${root}${path.sep}`)) throw new CoreError("INVALID_REQUEST", "Skill path escapes its scope");
+    return target;
   }
 
   async read(id: string, workspace: string): Promise<string> {
     const target = await this.checked(this.target(id, workspace), workspace, id.split("/", 1)[0] as SkillScope);
     if ((await stat(target)).size > MAX_BYTES) throw new CoreError("FILE_TOO_LARGE", "Skill exceeds 256 KB");
+    return readFile(target, "utf8");
+  }
+
+  /** Read a supporting document without exposing files outside the skill bundle. */
+  async readResource(id: string, workspace: string, resource = "SKILL.md"): Promise<string> {
+    if (typeof resource !== "string" || resource.length > 1000 || resource.includes("\\") || resource.includes("\0") || resource.split("/").some((part) => !part || part === "." || part === "..")) {
+      throw new CoreError("INVALID_REQUEST", "Skill resource must be a relative path within its skill directory");
+    }
+    if (resource === "SKILL.md") return this.read(id, workspace);
+    const directory = path.dirname(await this.checked(this.target(id, workspace), workspace, id.split("/", 1)[0] as SkillScope));
+    const boundary = await realpath(directory);
+    const target = await realpath(path.join(directory, resource));
+    if (!target.startsWith(`${boundary}${path.sep}`)) throw new CoreError("INVALID_REQUEST", "Skill resource escapes its skill directory");
+    const info = await stat(target);
+    if (!info.isFile()) throw new CoreError("INVALID_REQUEST", "Skill resource must be a file");
+    if (info.size > MAX_BYTES) throw new CoreError("FILE_TOO_LARGE", "Skill resource exceeds 256 KB");
     return readFile(target, "utf8");
   }
 
@@ -169,10 +176,16 @@ export class SkillsStore {
     return Promise.all(enabled.map(async (skill) => ({ id: skill.id, name: skill.title.slice(0, 200), ...(skill.description ? { description: skill.description.slice(0, 1000) } : {}), revision: crypto.createHash("sha256").update(`${skill.path}\0${await this.read(skill.id, workspace)}`).digest("hex") })));
   }
 
-  async load(workspace: string, id: string, session: AiSession): Promise<{ id: string; revision: string; baseDirectory: string; content: string }> {
+  async load(workspace: string, id: string, session: AiSession): Promise<{ id: string; revision: string; baseDirectory: string; content: string; unchanged?: boolean; message?: string }> {
     const catalogue = session.skillCatalogue;
     if (!catalogue || catalogue.threadId !== session.threadId || !catalogue.entries.some((skill) => skill.id === id)) throw new CoreError("INVALID_REQUEST", "Skill is not available in this conversation's current turn");
-    return this.loadAllowed(workspace, id, session.agentPreset);
+    const loaded = await this.loadAllowed(workspace, id, session.agentPreset);
+    let cache = loadedSkills.get(catalogue);
+    if (!cache) { cache = new Map(); loadedSkills.set(catalogue, cache); }
+    const key = JSON.stringify([workspace, id]);
+    if (cache.get(key) === loaded.revision) return { ...loaded, content: "", unchanged: true, message: "Skill already loaded in this conversation; reuse its instructions." };
+    cache.set(key, loaded.revision);
+    return loaded;
   }
 
   /** Workflow references are enabled by the graph, with the same live project/agent policy. */
@@ -187,5 +200,19 @@ export class SkillsStore {
     if (!skill || !skillAllowedForAgent(catalog.policy, id, agent)) throw new CoreError("INVALID_REQUEST", "Skill is missing or no longer allowed for this agent");
     const content = await this.read(id, workspace);
     return { id, revision: crypto.createHash("sha256").update(`${skill.path}\0${content}`).digest("hex"), baseDirectory: path.dirname(skill.path), content };
+  }
+}
+
+/** Resolve existing ancestors as well as the missing suffix (e.g. macOS /var aliases). */
+async function canonicalFuturePath(target: string): Promise<string> {
+  let ancestor = path.resolve(target);
+  for (;;) {
+    try { return path.resolve(await realpath(ancestor), path.relative(ancestor, target)); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      const parent = path.dirname(ancestor);
+      if (parent === ancestor) throw error;
+      ancestor = parent;
+    }
   }
 }

@@ -1,6 +1,14 @@
 const { contextBridge, ipcRenderer } = require("electron") as typeof import("electron");
 
 contextBridge.exposeInMainWorld("desktop", {
+  connectionToken(host: string, port: number): Promise<string | undefined> { return ipcRenderer.invoke("desktop:connection-token", host, port); },
+  onFullscreenChange(listener: (fullscreen: boolean) => void): () => void {
+    const wrapped = (_event: unknown, fullscreen: unknown) => { if (typeof fullscreen === "boolean") listener(fullscreen); };
+    ipcRenderer.on("desktop:fullscreen-changed", wrapped);
+    ipcRenderer.send("desktop:fullscreen-state");
+    return () => ipcRenderer.removeListener("desktop:fullscreen-changed", wrapped);
+  },
+  setWindowTheme(theme: "light" | "dark"): void { ipcRenderer.send("desktop:window-theme", theme); },
   setDirtyState(dirty: boolean): void { ipcRenderer.send("editor:dirty-state", dirty); },
   openEditorWindow(options: { host: string; port: string; type: "file" | "useful"; path: string; scope?: "global" | "local" }): void { ipcRenderer.send("editor:open-window", options); },
   readClipboard(): Promise<string> { return ipcRenderer.invoke("desktop:clipboard-read"); },

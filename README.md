@@ -18,7 +18,7 @@ This is an actively developed experiment. Expect rough edges and breaking change
 
 Use **Vibe Gateway** to launch the editor. It handles remote installation, builds, updates, and the SSH connection for you.
 
-You need Node.js 20+, npm, and Git on your local machine. For a remote workspace, you also need a Unix-like server with SSH access, Node.js 20+, npm, Git, and an existing project directory. See the [full requirements](docs/TECHNICAL_GUIDE.md#quick-start-vibe-gateway-recommended) if installation fails or your machine needs additional system tools.
+You need Node.js 22.12+, npm, and Git on your local machine. For a remote workspace, you also need a Unix-like server with SSH access, Node.js 22.12+, npm, Git, and an existing project directory. See the [full requirements](docs/TECHNICAL_GUIDE.md#quick-start-vibe-gateway-recommended) if installation fails or your machine needs additional system tools.
 
 On your local machine:
 

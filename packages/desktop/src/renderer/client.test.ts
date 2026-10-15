@@ -47,6 +47,36 @@ describe("CoreClient streaming disconnects", () => {
   });
   afterEach(() => vi.unstubAllGlobals());
 
+  it("authenticates with the main-process token without persisting it", async () => {
+    const previous = window.desktop;
+    const token = "a".repeat(64);
+    window.desktop = { ...previous, connectionToken: vi.fn(async () => token) } as Window["desktop"];
+    const client = new CoreClient();
+    try {
+      const connected = client.connect("127.0.0.1", 7331);
+      const socket = FakeWebSocket.instances[0]!;
+      socket.open(); await connected;
+      const handshake = socket.sent.map((value) => JSON.parse(value)).find((value) => value.type === "protocol.handshake");
+      expect(handshake.payload.token).toBe(token);
+      expect(window.desktop!.connectionToken).toHaveBeenCalledWith("127.0.0.1", 7331);
+    } finally { client.disconnect(); window.desktop = previous; }
+  });
+
+  it("reports the current transport and handshake operation", async () => {
+    const client = new CoreClient();
+    const progress = vi.fn();
+    client.onConnectionProgress = progress;
+    try {
+      const connecting = client.connect("core", 7331);
+      expect(progress).toHaveBeenLastCalledWith("Opening connection to core:7331…");
+      FakeWebSocket.instances[0]!.open();
+      await connecting;
+      expect(progress.mock.calls.map(([message]) => message)).toEqual([
+        "Opening connection to core:7331…", "Checking Desktop and Core compatibility…", "Finding workspace roots…"
+      ]);
+    } finally { client.disconnect(); }
+  });
+
   it("preserves snapshot error codes through response parsing and keeps the client usable", async () => {
     const client = new CoreClient();
     try {

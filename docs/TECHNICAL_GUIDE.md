@@ -12,8 +12,8 @@ Before starting, make sure the two machines have the following:
 
 | Machine | Required for Gateway |
 | --- | --- |
-| **Local client** | Node.js 20+ and npm, Git (to clone this repository), `tar`, and the platform libraries required by Electron. A `node-pty` compiler toolchain is needed only if npm cannot use its prebuilt binary. |
-| **Remote server** | A Unix-like SSH host reachable with a username and either a password or an already-authorized SSH private key, Node.js 20+ and npm for that SSH user, Git, `bash`, `tar`, standard process utilities (`nohup`, `kill`, `sleep`, and `tail`), and permission to create `~/.vibe`, run processes, and modify the selected project directory. It must be able to reach the Git repository selected in Gateway settings. A C/C++ compiler, `make`, and Python 3 are needed only if `node-pty` must be rebuilt. |
+| **Local client** | Node.js 22.12+ and npm, Git (to clone this repository), `tar`, and the platform libraries required by Electron. A `node-pty` compiler toolchain is needed only if npm cannot use its prebuilt binary. |
+| **Remote server** | A Unix-like SSH host reachable with a username and either a password or an already-authorized SSH private key, Node.js 22.12+ and npm for that SSH user, Git, `bash`, `tar`, standard process utilities (`nohup`, `kill`, `sleep`, and `tail`), and permission to create `~/.vibe`, run processes, and modify the selected project directory. It must be able to reach the Git repository selected in Gateway settings. A C/C++ compiler, `make`, and Python 3 are needed only if `node-pty` must be rebuilt. |
 
 On the **local client**, clone this repository, install dependencies, build, and launch Gateway:
 
@@ -53,6 +53,11 @@ An `npm install` without `VIBE_SKIP_JDTLS=1` attempts to download the pinned JDT
 npm run install:jdtls
 ```
 
+Gateway automatically runs this installer when provisioning a remote server release,
+including when reusing a cached release. Its progress appears as `install-java-tools`
+in the provisioning log. Installed versions are reused; a failed installation stops
+provisioning before switching Core, so retrying can finish the download.
+
 The bundled JRE installer supports Windows, macOS, and Linux on x64 or ARM64.
 
 ## Development
@@ -69,7 +74,7 @@ Then start Desktop in another terminal:
 npm run dev:desktop -- --host 127.0.0.1 --port 7331
 ```
 
-Desktop connects automatically only when both options are supplied; otherwise it opens the connection screen. Core defaults to `127.0.0.1:7331`, but `--workspace` has no default. The development launchers compile Electron code, start Vite (`5173` for Desktop and `5174` for Gateway), and launch Electron. Core uses `tsx watch`.
+Desktop connects automatically only when both options are supplied; otherwise it opens the connection screen. Core defaults to `127.0.0.1:7331`, but `--workspace` has no default. The development launchers compile Electron code, start Vite (`5173` for Desktop and `5174` for Gateway), and launch Electron. Core uses `tsx watch`. Its development launcher allows the exact Desktop origins `http://localhost:5173` and `http://127.0.0.1:5173` in addition to any configured `REMOTE_IDE_ALLOWED_ORIGINS`; session authentication remains required.
 
 Run Gateway in development with:
 
@@ -110,6 +115,15 @@ npm run build
 The root `typecheck` script builds ACP and Protocol, then checks Core and Desktop; the explicit workspace command checks Gateway. The root test command runs the Core, Desktop, and Gateway test suites; the workspace scripts use Vitest and Node's test runner. The build covers all workspaces.
 
 ## Remote connections
+
+Gateway loads the remote user's NVM without activating its default alias, then
+selects an installed Node 24 for Vibe's builds, Core launches, and health checks.
+If Node 24 is absent, it tries NVM's newest installed Node and requires 22.12+.
+Your default can remain Node 20: Gateway changes only the environment of its own
+remote commands and never changes NVM aliases or installs Node automatically.
+Run `nvm install 24` once on the remote host to provide the preferred runtime.
+An existing `NVM_DIR` is respected; otherwise Gateway uses `~/.nvm`.
+Hosts without NVM can still use a Node 22.12+ installation available on PATH.
 
 For direct network access, bind Core beyond loopback only on a trusted private network:
 
@@ -205,6 +219,20 @@ REMOTE_IDE_STATE_DIR=/var/lib/vibe-editor npm run core -- --workspace /srv/proje
 Core stores task registries/worktrees, workspace options, useful files, managed agent presets, AI session data, terminal restoration metadata, file colors, and commit drafts there. Workspace `.agents/*.md` presets remain in the project. Desktop stores UI settings in `settings.json` under its Electron application-data directory.
 
 Task Git prompt checkpoints are also stored there as content-addressed snapshots outside the repository. See [Task Git prompt history](TASK_GIT_HISTORY.md).
+
+### Server storage cleanup
+
+Open **Settings → Storage…** to calculate allocated disk usage across the connected SSH account's shared Vibe state directory. Core scans in the background and refreshes totals after removal. The panel inventories tasks, sessions, workflow records, snapshots, provider data, agent runtimes, Gateway releases and source caches. It does not scan other users' accounts or unrelated custom state directories. Workflow aliases do not count as additional workspace copies; shared hardlinks across separately measured units may count more than once.
+
+Task bars distinguish active (red), finished (blue), and unregistered (amber) workspaces. Unregistered folders are leftovers missing from a task registry, including interrupted task creation and integration worktrees; they can still contain recoverable changes. **Remove finished** preserves branches and skips dirty, selected and busy tasks. **Keep root & active** additionally removes inactive unregistered folders and associated checkpoints, and requires explicit acknowledgement that uncommitted changes will be discarded. Registered project roots, active tasks, ongoing integrations and workspaces used by processes or active workflows remain protected. The expandable inventory lists the paths and states before removal. Legacy independent task repositories have their HEAD and branches imported under `recovered/<task-id>/` in the root repository before deletion.
+
+History bars distinguish today, the preceding seven days excluding today, and older data. **Remove older than 7 days** removes eligible old records; **Keep today only** keeps everything from server-local midnight onward. Archived AI conversations, ended workflow runs, inactive finished-task checkpoint stores, abandoned workflow temporary files and rotated server logs can be removed. Workflow totals measure allocated bytes; their per-run age shares and reclaimable sizes are estimates. Workflow cleanup rewrites both current records and their recovery backup. File removal rechecks previewed identities, sizes, modification times and symlink ancestors.
+
+On Linux, **Keep current version** keeps the connected Core's actual release and selected agent runtime, removes obsolete versions and rebuildable deployment source caches, and updates runtime/rollback metadata. The preview requires acknowledgement that other Vibe sessions for the same SSH account will close. Core verifies process ownership, script identity and process birth before signaling other Core instances and their descendants, plus workers using obsolete runtimes. The current Core connection, its ancestors, unrelated processes and other users are preserved. Processes that do not shut down gracefully are terminated; versions still in use by an unrelated process are retained. Version maintenance locks runtime installation and Gateway provisioning/activation so builds cannot overlap removal. Future Gateway connections may download or build again.
+
+Current conversations, active workflows, command bridge state, unidentified checkpoint stores, provider databases and their linked native histories, settings and credentials remain protected and visible. Previews are tied to server scan identities; clients cannot provide deletion paths. Cleanup continues if the panel closes, and graceful Core shutdown waits for the job.
+
+Workflow errors appear as one-line disclosures with a scrollable full diagnostic. Chatbox steering is acknowledged after durable acceptance rather than waiting for the ACP extension response. Steering appears after prior conversation text, and subsequent assistant output continues beneath it; delayed delivery failures appear in the error disclosure.
 
 ## Current limitations and security
 

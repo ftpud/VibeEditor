@@ -8,6 +8,14 @@ const values = { theme: "dark" as const, highlightTheme: "default" as const, uiF
 const shortcutProps = { commands: [], shortcutBindings: {}, platform: "linux" as const, onShortcutChange: vi.fn(), onShortcutsReset: vi.fn() };
 
 describe("SettingsMenu", () => {
+  it("opens server cleanup from settings and keeps it searchable", () => {
+    const onStorage = vi.fn();
+    render(<SettingsMenu {...shortcutProps} onStorage={onStorage} workspace="/project" sideLayout="classic" onSideLayoutChange={vi.fn()} values={values} isWorkspaceOverride={() => false} onChange={vi.fn()} onReset={vi.fn()} />);
+    fireEvent.change(screen.getByRole("textbox", { name: "Search settings" }), { target: { value: "cleanup" } });
+    fireEvent.click(screen.getByRole("button", { name: "Storage…" }));
+    expect(onStorage).toHaveBeenCalledOnce();
+    expect(screen.queryByText(/No desktop settings match/)).toBeNull();
+  });
   it("filters persisted desktop settings", () => {
     render(<SettingsMenu {...shortcutProps} workspace="/project" sideLayout="classic" onSideLayoutChange={vi.fn()} values={values} isWorkspaceOverride={() => false} onChange={vi.fn()} onReset={vi.fn()} />);
     fireEvent.change(screen.getByRole("textbox", { name: "Search settings" }), { target: { value: "font" } });
@@ -22,7 +30,7 @@ describe("SettingsMenu", () => {
     render(<SettingsMenu {...shortcutProps} workspace="/project" sideLayout="classic" onSideLayoutChange={vi.fn()} values={values} isWorkspaceOverride={(setting) => setting === "theme"} onChange={vi.fn()} onReset={onReset} />);
     expect(screen.getAllByText("Workspace override")).toHaveLength(1);
     expect(screen.getAllByText("Global default")).toHaveLength(6);
-    fireEvent.click(screen.getByRole("button", { name: "Reset" }));
+    fireEvent.click(screen.getByRole("button", { name: "Reset Theme to global default" }));
     expect(onReset).toHaveBeenCalledWith("theme");
   });
 
@@ -45,4 +53,16 @@ it("changes UI font weight and clamps it to the supported range", () => {
   expect(onChange).toHaveBeenLastCalledWith("uiFontWeight", 500);
   fireEvent.change(input, { target: { value: "950" } });
   expect(onChange).toHaveBeenLastCalledWith("uiFontWeight", 600);
+});
+
+it("previews and selects interface fonts without dismissing Settings", () => {
+  const onChange = vi.fn(); const onClose = vi.fn();
+  render(<SettingsMenu {...shortcutProps} workspace="/project" sideLayout="classic" onSideLayoutChange={vi.fn()} values={values} isWorkspaceOverride={() => false} onChange={onChange} onReset={vi.fn()} onClose={onClose} />);
+  fireEvent.click(screen.getByRole("button", { name: "Font" }));
+  const option = screen.getByRole("option", { name: /Inter/ });
+  fireEvent.pointerDown(option);
+  expect(onClose).not.toHaveBeenCalled();
+  fireEvent.click(option);
+  expect(onChange).toHaveBeenCalledWith("uiFontFamily", "inter");
+  expect(screen.queryByRole("listbox")).toBeNull();
 });

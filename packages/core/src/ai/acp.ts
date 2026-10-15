@@ -13,6 +13,12 @@ export class AcpRegistry {
 
   list(): AiProviderDescriptor[] { return [...this.providers.values()].map((provider) => provider.descriptor); }
 
+  async shutdown(): Promise<void> {
+    const results = await Promise.allSettled([...this.providers.values()].map((provider) => provider.shutdown()));
+    const failures = results.filter((result): result is PromiseRejectedResult => result.status === "rejected");
+    if (failures.length) throw new AggregateError(failures.map((result) => result.reason), "Could not shut down AI providers");
+  }
+
   get(id = "codex"): AcpProvider {
     const provider = this.providers.get(id);
     if (!provider) throw new CoreError("INVALID_REQUEST", `Unknown AI provider '${id}'`);

@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { CONFIGURATION_REFERENCES } from "./self-configuration-reference.js";
 import os from "node:os";
 import path from "node:path";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
@@ -66,13 +67,41 @@ The app receives a configuration change event and refreshes the relevant panels.
 Global agent and skill edits affect every project on this host; do not broaden a
 project-only request into global changes. Existing chats keep their skill selections;
 agent or skill instruction changes take effect on a subsequent turn.
+
+## Detailed reference
+
+Before designing or changing a workflow, read [Blocks and connections](references/blocks.md).
+For complete configuration document formats and write examples, read
+[Configuration formats](references/configuration.md). For every app and workflow
+command, including argument schemas and limits, read [Commands](references/commands.md).
+These files are installed beside this SKILL.md on Core. Resolve relative links against
+this skill's baseDirectory returned by configuration_read or skill_load, and read
+them with the provider's
+file-reading tool. They are supporting files, not configuration_read resource IDs.
+The live MCP tool catalogue is authoritative for commands available in this session.
+
+Choose script for short, non-interactive commands, tests, builds and data transforms.
+Choose run_app for a named managed service. Use terminal_control only for persistent
+terminal sessions where interactive input may be needed; do not use it for small tasks,
+one-shot scripts or spawning AI agents. List terminals first and reuse suitable sessions.
 `;
 
-// Exact fingerprint of the shipped skill before local/workspace scopes were separated.
-const PREVIOUS_CONFIGURATION_SKILL_HASHES = new Set(["22c077677a7c43786df14bc1fd7126b31a3901508aae14b3b7727229c61f5155", "497f968c35f9f855f3dcacab9aa0aafd0524567701ef97e2a1c5f88da87a457b"]);
+// Exact fingerprints of previously shipped skills; never replace user-edited instructions.
+const PREVIOUS_CONFIGURATION_SKILL_HASHES = new Set([
+  "56930e7d161a65f291803724978469e20af359e3dc2a7e43c55e32cd9c901ea6",
+  "22c077677a7c43786df14bc1fd7126b31a3901508aae14b3b7727229c61f5155",
+  "497f968c35f9f855f3dcacab9aa0aafd0524567701ef97e2a1c5f88da87a457b"
+]);
 
 /** Install shipped global defaults on every Core host, preserving user edits. */
 export async function ensureSelfConfiguration(stateDirectory = process.env.REMOTE_IDE_STATE_DIR ?? path.join(os.homedir(), ".remote-ide", "workspaces")): Promise<void> {
+  const skillDirectory = path.join(stateDirectory, "skills", "global", "vibe-self-configuration");
+  for (const [name, content] of Object.entries(CONFIGURATION_REFERENCES)) {
+    const target = path.join(skillDirectory, "references", name);
+    await mkdir(path.dirname(target), { recursive: true });
+    try { await writeFile(target, content, { encoding: "utf8", flag: "wx" }); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; }
+  }
   for (const [target, content] of [
     [path.join(stateDirectory, "agents", "global", CONFIGURATION_AGENT_NAME), CONFIGURATION_AGENT],
     [path.join(stateDirectory, "skills", "global", "vibe-self-configuration", "SKILL.md"), CONFIGURATION_SKILL]

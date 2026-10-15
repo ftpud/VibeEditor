@@ -1,7 +1,20 @@
 import { describe, expect, it, vi } from "vitest";
-import { assertWorkflowModelAvailable, settleWorkflowSession } from "./server.js";
+import { assertWorkflowModelAvailable, settleWorkflowSession, workflowCapturesSnapshots } from "./server.js";
 import { WebSocket } from "ws";
 import { assertRequestRoot, assertRootRemovalAllowed, assertSessionChangeAllowed, LiveRootSelections, permissionTargetWorkspace, protocolHandshake, renameWorkspacePaths, rootRemovalBlocker, selectRootWorkspace, sendWebSocketData, transactionalRootSelection, WorkspaceWatchBatcher } from "./server.js";
+
+describe("workflow snapshot policy", () => {
+  it("skips use-connected helpers while retaining lead and follow-block snapshots", () => {
+    const run = { definition: { edges: [
+      { from: "lead", to: "helper", type: "use" },
+      { from: "lead", to: "review", type: "follow" }
+    ] } } as unknown as import("@remote-ide/protocol").HarnessRun;
+    expect(workflowCapturesSnapshots(run, "helper")).toBe(false);
+    expect(workflowCapturesSnapshots(run, "lead")).toBe(true);
+    expect(workflowCapturesSnapshots(run, "review")).toBe(true);
+    expect(workflowCapturesSnapshots(undefined, "lead")).toBe(true);
+  });
+});
 
 describe("protocol handshake", () => {
   it("rejects workflow models that are no longer available", async () => {
@@ -19,14 +32,21 @@ describe("protocol handshake", () => {
     expect(timers.scheduleAt).toHaveBeenCalledWith("/watchdog", "codex", expect.stringContaining("workflow_resume_failed"), dueAt, { runId: "run", blockId: "watchdog" });
   });
   it("accepts overlapping ranges and describes incompatible Desktops", () => {
-    expect(protocolHandshake({ minimum: 15, maximum: 15 })).toMatchObject({ compatible: true, compatibility: { minimum: 15, maximum: 15 } });
-    expect(protocolHandshake({ minimum: 8, maximum: 8 })).toEqual({ compatible: false, compatibility: { minimum: 15, maximum: 15 }, message: "Core supports protocol 15-15; this Desktop supports 8-8" });
+    expect(protocolHandshake({ minimum: 18, maximum: 18 })).toMatchObject({ compatible: true, compatibility: { minimum: 18, maximum: 18 } });
+    expect(protocolHandshake({ minimum: 8, maximum: 8 })).toEqual({ compatible: false, compatibility: { minimum: 18, maximum: 18 }, message: "Core supports protocol 18-18; this Desktop supports 8-8" });
     expect(protocolHandshake({ minimum: 11, maximum: 11 }).compatible).toBe(false);
     expect(protocolHandshake({ minimum: 4, maximum: 1 }).compatible).toBe(false);
   });
 });
 
 describe("workspace watcher batching", () => {
+  it("requests a healthy refresh after the initial scan without an error message", () => {
+    const events: unknown[] = [];
+    const batcher = new WorkspaceWatchBatcher((event) => events.push(event), 60_000, 2);
+    batcher.refresh(); batcher.flush(); batcher.flush();
+    expect(events).toEqual([{ type: "filesystem.changed", payload: { rootId: "legacy", paths: [], overflow: true, health: "healthy" } }]);
+  });
+
   it("coalesces bursts and marks bounded batches as overflowed", () => {
     const events: unknown[] = [];
     const batcher = new WorkspaceWatchBatcher((event) => events.push(event), 60_000, 2);

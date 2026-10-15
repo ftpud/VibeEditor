@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { mkdtemp, mkdir, readFile, writeFile, rename, rm } from "node:fs/promises";
 import crypto from "node:crypto";
 import os from "node:os";
 import path from "node:path";
@@ -7,18 +7,27 @@ import { fileURLToPath } from "node:url";
 import type { AiConfiguration, AiModel, AiProviderDescriptor, AiSession } from "@remote-ide/acp";
 import { CodexSessionManager } from "./codex.js";
 import { CopilotSessionManager } from "./copilot.js";
-import { StdioAcpProvider } from "../stdio-provider.js";
+import { StdioAcpProvider, type AcpTurnObserver } from "../stdio-provider.js";
 import { SkillsStore } from "../../skills.js";
 import { AcpRegistry } from "../acp.js";
 
 const FAKE_AGENT = fileURLToPath(new URL("./fake-acp-agent.py", import.meta.url));
+const fakeProviders = new Set<StdioAcpProvider>();
 
 class FakeProvider extends StdioAcpProvider {
-  constructor(onChanged: (workspace: string) => void, state: string, private readonly env: NodeJS.ProcessEnv = {}, projectRoot?: (workspace: string) => Promise<string>) { super(onChanged, state, undefined, projectRoot); }
+  constructor(onChanged: (workspace: string) => void, state: string, private readonly env: NodeJS.ProcessEnv = {}, projectRoot?: (workspace: string) => Promise<string>, turns?: AcpTurnObserver) { super(onChanged, state, turns, projectRoot); fakeProviders.add(this); }
   readonly descriptor: AiProviderDescriptor = { id: "fake", name: "Fake ACP", description: "test", settings: { title: "t", description: "d", sections: [] }, options: [], capabilities: { models: true, usage: true, mcp: true, agents: true, contextWindow: true, skills: true } };
   protected command(_configuration: AiConfiguration) { return { command: "python3", args: [FAKE_AGENT], env: this.env }; }
   protected async fallbackModels(): Promise<AiModel[]> { return [{ id: "fallback", name: "Fallback", defaultReasoning: "medium", reasoningLevels: ["medium"] }]; }
 }
+
+afterEach(async () => {
+  const providers = [...fakeProviders];
+  fakeProviders.clear();
+  const results = await Promise.allSettled(providers.map((provider) => provider.shutdown()));
+  const failure = results.find((result): result is PromiseRejectedResult => result.status === "rejected");
+  if (failure) throw failure.reason;
+});
 
 class MissingProvider extends StdioAcpProvider {
   readonly descriptor: AiProviderDescriptor = { id: "missing", name: "Missing ACP", description: "test", settings: { title: "t", description: "d", sections: [] }, options: [], capabilities: { models: true, usage: false, mcp: false, agents: false, contextWindow: false } };
@@ -26,16 +35,62 @@ class MissingProvider extends StdioAcpProvider {
   protected async fallbackModels(): Promise<AiModel[]> { return [{ id: "fallback", name: "Fallback", defaultReasoning: "", reasoningLevels: [] }]; }
 }
 
-async function settle(provider: FakeProvider, workspace: string): Promise<AiSession> {
-  for (let attempt = 0; attempt < 200; attempt += 1) {
+async function settle(provider: StdioAcpProvider, workspace: string, isSettled: (session: AiSession) => boolean = (session) => session.status !== "in_progress", timeoutMs = 5_000): Promise<AiSession> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
     const session = await provider.get(workspace);
-    if (session.status !== "in_progress") return session;
+    if (isSettled(session)) return session;
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
-  throw new Error("the fake agent never finished the turn");
+  throw new Error(`the fake agent did not satisfy the completion condition within ${timeoutMs}ms`);
 }
 
 describe("ACP integration", () => {
+  it("stops provider processes, flushes interrupted sessions and refuses new work during shutdown", async () => {
+    const state = await mkdtemp(path.join(os.tmpdir(), "acp-shutdown-"));
+    const workspace = process.cwd();
+    const turns = { begin: vi.fn(async () => "shutdown-checkpoint"), complete: vi.fn(async () => {}) };
+    const provider = new FakeProvider(() => undefined, state, { FAKE_SLOW: "on" }, undefined, turns);
+    try {
+      await provider.send(workspace, { prompt: "Work until stopped", configuration: { model: "model-a" } });
+      expect((await provider.get(workspace)).status).toBe("in_progress");
+      const stopped = provider.shutdown();
+      expect(provider.shutdown()).toBe(stopped);
+      await stopped;
+      expect(turns.complete.mock.calls[0]?.slice(0, 3)).toEqual([workspace, expect.arrayContaining(["shutdown-checkpoint"]), "interrupted"]);
+      const restored = await new FakeProvider(() => undefined, state).get(workspace);
+      expect(restored.status).toBe("idle");
+      expect(restored.messages.some((message) => message.text.includes("Core is shutting down"))).toBe(true);
+      await expect(provider.send(workspace, { prompt: "Too late", configuration: { model: "model-a" } })).rejects.toThrow("shutting down");
+    } finally { await provider.shutdown(); }
+  });
+
+  it("reuses persisted session labels after restart and rebuilds damaged or stale indexes", async () => {
+    const state = await mkdtemp(path.join(os.tmpdir(), "acp-summary-index-"));
+    const workspace = "/workspace";
+    const key = crypto.createHash("sha256").update(workspace).digest("hex");
+    const directory = path.join(state, `${key}-fake-sessions`);
+    const file = path.join(directory, "archived.json");
+    await mkdir(directory);
+    const archived: AiSession = { id: "archived", status: "idle", model: "auto", reasoning: "low", messages: [{ id: "first", role: "user", text: "Archived question", timestamp: "now" }, { id: "reply", role: "assistant", text: "x".repeat(200_000), timestamp: "now" }] };
+    await writeFile(file, JSON.stringify(archived));
+    const provider = new FakeProvider(() => {}, state);
+    expect((await provider.sessions(workspace)).find((session) => session.id === "archived")?.messages).toHaveLength(1);
+    const indexFile = `${directory}.index.json`;
+    const cached = JSON.parse(await readFile(indexFile, "utf8"));
+    expect(JSON.stringify(cached).length).toBeLessThan(1000);
+    // A different label in the derived index proves the restarted provider
+    // loaded it instead of rereading and summarizing the full transcript.
+    cached.sessions[0].messages[0].text = "Cached label";
+    await writeFile(indexFile, JSON.stringify(cached));
+    expect((await new FakeProvider(() => {}, state).sessions(workspace)).find((session) => session.id === "archived")?.messages[0]?.text).toBe("Cached label");
+    await writeFile(indexFile, "damaged index");
+    expect((await new FakeProvider(() => {}, state).sessions(workspace)).find((session) => session.id === "archived")?.messages[0]?.text).toBe("Archived question");
+    await writeFile(`${file}.tmp`, JSON.stringify({ ...archived, messages: [{ ...archived.messages[0], text: "Updated question" }] }));
+    await rename(`${file}.tmp`, file);
+    expect((await provider.sessions(workspace)).find((session) => session.id === "archived")?.messages[0]?.text).toBe("Updated question");
+  });
+
   it("offers GPT-6 Sol even when an older Codex catalogue omits it and launches it explicitly", async () => {
     class InspectCodex extends CodexSessionManager {
       describeCatalogue(models: AiModel[]) { return this.describeModels(models); }
@@ -112,6 +167,9 @@ describe("ACP integration", () => {
     expect(session.status).toBe("done");
     expect(session.contextUsed).toBe(120);
     expect(session.contextLimit).toBe(1000);
+    expect(session.context?.history.at(-1)).toMatchObject({ used: 120, limit: 1000 });
+    expect(session.context?.sections.find((section) => section.id === "tools")?.entries[0]?.preview).toBe("Run echo\n$ echo hi\nhi");
+    expect(session.context?.sections.find((section) => section.id === "reasoning")?.characters).toBeGreaterThan(0);
     expect(session.tokens).toEqual({ total: 30, input: 20, output: 10, thought: 4 });
     await provider.clear(workspace);
   });
@@ -155,15 +213,17 @@ describe("ACP integration", () => {
     const provider = new FakeProvider(() => undefined, state, { FAKE_SLOW: "on" });
     const workspace = process.cwd();
     await provider.send(workspace, { prompt: "first", configuration: { model: "model-b", reasoning: "" } });
-    await provider.configureNext(workspace, { model: "model-a", reasoning: "high" });
     await provider.steer(workspace, "continue", { senderModel: "model-b", queue: true });
-    const session = await settle(provider, workspace);
+    await provider.configureNext(workspace, { model: "model-a", reasoning: "high" });
+    const session = await settle(provider, workspace, (current) => current.status === "done"
+      && current.model === "model-a"
+      && current.messages.filter((message) => message.text.startsWith("working")).length === 2, 15_000);
     expect(session).toMatchObject({ model: "model-a", reasoning: "high" });
     expect(session.messages.find((message) => message.text === "continue")).toMatchObject({ role: "user", senderModel: "model-b" });
     expect(session.messages.filter((message) => message.text.startsWith("working"))).toHaveLength(2);
     expect(session.messages.filter((message) => message.role === "assistant").at(-1)).toMatchObject({ model: "model-a", reasoning: "high" });
     await provider.clear(workspace);
-  });
+  }, 20_000);
 
   it("archives conversations so they can be listed, switched back to and removed", async () => {
     const state = await mkdtemp(path.join(os.tmpdir(), "remote-ide-ai-sessions-"));
@@ -274,6 +334,8 @@ describe("ACP integration", () => {
     expect(prompts[2]!.text).toContain("<agent_instructions>");
     expect(prompts[2]!.text).toContain("Coordinate without waiting.");
     expect(session.agent?.name).toBe("Dispatcher");
+    const instructions = session.context?.sections.find((section) => section.id === "instructions");
+    expect(instructions?.entries.filter((item) => item.label === "Agent: Dispatcher").map((item) => item.preview)).toEqual(["Delegate bounded tasks.", "Coordinate without waiting."]);
     await provider.clear(workspace);
   });
 
@@ -288,6 +350,42 @@ describe("ACP integration", () => {
     expect(JSON.parse(codex["command"]({ webSearch: "default" }).env.CODEX_CONFIG as string)).toEqual({});
     expect(codex["command"]({ mode: "read-only" }).env.INITIAL_AGENT_MODE).toBe("read-only");
   });
+  it.each([false, true])("skips helper snapshots for sends and steering (live steering: %s) and preserves regular checkpoints", async (liveSteering) => {
+    const state = await mkdtemp(path.join(os.tmpdir(), "remote-ide-ai-snapshots-"));
+    const releaseFile = path.join(state, "release-prompt");
+    const turns = { begin: vi.fn(async () => crypto.randomUUID()), complete: vi.fn(async () => {}) };
+    const provider = new FakeProvider(() => undefined, state, { FAKE_SLOW: "on", FAKE_PROMPT_RELEASE_FILE: releaseFile, ...(liveSteering ? { FAKE_STEERING: "on" } : {}) }, undefined, turns);
+    const workspace = process.cwd();
+    const completedTurns = (count: number) => (session: AiSession) => session.status === "done"
+      && session.messages.filter((message) => message.text.startsWith("working")).length === count;
+
+    await provider.startFreshSession(workspace, { prompt: "helper assignment", configuration: { model: "model-a" }, captureSnapshots: false });
+    await vi.waitFor(async () => expect((await provider.get(workspace)).messages.some((message) => message.text.startsWith("working"))).toBe(true), { timeout: 5_000 });
+    await provider.steer(workspace, "helper steering");
+    await writeFile(releaseFile, "release");
+    const helperTurns = liveSteering ? 1 : 2;
+    const helper = await settle(provider, workspace, completedTurns(helperTurns), 15_000);
+    expect(helper.messages.filter((message) => message.role === "user").map((message) => message.text)).toEqual(["helper assignment", "helper steering"]);
+    await provider.send(workspace, { prompt: "helper follow-up", configuration: {} });
+    await settle(provider, workspace, completedTurns(helperTurns + 1), 15_000);
+    expect(turns.begin).not.toHaveBeenCalled();
+    expect(turns.complete).not.toHaveBeenCalled();
+
+    await rm(releaseFile);
+    await provider.startFreshSession(workspace, { prompt: "regular prompt", configuration: { model: "model-a" } });
+    await vi.waitFor(async () => {
+      const current = await provider.get(workspace);
+      expect(current.id).not.toBe(helper.id);
+      expect(current.messages.some((message) => message.text.startsWith("working"))).toBe(true);
+    }, { timeout: 5_000 });
+    await provider.steer(workspace, "regular steering");
+    await writeFile(releaseFile, "release");
+    await settle(provider, workspace, completedTurns(liveSteering ? 1 : 2), 15_000);
+    expect(turns.begin).toHaveBeenCalledTimes(2);
+    expect(turns.complete).toHaveBeenCalled();
+    expect(turns.complete.mock.calls.flat()).toContain("completed");
+  }, 20_000);
+
   it("queues mid-turn input for agents without steering and runs it next", async () => {
     const state = await mkdtemp(path.join(os.tmpdir(), "remote-ide-ai-queue-"));
     const provider = new FakeProvider(() => undefined, state);
@@ -309,16 +407,15 @@ describe("ACP integration", () => {
     const workspace = process.cwd();
     const first = await provider.send(workspace, { prompt: "old context", configuration: { model: "model-a", reasoning: "high" } });
     await provider.startFreshSession(workspace, { prompt: "fresh handoff", configuration: first.configuration ?? { model: first.model, reasoning: first.reasoning } });
-    let fresh = await provider.get(workspace);
-    for (let attempt = 0; attempt < 240 && (fresh.id === first.id || fresh.status === "in_progress" || !fresh.messages.some((message) => message.text === "fresh handoff")); attempt += 1) {
-      await new Promise((resolve) => setTimeout(resolve, 25)); fresh = await provider.get(workspace);
-    }
+    const fresh = await settle(provider, workspace, (session) => session.id !== first.id
+      && session.status === "done"
+      && session.messages.some((message) => message.role === "user" && message.text === "fresh handoff"), 15_000);
     expect(fresh.id).not.toBe(first.id);
     expect(fresh.messages.filter((message) => message.role === "user").map((message) => message.text)).toEqual(["fresh handoff"]);
     const archived = (await provider.sessions(workspace)).find((session) => session.id === first.id);
     expect(archived?.messages.some((message) => message.text === "old context")).toBe(true);
     await provider.clear(workspace);
-  });
+  }, 20_000);
 
   it("carries the selected local agent preset into a queued fresh session", async () => {
     const state = await mkdtemp(path.join(os.tmpdir(), "remote-ide-ai-fresh-agent-"));
@@ -328,16 +425,15 @@ describe("ACP integration", () => {
     const preset = { scope: "local" as const, name: "Oleg.md" };
     const first = await provider.send(workspace, { prompt: "old context", configuration: { model: "model-a" }, agent: oleg, agentPreset: preset });
     await provider.startFreshSession(workspace, { prompt: "fresh handoff", configuration: { model: "model-a" }, agent: oleg, agentPreset: preset });
-    let fresh = await provider.get(workspace);
-    for (let attempt = 0; attempt < 240 && (fresh.id === first.id || fresh.status === "in_progress" || !fresh.messages.some((message) => message.text === "fresh handoff")); attempt += 1) {
-      await new Promise((resolve) => setTimeout(resolve, 25)); fresh = await provider.get(workspace);
-    }
+    const fresh = await settle(provider, workspace, (session) => session.id !== first.id
+      && session.status === "done"
+      && session.messages.some((message) => message.role === "user" && message.text === "fresh handoff"), 15_000);
     expect(fresh.id).not.toBe(first.id);
     expect(fresh.agentPreset).toEqual(preset);
     expect(fresh.agent?.name).toBe("Oleg");
     expect((await provider.sessions(workspace)).find((session) => session.id === first.id)?.messages.some((message) => message.text === "old context")).toBe(true);
     await provider.clear(workspace);
-  });
+  }, 20_000);
 
   it("injects mid-turn input into the live turn when the agent supports steering", async () => {
     const state = await mkdtemp(path.join(os.tmpdir(), "remote-ide-ai-steer-"));
@@ -346,6 +442,9 @@ describe("ACP integration", () => {
     await provider.send(workspace, { prompt: "first", configuration: { model: "model-a" } });
     const steered = await provider.steer(workspace, "second");
     expect(steered.steering).toBe(true);
+    // Steering acknowledgement does not wait for the asynchronous transcript
+    // notification. Observe it before cancellation intentionally drops late output.
+    await vi.waitFor(async () => expect((await provider.get(workspace)).messages.some((message) => message.text.includes("[steered: second]"))).toBe(true), { timeout: 4_000 });
     await provider.interrupt(workspace);
     const session = await provider.get(workspace);
     expect(session.messages.some((message) => message.text.includes("[steered: second]"))).toBe(true);
@@ -409,6 +508,42 @@ describe("ACP integration", () => {
     expect(session.messages.some((message) => message.text.includes("Permission: yes"))).toBe(true);
     await provider.clear(workspace);
   });
+
+  it("supports Copilot Autopilot for new turns and a pending permission without restarting", async () => {
+    class FakeCopilot extends CopilotSessionManager {
+      constructor(onChanged: (workspace: string) => void, state: string) { super(onChanged, state); fakeProviders.add(this); }
+      protected command() { return { command: "python3", args: [FAKE_AGENT], env: { FAKE_PERMISSION: "on" } }; }
+    }
+    const state = await mkdtemp(path.join(os.tmpdir(), "copilot-autopilot-"));
+    const workspace = process.cwd();
+    const provider = new FakeCopilot(() => {}, state);
+    await provider.send(workspace, { prompt: "unattended", configuration: { model: "model-a", autopilot: true } });
+    let session = await settle(provider, workspace);
+    expect(session.pendingPermission).toBeUndefined();
+    expect(session.messages.some((message) => message.text.includes("Permission: yes"))).toBe(true);
+    expect(session.availableOptions).toContainEqual(expect.objectContaining({ id: "autopilot", permissionApproval: true }));
+    await provider.configure(workspace, { autopilot: false });
+    await provider.send(workspace, { prompt: "ask me", configuration: {} });
+    for (let attempt = 0; !session.pendingPermission && attempt < 100; attempt += 1) { await new Promise((resolve) => setTimeout(resolve, 10)); session = await provider.get(workspace); }
+    expect(session.pendingPermission).toBeDefined();
+    const threadId = session.threadId;
+    const sessionId = session.id;
+    const pendingId = session.pendingPermission!.id;
+    await expect(provider.configure(workspace, { model: "model-b" })).rejects.toThrow("currently working");
+    await provider.configure(workspace, { autopilot: true });
+    session = await settle(provider, workspace);
+    expect(session).toMatchObject({ id: sessionId, threadId, configuration: { autopilot: true } });
+    expect(session.pendingPermission).toBeUndefined();
+    expect(session.messages.filter((message) => message.text.includes("Permission: yes"))).toHaveLength(2);
+    await expect(provider.resolvePermission(workspace, pendingId, "yes")).rejects.toThrow("no longer pending");
+    await provider.configure(workspace, { autopilot: false });
+    await provider.send(workspace, { prompt: "ask again", configuration: {} });
+    session = await provider.get(workspace);
+    for (let attempt = 0; !session.pendingPermission && attempt < 100; attempt += 1) { await new Promise((resolve) => setTimeout(resolve, 10)); session = await provider.get(workspace); }
+    expect(session.pendingPermission).toBeDefined();
+    await provider.resolvePermission(workspace, session.pendingPermission!.id, "no");
+    await settle(provider, workspace);
+  }, 15_000);
 
   it("maps typed prompt blocks and remote MCP transports to ACP", async () => {
     const provider = new FakeProvider(() => undefined, await mkdtemp(path.join(os.tmpdir(), "remote-ide-ai-content-")));
@@ -543,7 +678,8 @@ describe("chat skills", () => {
     await provider.send(workspace, { prompt: "First turn", configuration: { model: "model-a" } });
     await provider.setSkills(workspace, [], first.id);
     await provider.steer(workspace, "Follow-up", { queue: true });
-    const done = await settle(provider, workspace);
+    const done = await settle(provider, workspace, (session) => session.status === "done"
+      && session.messages.filter((message) => message.text.startsWith("PROMPT:")).length === 2, 15_000);
     const echoes = done.messages.filter((message) => message.text.startsWith("PROMPT:"));
     expect(echoes).toHaveLength(2);
     expect(echoes[0]!.text).toContain("local/review");
@@ -554,8 +690,9 @@ describe("chat skills", () => {
     await provider.setSkills(workspace, ["local/review"], first.id);
     await skills.writePolicy(workspace, { allowed: [], defaults: [] });
     await provider.send(workspace, { prompt: "After revocation", configuration: { model: "model-a" } });
-    const revoked = await settle(provider, workspace);
+    const revoked = await settle(provider, workspace, (session) => session.status === "done"
+      && session.messages.filter((message) => message.text.startsWith("PROMPT:")).length >= 3, 15_000);
     expect(revoked.messages.filter((message) => message.text.startsWith("PROMPT:")).at(-1)!.text).not.toContain("Inspect regressions.");
     await provider.clear(workspace);
-  }, 15_000);
+  }, 20_000);
 });

@@ -1,13 +1,13 @@
 import crypto from "node:crypto";
 import os from "node:os";
 import path from "node:path";
-import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 
 // Readers/watchers only see .json files after their contents are complete.
 async function publishJson(file: string, value: unknown): Promise<void> {
   const temporary = `${file}.${crypto.randomUUID()}.tmp`;
   try {
-    await writeFile(temporary, `${JSON.stringify(value)}\n`, "utf8");
+    await writeFile(temporary, `${JSON.stringify(value)}\n`, { encoding: "utf8", flag: "wx", mode: 0o600 });
     await rename(temporary, file);
   } finally { await rm(temporary, { force: true }).catch(() => undefined); }
 }
@@ -33,7 +33,12 @@ export class AppEventBridge {
     this.responsesDirectory = path.join(stateDirectory, `${key}-responses`);
   }
 
-  async ready(): Promise<void> { await Promise.all([this.directory, this.commandsDirectory, this.responsesDirectory].map((directory) => mkdir(directory, { recursive: true }))); }
+  async ready(): Promise<void> {
+    await Promise.all([this.directory, this.commandsDirectory, this.responsesDirectory].map(async (directory) => {
+      await mkdir(directory, { recursive: true, mode: 0o700 });
+      await chmod(directory, 0o700);
+    }));
+  }
 
   async emit(event: AppEvent): Promise<void> {
     await this.ready();

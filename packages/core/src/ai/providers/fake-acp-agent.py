@@ -13,6 +13,7 @@ MODEL_META = {
 }
 STEERING = os.environ.get("FAKE_STEERING") == "on"
 SLOW = os.environ.get("FAKE_SLOW") == "on"
+PROMPT_RELEASE_FILE = os.environ.get("FAKE_PROMPT_RELEASE_FILE")
 LOAD = os.environ.get("FAKE_LOAD") == "on"
 PERMISSION = os.environ.get("FAKE_PERMISSION") == "on"
 ECHO_PROMPT = os.environ.get("FAKE_ECHO_PROMPT") == "on"
@@ -105,10 +106,15 @@ def handle(request):
             notify(session_id, {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": f"Permission: {state.get('permission', {}).get('optionId', 'cancelled')}"}})
         if SLOW:
             notify(session_id, {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "working"}})
-            for _ in range(100):
-                if state["cancelled"]:
-                    break
-                time.sleep(0.02)
+            if PROMPT_RELEASE_FILE:
+                # Tests release an admitted turn explicitly after steering or
+                # queueing, independent of host scheduling and timer drift.
+                while not state["cancelled"] and not os.path.exists(PROMPT_RELEASE_FILE):
+                    time.sleep(0.01)
+            else:
+                deadline = time.monotonic() + 2
+                while not state["cancelled"] and time.monotonic() < deadline:
+                    time.sleep(0.02)
             state["live"] = None
             ok({"stopReason": "end_turn"})
             return

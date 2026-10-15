@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <title>Vibe Gateway</title>
+  <rect x="100" y="100" width="824" height="824" rx="180" fill="#fff" stroke="#e8eaf0" stroke-width="1.5"/>
+  <g fill="none" stroke="#5268e8" stroke-width="28" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M512 354v48M352 466v-44q0-20 20-20h280q20 0 20 20v44"/>
+    <path d="M352 554v48M272 666v-44q0-20 20-20h120q20 0 20 20v44"/>
+    <path d="M672 554v48M592 666v-44q0-20 20-20h120q20 0 20 20v44"/>
+    <rect x="468" y="266" width="88" height="88" rx="18"/>
+    <rect x="308" y="466" width="88" height="88" rx="18"/>
+    <rect x="628" y="466" width="88" height="88" rx="18"/>
+    <rect x="228" y="666" width="88" height="88" rx="18"/>
+    <rect x="388" y="666" width="88" height="88" rx="18"/>
+    <rect x="548" y="666" width="88" height="88" rx="18"/>
+    <rect x="708" y="666" width="88" height="88" rx="18"/>
+  </g>
+</svg>

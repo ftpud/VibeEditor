@@ -9,14 +9,19 @@ export type AiContentBlock =
   | { type: "image"; data: string; mimeType: string; name?: string }
   | { type: "resource"; uri: string; mimeType?: string; text: string; name?: string }
   | { type: "resource_link"; uri: string; name: string; mimeType?: string; size?: number };
+export type AiContextCategory = "instructions" | "conversation" | "files" | "tools" | "reasoning";
+export type AiContextEntry = { id: string; label: string; characters: number; preview: string; timestamp: string };
+export type AiContextSection = { id: AiContextCategory; characters: number; count: number; entries: AiContextEntry[] };
+/** Captured history composition is separate from the provider's current token usage. */
+export type AiContextSnapshot = { sections: AiContextSection[]; history: { timestamp: string; used: number; limit?: number; characters: number }[]; compactions: number };
 /** `terminalId` is an opaque candidate Core terminal identity. It resolves only in the current workspace and never restores a shell. */
-export type AiMessage = { id: string; role: "user" | "assistant" | "activity" | "error"; text: string; content?: AiContentBlock[]; timestamp: string; terminalId?: string; /** Effective model for a generated response. */ model?: string; reasoning?: string; /** Model that originated an automated prompt; absent for human prompts. */ senderModel?: string };
+export type AiMessage = { id: string; role: "user" | "assistant" | "activity" | "error"; contextKind?: "tools" | "files" | "reasoning"; text: string; content?: AiContentBlock[]; timestamp: string; terminalId?: string; /** Effective model for a generated response. */ model?: string; reasoning?: string; /** Model that originated an automated prompt; absent for human prompts. */ senderModel?: string };
 export type AiCommand = { name: string; description: string; inputHint?: string };
 export type AiPermissionOption = { optionId: string; name: string; kind: "allow_once" | "allow_always" | "reject_once" | "reject_always" };
 export type AiPermissionRequest = { id: string; title: string; toolCallId: string; details?: string; options: AiPermissionOption[] };
 export type AiSkillSummary = { id: string; name: string; description?: string; revision: string };
 export type AiSkillCatalogue = { threadId: string; entries: AiSkillSummary[] };
-export type AiSession = { id?: string; createdAt?: string; updatedAt?: string; threadId?: string; model: string; reasoning: string; configuration?: AiConfiguration; /** One-shot model/reasoning override consumed by the next new turn. */ nextConfiguration?: AiConfiguration; availableOptions?: AiOption[]; availableCommands?: AiCommand[]; pendingPermission?: AiPermissionRequest; skillIds?: string[]; /** Whether prior turns received Vibe skill instructions. */ skillContext?: boolean; /** Catalogue already delivered to this provider conversation. */ skillCatalogue?: AiSkillCatalogue; status: AiStatus; failure?: AiFailure; messages: AiMessage[]; contextUsed?: number; contextLimit?: number; tokens?: AiTokenUsage; steering?: boolean; agent?: { name: string; fingerprint: string }; agentPreset?: AiAgentPreset };
+export type AiSession = { id?: string; createdAt?: string; updatedAt?: string; threadId?: string; model: string; reasoning: string; configuration?: AiConfiguration; /** One-shot model/reasoning override consumed by the next new turn. */ nextConfiguration?: AiConfiguration; availableOptions?: AiOption[]; availableCommands?: AiCommand[]; pendingPermission?: AiPermissionRequest; skillIds?: string[]; /** Whether prior turns received Vibe skill instructions. */ skillContext?: boolean; /** Catalogue already delivered to this provider conversation. */ skillCatalogue?: AiSkillCatalogue; status: AiStatus; failure?: AiFailure; messages: AiMessage[]; context?: AiContextSnapshot; contextUsed?: number; contextLimit?: number; tokens?: AiTokenUsage; steering?: boolean; agent?: { name: string; fingerprint: string }; agentPreset?: AiAgentPreset };
 export type AiTokenUsage = { total: number; input: number; output: number; thought?: number; cachedRead?: number; cachedWrite?: number };
 /**
  * Optional catalogue metadata. Everything here is advertised by the agent (ACP
@@ -43,7 +48,8 @@ export type AiModelDetails = {
   note?: string;
 };
 export type AiModel = { id: string; name: string; defaultReasoning: string; reasoningLevels: string[] } & AiModelDetails;
-export type AiOption = { id: string; name: string; description: string; section?: string; type: "select" | "number" | "boolean" | "text"; defaultValue: string | number | boolean; choices?: { value: string; name: string; description?: string }[]; min?: number; max?: number; modelDependent?: boolean };
+/** permissionApproval marks a client-owned boolean that approves ACP tool permission requests. */
+export type AiOption = { permissionApproval?: boolean; id: string; name: string; description: string; section?: string; type: "select" | "number" | "boolean" | "text"; defaultValue: string | number | boolean; choices?: { value: string; name: string; description?: string }[]; min?: number; max?: number; modelDependent?: boolean };
 export type AiAutopilotOption = { option: AiOption; on: string | boolean; off: string | boolean };
 export type AiSettingsSection = { id: string; name: string; description?: string };
 export type AiSettingsLayout = { title: string; description: string; sections: AiSettingsSection[] };
@@ -65,7 +71,11 @@ export type AiMcpServer =
 export type AiAgent = { name: string; description?: string; instructions: string; mcpServers?: string[] };
 export type AiAgentPreset = { scope: "global" | "local" | "workspace"; name: string };
 export type AiTaskSummary = { status: AiStatus; preview: string; additions: number; deletions: number; pendingPermission: boolean; waitingUntil?: string };
-export type AcpSendRequest = { prompt: string; content?: AiContentBlock[]; configuration: AiConfiguration; mcpServers?: AiMcpServer[]; agent?: AiAgent; agentPreset?: AiAgentPreset; skillIds?: string[] };
+export type AcpSendRequest = {
+  prompt: string; content?: AiContentBlock[]; configuration: AiConfiguration; mcpServers?: AiMcpServer[]; agent?: AiAgent; agentPreset?: AiAgentPreset; skillIds?: string[];
+  /** Core workspace snapshots. Inherits the live session's policy; new sessions default to true. */
+  captureSnapshots?: boolean;
+};
 
 /** Shared provider contract. Each provider owns its settings UI metadata. */
 export abstract class AcpProvider {
@@ -78,6 +88,8 @@ export abstract class AcpProvider {
   async setSkills(_workspace: string, _ids: string[], _sessionId?: string, _agentPreset?: AiAgentPreset | null): Promise<AiSession> { throw new Error("This provider does not support skills"); }
   abstract send(workspace: string, request: AcpSendRequest): Promise<AiSession>;
   abstract interrupt(workspace: string): Promise<AiSession>;
+  /** Stop owned processes and flush durable session state during Core shutdown. */
+  async shutdown(): Promise<void> {}
   abstract resolvePermission(workspace: string, requestId: string, optionId?: string): Promise<AiSession>;
   /** Adds input to a turn that is already running, optionally forcing a distinct follow-up turn. */
   abstract steer(workspace: string, prompt: string, options?: { senderModel?: string; queue?: boolean }): Promise<AiSession>;

@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import os from "node:os";
 import path from "node:path";
-import { copyFile, mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import type { HarnessDefinition, HarnessRun, HarnessStateDiagnostic } from "@remote-ide/protocol";
 import { workflowTemplate } from "./workflow-templates.js";
 import { CoreError } from "./errors.js";
@@ -81,6 +81,31 @@ export class HarnessStore {
     return (await this.readRecords("runs.json", "runs", isRun)).filter((run) => !harnessId || run.harnessId === harnessId).slice(0, RUNS_PER_WORKFLOW);
   }
 
+  /** Derived metadata avoids parsing transcripts on routine list requests. */
+  async summaries(harnessId?: string): Promise<HarnessRun[]> {
+    const stamp = await stat(path.join(this.directory, "runs.json")).then((value) => `${value.mtimeMs}:${value.size}`).catch(() => "missing");
+    try {
+      const cached = JSON.parse(await readFile(path.join(this.directory, "runs-summary.json"), "utf8"));
+      if (cached.schemaVersion === 1 && cached.stamp === stamp && Array.isArray(cached.runs) && cached.runs.every((run: unknown) => isRun(run) && run.summary === true)) {
+        return cached.runs.filter((run: HarnessRun) => !harnessId || run.harnessId === harnessId).slice(0, RUNS_PER_WORKFLOW);
+      }
+    } catch { /* Rebuild missing, stale, or damaged derived state from durable runs. */ }
+    const runs = (await this.readRecords("runs.json", "runs", isRun)).map(summarizeHarnessRun);
+    await this.cacheSummaries(runs, stamp);
+    return runs.filter((run) => !harnessId || run.harnessId === harnessId).slice(0, RUNS_PER_WORKFLOW);
+  }
+
+  private async cacheSummaries(runs: HarnessRun[], stamp: string): Promise<void> {
+    const target = path.join(this.directory, "runs-summary.json");
+    const temporary = `${target}.${crypto.randomUUID()}.tmp`;
+    try {
+      await mkdir(this.directory, { recursive: true });
+      await writeFile(temporary, JSON.stringify({ schemaVersion: 1, stamp, runs }, redactWorkflowValue));
+      await rename(temporary, target);
+    } catch { /* A cache write must not prevent reading or saving durable state. */ }
+    finally { await rm(temporary, { force: true }).catch(() => {}); }
+  }
+
   async saveRun(run: HarnessRun): Promise<void> {
     await this.mutate(async () => {
       const current = await this.runs();
@@ -111,6 +136,21 @@ export class HarnessStore {
       await this.writeJson("runs.json", { schemaVersion: SCHEMA_VERSION, runs: runs.filter((item) => item.id !== id) } satisfies RunFile);
     });
   }
+
+  async cleanupRunsBefore(cutoff: number): Promise<number> {
+    return this.mutate(async () => {
+      const runs = await this.readRecords("runs.json", "runs", isRun);
+      const retained = runs.filter((run) => activeRunStatuses.has(run.status) || !run.completedAt || !(Date.parse(run.completedAt) < cutoff));
+      if (retained.length === runs.length) return 0;
+      await this.writeJson("runs.json", { schemaVersion: SCHEMA_VERSION, runs: retained } satisfies RunFile);
+      // A recovery backup must not retain the history the user just removed.
+      await copyFile(path.join(this.directory, "runs.json"), path.join(this.directory, "runs.json.bak"));
+      return runs.length - retained.length;
+    });
+  }
+
+  /** Storage maintenance must include every workflow, beyond the UI list limit. */
+  async storageRuns(): Promise<HarnessRun[]> { return this.readRecords("runs.json", "runs", isRun); }
 
   async recoverInterruptedRuns(): Promise<HarnessRun[]> {
     return this.mutate(async () => {
@@ -169,7 +209,18 @@ export class HarnessStore {
 
   private async writeJson(name: string, value: unknown): Promise<void> {
     await mkdir(this.directory, { recursive: true }); const target = path.join(this.directory, name); const temporary = path.join(this.directory, `${name}.${crypto.randomUUID()}.tmp`);
-    try { await writeFile(temporary, `${JSON.stringify(value, redactWorkflowValue, 2)}\n`, "utf8"); await copyFile(target, `${target}.bak`).catch((error) => { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }); await rename(temporary, target); }
+    try {
+      await writeFile(temporary, `${JSON.stringify(value, redactWorkflowValue, 2)}\n`, "utf8");
+      if (name === "runs.json") {
+        const records = (value as RunFile).runs;
+        // Prepare derived state before publishing the durable outcome. Readers
+        // validate its stamp against runs.json, so it is ignored until promotion.
+        const stamp = await stat(temporary).then((entry) => `${entry.mtimeMs}:${entry.size}`);
+        await this.cacheSummaries(records.map(summarizeHarnessRun), stamp);
+      }
+      await copyFile(target, `${target}.bak`).catch((error) => { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; });
+      await rename(temporary, target);
+    }
     catch (error) { await rm(temporary, { force: true }).catch(() => undefined); throw new CoreError("WRITE_FAILED", `Could not save workflows: ${message(error)}`); }
   }
 
@@ -179,6 +230,12 @@ export class HarnessStore {
     void settled.finally(() => { if (mutationQueues.get(this.directory) === settled) mutationQueues.delete(this.directory); });
     return result;
   }
+}
+
+export function summarizeHarnessRun(run: HarnessRun): HarnessRun {
+  return { summary: true, id: run.id, harnessId: run.harnessId, harnessVersion: run.harnessVersion, input: run.input.slice(0, 200), status: run.status,
+    createdAt: run.createdAt, startedAt: run.startedAt, completedAt: run.completedAt, workspace: run.workspace, binding: run.binding,
+    blocks: run.blocks.map(({ blockId, status }) => ({ blockId, status })) };
 }
 
 function validName(name: string): string { const value = name.trim(); if (!value || value.length > 120) throw new CoreError("INVALID_REQUEST", "Harness name must contain 1–120 characters"); return value; }
@@ -217,6 +274,7 @@ function isRun(value: unknown): value is HarnessRun {
   if (value.features !== undefined && (!Array.isArray(value.features) || !value.features.every((feature) => isRecord(feature) && typeof feature.id === "string" && typeof feature.prompt === "string" && Array.isArray(feature.prerequisites) && feature.prerequisites.every((dependency) => typeof dependency === "string") && ["planned", "dispatched", "completed", "blocked"].includes(String(feature.status)) && (feature.taskId === undefined || typeof feature.taskId === "string") && (feature.commit === undefined || typeof feature.commit === "string") && (feature.blockedReason === undefined || typeof feature.blockedReason === "string")))) return false;
   if (value.corrections !== undefined && (!Array.isArray(value.corrections) || !value.corrections.every((cycle) => isRecord(cycle) && typeof cycle.reviewBlockId === "string" && typeof cycle.ownerBlockId === "string" && typeof cycle.cycle === "number" && typeof cycle.revision === "string" && Array.isArray(cycle.findings) && cycle.findings.every((finding) => isRecord(finding) && typeof finding.id === "string" && typeof finding.message === "string" && typeof finding.ownerBlockId === "string" && typeof finding.revision === "string") && ["requested", "corrected", "blocked"].includes(String(cycle.status)) && typeof cycle.requestedAt === "string" && (cycle.correctedRevision === undefined || typeof cycle.correctedRevision === "string") && (cycle.completedAt === undefined || typeof cycle.completedAt === "string") && (cycle.error === undefined || typeof cycle.error === "string")))) return false;
   return value.blocks.every((block) => isRecord(block) && typeof block.blockId === "string" && [...statuses, "skipped"].includes(String(block.status))
+    && (block.autopilot === undefined || typeof block.autopilot === "boolean")
     && (block.chatMessages === undefined || Array.isArray(block.chatMessages) && block.chatMessages.every((message) => isRecord(message) && typeof message.id === "string" && ["user", "assistant"].includes(String(message.role)) && typeof message.text === "string" && typeof message.timestamp === "string"))
     && (block.tokens === undefined || isTokenUsage(block.tokens))
     && (block.structuredInput === undefined || isJsonValue(block.structuredInput))
@@ -235,8 +293,8 @@ function isTokenUsage(value: unknown): boolean {
 }
 function isHarness(value: unknown): value is HarnessDefinition {
   if (!value || typeof value !== "object") return false; const item = value as Partial<HarnessDefinition>;
-  return typeof item.id === "string" && typeof item.name === "string" && typeof item.version === "number" && typeof item.createdAt === "string" && typeof item.updatedAt === "string" && (item.settings === undefined || isRecord(item.settings) && (item.settings.concurrency === undefined || Number.isInteger(item.settings.concurrency)) && (item.settings.maxActiveRuns === undefined || Number.isInteger(item.settings.maxActiveRuns)) && (item.settings.maxBlockAttempts === undefined || Number.isInteger(item.settings.maxBlockAttempts)) && (item.settings.maxStackSize === undefined || Number.isInteger(item.settings.maxStackSize)) && (item.settings.maxLoopCount === undefined || Number.isInteger(item.settings.maxLoopCount)) && (item.settings.maxChildTasks === undefined || Number.isInteger(item.settings.maxChildTasks)) && (item.settings.promptLimitChars === undefined || Number.isInteger(item.settings.promptLimitChars)) && (item.settings.outputLimitChars === undefined || Number.isInteger(item.settings.outputLimitChars)) && (item.settings.logLimitEntries === undefined || Number.isInteger(item.settings.logLimitEntries)) && (item.settings.maxRunDurationMs === undefined || Number.isInteger(item.settings.maxRunDurationMs)) && (item.settings.tokenBudget === undefined || Number.isInteger(item.settings.tokenBudget)) && (item.settings.retry === undefined || isRecord(item.settings.retry) && (item.settings.retry.maxAttempts === undefined || Number.isInteger(item.settings.retry.maxAttempts)))) && Array.isArray(item.blocks) && Array.isArray(item.edges)
-    && item.blocks.every((block) => block && typeof block.id === "string" && ["ai", "chatbox", "skill", "task_controls", "text", "timer", "user_prompt", "yes_no_prompt", "markdown", "script", "run_app", "start_button", "start_input", "prompt", "task", "review", "verification"].includes(block.type) && typeof block.label === "string" && (block.description === undefined || typeof block.description === "string") && (block.skillId === undefined || typeof block.skillId === "string") && typeof block.prompt === "string" && (block.seconds === undefined || typeof block.seconds === "number" && Number.isFinite(block.seconds)) && (block.command === undefined || typeof block.command === "string") && (block.app === undefined || isRecord(block.app) && ((block.app.actions === undefined && ["start", "status", "kill", "tail"].includes(block.app.action as string)) || (Array.isArray(block.app.actions) && block.app.actions.length > 0 && block.app.actions.every((action) => ["start", "status", "kill", "tail"].includes(action as string)))) && typeof block.app.name === "string" && (block.app.lines === undefined || Number.isInteger(block.app.lines))) && (block.inputSchema === undefined || isDataSchema(block.inputSchema)) && (block.outputSchema === undefined || isDataSchema(block.outputSchema)) && (block.provider === undefined || typeof block.provider === "string") && (block.model === undefined || typeof block.model === "string") && (block.reasoning === undefined || typeof block.reasoning === "string") && (block.watchdog === undefined || typeof block.watchdog === "boolean") && (block.review === undefined || isRecord(block.review) && typeof block.review.revision === "string" && (block.review.baseRevision === undefined || typeof block.review.baseRevision === "string") && (block.review.correction === undefined || isRecord(block.review.correction) && typeof block.review.correction.ownerBlockId === "string" && (block.review.correction.maxCycles === undefined || Number.isInteger(block.review.correction.maxCycles)) && (block.review.correction.verificationBlockId === undefined || typeof block.review.correction.verificationBlockId === "string"))) && (block.verification === undefined || isRecord(block.verification) && typeof block.verification.command === "string" && (block.verification.revision === undefined || typeof block.verification.revision === "string") && (block.verification.workingDirectory === undefined || typeof block.verification.workingDirectory === "string") && (block.verification.timeoutMs === undefined || Number.isInteger(block.verification.timeoutMs))) && (block.agent === undefined || isRecord(block.agent) && typeof block.agent.name === "string" && ["global", "local", "workspace"].includes(block.agent.scope)) && (!block.join || block.join === "all" || block.join === "any") && (!block.routing || block.routing === "all" || block.routing === "ai") && typeof block.position?.x === "number" && typeof block.position?.y === "number")
+  return typeof item.id === "string" && typeof item.name === "string" && typeof item.version === "number" && typeof item.createdAt === "string" && typeof item.updatedAt === "string" && (item.settings === undefined || isRecord(item.settings) && (item.settings.concurrency === undefined || Number.isInteger(item.settings.concurrency)) && (item.settings.maxActiveRuns === undefined || Number.isInteger(item.settings.maxActiveRuns)) && (item.settings.maxBlockAttempts === undefined || Number.isInteger(item.settings.maxBlockAttempts)) && (item.settings.maxStackSize === undefined || Number.isInteger(item.settings.maxStackSize)) && (item.settings.maxLoopCount === undefined || Number.isInteger(item.settings.maxLoopCount)) && (item.settings.maxChildTasks === undefined || Number.isInteger(item.settings.maxChildTasks)) && (item.settings.contextBudgetChars === undefined || Number.isInteger(item.settings.contextBudgetChars)) && (item.settings.promptLimitChars === undefined || Number.isInteger(item.settings.promptLimitChars)) && (item.settings.outputLimitChars === undefined || Number.isInteger(item.settings.outputLimitChars)) && (item.settings.logLimitEntries === undefined || Number.isInteger(item.settings.logLimitEntries)) && (item.settings.maxRunDurationMs === undefined || Number.isInteger(item.settings.maxRunDurationMs)) && (item.settings.tokenBudget === undefined || Number.isInteger(item.settings.tokenBudget)) && (item.settings.retry === undefined || isRecord(item.settings.retry) && (item.settings.retry.maxAttempts === undefined || Number.isInteger(item.settings.retry.maxAttempts)))) && Array.isArray(item.blocks) && Array.isArray(item.edges)
+    && item.blocks.every((block) => block && typeof block.id === "string" && ["ai", "chatbox", "skill", "task_controls", "terminal_control", "text", "timer", "user_prompt", "yes_no_prompt", "markdown", "script", "run_app", "start_button", "start_input", "prompt", "task", "review", "verification"].includes(block.type) && typeof block.label === "string" && (block.description === undefined || typeof block.description === "string") && (block.skillId === undefined || typeof block.skillId === "string") && typeof block.prompt === "string" && (block.seconds === undefined || typeof block.seconds === "number" && Number.isFinite(block.seconds)) && (block.command === undefined || typeof block.command === "string") && (block.app === undefined || isRecord(block.app) && ((block.app.actions === undefined && ["start", "status", "kill", "tail"].includes(block.app.action as string)) || (Array.isArray(block.app.actions) && block.app.actions.length > 0 && block.app.actions.every((action) => ["start", "status", "kill", "tail"].includes(action as string)))) && typeof block.app.name === "string" && (block.app.lines === undefined || Number.isInteger(block.app.lines))) && (block.inputSchema === undefined || isDataSchema(block.inputSchema)) && (block.outputSchema === undefined || isDataSchema(block.outputSchema)) && (block.provider === undefined || typeof block.provider === "string") && (block.model === undefined || typeof block.model === "string") && (block.reasoning === undefined || typeof block.reasoning === "string") && (block.autopilot === undefined || typeof block.autopilot === "boolean") && (block.watchdog === undefined || typeof block.watchdog === "boolean") && (block.review === undefined || isRecord(block.review) && typeof block.review.revision === "string" && (block.review.baseRevision === undefined || typeof block.review.baseRevision === "string") && (block.review.correction === undefined || isRecord(block.review.correction) && typeof block.review.correction.ownerBlockId === "string" && (block.review.correction.maxCycles === undefined || Number.isInteger(block.review.correction.maxCycles)) && (block.review.correction.verificationBlockId === undefined || typeof block.review.correction.verificationBlockId === "string"))) && (block.verification === undefined || isRecord(block.verification) && typeof block.verification.command === "string" && (block.verification.revision === undefined || typeof block.verification.revision === "string") && (block.verification.workingDirectory === undefined || typeof block.verification.workingDirectory === "string") && (block.verification.timeoutMs === undefined || Number.isInteger(block.verification.timeoutMs))) && (block.agent === undefined || isRecord(block.agent) && typeof block.agent.name === "string" && ["global", "local", "workspace"].includes(block.agent.scope)) && (!block.join || block.join === "all" || block.join === "any") && (!block.routing || block.routing === "all" || block.routing === "ai") && typeof block.position?.x === "number" && typeof block.position?.y === "number")
     && item.edges.every((edge) => edge && typeof edge.id === "string" && typeof edge.from === "string" && typeof edge.to === "string" && (edge.type === undefined || ["use", "follow", "path"].includes(edge.type)) && (edge.timeoutMs === undefined || Number.isInteger(edge.timeoutMs)) && (edge.label === undefined || typeof edge.label === "string") && (edge.loop === undefined || typeof edge.loop === "boolean") && (edge.execution === undefined || edge.execution === "sync" || edge.execution === "async"));
 }
 function isJsonValue(value: unknown, depth = 0): boolean {

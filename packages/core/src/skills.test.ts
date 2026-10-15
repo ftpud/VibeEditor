@@ -23,6 +23,26 @@ async function loadedInstructions(store: SkillsStore, workspace: string, ids: st
 }
 
 describe("project skills", () => {
+  it("reads linked supporting files within a skill and rejects traversal and symlink escapes", async () => {
+    const { root, workspace, store } = await setup();
+    await store.write("global/review", workspace, review);
+    const skill = (await store.list(workspace)).skills.find((item) => item.id === "global/review")!;
+    const directory = path.dirname(skill.path);
+    await mkdir(path.join(directory, "references"));
+    await writeFile(path.join(directory, "references/guide.md"), "Supporting guidance");
+    expect(await store.readResource(skill.id, workspace)).toBe(review);
+    expect(await store.readResource(skill.id, workspace, "references/guide.md")).toBe("Supporting guidance");
+    for (const resource of ["../SKILL.md", "/etc/passwd", "references/../../outside.md", "references\\guide.md", ""]) {
+      await expect(store.readResource(skill.id, workspace, resource)).rejects.toThrow("relative path");
+    }
+    const outside = path.join(root, "outside.md");
+    await writeFile(outside, "Private data");
+    await symlink(outside, path.join(directory, "references/escape.md"));
+    await expect(store.readResource(skill.id, workspace, "references/escape.md")).rejects.toThrow("escapes");
+    await writeFile(path.join(directory, "references/large.md"), "x".repeat(256 * 1024 + 1));
+    await expect(store.readResource(skill.id, workspace, "references/large.md")).rejects.toThrow("256 KB");
+  });
+
   it("discovers separate global/local skills and persists a project allowlist with defaults", async () => {
     const { root, workspace, store } = await setup();
     expect(await store.list(workspace)).toEqual({ skills: [], policy: { allowed: [], defaults: [] }, policyStorage: "local" });
@@ -36,6 +56,16 @@ describe("project skills", () => {
     await expect(store.validateSelection(workspace, ["global/review"])).rejects.toThrow("not allowed");
     expect(await store.validateSelection(workspace, ["local/review", "local/review"])).toEqual(["local/review"]);
     expect(JSON.parse(await readFile(path.join(root, "state/skills/local", crypto.createHash("sha256").update(workspace).digest("hex"), "skills.json"), "utf8"))).toEqual({ allowed: ["local/review"], defaults: ["local/review"], scopeVersion: 2 });
+  });
+
+  it("resolves aliased ancestors when the state directory does not exist yet", async () => {
+    const { root, workspace } = await setup();
+    const alias = path.join(root, "alias");
+    await symlink(root, alias, "dir");
+    const store = new SkillsStore(path.join(alias, "missing", "state"), workspace);
+    expect((await store.list(workspace)).skills).toEqual([]);
+    await store.write("local/review", workspace, review);
+    expect(await store.read("local/review", workspace)).toBe(review);
   });
 
   it("reloads edited instructions and enforces revoked policy on every turn", async () => {
@@ -140,7 +170,7 @@ describe("project skills", () => {
   });
 
   it("loads only advertised skills and rechecks policy, agent scope and conversation identity", async () => {
-    const { workspace, store } = await setup();
+    const { root, workspace, store } = await setup();
     await store.write("local/review", workspace, review);
     await store.write("local/other", workspace, "Hidden instructions");
     const entries = await store.available(workspace, ["local/review"]);
@@ -148,6 +178,8 @@ describe("project skills", () => {
     expect(JSON.stringify(entries)).not.toContain("Check regressions");
     const session = { model: "test", reasoning: "", status: "in_progress" as const, messages: [], threadId: "thread", skillCatalogue: { threadId: "thread", entries } };
     expect(await store.load(workspace, "local/review", session)).toMatchObject({ content: review, revision: entries[0]!.revision });
+    expect(await new SkillsStore(path.join(root, "state"), workspace).load(workspace, "local/review", { ...session })).toMatchObject({ content: "", unchanged: true });
+    expect(await store.load(workspace, "local/review", { ...session, skillCatalogue: { threadId: "thread", entries } })).toMatchObject({ content: review });
     await expect(store.load(workspace, "local/other", session)).rejects.toThrow("not available");
     await expect(store.load(workspace, "local/review", { ...session, threadId: "other" })).rejects.toThrow("not available");
     await store.write("local/review", workspace, "Updated instructions");

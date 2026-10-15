@@ -1,3 +1,9 @@
+export type StorageAge = "today" | "week" | "older";
+export type StorageCategory = "tasks" | "sessions" | "workflows" | "checkpoints" | "logs" | "provider" | "runtime" | "other";
+export type StorageUsage = { id: StorageCategory; label: string; description: string; bytes: number; count: number; segments: { id: string; label: string; bytes: number }[]; entries?: { path: string; label: string; bytes: number; state: string }[]; cleanable: { finished: number; week: number; older: number; inactive?: number; versions?: number } };
+export type StorageSnapshot = { id: string; phase: "idle" | "scanning" | "cleaning" | "ready" | "error"; updatedAt: string; server: string; paths: string[]; categories: StorageUsage[]; totalBytes: number; scannedFiles: number; message: string; warnings: string[]; disk?: { total: number; available: number } };
+export type StorageCleanup = { scanId: string; category: StorageCategory; age: "finished" | "older" | "week" | "inactive" | "versions"; closeOtherSessions?: boolean; discardChanges?: boolean };
+
 export type FileTreeNode = {
   name: string;
   path: string;
@@ -16,7 +22,7 @@ export type FileRevision = { identity: string; version: string };
  * Desktop can prove it is safe to talk to a newly deployed Core.
  */
 export type ProtocolCompatibility = { minimum: number; maximum: number };
-export const protocolCompatibility: ProtocolCompatibility = { minimum: 15, maximum: 15 };
+export const protocolCompatibility: ProtocolCompatibility = { minimum: 18, maximum: 18 };
 
 export function protocolRangeIsValid(range: ProtocolCompatibility): boolean {
   return Number.isInteger(range.minimum) && Number.isInteger(range.maximum) && range.minimum > 0 && range.minimum <= range.maximum;
@@ -153,11 +159,11 @@ export type FileColor = "red" | "orange" | "yellow" | "green" | "blue" | "purple
 /** Durable terminal-tab metadata. The display name is UI state, not a PTY identity. */
 export type WorkspaceWorkflowDocument = { runId: string; blockId: string; position: number; pinned?: boolean; markdownMode?: "edit" | "preview"; active?: boolean };
 export type WorkspaceTerminalOptions = { tabs: { displayName: string; terminalId?: string }[]; activeTabIndex?: number; panelOpen: boolean };
-export type TerminalSessionSnapshot = { terminalId: string; status: "running" | "exited"; output: string; exitCode?: number };
+export type TerminalSessionSnapshot = { terminalId: string; status: "running" | "exited"; output: string; exitCode?: number; displayName?: string };
 /** Resolution is always against the currently selected workspace. A stale ID means Core no longer owns that process. */
 export type TerminalAttachResult = { state: "available"; session: TerminalSessionSnapshot } | { state: "stale"; reason: "session-unavailable" };
 export type WorkspaceTask = { id: string; name: string; branch: string; baseBranch: string; status: "active" | "finished"; archived: boolean };
-export type { AiAgent, AiAgentPreset, AiCommand, AiConfiguration, AiContentBlock, AiFailure, AiFailureKind, AiMessage, AiModel, AiMcpServer, AiOption, AiPermissionRequest, AiProvider, AiProviderCapabilities, AiProviderDescriptor, AiSession, AiSettingsLayout, AiSettingsSection, AiStatus, AiTaskSummary, AiTokenUsage, AiUsage } from "@remote-ide/acp";
+export type { AiContextCategory, AiContextEntry, AiContextSection, AiContextSnapshot, AiAgent, AiAgentPreset, AiCommand, AiConfiguration, AiContentBlock, AiFailure, AiFailureKind, AiMessage, AiModel, AiMcpServer, AiOption, AiPermissionRequest, AiProvider, AiProviderCapabilities, AiProviderDescriptor, AiSession, AiSettingsLayout, AiSettingsSection, AiStatus, AiTaskSummary, AiTokenUsage, AiUsage } from "@remote-ide/acp";
 import type { AiAgent, AiAgentPreset, AiConfiguration, AiContentBlock, AiMcpServer, AiModel, AiPermissionRequest, AiProvider, AiProviderDescriptor, AiSession, AiTaskSummary, AiTokenUsage, AiUsage } from "@remote-ide/acp";
 export type UsefulFileScope = "global" | "local";
 export type UsefulFile = { scope: UsefulFileScope; name: string };
@@ -201,10 +207,10 @@ export type AiContinuationTimer = { id: string; workspace: string; provider: AiP
 export type HarnessAppAction = "start" | "status" | "kill" | "tail";
 export type HarnessAppState = { name: string; status: "not_found" | "starting" | "running" | "descendants-running" | "exited"; output: string; pid?: number; exitCode?: number | null; signal?: string | null };
 export type HarnessAppOptions = { action?: HarnessAppAction; actions?: HarnessAppAction[]; name: string; lines?: number };
-export type HarnessBlock = { id: string; type: "ai" | "chatbox" | "skill" | "task_controls" | "text" | "timer" | "user_prompt" | "yes_no_prompt" | "markdown" | "script" | "run_app" | "start_button" | "start_input" | "prompt" | "task" | "review" | "verification"; seconds?: number; command?: string; app?: HarnessAppOptions; label: string; description?: string; skillId?: string; prompt: string; inputSchema?: HarnessDataSchema; outputSchema?: HarnessDataSchema; provider?: AiProvider; model?: string; reasoning?: string; agent?: AgentFileReference; watchdog?: boolean; review?: HarnessReview; verification?: HarnessVerification; join?: "all" | "any"; routing?: "all" | "ai"; position: { x: number; y: number } };
+export type HarnessBlock = { id: string; type: "ai" | "chatbox" | "skill" | "task_controls" | "terminal_control" | "text" | "timer" | "user_prompt" | "yes_no_prompt" | "markdown" | "script" | "run_app" | "start_button" | "start_input" | "prompt" | "task" | "review" | "verification"; seconds?: number; command?: string; app?: HarnessAppOptions; autopilot?: boolean; label: string; description?: string; skillId?: string; prompt: string; inputSchema?: HarnessDataSchema; outputSchema?: HarnessDataSchema; provider?: AiProvider; model?: string; reasoning?: string; agent?: AgentFileReference; watchdog?: boolean; review?: HarnessReview; verification?: HarnessVerification; join?: "all" | "any"; routing?: "all" | "ai"; position: { x: number; y: number } };
 export type HarnessEdge = { timeoutMs?: number; type?: "use" | "follow" | "path"; id: string; from: string; to: string; label?: string; loop?: boolean; execution?: "sync" | "async" };
 export type HarnessRetryPolicy = { maxAttempts?: number };
-export type HarnessSettings = { concurrency?: number; maxActiveRuns?: number; maxBlockAttempts?: number; maxStackSize?: number; maxLoopCount?: number; maxChildTasks?: number; promptLimitChars?: number; retry?: HarnessRetryPolicy; outputLimitChars?: number; logLimitEntries?: number; maxRunDurationMs?: number; tokenBudget?: number };
+export type HarnessSettings = { concurrency?: number; maxActiveRuns?: number; maxBlockAttempts?: number; maxStackSize?: number; maxLoopCount?: number; maxChildTasks?: number; promptLimitChars?: number; contextBudgetChars?: number; retry?: HarnessRetryPolicy; outputLimitChars?: number; logLimitEntries?: number; maxRunDurationMs?: number; tokenBudget?: number };
 export type HarnessDefinition = { id: string; name: string; version: number; createdAt: string; updatedAt: string; settings?: HarnessSettings; blocks: HarnessBlock[]; edges: HarnessEdge[] };
 export type HarnessStateDiagnostic = { source: "index.json" | "runs.json"; reason: string; detectedAt: string };
 export type HarnessValidationIssue = { code: "empty" | "duplicate-id" | "duplicate-edge-id" | "missing-endpoint" | "self-edge" | "duplicate-edge" | "cycle" | "route-label" | "empty-label" | "empty-prompt" | "unknown-template" | "missing-template-block" | "invalid-loop" | "invalid-schema" | "invalid-gate" | "invalid-watchdog" | "invalid-settings" | "unavailable-provider" | "unavailable-model" | "unavailable-agent"; message: string; blockId?: string; edgeId?: string };
@@ -219,9 +225,11 @@ export type HarnessBlockAttempt = { id: string; index: number; status: "running"
 export type HarnessPauseStatus = "awaiting_permission" | "awaiting_user_input" | "waiting_timer" | "retry_scheduled";
 export type HarnessBlockStatus = "queued" | "running" | "succeeded" | "failed" | "blocked" | "cancelled" | "waiting" | "skipped" | HarnessPauseStatus;
 export type HarnessRunStatus = "queued" | "running" | "succeeded" | "failed" | "blocked" | "cancelled" | "waiting" | HarnessPauseStatus;
+/** Per-run Chatbox settings. An empty model selects the provider default. */
+export type HarnessChatSettings = Pick<HarnessBlock, "provider" | "model" | "autopilot">;
 export type HarnessChatMessage = { id: string; role: "user" | "assistant"; text: string; timestamp: string };
 export type HarnessAgentActivity = { id: string; timestamp: string; text: string };
-export type HarnessBlockRun = { blockId: string; agentActivity?: HarnessAgentActivity[]; chatMessages?: HarnessChatMessage[]; status: HarnessBlockStatus; startedAt?: string; completedAt?: string; prompt?: string; output?: string; structuredInput?: unknown; structuredOutput?: unknown; tokens?: AiTokenUsage; error?: string; failureReason?: HarnessFailureReason; retryAt?: string; retryStartedAt?: string; provider?: AiProvider; sessionId?: string; workspace?: string; selectedRoute?: string; plannedRuns?: number; iterations?: HarnessBlockIteration[]; attempts?: HarnessBlockAttempt[]; log?: HarnessLogEntry[]; waitingUntil?: string; recoveryAttempts?: number; pendingPermission?: AiPermissionRequest; question?: string; pauseId?: string };
+export type HarnessBlockRun = { blockId: string; context?: import("@remote-ide/acp").AiContextSnapshot; contextUsed?: number; contextLimit?: number; chatSettings?: HarnessChatSettings; deliveredContextChars?: number; autopilot?: boolean; agentActivity?: HarnessAgentActivity[]; chatMessages?: HarnessChatMessage[]; status: HarnessBlockStatus; startedAt?: string; completedAt?: string; prompt?: string; output?: string; structuredInput?: unknown; structuredOutput?: unknown; tokens?: AiTokenUsage; error?: string; failureReason?: HarnessFailureReason; retryAt?: string; retryStartedAt?: string; provider?: AiProvider; sessionId?: string; workspace?: string; selectedRoute?: string; plannedRuns?: number; iterations?: HarnessBlockIteration[]; attempts?: HarnessBlockAttempt[]; log?: HarnessLogEntry[]; waitingUntil?: string; recoveryAttempts?: number; pendingPermission?: AiPermissionRequest; question?: string; pauseId?: string };
 export type HarnessChildTask = { taskId: string; blockId: string; provider: AiProvider; workspace: string; recoveryAttempts: number; recoveryError?: string; failureReason?: HarnessFailureReason; retryAt?: string; retryStartedAt?: string };
 export type HarnessFeatureStatus = "planned" | "dispatched" | "completed" | "blocked";
 export type HarnessFeature = { id: string; prompt: string; prerequisites: string[]; status: HarnessFeatureStatus; taskId?: string; commit?: string; blockedReason?: string };
@@ -230,7 +238,7 @@ export type HarnessConnectionTrace = { id: string; edgeId: string; direction: "f
 export type HarnessTaskTarget = { taskId?: string };
 /** Core resolves this once. Continuations and reruns retain it regardless of selection. */
 export type HarnessWorkspaceBinding = { rootWorkspace: string; workspace: string; taskId?: string; taskName?: string };
-export type HarnessRun = { binding?: HarnessWorkspaceBinding; workspace?: string; connectionTraces?: HarnessConnectionTrace[]; id: string; harnessId: string; harnessVersion: number; definition?: HarnessDefinition; executionPlan?: HarnessExecutionPlan; operations?: HarnessOperation[]; children?: HarnessChildTask[]; features?: HarnessFeature[]; corrections?: HarnessCorrectionCycle[]; input: string; status: HarnessRunStatus; createdAt: string; startedAt?: string; completedAt?: string; blocks: HarnessBlockRun[]; error?: string; cleanupErrors?: string[] };
+export type HarnessRun = { summary?: true; binding?: HarnessWorkspaceBinding; workspace?: string; connectionTraces?: HarnessConnectionTrace[]; id: string; harnessId: string; harnessVersion: number; definition?: HarnessDefinition; executionPlan?: HarnessExecutionPlan; operations?: HarnessOperation[]; children?: HarnessChildTask[]; features?: HarnessFeature[]; corrections?: HarnessCorrectionCycle[]; input: string; status: HarnessRunStatus; createdAt: string; startedAt?: string; completedAt?: string; blocks: HarnessBlockRun[]; error?: string; cleanupErrors?: string[] };
 export type HttpResponse = { status: number; statusText: string; headers: Record<string, string>; body: string; durationMs: number };
 
 export type JavaProjectOptions = {
@@ -317,8 +325,11 @@ export type SearchReplacePreview = { id: string; files: SearchReplacePreviewFile
 export type SearchReplaceApplyResult = { applied: { path: string; revision: FileRevision }[]; failures: { path: string; code: string; message: string }[] };
 
 export type ProtocolOperations = {
+  "storage.scan": { payload: Record<string, never>; result: StorageSnapshot };
+  "storage.status": { payload: Record<string, never>; result: StorageSnapshot };
+  "storage.cleanup": { payload: StorageCleanup; result: StorageSnapshot };
   "protocol.keepAlive": { payload: Record<string, never>; result: Record<string, never> };
-  "protocol.handshake": { payload: { compatibility: ProtocolCompatibility; clientVersion?: string }; result: { compatible: boolean; compatibility: ProtocolCompatibility; message?: string } };
+  "protocol.handshake": { payload: { compatibility: ProtocolCompatibility; clientVersion?: string; token?: string }; result: { compatible: boolean; compatibility: ProtocolCompatibility; message?: string } };
   "workspace.roots": { payload: Record<string, never>; result: { roots: WorkspaceRoot[]; selectedRootId: WorkspaceRootId } };
   "workspace.addRoot": { payload: { path: string; alias: string }; result: { root: WorkspaceRoot; roots: WorkspaceRoot[] } };
   "workspace.selectRoot": { payload: { rootId: WorkspaceRootId; includeIgnored?: boolean; preserveTaskSelection?: boolean }; result: { root: WorkspaceRoot; workspace: string; projectName: string; tree: FileTreeNode[]; options: WorkspaceOptions } };
@@ -359,7 +370,7 @@ export type ProtocolOperations = {
   "ai.models": { payload: { provider?: AiProvider }; result: { models: AiModel[] } };
   "ai.configure": { payload: { provider?: AiProvider; model?: string; reasoning?: string; configuration?: AiConfiguration }; result: { session: AiSession } };
   "skills.list": { payload: Record<string, never>; result: SkillCatalog };
-  "skills.read": { payload: { id: string }; result: { content: string } };
+  "skills.read": { payload: { id: string; path?: string }; result: { content: string } };
   "skills.write": { payload: { id: string; content: string }; result: Record<string, never> };
   "skills.delete": { payload: { id: string }; result: Record<string, never> };
   "skills.policy": { payload: SkillPolicy; result: Record<string, never> };
@@ -403,13 +414,16 @@ export type ProtocolOperations = {
   "harnesses.update": { payload: { harness: HarnessDefinition }; result: { harness: HarnessDefinition } };
   "harnesses.delete": { payload: { id: string }; result: Record<string, never> };
   "harnesses.validate": { payload: { harness: HarnessDefinition }; result: { valid: boolean; issues: HarnessValidationIssue[]; order: string[] } };
-  "harnesses.runs": { payload: { harnessId?: string; runId?: string }; result: { runs: HarnessRun[] } };
+  "harnesses.runs": { payload: { harnessId?: string; runId?: string; summary?: boolean }; result: { runs: HarnessRun[] } };
   "harnesses.runs.delete": { payload: { runId: string }; result: Record<string, never> };
   "harnesses.test": { payload: { definition: HarnessDefinition; blockId: string; input: string; provider?: AiProvider; target?: HarnessTaskTarget }; result: { run: HarnessRun } };
   "harnesses.app.read": { payload: { harnessId: string; blockId: string; runId?: string }; result: { app: HarnessAppState } };
+  "harnesses.app.terminal": { payload: { harnessId: string; blockId: string; runId?: string }; result: TerminalSessionSnapshot };
+  "harnesses.autopilot": { payload: { runId: string; blockId: string; sessionId: string; enabled: boolean }; result: { run: HarnessRun } };
+  "harnesses.steer": { payload: { runId: string; blockId: string; sessionId: string; input: string }; result: { run: HarnessRun } };
   "harnesses.app.kill": { payload: { harnessId: string; blockId: string; runId?: string }; result: Record<string, never> };
   "harnesses.run": { payload: { harnessId: string; input: string; startBlockId?: string; rerunRunId?: string; provider?: AiProvider; target?: HarnessTaskTarget }; result: { run: HarnessRun } };
-  "harnesses.chat": { payload: { harnessId: string; blockId: string; input: string; runId?: string; provider?: AiProvider; target?: HarnessTaskTarget }; result: { run: HarnessRun } };
+  "harnesses.chat": { payload: { harnessId: string; blockId: string; input: string; runId?: string; provider?: AiProvider; settings?: HarnessChatSettings; target?: HarnessTaskTarget }; result: { run: HarnessRun } };
   "harnesses.append": { payload: { runId: string; input: string }; result: { run: HarnessRun } };
   "harnesses.permission.resolve": { payload: { runId: string; blockId: string; sessionId: string; pauseId: string; requestId: string; optionId?: string }; result: { run: HarnessRun } };
   "harnesses.answer": { payload: { runId: string; blockId: string; sessionId: string; pauseId: string; input: string }; result: { run: HarnessRun } };
@@ -492,8 +506,9 @@ export type ProtocolOperations = {
     payload: { previewId: string; confirmed: boolean };
     result: SearchReplaceApplyResult;
   };
+  "terminal.list": { payload: Record<string, never>; result: { terminals: TerminalSessionSnapshot[] } };
   "terminal.create": {
-    payload: { cols: number; rows: number };
+    payload: { cols: number; rows: number; displayName?: string };
     result: TerminalSessionSnapshot;
   };
   "terminal.attach": {
@@ -706,6 +721,8 @@ export type FilesystemChangedEvent = {
   payload: { rootId: WorkspaceRootId; paths: string[]; overflow: boolean; health: "healthy" | "degraded"; message?: string };
 };
 
+export type TerminalOpenedEvent = { type: "terminal.opened"; payload: { rootId: WorkspaceRootId; workspace: string; session: TerminalSessionSnapshot } };
+
 export type TerminalOutputEvent = {
   type: "terminal.output";
   payload: { rootId: WorkspaceRootId; terminalId: string; data: string };
@@ -734,7 +751,7 @@ export type HarnessChangedEvent = { type: "harness.changed"; payload: { rootId: 
 export type WorkflowDocumentEvent = { type: "workflow.document"; payload: { rootId: WorkspaceRootId; runId: string; blockId: string; title: string; content: string } };
 export type ConfigurationChangedEvent = { type: "configuration.changed"; payload: { rootId: WorkspaceRootId; resource: string; global: boolean } };
 export type ProcessesChangedEvent = { type: "processes.changed"; payload: Record<string, never> };
-export type ServerEvent = ProcessesChangedEvent | ConfigurationChangedEvent | TimersChangedEvent | WorkflowDocumentEvent | FilesystemChangedEvent | TerminalOutputEvent | TerminalExitEvent | GitChangedEvent | TaskGitChangedEvent | JavaSemanticChangedEvent | JavaOutputEvent | JavaExitEvent | JavaDebugStateEvent | AiChangedEvent | TasksChangedEvent | CommitMessageChangedEvent | RunConfigChangedEvent | HarnessChangedEvent;
+export type ServerEvent = ProcessesChangedEvent | ConfigurationChangedEvent | TimersChangedEvent | WorkflowDocumentEvent | FilesystemChangedEvent | TerminalOpenedEvent | TerminalOutputEvent | TerminalExitEvent | GitChangedEvent | TaskGitChangedEvent | JavaSemanticChangedEvent | JavaOutputEvent | JavaExitEvent | JavaDebugStateEvent | AiChangedEvent | TasksChangedEvent | CommitMessageChangedEvent | RunConfigChangedEvent | HarnessChangedEvent;
 
 /**
  * Every request the core accepts. Declaring it as a fully keyed record makes TypeScript
@@ -772,6 +789,9 @@ const requestTypeRegistry: Record<RequestType, true> = {
   "tasks.rename": true,
   "tasks.archive": true,
   "tasks.switch": true,
+  "storage.scan": true,
+  "storage.status": true,
+  "storage.cleanup": true,
   "tasks.delete": true,
   "ai.providers": true,
   "ai.get": true,
@@ -826,6 +846,9 @@ const requestTypeRegistry: Record<RequestType, true> = {
   "harnesses.runs.delete": true,
   "harnesses.test": true,
   "harnesses.app.read": true,
+  "harnesses.app.terminal": true,
+  "harnesses.autopilot": true,
+  "harnesses.steer": true,
   "harnesses.app.kill": true,
   "harnesses.run": true,
   "harnesses.chat": true,
@@ -856,6 +879,7 @@ const requestTypeRegistry: Record<RequestType, true> = {
   "filesystem.readRootFile": true,
   "filesystem.replacePreview": true,
   "filesystem.replaceApply": true,
+  "terminal.list": true,
   "terminal.create": true,
   "terminal.attach": true,
   "terminal.input": true,

@@ -1,0 +1,520 @@
+/* Application chrome. Content lives in panels; actions live in their owning toolbar. */
+:root { line-height: 1.4; }
+button { border-radius: var(--radius-control); transition: background-color .14s, border-color .14s, color .14s; }
+button:disabled { cursor: default; opacity: .45; }
+button:focus-visible, [tabindex]:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+input, select, textarea { accent-color: var(--accent); }
+input::placeholder, textarea::placeholder { color: var(--text-muted); opacity: 1; }
+* { scrollbar-width: thin; scrollbar-color: var(--border-strong) transparent; }
+.ide-shell { --workspace-title-height: 52px; --panel-title-height: 42px; padding: 0 8px 7px; background: var(--shell-background); color: var(--text-primary); }
+.titlebar-actions { height: var(--workspace-title-height); min-height: var(--workspace-title-height); flex-basis: var(--workspace-title-height); padding: 0 8px; gap: 10px; justify-content: flex-start; flex-wrap: nowrap; border: 0; background: transparent; -webkit-app-region: drag; }
+.titlebar-actions :is(button, input, select, .settings-anchor, .branch-picker, .connection-menu, .top-java-run, .storage-overlay) { -webkit-app-region: no-drag; }
+:root[data-native-window="true"][data-platform="mac"] .titlebar-actions { padding-left: 84px; }
+:root[data-native-window="true"]:not([data-platform="mac"]) .titlebar-actions { padding-right: 142px; }
+.titlebar-actions > .workspace-identity { flex: 0 1 auto; max-width: 190px; gap: 8px; font-size: 13px; color: var(--text-heading); }
+.workspace-identity > svg { color: var(--accent); width: 21px; height: 21px; }
+.workspace-identity > span { font-weight: 650; }
+.titlebar-actions > .titlebar-spacer { flex: 1; min-width: 12px; }
+.titlebar-actions .workspace-settings-button { width: auto; height: 32px; padding: 0 10px; display: flex; align-items: center; justify-content: center; line-height: 1; white-space: nowrap; gap: 7px; border: 1px solid transparent; border-radius: 8px; color: var(--text-secondary); background: transparent; font-size: 12px; }
+.titlebar-actions .workspace-settings-button:hover, .titlebar-actions .workspace-settings-button[aria-expanded="true"] { background: var(--surface-panel); border-color: var(--border-subtle); color: var(--text-heading); }
+.titlebar-actions .top-java-run { height: 38px; padding: 2px; gap: 3px; border: 1px solid var(--border-subtle); border-radius: 10px; background: var(--glass); flex: 0 1 auto; }
+.titlebar-actions .top-java-run button { width: 32px; height: 32px; flex: 0 0 32px; padding: 0; display: grid; place-items: center; border: 0; border-radius: 6px; background: transparent; line-height: 1; }
+.titlebar-actions .top-java-run button:hover:not(:disabled) { background: var(--surface-hover); }
+.titlebar-actions .top-java-run select { width: 260px; min-width: 140px; max-width: 26vw; height: 32px; padding: 0 24px 0 8px; border: 0; border-left: 1px solid var(--border-subtle); border-radius: 0; background: transparent; color: var(--text-secondary); font-size: 12px; }
+
+/* A compact, searchable branch switcher directly beside the workspace identity. */
+.branch-picker, .connection-menu, .settings-anchor { position: relative; min-width: 0; }
+.branch-picker { max-width: 220px; }
+.branch-picker-trigger, .connection-menu-trigger { min-width: 0; height: 32px; display: flex; align-items: center; gap: 7px; padding: 0 10px; border: 1px solid var(--border-subtle); border-radius: 8px; background: var(--glass); color: var(--text-secondary); cursor: pointer; font-size: 12px; }
+.branch-picker-trigger { max-width: 220px; }
+.branch-picker-trigger > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.branch-picker-trigger > svg { flex-shrink: 0; }
+.branch-picker-trigger:hover, .branch-picker-trigger[aria-expanded="true"] { background: var(--selection); border-color: var(--border-strong); color: var(--accent); }
+.branch-picker-popover, .connection-popover { position: absolute; top: calc(100% + 9px); z-index: 40; border: 1px solid var(--border-subtle); border-radius: 12px; background: var(--surface-raised); color: var(--text-primary); box-shadow: var(--shadow-popover); overflow: hidden; }
+.branch-picker-popover { width: min(380px, calc(100vw - 120px)); left: 0; }
+.branch-picker-popover > header { display: flex; align-items: center; justify-content: space-between; padding: 14px 14px 11px; }
+.branch-picker-popover header > div, .connection-popover header > div { display: grid; gap: 3px; }
+.branch-picker-popover header strong { color: var(--text-heading); font-size: 13px; }
+.branch-picker-popover header small { color: var(--text-muted); font-size: 11px; }
+.icon-button { display: grid; place-items: center; width: 28px; height: 28px; flex: 0 0 28px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--text-muted); cursor: pointer; }
+.icon-button:hover { background: var(--surface-hover); color: var(--text-primary); }
+.branch-picker-search { margin: 0 12px 12px; height: 34px; display: flex; align-items: center; gap: 8px; padding: 0 10px; border: 1px solid var(--border-subtle); border-radius: 7px; background: var(--input); color: var(--text-muted); }
+.branch-picker-search:focus-within { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
+.branch-picker-search input { min-width: 0; width: 100%; border: 0; outline: 0; background: transparent; color: var(--text-primary); font-size: 12px; }
+.branch-picker-scopes { display: flex; gap: 4px; padding: 0 12px 9px; border-bottom: 1px solid var(--border-subtle); }
+.branch-picker-scopes button { height: 28px; padding: 0 9px; display: flex; align-items: center; gap: 6px; border: 0; background: transparent; color: var(--text-muted); font-size: 11px; cursor: pointer; }
+.branch-picker-scopes button[aria-selected="true"] { color: var(--accent); background: var(--selection); }
+.branch-picker-scopes button > span { font-size: 10px; opacity: .7; }
+.branch-picker-list { max-height: min(360px, calc(100vh - 250px)); overflow: auto; padding: 5px; }
+.branch-picker-item { border-radius: 7px; }
+.branch-picker-item.current { background: var(--accent-soft); }
+.branch-picker-item-row { min-width: 0; display: flex; align-items: center; padding-right: 3px; }
+.branch-picker-checkout { flex: 1; min-width: 0; min-height: 38px; display: flex; align-items: center; gap: 9px; padding: 8px 9px; border: 0; background: transparent; color: var(--text-primary); cursor: pointer; text-align: left; }
+.branch-picker-checkout > span { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.branch-picker-checkout > svg { color: var(--text-muted); flex-shrink: 0; }
+.branch-picker-item.current .branch-picker-checkout > svg { color: var(--accent); }
+.branch-picker-checkout > small { opacity: 0; color: var(--text-muted); font-size: 10px; }
+.branch-picker-item:hover, .branch-picker-item:focus-within { background: var(--surface-hover); }
+.branch-picker-checkout:hover > small, .branch-picker-checkout:focus-visible > small { opacity: 1; }
+.branch-picker-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 3px; padding: 3px 7px 8px 31px; }
+.branch-picker-actions button { display: flex; align-items: center; gap: 7px; min-height: 29px; padding: 5px 8px; border: 0; background: var(--surface-panel); color: var(--text-secondary); font-size: 11px; cursor: pointer; }
+.branch-picker-actions button:hover { background: var(--selection); color: var(--accent); }
+.branch-picker-actions button.danger { color: var(--danger); }
+.branch-picker-empty { min-height: 100px; padding: 22px; display: flex; gap: 8px; align-items: center; justify-content: center; color: var(--text-muted); font-size: 12px; }
+.branch-picker-popover > footer { padding: 8px 12px; display: flex; align-items: center; gap: 12px; border-top: 1px solid var(--border-subtle); background: var(--surface-base); }
+.branch-picker-popover footer button { display: flex; align-items: center; gap: 8px; border: 0; padding: 6px 0; background: transparent; color: var(--accent); cursor: pointer; font-size: 12px; }
+.branch-picker-popover kbd { margin-left: auto; font: inherit; font-size: 10px; color: var(--text-muted); }
+
+/* Connection details and disconnect belong to one anchored control. */
+.connection-menu-trigger { border-color: transparent; background: transparent; }
+.connection-menu-trigger:hover, .connection-menu-trigger[aria-expanded="true"] { background: var(--glass); border-color: var(--border-subtle); }
+.connection-indicator { width: 7px; height: 7px; border-radius: 50%; background: var(--warning); flex-shrink: 0; }
+.connection-indicator.connected { background: var(--success); box-shadow: 0 0 0 3px var(--success-soft); }
+.connection-popover { right: 0; width: 270px; padding: 14px; }
+.connection-popover header { display: flex; gap: 10px; align-items: center; }
+.connection-popover header > svg { color: var(--accent); }
+.connection-popover strong { font-size: 12px; }
+.connection-popover small { font-size: 11px; color: var(--success); }
+.connection-popover dl { padding: 12px 0; margin: 12px 0 8px; border-block: 1px solid var(--border-subtle); }
+.connection-popover dt { font-size: 10px; color: var(--text-muted); margin-bottom: 4px; }
+.connection-popover dd { margin: 0; font: 12px "JetBrains Mono Variable", monospace; }
+.connection-disconnect { width: 100%; min-height: 32px; display: flex; gap: 8px; align-items: center; padding: 7px 9px; border: 0; border-radius: 7px; background: transparent; color: var(--danger); font-size: 12px; cursor: pointer; }
+.connection-disconnect:hover { background: var(--danger-soft); }
+
+/* Panel structure and compact tool rails. */
+.workspace-row { min-height: 0; gap: 0; }
+.tool-stripe, .right-tool-stripe { width: 46px; flex-basis: 46px; padding: 6px 4px; gap: 4px; background: var(--glass); border: 1px solid var(--border-subtle); border-radius: var(--radius-panel); }
+.tool-stripe { margin-right: 7px; }
+.right-tool-stripe { margin-left: 7px; }
+.tool-stripe-button, .tool-stripe-button.right { width: 36px; height: 38px; min-height: 38px; border-radius: 8px; }
+.tool-stripe-button.active, .tool-stripe-button.right.active { background: var(--selection); color: var(--accent); }
+.tool-stripe-bottom { background: transparent; }
+.side-panel { background: transparent; }
+.stacked-panel { border: 1px solid var(--border-subtle); border-radius: var(--radius-panel); background: var(--surface-panel); box-shadow: var(--shadow-panel); }
+.stacked-panel + .stacked-panel { border-top: 1px solid var(--border-subtle); margin-top: 7px; }
+.resizable-panel-item > .stacked-panel { margin-bottom: 7px; }
+.resizable-panel-item:last-child > .stacked-panel { margin-bottom: 0; }
+.panel-header { height: var(--panel-title-height); min-height: var(--panel-title-height); max-height: var(--panel-title-height); flex: 0 0 var(--panel-title-height); flex-wrap: nowrap; padding: 0 12px; gap: 6px; font-size: 12px; letter-spacing: -.01em; border-bottom: 1px solid var(--border-subtle); background: var(--surface-panel); color: var(--text-heading); }
+.panel-header > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.panel-header-actions { min-width: 0; gap: 3px; flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
+.panel-header-actions > button { flex-shrink: 0; }
+.panel-header button { border-radius: 6px; background: transparent; color: var(--text-muted); }
+.panel-header button:hover { background: var(--surface-hover); color: var(--accent); }
+.resize-handle, .right-resize-handle { width: 7px; flex: 0 0 7px; margin: 0; border: 0; border-radius: 5px; }
+.classic-panel-divider { height: 7px; flex-basis: 7px; border: 0; }
+.focused-panel-divider { height: 7px; border: 0; background: transparent; }
+.quick-filter { min-height: 32px; margin: 8px 10px; padding: 0 9px; border: 1px solid var(--border-subtle); border-radius: 7px; background: var(--input); }
+.quick-filter:focus-within { border-color: var(--accent); }
+.quick-filter input { font-size: 12px; }
+.task-filters { padding: 8px 10px; gap: 7px; }
+.task-filters select { height: 32px; border-radius: 7px; border-color: var(--border-subtle); background: var(--input); }
+.tasks-list { padding: 0 6px 7px; }
+.task-row { border-bottom: 0; border-radius: 8px; margin-bottom: 3px; }
+.task-row.selected { background: var(--selection); color: var(--text-heading); }
+.task-row.selected .task-icon { color: var(--accent); }
+.task-open { padding: 10px 8px; gap: 9px; }
+.task-title { color: inherit; font-weight: 550; }
+.workspace-name { height: 32px; padding: 0 10px; color: var(--text-heading); }
+.tree { padding: 2px 5px 10px; }
+.tree-row { height: 28px; border-radius: 5px; }
+.tree-row.selected { color: var(--text-heading); }
+.git-file-row, .git-group-title { min-height: 27px; }
+.git-branch { min-height: 32px; background: var(--surface-sunken); border-color: var(--border-subtle); }
+
+/* Editors use the same opaque canvas as xterm and workflow previews. */
+.workbench { min-width: 0; border-radius: var(--radius-panel); overflow: hidden; background: transparent; }
+.workbench:has(.tab) { border: 1px solid var(--border-subtle); background: var(--editor-background); }
+.editor-area, .detached-editor, .find-preview-editor, .conflict-code-editor { background: var(--editor-background); }
+.tabs { height: var(--panel-title-height); min-height: var(--panel-title-height); flex-basis: var(--panel-title-height); gap: 3px; padding: 4px 5px 0; border-bottom: 1px solid var(--border-subtle); background: var(--surface-panel); }
+.tab { height: 37px; min-width: 100px; max-width: 220px; padding: 0 10px; border: 1px solid transparent; border-radius: 7px 7px 0 0; color: var(--text-muted); background: transparent; box-shadow: none; }
+.tab.active { background: var(--editor-background); color: var(--text-heading); border-color: var(--border-subtle); border-bottom-color: var(--editor-background); box-shadow: none; }
+.tab.active::after { content: ""; height: 2px; position: absolute; bottom: 0; left: 10px; right: 10px; background: var(--accent); border-radius: 2px; }
+.tab .close, .terminal-tab .close { display: grid; place-items: center; width: 20px; height: 20px; flex: 0 0 20px; border-radius: 5px; color: var(--text-muted); }
+.tab .close:hover, .terminal-tab .close:hover { background: var(--surface-hover); color: var(--text-heading); }
+.editor-status-bar { height: 25px; min-height: 25px; color: var(--text-muted); background: var(--surface-panel); border-color: var(--border-subtle); font-size: 10px; }
+.empty-editor { min-width: 0; overflow: auto; padding: 20px; background: transparent; color: var(--text-muted); }
+.workspace-welcome { max-width: 280px; gap: 12px; margin: auto; }
+.workspace-welcome > svg { width: 70px; height: 70px; padding: 18px; border: 1px solid var(--border-subtle); border-radius: 19px; background: var(--surface-panel); color: var(--accent); box-shadow: var(--shadow-panel); }
+.workspace-welcome h1 { margin: 8px 0 0; font-size: clamp(22px, 2.4vw, 34px); line-height: 1.2; font-weight: 650; }
+.workspace-welcome h1 span { color: var(--accent); }
+.workspace-welcome p { max-width: 250px; font-size: 12px; line-height: 1.7; }
+.workspace-welcome button { width: 100%; min-height: 40px; border: 1px solid var(--border-subtle); border-radius: 9px; padding: 10px 12px; background: var(--surface-panel); box-shadow: var(--shadow-control); }
+.workspace-welcome button > span { flex: 1; }
+
+/* Terminal tabs form a single toolbar with clear selection and readable status. */
+.terminal-panel { margin-top: 7px; border: 1px solid var(--border-subtle); border-radius: var(--radius-panel); background: var(--editor-background); }
+.terminal-tabs { height: 40px; flex-basis: 40px; padding: 5px 7px; gap: 4px; align-items: center; background: var(--surface-panel); border-bottom: 1px solid var(--border-subtle); border-radius: 12px 12px 0 0; scrollbar-width: none; }
+.terminal-tab { min-width: 100px; max-width: 230px; height: 29px; flex-shrink: 0; gap: 7px; padding: 0 7px 0 9px; border: 1px solid transparent; border-radius: 7px; background: transparent; color: var(--text-muted); font-size: 11px; }
+.terminal-tab.active { background: var(--selection); border: 1px solid var(--border-subtle); color: var(--accent); }
+.terminal-tab.has-unread-output { border-bottom: 1px solid var(--border-subtle); }
+.terminal-tab-icon { flex-shrink: 0; opacity: .8; }
+.terminal-tab-label { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.terminal-action { width: 28px; height: 28px; border: 1px solid var(--border-subtle); border-radius: 7px; background: transparent; color: var(--text-secondary); }
+.terminal-content { padding: 10px 12px; }
+.terminal-instance { inset: 10px 12px; }
+.terminal-instance .xterm-viewport { background: var(--editor-background) !important; }
+.terminal-recovery-notice { padding: 7px 12px; font-size: 11px; }
+.bottom-tool-bar { height: 30px; min-height: 30px; flex-basis: 30px; margin-top: 7px; border: 1px solid var(--border-subtle); border-radius: 9px; overflow: hidden; background: var(--glass); }
+.bottom-tool-button { color: var(--text-muted); font-size: 11px; }
+.bottom-tool-button.active { background: var(--selection); color: var(--accent); }
+.bottom-tool-count { background: var(--selection); color: var(--text-secondary); }
+
+/* Every context menu, including terminals and nested submenus, shares one material. */
+.context-menu-layer { background: transparent; }
+.context-menu, .terminal-context-menu { padding: 5px; min-width: 200px; border: 1px solid var(--border-subtle); border-radius: 10px; background: var(--surface-raised); color: var(--text-primary); box-shadow: var(--shadow-popover); font-size: 12px; }
+.context-menu button, .terminal-context-menu button { width: 100%; min-height: 31px; height: auto; display: flex; align-items: center; gap: 9px; padding: 7px 9px; border: 0; border-radius: 6px; background: transparent; color: var(--text-secondary); text-align: left; cursor: pointer; }
+.context-menu button > svg, .terminal-context-menu button > svg { width: 14px; height: 14px; flex-shrink: 0; color: var(--text-muted); }
+.context-menu button:hover:not(:disabled), .context-menu button:focus-visible, .terminal-context-menu button:hover, .terminal-context-menu button:focus-visible { background: var(--selection); color: var(--text-heading); }
+.context-menu button.danger, .terminal-context-menu button.danger { color: var(--danger); }
+.context-menu button.danger:hover { background: var(--danger-soft); }
+.context-menu hr { margin: 5px 4px; border: 0; border-top: 1px solid var(--border-subtle); }
+.context-submenu { margin-left: 5px; }
+.file-color-swatch.red { background: var(--danger); }.file-color-swatch.orange, .file-color-swatch.yellow { background: var(--warning); }.file-color-swatch.green { background: var(--success); }.file-color-swatch.blue { background: var(--accent); }.file-color-swatch.purple { background: var(--purple); }.file-color-swatch.gray { background: var(--text-muted); }
+
+/* Forms, pickers and settings are composed from the same inputs and sections. */
+.dialog-overlay { padding-bottom: 16px; overflow: auto; background: #0c173d40; backdrop-filter: blur(5px); }
+.dialog-overlay > :is(section, div), .floating-window-layer > section { border: 1px solid var(--border-subtle); border-radius: 14px; background: var(--surface-panel); color: var(--text-primary); box-shadow: var(--shadow-popover); max-width: calc(100vw - 32px); max-height: calc(100dvh - 32px); }
+.dialog-overlay > :is(section, div) > header { padding: 14px 16px; border-color: var(--border-subtle); background: var(--surface-panel); }
+.dialog-overlay > :is(section, div) > footer { padding: 10px 16px; border-color: var(--border-subtle); background: var(--surface-base); }
+.dialog-overlay :is(input:not([type="checkbox"]):not([type="radio"]), select, textarea), .ai-toolbar select, .ai-model-trigger { border-radius: 7px; border-color: var(--border-subtle); background: var(--input); color: var(--text-primary); }
+.dialog-overlay :is(input:not([type="checkbox"]):not([type="radio"]), select) { min-height: 31px; }
+.dialog-overlay button { border-radius: 7px; }
+.dialog-overlay h2 { font-size: 14px; color: var(--text-heading); }
+.dialog-overlay footer button, .connection-form .primary { min-height: 32px; }
+.dialog-overlay button.primary, .connection-form .primary, .git-commit-panel footer button:not(.git-amend-button), .ai-composer-actions button:last-child { background: var(--accent); color: var(--on-accent); border-color: transparent; }
+.settings-menu { top: calc(100% + 10px); width: min(460px, calc(100vw - 32px)); max-height: calc(100dvh - 80px); padding: 0 16px 14px; border-radius: 12px; border-color: var(--border-subtle); background: var(--surface-raised); box-shadow: var(--shadow-popover); }
+.settings-menu > header { min-height: 48px; margin-bottom: 12px; color: var(--text-heading); font-size: 14px; }
+.settings-search { height: 34px; padding: 0 10px; border-radius: 7px; border-color: var(--border-subtle); background: var(--input); }
+.settings-row { padding: 12px 0; gap: 12px; border-color: var(--border-subtle); }
+.settings-choice > div:first-child { flex-basis: 130px; }
+.settings-choice label { color: var(--text-primary); font-size: 12px; }
+.settings-choice small { margin-top: 4px; color: var(--text-muted); line-height: 1.5; font-size: 10px; }
+.settings-menu button, .settings-menu select, .settings-menu input { border-radius: 7px; border-color: var(--border-subtle); color: var(--text-secondary); }
+.theme-switch { padding: 3px; gap: 2px; border: 1px solid var(--border-subtle); border-radius: 8px; background: var(--input); }
+.theme-switch button { border: 0; background: transparent; color: var(--text-muted); }
+.theme-switch button.active { background: var(--surface-panel); color: var(--accent); box-shadow: var(--shadow-control); }
+.ai-toolbar { padding: 9px 10px; gap: 7px; background: var(--surface-sunken); border-color: var(--border-subtle); }
+.ai-model-trigger { min-height: 30px; }
+.ai-model-menu, .skill-chat-picker { border-color: var(--border-subtle); border-radius: 10px; background: var(--surface-raised); box-shadow: var(--shadow-popover); }
+.ai-composer { min-width: 0; min-height: 104px; display: flex; flex-direction: column; padding: 9px; gap: 7px; border-top: 1px solid var(--border-subtle); background: var(--surface-panel); }
+.ai-composer textarea, .git-commit-panel textarea { border: 1px solid var(--border-subtle); border-radius: 8px; background: var(--input); color: var(--text-primary); padding: 10px; line-height: 1.6; }
+.ai-composer-body { min-width: 0; min-height: 0; flex: 1; display: flex; flex-direction: column; gap: 7px; overflow-y: auto; }
+.ai-composer .ai-composer-body textarea { width: 100%; height: auto; min-height: 40px; flex: 1 0 40px; }
+.ai-composer-body > :is(.ai-attachments, .ai-attachment-error) { flex-shrink: 0; }
+.ai-composer-actions { min-width: 0; flex: 0 0 31px; align-self: stretch; flex-direction: row; justify-content: flex-end; align-items: center; gap: 4px; }
+.ai-composer-actions > button:first-of-type { margin-right: auto; }
+.ai-composer-actions button { flex: 0 0 31px; width: 31px; height: 31px; border-radius: 7px; background: var(--surface-hover); }
+.ai-message, .ai-reasoning, .ai-activity { border-color: var(--border-subtle); border-radius: 8px; }
+.ai-message.user { background: var(--accent-soft); }
+.ai-empty { color: var(--text-muted); padding: 30px 20px; line-height: 1.7; }
+.git-commit-panel { padding: 10px; background: var(--surface-panel); }
+.git-commit-panel textarea { min-height: 64px; }
+.git-commit-panel footer { gap: 7px; padding-top: 8px; }
+.git-commit-panel footer button { min-height: 29px; border-radius: 6px; }
+.git-commit-panel footer .git-amend-button { background: var(--surface-hover); color: var(--text-secondary); border-color: var(--border-subtle); }
+
+/* Workflow design, execution, chat and inspection share the editor's canvas. */
+.harness-panel, .workflow-run-panel { background: var(--surface-panel); color: var(--text-primary); }
+.workflow-run-panel { padding: 10px; gap: 12px; }
+.workflow-library-toolbar { gap: 10px; }
+.workflow-library-heading { padding: 2px 2px 0; }
+.workflow-library-heading > strong { font-size: 12px; color: var(--text-heading); }
+.workflow-library-heading > span { color: var(--text-muted); font-size: 10px; }
+.workflow-filter { min-height: 33px; border: 1px solid var(--border-subtle); border-radius: 7px; background: var(--input); padding: 0 10px; color: var(--text-primary); }
+.workflow-card { padding: 12px; border: 1px solid var(--border-subtle); border-radius: 10px; background: var(--surface-panel); box-shadow: none; }
+.workflow-card.live { border-color: var(--border-strong); box-shadow: inset 3px 0 var(--accent); }
+.workflow-card > header { min-height: 28px; }
+.workflow-card > header > strong { font-size: 12px; }
+.workflow-view-controls button, .workflow-preview-controls button { border: 1px solid transparent; border-radius: 6px; background: transparent; color: var(--text-muted); }
+.workflow-view-controls button:hover, .workflow-preview-controls button:hover { background: var(--surface-hover); color: var(--accent); }
+.harness-canvas, .workflow-compact-preview { background-color: var(--editor-background); background-image: radial-gradient(var(--border-subtle) .75px, transparent .75px); background-size: 20px 20px; }
+.workflow-compact-preview { border: 1px solid var(--border-subtle); border-radius: 8px; }
+.harness-canvas-frame { border-color: var(--border-subtle); }
+.harness-block { border: 1px solid var(--border-strong); border-radius: 9px; background: var(--surface-panel); box-shadow: var(--shadow-control); }
+.harness-block.selected { border-color: var(--accent); box-shadow: 0 0 0 2px var(--selection); }
+.harness-block > header { color: var(--text-heading); }
+.harness-inspector { border-color: var(--border-subtle); background: var(--surface-panel); }
+.harness-toolbar, .harness-editor-toolbar, .harness-tabs { background: var(--surface-panel); border-color: var(--border-subtle); }
+.harness-run-details, .workflow-message {
+  --workflow-surface: var(--surface-sunken); --workflow-border: var(--border-subtle); --workflow-text: var(--text-primary);
+  --workflow-muted: var(--text-muted); --workflow-accent: var(--accent); --workflow-code: var(--editor-background);
+}
+.workflow-message { border-radius: 9px; }
+.workflow-chatbox { background: var(--surface-panel); border-top: 1px solid var(--border-subtle); }
+.workflow-chatbox textarea, .harness-inspector textarea, .harness-inspector input, .harness-inspector select { border-color: var(--border-subtle); border-radius: 7px; background: var(--input); color: var(--text-primary); }
+.harness-status { background: var(--text-muted); }
+.harness-status.running { background: var(--accent); }.harness-status.succeeded { background: var(--success); }.harness-status.failed { background: var(--danger); }.harness-status.awaiting_permission, .harness-status.awaiting_user_input { background: var(--warning); }
+.workflow-compact-node rect { fill: var(--surface-panel); stroke: var(--border-strong); }
+.workflow-compact-node text { fill: var(--text-primary); }
+.workflow-compact-edge { stroke: var(--border-strong); }
+.storage-panel { --storage-surface: var(--surface-base); --storage-card: var(--surface-panel); --storage-border: var(--border-subtle); --storage-muted: var(--text-muted); color: var(--text-primary); border-radius: 14px; }
+.storage-panel > header { background: var(--surface-panel); }
+
+/* Connection and detached windows retain integrated native window controls. */
+.connection-screen { position: relative; background: var(--shell-background); }
+.connection-form { padding: 30px; border-radius: 16px; border-color: var(--border-subtle); background: var(--surface-panel); box-shadow: var(--shadow-popover); }
+.connection-form input { background: var(--input); border-color: var(--border-subtle); }
+.connection-form h1 { font-size: 25px; }
+.status-toast { top: 60px; border-radius: 9px; box-shadow: var(--shadow-popover); background: var(--surface-raised); }
+:root[data-native-window="true"] :is(.connection-screen, .detached-editor, .detached-error) { padding-top: 52px; }
+:root[data-native-window="true"] :is(.connection-screen, .detached-editor, .detached-error)::before { content: "Vibe Editor"; position: absolute; top: 0; left: 0; right: 0; height: 48px; padding: 17px 155px 0 92px; color: var(--text-muted); font-size: 12px; -webkit-app-region: drag; }
+@media (max-width: 1100px) { .titlebar-actions { gap: 7px; } .branch-picker, .branch-picker-trigger { max-width: 170px; } .titlebar-actions .top-java-run select { width: 200px; max-width: 22vw; } }
+@media (max-width: 850px) { .workspace-settings-button > span { display: none; } .titlebar-actions .workspace-settings-button { padding: 0 7px; } .connection-menu-trigger > span:nth-child(2) { display: none; } .titlebar-actions .top-java-run select { width: 160px; min-width: 100px; max-width: 20vw; } .titlebar-actions > .workspace-identity { max-width: 120px; } .branch-picker, .branch-picker-trigger { max-width: 130px; } }
+@media (max-height: 600px) { .workspace-welcome { gap: 8px; } .workspace-welcome > svg { width: 52px; height: 52px; padding: 13px; } .workspace-welcome h1 { margin-top: 0; } .workspace-welcome p { margin-bottom: 0; } }
+/* Shared button variants; native browser bevels are never part of the UI. */
+button { appearance: none; -webkit-appearance: none; border-style: solid; border-width: 1px; border-color: var(--border-subtle); background-color: var(--surface-panel); color: var(--text-secondary); box-shadow: none; }
+button:hover:not(:disabled) { border-color: var(--border-strong); }
+button:disabled { opacity: .45; box-shadow: none; }
+:where(button.primary, button[type="submit"]):not(:disabled):hover { background-color: var(--accent-hover); }
+.settings-menu button { min-height: 29px; padding: 5px 9px; border: 1px solid var(--border-subtle); background: var(--surface-panel); color: var(--text-secondary); }
+.settings-menu button:hover { background: var(--surface-hover); }
+.settings-menu > header { display: flex; justify-content: space-between; }
+.settings-menu > header .icon-button { border: 0; padding: 0; min-width: 28px; width: 28px; background: transparent; }
+.settings-menu input, .settings-menu select { border: 1px solid var(--border-subtle); background: var(--input); padding: 6px 8px; }
+.settings-menu .theme-switch button { border: 0; border-radius: 5px; background: transparent; }
+.settings-menu .theme-switch button.active { background: var(--surface-panel); color: var(--accent); }
+.icon-button, .panel-header button, .tool-stripe-button, .tool-stripe-button.right, .branch-picker-checkout, .branch-picker-scopes button, .branch-picker-actions button, .branch-picker-popover footer button, .connection-disconnect, .bottom-tool-button, .terminal-tab { border-color: transparent; }
+.branch-picker-checkout, .branch-picker-scopes button, .branch-picker-popover footer button, .connection-disconnect, .tool-stripe-button, .tool-stripe-button.right, .bottom-tool-button, .terminal-tab { background-color: transparent; }
+.tool-stripe-button.active, .tool-stripe-button.right.active, .terminal-tab.active, .bottom-tool-button.active { background: var(--selection); }
+.branch-picker-scopes button[aria-selected="true"] { background: var(--selection); }
+.branch-picker-popover .icon-button { background: transparent; }
+.branch-picker-popover .icon-button:hover { background: var(--surface-hover); }
+.branch-picker-popover footer button:hover { border-color: transparent; background: transparent; color: var(--accent-hover); }
+.context-menu button, .terminal-context-menu button { background: transparent; border: 0; }
+.primary, .ai-composer-actions button:last-child, .git-commit-panel footer button:not(.git-amend-button) { background: var(--accent); color: var(--on-accent); border-color: transparent; }
+button.danger:hover:not(:disabled) { background: var(--danger-soft); border-color: var(--danger-border); }
+.panel-header:has(.git-toolbar-actions) { display: flex; gap: 6px; }
+.panel-header:has(.git-toolbar-actions) > span { flex: 0 0 64px; }
+.panel-header:has(.git-toolbar-actions) > .panel-header-actions { flex: 1; width: auto; max-width: 100%; display: flex; flex-wrap: nowrap; margin: 0 0 0 auto; gap: 3px; }
+.panel-header .git-toolbar-actions { flex: 0 0 auto; flex-wrap: nowrap; gap: 3px; margin: 0; }
+.panel-header .git-toolbar-actions button { flex-shrink: 0; min-width: 26px; width: 26px; height: 27px; padding: 0; background: transparent; }
+.panel-header .git-toolbar-actions .git-rollback-selected { width: auto; min-width: 26px; margin-right: auto; padding: 0 6px; }
+.panel-header .git-toolbar-actions .git-rollback-selected > span { font-size: 10px; }
+@container (max-width: 440px) { .panel-header .git-toolbar-actions .git-rollback-selected > span { display: none; } .panel-header .git-toolbar-actions .git-rollback-selected { width: 26px; padding: 0; } }
+.workflow-compact-block text { fill: var(--text-primary); }
+.workflow-compact-block rect { fill: var(--surface-panel); stroke: var(--border-strong); }
+.workflow-compact-block circle { fill: var(--text-muted); }
+.workflow-compact-block.running circle { fill: var(--accent); }.workflow-compact-block.succeeded circle { fill: var(--success); }.workflow-compact-block.failed circle, .workflow-compact-block.blocked circle { fill: var(--danger); }.workflow-compact-block.awaiting_permission circle, .workflow-compact-block.awaiting_user_input circle, .workflow-compact-block.waiting circle { fill: var(--warning); }
+.context-menu-separator { margin: 5px 4px; border-color: var(--border-subtle); }
+:where(.harness-toolbar, .harness-settings, .harness-inspector, .harness-run-actions, .workflow-start-control, .workflow-chatbox, .workflow-chat-settings, .timers-panel, .processes-panel, .skills-panel) button { border-radius: 7px; border-color: var(--border-subtle); background: var(--surface-panel); color: var(--text-secondary); box-shadow: none; }
+:where(.harness-toolbar, .harness-inspector, .harness-run-actions, .workflow-start-control, .workflow-chatbox) button:hover:not(:disabled) { background: var(--surface-hover); border-color: var(--border-strong); }
+:where(.harness-run-actions, .workflow-start-control, .workflow-chatbox) button[type="submit"], .harness-run button:not(.danger) { background: var(--accent); color: var(--on-accent); border-color: transparent; }
+:where(.harness-settings, .harness-toolbar, .harness-inspector, .workflow-run-meta, .workflow-chat-settings, .timers-panel, .processes-panel) :is(input, select, textarea) { border-radius: 7px; border-color: var(--border-subtle); background: var(--input); color: var(--text-primary); }
+.tab { position: relative; }
+.task-row.selected .task-preview { color: var(--text-secondary); }
+
+.workspace-utilities { display: flex; align-items: center; justify-content: flex-end; gap: 3px; height: 38px; padding: 2px; border: 1px solid var(--border-subtle); border-radius: 10px; background: var(--glass); -webkit-app-region: no-drag; }
+.workspace-utilities .settings-anchor { display: flex; align-items: center; align-self: center; height: 32px; }
+.workspace-utilities .workspace-settings-button > svg { display: block; flex: 0 0 16px; }
+.workspace-utility-divider { width: 1px; height: 16px; flex: 0 0 1px; margin: 0 3px; background: var(--border-subtle); }
+.workspace-utilities .settings-anchor::before { content: ""; width: 1px; height: 16px; background: var(--border-subtle); margin-right: 3px; }
+.segmented-control { display: inline-flex; align-items: center; gap: 3px; padding: 3px; border: 1px solid var(--border-subtle); border-radius: 9px; background: var(--input); }
+.segmented-control button, .settings-menu .segmented-control button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; flex: 1; min-width: 66px; min-height: 28px; height: 28px; padding: 0 10px; border: 1px solid transparent; border-radius: 6px; background: transparent; color: var(--text-muted); font-size: 11px; font-weight: 550; line-height: 1; white-space: nowrap; box-shadow: none; }
+.segmented-control button[aria-pressed="true"], .settings-menu .segmented-control button[aria-pressed="true"] { background: var(--surface-panel); border-color: var(--border-subtle); color: var(--accent); box-shadow: var(--shadow-control); }
+.segmented-control button:hover:not([aria-pressed="true"]), .settings-menu .segmented-control button:hover:not([aria-pressed="true"]) { background: var(--surface-hover); color: var(--text-secondary); }
+.settings-menu .settings-reset.icon-button { width: 28px; height: 28px; min-width: 28px; min-height: 28px; flex: 0 0 28px; padding: 0; display: grid; place-items: center; border: 1px solid transparent; background: transparent; color: var(--text-muted); }
+.settings-menu .settings-reset.icon-button:hover { background: var(--surface-hover); border-color: var(--border-subtle); color: var(--accent); }
+.settings-menu input[type="number"] { appearance: textfield; }
+.settings-menu input[type="number"]::-webkit-inner-spin-button, .settings-menu input[type="number"]::-webkit-outer-spin-button { appearance: none; margin: 0; }
+.settings-menu .shortcut-row > button { min-height: 27px; padding: 5px 8px; font-size: 10px; font-weight: 500; line-height: 1.2; color: var(--text-secondary); background: var(--input); }
+.settings-menu .font-picker-trigger { width: 172px; min-width: 0; min-height: 34px; display: flex; align-items: center; justify-content: flex-start; gap: 7px; padding: 0 9px; border: 1px solid var(--border-subtle); border-radius: 8px; background: var(--input); color: var(--text-primary); font-size: 11px; cursor: pointer; }
+.font-picker-trigger > span { flex: 1; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.font-picker-trigger > svg { flex-shrink: 0; color: var(--text-muted); }
+.settings-menu .font-picker-trigger[aria-expanded="true"] { border-color: var(--accent); background: var(--selection); }
+.font-picker-menu { position: fixed; z-index: 150; width: 250px; padding: 5px; border: 1px solid var(--border-subtle); border-radius: 11px; background: var(--surface-raised); box-shadow: var(--shadow-popover); color: var(--text-primary); -webkit-app-region: no-drag; }
+.font-picker-menu > header { padding: 7px 8px; font-size: 10px; color: var(--text-muted); }
+.font-picker-option { width: 100%; display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; padding: 10px; border: 1px solid transparent; border-radius: 7px; background: transparent; text-align: left; color: var(--text-primary); cursor: pointer; }
+.font-picker-option > div { display: grid; gap: 4px; }
+.font-picker-option strong { font-size: 12px; font-weight: 550; }
+.font-picker-option small { font: 10px/1.5 "Inter Variable", sans-serif; color: var(--text-muted); }
+.font-picker-sample { font-size: 15px; line-height: 1.5; letter-spacing: .02em; margin-top: 3px; color: var(--text-secondary); }
+.font-picker-option.font-inter { font-family: "Inter Variable", sans-serif; }
+.font-picker-option.font-jetbrains { font-family: "JetBrains Mono Variable", monospace; }
+.font-picker-option[aria-selected="true"] { background: var(--selection); border-color: var(--border-subtle); }
+.font-picker-option > svg { color: var(--accent); margin-top: 2px; flex-shrink: 0; }
+.font-picker-option:hover { background: var(--surface-hover); }
+/* Fullscreen hides native window controls, so their reserved space is reclaimed. */
+:root[data-native-window="true"][data-fullscreen="true"] .ide-shell { padding-left: 0; padding-right: 0; }
+:root[data-native-window="true"][data-fullscreen="true"] .titlebar-actions { padding-left: 8px; padding-right: 8px; }
+:root[data-native-window="true"][data-fullscreen="true"] :is(.connection-screen, .detached-editor, .detached-error)::before { padding-left: 8px; padding-right: 8px; }
+
+/* Focus folds tool rails into edge bubbles, keeping panel contents in place. */
+.titlebar-actions .workspace-focus-button {
+  width: 32px; min-width: 32px; height: 32px; padding: 0;
+  display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0;
+}
+.titlebar-actions .workspace-focus-button[aria-pressed="true"] {
+  background: var(--surface-panel); border-color: var(--border-subtle); color: var(--text-heading);
+}
+.workflow-editor-tab { flex: 1; min-height: 0; min-width: 0; display: flex; overflow: hidden; }
+.workflow-editor-tab > .workflow-run-panel { flex: 1; min-width: 0; }
+.workflow-editor-tab .workflow-library { padding: 16px; }
+.workflow-editor-tab .workflow-card.expanded { border: 0; box-shadow: none; }
+
+.workflow-editor-tab[hidden] { display: none; }
+
+.focus-dock, .focus-dock-content, .focus-dock-inner { display: contents; }
+.ide-shell { transition: padding .32s cubic-bezier(.22, 1, .36, 1); }
+.focus-mode { padding: 0; }
+.focus-mode .workspace-row { gap: 0; align-items: stretch; }
+/* Match the panel-header row so editor content begins on the same baseline. */
+.focus-mode .workbench { border: 1px solid var(--border-subtle); }
+.focus-mode .side-panel:has(> .panel-header) { border-top: 1px solid var(--border-subtle); border-bottom: 1px solid var(--border-subtle); }
+.focus-mode :is(.workbench, .stacked-panel, .side-panel, .terminal-panel, .java-panel, .problems-panel, .git-log-panel) {
+  border-radius: 0; box-shadow: none; margin: 0;
+}
+.focus-mode .stacked-panel + .stacked-panel,
+.focus-mode .resizable-panel-item > .stacked-panel { margin: 0; }
+.focus-mode :is(.resize-handle, .right-resize-handle) { width: 1px; flex-basis: 1px; border-radius: 0; background: var(--border-subtle); }
+.focus-mode :is(.classic-panel-divider, .focused-panel-divider) { height: 1px; flex-basis: 1px; background: var(--border-subtle); }
+.focus-dock.enabled {
+  --dock-ease: cubic-bezier(.22, 1, .36, 1);
+  position: fixed; z-index: 18; display: flex; align-items: center; flex-direction: column;
+  padding: 3px; background: var(--surface-raised); color: var(--text-secondary);
+  border: 1px solid var(--border-subtle); box-shadow: var(--shadow-popover);
+  transition: border-radius .32s var(--dock-ease), box-shadow .32s var(--dock-ease);
+  animation: focus-dock-arrive .38s var(--dock-ease) both;
+}
+.focus-dock-left.enabled { left: 0; top: 50%; translate: 0 -50%; border-left: 0; border-radius: 0 18px 18px 0; transform-origin: left center; }
+.focus-dock-right.enabled { right: 0; top: 50%; translate: 0 -50%; border-right: 0; border-radius: 18px 0 0 18px; transform-origin: right center; }
+.focus-dock-bottom.enabled { bottom: 0; left: 50%; translate: -50% 0; flex-direction: row; border-bottom: 0; border-radius: 18px 18px 0 0; transform-origin: center bottom; }
+.focus-dock-handle {
+  width: 26px; height: 42px; padding: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 5px;
+  flex-shrink: 0; border: 0; border-radius: 14px; background: transparent; color: var(--text-muted); cursor: pointer;
+}
+.focus-dock-handle:hover, .focus-dock-handle[aria-pressed="true"] { color: var(--accent); background: var(--selection); }
+.focus-dock-grip { width: 10px; height: 2px; border-radius: 2px; background: currentColor; opacity: .45; }
+.focus-dock-bottom .focus-dock-handle { width: 42px; height: 26px; flex-direction: row; }
+.focus-dock-bottom .focus-dock-grip { width: 2px; height: 10px; }
+.focus-dock.enabled > .focus-dock-content {
+  display: grid; grid-template-rows: 0fr; opacity: 0; visibility: hidden;
+  transition: grid-template-rows .32s var(--dock-ease), opacity .2s ease, visibility .32s;
+}
+.focus-dock.enabled.open > .focus-dock-content { grid-template-rows: 1fr; opacity: 1; visibility: visible; }
+.focus-dock.enabled .focus-dock-inner { display: block; min-height: 0; min-width: 0; overflow: hidden; }
+.focus-dock.enabled :is(.tool-stripe, .right-tool-stripe) {
+  position: static; width: 38px; height: auto; max-height: calc(100dvh - 204px); min-height: 0; flex: none;
+  margin: 0; padding: 4px 1px; border: 0; border-radius: 14px; background: transparent; overflow-y: auto;
+}
+.focus-dock.enabled .tool-stripe-bottom { margin-top: 8px; }
+.focus-dock.enabled .tool-stripe-button { flex-shrink: 0; }
+.focus-dock-bottom.enabled > .focus-dock-content { grid-template-rows: none; grid-template-columns: 0fr; }
+.focus-dock-bottom.enabled.open > .focus-dock-content { grid-template-columns: 1fr; }
+.focus-dock-bottom.enabled > .focus-dock-content { transition: grid-template-columns .32s var(--dock-ease), opacity .2s ease, visibility .32s; }
+.focus-dock.enabled .bottom-tool-bar {
+  width: max-content; max-width: calc(100dvw - 66px); height: 30px; min-height: 30px; margin: 0; padding: 0 4px;
+  border: 0; border-radius: 14px; background: transparent; overflow-x: auto;
+}
+@keyframes focus-dock-arrive { from { opacity: 0; transform: scale(.6); } to { opacity: 1; transform: scale(1); } }
+@media (prefers-reduced-motion: reduce) {
+  .ide-shell, .focus-dock.enabled, .focus-dock.enabled > .focus-dock-content { transition: none; animation: none; }
+}
+
+/* Match the full rails to their bubbles so entering and leaving focus morphs
+   their position and size instead of replacing the bars with a hard cut. */
+.tool-stripe { view-transition-name: focus-left-tools; }
+.right-tool-stripe { view-transition-name: focus-right-tools; }
+.bottom-tool-bar { view-transition-name: focus-bottom-tools; }
+.focus-mode .focus-dock-left { view-transition-name: focus-left-tools; }
+.focus-mode .focus-dock-right { view-transition-name: focus-right-tools; }
+.focus-mode .focus-dock-bottom { view-transition-name: focus-bottom-tools; }
+.focus-mode .focus-dock :is(.tool-stripe, .right-tool-stripe, .bottom-tool-bar) { view-transition-name: none; }
+::view-transition-group(focus-left-tools),
+::view-transition-group(focus-right-tools),
+::view-transition-group(focus-bottom-tools) {
+  animation-duration: .36s; animation-timing-function: cubic-bezier(.22, 1, .36, 1);
+}
+@media (prefers-reduced-motion: reduce) {
+  .tool-stripe, .right-tool-stripe, .bottom-tool-bar, .focus-mode .focus-dock { view-transition-name: none; }
+}
+
+/* Tucked bubbles leave a small edge tab and slide back out on hover/focus. */
+.focus-dock.enabled { transition: translate .28s var(--dock-ease), border-radius .32s var(--dock-ease), box-shadow .32s var(--dock-ease); }
+.focus-dock-left.enabled.tucked { translate: calc(-100% + 7px) -50%; }
+.focus-dock-right.enabled.tucked { translate: calc(100% - 7px) -50%; }
+.focus-dock-bottom.enabled.tucked { translate: -50% calc(100% - 7px); }
+.focus-dock-end { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 3px 0; }
+.focus-dock-separator { width: 22px; height: 1px; flex-shrink: 0; background: var(--border-subtle); }
+.focus-dock-hide { width: 28px; height: 28px; padding: 0; display: grid; place-items: center; flex-shrink: 0; border: 0; border-radius: 8px; color: var(--text-muted); background: transparent; cursor: pointer; }
+.focus-dock-hide:hover { color: var(--accent); background: var(--selection); }
+.focus-dock-bottom.enabled .focus-dock-inner { display: flex; align-items: center; max-width: calc(100dvw - 66px); }
+.focus-dock-bottom .focus-dock-end { flex-direction: row; flex-shrink: 0; padding: 0 3px; }
+.focus-dock-bottom .focus-dock-separator { width: 1px; height: 18px; }
+.focus-dock-bottom.enabled { max-width: calc(100dvw - 16px); }
+.focus-dock-bottom.enabled > .focus-dock-content { min-width: 0; }
+/* Override the normal footer's vertical flex-basis when it lives in a row. */
+.focus-dock-bottom.enabled .bottom-tool-bar { flex: 0 1 auto; min-width: 0; max-width: calc(100dvw - 108px); }
+@media (prefers-reduced-motion: reduce) { .focus-dock.enabled { transition: none; } }
+
+
+/* Auto-hide restores the rail's original edge length instead of a short pill. */
+.focus-dock.enabled.auto-hide { border-radius: 0; }
+.focus-dock-left.enabled.auto-hide,
+.focus-dock-right.enabled.auto-hide {
+  top: var(--workspace-title-height); bottom: 7px; width: 46px; translate: 0 0;
+}
+.focus-dock-left.enabled.auto-hide.tucked { translate: calc(-100% + 7px) 0; }
+.focus-dock-right.enabled.auto-hide.tucked { translate: calc(100% - 7px) 0; }
+.focus-dock-left.enabled.auto-hide > .focus-dock-content,
+.focus-dock-right.enabled.auto-hide > .focus-dock-content { flex: 1; min-height: 0; width: 100%; }
+.focus-dock-left.enabled.auto-hide .focus-dock-inner,
+.focus-dock-right.enabled.auto-hide .focus-dock-inner { display: flex; flex-direction: column; align-items: center; }
+.focus-dock.enabled.auto-hide :is(.tool-stripe, .right-tool-stripe) { flex: 1; max-height: none; width: 100%; border-radius: 0; }
+.focus-dock.enabled.auto-hide .tool-stripe-bottom { margin-top: auto; }
+.focus-dock.enabled.auto-hide .focus-dock-end { flex-shrink: 0; }
+.focus-dock-bottom.enabled.auto-hide { left: 0; right: 0; width: 100%; max-width: none; translate: 0 0; }
+.focus-dock-bottom.enabled.auto-hide.tucked { translate: 0 calc(100% - 7px); }
+.focus-dock-bottom.enabled.auto-hide > .focus-dock-content { flex: 1; }
+.focus-dock-bottom.enabled.auto-hide .focus-dock-inner { max-width: none; }
+.focus-dock-bottom.enabled.auto-hide .bottom-tool-bar { flex: 1; width: auto; max-width: none; border-radius: 0; }
+
+/* Java output and debugger use the same title row as the side panels. */
+.java-log-wrap > .java-panel-header,
+.debug-view > .java-panel-header {
+  height: var(--panel-title-height);
+  min-height: var(--panel-title-height);
+  max-height: var(--panel-title-height);
+  flex: 0 0 var(--panel-title-height);
+  display: flex;
+  align-items: center;
+  padding: 0 12px;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-heading);
+}
+.java-panel-header > span:first-child { flex-shrink: 0; }
+.java-panel-header .java-process-status { flex-shrink: 0; color: var(--text-muted); font-size: 11px; font-weight: 400; text-transform: capitalize; }
+.java-panel-header .java-process-status.running { color: var(--success); }
+.java-panel-header .java-actions,
+.java-panel-header .debug-controls {
+  width: auto;
+  height: 100%;
+  min-width: 0;
+  flex: 0 1 auto;
+  flex-direction: row;
+  align-items: center;
+  margin-left: auto;
+  padding: 0;
+  gap: 3px;
+  border: 0;
+  background: transparent;
+}
+.java-panel-header :is(.java-actions, .debug-controls) > button {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  line-height: 1;
+}
+.java-panel-header :is(.java-actions, .debug-controls) > button:hover:not(:disabled) { background: var(--surface-hover); }
+.java-log-wrap, .debug-view { container-type: inline-size; }
+@container (max-width: 360px) {
+  .java-panel-header .java-process-status { display: none; }
+}
+@container (max-width: 300px) {
+  .java-log-wrap > .java-panel-header > span:first-child { display: none; }
+}
+@container (max-width: 240px) {
+  .debug-view > .java-panel-header > span:first-child { display: none; }
+}

@@ -2,7 +2,7 @@ import os from "node:os";
 import path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { mkdtemp, mkdir, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, rm, realpath, symlink, writeFile } from "node:fs/promises";
 import { afterEach, expect, it, vi } from "vitest";
 import type { HarnessBlock, HarnessRun } from "@remote-ide/protocol";
 import { HarnessRunner } from "./harness-runner.js";
@@ -20,7 +20,7 @@ afterEach(async () => {
 });
 
 it("runs apps and scripts with terminal shell initialization in the same Git worktree, including reruns", async () => {
-  const directory = await mkdtemp(path.join(os.tmpdir(), "workflow-context-")); directories.push(directory);
+  const directory = await realpath(await mkdtemp(path.join(os.tmpdir(), "workflow-context-"))); directories.push(directory);
   const root = path.join(directory, "root"), worktree = path.join(directory, "task");
   await mkdir(root);
   await execFileAsync("git", ["init", root]);
@@ -55,7 +55,7 @@ it("runs apps and scripts with terminal shell initialization in the same Git wor
 });
 
 it("recovers the worktree from older workflow session aliases", async () => {
-  const directory = await mkdtemp(path.join(os.tmpdir(), "workflow-alias-")); directories.push(directory);
+  const directory = await realpath(await mkdtemp(path.join(os.tmpdir(), "workflow-alias-"))); directories.push(directory);
   const worktree = path.join(directory, "task"), alias = path.join(directory, "session");
   await mkdir(worktree); await symlink(worktree, alias, "dir");
   const run = { blocks: [{ blockId: "chat", workspace: alias }] } as HarnessRun;

@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { createReadStream, createWriteStream } from "node:fs";
 import { lstat, rename, rm } from "node:fs/promises";
 import path from "node:path";
-import { BrowserWindow, dialog, ipcMain } from "electron";
+import { BrowserWindow, dialog, ipcMain, type IpcMainInvokeEvent } from "electron";
 import WebSocket from "ws";
 
 type LocalChoice = { id: string; name: string; size?: number };
@@ -16,22 +16,23 @@ export class LocalChoiceStore {
 const choices = new LocalChoiceStore();
 const active = new Map<string, WebSocket>();
 
-export function registerProjectTransferIpc(): void {
-  ipcMain.handle("project-transfer:choose-upload", async (event): Promise<LocalChoice | undefined> => {
+export function registerProjectTransferIpc(assertTrustedSender: (event: IpcMainInvokeEvent) => void): void {
+  const handle = (channel: string, listener: (event: IpcMainInvokeEvent, ...args: any[]) => any) => ipcMain.handle(channel, (event, ...args) => { assertTrustedSender(event); return listener(event, ...args); });
+  handle("project-transfer:choose-upload", async (event): Promise<LocalChoice | undefined> => {
     const owner = BrowserWindow.fromWebContents(event.sender) ?? undefined;
     const result = owner ? await dialog.showOpenDialog(owner, { title: "Upload to workspace", properties: ["openFile"] }) : await dialog.showOpenDialog({ title: "Upload to workspace", properties: ["openFile"] });
     const localPath = result.filePaths[0]; if (result.canceled || !localPath) return;
     const info = await lstat(localPath); if (!info.isFile() || info.isSymbolicLink()) throw new Error("Choose a regular, non-symlink local file");
     const id = choices.put({ path: localPath, direction: "upload" }); return { id, name: path.basename(localPath), size: info.size };
   });
-  ipcMain.handle("project-transfer:choose-download", async (event, suggestedName: unknown): Promise<LocalChoice | undefined> => {
+  handle("project-transfer:choose-download", async (event, suggestedName: unknown): Promise<LocalChoice | undefined> => {
     if (typeof suggestedName !== "string" || !suggestedName || suggestedName.length > 255) throw new Error("Invalid download name");
     const owner = BrowserWindow.fromWebContents(event.sender) ?? undefined;
     const result = owner ? await dialog.showSaveDialog(owner, { title: "Save workspace file", defaultPath: suggestedName }) : await dialog.showSaveDialog({ title: "Save workspace file", defaultPath: suggestedName });
     if (result.canceled || !result.filePath) return;
     const id = choices.put({ path: result.filePath, direction: "download" }); return { id, name: path.basename(result.filePath) };
   });
-  ipcMain.handle("project-transfer:start", async (event, value: unknown) => {
+  handle("project-transfer:start", async (event, value: unknown) => {
     const input = validateStart(value); const choice = choices.take(input.localId);
     if (!choice || choice.direction !== input.direction) throw new Error("The local file choice expired; choose the file again");
     const operationId = randomUUID();
@@ -40,7 +41,7 @@ export function registerProjectTransferIpc(): void {
       .catch((error: unknown) => event.sender.send("project-transfer:progress", { operationId, bytes: 0, total: input.size, error: error instanceof Error ? error.message : "Transfer failed" }));
     return { operationId };
   });
-  ipcMain.handle("project-transfer:cancel", (_event, operationId: unknown) => { if (typeof operationId !== "string") return false; const socket = active.get(operationId); socket?.close(4000, "Transfer cancelled"); return Boolean(socket); });
+  handle("project-transfer:cancel", (_event, operationId: unknown) => { if (typeof operationId !== "string") return false; const socket = active.get(operationId); socket?.close(4000, "Transfer cancelled"); return Boolean(socket); });
 }
 
 export function validateStart(value: unknown): { localId: string; token: string; host: string; port: number; direction: "upload" | "download"; size: number } {

@@ -1,9 +1,10 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { HarnessBlock, HarnessDefinition, HarnessRun } from "@remote-ide/protocol";
 import { alignBlocks, autoLayoutBlocks, BlockRunDetails, dragPosition, edgePath, fitCanvasViewport, HarnessPanel, minimapScrollPosition, minimapViewport, responsePreview, parseWorkflowDefinitionImport, workflowDefinitionExport, workflowRunExport } from "./HarnessPanel";
 
-afterEach(cleanup);
+beforeEach(() => { Object.defineProperty(window, "confirm", { configurable: true, writable: true, value: vi.fn() }); });
+afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
 function renderEditor(ui: Parameters<typeof render>[0]) {
   const view = render(ui);
@@ -12,6 +13,41 @@ function renderEditor(ui: Parameters<typeof render>[0]) {
 }
 
 describe("HarnessPanel", () => {
+  it("toggles Chatbox Autopilot while permission is pending and reports failures", async () => {
+    const block = { id: "chat", type: "chatbox", label: "Chat", prompt: "", position: { x: 0, y: 0 } } as const;
+    const state = { blockId: "chat", status: "awaiting_permission", sessionId: "session", autopilot: false } as const;
+    const onAutopilot = vi.fn().mockResolvedValue(undefined);
+    const view = render(<BlockRunDetails block={block} state={state} onClose={vi.fn()} onAutopilot={onAutopilot} />);
+    fireEvent.click(screen.getByRole("button", { name: "Chatbox settings" }));
+    const toggle = screen.getByRole("switch", { name: "Autopilot" });
+    expect((toggle as HTMLInputElement).checked).toBe(false);
+    fireEvent.click(toggle);
+    await waitFor(() => expect((toggle as HTMLInputElement).checked).toBe(true));
+    expect(onAutopilot).toHaveBeenCalledWith(true);
+    onAutopilot.mockRejectedValueOnce(new Error("Session changed"));
+    fireEvent.click(toggle);
+    expect((await screen.findByRole("alert")).textContent).toBe("Session changed");
+    expect((toggle as HTMLInputElement).checked).toBe(true);
+    view.rerender(<BlockRunDetails block={block} state={{ ...state, sessionId: "new", autopilot: false }} onClose={vi.fn()} onAutopilot={onAutopilot} />);
+    await waitFor(() => expect((toggle as HTMLInputElement).checked).toBe(false));
+  });
+
+  it("sends provider and model overrides with the first Chatbox message", async () => {
+    const block: HarnessBlock = { id: "chat", type: "chatbox", label: "Chat", prompt: "", provider: "old", model: "old-model", position: { x: 0, y: 0 } };
+    const onChat = vi.fn().mockResolvedValue(undefined);
+    const onLoadModels = vi.fn().mockResolvedValue([{ id: "new-model", name: "New model", defaultReasoning: "", reasoningLevels: [] }]);
+    render(<BlockRunDetails block={block} onClose={vi.fn()} onChat={onChat} providers={[{ id: "new", name: "New provider", options: [], capabilities: {} } as unknown as Parameters<typeof HarnessPanel>[0]["providers"][number]]} onLoadModels={onLoadModels} />);
+    fireEvent.click(screen.getByRole("button", { name: "Chatbox settings" }));
+    fireEvent.change(screen.getByLabelText("Chatbox provider override"), { target: { value: "new" } });
+    await waitFor(() => expect(onLoadModels).toHaveBeenLastCalledWith("new"));
+    fireEvent.click(screen.getByRole("button", { name: "Chatbox model override" }));
+    fireEvent.click(await screen.findByRole("option", { name: /New model/ }));
+    fireEvent.click(screen.getByRole("switch", { name: "Autopilot" }));
+    fireEvent.change(screen.getByLabelText("Message Chat"), { target: { value: "Hello" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send chat message" }));
+    await waitFor(() => expect(onChat).toHaveBeenCalledWith("Hello", { provider: "new", model: "new-model", autopilot: false }));
+  });
+
   it("links an existing skill from the catalogue and can return to custom instructions", async () => {
     const harness: HarnessDefinition = { id: "flow", name: "Flow", version: 1, createdAt: "now", updatedAt: "now", blocks: [{ id: "skill", type: "skill", label: "Skill", description: "Custom", prompt: "Custom instructions", position: { x: 0, y: 0 } }], edges: [] };
     const skillCatalog = { skills: [{ id: "workspace/review", scope: "workspace" as const, name: "review", title: "Reviewer", description: "Review code changes", path: "/project/.agents/skills/review/SKILL.md" }, { id: "global/blocked", scope: "global" as const, name: "blocked", title: "Blocked", path: "/skills/blocked/SKILL.md" }], policy: { allowed: ["workspace/review"], defaults: [] } };
@@ -113,9 +149,24 @@ describe("HarnessPanel", () => {
     fireEvent.change(screen.getByLabelText("Add block type"), { target: { value: "chatbox" } });
     expect(screen.getByLabelText("AI model")).toBeTruthy();
     expect(screen.getByLabelText("Block prompt")).toHaveProperty("value", "");
+    expect(screen.getByLabelText("Block Autopilot")).toHaveProperty("checked", true);
+    fireEvent.click(screen.getByLabelText("Block Autopilot"));
     fireEvent.click(screen.getByTitle("Save workflow"));
     await waitFor(() => expect(onSave).toHaveBeenCalled());
-    expect(onSave.mock.calls[0]?.[0].blocks[0]).toMatchObject({ type: "chatbox", prompt: "" });
+    expect(onSave.mock.calls[0]?.[0].blocks[0]).toMatchObject({ type: "chatbox", prompt: "", autopilot: false });
+  });
+
+  it("adds and saves Terminal Control without AI configuration", async () => {
+    const harness: HarnessDefinition = { id: "terminal", name: "Terminals", version: 1, createdAt: "now", updatedAt: "now", blocks: [], edges: [] };
+    const onSave = vi.fn(async (definition) => definition);
+    renderEditor(<HarnessPanel harnesses={[harness]} runs={[]} providers={[]} agents={[]} onCreate={vi.fn()} onSave={onSave} onDelete={vi.fn()} onRun={vi.fn()} onCancelRun={vi.fn()} onError={vi.fn()} />);
+    fireEvent.change(screen.getByLabelText("Add block type"), { target: { value: "terminal_control" } });
+    expect(screen.queryByLabelText("AI model")).toBeNull();
+    expect(screen.queryByLabelText("Block prompt")).toBeNull();
+    expect(screen.getByText(/Supply JSON input/)).toBeTruthy();
+    fireEvent.click(screen.getByTitle("Save workflow"));
+    await waitFor(() => expect(onSave).toHaveBeenCalled());
+    expect(onSave.mock.calls[0]?.[0].blocks[0]).toMatchObject({ type: "terminal_control", prompt: "" });
   });
 
   it("configures and saves a long-lived app block", async () => {
@@ -1069,4 +1120,17 @@ describe("HarnessPanel", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Retry now" }));
     await waitFor(() => expect(onRetryPause).toHaveBeenCalledWith("run-1", "a", "pause-4"));
   });
+});
+
+it.each(["success", "failure"])("keeps a Chatbox draft typed while its previous message completes with %s", async (outcome) => {
+  const block: HarnessBlock = { id: "chat", type: "chatbox", label: "Chat", prompt: "", position: { x: 0, y: 0 } };
+  let resolve!: () => void; let reject!: (error: Error) => void;
+  const onChat = vi.fn(() => new Promise<void>((done, failed) => { resolve = done; reject = failed; }));
+  render(<BlockRunDetails block={block} onClose={vi.fn()} onChat={onChat} />);
+  const input = screen.getByLabelText("Message Chat");
+  fireEvent.change(input, { target: { value: "First message" } });
+  fireEvent.click(screen.getByRole("button", { name: "Send chat message" }));
+  fireEvent.change(input, { target: { value: "Next message" } });
+  await act(async () => { if (outcome === "success") resolve(); else reject(new Error("SSH disconnected")); });
+  expect(input).toHaveProperty("value", "Next message");
 });

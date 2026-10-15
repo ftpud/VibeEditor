@@ -1,15 +1,23 @@
 import crypto from "node:crypto";
 import os from "node:os";
 import path from "node:path";
-import { mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
+import { mkdir, open, readFile, rename, unlink } from "node:fs/promises";
 import type { JavaBreakpoint, JavaProjectOptions, JavaRunConfiguration, WorkspaceOptions, WorkspaceWorkflowDocument, WorkspaceSearchQuery, WorkspaceSearchQueries } from "@remote-ide/protocol";
 import { CoreError } from "./errors.js";
+import { serializedStateMutation } from "./root-mutation.js";
+
+const saveQueues = new Map<string, Promise<void>>();
+
+export async function flushWorkspaceStateWrites(): Promise<void> {
+  const results = await Promise.allSettled([...saveQueues.values()]);
+  const failures = results.filter((result): result is PromiseRejectedResult => result.status === "rejected");
+  if (failures.length) throw new AggregateError(failures.map((result) => result.reason), "Workspace writes could not be drained");
+}
 
 const EMPTY_OPTIONS: WorkspaceOptions = { openFiles: [] };
 
 export class WorkspaceStateStore {
   private readonly stateFile: string;
-  private saveQueue: Promise<void> = Promise.resolve();
 
   constructor(workspace: string, stateDirectory = path.join(os.homedir(), ".remote-ide", "workspaces")) {
     const key = crypto.createHash("sha256").update(workspace).digest("hex");
@@ -17,35 +25,53 @@ export class WorkspaceStateStore {
   }
 
   async load(): Promise<WorkspaceOptions> {
-    try {
-      const parsed = JSON.parse(await readFile(this.stateFile, "utf8")) as unknown;
-      return validateWorkspaceOptions(parsed);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return { ...EMPTY_OPTIONS };
-      console.error(`[core] could not load workspace options: ${error instanceof Error ? error.message : String(error)}`);
-      return { ...EMPTY_OPTIONS };
+    try { return validateWorkspaceOptions(JSON.parse(await readFile(this.stateFile, "utf8"))); }
+    catch (error) {
+      const missing = (error as NodeJS.ErrnoException).code === "ENOENT";
+      if (!missing && !(error instanceof SyntaxError) && !(error instanceof CoreError)) {
+        throw new CoreError("READ_FAILED", `Could not read workspace options at ${this.stateFile}: ${String(error)}`);
+      }
+      try {
+        const backup = validateWorkspaceOptions(JSON.parse(await readFile(`${this.stateFile}.bak`, "utf8")));
+        console.warn(`[core] Recovered workspace options from ${this.stateFile}.bak; inspect the primary state file`);
+        return backup;
+      } catch (backupError) {
+        if (missing && (backupError as NodeJS.ErrnoException).code === "ENOENT") return { ...EMPTY_OPTIONS };
+        throw new CoreError("READ_FAILED", `Workspace options at ${this.stateFile} are unreadable and no valid backup is available: ${String(error)}`);
+      }
     }
   }
 
   save(options: WorkspaceOptions): Promise<void> {
     const validated = validateWorkspaceOptions(options);
-    const pending = this.saveQueue.then(() => this.write(validated));
-    this.saveQueue = pending.catch(() => undefined);
+    const pending = (saveQueues.get(this.stateFile) ?? Promise.resolve()).catch(() => undefined).then(() => serializedStateMutation(this.stateFile, () => this.write(validated)));
+    saveQueues.set(this.stateFile, pending);
+    void pending.finally(() => { if (saveQueues.get(this.stateFile) === pending) saveQueues.delete(this.stateFile); }).catch(() => undefined);
     return pending;
   }
 
-  private async write(options: WorkspaceOptions): Promise<void> {
-    const directory = path.dirname(this.stateFile);
-    const temporary = `${this.stateFile}.${process.pid}.${crypto.randomUUID()}.tmp`;
+  private async promote(file: string, options: WorkspaceOptions): Promise<void> {
+    const temporary = `${file}.${process.pid}.${crypto.randomUUID()}.tmp`;
     try {
-      await mkdir(directory, { recursive: true });
-      await writeFile(temporary, `${JSON.stringify(options, null, 2)}\n`, "utf8");
-      await rename(temporary, this.stateFile);
+      const handle = await open(temporary, "wx", 0o600);
+      try { await handle.writeFile(`${JSON.stringify(options, null, 2)}\n`, "utf8"); await handle.sync(); }
+      finally { await handle.close(); }
+      await rename(temporary, file);
+    } finally { await unlink(temporary).catch(() => undefined); }
+  }
+
+  private async write(options: WorkspaceOptions): Promise<void> {
+    try {
+      await mkdir(path.dirname(this.stateFile), { recursive: true });
+      // load() restores a last-good backup, or refuses silent data loss.
+      const previous = await this.load();
+      await this.promote(`${this.stateFile}.bak`, previous);
+      await this.promote(this.stateFile, options);
     } catch (error) {
-      await unlink(temporary).catch(() => undefined);
       throw new CoreError("WRITE_FAILED", `Could not save workspace options: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
+
 }
 
 export function validateWorkspaceOptions(value: unknown): WorkspaceOptions {

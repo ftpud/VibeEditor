@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { mkdtemp, mkdir, rm } from "node:fs/promises";
+import { realpath, mkdtemp, mkdir, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { WorkspaceRootRegistry } from "./workspace-roots.js";
@@ -8,7 +8,7 @@ const cleanup: string[] = [];
 afterEach(async () => { await Promise.all(cleanup.splice(0).map((item) => rm(item, { recursive: true, force: true }))); });
 
 async function fixture() {
-  const directory = await mkdtemp(path.join(os.tmpdir(), "vibe-roots-")); cleanup.push(directory);
+  const directory = await realpath(await mkdtemp(path.join(os.tmpdir(), "vibe-roots-"))); cleanup.push(directory);
   const primary = path.join(directory, "primary"), related = path.join(directory, "related"), state = path.join(directory, "state");
   await Promise.all([mkdir(primary), mkdir(related), mkdir(state)]);
   return { directory, primary, related, state };

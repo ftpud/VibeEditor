@@ -1,3 +1,5 @@
+import { captureContextInstructions, refreshContext } from "./context.js";
+import { retryProcessSpawn } from "../process-spawn.js";
 import { managedProcesses } from "../managed-processes.js";
 import crypto from "node:crypto";
 import os from "node:os";
@@ -14,7 +16,7 @@ import { SkillsStore } from "../skills.js";
 import { CoreError } from "../errors.js";
 import { agentFingerprint } from "../agent-profile.js";
 
-type ToolState = { title: string; name?: string; status?: string; command?: string; body: string[]; content: AiContentBlock[]; completion?: string; terminalId?: string };
+type ToolState = { kind?: string; title: string; name?: string; status?: string; command?: string; body: string[]; content: AiContentBlock[]; completion?: string; terminalId?: string };
 type Runtime = {
   child: ChildProcessWithoutNullStreams;
   connection: ClientSideConnection;
@@ -31,6 +33,7 @@ type Runtime = {
   /** Follow-ups typed mid-turn that agents without steering run next. */
   pending: { prompt: string; senderModel?: string }[];
   checkpointIds: string[];
+  captureSnapshots: boolean;
   configOptions: SessionConfigOption[];
   modes: ModeState;
   mcpKey: string;
@@ -61,7 +64,7 @@ function stamp(session: AiSession): number { return Date.parse(session.updatedAt
 /** Everything the session picker needs to label a conversation, without its transcript. */
 function summarize(session: AiSession): AiSession {
   const first = session.messages?.find((message) => message.role === "user");
-  return { ...session, pendingPermission: undefined, availableCommands: undefined, availableOptions: undefined, messages: first ? [first] : [] };
+  return { ...session, context: undefined, pendingPermission: undefined, availableCommands: undefined, availableOptions: undefined, messages: first ? [{ id: first.id, role: first.role, text: first.text.slice(0, 2000), timestamp: first.timestamp }] : [] };
 }
 
 const MODEL_CACHE_MS = 5 * 60_000;
@@ -80,6 +83,54 @@ export abstract class StdioAcpProvider extends AcpProvider {
   protected abstract command(configuration: AiConfiguration): { command: string; args: string[]; env?: NodeJS.ProcessEnv };
   protected abstract fallbackModels(): Promise<AiModel[]>;
   protected supportsUnlistedModel(_model: string): boolean { return false; }
+  private shuttingDown = false;
+  private shutdownPromise?: Promise<void>;
+  private readonly ownedChildren = new Set<ChildProcessWithoutNullStreams>();
+
+  override shutdown(): Promise<void> { return this.shutdownPromise ??= this.shutdownOwnedResources(); }
+
+  private async shutdownOwnedResources(): Promise<void> {
+    this.shuttingDown = true;
+    const runtimes = [...this.runtimes];
+    for (const [workspace, runtime] of runtimes) {
+      runtime.generation += 1; runtime.running = false; runtime.pending = [];
+      this.freshSessions.delete(workspace); this.cancelPermissionWaiters(workspace);
+      runtime.session.pendingPermission = undefined;
+      if (runtime.session.status === "in_progress" || runtime.session.status === "user_prompt") {
+        runtime.session.status = "idle";
+        runtime.session.messages.push(this.message("activity", "Interrupted because Core is shutting down"));
+      }
+    }
+    const children = [...this.ownedChildren];
+    const ownedPids = new Set(children.flatMap((child) => child.pid ? [child.pid] : []));
+    let inspectionError: unknown;
+    const rows = ownedPids.size ? await managedProcesses.list().catch((error) => { inspectionError = error; return []; }) : [];
+    let expanded = true;
+    while (expanded) {
+      expanded = false;
+      for (const row of rows) if (row.parentPid !== undefined && ownedPids.has(row.parentPid) && !ownedPids.has(row.pid)) { ownedPids.add(row.pid); expanded = true; }
+    }
+    const descendants = rows.filter((row) => ownedPids.has(row.pid) && !children.some((child) => child.pid === row.pid));
+    const stopped = children.map((child) => new Promise<void>((resolve) => {
+      if (child.exitCode !== null || child.signalCode !== null) { resolve(); return; }
+      const force = setTimeout(() => child.kill("SIGKILL"), 1_000);
+      const done = () => { clearTimeout(force); child.off("exit", done); child.off("close", done); resolve(); };
+      child.once("exit", done); child.once("close", done);
+    }));
+    await Promise.all(runtimes.map(([workspace]) => this.closeRuntime(workspace)));
+    for (const child of children) { child.stdin.end(); child.kill("SIGTERM"); }
+    await Promise.all(stopped);
+    // Revalidate recorded process identities before stopping descendants that
+    // survived their launcher. Never signal a recycled PID.
+    await Promise.all(descendants.map((row) => managedProcesses.kill(row.id, async () => true)));
+    await Promise.all(runtimes.map(async ([workspace, runtime]) => {
+      await this.completeCheckpoints(workspace, runtime, "interrupted");
+      await this.save(workspace, runtime.session);
+    }));
+    await Promise.all([...this.queues.values(), ...this.saveQueues.values()]);
+    if (inspectionError) throw new Error("Could not verify provider descendant cleanup", { cause: inspectionError });
+  }
+
   private readonly runtimes = new Map<string, Runtime>();
   private readonly queues = new Map<string, Promise<void>>();
   private readonly freshSessions = new Map<string, AcpSendRequest>();
@@ -146,23 +197,30 @@ export abstract class StdioAcpProvider extends AcpProvider {
   protected async describeModels(models: AiModel[]): Promise<AiModel[]> { return models; }
 
   async configure(workspace: string, configuration: AiConfiguration | string, legacyReasoning?: string): Promise<AiSession> {
-    if (this.runtimes.get(workspace)?.running) throw new CoreError("INVALID_REQUEST", `${this.descriptor.name} is currently working`);
+    const clientOptions = new Set(this.descriptor.options.filter((option) => option.permissionApproval).map((option) => option.id));
+    const clientOnly = typeof configuration !== "string" && Object.keys(configuration).every((key) => clientOptions.has(key));
+    if (this.runtimes.get(workspace)?.running && !clientOnly) throw new CoreError("INVALID_REQUEST", `${this.descriptor.name} is currently working`);
     const runtime = this.runtimes.get(workspace);
     const session = runtime?.session ?? await this.get(workspace);
     const previousModel = session.model;
     const desired = typeof configuration === "string" ? { model: configuration, reasoning: legacyReasoning ?? session.reasoning } : configuration;
+    if (Object.entries(desired).some(([key, value]) => clientOptions.has(key) && typeof value !== "boolean")) throw new CoreError("INVALID_REQUEST", "Autopilot must be a boolean");
     applyConfiguration(session, desired);
     if (typeof desired.model === "string" || typeof desired.reasoning === "string") session.nextConfiguration = undefined;
     const restartForModel = runtime && this.needsUnlistedModelLaunch(runtime, session.model);
     if (restartForModel) { await this.closeRuntime(workspace); session.threadId = undefined; }
     else if (!runtime && previousModel !== session.model && this.supportsUnlistedModel(session.model)) session.threadId = undefined;
-    if (runtime && !restartForModel) {
+    if (runtime && !restartForModel && !clientOnly) {
       const warnings = await this.applyAcpConfiguration(runtime, runtime.configOptions, runtime.modes);
       if (warnings.length > 0) session.messages.push(this.message("activity", `Session configuration\n${warnings.join("\n")}`));
-      const dynamic = new Set(["model", "reasoning", "mode", ...runtime.configOptions.map((option) => option.id)]);
+      const dynamic = new Set(["model", "reasoning", "mode", ...runtime.configOptions.map((option) => option.id), ...clientOptions]);
       if (Object.keys(desired).some((key) => !dynamic.has(key))) await this.closeRuntime(workspace);
     }
-    await this.save(workspace, session); this.onChanged(workspace); return session;
+    await this.save(workspace, session); this.onChanged(workspace);
+    const permission = session.pendingPermission;
+    const allowed = permission && this.automaticPermissionOption(session, permission.options);
+    if (allowed) return this.resolvePermission(workspace, permission!.id, allowed.optionId);
+    return session;
   }
 
   async configureNext(workspace: string, configuration: AiConfiguration): Promise<AiSession> {
@@ -189,12 +247,13 @@ export abstract class StdioAcpProvider extends AcpProvider {
     const allowedServers = request.agent?.mcpServers ? request.mcpServers?.filter((server) => request.agent!.mcpServers!.includes(server.name)) : request.mcpServers;
     const servers = this.descriptor.capabilities.skills ? [...(allowedServers ?? []).filter((server) => server.name !== "vibe-skills"), skillToolServer(await this.projectRoot(workspace), workspace, this.descriptor.id, this.bridgeWorkspace)] : allowedServers;
     const runtime = await this.ensureRuntime(workspace, session, servers);
+    runtime.captureSnapshots = request.captureSnapshots ?? runtime.captureSnapshots;
     if (nextConfiguration) runtime.session.nextConfiguration = undefined;
     const agentContent = this.withSessionAgent(content, request.agent, request.agentPreset, runtime.session);
     const turnContent = await this.withSkillCatalogue(workspace, runtime.session, agentContent);
     const visible = [prompt, ...(request.content ?? []).map(contentLabel)].filter(Boolean).join("\n");
     runtime.session.messages.push({ ...this.message("user", visible), content: request.content });
-    if (this.turns) try { runtime.checkpointIds.push(await this.turns.begin(workspace, this.descriptor.id, visible, runtime.session.id, checkpointProvenance(runtime.session, request.content, request.agent))); } catch (error) { runtime.session.messages.push(this.message("activity", `Prompt checkpoint could not be created: ${error instanceof Error ? error.message : String(error)}`)); }
+    if (this.turns && runtime.captureSnapshots) try { runtime.checkpointIds.push(await this.turns.begin(workspace, this.descriptor.id, visible, runtime.session.id, checkpointProvenance(runtime.session, request.content, request.agent))); } catch (error) { runtime.session.messages.push(this.message("activity", `Prompt checkpoint could not be created: ${error instanceof Error ? error.message : String(error)}`)); }
     this.runPrompt(workspace, runtime, turnContent);
     await this.save(workspace, runtime.session); this.onChanged(workspace);
     return this.get(workspace);
@@ -210,7 +269,7 @@ export abstract class StdioAcpProvider extends AcpProvider {
     const runtime = this.runtimes.get(workspace);
     if (!runtime?.running) throw new CoreError("INVALID_REQUEST", `${this.descriptor.name} is not currently working`);
     runtime.session.messages.push({ ...this.message("user", prompt), ...(options?.senderModel ? { senderModel: options.senderModel } : {}) });
-    if (this.turns) try { runtime.checkpointIds.push(await this.turns.begin(workspace, this.descriptor.id, prompt, runtime.session.id, checkpointProvenance(runtime.session))); } catch (error) { runtime.session.messages.push(this.message("activity", `Prompt checkpoint could not be created: ${error instanceof Error ? error.message : String(error)}`)); }
+    if (this.turns && runtime.captureSnapshots) try { runtime.checkpointIds.push(await this.turns.begin(workspace, this.descriptor.id, prompt, runtime.session.id, checkpointProvenance(runtime.session))); } catch (error) { runtime.session.messages.push(this.message("activity", `Prompt checkpoint could not be created: ${error instanceof Error ? error.message : String(error)}`)); }
     runtime.anchors = {};
     if (runtime.steering && !options?.queue) {
       try { await runtime.connection.extMethod(STEERING_METHOD, { sessionId: runtime.sessionId, prompt: [{ type: "text", text: prompt }] }); }
@@ -338,6 +397,7 @@ export abstract class StdioAcpProvider extends AcpProvider {
     const text = previous
       ? `Vibe skill catalogue changes: ${JSON.stringify({ added, updated, removed })}. Remove disabled skills from use. Reload updated skills with skill_load before applying them.`
       : `Vibe skill catalogue: ${JSON.stringify({ available: entries })}. Use skill_load(id) on the vibe-skills MCP server to load instructions only when relevant, before following a skill. Supporting files are relative to the returned base directory. Reuse loaded instructions until that skill is updated or removed. Only catalogue skills are enabled; ignore earlier Vibe skill instructions for skills outside this catalogue. Changes will be sent as additions, updates and removals.`;
+    captureContextInstructions(session, "Skill catalogue", text);
     session.skillCatalogue = { threadId: session.threadId!, entries };
     session.skillContext = true;
     const first = content.findIndex((block) => block.type === "text");
@@ -367,6 +427,7 @@ export abstract class StdioAcpProvider extends AcpProvider {
     session.agentPreset = preset;
     if (session.agent?.fingerprint === fingerprint) return content;
     session.agent = { name: agent.name, fingerprint };
+    if (agent.instructions.trim()) captureContextInstructions(session, `Agent: ${agent.name}`, agent.instructions.trim());
     return this.withAgent(content, agent);
   }
 
@@ -465,18 +526,37 @@ export abstract class StdioAcpProvider extends AcpProvider {
     const modified = await this.archiveStamp(workspace);
     const cached = this.archiveIndex.get(workspace);
     if (cached && cached.at === modified) return cached.sessions;
+    try {
+      const saved = JSON.parse(await readFile(`${directory}.index.json`, "utf8"));
+      if (saved.version === 1 && saved.at === modified && Array.isArray(saved.sessions) && saved.sessions.every((entry: AiSession) => entry && typeof entry.id === "string" && Array.isArray(entry.messages) && entry.messages.length <= 1)) {
+        this.archiveIndex.set(workspace, { at: modified, sessions: saved.sessions });
+        return saved.sessions;
+      }
+    } catch { /* A stale or damaged index is rebuilt from archived transcripts. */ }
     let names: string[] = [];
     try { names = await readdir(directory); } catch { this.archiveIndex.set(workspace, { at: modified, sessions: [] }); return []; }
     const sessions = await Promise.all(names.filter((name) => name.endsWith(".json")).map(async (name) => {
       try { return summarize(JSON.parse(await readFile(path.join(directory, name), "utf8")) as AiSession); } catch { return undefined; }
     }));
     const index = sessions.filter((session): session is AiSession => Boolean(session?.id)).sort((left, right) => stamp(right) - stamp(left));
-    this.archiveIndex.set(workspace, { at: modified, sessions: index });
+    await this.cacheIndex(workspace, index, modified);
     return index;
   }
 
   private async archiveStamp(workspace: string): Promise<number> { return stat(this.archiveDirectory(workspace)).then((stats) => stats.mtimeMs).catch(() => 0); }
-  private async cacheIndex(workspace: string, sessions: AiSession[]): Promise<void> { this.archiveIndex.set(workspace, { at: await this.archiveStamp(workspace), sessions }); }
+  private async cacheIndex(workspace: string, sessions: AiSession[], capturedStamp?: number): Promise<void> {
+    const at = capturedStamp ?? await this.archiveStamp(workspace);
+    this.archiveIndex.set(workspace, { at, sessions });
+    // Keep the index beside the archive directory so writing it does not change
+    // the directory timestamp used to detect changes by another Core process.
+    const file = `${this.archiveDirectory(workspace)}.index.json`;
+    const temporary = `${file}.${crypto.randomUUID()}.tmp`;
+    try {
+      await writeFile(temporary, JSON.stringify({ version: 1, at, sessions }));
+      await rename(temporary, file);
+    } catch { /* Derived metadata is optional; transcripts remain authoritative. */ }
+    finally { await rm(temporary, { force: true }).catch(() => {}); }
+  }
 
   private async readArchived(workspace: string, sessionId: string): Promise<AiSession | undefined> {
     try {
@@ -506,6 +586,7 @@ export abstract class StdioAcpProvider extends AcpProvider {
   }
 
   private async ensureRuntime(workspace: string, session: AiSession, servers?: AcpSendRequest["mcpServers"]): Promise<Runtime> {
+    if (this.shuttingDown) throw new CoreError("INVALID_REQUEST", "Core is shutting down");
     let existing = this.runtimes.get(workspace);
     const mcpKey = JSON.stringify(this.mcpServers(servers));
     if (existing && servers !== undefined && existing.mcpKey !== mcpKey) { await this.closeRuntime(workspace); existing = undefined; }
@@ -524,11 +605,12 @@ export abstract class StdioAcpProvider extends AcpProvider {
     }
     this.lastWorkspace = workspace;
     const connected = await this.connect(workspace, session.configuration ?? {}, servers, session.threadId);
+    if (this.shuttingDown) { connected.child.stdin.end(); connected.child.kill("SIGTERM"); throw new CoreError("INVALID_REQUEST", "Core is shutting down"); }
     // A fresh provider session has no prior prompt context, even when the local
     // transcript still records which preset the previous session received.
-    if (!connected.resumed) { session.agent = undefined; session.skillCatalogue = undefined; }
+    if (!connected.resumed) { session.agent = undefined; session.skillCatalogue = undefined; session.context = undefined; session.contextUsed = undefined; session.contextLimit = undefined; }
     if (connected.resumeFailed) session.messages.push(this.message("activity", "The saved ACP session could not be resumed; a new agent session was started."));
-    const runtime: Runtime = { child: connected.child, connection: connected.connection, sessionId: connected.sessionId, running: false, stderr: connected.stderr(), session, tools: new Map(), anchors: {}, generation: 0, steering: connected.steering, pending: [], checkpointIds: [], configOptions: connected.configOptions, modes: connected.modes, mcpKey };
+    const runtime: Runtime = { child: connected.child, connection: connected.connection, sessionId: connected.sessionId, running: false, stderr: connected.stderr(), session, tools: new Map(), anchors: {}, generation: 0, steering: connected.steering, pending: [], checkpointIds: [], captureSnapshots: true, configOptions: connected.configOptions, modes: connected.modes, mcpKey };
     connected.bind(runtime);
     session.threadId = connected.sessionId;
     session.steering = connected.steering;
@@ -548,9 +630,18 @@ export abstract class StdioAcpProvider extends AcpProvider {
 
   /** Spawns the agent, performs the ACP handshake and opens a session. */
   private async connect(workspace: string, configuration: AiConfiguration, servers?: AcpSendRequest["mcpServers"], savedSessionId?: string): Promise<Connected> {
+    if (this.shuttingDown) throw new CoreError("INVALID_REQUEST", "Core is shutting down");
     const launch = this.command(configuration);
     const processContext = { workspace, rootWorkspace: await this.projectRoot(workspace), provider: this.descriptor.id, kind: "agent" as const };
-    const child = managedProcesses.launch(processContext, (env) => spawn(launch.command, launch.args, { cwd: workspace, env: { ...env, ...launch.env }, stdio: "pipe" }));
+    if (this.shuttingDown) throw new CoreError("INVALID_REQUEST", "Core is shutting down");
+    const child = await retryProcessSpawn(() => new Promise<ChildProcessWithoutNullStreams>((resolve, reject) => {
+      if (this.shuttingDown) { reject(new CoreError("INVALID_REQUEST", "Core is shutting down")); return; }
+      const child = managedProcesses.launch(processContext, (env) => spawn(launch.command, launch.args, { cwd: workspace, env: { ...env, ...launch.env }, stdio: "pipe" }));
+      this.ownedChildren.add(child);
+      child.once("close", () => this.ownedChildren.delete(child));
+      child.once("error", reject);
+      child.once("spawn", () => { child.off("error", reject); resolve(child); });
+    }));
     // Spawn failures (most commonly an optional provider CLI missing from PATH)
     // are emitted asynchronously. Listen before constructing the ACP transport so
     // ENOENT rejects discovery instead of becoming an unhandled process error.
@@ -615,7 +706,14 @@ export abstract class StdioAcpProvider extends AcpProvider {
     }
   }
 
+  private automaticPermissionOption(session: AiSession, options: RequestPermissionRequest["options"]) {
+    const enabled = this.descriptor.options.some((option) => option.permissionApproval && option.type === "boolean" && (session.configuration?.[option.id] ?? option.defaultValue) === true);
+    return enabled ? options.find((option) => option.kind === "allow_once") ?? options.find((option) => option.kind === "allow_always") : undefined;
+  }
+
   private async requestPermission(workspace: string, runtime: Runtime, params: RequestPermissionRequest): Promise<RequestPermissionResponse> {
+    const allowed = this.automaticPermissionOption(runtime.session, params.options);
+    if (allowed) return { outcome: { outcome: "selected", optionId: allowed.optionId } };
     const id = crypto.randomUUID();
     const detail = toolBody(params.toolCall);
     runtime.session.pendingPermission = {
@@ -703,15 +801,16 @@ export abstract class StdioAcpProvider extends AcpProvider {
       }
       case "tool_call": {
         runtime.anchors = {};
-        const tool: ToolState = { title: update.title, name: update.name ?? undefined, status: update.status ?? undefined, ...toolBody(update) };
+        const tool: ToolState = { kind: update.kind, title: update.title, name: update.name ?? undefined, status: update.status ?? undefined, ...toolBody(update) };
         runtime.tools.set(update.toolCallId, tool);
-        session.messages.push({ id: update.toolCallId, role: "activity", text: renderTool(tool), content: tool.content, timestamp: new Date().toISOString(), ...(tool.terminalId ? { terminalId: tool.terminalId } : {}) });
+        session.messages.push({ id: update.toolCallId, role: "activity", contextKind: tool.kind === "read" ? "files" : "tools", text: renderTool(tool), content: tool.content, timestamp: new Date().toISOString(), ...(tool.terminalId ? { terminalId: tool.terminalId } : {}) });
         appendTaskCompletion(session, update.toolCallId, tool);
         break;
       }
       case "tool_call_update": {
         const tool = runtime.tools.get(update.toolCallId) ?? { title: update.title ?? "Tool call", body: [], content: [] };
         if (update.title) tool.title = update.title;
+        if (update.kind) tool.kind = update.kind;
         if (update.status) tool.status = update.status;
         const next = toolBody(update);
         if (next.command) tool.command = next.command;
@@ -721,8 +820,8 @@ export abstract class StdioAcpProvider extends AcpProvider {
         if (next.terminalId) tool.terminalId = next.terminalId;
         runtime.tools.set(update.toolCallId, tool);
         const existing = session.messages.find((message) => message.id === update.toolCallId);
-        if (existing) { existing.text = renderTool(tool); existing.content = tool.content; existing.terminalId = tool.terminalId; }
-        else session.messages.push({ id: update.toolCallId, role: "activity", text: renderTool(tool), content: tool.content, timestamp: new Date().toISOString(), ...(tool.terminalId ? { terminalId: tool.terminalId } : {}) });
+        if (existing) { existing.contextKind = tool.kind === "read" ? "files" : "tools"; existing.text = renderTool(tool); existing.content = tool.content; existing.terminalId = tool.terminalId; }
+        else session.messages.push({ id: update.toolCallId, role: "activity", contextKind: tool.kind === "read" ? "files" : "tools", text: renderTool(tool), content: tool.content, timestamp: new Date().toISOString(), ...(tool.terminalId ? { terminalId: tool.terminalId } : {}) });
         appendTaskCompletion(session, update.toolCallId, tool);
         break;
       }
@@ -741,8 +840,12 @@ export abstract class StdioAcpProvider extends AcpProvider {
         break;
       }
       case "available_commands_update": session.availableCommands = update.availableCommands.map((command) => ({ name: command.name, description: command.description, inputHint: command.input?.hint })); break;
-      case "usage_update": session.contextUsed = update.used; if (update.size != null) { session.contextLimit = update.size; this.rememberContextWindow(session.model, update.size); } break;
-      case "compaction_update": session.messages.push(this.message("activity", "Compacting conversation history")); break;
+      case "usage_update": session.contextUsed = update.used; if (update.size != null) { session.contextLimit = update.size; this.rememberContextWindow(session.model, update.size); } refreshContext(session, true); break;
+      case "compaction_update": {
+        refreshContext(session);
+        session.context!.compactions++;
+        session.messages.push(this.message("activity", "Compacting conversation history")); break;
+      }
       default: break;
     }
     await this.save(workspace, session); this.onChanged(workspace);
@@ -816,7 +919,7 @@ export abstract class StdioAcpProvider extends AcpProvider {
   private toUiOptions(options: SessionConfigOption[], modes: ModeState): AiOption[] {
     const mapped: AiOption[] = options.filter((option) => option.category !== "model" && option.category !== "thought_level").map((option) => ({ id: option.id, name: option.name, description: option.description ?? "Configuration advertised by the ACP agent.", section: "acp", type: option.type, defaultValue: option.currentValue, ...(option.type === "select" ? { choices: selectOptions(option) } : {}) }));
     if (modes && !options.some((option) => option.category === "mode")) mapped.unshift({ id: "mode", name: "Agent mode", description: "Controls the ACP agent's operating mode for this session.", section: "acp", type: "select", defaultValue: modes.currentModeId, choices: modes.availableModes.map((mode) => ({ value: mode.id, name: mode.name ?? mode.id, description: mode.description ?? undefined })) });
-    return mapped;
+    return [...this.descriptor.options.filter((option) => option.permissionApproval), ...mapped.filter((option) => !this.descriptor.options.some((own) => own.permissionApproval && own.id === option.id))];
   }
 
   /**
@@ -828,7 +931,7 @@ export abstract class StdioAcpProvider extends AcpProvider {
     const existing = anchor ? session.messages.find((message) => message.id === anchor && message.role === role) : undefined;
     if (existing) { existing.text += text; return existing.id; }
     const id = anchor ?? crypto.randomUUID();
-    session.messages.push({ id, role, text: heading ? `${heading}\n${text}` : text, timestamp: new Date().toISOString(), ...(role === "assistant" ? { model: session.model, reasoning: session.reasoning } : {}) });
+    session.messages.push({ id, role, ...(heading === "Reasoning" ? { contextKind: "reasoning" as const } : {}), text: heading ? `${heading}\n${text}` : text, timestamp: new Date().toISOString(), ...(role === "assistant" ? { model: session.model, reasoning: session.reasoning } : {}) });
     return id;
   }
 
@@ -861,6 +964,7 @@ export abstract class StdioAcpProvider extends AcpProvider {
   private message(role: AiMessage["role"], text: string, session?: AiSession): AiMessage { return { id: crypto.randomUUID(), role, text, timestamp: new Date().toISOString(), ...(role === "assistant" && session ? { model: session.model, reasoning: session.reasoning } : {}) }; }
   private file(workspace: string): string { return path.join(this.stateDirectory, `${crypto.createHash("sha256").update(workspace).digest("hex")}-${this.descriptor.id}.json`); }
   private async save(workspace: string, session: AiSession): Promise<void> {
+    refreshContext(session);
     const serialized = `${JSON.stringify({ ...session, messages: session.messages.slice(-1000), ...(session.status === "in_progress" ? { _ownerPid: process.pid } : {}) }, null, 2)}\n`;
     const previous = this.saveQueues.get(workspace) ?? Promise.resolve();
     const next = previous.catch(() => undefined).then(async () => {

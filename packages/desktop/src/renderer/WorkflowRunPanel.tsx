@@ -1,10 +1,11 @@
+import { WorkflowError } from "./WorkflowError";
 import { forwardRef, useImperativeHandle, useEffect, useId, useMemo, useRef, useState } from "react";
-import { ArrowLeftRight, ArrowUpDown, Play, Square, Workflow, RotateCcw, ChevronDown, ChevronUp, Maximize2, Minimize2 } from "lucide-react";
+import { ArrowLeftRight, ArrowUpDown, Play, Square, Workflow, RotateCcw, ChevronDown, ChevronUp, Maximize2, PanelTop, Minimize2 } from "lucide-react";
 import type { HarnessAppState, HarnessBlock, HarnessDefinition, HarnessRun } from "@remote-ide/protocol";
 import { BlockRunDetails, PauseResolution, WorkflowMessage, type HarnessPanelProps } from "./HarnessPanel";
 import { useWorkflowTraces } from "./workflow-tracing";
 
-type Props = Pick<HarnessPanelProps, "harnesses" | "runs" | "diagnostics" | "onRun" | "onChat" | "onValidate" | "onCancelRun" | "onKillApp" | "onReadApp" | "onResolvePermission" | "onAnswerQuestion" | "onResumePause" | "onRetryPause" | "onCancelPause" | "onError">;
+type Props = { onOpenWorkflow?(workflow: HarnessDefinition): void; editorView?: boolean } & Partial<Pick<HarnessPanelProps, "providers">> & Pick<HarnessPanelProps, "defaultProvider" | "onLoadModels" | "harnesses" | "runs" | "diagnostics" | "onReadRun" | "onRun" | "onChat" | "onValidate" | "onCancelRun" | "onKillApp" | "onOpenAppTerminal" | "onSteerChat" | "onAutopilot" | "onReadApp" | "onResolvePermission" | "onAnswerQuestion" | "onResumePause" | "onRetryPause" | "onCancelPause" | "onError">;
 const activeStatuses = new Set(["queued", "running", "waiting", "awaiting_permission", "awaiting_user_input", "waiting_timer", "retry_scheduled"]);
 const pauseStatuses = new Set(["awaiting_permission", "awaiting_user_input", "waiting_timer", "retry_scheduled"]);
 const statusLabel = (status: string) => status.replaceAll("_", " ");
@@ -12,7 +13,7 @@ const statusLabel = (status: string) => status.replaceAll("_", " ");
 export function WorkflowRunPanel(props: Props) {
   const [filter, setFilter] = useState("");
   const [expandedId, setExpandedId] = useState<string>();
-  const expandedWorkflowId = props.harnesses.some((workflow) => workflow.id === expandedId) ? expandedId : undefined;
+  const expandedWorkflowId = props.editorView ? props.harnesses[0]?.id : props.harnesses.some((workflow) => workflow.id === expandedId) ? expandedId : undefined;
   const workflows = props.harnesses.filter((workflow) => workflow.id === expandedWorkflowId || workflow.name.toLowerCase().includes(filter.toLowerCase()));
   return <div className={`workflow-run-panel harness-panel${expandedWorkflowId ? " expanded" : ""}`}>
     <div className="workflow-library-toolbar" hidden={!!expandedWorkflowId}>
@@ -26,7 +27,7 @@ export function WorkflowRunPanel(props: Props) {
 }
 
 function WorkflowCard({ workflow, expanded, hidden, onToggleExpanded, ...props }: Props & { workflow: HarnessDefinition; expanded: boolean; hidden: boolean; onToggleExpanded(): void }) {
-  const [collapsed, setCollapsed] = useState(true);
+  const [collapsed, setCollapsed] = useState(!props.editorView);
   const bodyId = useId();
   const previewRef = useRef<WorkflowPreviewHandle>(null);
   const [selectedRunId, setSelectedRunId] = useState<string>();
@@ -39,6 +40,14 @@ function WorkflowCard({ workflow, expanded, hidden, onToggleExpanded, ...props }
   const [error, setError] = useState("");
   const runs = [...props.runs, ...(startedRun && !props.runs.some((run) => run.id === startedRun.id) ? [startedRun] : [])].sort((a, b) => Number(activeStatuses.has(b.status)) - Number(activeStatuses.has(a.status)) || b.createdAt.localeCompare(a.createdAt));
   const run = runs.find((item) => item.id === selectedRunId) ?? runs[0];
+  const [loadingError, setLoadingError] = useState("");
+  useEffect(() => {
+    if (collapsed || hidden || !run?.summary || !props.onReadRun) return;
+    let active = true;
+    setLoadingError("");
+    void props.onReadRun(run.id).catch((cause) => { if (active) setLoadingError(cause instanceof Error ? cause.message : "Could not load run details"); });
+    return () => { active = false; };
+  }, [collapsed, hidden, run?.id, run?.summary, props.onReadRun]);
   const definition = run?.definition ?? workflow;
   const selectedBlock = definition.blocks.find((block) => block.id === selectedBlockId);
   const starts = workflow.blocks.filter((block) => block.type === "start_button" || block.type === "start_input");
@@ -85,12 +94,14 @@ function WorkflowCard({ workflow, expanded, hidden, onToggleExpanded, ...props }
   </>;
   return <article className={`workflow-card${run && activeStatuses.has(run.status) ? " live" : ""}${collapsed ? " collapsed" : ""}${expanded ? " expanded" : ""}`} aria-label={workflow.name} hidden={hidden}>
     <header><Workflow size={16} aria-hidden="true" /><strong title={workflow.name}>{workflow.name}</strong><span className={`workflow-overall-status ${run?.status ?? "idle"}`} role="status" aria-label={statusLabel(run?.status ?? "Ready")} title={statusLabel(run?.status ?? "Ready")}><i className={`harness-status ${run?.status ?? "idle"}`} /></span><div className="workflow-view-controls">
-      <button type="button" aria-label={`${collapsed ? "Show" : "Collapse"} ${workflow.name}`} title={collapsed ? "Show workflow content" : "Collapse workflow"} aria-expanded={!collapsed} aria-controls={bodyId} onClick={() => { setCollapsed((current) => !current); if (expanded) onToggleExpanded(); }}>{collapsed ? <ChevronDown size={15} aria-hidden="true" /> : <ChevronUp size={15} aria-hidden="true" />}</button>
+      {props.onOpenWorkflow && <button type="button" aria-label={`Open ${workflow.name} in editor tab`} title="Open workflow in editor tab" onClick={() => props.onOpenWorkflow?.(workflow)}><PanelTop size={15} aria-hidden="true" /></button>}
+      {!props.editorView && <><button type="button" aria-label={`${collapsed ? "Show" : "Collapse"} ${workflow.name}`} title={collapsed ? "Show workflow content" : "Collapse workflow"} aria-expanded={!collapsed} aria-controls={bodyId} onClick={() => { setCollapsed((current) => !current); if (expanded) onToggleExpanded(); }}>{collapsed ? <ChevronDown size={15} aria-hidden="true" /> : <ChevronUp size={15} aria-hidden="true" />}</button>
       <button type="button" aria-label={`${expanded ? "Restore" : "Expand"} ${workflow.name}`} title={expanded ? "Restore item size" : "Expand to panel"} aria-pressed={expanded} onClick={() => { setCollapsed(false); onToggleExpanded(); }}>{expanded ? <Minimize2 size={15} aria-hidden="true" /> : <Maximize2 size={15} aria-hidden="true" />}</button>
+      </>}
     </div></header>
     <div id={bodyId} className="workflow-card-body" hidden={collapsed}>
     <div className="workflow-card-context">
-    {run ? <>
+    {run?.summary ? <div><p role={loadingError ? "alert" : "status"}>{loadingError || "Loading run details…"}</p>{loadingError && <button onClick={() => { setLoadingError(""); void props.onReadRun?.(run.id).catch((cause) => setLoadingError(String(cause))); }}>Retry</button>}</div> : run ? <>
       <div className="workflow-run-meta"><select aria-label={`Run for ${workflow.name}`} value={run.id} onChange={(event) => { setSelectedRunId(event.target.value); setSelectedBlockId(undefined); }}>{runs.map((item) => <option key={item.id} value={item.id}>{statusLabel(item.status)} · {new Date(item.createdAt).toLocaleString()}</option>)}</select><span title={run.binding?.workspace ?? run.workspace}>{run.binding?.taskName ?? run.binding?.taskId ?? (run.binding ? "Root workspace" : "Legacy workspace")} · {completed}/{definition.blocks.length} complete</span></div>
       <div className="workflow-run-prompt-row">
         <details className="workflow-run-input"><summary>Run prompt</summary><WorkflowMessage key={run.id} title="Prompt" value={run.input} /></details>
@@ -104,12 +115,12 @@ function WorkflowCard({ workflow, expanded, hidden, onToggleExpanded, ...props }
       <CompactWorkflowPreview ref={previewRef} onReadApp={props.onReadApp} pollApps={!collapsed && !hidden} definition={definition} run={run} selectedBlockId={selectedBlockId} onSelect={setSelectedBlockId} />
 
       {run.blocks.filter((block) => pauseStatuses.has(block.status)).map((block) => <PauseResolution compactTimer key={`${run.id}:${block.blockId}:${block.pauseId}`} {...props} run={run} block={block} label={definition.blocks.find((item) => item.id === block.blockId)?.label ?? block.blockId} yesNo={definition.blocks.find((item) => item.id === block.blockId)?.type === "yes_no_prompt"} />)}
-      {run.error && <p className="workflow-card-error">{run.error}</p>}{!!run.cleanupErrors?.length && <p className="workflow-card-error">{run.cleanupErrors.join("; ")}</p>}
+      {run.error && <WorkflowError message={run.error} />}{!!run.cleanupErrors?.length && <WorkflowError message={run.cleanupErrors.join("; ")} label="Cleanup error" />}
     </> : <><div className="workflow-run-prompt-row"><p className="workflow-card-hint">{workflow.blocks.length} blocks · {workflow.blocks.some((block) => block.type === "chatbox") ? "Open a Chatbox or choose a starting point" : "Choose a starting point"}</p><div className="workflow-run-controls" onFocus={(event) => event.target.scrollIntoView({ block: "nearest", inline: "nearest" })}>{fitControls}</div></div><CompactWorkflowPreview ref={previewRef} onReadApp={props.onReadApp} pollApps={!collapsed && !hidden} definition={definition} selectedBlockId={selectedBlockId} onSelect={setSelectedBlockId} /></>}
     </div>
-    {selectedBlock && <BlockRunDetails key={`${run?.id ?? workflow.id}:${selectedBlock.id}`} block={selectedBlock} run={run} state={run?.blocks.find((block) => block.blockId === selectedBlock.id)} tasks={run?.children?.filter((child) => child.blockId === selectedBlock.id)} onClose={() => setSelectedBlockId(undefined)} onChat={props.onChat ? async (message) => { const next = await props.onChat!(workflow.id, selectedBlock.id, message, run?.id); setStartedRun(next); setSelectedRunId(next.id); } : undefined} onCancelChat={run ? () => props.onCancelRun(run.id) : undefined} onReadApp={props.onReadApp && selectedBlock.type === "run_app" ? () => props.onReadApp!(workflow.id, selectedBlock.id, run?.id) : undefined} onKillApp={props.onKillApp && selectedBlock.type === "run_app" ? () => props.onKillApp!(workflow.id, selectedBlock.id, run?.id) : undefined} definition={definition} />}
+    {selectedBlock && !run?.summary && <BlockRunDetails providers={props.providers} defaultProvider={props.defaultProvider} onLoadModels={props.onLoadModels} key={`${run?.id ?? workflow.id}:${selectedBlock.id}`} block={selectedBlock} run={run} state={run?.blocks.find((block) => block.blockId === selectedBlock.id)} tasks={run?.children?.filter((child) => child.blockId === selectedBlock.id)} onClose={() => setSelectedBlockId(undefined)} onChat={props.onChat ? async (message, settings) => { const next = await props.onChat!(workflow.id, selectedBlock.id, message, run?.id, settings); setStartedRun(next); setSelectedRunId(next.id); } : undefined} onSteer={props.onSteerChat && run && run.blocks.find((item) => item.blockId === selectedBlock.id)?.sessionId ? async (input) => { const state = run.blocks.find((item) => item.blockId === selectedBlock.id)!; const next = await props.onSteerChat!(run.id, selectedBlock.id, state.sessionId!, input); setStartedRun(next); } : undefined} onOpenAppTerminal={props.onOpenAppTerminal && selectedBlock.type === "run_app" ? () => props.onOpenAppTerminal!(workflow.id, selectedBlock.id, run?.id) : undefined} onAutopilot={props.onAutopilot && run && run.blocks.find((item) => item.blockId === selectedBlock.id)?.sessionId ? async (enabled) => { const state = run.blocks.find((item) => item.blockId === selectedBlock.id)!; const next = await props.onAutopilot!(run.id, selectedBlock.id, state.sessionId!, enabled); setStartedRun(next); } : undefined} onCancelChat={run ? () => props.onCancelRun(run.id) : undefined} onReadApp={props.onReadApp && selectedBlock.type === "run_app" ? () => props.onReadApp!(workflow.id, selectedBlock.id, run?.id) : undefined} onKillApp={props.onKillApp && selectedBlock.type === "run_app" ? () => props.onKillApp!(workflow.id, selectedBlock.id, run?.id) : undefined} definition={definition} />}
     {(!run || showStarts) && <div className="workflow-starts">{starts.length ? starts.map((block) => renderStart(block)) : renderStart()}</div>}
-    {error && <p role="alert" className="workflow-card-error">{error}</p>}
+    {error && <WorkflowError message={error} />}
     </div>
   </article>;
 }

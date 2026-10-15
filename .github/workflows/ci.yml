@@ -1,0 +1,67 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Verify (${{ matrix.os }}, Node ${{ matrix.node }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+        node:
+          - 22
+          - 24
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      - name: Set up Java toolchain
+        uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Audit locked dependencies
+        run: npm audit --audit-level=moderate
+
+      - name: Build
+        run: npm run build
+
+      - name: Typecheck root workspaces
+        run: npm run typecheck
+
+      - name: Typecheck Gateway
+        run: npm run typecheck -w @remote-ide/gateway
+
+      - name: Run full test suite
+        id: tests
+        shell: bash
+        run: |
+          set -o pipefail
+          npm test 2>&1 | tee "$RUNNER_TEMP/vibe-tests.log"
+
+      - name: Report test failure details
+        if: failure() && steps.tests.outcome == 'failure'
+        run: node scripts/annotate-test-failure.mjs "$RUNNER_TEMP/vibe-tests.log"
+
+      - name: Verify crash and restart recovery
+        run: npm run test:release-soak -- --cycles 12 --output "${{ runner.temp }}/vibe-release-soak.json"
