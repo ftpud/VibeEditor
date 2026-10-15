@@ -58,6 +58,34 @@ async function setup() {
   return { root, tasks, a, b, wa, wb, store, runner, context, provider };
 }
 
+it.each([false, true])("keeps Chatbox guidance in session instructions with selected preset: %s", async (withPreset) => {
+  const f = await setup();
+  const preset = { scope: "local" as const, name: "reviewer.md" };
+  if (withPreset) f.context.agents.list = vi.fn().mockResolvedValue([{ ...preset, agent: { name: "Reviewer", instructions: "Review carefully.", mcpServers: [] } }]);
+  const created = await f.store.create("Chat instructions");
+  const definition = await f.store.update({ ...created, blocks: [block("chat", "chatbox", { prompt: "Follow the chat rules for {{input}}.", ...(withPreset ? { agent: preset } : {}) })], edges: [] });
+  const run = await startWorkflow({ harnessId: definition.id, input: "first message", startBlockId: "chat", provider: "test", target: {} }, f.context);
+  await vi.waitFor(async () => expect((await f.runner.readRun(run.id))?.status).toBe("succeeded"), { timeout: 4_000 });
+  expect(f.provider.startFreshSession).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({
+    prompt: "first message",
+    agent: expect.objectContaining({ name: withPreset ? "Reviewer" : "chat", instructions: expect.stringContaining("Follow the chat rules for {{input}}.") }),
+    ...(withPreset ? { agentPreset: preset } : {}),
+  }));
+  const request = f.provider.startFreshSession.mock.calls[0]![1] as import("@remote-ide/acp").AcpSendRequest;
+  expect(request.agent!.instructions).toContain("Connected tools:");
+  expect(request.agent!.instructions).not.toContain("first message");
+  if (withPreset) {
+    expect(request.agent!.instructions).toContain("Review carefully.");
+    expect(request.agent!.mcpServers).toContain("vibe-editor");
+  }
+  await vi.waitFor(() => expect(f.runner.isActive(run.id)).toBe(false));
+  await startWorkflow({ harnessId: definition.id, input: "second message", startBlockId: "chat", chatRunId: run.id, provider: "test", target: {} }, f.context);
+  await vi.waitFor(async () => expect((await f.runner.readRun(run.id))?.status).toBe("succeeded"), { timeout: 4_000 });
+  expect(f.provider.startFreshSession).toHaveBeenCalledOnce();
+  expect(f.provider.send).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ prompt: "second message" }));
+  expect(f.provider.send.mock.calls[0]![1]).not.toHaveProperty("agent");
+});
+
 it("applies a Chatbox's saved Autopilot preference and defaults new workflow sessions to on", async () => {
   const f = await setup();
   Object.assign(f.provider.descriptor, { options: [{ id: "autoApprove", name: "Autopilot", type: "boolean", defaultValue: false, permissionApproval: true }] });

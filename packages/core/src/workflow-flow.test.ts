@@ -133,9 +133,10 @@ describe("typed workflows", () => {
     // Verify the new type and description survive persistence.
     expect((await store.read(definition.id)).blocks[1]).toMatchObject({ type: "skill", description, prompt: instructions });
     const dispatch = vi.fn(async (_block: HarnessBlock, prompt: string, runtime: Parameters<Parameters<HarnessRunner["start"]>[2]>[2]) => {
-      expect(prompt).toContain(description);
-      expect(prompt).not.toContain(instructions);
-      expect(prompt).toContain("load its instructions before applying them in your own session");
+      const guidance = type === "chatbox" ? runtime.instructions! : prompt;
+      expect(guidance).toContain(description);
+      expect(guidance).not.toContain(instructions);
+      expect(guidance).toContain("load its instructions before applying them in your own session");
       const connections = await runner.flowTool(runtime.runId, "agent", "workflow_connections", {});
       expect(connections).toEqual(expect.arrayContaining([expect.objectContaining({ block_id: "review-skill", blockType: "skill", description })]));
       expect(JSON.stringify(connections)).not.toContain(instructions);

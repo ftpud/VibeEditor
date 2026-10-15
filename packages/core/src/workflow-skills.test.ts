@@ -45,8 +45,9 @@ it.each(["ai", "chatbox"] as const)("loads linked skills on demand for %s with c
   const load = vi.spyOn(skills, "loadForWorkflow");
   const dispatch: Parameters<HarnessRunner["start"]>[2] = async (block, prompt, runtime) => {
     if (block.type === "skill") return executeWorkflowSkill(block, skills, workspace, runtime);
-    expect(prompt).toContain("Review code changes");
-    expect(prompt).not.toContain("Read examples.txt");
+    const guidance = type === "chatbox" ? runtime.instructions! : prompt;
+    expect(guidance).toContain("Review code changes");
+    expect(guidance).not.toContain("Read examples.txt");
     expect(load).not.toHaveBeenCalled();
     // Linked blocks read saved changes when used, rather than copying instructions.
     await skills.write("workspace/review", workspace, "---\nname: Reviewer\ndescription: Review code changes\n---\n\nUpdated instructions. Keep {{example}} literal.\n");

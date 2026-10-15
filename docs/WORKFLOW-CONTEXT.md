@@ -2,9 +2,15 @@
 
 Workflow blocks keep separate provider sessions. Invoking a connected AI or
 Chatbox continues its session without copying the parent's conversation.
-New sessions receive block instructions and a connected tool catalogue; later
-turns omit the runtime manual and static instructions. Dynamic templates still
-receive new input, with the following bounds.
+New sessions receive block instructions and a connected tool catalogue. Chatbox
+instructions and runtime guidance are delivered through the session's agent
+instructions, alongside any selected agent preset, rather than as user messages.
+They appear under Instructions in the context inspector. A Chatbox's `{{input}}`
+placeholder refers to the current user message; it does not cause its instructions
+to be repeated on each turn. Follow-up messages contain the new user input, plus
+bounded updates for explicitly referenced block outputs. Those updates omit the
+surrounding instruction template. AI Agent blocks retain dynamic prompt templates.
+Later turns omit the runtime manual and static instructions, with these bounds:
 
 ## Context transfers
 

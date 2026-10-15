@@ -18,11 +18,13 @@ async function setup(blocks: HarnessBlock[]) {
   return { store, definition, runner, finished, setRunId: (id: string) => { runId = id; } };
 }
 
-it.each(["Static chat instructions", "Goal: {{input}}; Tool: {{blocks.tool.output}}"])("keeps session instructions once and preserves dynamic templates: %s", async (prompt) => {
+it.each(["Static chat instructions", "Goal: {{input}}; Tool: {{blocks.tool.output}}"])("sends Chatbox instructions once and only includes dynamic data in later turns: %s", async (prompt) => {
   const f = await setup([block("chat", "chatbox", { prompt }), block("tool", "text", { prompt: "tool-result" })]);
   const dispatch = vi.fn(async (_block, firstPrompt, runtime) => {
-    expect(firstPrompt).toContain("Connected tools:");
-    expect(firstPrompt.split("first-user-message")).toHaveLength(2);
+    expect(firstPrompt).toBe("first-user-message");
+    expect(runtime.instructions).toContain("Connected tools:");
+    expect(runtime.instructions).toContain(prompt.startsWith("Static") ? prompt : "Goal: {{input}}; Tool:");
+    expect(runtime.instructions).not.toContain("first-user-message");
     await runtime.started("/chat/session");
     await f.runner.flowTool(runtime.runId, "chat", "workflow_use_block", { block_id: "tool" });
     return session("First response");
@@ -30,15 +32,45 @@ it.each(["Static chat instructions", "Goal: {{input}}; Tool: {{blocks.tool.outpu
   const append = vi.fn(async (_block, nextPrompt) => {
     expect(nextPrompt).not.toContain("Connected tools:");
     expect(nextPrompt.split("second-user-message")).toHaveLength(2);
+    expect(nextPrompt).not.toContain("Goal:");
+    expect(nextPrompt).not.toContain("Static chat instructions");
     if (prompt.startsWith("Static")) expect(nextPrompt).toBe("second-user-message");
-    else expect(nextPrompt).toContain("Tool: tool-result");
+    else expect(nextPrompt).toContain("tool: tool-result");
     return session("Second response");
   });
   const run = await f.runner.start(f.definition.id, "first-user-message", dispatch, "test", append, "chat");
   f.setRunId(run.id); await f.finished();
-  await f.runner.continueChat(run.id, "chat", "second-user-message", dispatch, "test", append);
-  expect((await f.finished())?.status).toBe("succeeded");
+  // Continuing after a runner restart must not re-send the Chatbox instructions.
+  const resumed = new HarnessRunner(f.store, () => {});
+  await resumed.continueChat(run.id, "chat", "second-user-message", dispatch, "test", append);
+  await vi.waitFor(() => expect(resumed.isActive(run.id)).toBe(false));
+  expect((await resumed.readRun(run.id))?.status).toBe("succeeded");
   expect(dispatch).toHaveBeenCalledOnce(); expect(append).toHaveBeenCalledOnce();
+});
+
+it.each(["Static agent instructions", "Goal: {{input}}; Tool: {{blocks.tool.output}}"])("preserves AI Agent follow-up templates: %s", async (prompt) => {
+  const f = await setup([block("parent", "chatbox"), block("agent", "ai", { prompt }), block("tool", "text", { prompt: "tool-result" })]);
+  const append = vi.fn(async (_block, nextPrompt) => {
+    expect(nextPrompt).not.toContain("Connected tools:");
+    if (prompt.startsWith("Static")) expect(nextPrompt).toBe("second");
+    else {
+      expect(nextPrompt).toContain("Goal: second; Tool:");
+      expect(nextPrompt).toContain("output unchanged");
+    }
+    return session("Second response");
+  });
+  const run = await f.runner.start(f.definition.id, "Start", async (target, _prompt, runtime) => {
+    await runtime.started(`/session/${target.id}`);
+    if (target.id === "parent") {
+      await f.runner.flowTool(runtime.runId, "parent", "workflow_use_block", { block_id: "tool" });
+      await f.runner.flowTool(runtime.runId, "parent", "workflow_use_block", { block_id: "agent", input: "first" });
+      await f.runner.flowTool(runtime.runId, "parent", "workflow_use_block", { block_id: "agent", input: "second" });
+    }
+    return session("Done");
+  }, "test", append, "parent");
+  f.setRunId(run.id);
+  expect((await f.finished())?.status).toBe("succeeded");
+  expect(append).toHaveBeenCalledOnce();
 });
 
 it("returns app logs once and keeps full block output outside the caller context", async () => {

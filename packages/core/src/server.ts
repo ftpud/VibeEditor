@@ -1371,12 +1371,17 @@ export async function startWorkflow(input: ProtocolOperations["harnesses.run"]["
       const workflowTools = appToolServer(rootWorkspace, sessionWorkspace, provider.descriptor.id, bridgeWorkspace, { ...runtime, flow: ["ai", "chatbox"].includes(block.type) });
       const mcpServers = [...appTools.servers.filter((server) => server.name !== workflowTools.name), workflowTools];
       const workflowAgent = appTools.agent ? { ...appTools.agent, mcpServers: [...new Set([...(appTools.agent.mcpServers ?? []), workflowTools.name])] } : undefined;
+      const sessionAgent = runtime.instructions ? {
+        ...workflowAgent,
+        name: workflowAgent?.name ?? block.label,
+        instructions: [workflowAgent?.instructions, runtime.instructions].filter(Boolean).join("\n\n"),
+      } : workflowAgent;
       const autopilot = findAutopilotOption(provider.descriptor.options);
       const configuration = { ...(block.model ? { model: block.model } : {}), ...(block.reasoning ? { reasoning: block.reasoning } : {}), ...(autopilot ? { [autopilot.option.id]: block.autopilot === false ? autopilot.off : autopilot.on } : {}) };
       const run = await harnessRunner.readRun(runtime.runId);
       const skillIds = await workflowSessionSkillIds(run?.definition, block, new SkillsStore(undefined, rootWorkspace), workspacePath);
       runtime.assertActive();
-      try { await provider.startFreshSession(sessionWorkspace, { prompt, configuration, mcpServers, captureSnapshots: workflowCapturesSnapshots(run, block.id), ...(skillIds ? { skillIds } : {}), agent: workflowAgent, ...(block.agent ? { agentPreset: block.agent } : {}) }); runtime.assertActive(); }
+      try { await provider.startFreshSession(sessionWorkspace, { prompt, configuration, mcpServers, captureSnapshots: workflowCapturesSnapshots(run, block.id), ...(skillIds ? { skillIds } : {}), agent: sessionAgent, ...(block.agent ? { agentPreset: block.agent } : {}) }); runtime.assertActive(); }
       catch (error) { runtime.assertActive(); if (!block.watchdog) throw error; console.error("[core] Watchdog startup failed; scheduling recovery", error); }
       managedProcesses.setWorkspaceContext(sessionWorkspace, { workflowRunId: runtime.runId, workflowBlockId: runtime.blockId });
       return settleWorkflowSession(provider, sessionWorkspace, aiTimers, block.watchdog ? runtime : undefined, () => harnessRunner.isActive(runtime.runId), runtime.activity);
