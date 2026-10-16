@@ -105,6 +105,7 @@ Vibe Editor is a remote-workspace IDE: an Electron/React/Monaco desktop client t
 
 - Core persists workspace layout, tasks, useful files, AI session metadata, file colors, terminal restoration data, root registrations, run configurations, workflow definitions/history, AI timers, and Git commit drafts outside the project, under `~/.remote-ide/workspaces` (overridable via `REMOTE_IDE_STATE_DIR`).
 - Desktop persists client-side UI preferences (tool window visibility, side panel widths, stacked panel sizes, bottom panel heights, layout mode, theme, fonts) per remote workspace in `settings.json` inside its Electron application-data directory, so panel geometry survives client restarts.
+- Buttons at the bottom of the left and right tool rails independently extend each sidebar through the lower panel area, narrowing the lower panel. Both layout modes support this, and the client-wide extension settings are restored on restart.
 - Gateway stores its own connection/workspace data in the platform's Electron application-data directory.
 
 ## Security Model
