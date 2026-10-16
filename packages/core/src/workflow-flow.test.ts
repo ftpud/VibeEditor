@@ -162,10 +162,13 @@ describe("typed workflows", () => {
     const { runner, definition, store, finished } = await setup([block("parent", "chatbox"), block("child", "chatbox"), block("unconnected", "chatbox")], [{ ...edge("parent", "child", "use"), timeoutMs: 100 }]);
     let release!: () => void;
     const waiting = new Promise<void>((resolve) => { release = resolve; });
+    let childReady!: () => void;
+    const childStarted = new Promise<void>((resolve) => { childReady = resolve; });
     let parentFinished = false;
     const dispatch = async (item: HarnessBlock, _input: string, runtime: Parameters<Parameters<HarnessRunner["start"]>[2]>[2]) => {
       if (item.id === "child") {
         await runtime.activity(session("Still working"));
+        childReady();
         await waiting;
         return session("Completed child");
       }
@@ -177,12 +180,18 @@ describe("typed workflows", () => {
       parentFinished = true;
       return session("Parent can continue");
     };
+    // The timeout snapshot must follow the child's disk-backed activity update,
+    // regardless of how long that update takes on a busy CI runner.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     try {
       await runner.start(definition.id, "hello", dispatch, "provider", undefined, "parent");
+      await childStarted;
+      await vi.advanceTimersByTimeAsync(100);
+      vi.useRealTimers();
       await vi.waitFor(() => expect(parentFinished).toBe(true), { timeout: 4_000 });
       expect((await store.runs())[0]?.status).not.toBe("succeeded");
       expect((await store.runs())[0]?.blocks.find((item) => item.blockId === "child")?.status).toBe("running");
-    } finally { release(); }
+    } finally { vi.useRealTimers(); release(); }
     const run = await finished();
     expect(run.status).toBe("succeeded");
     expect(run.blocks.find((item) => item.blockId === "child")?.output).toBe("Completed child");
