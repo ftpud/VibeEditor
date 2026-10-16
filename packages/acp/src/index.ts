@@ -19,9 +19,15 @@ export type AiMessage = { id: string; role: "user" | "assistant" | "activity" | 
 export type AiCommand = { name: string; description: string; inputHint?: string };
 export type AiPermissionOption = { optionId: string; name: string; kind: "allow_once" | "allow_always" | "reject_once" | "reject_always" };
 export type AiPermissionRequest = { id: string; title: string; toolCallId: string; details?: string; options: AiPermissionOption[] };
+/** A form the agent needs a person to fill in (ACP form elicitation), normalized for the UI. */
+export type AiQuestionChoice = { value: string; label: string; description?: string };
+export type AiQuestionField = { id: string; type: "text" | "number" | "integer" | "boolean" | "choice" | "multi"; title?: string; description?: string; required?: boolean; choices?: AiQuestionChoice[]; defaultValue?: string | number | boolean | string[]; minItems?: number; maxItems?: number };
+export type AiQuestionRequest = { id: string; message: string; fields: AiQuestionField[] };
+export type AiQuestionAnswer = Record<string, string | number | boolean | string[]>;
+export type AiQuestionAction = "accept" | "decline" | "cancel";
 export type AiSkillSummary = { id: string; name: string; description?: string; revision: string };
 export type AiSkillCatalogue = { threadId: string; entries: AiSkillSummary[] };
-export type AiSession = { id?: string; createdAt?: string; updatedAt?: string; threadId?: string; model: string; reasoning: string; configuration?: AiConfiguration; /** One-shot model/reasoning override consumed by the next new turn. */ nextConfiguration?: AiConfiguration; availableOptions?: AiOption[]; availableCommands?: AiCommand[]; pendingPermission?: AiPermissionRequest; skillIds?: string[]; /** Whether prior turns received Vibe skill instructions. */ skillContext?: boolean; /** Catalogue already delivered to this provider conversation. */ skillCatalogue?: AiSkillCatalogue; status: AiStatus; failure?: AiFailure; messages: AiMessage[]; context?: AiContextSnapshot; contextUsed?: number; contextLimit?: number; tokens?: AiTokenUsage; steering?: boolean; agent?: { name: string; fingerprint: string }; agentPreset?: AiAgentPreset };
+export type AiSession = { id?: string; createdAt?: string; updatedAt?: string; threadId?: string; model: string; reasoning: string; configuration?: AiConfiguration; /** One-shot model/reasoning override consumed by the next new turn. */ nextConfiguration?: AiConfiguration; availableOptions?: AiOption[]; availableCommands?: AiCommand[]; pendingPermission?: AiPermissionRequest; pendingQuestion?: AiQuestionRequest; skillIds?: string[]; /** Whether prior turns received Vibe skill instructions. */ skillContext?: boolean; /** Catalogue already delivered to this provider conversation. */ skillCatalogue?: AiSkillCatalogue; status: AiStatus; failure?: AiFailure; messages: AiMessage[]; context?: AiContextSnapshot; contextUsed?: number; contextLimit?: number; tokens?: AiTokenUsage; steering?: boolean; agent?: { name: string; fingerprint: string }; agentPreset?: AiAgentPreset; /** Agent preset text delivered as session system instructions; re-sent when the session is resumed. */ systemInstructions?: string };
 export type AiTokenUsage = { total: number; input: number; output: number; thought?: number; cachedRead?: number; cachedWrite?: number };
 /**
  * Optional catalogue metadata. Everything here is advertised by the agent (ACP
@@ -48,8 +54,12 @@ export type AiModelDetails = {
   note?: string;
 };
 export type AiModel = { id: string; name: string; defaultReasoning: string; reasoningLevels: string[] } & AiModelDetails;
-/** permissionApproval marks a client-owned boolean that approves ACP tool permission requests. */
-export type AiOption = { permissionApproval?: boolean; id: string; name: string; description: string; section?: string; type: "select" | "number" | "boolean" | "text"; defaultValue: string | number | boolean; choices?: { value: string; name: string; description?: string }[]; min?: number; max?: number; modelDependent?: boolean };
+/**
+ * permissionApproval marks a client-owned boolean that approves ACP tool permission requests.
+ * client marks an option Vibe applies itself: it is never sent to the agent and changes apply live.
+ * interactive marks a feature that waits for a person; it is off by default and forced off in workflows.
+ */
+export type AiOption = { permissionApproval?: boolean; client?: boolean; interactive?: boolean; id: string; name: string; description: string; section?: string; type: "select" | "number" | "boolean" | "text"; defaultValue: string | number | boolean; choices?: { value: string; name: string; description?: string }[]; min?: number; max?: number; modelDependent?: boolean };
 export type AiAutopilotOption = { option: AiOption; on: string | boolean; off: string | boolean };
 export type AiSettingsSection = { id: string; name: string; description?: string };
 export type AiSettingsLayout = { title: string; description: string; sections: AiSettingsSection[] };
@@ -91,6 +101,8 @@ export abstract class AcpProvider {
   /** Stop owned processes and flush durable session state during Core shutdown. */
   async shutdown(): Promise<void> {}
   abstract resolvePermission(workspace: string, requestId: string, optionId?: string): Promise<AiSession>;
+  /** Answers, declines or cancels a pending agent question. */
+  async answerQuestion(_workspace: string, _requestId: string, _action: AiQuestionAction, _answer?: AiQuestionAnswer): Promise<AiSession> { throw new AiProviderError({ kind: "permanent", message: `${this.descriptor.name} does not ask questions` }); }
   /** Adds input to a turn that is already running, optionally forcing a distinct follow-up turn. */
   abstract steer(workspace: string, prompt: string, options?: { senderModel?: string; queue?: boolean }): Promise<AiSession>;
   abstract clear(workspace: string): Promise<AiSession>;

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import { assertWorkflowModelAvailable, settleWorkflowSession, workflowCapturesSnapshots } from "./server.js";
+import { assertWorkflowModelAvailable, settleWorkflowSession, workflowCapturesSnapshots, workflowConfiguration } from "./server.js";
+import { ClaudeSessionManager } from "./ai/providers/claude.js";
 import { WebSocket } from "ws";
 import { assertRequestRoot, assertRootRemovalAllowed, assertSessionChangeAllowed, LiveRootSelections, permissionTargetWorkspace, protocolHandshake, renameWorkspacePaths, rootRemovalBlocker, selectRootWorkspace, sendWebSocketData, transactionalRootSelection, WorkspaceWatchBatcher } from "./server.js";
 
@@ -13,6 +14,14 @@ describe("workflow snapshot policy", () => {
     expect(workflowCapturesSnapshots(run, "lead")).toBe(true);
     expect(workflowCapturesSnapshots(run, "review")).toBe(true);
     expect(workflowCapturesSnapshots(undefined, "lead")).toBe(true);
+  });
+});
+
+describe("workflow provider configuration", () => {
+  it("forces interactive features off and keeps only non-blocking switches from the block", () => {
+    const options = new ClaudeSessionManager(() => undefined).descriptor.options;
+    expect(workflowConfiguration(options, { model: "opus", options: { askQuestions: true, liveSteering: false, autopilot: false, unknown: true } })).toEqual({ model: "opus", liveSteering: false, askQuestions: false, autopilot: true });
+    expect(workflowConfiguration(options, { autopilot: false })).toEqual({ askQuestions: false, autopilot: false });
   });
 });
 
@@ -32,8 +41,8 @@ describe("protocol handshake", () => {
     expect(timers.scheduleAt).toHaveBeenCalledWith("/watchdog", "codex", expect.stringContaining("workflow_resume_failed"), dueAt, { runId: "run", blockId: "watchdog" });
   });
   it("accepts overlapping ranges and describes incompatible Desktops", () => {
-    expect(protocolHandshake({ minimum: 18, maximum: 18 })).toMatchObject({ compatible: true, compatibility: { minimum: 18, maximum: 18 } });
-    expect(protocolHandshake({ minimum: 8, maximum: 8 })).toEqual({ compatible: false, compatibility: { minimum: 18, maximum: 18 }, message: "Core supports protocol 18-18; this Desktop supports 8-8" });
+    expect(protocolHandshake({ minimum: 19, maximum: 19 })).toMatchObject({ compatible: true, compatibility: { minimum: 19, maximum: 19 } });
+    expect(protocolHandshake({ minimum: 8, maximum: 8 })).toEqual({ compatible: false, compatibility: { minimum: 19, maximum: 19 }, message: "Core supports protocol 19-19; this Desktop supports 8-8" });
     expect(protocolHandshake({ minimum: 11, maximum: 11 }).compatible).toBe(false);
     expect(protocolHandshake({ minimum: 4, maximum: 1 }).compatible).toBe(false);
   });

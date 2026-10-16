@@ -18,9 +18,13 @@ LOAD = os.environ.get("FAKE_LOAD") == "on"
 PERMISSION = os.environ.get("FAKE_PERMISSION") == "on"
 ECHO_PROMPT = os.environ.get("FAKE_ECHO_PROMPT") == "on"
 CONFIG_ACK_ONLY = os.environ.get("FAKE_CONFIG_ACK_ONLY") == "on"
-state = {"live": None, "model": "model-a", "effort": "medium", "cancelled": False}
+QUESTION = os.environ.get("FAKE_QUESTION") == "on"
+QUEUEING = os.environ.get("FAKE_QUEUEING") == "on"
+RATE_LIMIT = os.environ.get("FAKE_RATE_LIMIT") == "on"
+state = {"live": None, "model": "model-a", "effort": "medium", "cancelled": False, "capabilities": {}}
 write_lock = threading.Lock()
 permission_event = threading.Event()
+question_event = threading.Event()
 
 
 def send(payload):
@@ -59,13 +63,19 @@ def handle(request):
     if method is None and request.get("id") == "permission-1":
         state["permission"] = request.get("result", {}).get("outcome", {})
         permission_event.set()
+    elif method is None and request.get("id") == "question-1":
+        state["answer"] = request.get("result", {})
+        question_event.set()
     elif method == "initialize":
-        ok({"protocolVersion": 1, "agentCapabilities": {**({"loadSession": True} if LOAD else {})}, "agentInfo": {"name": "fake", "version": "1"},
+        state["capabilities"] = params.get("clientCapabilities") or {}
+        ok({"protocolVersion": 1, "agentCapabilities": {**({"loadSession": True} if LOAD else {}), **({"_meta": {"claudeCode": {"promptQueueing": True}}} if QUEUEING else {})}, "agentInfo": {"name": "fake", "version": "1"},
             **({"_meta": {"steering": {"supported": True}}} if STEERING else {})})
     elif method == "session/new":
+        state["meta"] = params.get("_meta")
         ok({"sessionId": "fake-session", "modes": None, "configOptions": options()})
         notify("fake-session", {"sessionUpdate": "available_commands_update", "availableCommands": [{"name": "review", "description": "Review changes", "input": {"hint": "optional scope"}}]})
     elif method == "session/load":
+        state["meta"] = params.get("_meta")
         notify(params["sessionId"], {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "Restored authoritative history"}})
         ok({"modes": None, "configOptions": options()})
     elif method == "session/set_config_option":
@@ -94,7 +104,32 @@ def handle(request):
             state["cancelled"] = True
     elif method == "session/prompt":
         session_id = params["sessionId"]
+        if QUEUEING and state["live"]:
+            # Mirrors Claude's prompt queueing: a prompt sent mid-turn joins the live turn.
+            notify(session_id, {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": f"[queued: {params['prompt'][0]['text']}]"}})
+            while state["live"] and not state["cancelled"]:
+                time.sleep(0.01)
+            ok({"stopReason": "cancelled" if state["cancelled"] else "end_turn"})
+            return
         state.update(live=session_id, cancelled=False)
+        notify(session_id, {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "META:" + json.dumps(state.get("meta"), separators=(",", ":")) + "\n"}}) if os.environ.get("FAKE_ECHO_META") == "on" else None
+        if RATE_LIMIT:
+            for kind, used in (("five_hour", 0.42), ("seven_day", 0.9)):
+                notify(session_id, {"sessionUpdate": "usage_update", "used": 50, "size": 1000, "_meta": {"_claude/rateLimit": {"status": "allowed", "rateLimitType": kind, "utilization": used, "resetsAt": 4102444800}}})
+        if QUESTION:
+            if (state["capabilities"].get("elicitation") or {}).get("form") is None:
+                notify(session_id, {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "Questions unavailable"}})
+            else:
+                question_event.clear()
+                send({"jsonrpc": "2.0", "id": "question-1", "method": "elicitation/create", "params": {"mode": "form", "sessionId": session_id, "message": "Which database?", "requestedSchema": {"type": "object", "properties": {
+                    "question_0": {"type": "string", "title": "Database", "oneOf": [{"const": "pg", "title": "Postgres", "description": "Relational"}, {"const": "redis", "title": "Redis"}]},
+                    "question_0_custom": {"type": "string", "title": "Other"},
+                    "extras": {"type": "array", "items": {"anyOf": [{"const": "cache", "title": "Cache"}, {"const": "queue", "title": "Queue"}]}},
+                    "confirm": {"type": "boolean", "title": "Confirm", "default": True}}, "required": ["question_0"]}}})
+                if not question_event.wait(3):
+                    fail("question response timed out")
+                    return
+                notify(session_id, {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "Answer: " + json.dumps(state.get("answer"), separators=(",", ":"), sort_keys=True)}})
         if ECHO_PROMPT:
             notify(session_id, {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "PROMPT:" + json.dumps(params.get("prompt", []), separators=(",", ":"))}})
         if PERMISSION:

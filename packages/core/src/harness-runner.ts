@@ -971,7 +971,7 @@ export class HarnessRunner {
       const originalBlock = blocks.find((item) => item.id === id)!;
       const state = run.blocks.find((item) => item.blockId === id)!;
       const settings = state.chatSettings;
-      const block = settings ? { ...originalBlock, ...settings, model: settings.model } : originalBlock;
+      const block = settings ? { ...originalBlock, ...settings, model: settings.model, ...(settings.options ? { options: { ...originalBlock.options, ...settings.options } } : {}) } : originalBlock;
       if (settings && ((settings.provider ?? originalBlock.provider ?? execution.defaultProvider) !== (originalBlock.provider ?? execution.defaultProvider) || settings.model !== originalBlock.model)) block.reasoning = undefined;
       let published!: () => void;
       finishing.set(id, new Promise<void>((resolve) => { published = resolve; }));

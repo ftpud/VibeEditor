@@ -1,7 +1,8 @@
 import { WorkflowError } from "./WorkflowError";
 import { useCallback, useEffect, useLayoutEffect, useId, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type SetStateAction } from "react";
 import { ArrowLeftRight, ArrowUpDown, AlignStartHorizontal, AlignCenterHorizontal, AlignEndHorizontal, AlignStartVertical, AlignCenterVertical, AlignEndVertical, Bot, ClipboardPaste, Clock, Copy, Download, Eye, FileText, GripHorizontal, LayoutGrid, List, Map as MapIcon, Maximize, MessageSquare, PanelTop, Pencil, Play, Plus, Redo2, RotateCcw, Save, Send, Settings2, Square, Terminal, Trash2, Undo2, Upload, Workflow, X, ZoomIn, ZoomOut } from "lucide-react";
-import type { AgentFile, AiModel, AiProvider, AiProviderDescriptor, HarnessBlock, HarnessChatSettings, HarnessOperation, HarnessAppState, HarnessDataSchema, HarnessDefinition, HarnessRun, HarnessLogEntry, HarnessStateDiagnostic, HarnessValidationIssue, SkillCatalog } from "@remote-ide/protocol";
+import { findAutopilotOption } from "@remote-ide/acp";
+import type { AgentFile, AiConfiguration, AiModel, AiProvider, AiProviderDescriptor, HarnessBlock, HarnessChatSettings, HarnessOperation, HarnessAppState, HarnessDataSchema, HarnessDefinition, HarnessRun, HarnessLogEntry, HarnessStateDiagnostic, HarnessValidationIssue, SkillCatalog } from "@remote-ide/protocol";
 import { useWorkflowTraces } from "./workflow-tracing";
 import { ContextInspector, ContextUsageIndicator } from "./ContextInspector";
 import { ModelPicker } from "./ModelPicker";
@@ -749,6 +750,14 @@ function WorkflowChatbox({ providers = [], defaultProvider, onLoadModels, block,
   const [models, setModels] = useState<AiModel[]>([]);
   const [modelError, setModelError] = useState("");
   const effectiveProvider = providerOverride || block.provider || defaultProvider || state?.provider;
+  // Only non-blocking feature switches belong here: a Chatbox runs on Autopilot by design, and Core
+  // forces interactive features such as agent questions off for every workflow session.
+  const [optionOverrides, setOptionOverrides] = useState<AiConfiguration>(state?.chatSettings?.options ?? {});
+  const featureOptions = useMemo(() => {
+    const options = providers.find((item) => item.id === effectiveProvider)?.options ?? [];
+    const autopilotOption = findAutopilotOption(options)?.option.id;
+    return options.filter((option) => option.type === "boolean" && !option.interactive && !option.permissionApproval && option.id !== autopilotOption);
+  }, [providers, effectiveProvider]);
   useEffect(() => {
     let cancelled = false;
     setModels([]); setModelError("");
@@ -779,14 +788,14 @@ function WorkflowChatbox({ providers = [], defaultProvider, onLoadModels, block,
     setSending(true); setError(""); followMessages.current = true;
     try {
       if (busy) await onSteer!(input);
-      else await onSend!(input, { provider: effectiveProvider, model: modelOverride || (effectiveProvider !== (block.provider || defaultProvider || state?.provider) ? "" : block.model ?? ""), autopilot });
+      else await onSend!(input, { provider: effectiveProvider, model: modelOverride || (effectiveProvider !== (block.provider || defaultProvider || state?.provider) ? "" : block.model ?? ""), autopilot, ...(Object.keys(optionOverrides).length ? { options: optionOverrides } : {}) });
     } catch (reason) { if (messageRevision.current === revision) setMessage(input); setError(reason instanceof Error ? reason.message : "Could not send message"); } finally { setSending(false); }
   };
   return <section className="harness-run-details workflow-chatbox" aria-label={`${block.label} run details`}>
     <header><div><span className="harness-detail-icon"><MessageSquare size={16} aria-hidden="true" /></span><div className="harness-detail-title"><strong>{block.label}</strong><small>Chatbox · {busy ? "Working" : "Ready"}</small></div></div><div className="harness-detail-actions"><ContextUsageIndicator session={state ?? {}} onClick={() => setContextOpen((open) => !open)} expanded={contextOpen} controls={contextId} /><button type="button" aria-label="Chatbox settings" title="Chatbox settings" aria-expanded={settingsOpen} onClick={() => setSettingsOpen((open) => !open)}><Settings2 size={16} /></button><button title="Close run details" aria-label="Close run details" onClick={onClose}><X size={16} /></button></div></header>
     {contextOpen && <ContextInspector key={state?.sessionId} id={contextId} session={state ?? {}} />}
     {settingsOpen && <div className="workflow-chat-settings" role="group" aria-label="Chatbox settings">
-      <label>Provider override<select aria-label="Chatbox provider override" disabled={busy} value={providerOverride} onChange={(event) => { setProviderOverride(event.target.value); setModelOverride(""); }}><option value="">Workflow default</option>{providers.map((provider) => <option key={provider.id} value={provider.id}>{provider.name}</option>)}</select></label>
+      <label>Provider override<select aria-label="Chatbox provider override" disabled={busy} value={providerOverride} onChange={(event) => { setProviderOverride(event.target.value); setModelOverride(""); setOptionOverrides({}); }}><option value="">Workflow default</option>{providers.map((provider) => <option key={provider.id} value={provider.id}>{provider.name}</option>)}</select></label>
       <label>Model override<ModelPicker label="Chatbox model override" models={[{ id: "", name: "Provider / workflow default", defaultReasoning: "", reasoningLevels: [] }, ...models]} value={modelOverride} disabled={busy || !effectiveProvider} onChange={setModelOverride} /></label>
       {modelError && <small role="alert">{modelError}</small>}
       <label className="harness-autopilot"><input type="checkbox" role="switch" aria-label="Autopilot" checked={autopilot} disabled={changingAutopilot} onChange={(event) => {
@@ -795,6 +804,7 @@ function WorkflowChatbox({ providers = [], defaultProvider, onLoadModels, block,
         setChangingAutopilot(true); setError("");
         void onAutopilot(enabled).then(() => setAutopilotOverride(enabled)).catch((reason) => setError(reason instanceof Error ? reason.message : "Could not change Autopilot")).finally(() => setChangingAutopilot(false));
       }} />Autopilot</label>
+      {featureOptions.map((option) => <label key={option.id} className="harness-autopilot" title={option.description}><input type="checkbox" role="switch" aria-label={option.name} disabled={busy} checked={(optionOverrides[option.id] ?? block.options?.[option.id] ?? option.defaultValue) === true} onChange={(event) => setOptionOverrides((current) => ({ ...current, [option.id]: event.target.checked }))} />{option.name}</label>)}
       <small>Overrides apply to this Chatbox on the next message. Changing provider or model starts a fresh session. Autopilot approves tool permission requests automatically.</small>
     </div>}
     {!!connected.length && <div className="workflow-chat-tools" aria-label="Connected chat tools"><span>Connected</span>{connected.map((label, index) => <span className="workflow-chat-tool" key={`${label}:${index}`}>{label}</span>)}</div>}

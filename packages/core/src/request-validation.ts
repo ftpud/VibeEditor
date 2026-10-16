@@ -29,6 +29,17 @@ export function validateRequestPayload(type: RequestType, payload: unknown): voi
       optionalString(record, "clientVersion", "Client version must be a string");
       return;
     }
+    case "ai.question.answer": {
+      requireNonEmptyString(record.requestId, "Question ID must be a non-empty string");
+      if (record.action !== "accept" && record.action !== "decline" && record.action !== "cancel") invalid("Question action must be accept, decline, or cancel");
+      if (record.answer !== undefined) {
+        const answer = requireRecord(record.answer, "Question answer must be an object");
+        for (const value of Object.values(answer)) {
+          if (typeof value !== "string" && typeof value !== "boolean" && (typeof value !== "number" || !Number.isFinite(value)) && (!Array.isArray(value) || !value.every((item) => typeof item === "string"))) invalid("Question answers must be strings, finite numbers, booleans, or string arrays");
+        }
+      }
+      return;
+    }
     case "tasks.create":
       requireNonEmptyString(record.branch, "Task branch must be a non-empty string");
       optionalBoolean(record, "existing", "Task existing flag must be a boolean");

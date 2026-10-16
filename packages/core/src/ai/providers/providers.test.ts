@@ -8,7 +8,7 @@ import type { AiConfiguration, AiModel, AiProviderDescriptor, AiSession } from "
 import { CodexSessionManager } from "./codex.js";
 import { CopilotSessionManager } from "./copilot.js";
 import { ClaudeSessionManager } from "./claude.js";
-import { StdioAcpProvider, type AcpTurnObserver } from "../stdio-provider.js";
+import { ASK_QUESTIONS_OPTION, LIVE_STEERING_OPTION, StdioAcpProvider, SYSTEM_INSTRUCTIONS_OPTION, type AcpTurnObserver } from "../stdio-provider.js";
 import { SkillsStore } from "../../skills.js";
 import { AcpRegistry } from "../acp.js";
 
@@ -704,4 +704,110 @@ describe("chat skills", () => {
     expect(revoked.messages.filter((message) => message.text.startsWith("PROMPT:")).at(-1)!.text).not.toContain("Inspect regressions.");
     await provider.clear(workspace);
   }, 20_000);
+});
+
+class FeatureProvider extends FakeProvider {
+  readonly descriptor: AiProviderDescriptor = { id: "feature", name: "Feature ACP", description: "test", settings: { title: "t", description: "d", sections: [] }, options: [ASK_QUESTIONS_OPTION, LIVE_STEERING_OPTION, SYSTEM_INSTRUCTIONS_OPTION], capabilities: { models: true, usage: true, mcp: true, agents: true, contextWindow: true, skills: false } };
+  protected sessionInstructionsMeta(instructions: string) { return { systemPrompt: { append: instructions } }; }
+}
+
+async function until(provider: StdioAcpProvider, workspace: string, condition: (session: AiSession) => boolean): Promise<AiSession> {
+  return settle(provider, workspace, condition);
+}
+
+describe("ACP session features", () => {
+  it("keeps agent questions off by default and asks through a form once enabled", async () => {
+    const state = await mkdtemp(path.join(os.tmpdir(), "acp-questions-"));
+    const workspace = process.cwd();
+    const provider = new FeatureProvider(() => undefined, state, { FAKE_QUESTION: "on" });
+    await provider.send(workspace, { prompt: "pick", configuration: { model: "model-a" } });
+    let session = await settle(provider, workspace);
+    expect(session.messages.some((message) => message.text.includes("Questions unavailable"))).toBe(true);
+    expect(session.pendingQuestion).toBeUndefined();
+
+    await provider.configure(workspace, { askQuestions: true });
+    await provider.send(workspace, { prompt: "pick again", configuration: {} });
+    session = await until(provider, workspace, (item) => item.pendingQuestion !== undefined);
+    const question = session.pendingQuestion!;
+    expect(question.message).toBe("Which database?");
+    expect(question.fields).toEqual([
+      { id: "question_0", type: "choice", title: "Database", required: true, choices: [{ value: "pg", label: "Postgres", description: "Relational" }, { value: "redis", label: "Redis" }] },
+      { id: "question_0_custom", type: "text", title: "Other" },
+      { id: "extras", type: "multi", choices: [{ value: "cache", label: "Cache" }, { value: "queue", label: "Queue" }] },
+      { id: "confirm", type: "boolean", title: "Confirm", defaultValue: true }
+    ]);
+    await expect(provider.answerQuestion(workspace, question.id, "accept", {})).rejects.toThrow("Database is required");
+    await expect(provider.answerQuestion(workspace, question.id, "accept", { question_0: "mysql" })).rejects.toThrow("Invalid answer");
+    await provider.answerQuestion(workspace, question.id, "accept", { question_0: "pg", extras: ["cache"], confirm: false, question_0_custom: "" });
+    session = await settle(provider, workspace);
+    expect(session.pendingQuestion).toBeUndefined();
+    expect(session.messages.some((message) => message.text.includes('Answer: {"action":"accept","content":{"confirm":false,"extras":["cache"],"question_0":"pg"}}'))).toBe(true);
+    await provider.clear(workspace);
+  });
+
+  it("steers agents that queue prompts into the running turn unless live steering is off", async () => {
+    for (const liveSteering of [true, false]) {
+      const state = await mkdtemp(path.join(os.tmpdir(), "acp-queueing-"));
+      const releaseFile = path.join(state, "release");
+      const workspace = process.cwd();
+      const provider = new FeatureProvider(() => undefined, state, { FAKE_QUEUEING: "on", FAKE_SLOW: "on", FAKE_PROMPT_RELEASE_FILE: releaseFile });
+      await provider.send(workspace, { prompt: "start", configuration: { model: "model-a", liveSteering } });
+      let session = await until(provider, workspace, (item) => item.messages.some((message) => message.text === "working"));
+      expect(session.steering).toBe(liveSteering);
+      await provider.steer(workspace, "also this");
+      if (liveSteering) await until(provider, workspace, (item) => item.messages.some((message) => message.text.includes("[queued: also this]")));
+      expect((await provider.get(workspace)).status).toBe("in_progress");
+      await writeFile(releaseFile, "");
+      session = await settle(provider, workspace, (item) => item.status === "done");
+      expect(session.messages.filter((message) => message.text.includes("[queued: also this]"))).toHaveLength(liveSteering ? 1 : 0);
+      // Without live steering the message runs as the next turn after the first one settles.
+      expect(session.messages.filter((message) => message.text === "working")).toHaveLength(liveSteering ? 1 : 2);
+      await provider.clear(workspace);
+    }
+  });
+
+  it("delivers agent presets as session system instructions and resumes the session when they change", async () => {
+    const state = await mkdtemp(path.join(os.tmpdir(), "acp-system-"));
+    const workspace = process.cwd();
+    const provider = new FeatureProvider(() => undefined, state, { FAKE_ECHO_META: "on", FAKE_ECHO_PROMPT: "on", FAKE_LOAD: "on" });
+    const agent = { name: "Reviewer", instructions: "Review carefully." };
+    await provider.send(workspace, { prompt: "first", configuration: { model: "model-a" }, agent });
+    let session = await settle(provider, workspace);
+    const first = session.messages.map((message) => message.text).join("\n");
+    expect(first).toContain('META:{"systemPrompt":{"append":"Selected agent: Reviewer\\n\\n<agent_instructions>\\nReview carefully.\\n</agent_instructions>"}}');
+    expect(first).toContain('PROMPT:[{"type":"text","text":"first"}]');
+    expect(session.systemInstructions).toContain("Review carefully.");
+    expect(session.context?.sections.find((section) => section.id === "instructions")?.entries.map((entry) => entry.label)).toContain("Agent: Reviewer");
+
+    // A follow-up without an agent keeps the preset; a different preset restarts and resumes with it.
+    await provider.send(workspace, { prompt: "second", configuration: {} });
+    session = await settle(provider, workspace);
+    await provider.send(workspace, { prompt: "third", configuration: {}, agent: { name: "Writer", instructions: "Write tersely." } });
+    session = await settle(provider, workspace);
+    const latest = session.messages.filter((message) => message.text.startsWith("META:")).at(-1)!.text;
+    expect(latest).toContain("Write tersely.");
+    expect(session.messages.some((message) => message.text.includes("could not be resumed"))).toBe(false);
+
+    // Turning the switch off falls back to sending the preset inside the prompt.
+    await provider.configure(workspace, { agentSystemInstructions: false });
+    await provider.send(workspace, { prompt: "fourth", configuration: {}, agent: { name: "Writer", instructions: "Write tersely." } });
+    session = await settle(provider, workspace);
+    const fallback = session.messages.filter((message) => message.text.startsWith("META:")).at(-1)!.text;
+    expect(fallback).toContain("META:null");
+    expect(fallback).toContain("<agent_instructions>");
+    expect(session.systemInstructions).toBeUndefined();
+    await provider.clear(workspace);
+  });
+
+  it("reports Claude subscription windows from rate limit metadata", async () => {
+    const state = await mkdtemp(path.join(os.tmpdir(), "claude-limits-"));
+    const claude = new ClaudeSessionManager(() => undefined, state);
+    expect((await claude.usage("/no/session")).accountQuota).toBeUndefined();
+    claude["observeUsage"]({ "_claude/rateLimit": { status: "allowed", rateLimitType: "five_hour", utilization: 0.42, resetsAt: 4102444800 } });
+    claude["observeUsage"]({ "_claude/rateLimit": { status: "rejected", rateLimitType: "seven_day_opus", resetsAt: 4102444800 } });
+    claude["observeUsage"]({ "_claude/rateLimit": { status: "allowed_warning", rateLimitType: "seven_day", utilization: 0.9 } });
+    const usage = await claude.usage("/no/session");
+    expect(usage.accountQuota).toEqual({ limitName: "Claude subscription", primary: { usedPercent: 42, remainingPercent: 58, windowMinutes: 300, resetsAt: "2100-01-01T00:00:00.000Z" }, secondary: { usedPercent: 90, remainingPercent: 10, windowMinutes: 10_080 } });
+    expect(usage.details).toMatchObject({ "5-hour limit": "42% used, resets 2100-01-01 00:00 UTC", "Weekly limit · Opus": "100% used, resets 2100-01-01 00:00 UTC (limit reached)", "Weekly limit · all models": "90% used (approaching limit)" });
+  });
 });

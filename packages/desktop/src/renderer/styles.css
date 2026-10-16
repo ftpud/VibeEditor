@@ -660,6 +660,20 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .ai-permission button:disabled { opacity: .55; cursor: wait; }
 .ai-permission button.allow { background: var(--success-soft); color: var(--text-primary); }
 .ai-permission button.reject { background: var(--danger-soft); color: var(--text-primary); }
+.ai-question { margin: 8px; padding: 10px; display: grid; gap: 8px; border: 1px solid var(--accent); border-radius: 5px; background: var(--surface-panel); outline: none; }
+.ai-question > p { margin: 0; white-space: pre-wrap; }
+.ai-question fieldset { margin: 0; padding: 0; border: 0; display: grid; gap: 5px; min-width: 0; }
+.ai-question legend { padding: 0; margin-bottom: 4px; font-weight: 600; }
+.ai-question small { color: var(--text-secondary); }
+.ai-question textarea, .ai-question input[type="number"] { width: 100%; box-sizing: border-box; }
+.ai-question-choices { display: grid; gap: 4px; }
+.ai-question-choices label, .ai-question-toggle { display: flex; align-items: flex-start; gap: 6px; cursor: pointer; }
+.ai-question-choices label span { display: grid; gap: 1px; }
+.ai-question-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.ai-question-actions button { padding: 4px 8px; border: 1px solid var(--border-strong); border-radius: var(--radius-control); cursor: pointer; }
+.ai-question-actions button:disabled { opacity: .55; cursor: default; }
+.ai-question-actions button.allow { background: var(--success-soft); color: var(--text-primary); }
+.ai-question-actions button.reject { background: var(--danger-soft); color: var(--text-primary); }
 .ai-command-menu { position: absolute; left: 8px; right: 8px; bottom: calc(100% + 4px); z-index: 4; display: grid; max-height: 240px; overflow: auto; border: 1px solid var(--border-subtle); background: var(--surface-panel); box-shadow: 0 5px 18px #0008; }
 .ai-command-menu button { padding: 7px 9px; display: grid; grid-template-columns: auto 1fr; gap: 10px; border: 0; border-bottom: 1px solid var(--border-subtle); background: transparent; color: inherit; text-align: left; cursor: pointer; }
 .ai-command-menu button:hover { background: var(--surface-panel); }
@@ -1209,7 +1223,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
   button, input, select, textarea, [role="treeitem"], [role="option"] { forced-color-adjust: auto; }
   button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible, [tabindex]:focus-visible { outline: 2px solid Highlight; }
   .selected, .active, [aria-selected="true"], [aria-pressed="true"] { outline: 2px solid Highlight; outline-offset: -2px; }
-  .status-toast, .ai-permission, .connection-message { border: 2px solid CanvasText; }
+  .status-toast, .ai-permission, .ai-question, .connection-message { border: 2px solid CanvasText; }
   .status-toast.error, .ai-permission-error { border-style: double; }
   .resize-handle, .right-resize-handle, .focused-panel-divider, .terminal-resize-handle { background: ButtonText; }
   .tree-git-status, .git-status, .task-ai-status { forced-color-adjust: none; color: CanvasText; background: Canvas; border: 1px solid CanvasText; }
