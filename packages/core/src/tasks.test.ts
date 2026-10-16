@@ -275,13 +275,13 @@ describe("WorkspaceTaskStore", () => {
     expect(await readFile(path.join(selected.workspace, ".git"), "utf8")).toContain("gitdir:");
     expect((await execFileAsync("git", ["-C", root, "worktree", "list", "--porcelain"])).stdout).toContain(`worktree ${await realpath(selected.workspace)}`);
     expect((await execFileAsync("git", ["-C", selected.workspace, "branch", "--show-current"])).stdout.trim()).toBe("feature/task-one");
-    expect((await execFileAsync("git", ["-C", selected.workspace, "rev-parse", "--abbrev-ref", "@{upstream}"])).stdout.trim()).toBe(rootBranch);
+    // Like `git switch -C`: a repository without remotes gives the task branch no upstream.
+    await expect(execFileAsync("git", ["-C", selected.workspace, "rev-parse", "--abbrev-ref", "@{upstream}"])).rejects.toBeTruthy();
     await writeFile(path.join(selected.workspace, "tracked.txt"), "task\n");
     expect(await readFile(path.join(root, "tracked.txt"), "utf8")).toBe("root\n");
     await execFileAsync("git", ["-C", selected.workspace, "add", "tracked.txt"]);
     await execFileAsync("git", ["-C", selected.workspace, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "task change"]);
-    expect((await execFileAsync("git", ["-C", selected.workspace, "rev-list", "--left-right", "--count", "@{upstream}...HEAD"])).stdout.trim()).toBe("0\t1");
-    expect((await execFileAsync("git", ["-C", selected.workspace, "status", "--short", "--branch"])).stdout).toContain("ahead 1");
+    expect((await execFileAsync("git", ["-C", selected.workspace, "rev-list", "--left-right", "--count", `${rootBranch}...HEAD`])).stdout.trim()).toBe("0\t1");
     expect((await store.merge(task.id)).targetBranch).toBe(rootBranch);
     await expect(store.integrations()).resolves.toEqual([expect.objectContaining({ taskId: task.id, status: "completed", expectedHead: expect.any(String), candidateRevision: expect.any(String), test: expect.objectContaining({ exitCode: 0 }) })]);
     const integrations = await store.integrations();
@@ -299,7 +299,7 @@ describe("WorkspaceTaskStore", () => {
     await expect(execFileAsync("git", ["-C", root, "show-ref", "--verify", "refs/heads/feature/task-one"])).rejects.toBeTruthy();
   });
 
-  it("creates a new task from the root tip and inherits its remote upstream", async () => {
+  it("creates a new task from the root tip that publishes to a same-named remote branch with plain git push", async () => {
     const parent = await mkdtemp(path.join(os.tmpdir(), "remote-ide-task-push-"));
     const remote = path.join(parent, "remote.git");
     const root = path.join(parent, "root");
@@ -321,12 +321,14 @@ describe("WorkspaceTaskStore", () => {
 
     expect(task.baseBranch).toBe(rootBranch);
     expect((await execFileAsync("git", ["-C", workspace, "rev-parse", "HEAD"])).stdout.trim()).toBe(rootHead);
-    expect((await execFileAsync("git", ["-C", workspace, "rev-parse", "--abbrev-ref", "@{upstream}"])).stdout.trim()).toBe(`origin/${rootBranch}`);
-    expect((await execFileAsync("git", ["-C", workspace, "status", "--short", "--branch"])).stdout.trim()).toBe(`## feature/pushable...origin/${rootBranch}`);
+    // Not the base's upstream: the branch tracks origin/feature/pushable, which the first push creates.
+    expect((await execFileAsync("git", ["-C", workspace, "status", "--short", "--branch"])).stdout.trim()).toBe("## feature/pushable...origin/feature/pushable [gone]");
     await writeFile(path.join(workspace, "tracked.txt"), "task commit\n");
     await execFileAsync("git", ["-C", workspace, "add", "tracked.txt"]);
     await execFileAsync("git", ["-C", workspace, "commit", "-m", "task commit"]);
-    expect((await execFileAsync("git", ["-C", workspace, "status", "--short", "--branch"])).stdout).toContain("ahead 1");
+    await execFileAsync("git", ["-C", workspace, "-c", "push.default=simple", "push"]);
+    expect((await execFileAsync("git", ["-C", workspace, "status", "--short", "--branch"])).stdout.trim()).toBe("## feature/pushable...origin/feature/pushable");
+    expect((await execFileAsync("git", ["--git-dir", remote, "rev-parse", "refs/heads/feature/pushable"])).stdout.trim()).toBe((await execFileAsync("git", ["-C", workspace, "rev-parse", "HEAD"])).stdout.trim());
     await store.delete(task.id);
   });
 

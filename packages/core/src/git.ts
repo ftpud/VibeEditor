@@ -612,8 +612,15 @@ export class GitService {
     await this.stash(reference); await this.git(["stash", "drop", reference]);
   }
 
+  /** Pushes; a branch without an upstream is published to its remote and starts tracking it, like `git push -u`. */
   async push(): Promise<void> {
-    await this.git(["push"]);
+    const branch = (await this.git(["branch", "--show-current"])).trim();
+    const configured = branch ? await this.git(["config", "--get", `branch.${branch}.remote`]).then((value) => value.trim(), () => "") : "";
+    if (!branch || configured) { await this.networkGit(["push"]); return; }
+    const remotes = (await this.git(["remote"])).split("\n").map((item) => item.trim()).filter(Boolean);
+    const remote = remotes.includes("origin") ? "origin" : remotes.length === 1 ? remotes[0] : undefined;
+    if (!remote) throw new CoreError("GIT_FAILED", remotes.length ? `Choose a remote for ${branch}: publish it from the branch menu.` : "This repository has no Git remote to push to.");
+    await this.networkGit(["push", "--set-upstream", remote, `refs/heads/${branch}:refs/heads/${branch}`]);
   }
 
   private async stash(reference: string): Promise<GitStash> {

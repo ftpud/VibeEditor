@@ -87,8 +87,13 @@ export class WorkspaceTaskStore {
         else {
           await taskGit(destination, ["switch", "--quiet", "-C", name]);
           createdBranch = true;
-          const upstream = await this.taskUpstream(task.baseBranch);
-          if (upstream) await taskGit(destination, ["branch", "--set-upstream-to", upstream, name]);
+          // Track a same-named branch on the base's remote, as `git push -u <remote> <name>` would:
+          // plain `git push` publishes it, and ahead/behind compare with it, not with the base.
+          const remote = await this.taskRemote(task.baseBranch);
+          if (remote) {
+            await taskGit(destination, ["config", `branch.${name}.remote`, remote]);
+            await taskGit(destination, ["config", `branch.${name}.merge`, `refs/heads/${name}`]);
+          }
         }
         await this.copyWorkspaceState(this.rootWorkspace, destination);
         await this.save({ ...registry, tasks: [...registry.tasks, task], ...(select ? { selectedTaskId: task.id } : {}) });
@@ -522,13 +527,13 @@ export class WorkspaceTaskStore {
     catch (error) { throw new CoreError("GIT_FAILED", `Could not determine task base branch: ${gitError(error)}`); }
   }
 
-  private async taskUpstream(baseBranch: string): Promise<string | undefined> {
-    if (baseBranch === "HEAD") return undefined;
-    try {
-      const inherited = (await taskGit(this.rootWorkspace, ["rev-parse", "--abbrev-ref", "--symbolic-full-name", `${baseBranch}@{upstream}`])).stdout.trim();
-      if (inherited && inherited !== "HEAD") return inherited;
-    } catch (error) { if (typeof (error as { code?: unknown }).code !== "number") throw error; /* A local-only base branch has no configured upstream. */ }
-    return baseBranch;
+  /** The remote new task branches publish to: the base branch's remote, else `origin`, else the only remote. */
+  private async taskRemote(baseBranch: string): Promise<string | undefined> {
+    const config = async (key: string) => { try { return (await taskGit(this.rootWorkspace, ["config", "--get", key])).stdout.trim(); } catch { return ""; } };
+    const inherited = baseBranch === "HEAD" ? "" : await config(`branch.${baseBranch}.remote`);
+    if (inherited && inherited !== ".") return inherited;
+    const remotes = (await taskGit(this.rootWorkspace, ["remote"])).stdout.split("\n").map((item) => item.trim()).filter(Boolean);
+    return remotes.includes("origin") ? "origin" : remotes.length === 1 ? remotes[0] : undefined;
   }
 
   private async save(registry: Registry): Promise<void> {

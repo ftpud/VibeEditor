@@ -96,3 +96,14 @@ it("reports commits and pushes made outside Vibe, batched", async () => {
     await vi.waitFor(() => expect(changed.mock.calls.length).toBeGreaterThan(afterCommit), { timeout: 5000 });
   } finally { await watcher.close(); }
 });
+
+it("publishes a branch without an upstream on push and then tracks the same-named remote branch", async () => {
+  const { root, write, commit, git, service } = await repository();
+  const remote = path.join(root, "..", `${path.basename(root)}-remote.git`); directories.push(remote);
+  await run("git", ["init", "-q", "--bare", remote]); await git("remote", "add", "origin", remote);
+  await write("a.txt", "1\n"); await commit("initial");
+  await git("switch", "-q", "-C", "feature/no-upstream");
+  await service.push();
+  expect((await git("rev-parse", "--abbrev-ref", "@{upstream}")).trim()).toBe("origin/feature/no-upstream");
+  expect((await service.status()).upstream).toMatchObject({ upstream: "origin/feature/no-upstream", ahead: 0, behind: 0 });
+});
