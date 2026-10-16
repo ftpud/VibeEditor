@@ -29,7 +29,21 @@ async function handshake() {
     const done = (error, result) => { clearTimeout(timer); socket.terminate(); error ? reject(error) : resolve(result); };
     socket.on('error', error => done(error));
     socket.on('open', () => socket.send(JSON.stringify({ id: 'smoke', type: 'protocol.handshake', payload: { compatibility: protocolCompatibility, token } })));
-    socket.on('message', data => { const result = JSON.parse(String(data)); if (result.id === 'smoke') done(null, result); });
+    socket.on('message', data => {
+      const result = JSON.parse(String(data));
+      if (result.id === 'smoke') {
+        if (!result.ok || !result.result?.compatible) return done(null, result);
+        socket.send(JSON.stringify({ id: 'roots', type: 'workspace.roots', payload: {} }));
+      } else if (result.id === 'roots') {
+        if (!result.ok || !result.result?.selectedRootId) return done(new Error(`Portable workspace lookup failed: ${JSON.stringify(result)}`));
+        // Polling usage before provider installation must work without vendor
+        // packages and must not trigger an on-demand runtime download.
+        socket.send(JSON.stringify({ id: 'usage', type: 'ai.usage', rootId: result.result.selectedRootId, payload: { provider: 'codex' } }));
+      } else if (result.id === 'usage') {
+        if (!result.ok || !result.result?.usage) return done(new Error(`Portable Codex usage failed: ${JSON.stringify(result)}`));
+        done(null, { ok: true, result: { compatible: true } });
+      }
+    });
   });
 }
 try {
@@ -47,7 +61,7 @@ try {
   for (let cycle = 0; cycle < 2; cycle++) {
     child = spawn(node, [path.join(runtime, 'packages/core/dist/index.js'), '--host', '127.0.0.1', '--port', String(port), '--workspace', sandbox], {
       cwd: sandbox,
-      env: { ...process.env, PATH: `${path.join(runtime, 'bin')}${path.delimiter}${process.env.PATH ?? ''}`, REMOTE_IDE_STATE_DIR: path.join(sandbox, 'state'), REMOTE_IDE_SESSION_TOKEN: token, REMOTE_IDE_CODEX_AUTO_UPDATE: '0' },
+      env: { ...process.env, PATH: `${path.join(runtime, 'bin')}${path.delimiter}${process.env.PATH ?? ''}`, REMOTE_IDE_STATE_DIR: path.join(sandbox, 'state'), REMOTE_IDE_SESSION_TOKEN: token },
       stdio: ['ignore', 'pipe', 'pipe']
     });
     child.stdout.on('data', data => { output += data; }); child.stderr.on('data', data => { output += data; });

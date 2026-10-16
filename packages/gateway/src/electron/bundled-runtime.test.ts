@@ -25,7 +25,7 @@ test("validates the complete packaged manifest and archive contents", async () =
     await mkdir(path.join(resources, "bundle/cores"), { recursive: true });
     const content = "fixture archive";
     const cores = Object.fromEntries(["linux-x64", "linux-arm64", "darwin-arm64"].map(target => [target, { target, commit, release, archive: `core-${target}.tar.gz`, sha256: createHash("sha256").update(content).digest("hex") }]));
-    const manifest = { schema: 1, channel: "early-access", commit, version: "0.1.0", desktopExecutable: "desktop/Vibe Editor.exe", cores };
+    const manifest = { schema: 1, channel: "early-access", commit, version: "0.1.0", desktopApp: "desktop", cores };
     const file = path.join(resources, "bundle/manifest.json");
     await writeFile(file, JSON.stringify(manifest));
     assert.equal((await loadBundle(resources)).commit, commit);
@@ -34,7 +34,7 @@ test("validates the complete packaged manifest and archive contents", async () =
     await verifiedCoreArchive(resources, core);
     await writeFile(path.join(resources, "bundle/cores", core.archive), "corrupt");
     await assert.rejects(verifiedCoreArchive(resources, core), /checksum failed/);
-    delete cores["linux-arm64"];
+    cores["linux-arm64"]!.commit = "b".repeat(40);
     await writeFile(file, JSON.stringify(manifest));
     await assert.rejects(loadBundle(resources), /Invalid bundled Core/);
   } finally { await rm(resources, { recursive: true, force: true }); }

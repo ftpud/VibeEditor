@@ -1,3 +1,4 @@
+import { AiAuthentication } from "./AiAuthentication";
 import { WorkflowError } from "./WorkflowError";
 import { useCallback, useEffect, useLayoutEffect, useId, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type SetStateAction } from "react";
 import { ArrowLeftRight, ArrowUpDown, AlignStartHorizontal, AlignCenterHorizontal, AlignEndHorizontal, AlignStartVertical, AlignCenterVertical, AlignEndVertical, Bot, ClipboardPaste, Clock, Copy, Download, Eye, FileText, GripHorizontal, LayoutGrid, List, Map as MapIcon, Maximize, MessageSquare, PanelTop, Pencil, Play, Plus, Redo2, RotateCcw, Save, Send, Settings2, Square, Terminal, Trash2, Undo2, Upload, Workflow, X, ZoomIn, ZoomOut } from "lucide-react";
@@ -805,6 +806,7 @@ function WorkflowChatbox({ providers = [], defaultProvider, onLoadModels, block,
         void onAutopilot(enabled).then(() => setAutopilotOverride(enabled)).catch((reason) => setError(reason instanceof Error ? reason.message : "Could not change Autopilot")).finally(() => setChangingAutopilot(false));
       }} />Autopilot</label>
       {featureOptions.map((option) => <label key={option.id} className="harness-autopilot" title={option.description}><input type="checkbox" role="switch" aria-label={option.name} disabled={busy} checked={(optionOverrides[option.id] ?? block.options?.[option.id] ?? option.defaultValue) === true} onChange={(event) => setOptionOverrides((current) => ({ ...current, [option.id]: event.target.checked }))} />{option.name}</label>)}
+      {effectiveProvider && <div className="workflow-chat-account" role="group" aria-label="Provider account"><span>Provider account</span><AiAuthentication provider={effectiveProvider} disabled={busy} /></div>}
       <small>Overrides apply to this Chatbox on the next message. Changing provider or model starts a fresh session. Autopilot approves tool permission requests automatically.</small>
     </div>}
     {!!connected.length && <div className="workflow-chat-tools" aria-label="Connected chat tools"><span>Connected</span>{connected.map((label, index) => <span className="workflow-chat-tool" key={`${label}:${index}`}>{label}</span>)}</div>}

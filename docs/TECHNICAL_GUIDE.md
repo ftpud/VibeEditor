@@ -20,12 +20,10 @@ On the **local client**, clone this repository, install dependencies, build, and
 ```bash
 git clone https://github.com/ftpud/VibeEditor.git
 cd VibeEditor
-VIBE_SKIP_JDTLS=1 npm install
+npm install
 npm run build
 npm run gateway
 ```
-
-`VIBE_SKIP_JDTLS=1` skips the optional Java language-server download. Omit it if you want Java tooling; its requirements are listed below.
 
 In Gateway's first run:
 
@@ -43,23 +41,13 @@ For deployment details, caching behavior, and lifecycle notes, see [Vibe Gateway
 
 Optional features have additional requirements:
 
-- Java: Maven and a project JDK that provides `java`, `jdb`, `jimage`, and related tools. The installer downloads JDT LS and a Temurin 21 JRE used only to run the language server.
-- Codex: valid Codex authentication/configuration in the account running Core. The Codex ACP server itself is an npm dependency of this repository; a separate `codex` executable is not required.
-- Copilot: an installed and authenticated `copilot` CLI, or `COPILOT_CLI_PATH` pointing to it.
-- Claude: a Claude Code login on the Core host (`claude` then `/login`), or `ANTHROPIC_API_KEY` in Core's environment. The ACP adapter and its CLI are bundled.
+- Java: Maven and a project JDK that provides `java`, `jdb`, `jimage`, and related tools. Java highlighting, completion and navigation also need the **Java runtime** (a pinned Temurin 21 JRE used only to run the language server) and the **Java language server** (JDT LS), downloaded to the Core host from **Settings → Tools**.
+- AI providers: install Codex, Claude or Copilot from **Settings → AI providers** (npm access from the Core host is required). Only installed providers are usable. The same panel checks and performs sign-in.
+- Codex: valid Codex authentication/configuration in the account running Core. The installed adapter brings its own `codex` CLI.
+- Copilot: an authenticated Copilot account. `COPILOT_CLI_PATH` can point to an existing `copilot` CLI instead of installing one.
+- Claude: a Claude Code login on the Core host (`claude` then `/login`), or `ANTHROPIC_API_KEY` in Core's environment. The installed ACP adapter bundles its CLI.
 
-An `npm install` without `VIBE_SKIP_JDTLS=1` attempts to download the pinned JDT LS and Temurin runtime. A download failure is reported as a warning because Java tooling is optional. If you skipped that download, install or repair it later on the machine running Core:
-
-```bash
-npm run install:jdtls
-```
-
-Gateway automatically runs this installer when provisioning a remote server release,
-including when reusing a cached release. Its progress appears as `install-java-tools`
-in the provisioning log. Installed versions are reused; a failed installation stops
-provisioning before switching Core, so retrying can finish the download.
-
-The bundled JRE installer supports Windows, macOS, and Linux on x64 or ARM64.
+Settings → Tools downloads the pinned, checksum-verified Java tools into `~/.remote-ide/tools/` on the Core host (`REMOTE_IDE_TOOLS_DIR` relocates it), shared by all projects. Installing the language server also installs the runtime when it is missing. A failed download keeps the previous installation. Neither `npm install`, Gateway provisioning nor Early Access bundles download Java anymore.
 
 ## Development
 
@@ -98,7 +86,9 @@ npm run core -- --host 127.0.0.1 --port 7331 --workspace /absolute/path/to/proje
 npm run desktop -- --host 127.0.0.1 --port 7331
 ```
 
-`npm run desktop` uses the existing build, so rebuild after source changes. Gateway rebuilds itself each time it starts:
+The source launch commands build their dependencies before starting. Gateway builds Core and Desktop too, so its local-workspace controls work from a clean checkout. Missing Electron binaries are installed on first launch. If the current Node is older than 22.12, the launcher selects Node 24 through npm; Gateway passes that same Node executable to local Core. The first launch may need network access for these runtimes. On macOS, source apps also receive their native app icons.
+
+Start Gateway with:
 
 ```bash
 npm run gateway
@@ -242,6 +232,36 @@ Workflow errors appear as one-line disclosures with a scrollable full diagnostic
 - Task workspaces require the root to be a Git repository. Each task has an independent dependency tree, so run its package installation after switching when needed. Deleting a task forcibly removes its worktree and local task branch. Merging first commits all task changes; smart merge may stash and restore root changes.
 - Gateway supports password, local private-key, and OS SSH-agent authentication. It pins the explicitly trusted server SHA-256 host-key fingerprint, deploys the saved repository and branch, and owns non-persistent tunnels. Closing Gateway closes its tunnels but does not stop remote Core unless **Stop server** is used.
 - If private-key authentication fails, select the private key itself (such as `~/.ssh/id_ed25519`), not its `.pub` companion. Gateway validates RSA, ECDSA, Ed25519, and OpenSSH key files locally and reports missing or incorrect passphrases before connecting. If the server rejects a valid key, verify that its matching public key is present in the selected remote user's `~/.ssh/authorized_keys`.
-- Java support is Maven-specific. The downloaded JRE runs JDT LS only; builds, runs, and debugging still depend on suitable project Java/Maven tools on the Core host.
+- Java support is Maven-specific. The Java runtime from Settings → Tools runs JDT LS only; builds, runs, and debugging still depend on suitable project Java/Maven tools on the Core host.
 - The editor opens existing UTF-8 text files only; binary and invalid UTF-8 files are rejected.
 
+
+
+## Early Access bundles and provider installations
+
+Portable Core bundles contain Vibe's runtime and provider-neutral ACP transport,
+not vendor ACP adapters, Codex/Claude/Copilot CLIs, or vendor SDKs; neither does a
+source checkout. Providers are installed, updated and deleted from **Settings → AI
+providers** into `~/.remote-ide/provider-runtimes/` on the Core host, are cached across
+projects and Core restarts, and only installed providers can be used. Failed downloads
+never replace a working installation. Nothing is downloaded just to start Core. See
+[ACP](ACP.md#installing-providers) for overrides such as `CODEX_ACP_COMMAND`,
+`CLAUDE_AGENT_ACP_PATH` and `COPILOT_CLI_PATH`.
+
+Application bundles contain only their Electron main-process dependency closure;
+renderer dependencies are already compiled into the UI. Desktop contains no Core
+archives. Gateway includes one set of architecture-specific Core archives and its
+Desktop client. Native dependencies cannot share a single node_modules tree across
+Linux/macOS and different CPU architectures.
+
+To build the first Apple Silicon bundle entirely on an Apple Silicon Mac:
+
+```bash
+npm run build
+npm run bundle:core
+npm run bundle:apps -- --local
+```
+
+The local bundle includes only macOS ARM64 Core; it cannot provision Linux hosts.
+Applications and ZIP downloads are written to `artifacts/apps` and
+`artifacts/downloads`. Normal CI builds include all supported Core targets.

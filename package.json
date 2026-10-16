@@ -6,11 +6,6 @@
   "allowScripts": {
     "node-pty@1.1.0": true
   },
-  "overrides": {
-    "@agentclientprotocol/codex-acp": {
-      "@openai/codex": "0.156.1"
-    }
-  },
   "workspaces": [
     "packages/*"
   ],
@@ -18,7 +13,6 @@
     "core": "npm run start -w @remote-ide/core --",
     "desktop": "npm run start -w @remote-ide/desktop --",
     "gateway": "npm run start -w @remote-ide/gateway --",
-    "install:jdtls": "node scripts/install-jdtls.mjs",
     "postinstall": "node scripts/postinstall.mjs",
     "predev:core": "npm run build -w @remote-ide/acp && npm run build -w @remote-ide/protocol",
     "dev:core": "npm run dev -w @remote-ide/core --",
@@ -29,6 +23,7 @@
     "typecheck": "npm run build -w @remote-ide/acp && npm run build -w @remote-ide/protocol && npm run typecheck -w @remote-ide/core && npm run typecheck -w @remote-ide/desktop",
     "test": "npm run test --workspaces --if-present",
     "test:release-soak": "node scripts/release-soak.mjs",
+    "test:bundle": "node --test scripts/bundle/*.test.mjs",
     "bundle:core": "node scripts/bundle/core.mjs",
     "bundle:apps": "node scripts/bundle/apps.mjs"
   },

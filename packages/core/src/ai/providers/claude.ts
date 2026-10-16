@@ -1,8 +1,7 @@
-import { createRequire } from "node:module";
 import type { AiAccountQuota, AiConfiguration, AiModel, AiProviderDescriptor, AiQuotaWindow, AiUsage } from "@remote-ide/acp";
+import type { InstallationSpec } from "../provider-installations.js";
 import { ASK_QUESTIONS_OPTION, LIVE_STEERING_OPTION, StdioAcpProvider, SYSTEM_INSTRUCTIONS_OPTION } from "../stdio-provider.js";
 
-const require = createRequire(import.meta.url);
 const REASONING_LEVELS = ["low", "medium", "high", "xhigh", "max"];
 const RATE_LIMIT_META = "_claude/rateLimit";
 const WINDOW_LABELS: Record<string, { label: string; minutes?: number }> = {
@@ -42,9 +41,16 @@ export class ClaudeSessionManager extends StdioAcpProvider {
   /** Account-wide subscription windows, as last reported by any session. */
   private readonly rateLimits = new Map<string, RateLimit>();
 
-  /** The adapter bundles the Claude Code CLI; `CLAUDE_CODE_EXECUTABLE` overrides it through the inherited environment. */
+  /**
+   * The adapter bundles the Claude Code CLI; `CLAUDE_CODE_EXECUTABLE` overrides it through the inherited environment.
+   * `CLAUDE_AGENT_ACP_PATH` (an adapter entry script) or `CLAUDE_ACP_COMMAND` selects an existing adapter instead.
+   */
+  protected readonly installationSpec: InstallationSpec = { package: "@agentclientprotocol/claude-agent-acp", bin: "dist/index.js", override: () => process.env.CLAUDE_AGENT_ACP_PATH ?? process.env.CLAUDE_ACP_COMMAND };
+
   protected command(_configuration: AiConfiguration): { command: string; args: string[] } {
-    return { command: process.execPath, args: [process.env.CLAUDE_AGENT_ACP_PATH ?? require.resolve("@agentclientprotocol/claude-agent-acp/dist/index.js")] };
+    if (process.env.CLAUDE_AGENT_ACP_PATH) return { command: process.execPath, args: [process.env.CLAUDE_AGENT_ACP_PATH] };
+    if (process.env.CLAUDE_ACP_COMMAND) return { command: process.env.CLAUDE_ACP_COMMAND, args: [] };
+    return { command: process.execPath, args: [this.installedAgent()] };
   }
 
   protected async fallbackModels(): Promise<AiModel[]> { return FALLBACK_MODELS; }

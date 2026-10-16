@@ -23,6 +23,7 @@ const electron = spawn(electronRuntime, [packageRoot], {
     ...process.env,
     VITE_DEV_SERVER_URL: "http://localhost:5174",
     VIBE_DESKTOP_EXECUTABLE: desktopRuntime,
+    VIBE_NODE_EXECUTABLE: process.env.VIBE_NODE_EXECUTABLE || process.execPath,
     VIBE_DESKTOP_ICON: path.resolve(packageRoot, "../desktop/assets/app-icon.png"),
   },
   stdio: "inherit",

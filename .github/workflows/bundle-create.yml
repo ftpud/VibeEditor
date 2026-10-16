@@ -32,13 +32,12 @@ jobs:
           node-version: 24.20.0
           cache: npm
       - run: npm ci
-      - name: Require bundled Java runtime
-        run: npm run install:jdtls
       - run: npm run build -w @remote-ide/acp
       - run: npm run build -w @remote-ide/protocol
       - run: npm run build -w @remote-ide/core
       - run: npm run typecheck -w @remote-ide/core
       - run: npm run test -w @remote-ide/core
+      - run: npm run test:bundle
       - name: Build and smoke test portable Core
         run: npm run bundle:core
       - uses: actions/upload-artifact@v4
@@ -56,8 +55,6 @@ jobs:
         os: [macos-15, windows-2025]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 40
-    env:
-      VIBE_SKIP_JDTLS: '1'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -81,7 +78,14 @@ jobs:
         run: npm exec -w @remote-ide/gateway -- vitest run --environment happy-dom
       - run: npm run test -w @remote-ide/desktop
       - name: Package Early Access applications
-        run: npm run bundle:apps
+        id: bundle
+        shell: bash
+        run: |
+          set -o pipefail
+          npm run bundle:apps 2>&1 | tee "$RUNNER_TEMP/vibe-bundle.log"
+      - name: Report packaging failure details
+        if: failure() && steps.bundle.outcome == 'failure'
+        run: node scripts/annotate-test-failure.mjs "${{ runner.temp }}/vibe-bundle.log" "Bundle creation failure details"
       - uses: actions/upload-artifact@v4
         with:
           name: vibe-early-access-${{ matrix.os }}

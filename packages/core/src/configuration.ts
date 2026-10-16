@@ -45,7 +45,7 @@ export class ConfigurationService {
       ...registry.tasks.map((task) => ({ resource: `tasks/${task.id}.json`, title: task.name, description: task.branch })),
       { resource: "skills/policy.json", title: "Project skill policy" }
     ];
-    const providers = await Promise.all(this.acp.list().map(async (provider) => ({ ...provider, ...(includeModels ? { models: await this.acp.get(provider.id).models() } : {}) })));
+    const providers = await Promise.all((await this.acp.available()).map(async (provider) => ({ ...provider, ...(includeModels ? { models: await this.acp.get(provider.id).models() } : {}) })));
     return { rootWorkspace: this.rootWorkspace, workspace: this.workspace, resources, providers, formats: {
       agents: "agents/{global|local|workspace}/{file.md}: Markdown with name, description and optional mcpServers frontmatter. Global/local are Core state; workspace is the invoking checkout's .agents directory.",
       skills: "skills/{global|local|workspace}/{name}/SKILL.md: Markdown instructions. Global is shared across projects on Core; local is Core state shared by all tasks of the root project; workspace is the invoking checkout's .agents/skills directory.",

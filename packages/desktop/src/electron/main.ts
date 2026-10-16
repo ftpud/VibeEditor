@@ -7,7 +7,8 @@ import { restoreWindowInputFocus } from "./window-focus.js";
 import { isTrustedIpcFrame, isTrustedRendererUrl } from "./navigation-policy.js";
 import { connectionToken } from "./connection-token.js";
 
-const bundleSmokeTest = app.isPackaged && process.argv.includes("--bundle-smoke-test");
+const bundleSmokeTest = (app.isPackaged && process.argv.includes("--bundle-smoke-test")) || (!app.isPackaged && process.argv.includes("--startup-smoke-test"));
+if (bundleSmokeTest) app.setPath("userData", path.join(app.getPath("temp"), `vibe-desktop-bundle-smoke-${process.pid}`));
 const directory = path.dirname(fileURLToPath(import.meta.url));
 const appIcon = path.join(directory, "../assets/app-icon.png");
 const rendererFilePath = path.resolve(directory, "../dist-renderer/index.html");

@@ -1,10 +1,11 @@
 import os from "node:os";
 import path from "node:path";
 import { readFile } from "node:fs/promises";
+import { createRequire } from "node:module";
 import type { AiConfiguration, AiModel, AiProviderDescriptor, AiUsage } from "@remote-ide/acp";
 import { ASK_QUESTIONS_OPTION, LIVE_STEERING_OPTION, StdioAcpProvider } from "../stdio-provider.js";
 import { readCodexAccountQuota } from "./codex-usage.js";
-import { resolveCodexRuntime } from "./codex-runtime.js";
+import { providerInstallations, type InstallationSpec } from "../provider-installations.js";
 
 const WEB_SEARCH_MODES = ["live", "indexed", "cached", "disabled"];
 const GPT_6_SOL: AiModel = { id: "gpt-6-sol", name: "GPT-6 Sol", defaultReasoning: "medium", reasoningLevels: ["none", "low", "medium", "high", "xhigh", "max"], note: "When Codex does not advertise this model, selecting it starts a new Codex thread. Access depends on your account." };
@@ -24,20 +25,37 @@ export class CodexSessionManager extends StdioAcpProvider {
     ]
   };
 
+  /** The adapter depends on its compatible Codex CLI. `CODEX_ACP_COMMAND` selects an existing adapter instead. */
+  protected readonly installationSpec: InstallationSpec = { package: "@agentclientprotocol/codex-acp", bin: "dist/index.js", override: () => process.env.CODEX_ACP_COMMAND };
+
   protected command(configuration: AiConfiguration): { command: string; args: string[]; env: NodeJS.ProcessEnv } {
     // `features.web_search` is deprecated and makes Codex emit an error item on
     // every turn; the supported form is a top-level `web_search` source mode.
     const webSearch = String(configuration.webSearch ?? "default");
     const config = { ...(WEB_SEARCH_MODES.includes(webSearch) ? { web_search: webSearch } : {}), ...(configuration.model === GPT_6_SOL.id ? { model: GPT_6_SOL.id, ...(typeof configuration.reasoning === "string" && configuration.reasoning ? { model_reasoning_effort: configuration.reasoning } : {}) } : {}) };
-    return { command: process.execPath, args: [resolveCodexRuntime("@agentclientprotocol/codex-acp")], env: { CODEX_PATH: process.env.CODEX_PATH ?? resolveCodexRuntime("@openai/codex/bin/codex.js"), INITIAL_AGENT_MODE: String(configuration.mode ?? "agent"), CODEX_CONFIG: JSON.stringify(config) } };
+    const env = { INITIAL_AGENT_MODE: String(configuration.mode ?? "agent"), CODEX_CONFIG: JSON.stringify(config) };
+    if (process.env.CODEX_ACP_COMMAND) return { command: process.env.CODEX_ACP_COMMAND, args: [], env: { CODEX_PATH: process.env.CODEX_PATH ?? "codex", ...env } };
+    return { command: process.execPath, args: [this.installedAgent()], env: { ...(process.env.CODEX_PATH ? { CODEX_PATH: process.env.CODEX_PATH } : {}), ...env } };
   }
 
   protected supportsUnlistedModel(model: string): boolean { return model === GPT_6_SOL.id; }
 
   async usage(workspace?: string): Promise<AiUsage> {
     const usage = await super.usage(workspace);
-    const accountQuota = await readCodexAccountQuota(process.execPath, [resolveCodexRuntime("@openai/codex/bin/codex.js"), "app-server", "--stdio"]).catch(() => undefined);
-    return accountQuota ? { ...usage, accountQuota } : usage;
+    try {
+      let command = process.execPath;
+      let args: string[] = [];
+      if (process.env.CODEX_PATH) command = process.env.CODEX_PATH;
+      else if (process.env.CODEX_ACP_COMMAND) command = "codex";
+      else {
+        // Usage polling never installs anything; read quota with the installed adapter's own CLI.
+        const entry = await providerInstallations.entry(this.descriptor.id, this.installationSpec);
+        if (!entry) return usage;
+        args = [createRequire(entry).resolve("@openai/codex/bin/codex.js")];
+      }
+      const accountQuota = await readCodexAccountQuota(command, [...args, "app-server", "--stdio"]);
+      return accountQuota ? { ...usage, accountQuota } : usage;
+    } catch { return usage; }
   }
 
   /** Codex publishes context windows and retirement notices only in its own cache. */

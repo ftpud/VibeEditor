@@ -38,8 +38,8 @@ test("provisioning is valid shell and stages a commit-keyed immutable release", 
   assert.match(command, /git -C "\$STAGING" checkout --detach "\$COMMIT"/);
   assert.match(command, /RELEASE_KEY="\$COMMIT-node\$NODE_ABI"/);
   assert.match(command, /npm ci/);
-  assert.match(command, /VIBE_STAGE:install-java-tools/);
-  assert.match(command, /npm run install:jdtls/);
+  // Java tools are installed on demand from Settings -> Tools, not during deployment.
+  assert.doesNotMatch(command, /install:jdtls|install-java-tools/);
   assert.doesNotMatch(command, /npm install/);
   assert.match(command, /while ! mkdir "\$LOCK"/);
   assert.match(command, /owner_is_alive/);
@@ -101,11 +101,6 @@ test("failed repair leaves prior releases intact and successful repairs get uniq
     "  printf '%s\\n' 'export const ready = true;' > packages/desktop/dist-electron/main.js",
     "  printf '%s\\n' '<html></html>' > packages/desktop/dist-renderer/index.html",
     "fi",
-    "if [ \"$*\" = 'run install:jdtls' ]; then",
-    "  if [ \"${FAKE_JDTLS_FAIL:-0}\" = 1 ]; then echo 'simulated JDT LS download failure' >&2; exit 24; fi",
-    "  mkdir -p .tools/jdtls/plugins .tools/jre21/bin",
-    "  touch .tools/jdtls/plugins/org.eclipse.equinox.launcher_fixture.jar .tools/jre21/bin/java",
-    "fi",
   ].join("\n"), { mode: 0o755 });
   const fakeGit = path.join(fakeBin, "git");
   const realGit = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
@@ -120,9 +115,9 @@ test("failed repair leaves prior releases intact and successful repairs get uniq
 
   const remoteEnvironment = `export PATH=${testShell(fakeBin)}:"$PATH"; export FAKE_NPM_LOG=${testShell(npmLog)}; export REAL_GIT=${testShell(realGit)}; export FAKE_REMOTE_URL=${testShell(fakeRemote)}; export FAKE_GIT_REPO=${testShell(repository)}`;
   const settings = { repository: fakeRemote, branch: "main", autoUpdate: false };
-  const runProvision = (autoUpdate: boolean, repair = false, fail: boolean | "java" = false, preferredRelease?: string) => spawnSync("bash", ["-c", provisionCommand({ ...settings, autoUpdate }, remoteEnvironment, repair, preferredRelease)], {
+  const runProvision = (autoUpdate: boolean, repair = false, fail = false, preferredRelease?: string) => spawnSync("bash", ["-c", provisionCommand({ ...settings, autoUpdate }, remoteEnvironment, repair, preferredRelease)], {
     encoding: "utf8",
-    env: { ...process.env, HOME: home, ...(fail === "java" ? { FAKE_JDTLS_FAIL: "1" } : fail ? { FAKE_NPM_FAIL: "1" } : {}) },
+    env: { ...process.env, HOME: home, ...(fail ? { FAKE_NPM_FAIL: "1" } : {}) },
   });
 
   const first = runProvision(false);
@@ -131,15 +126,11 @@ test("failed repair leaves prior releases intact and successful repairs get uniq
   assert.ok(initialResult, first.stdout);
   const initialRelease = path.join(home, ".vibe-deploy", "releases", initialResult[1]!);
   await writeFile(path.join(initialRelease, "preserve-me"), "known-good\n");
-  assert.equal(await readFile(path.join(initialRelease, ".tools/jdtls/plugins/org.eclipse.equinox.launcher_fixture.jar"), "utf8"), "");
-  await rm(path.join(initialRelease, ".tools"), { recursive: true });
   const npmLogBeforeReuse = await readFile(npmLog, "utf8");
   const reuse = runProvision(false);
   assert.equal(reuse.status, 0, reuse.stderr);
   assert.match(reuse.stdout, new RegExp(`VIBE_RESULT:${commit}:0:${initialResult[1]}`));
-  assert.equal(await readFile(npmLog, "utf8"), `${npmLogBeforeReuse}run install:jdtls\n`);
-  assert.match(reuse.stdout, /VIBE_STAGE:install-java-tools/);
-  assert.equal(await readFile(path.join(initialRelease, ".tools/jdtls/plugins/org.eclipse.equinox.launcher_fixture.jar"), "utf8"), "");
+  assert.equal(await readFile(npmLog, "utf8"), npmLogBeforeReuse);
 
   const repairOne = runProvision(false, true);
   assert.equal(repairOne.status, 0, repairOne.stderr);
@@ -174,12 +165,6 @@ test("failed repair leaves prior releases intact and successful repairs get uniq
   const offlineReuse = runProvision(false);
   assert.equal(offlineReuse.status, 0, offlineReuse.stderr);
   assert.match(offlineReuse.stdout, new RegExp(`VIBE_RESULT:${commit}:0:${initialResult[1]}`));
-  assert.equal(await readFile(selectedPath, "utf8"), selectedBeforeUpdate);
-
-  const failedJava = runProvision(false, true, "java");
-  assert.notEqual(failedJava.status, 0);
-  assert.match(failedJava.stderr, /simulated JDT LS download failure/);
-  assert.deepEqual(await readdir(path.join(home, ".vibe-deploy", "releases")), beforeFailure);
   assert.equal(await readFile(selectedPath, "utf8"), selectedBeforeUpdate);
 
   const failedRepair = runProvision(false, true, true);

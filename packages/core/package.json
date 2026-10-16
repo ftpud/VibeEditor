@@ -5,14 +5,12 @@
   "main": "dist/index.js",
   "scripts": {
     "dev": "node ../../scripts/dev-core.mjs",
-    "start": "node dist/index.js",
+    "start": "node ../../scripts/start.mjs core",
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run"
   },
   "dependencies": {
-    "@agentclientprotocol/claude-agent-acp": "^0.89.1",
-    "@agentclientprotocol/codex-acp": "^1.13.0",
     "@agentclientprotocol/sdk": "^1.4.0",
     "@remote-ide/acp": "0.1.0",
     "@remote-ide/protocol": "0.1.0",

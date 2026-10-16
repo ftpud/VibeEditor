@@ -1,3 +1,7 @@
+import { AcpAuthentication, isAuthenticationError } from "./authentication.js";
+import { providerInstallations, type InstallationSpec } from "./provider-installations.js";
+import type { AiAuthentication, AiAuthInput, AiProviderInstallation } from "@remote-ide/acp";
+import type { AuthMethod } from "@agentclientprotocol/sdk";
 import { captureContextInstructions, refreshContext } from "./context.js";
 import { retryProcessSpawn } from "../process-spawn.js";
 import { managedProcesses } from "../managed-processes.js";
@@ -93,6 +97,41 @@ export type AcpTurnObserver = {
 };
 export abstract class StdioAcpProvider extends AcpProvider {
   abstract readonly descriptor: AiProviderDescriptor;
+  private authenticationController?: AcpAuthentication;
+  private get auth(): AcpAuthentication { return this.authenticationController ??= new AcpAuthentication(this.descriptor.id, async () => { await this.prepareLaunch(); return this.command({}); }); }
+  override authentication(workspace: string, discover = false): Promise<AiAuthentication> { return this.auth.get(workspace, discover); }
+  override authenticate(workspace: string, methodId: string): Promise<AiAuthentication> { this.modelCache = undefined; return this.auth.start(workspace, methodId); }
+  override authenticationInput(workspace: string, input: AiAuthInput): Promise<AiAuthentication> { this.modelCache = undefined; return this.auth.input(workspace, input); }
+
+  /** Installable providers are usable only once their agent is installed on the Core host. */
+  protected readonly installationSpec?: InstallationSpec;
+  /** Entry point of the installed agent, resolved before every launch. */
+  protected installedEntry?: string;
+  protected async prepareLaunch(): Promise<void> {
+    const spec = this.installationSpec;
+    if (!spec || spec.override?.()) { this.installedEntry = undefined; return; }
+    this.installedEntry = await providerInstallations.entry(this.descriptor.id, spec);
+    this.installedAgent();
+  }
+  protected installedAgent(): string {
+    if (!this.installedEntry) throw new CoreError("INVALID_REQUEST", `${this.descriptor.name} is not installed on this Core host. Install it from Settings → AI providers.`);
+    return this.installedEntry;
+  }
+  override async installation(checkLatest = false): Promise<AiProviderInstallation> {
+    const base = { provider: this.descriptor.id, name: this.descriptor.name, description: this.descriptor.description };
+    return this.installationSpec ? { ...base, ...await providerInstallations.state(this.descriptor.id, this.installationSpec, checkLatest) } : super.installation(checkLatest);
+  }
+  override async install(): Promise<AiProviderInstallation> { return this.changeInstallation((spec) => providerInstallations.install(this.descriptor.id, spec)); }
+  override async uninstall(): Promise<AiProviderInstallation> { return this.changeInstallation((spec) => providerInstallations.uninstall(this.descriptor.id, spec)); }
+  /** Starts the change and reports progress immediately; clients poll `installation()`. Conflicts throw. */
+  private async changeInstallation(change: (spec: InstallationSpec) => Promise<void>): Promise<AiProviderInstallation> {
+    if (!this.installationSpec) return super.install();
+    const done = change(this.installationSpec);
+    this.modelCache = undefined;
+    void done.then(() => { this.modelCache = undefined; }, () => {});
+    return this.installation();
+  }
+
   protected abstract command(configuration: AiConfiguration): { command: string; args: string[]; env?: NodeJS.ProcessEnv };
   protected abstract fallbackModels(): Promise<AiModel[]>;
   protected supportsUnlistedModel(_model: string): boolean { return false; }
@@ -104,6 +143,7 @@ export abstract class StdioAcpProvider extends AcpProvider {
 
   private async shutdownOwnedResources(): Promise<void> {
     this.shuttingDown = true;
+    await this.authenticationController?.shutdown();
     const runtimes = [...this.runtimes];
     for (const [workspace, runtime] of runtimes) {
       runtime.generation += 1; runtime.running = false; runtime.pending = [];
@@ -734,6 +774,7 @@ export abstract class StdioAcpProvider extends AcpProvider {
   /** Spawns the agent, performs the ACP handshake and opens a session. */
   private async connect(workspace: string, configuration: AiConfiguration, servers?: AcpSendRequest["mcpServers"], savedSessionId?: string, sessionMeta?: Record<string, unknown>): Promise<Connected> {
     if (this.shuttingDown) throw new CoreError("INVALID_REQUEST", "Core is shutting down");
+    await this.prepareLaunch();
     const launch = this.command(configuration);
     const processContext = { workspace, rootWorkspace: await this.projectRoot(workspace), provider: this.descriptor.id, kind: "agent" as const };
     if (this.shuttingDown) throw new CoreError("INVALID_REQUEST", "Core is shutting down");
@@ -763,12 +804,15 @@ export abstract class StdioAcpProvider extends AcpProvider {
     };
     const connection = new ClientSideConnection(() => client, stream);
     let authHint = "";
+    let authMethods: AuthMethod[] = [];
     try {
       const initialized = await Promise.race([
         // Questions are declared only when enabled: agents then drop their question tools instead of blocking.
-        connection.initialize({ protocolVersion: PROTOCOL_VERSION, clientCapabilities: this.optionEnabled(configuration, ASK_QUESTIONS_OPTION.id) ? { elicitation: { form: {} } } : {}, clientInfo: { name: "Vibe Editor", version: "0.1.0" } }),
+        connection.initialize({ protocolVersion: PROTOCOL_VERSION, clientCapabilities: { auth: { terminal: true }, ...(this.optionEnabled(configuration, ASK_QUESTIONS_OPTION.id) ? { elicitation: { form: {} } } : {}) }, clientInfo: { name: "Vibe Editor", version: "0.1.0" } }),
         spawnFailure
       ]);
+      authMethods = initialized.authMethods ?? [];
+      this.auth.observe(workspace, authMethods);
       authHint = initialized.authMethods?.map((method) => method.description ?? method.name).join("; ") ?? "";
       // `_session/steering` is advertised in the response `_meta`; agents built on the Claude Agent SDK
       // instead advertise that a `session/prompt` sent during a turn is queued into it.
@@ -788,6 +832,7 @@ export abstract class StdioAcpProvider extends AcpProvider {
           created = await connection.newSession({ cwd: workspace, mcpServers: this.mcpServers(servers), ...meta }) as CreatedSession;
         }
       } else created = await connection.newSession({ cwd: workspace, mcpServers: this.mcpServers(servers), ...meta }) as CreatedSession;
+      this.auth.observe(workspace, authMethods, "authenticated");
       managedProcesses.setSession(child.pid, created.sessionId);
       const configOptions = created.configOptions ?? [];
       this.rememberModels(configOptions, created.models);
@@ -813,6 +858,7 @@ export abstract class StdioAcpProvider extends AcpProvider {
     } catch (error) {
       child.kill("SIGTERM");
       const message = error instanceof Error ? error.message : String(error);
+      if (isAuthenticationError(error)) this.auth.observe(workspace, authMethods, "required");
       throw new CoreError("TERMINAL_FAILED", `Could not start ${this.descriptor.name} ACP server: ${message}${/auth/i.test(message) && authHint ? `. ${authHint}` : ""}${stderr ? ` (${stderr.trim()})` : ""}`);
     }
   }

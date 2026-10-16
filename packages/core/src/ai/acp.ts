@@ -1,4 +1,4 @@
-import { AcpProvider, type AiProviderDescriptor } from "@remote-ide/acp";
+import { AcpProvider, type AiProviderDescriptor, type AiProviderInstallation } from "@remote-ide/acp";
 import { CoreError } from "../errors.js";
 
 /** Runtime registry: new providers are added by registering one AcpProvider plugin. */
@@ -11,7 +11,16 @@ export class AcpRegistry {
     return this;
   }
 
+  /** Every registered provider, including those whose agent is not installed. */
   list(): AiProviderDescriptor[] { return [...this.providers.values()].map((provider) => provider.descriptor); }
+
+  /** Providers whose agent is installed on the Core host; only these are offered to clients. */
+  async available(): Promise<AiProviderDescriptor[]> {
+    const states = await Promise.all([...this.providers.values()].map(async (provider) => ({ provider, state: await provider.installation().catch(() => undefined) })));
+    return states.filter(({ state }) => state?.status === "installed" || !!state?.version).map(({ provider }) => provider.descriptor);
+  }
+
+  installations(checkLatest = false): Promise<AiProviderInstallation[]> { return Promise.all([...this.providers.values()].map((provider) => provider.installation(checkLatest))); }
 
   async shutdown(): Promise<void> {
     const results = await Promise.allSettled([...this.providers.values()].map((provider) => provider.shutdown()));

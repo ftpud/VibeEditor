@@ -53,7 +53,7 @@ Vibe Editor is a remote-workspace IDE: an Electron/React/Monaco desktop client t
 
 ## AI Integration
 
-- Pluggable **AI Capability Provider (ACP)** layer with adapters for **Codex ACP** (an npm dependency, with a managed runtime update cache) **GitHub Copilot CLI**, and **Claude** (via `@agentclientprotocol/claude-agent-acp`) over Agent Client Protocol.
+- Pluggable **AI Capability Provider (ACP)** layer with adapters for **Codex ACP**, **GitHub Copilot CLI**, and **Claude** (via `@agentclientprotocol/claude-agent-acp`) over Agent Client Protocol. Provider agents are installed, updated and deleted on the Core host from **Settings → AI providers**, which also checks each account; only installed providers are usable.
 - Providers declare supported models, reasoning levels, extra controls, usage reporting, MCP server support, and custom-agent support; the AI panel UI is generated from those capabilities.
 - Global, repository-local, and workspace `.agents` presets with editable Markdown templates, automatic `.agents` discovery, and a persisted per-task agent selector.
 - Searchable model picker showing each model's request-cost multiplier, context window, description, reasoning levels, input modalities, and availability as advertised by the agent.
@@ -71,7 +71,7 @@ Vibe Editor is a remote-workspace IDE: an Electron/React/Monaco desktop client t
 - Editable `.settings/java.json` launch profiles: Maven/JDK selection, tool checks, program/VM arguments, environment, and working directory.
 - Debugging via `jdb`: breakpoints, stepping, object/array inspection, and **Apply code changes** through paused-session JVM HotSwap. See [Java debugging](docs/JAVA_DEBUGGING.md).
 - Java and Problems tool windows show Maven build/run output, debugger controls, and compiler diagnostics; Problems supports text/severity filtering and keyboard navigation.
-- A pinned Temurin Java 21 runtime (under `.tools/`) is bundled specifically to run JDT LS.
+- A pinned Temurin Java 21 runtime and JDT LS are downloaded to the Core host from **Settings → Tools** to run Java highlighting, completion and navigation.
 
 ## Markdown, Useful Files & HTTP
 

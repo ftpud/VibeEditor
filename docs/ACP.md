@@ -1,5 +1,31 @@
 # ACP: the AI provider abstraction
 
+## Installing providers
+
+Provider agents are not bundled with Vibe Editor. **Settings → AI providers** installs, updates and deletes Codex, Claude and Copilot on the Core host, and checks each provider's account. Only installed providers are returned by `ai.providers`, so pickers, chats and workflows offer only those; launching an uninstalled provider fails with a message pointing to the panel.
+
+| Provider | npm package | Agent entry |
+| --- | --- | --- |
+| Codex | `@agentclientprotocol/codex-acp` (depends on its compatible `@openai/codex` CLI) | `dist/index.js` |
+| Claude | `@agentclientprotocol/claude-agent-acp` (bundles the Claude Code CLI) | `dist/index.js` |
+| Copilot | `@github/copilot` | `npm-loader.js` |
+
+Core installs the `latest` published version into a fresh directory under `~/.remote-ide/provider-runtimes/<provider>/` (`REMOTE_IDE_PROVIDER_RUNTIME_DIR` relocates it) and starts the agent with Core's own Node. A completed installation is selected atomically through `current.json`; a failed install or update keeps the previous one. Update replaces the selection and keeps the previous directory, because running agents may still use it. Delete unpublishes the provider before removing its files; provider sign-in and chat history stay. Installation runs in the background: `ai.installations.install` and `ai.installations.uninstall` return immediately, and Desktop polls `ai.installations.list` (`checkLatest: true` asks npm for the latest version, cached for ten minutes).
+
+Core-host overrides count as installed and cannot be managed from the client: `CODEX_ACP_COMMAND` (Codex adapter command; `CODEX_PATH` selects the CLI), `CLAUDE_AGENT_ACP_PATH` (adapter entry script) or `CLAUDE_ACP_COMMAND`, and `COPILOT_CLI_PATH`. Codex account-quota reads use the CLI belonging to the installed adapter, or `CODEX_PATH`; usage polling never installs anything.
+
+## Signing in
+
+The provider account control sits in **Settings → AI providers** and in the settings (cog) section of the AI panel and workflow Chatboxes. It discovers the agent's `initialize.authMethods`; the UI uses the advertised names and descriptions rather than provider-specific login commands. Account setup runs on the selected Core host, so local and remote workspaces use the credentials belonging to that host.
+
+Checking an account (`ai.auth.get` with `discover: true`) initializes the agent and opens a session: success reports *signed in*, an ACP `auth_required` error (or equivalent message) reports *sign in to continue*, and other failures are shown as errors. The AI providers panel checks every installed provider when it opens.
+
+For agent methods, Core calls ACP `authenticate`. URL elicitations appear as explicit browser links with a confirmation button. For terminal methods, Core starts the agent command with its advertised authentication arguments and environment in a dedicated interactive terminal. A successful terminal exit is checked by opening a fresh ACP session. Terminal methods do not call `authenticate`.
+
+Desktop uses `ai.auth.get`, `ai.auth.start` (`methodId`), and `ai.auth.input` (`requestId` plus terminal `data`, `cols`/`rows`, or `action: "accept" | "cancel"`). Each active request belongs to one workspace and provider. Cancellation, shutdown, and a ten-minute timeout terminate the authentication processes. Discovery is shared across simultaneous requests. Browser links accept HTTP and HTTPS only and require a user click.
+
+Authentication output is bounded, held in memory, and cleared on success. It is not added to chat history or saved workspace configuration. Provider tools manage their own credential storage. Agents without advertised authentication methods continue to use their existing Core-host login or environment configuration.
+
 Vibe Editor uses one interface for Codex, GitHub Copilot, and Claude. Core handles each
 provider through `AcpProvider`; Desktop reads the provider's capabilities and
 settings to build the AI controls. Adding a provider should not require special
@@ -19,13 +45,13 @@ To add a provider, subclass `AcpProvider`, implement its required session/model/
 
 Codex discovers model and reasoning metadata from its local model cache, which also supplies context window sizes, input modalities, and retirement notices for the models advertised over ACP. Its ACP options expose sandbox and web search. Saved session ids are loaded when the agent advertises `loadSession`; loaded history replaces the local transcript. MCP definitions are supplied during session setup and selected custom-agent presets can restrict the enabled MCP set.
 
-Codex ACP may lag the Codex CLI release. The root npm override keeps ACP's bundled CLI on a version that can run GPT-6 Sol even when ACP's model catalogue has not advertised it yet.
+Codex ACP may lag the Codex CLI release, so Core offers GPT-6 Sol even when ACP's model catalogue has not advertised it yet.
 
-Core checks npm's `latest` versions of `@agentclientprotocol/codex-acp` and `@openai/codex` in the background during startup by default, so registry requests and installation do not delay the Core listener or Gateway health checks. Sessions started before an update completes use the cached or bundled runtime; later sessions use the completed update. Set `REMOTE_IDE_CODEX_AUTO_UPDATE=0` to disable updates and use the bundled runtime installed from the project lockfile. With updates enabled, changed versions are installed into a new directory under `~/.remote-ide/codex-runtime`; a completed installation is selected atomically. Both ACP sessions and quota reads use the selected runtime. Registry requests have a 15-second fetch timeout and each npm command has a 60-second limit. An offline or failed update logs a warning and retains the previous cached runtime, or the bundled dependency on first startup. `REMOTE_IDE_CODEX_RUNTIME_DIR` relocates the cache. An explicit `CODEX_PATH` still overrides the Codex binary for ACP sessions. Model access depends on the account and what the agent advertises.
+Codex, Claude and Copilot are updated only from **Settings → AI providers**; Core does not update provider agents on its own.
 
 Copilot discovers models from ACP configuration metadata, including the premium-request multiplier, cost tier, and availability published in the model option's `_meta`. Stored model and reasoning choices are passed at server launch and are also applied when their dynamic ACP options arrive. Copilot exposes a client-owned Autopilot toggle. When enabled, Core selects an advertised allow option for ACP tool permission requests; it prefers allow-once so disabling Autopilot restores prompting for subsequent requests. Enabling it during a pending permission request also approves that request without restarting the session. A per-session AI-credit ceiling remains available. Copilot documents quota details in interactive `/usage`; the shared usage view displays the context and latest-turn token data ACP reports.
 
-Claude runs through `@agentclientprotocol/claude-agent-acp`, an npm dependency of Core that bundles the Claude Code CLI through the Claude Agent SDK. It uses the existing Claude Code login on the Core host (or `ANTHROPIC_API_KEY`, Bedrock and Vertex variables in Core's environment). Models, effort levels, and extra switches such as fast mode come from the agent's ACP configuration options. The permission mode (Manual, Accept edits, Plan, Auto, Bypass permissions) is applied as a session-scoped ACP mode; modes the agent does not advertise for a session are skipped with a warning. Claude also exposes the client-owned Autopilot toggle. When Claude reports subscription rate limits with a turn (`_claude/rateLimit` on `usage_update`), the usage view lists each window and the account quota carries the 5-hour window as primary and the weekly window as secondary, which workflow watchdogs use to schedule recovery. These windows appear only after the agent reports them. `CLAUDE_CODE_EXECUTABLE` overrides the bundled CLI and `CLAUDE_AGENT_ACP_PATH` overrides the adapter entry point.
+Claude runs through `@agentclientprotocol/claude-agent-acp`, installed from Settings → AI providers, which bundles the Claude Code CLI through the Claude Agent SDK. It uses the existing Claude Code login on the Core host (or `ANTHROPIC_API_KEY`, Bedrock and Vertex variables in Core's environment). Models, effort levels, and extra switches such as fast mode come from the agent's ACP configuration options. The permission mode (Manual, Accept edits, Plan, Auto, Bypass permissions) is applied as a session-scoped ACP mode; modes the agent does not advertise for a session are skipped with a warning. Claude also exposes the client-owned Autopilot toggle. When Claude reports subscription rate limits with a turn (`_claude/rateLimit` on `usage_update`), the usage view lists each window and the account quota carries the 5-hour window as primary and the weekly window as secondary, which workflow watchdogs use to schedule recovery. These windows appear only after the agent reports them. `CLAUDE_CODE_EXECUTABLE` overrides the adapter's CLI and `CLAUDE_AGENT_ACP_PATH` overrides the adapter entry point.
 
 ## Session features
 

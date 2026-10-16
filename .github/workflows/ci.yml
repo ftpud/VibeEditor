@@ -63,5 +63,8 @@ jobs:
         if: failure() && steps.tests.outcome == 'failure'
         run: node scripts/annotate-test-failure.mjs "$RUNNER_TEMP/vibe-tests.log"
 
+      - name: Verify bundle dependency pruning
+        run: npm run test:bundle
+
       - name: Verify crash and restart recovery
         run: npm run test:release-soak -- --cycles 12 --output "${{ runner.temp }}/vibe-release-soak.json"

@@ -30,12 +30,13 @@ Every Gateway and Desktop download includes all three portable Core archives:
 | `darwin-arm64` | Apple Silicon Mac |
 
 Each Core archive contains compiled ACP, protocol and Core packages, locked
-production dependencies (including provider adapters/CLIs and native PTY
-support), a matching Node binary and npm, JDT LS and a platform-specific JRE.
+production dependencies (including native PTY support), and a matching Node
+binary and npm. AI provider agents are installed from Settings → AI providers,
+and the Java runtime and language server from Settings → Tools, on the Core host.
 The archive is built and smoke-tested on its own target architecture. The smoke
 check starts a native PTY and starts, authenticates to, stops and restarts Core
 with its staged Node runtime. CI also launches both packaged applications and
-Gateway’s nested Desktop with `--bundle-smoke-test` to check renderer/preload
+Gateway’s embedded Editor (`--vibe-editor`) with `--bundle-smoke-test` to check renderer/preload
 loading and bundled mode before archiving. Applications only accept Core artifacts from the
 same source commit and validate their SHA-256 digests before packaging.
 
@@ -43,12 +44,13 @@ Packaged Gateway is identified by Electron's `app.isPackaged`, and requires a
 valid bundled manifest. There is no environment switch that silently falls back
 to Git provisioning. Repository/branch/auto-update controls are hidden and their
 IPC handler is disabled. Saved repository preferences have no effect on bundled
-provisioning. Provider auto-update is disabled for bundled Core; the adapters
-and CLIs installed from the release lockfile are used.
+provisioning.
 
 On a Mac, local connections unpack the matching bundled Core into Gateway's
-application-data cache and launch it with its own Node runtime. Gateway launches
-the included Desktop executable, including for SSH connections. It never
+application-data cache and launch it with its own Node runtime. Gateway ships the
+Editor's application files, not a second Electron runtime, and starts the Editor
+by running its own executable with `--vibe-editor`, including for SSH connections.
+The Editor keeps the standalone Vibe Editor's settings directory. It never
 fetches Desktop code from the Core host in this mode.
 
 For SSH hosts, Gateway detects the target OS/architecture, uploads the matching
@@ -85,12 +87,12 @@ remote-built Desktop download behavior. Packaging does not change that flow.
 After `npm ci` and building the relevant workspaces:
 
 - `npm run bundle:core` on each supported Core host architecture writes its
-  archive and metadata to `artifacts/cores/`. Java resources must already be
-  installed with `npm run install:jdtls`; missing resources fail the bundle.
+  archive and metadata to `artifacts/cores/`.
 - Collect all three Core archives **and** JSON metadata from the same commit
   into `artifacts/cores/` on macOS ARM64 or Windows x64.
 - `npm run build && npm run bundle:apps` creates both application downloads
-  under `artifacts/downloads/` using the lockfile's Electron version.
+  under `artifacts/downloads/` using the lockfile's Electron version. Chromium
+  UI translations other than English are removed from both applications.
 
 `artifacts/` is ignored by Git. CI does not publish, commit generated files or
 read local provider/MCP credentials. Workflow permissions are read-only.

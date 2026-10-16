@@ -26,6 +26,7 @@ import { WorkspaceStateStore, flushWorkspaceStateWrites } from "./workspace-stat
 import { WorkspaceSearch } from "./search.js";
 import { JavaProjectService } from "./java.js";
 import { JdtLanguageService } from "./jdtls.js";
+import { toolInstallations } from "./tools.js";
 import { WorkspaceTaskStore } from "./tasks.js";
 import { ServerStorage } from "./storage.js";
 import { UsefulFilesStore } from "./useful-files.js";
@@ -930,8 +931,20 @@ async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStor
     case "skills.policy.moveToLocal": await new SkillsStore(undefined, rootWorkspace).movePolicyToLocal(workspacePath); return {};
     case "skills.policy": await new SkillsStore(undefined, rootWorkspace).writePolicy(workspacePath, request.payload); return {};
     case "ai.skills": return { session: await acp.get(request.payload.provider).setSkills(workspacePath, request.payload.ids, request.payload.sessionId, request.payload.agentPreset) };
-    case "ai.providers": return { providers: acp.list() };
+    case "ai.providers": return { providers: await acp.available() };
+    case "tools.list": return { tools: await toolInstallations.list() };
+    case "tools.install": case "tools.uninstall": {
+      const change = request.type === "tools.install" ? toolInstallations.install(request.payload.tool) : toolInstallations.uninstall(request.payload.tool);
+      void change.catch(() => {}); // Failures are reported through `tools.list`.
+      return { tools: await toolInstallations.list() };
+    }
+    case "ai.installations.list": return { installations: await acp.installations(request.payload.checkLatest === true) };
+    case "ai.installations.install": return { installation: await acp.get(request.payload.provider).install() };
+    case "ai.installations.uninstall": return { installation: await acp.get(request.payload.provider).uninstall() };
     case "ai.get": return { session: await acp.get(request.payload.provider).get(workspacePath) };
+    case "ai.auth.get": return { authentication: await acp.get(request.payload.provider).authentication(workspacePath, request.payload.discover) };
+    case "ai.auth.start": return { authentication: await acp.get(request.payload.provider).authenticate(workspacePath, request.payload.methodId) };
+    case "ai.auth.input": return { authentication: await acp.get(request.payload.provider).authenticationInput(workspacePath, request.payload) };
     case "ai.models": return { models: await acp.get(request.payload.provider).models() };
     case "ai.configure": return { session: await acp.get(request.payload.provider).configure(workspacePath, { ...request.payload.configuration, ...(request.payload.model ? { model: request.payload.model } : {}), ...(request.payload.reasoning ? { reasoning: request.payload.reasoning } : {}) }) };
     case "ai.send": {

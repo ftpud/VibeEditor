@@ -1,3 +1,4 @@
+import { AuthenticationClientContext } from "./AiAuthentication";
 import { flushSync } from "react-dom";
 import { SidebarExtentButton, useSidebarExtent } from "./SidebarExtentButton";
 import { FocusDock } from "./FocusDock";
@@ -23,6 +24,8 @@ import { recoverEditorGroups, workspaceRestorationGuard } from "./workspace-reco
 import { remoteUploadDestination, treeContainsPath } from "./remote-transfer";
 import { hasWorkspaceSetting, readSetting, readSettingNumber, readWorkspaceSetting, resetWorkspaceSetting, workspaceSettingKey, writeSetting, writeWorkspaceSetting } from "./settings";
 import { SettingsMenu, type DesktopSettings } from "./SettingsMenu";
+import { AiProvidersPanel } from "./AiProvidersPanel";
+import { ToolsPanel } from "./ToolsPanel";
 import { StoragePanel } from "./StoragePanel";
 import { readAiPromptDraft, writeAiPromptDraft } from "./ai-prompt-drafts";
 import { editorTabLabel, initialLayout, type EditorTab, type LayoutModel, type Panel } from "./model";
@@ -143,6 +146,8 @@ export function App() {
   const [uiLineHeight, setUiLineHeight] = useState(() => readSettingNumber("uiLineHeight", 1.2, 1, 2));
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [storageOpen, setStorageOpen] = useState(false);
+  const [aiProvidersOpen, setAiProvidersOpen] = useState(false);
+  const [toolsOpen, setToolsOpen] = useState(false);
   const platform = useMemo(desktopPlatform, []);
   const [shortcutBindings, setShortcutBindings] = useState(() => { const stored = readSetting(KEYBOARD_SHORTCUTS_SETTING); const migrated = migrateShortcutSetting(stored, desktopPlatform()); if (migrated) writeSetting(KEYBOARD_SHORTCUTS_SETTING, migrated); return parseShortcutSetting(stored, desktopPlatform()); });
   const changeShortcut = (id: CommandId, shortcut?: string) => setShortcutBindings((current) => { const next = updateShortcut(current, id, shortcut); writeSetting(KEYBOARD_SHORTCUTS_SETTING, serializeShortcutSetting(next)); return next; });
@@ -1644,6 +1649,21 @@ export function App() {
       await refreshAiSessions();
     } catch (error) { setStatusMessage(error instanceof Error ? error.message : "Could not switch AI provider"); }
   }, [aiToken, applyAiSession, refreshAiSessions]);
+  // Only installed providers are offered; follow installs, updates and removals from Settings → AI providers.
+  const refreshAiProviders = useCallback(async () => {
+    const client = clientRef.current;
+    if (!client) return;
+    try {
+      const { providers } = await client.request("ai.providers", {});
+      setAiProviders(providers);
+      const current = aiProviderRef.current;
+      if (providers.length && !providers.some((item) => item.id === current)) { await switchAiProvider(providers[0]!.id); return; }
+      if (providers.some((item) => item.id === current)) {
+        const { models } = await client.request("ai.models", { provider: current });
+        if (aiProviderRef.current === current) setAiModels(models);
+      }
+    } catch (error) { setStatusMessage(error instanceof Error ? error.message : "Could not refresh AI providers"); }
+  }, [switchAiProvider]);
 
   const switchTask = useCallback(async (taskId?: string) => {
     if (!clientRef.current) return;
@@ -2946,7 +2966,7 @@ export function App() {
   // Keep live buffers mounted during automatic recovery; commands still see disconnected.
   if (status !== "connected" && status !== "disconnected") return <ConnectionScreen {...{ host, port, status, statusMessage, setHost, setPort, connect }} />;
 
-  return <div className={`ide-shell${focusMode ? " focus-mode" : ""}`}><ModalFocusManager />
+  return <AuthenticationClientContext.Provider value={clientRef.current ?? null}><div className={`ide-shell${focusMode ? " focus-mode" : ""}`}><ModalFocusManager />
     {statusMessage && <div className={`status-toast ${statusKind}`} role={statusKind === "error" ? "alert" : "status"} aria-live={statusKind === "error" ? "assertive" : "polite"}>
       {statusKind === "progress" ? <LoaderCircle className="status-toast-spinner" size={16} /> : statusKind === "success" ? <Check size={16} /> : <CircleAlert size={16} />}
       <span>{statusMessage}</span>
@@ -2966,7 +2986,7 @@ export function App() {
         <button aria-label="Edit Java run/debug configuration" title="Edit Java run/debug configuration" onClick={() => setShowRunConfigurationDialog(true)}><Settings size={14} /></button>
         <select aria-label="Java run configuration" value={javaOptions.selectedRunConfigurationId ?? ""} onChange={(event) => event.target.value === "__create__" ? setShowRunConfigurationDialog(true) : void selectRunConfiguration(event.target.value)}><option value="" disabled>Select run configuration</option>{javaOptions.runConfigurations.map((configuration) => <option key={configuration.id} value={configuration.id}>{configuration.name}</option>)}<option value="__create__">Edit configurations…</option></select>
       </div>}
-      {storageOpen && clientRef.current && <StoragePanel client={clientRef.current} onClose={() => setStorageOpen(false)} />}<div className="workspace-utilities"><FocusModeButton active={focusMode} onChange={changeFocusMode} /><span className="workspace-utility-divider" aria-hidden="true" /><ConnectionMenu host={host} port={port} connected={status === "connected"} onDisconnect={disconnect} /><div className="settings-anchor"><button className="workspace-settings-button" aria-label="Settings" title="Settings" aria-expanded={settingsOpen} onClick={() => setSettingsOpen((open) => !open)}><Settings size={16} /><span>Settings</span></button>{settingsOpen && <SettingsMenu onClose={() => setSettingsOpen(false)} onStorage={() => { setSettingsOpen(false); setStorageOpen(true); }} workspace={activeWorkspace} sideLayout={sideLayout} onSideLayoutChange={changeSideLayout} commands={commands} shortcutBindings={shortcutBindings} platform={platform} onShortcutChange={changeShortcut} onShortcutsReset={resetShortcuts} values={{ theme, highlightTheme, uiFontFamily, uiFontWeight, uiFontSize, uiLineHeight }} isWorkspaceOverride={(setting) => hasWorkspaceSetting(activeWorkspace, setting)} onChange={(setting, value) => { workspaceDefaultsRef.current.delete(setting); if (setting === "theme") setTheme(value as DesktopSettings["theme"]); else if (setting === "highlightTheme") setHighlightTheme(value as DesktopSettings["highlightTheme"]); else if (setting === "uiFontFamily") setUiFontFamily(value as DesktopSettings["uiFontFamily"]); else if (setting === "uiFontWeight") setUiFontWeight(value as number); else if (setting === "uiFontSize") setUiFontSize(value as number); else setUiLineHeight(value as number); }} onReset={(setting) => { resetWorkspaceSetting(activeWorkspace, setting); workspaceDefaultsRef.current.add(setting); const value = readSetting(setting); if (setting === "theme") setTheme(value === "dark" ? "dark" : "light"); else if (setting === "highlightTheme") setHighlightTheme(value === "ftpud" || value === "ftpud-dark" ? "ftpud" : "default"); else if (setting === "uiFontFamily") setUiFontFamily(value === "jetbrains" ? "jetbrains" : "inter"); else if (setting === "uiFontWeight") setUiFontWeight(readSettingNumber(setting, 450, 350, 600)); else if (setting === "uiFontSize") setUiFontSize(readSettingNumber(setting, 13, 10, 20)); else setUiLineHeight(readSettingNumber(setting, 1.2, 1, 2)); setSettingsRevision((revision) => revision + 1); }} />}</div></div>
+      {storageOpen && clientRef.current && <StoragePanel client={clientRef.current} onClose={() => setStorageOpen(false)} />}{aiProvidersOpen && clientRef.current && <AiProvidersPanel client={clientRef.current} onClose={() => setAiProvidersOpen(false)} onChanged={() => void refreshAiProviders()} />}{toolsOpen && clientRef.current && <ToolsPanel client={clientRef.current} onClose={() => setToolsOpen(false)} />}<div className="workspace-utilities"><FocusModeButton active={focusMode} onChange={changeFocusMode} /><span className="workspace-utility-divider" aria-hidden="true" /><ConnectionMenu host={host} port={port} connected={status === "connected"} onDisconnect={disconnect} /><div className="settings-anchor"><button className="workspace-settings-button" aria-label="Settings" title="Settings" aria-expanded={settingsOpen} onClick={() => setSettingsOpen((open) => !open)}><Settings size={16} /><span>Settings</span></button>{settingsOpen && <SettingsMenu onClose={() => setSettingsOpen(false)} onStorage={() => { setSettingsOpen(false); setStorageOpen(true); }} onAiProviders={() => { setSettingsOpen(false); setAiProvidersOpen(true); }} onTools={() => { setSettingsOpen(false); setToolsOpen(true); }} workspace={activeWorkspace} sideLayout={sideLayout} onSideLayoutChange={changeSideLayout} commands={commands} shortcutBindings={shortcutBindings} platform={platform} onShortcutChange={changeShortcut} onShortcutsReset={resetShortcuts} values={{ theme, highlightTheme, uiFontFamily, uiFontWeight, uiFontSize, uiLineHeight }} isWorkspaceOverride={(setting) => hasWorkspaceSetting(activeWorkspace, setting)} onChange={(setting, value) => { workspaceDefaultsRef.current.delete(setting); if (setting === "theme") setTheme(value as DesktopSettings["theme"]); else if (setting === "highlightTheme") setHighlightTheme(value as DesktopSettings["highlightTheme"]); else if (setting === "uiFontFamily") setUiFontFamily(value as DesktopSettings["uiFontFamily"]); else if (setting === "uiFontWeight") setUiFontWeight(value as number); else if (setting === "uiFontSize") setUiFontSize(value as number); else setUiLineHeight(value as number); }} onReset={(setting) => { resetWorkspaceSetting(activeWorkspace, setting); workspaceDefaultsRef.current.add(setting); const value = readSetting(setting); if (setting === "theme") setTheme(value === "dark" ? "dark" : "light"); else if (setting === "highlightTheme") setHighlightTheme(value === "ftpud" || value === "ftpud-dark" ? "ftpud" : "default"); else if (setting === "uiFontFamily") setUiFontFamily(value === "jetbrains" ? "jetbrains" : "inter"); else if (setting === "uiFontWeight") setUiFontWeight(readSettingNumber(setting, 450, 350, 600)); else if (setting === "uiFontSize") setUiFontSize(readSettingNumber(setting, 13, 10, 20)); else setUiLineHeight(readSettingNumber(setting, 1.2, 1, 2)); setSettingsRevision((revision) => revision + 1); }} />}</div></div>
     </header>
     <div className={`workspace-row${leftSidebarExtended ? " extend-left" : ""}${rightSidebarExtended ? " extend-right" : ""}`}>
       <div className="workspace-sidebar workspace-sidebar-left">
@@ -3168,7 +3188,7 @@ export function App() {
     {usefulDialog && <UsefulFileDialog mode={usefulDialog.mode} initialName={usefulDialog.file?.name ?? ""} scope={usefulDialog.scope} onClose={() => setUsefulDialog(undefined)} onSave={saveUsefulFileDialog} />}
     {runConfigDialog && <RunConfigDialog scope={runConfigDialog.scope} onClose={() => setRunConfigDialog(undefined)} onSave={async (name, commands) => { const config = (await clientRef.current!.request("runConfig.create", { scope: runConfigDialog.scope, name, commands })).config; setRunConfigs((items) => [...items, config].sort((a, b) => a.name.localeCompare(b.name) || a.scope.localeCompare(b.scope))); setRunConfigDialog(undefined); }} />}
     {agentDialog && <AgentDialog mode={agentDialog.mode} initialName={agentDialog.file?.name ?? ""} scope={agentDialog.scope} onClose={() => setAgentDialog(undefined)} onSave={saveAgentDialog} />}
-  </div>;
+  </div></AuthenticationClientContext.Provider>;
 }
 
 function ExternalChangeConflict({ dialog, onClose, onReload, onOverwrite, onSaveAs }: { dialog: { path: string; externalContent: string; externalRevision: FileRevision; error?: string }; onClose(): void; onReload(): void; onOverwrite(): void; onSaveAs(target: string): void }) {

@@ -36,6 +36,10 @@ class MissingProvider extends StdioAcpProvider {
   protected async fallbackModels(): Promise<AiModel[]> { return [{ id: "fallback", name: "Fallback", defaultReasoning: "", reasoningLevels: [] }]; }
 }
 
+const INSTALLED_ENTRY = path.join(os.tmpdir(), "provider-runtimes", "agent", "dist", "index.js");
+/** Simulates the entry that `prepareLaunch` resolves from a managed installation. */
+function installed<T extends StdioAcpProvider>(provider: T): T { return Object.assign(provider, { installedEntry: INSTALLED_ENTRY }); }
+
 async function settle(provider: StdioAcpProvider, workspace: string, isSettled: (session: AiSession) => boolean = (session) => session.status !== "in_progress", timeoutMs = 5_000): Promise<AiSession> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -92,12 +96,40 @@ describe("ACP integration", () => {
     expect((await provider.sessions(workspace)).find((session) => session.id === "archived")?.messages[0]?.text).toBe("Updated question");
   });
 
+  it("launches installed agents with Core's Node, honours Core-host overrides and refuses uninstalled providers", async () => {
+    for (const name of ["CODEX_PATH", "CODEX_ACP_COMMAND", "CLAUDE_ACP_COMMAND", "CLAUDE_AGENT_ACP_PATH", "COPILOT_CLI_PATH"]) vi.stubEnv(name, undefined);
+    vi.stubEnv("REMOTE_IDE_PROVIDER_RUNTIME_DIR", path.join(os.tmpdir(), `vibe-no-providers-${crypto.randomUUID()}`));
+    class InspectCodex extends CodexSessionManager { launch(configuration: AiConfiguration) { return this.command(configuration); } prepare() { return this.prepareLaunch(); } }
+    class InspectClaude extends ClaudeSessionManager { launch(configuration: AiConfiguration) { return this.command(configuration); } }
+    class InspectCopilot extends CopilotSessionManager { launch(configuration: AiConfiguration) { return this.command(configuration); } }
+    try {
+      const codex = new InspectCodex(() => undefined);
+      await expect(codex.prepare()).rejects.toThrow("Codex ACP is not installed");
+      expect(() => codex.launch({})).toThrow("not installed");
+      expect(await codex.installation()).toMatchObject({ provider: "codex", status: "not_installed", package: "@agentclientprotocol/codex-acp" });
+      expect(installed(new InspectCodex(() => undefined)).launch({})).toMatchObject({ command: process.execPath, args: [INSTALLED_ENTRY] });
+      expect(installed(new InspectCodex(() => undefined)).launch({}).env).not.toHaveProperty("CODEX_PATH");
+      expect(installed(new InspectClaude(() => undefined)).launch({})).toEqual({ command: process.execPath, args: [INSTALLED_ENTRY] });
+      expect(installed(new InspectCopilot(() => undefined)).launch({})).toEqual({ command: process.execPath, args: [INSTALLED_ENTRY, "--acp", "--stdio"] });
+      vi.stubEnv("CODEX_ACP_COMMAND", "/server/codex-acp");
+      vi.stubEnv("CLAUDE_ACP_COMMAND", "/server/claude-acp");
+      vi.stubEnv("COPILOT_CLI_PATH", "/server/copilot");
+      expect(new InspectCodex(() => undefined).launch({})).toMatchObject({ command: "/server/codex-acp", env: { CODEX_PATH: "codex" } });
+      expect(new InspectClaude(() => undefined).launch({}).command).toBe("/server/claude-acp");
+      expect(new InspectCopilot(() => undefined).launch({}).command).toBe("/server/copilot");
+      expect(await new InspectCodex(() => undefined).installation()).toMatchObject({ status: "installed", source: "external", location: "/server/codex-acp" });
+      expect(await new AcpRegistry().register(new InspectCodex(() => undefined)).available()).toHaveLength(1);
+      vi.stubEnv("CODEX_ACP_COMMAND", undefined);
+      expect(await new AcpRegistry().register(new InspectCodex(() => undefined)).available()).toEqual([]);
+    } finally { vi.unstubAllEnvs(); }
+  });
+
   it("offers GPT-6 Sol even when an older Codex catalogue omits it and launches it explicitly", async () => {
     class InspectCodex extends CodexSessionManager {
       describeCatalogue(models: AiModel[]) { return this.describeModels(models); }
       launch(configuration: AiConfiguration) { return this.command(configuration); }
     }
-    const provider = new InspectCodex(() => undefined);
+    const provider = installed(new InspectCodex(() => undefined));
     const models = await provider.describeCatalogue([{ id: "gpt-5.6-sol", name: "GPT-5.6-Sol", defaultReasoning: "low", reasoningLevels: ["low"] }]);
     expect(models.find((model) => model.id === "gpt-6-sol")).toMatchObject({ defaultReasoning: "medium", reasoningLevels: ["none", "low", "medium", "high", "xhigh", "max"] });
     expect(models.filter((model) => model.id === "gpt-6-sol")).toHaveLength(1);
@@ -341,20 +373,20 @@ describe("ACP integration", () => {
   });
 
   it("passes server-scoped Copilot model and reasoning configuration at launch", () => {
-    const command = new CopilotSessionManager(() => undefined)["command"]({ model: "claude-haiku-4.5", reasoning: "medium", maxAiCredits: 5 });
-    expect(command.args).toEqual(["--acp", "--stdio", "--model=claude-haiku-4.5", "--reasoning-effort=medium", "--max-ai-credits=5"]);
+    const command = installed(new CopilotSessionManager(() => undefined))["command"]({ model: "claude-haiku-4.5", reasoning: "medium", maxAiCredits: 5 });
+    expect(command.args).toEqual([INSTALLED_ENTRY, "--acp", "--stdio", "--model=claude-haiku-4.5", "--reasoning-effort=medium", "--max-ai-credits=5"]);
   });
 
-  it("launches the bundled Claude ACP adapter with session-scoped permission modes", () => {
-    const claude = new ClaudeSessionManager(() => undefined);
+  it("launches the installed Claude ACP adapter with session-scoped permission modes", () => {
+    const claude = installed(new ClaudeSessionManager(() => undefined));
     const command = claude["command"]({ mode: "plan" });
     expect(command.command).toBe(process.execPath);
-    expect(command.args[0]).toMatch(/claude-agent-acp[\\/]dist[\\/]index\.js$/);
+    expect(command.args[0]).toBe(INSTALLED_ENTRY);
     expect(claude.descriptor.options.find((option) => option.id === "mode")?.choices?.map((choice) => choice.value)).toContain("plan");
   });
 
   it("configures Codex web search with the supported top-level key", () => {
-    const codex = new CodexSessionManager(() => undefined);
+    const codex = installed(new CodexSessionManager(() => undefined));
     expect(JSON.parse(codex["command"]({ webSearch: "disabled" }).env.CODEX_CONFIG as string)).toEqual({ web_search: "disabled" });
     expect(JSON.parse(codex["command"]({ webSearch: "default" }).env.CODEX_CONFIG as string)).toEqual({});
     expect(codex["command"]({ mode: "read-only" }).env.INITIAL_AGENT_MODE).toBe("read-only");
@@ -521,6 +553,7 @@ describe("ACP integration", () => {
   it("supports Copilot Autopilot for new turns and a pending permission without restarting", async () => {
     class FakeCopilot extends CopilotSessionManager {
       constructor(onChanged: (workspace: string) => void, state: string) { super(onChanged, state); fakeProviders.add(this); }
+      protected async prepareLaunch() {}
       protected command() { return { command: "python3", args: [FAKE_AGENT], env: { FAKE_PERMISSION: "on" } }; }
     }
     const state = await mkdtemp(path.join(os.tmpdir(), "copilot-autopilot-"));

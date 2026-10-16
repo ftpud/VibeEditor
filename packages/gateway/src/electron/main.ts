@@ -1,4 +1,4 @@
-import { loadBundle, coreTarget, verifiedCoreArchive, bundledEnvironment, installBundleCommand, prepareBundledCore } from "./bundled-runtime.js";
+import { EDITOR_FLAG, loadBundle, coreTarget, verifiedCoreArchive, bundledEnvironment, installBundleCommand, prepareBundledCore } from "./bundled-runtime.js";
 import { prepareLocalWorkspaceDirectory } from "./local-workspace.js";
 import { remoteNodeEnvironment } from "./remote-node.js";
 import { executeSshCommand as execute } from "./ssh-command.js";
@@ -32,8 +32,13 @@ type TunnelRuntime = { status: "idle" | "working" | "running" | "error"; message
 type ConnectionRuntimeSnapshot = ConnectionRuntime & { updatedAt: string; stage: string };
 
 const bundle = app.isPackaged ? await loadBundle(process.resourcesPath) : undefined;
-const bundledDesktop = bundle ? path.join(process.resourcesPath, "bundle", bundle.desktopExecutable) : undefined;
-const bundleSmokeTest = app.isPackaged && process.argv.includes("--bundle-smoke-test");
+/** The bundled Editor's app directory; it runs on this executable with `--vibe-editor` (see entry.ts). */
+const bundledDesktop = bundle ? path.join(process.resourcesPath, "bundle", bundle.desktopApp) : undefined;
+function desktopCommand(desktopMain: string): { command: string; args: string[] } {
+  return bundle ? { command: process.execPath, args: [EDITOR_FLAG] } : { command: process.env.VIBE_DESKTOP_EXECUTABLE || process.execPath, args: [desktopMain] };
+}
+const bundleSmokeTest = (app.isPackaged && process.argv.includes("--bundle-smoke-test")) || (!app.isPackaged && process.argv.includes("--startup-smoke-test"));
+if (bundleSmokeTest) app.setPath("userData", path.join(app.getPath("temp"), `vibe-gateway-bundle-smoke-${process.pid}`));
 const directory = path.dirname(fileURLToPath(import.meta.url));
 const rendererFilePath = path.join(directory, "../dist-renderer/index.html");
 const appIcon = path.join(directory, "../assets/app-icon.png");
@@ -152,8 +157,10 @@ async function workspaceAndStoredConnection(workspaceId: string): Promise<{ work
 async function localArtifactPaths(): Promise<{ coreMain: string; desktopRoot: string; node: string; env: NodeJS.ProcessEnv }> {
   if (bundle) {
     const target = coreTarget(process.platform, process.arch);
-    const root = await prepareBundledCore(process.resourcesPath, path.join(app.getPath("userData"), "cores"), bundle.cores[target]!, (archive, destination) => runLocal("tar", ["-xzf", archive, "-C", destination], destination));
-    return { coreMain: path.join(root, "packages/core/dist/index.js"), desktopRoot: path.dirname(bundledDesktop!), node: path.join(root, "bin/node"), env: { ...process.env, PATH: `${path.join(root, "bin")}${path.delimiter}${process.env.PATH ?? ""}`, REMOTE_IDE_CODEX_AUTO_UPDATE: "0" } };
+    const shippedCore = bundle.cores[target];
+    if (!shippedCore) throw new Error(`This bundle does not include Core for ${target}.`);
+    const root = await prepareBundledCore(process.resourcesPath, path.join(app.getPath("userData"), "cores"), shippedCore, (archive, destination) => runLocal("tar", ["-xzf", archive, "-C", destination], destination));
+    return { coreMain: path.join(root, "packages/core/dist/index.js"), desktopRoot: bundledDesktop!, node: path.join(root, "bin/node"), env: { ...process.env, PATH: `${path.join(root, "bin")}${path.delimiter}${process.env.PATH ?? ""}` } };
   }
   const repositoryRoot = path.resolve(directory, "../../..");
   return { coreMain: path.join(repositoryRoot, "packages/core/dist/index.js"), desktopRoot: path.join(repositoryRoot, "packages/desktop"), node: process.env.VIBE_NODE_EXECUTABLE || "node", env: process.env };
@@ -182,7 +189,7 @@ async function startLocalServer(workspaceId: string): Promise<{ remotePort: numb
   const log = await open(logPath, "a");
   const child = spawn(node, [coreMain, "--host", "127.0.0.1", "--port", String(workspace.remotePort), "--workspace", workspace.directory], {
     cwd: workspace.directory,
-    env: { ...env, REMOTE_IDE_SESSION_TOKEN: "", REMOTE_IDE_SESSION_TOKEN_FILE: path.join(app.getPath("userData"), "core-tokens", `${workspaceId}.token`) },
+    env: { ...env, ...(bundleSmokeTest ? { REMOTE_IDE_STATE_DIR: path.join(app.getPath("userData"), "core-state") } : {}), REMOTE_IDE_SESSION_TOKEN: "", REMOTE_IDE_SESSION_TOKEN_FILE: path.join(app.getPath("userData"), "core-tokens", `${workspaceId}.token`) },
     // macOS child processes such as Git and node-pty need valid inherited descriptors.
     // Keep stdin attached to /dev/null and retain Core output in a durable diagnostic log.
     stdio: ["ignore", log.fd, log.fd]
@@ -213,9 +220,9 @@ async function startLocalServer(workspaceId: string): Promise<{ remotePort: numb
 }
 async function startLocalClient(workspaceId: string): Promise<void> {
   const { workspace } = await workspaceAndStoredConnection(workspaceId); const { desktopRoot } = await localArtifactPaths();
-  const desktopMain = path.join(desktopRoot, "dist-electron/main.js"); await access(bundledDesktop || desktopMain).catch(() => { throw new Error(bundle ? "Bundled Desktop is missing or damaged. Reinstall Vibe Gateway." : "Local Desktop is not built. Run npm run build before starting a local workspace."); });
-  const executable = bundledDesktop || process.env.VIBE_DESKTOP_EXECUTABLE || process.execPath;
-  const child = spawn(executable, [...(bundle ? [] : [desktopMain]), "--host", "127.0.0.1", "--port", String(workspace.remotePort)], { cwd: desktopRoot, env: { ...process.env, VITE_DEV_SERVER_URL: "", REMOTE_IDE_SESSION_TOKEN: "", REMOTE_IDE_SESSION_TOKEN_FILE: path.join(app.getPath("userData"), "core-tokens", `${workspaceId}.token`) }, detached: true, stdio: "ignore" });
+  const desktopMain = path.join(desktopRoot, "dist-electron/main.js"); await access(desktopMain).catch(() => { throw new Error(bundle ? "Bundled Desktop is missing or damaged. Reinstall Vibe Gateway." : "Local Desktop is not built. Run npm run build before starting a local workspace."); });
+  const desktop = desktopCommand(desktopMain);
+  const child = spawn(desktop.command, [...desktop.args, "--host", "127.0.0.1", "--port", String(workspace.remotePort)], { cwd: desktopRoot, env: { ...process.env, VITE_DEV_SERVER_URL: "", REMOTE_IDE_SESSION_TOKEN: "", REMOTE_IDE_SESSION_TOKEN_FILE: path.join(app.getPath("userData"), "core-tokens", `${workspaceId}.token`) }, detached: true, stdio: "ignore" });
   await new Promise<void>((resolve, reject) => { child.once("spawn", resolve); child.once("error", reject); });
   child.unref(); runtime(workspaceId, "client", `Client connected locally on port ${workspace.remotePort}`);
 }
@@ -258,7 +265,8 @@ async function provision(workspaceId: string, client: Client, settings: Reposito
     runtime(workspaceId, "working", "Uploading bundled Core…", { stage: "bundle-upload" });
     const platform = (await execute(client, "uname -s; uname -m")).trim().split(/\s+/);
     const target = coreTarget(platform[0]!, platform[1]!);
-    const shippedCore = bundle.cores[target]!;
+    const shippedCore = bundle.cores[target];
+    if (!shippedCore) throw new Error(`This local bundle does not include Core for ${target}. Use a bundle containing that server platform.`);
     const core = repair ? { ...shippedCore, release: `${shippedCore.release}-repair-${id().replaceAll("-", "")}` } : shippedCore;
     const archive = await verifiedCoreArchive(process.resourcesPath, core);
     const upload = `.vibe-upload-${id()}`;
@@ -402,7 +410,7 @@ async function startClient(workspaceId: string): Promise<void> {
       return releaseDirectory === expected || (releaseDirectory.startsWith(expected) && /^-repair-[a-f0-9]{32}$/.test(releaseDirectory.slice(expected.length)));
     });
     if (!matchesBundle) throw new Error("Start the bundled Core before opening Desktop");
-    await launchClient(workspaceId, workspace, connection, path.dirname(bundledDesktop!), true, sessionToken);
+    await launchClient(workspaceId, workspace, connection, bundledDesktop!, true, sessionToken);
     return;
   }
   const commit = (await execute(client, `git -C ${shell(releaseDirectory)} rev-parse HEAD`)).trim();
@@ -469,8 +477,9 @@ async function launchClient(workspaceId: string, workspace: Workspace, connectio
   }
   const localPort = await createTunnel(workspaceId, connection, workspace.remotePort);
   const desktopMain = path.join(clientRoot, "dist-electron", "main.js");
-  const desktopExecutable = bundledDesktop || process.env.VIBE_DESKTOP_EXECUTABLE || process.execPath;
-  const child = spawn(desktopExecutable, [...(bundle ? [] : [desktopMain]), "--host", "127.0.0.1", "--port", String(localPort)], { cwd: clientRoot, env: { ...process.env, VITE_DEV_SERVER_URL: "", REMOTE_IDE_SESSION_TOKEN: sessionToken ?? "", REMOTE_IDE_SESSION_TOKEN_FILE: "" }, detached: true, stdio: "ignore" });
+  const desktop = desktopCommand(desktopMain);
+  const desktopExecutable = desktop.command;
+  const child = spawn(desktopExecutable, [...desktop.args, "--host", "127.0.0.1", "--port", String(localPort)], { cwd: clientRoot, env: { ...process.env, VITE_DEV_SERVER_URL: "", REMOTE_IDE_SESSION_TOKEN: sessionToken ?? "", REMOTE_IDE_SESSION_TOKEN_FILE: "" }, detached: true, stdio: "ignore" });
   try {
     await new Promise<void>((resolve, reject) => {
       child.once("spawn", resolve);
@@ -634,9 +643,29 @@ function createWindow(): void {
   if (bundleSmokeTest) {
     const timeout = setTimeout(() => app.exit(1), 30_000);
     void load.then(async () => {
-      const healthy = await window.webContents.executeJavaScript("window.gateway && window.gateway.get().then(result => result.distribution === 'bundled')");
-      if (!healthy) throw new Error("Packaged Gateway renderer, preload or bundle mode failed");
-      await access(bundledDesktop!);
+      const distribution = bundle ? "bundled" : "source";
+      const healthy = await window.webContents.executeJavaScript(`window.gateway && window.gateway.get().then(result => result.distribution === '${distribution}')`);
+      if (!healthy) throw new Error("Gateway renderer, preload or distribution mode failed");
+      await access(bundledDesktop ? path.join(bundledDesktop, "dist-electron", "main.js") : process.env.VIBE_DESKTOP_EXECUTABLE!);
+      if (process.argv.includes("--bundle-core-smoke-test") || process.argv.includes("--startup-core-smoke-test")) {
+        const { createServer } = await import("node:net");
+        const probe = createServer();
+        await new Promise<void>(resolve => probe.listen(0, "127.0.0.1", resolve));
+        const address = probe.address();
+        if (!address || typeof address === "string") throw new Error("Could not allocate local Core test port");
+        await new Promise<void>((resolve, reject) => probe.close(error => error ? reject(error) : resolve()));
+        const smokeId = "bundle-smoke-local";
+        await updateState(state => {
+          state.connections.push({ id: smokeId, kind: "local", name: "Bundle smoke", host: "127.0.0.1", port: 22, username: "", password: "" });
+          state.workspaces.push({ id: smokeId, connectionId: smokeId, name: "Bundle smoke", directory: path.join(app.getPath("userData"), "workspace"), remotePort: address.port });
+        });
+        try {
+          await startLocalServer(smokeId);
+          await stopLocalServer(smokeId);
+          await startLocalServer(smokeId);
+        } finally { await stopLocalServer(smokeId); }
+        console.log(`[gateway] ${distribution} local Core passed start, stop and restart checks`);
+      }
       clearTimeout(timeout); app.exit(0);
     }).catch(error => { console.error(error); app.exit(1); });
   } else void load.catch(error => console.error("Gateway page load failed", error));

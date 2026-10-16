@@ -5,12 +5,17 @@ import path from "node:path";
 import { quoteWorkspaceShellArgument as shell } from "./workspace-path.js";
 
 export type CoreBundle = { target: string; commit: string; release: string; archive: string; sha256: string };
-export type BundleManifest = { schema: 1; channel: "early-access"; version: string; commit: string; desktopExecutable: string; cores: Record<string, CoreBundle> };
+/** Gateway argument that runs the bundled Editor on Gateway's own Electron runtime. */
+export const EDITOR_FLAG = "--vibe-editor";
+/** `desktopApp` is the Editor's Electron app directory (package.json, dist-electron, dist-renderer, node_modules), relative to `bundle/`. */
+export type BundleManifest = { schema: 1; channel: "early-access"; version: string; commit: string; desktopApp: string; cores: Record<string, CoreBundle> };
 export async function loadBundle(resources: string): Promise<BundleManifest> {
   const manifest = JSON.parse(await readFile(path.join(resources, "bundle/manifest.json"), "utf8")) as BundleManifest;
   if (manifest.schema !== 1 || manifest.channel !== "early-access" || !/^[0-9a-f]{40,64}$/.test(manifest.commit)) throw new Error("Invalid Early Access bundle manifest");
-  if (!manifest.desktopExecutable || path.isAbsolute(manifest.desktopExecutable) || manifest.desktopExecutable.split(/[\\/]/).includes("..")) throw new Error("Invalid bundled Desktop executable");
-  for (const target of ["linux-x64", "linux-arm64", "darwin-arm64"]) {
+  if (!manifest.desktopApp || path.isAbsolute(manifest.desktopApp) || manifest.desktopApp.split(/[\\/]/).includes("..")) throw new Error("Invalid bundled Desktop application");
+  const targets = Object.keys(manifest.cores ?? {});
+  if (!targets.length || targets.some(target => !["linux-x64", "linux-arm64", "darwin-arm64"].includes(target))) throw new Error("Invalid bundled Core targets");
+  for (const target of targets) {
     const core = manifest.cores[target];
     if (!core || core.target !== target || core.commit !== manifest.commit || core.archive !== `core-${target}.tar.gz` || !/^[a-f0-9]{64}$/.test(core.sha256) || !new RegExp(`^${manifest.commit}-node[0-9]+-bundle-[a-zA-Z0-9-]+$`).test(core.release)) throw new Error(`Invalid bundled Core: ${target}`);
   }
@@ -32,7 +37,7 @@ export async function verifiedCoreArchive(resources: string, core: CoreBundle): 
 }
 export function bundledEnvironment(release: string): string {
   if (!/^[0-9a-f]{40,64}-node[0-9]+-bundle-[a-zA-Z0-9-]+$/.test(release)) throw new Error("Invalid bundled release identity");
-  return `export PATH="$HOME/.vibe-deploy/releases/${release}/bin:$PATH"\nexport REMOTE_IDE_CODEX_AUTO_UPDATE=0`;
+  return `export PATH="$HOME/.vibe-deploy/releases/${release}/bin:$PATH"`;
 }
 
 /** Upload to a private directory, verify before extraction, then atomically install. */

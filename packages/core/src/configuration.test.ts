@@ -22,7 +22,7 @@ async function fixture() {
   const workspace = path.join(root, "project"); const taskWorkspace = path.join(root, "checkout"); const state = path.join(root, "state");
   await Promise.all([mkdir(workspace), mkdir(taskWorkspace)]);
   const stores = { agents: new AgentsStore(workspace, state), skills: new SkillsStore(state, workspace), useful: new UsefulFilesStore(workspace, state), workflows: new HarnessStore(workspace, state), tasks: new WorkspaceTaskStore(workspace, state) };
-  const acp = { list: () => [], get: vi.fn() } as unknown as AcpRegistry;
+  const acp = { list: () => [], available: async () => [], get: vi.fn() } as unknown as AcpRegistry;
   const changed = vi.fn(async () => undefined);
   const service = new ConfigurationService(workspace, taskWorkspace, stores, acp, changed);
   return { root, workspace, taskWorkspace, state, stores, acp, changed, service };
@@ -57,7 +57,7 @@ describe("logical configuration documents", () => {
     expect(await readFile(path.join(taskWorkspace, ".agents/skills/testing/SKILL.md"), "utf8")).toBe("Checkout instructions");
     expect(await stores.skills.read("local/testing", workspace)).toBe("Testing instructions");
     expect((await stores.skills.list(workspace)).skills.map((file) => file.id)).toEqual(["local/testing"]);
-    const fromRoot = new ConfigurationService(workspace, workspace, stores, { list: () => [] } as unknown as AcpRegistry);
+    const fromRoot = new ConfigurationService(workspace, workspace, stores, { list: () => [], available: async () => [] } as unknown as AcpRegistry);
     const local = await fromRoot.read("skills/local/testing/SKILL.md");
     await fromRoot.write(local.resource, "Updated shared instructions", local.revision);
     expect((await service.read(local.resource)).content).toBe("Updated shared instructions");

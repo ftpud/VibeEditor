@@ -2,6 +2,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { cp, mkdir, readdir } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL, fileURLToPath } from "node:url";
+import { toolInstallations } from "./tools.js";
 import { createMessageConnection, StreamMessageReader, StreamMessageWriter, type MessageConnection } from "vscode-jsonrpc/node.js";
 import type { JavaLspCompletion, JavaLspLocation, JavaSemanticToken, WorkspaceSymbol } from "@remote-ide/protocol";
 import { JavaSemanticCache, javaLanguageStateDirectory } from "./java-semantic-cache.js";
@@ -11,7 +12,6 @@ import { WorkspaceFileSystem } from "./filesystem.js";
 type LspPosition = { line: number; character: number };
 type LspRange = { start: LspPosition; end: LspPosition };
 type LspLocation = { uri: string; range: LspRange };
-const bundledTools = fileURLToPath(new URL("../../../.tools/", import.meta.url));
 
 export class JdtLanguageService {
   private process?: ChildProcessWithoutNullStreams;
@@ -151,9 +151,11 @@ export class JdtLanguageService {
   }
 
   private async start(): Promise<void> {
-    const distribution = path.join(bundledTools, "jdtls");
+    const [distribution, java] = await Promise.all([toolInstallations.directory("jdtls"), toolInstallations.java()]);
+    if (!distribution) throw new CoreError("JAVA_PROCESS_FAILED", "The Java language server is not installed on this Core host. Install it from Settings → Tools.");
+    if (!java) throw new CoreError("JAVA_PROCESS_FAILED", "The Java runtime is not installed on this Core host. Install it from Settings → Tools.");
     let plugins: string[];
-    try { plugins = await readdir(path.join(distribution, "plugins")); } catch { throw new CoreError("JAVA_PROCESS_FAILED", "JDT LS is not installed. Run npm run install:jdtls"); }
+    try { plugins = await readdir(path.join(distribution, "plugins")); } catch { throw new CoreError("JAVA_PROCESS_FAILED", "The Java language server installation is incomplete. Reinstall it from Settings → Tools."); }
     const launcher = plugins.find((name) => /^org\.eclipse\.equinox\.launcher_.*\.jar$/.test(name));
     if (!launcher) throw new CoreError("JAVA_PROCESS_FAILED", "JDT LS launcher was not found");
     const platform = process.platform === "darwin" ? "mac" : process.platform === "win32" ? "win" : "linux";
@@ -163,9 +165,8 @@ export class JdtLanguageService {
     await mkdir(path.dirname(configuration), { recursive: true });
     await cp(path.join(distribution, `config_${platform}`), configuration, { recursive: true, force: true });
     await mkdir(data, { recursive: true });
-    const bundledJava = path.join(bundledTools, "jre21", process.platform === "darwin" ? "Contents/Home/bin/java" : process.platform === "win32" ? "bin/java.exe" : "bin/java");
     if (this.closed) throw new CoreError("JAVA_PROCESS_FAILED", "Java language service is closed");
-    const child = spawn(bundledJava, ["-Declipse.application=org.eclipse.jdt.ls.core.id1", "-Dosgi.bundles.defaultStartLevel=4", "-Declipse.product=org.eclipse.jdt.ls.core.product", "-Dlog.level=ERROR", "-Xmx1G", "--add-modules=ALL-SYSTEM", "--add-opens", "java.base/java.util=ALL-UNNAMED", "--add-opens", "java.base/java.lang=ALL-UNNAMED", "-jar", path.join(distribution, "plugins", launcher), "-configuration", configuration, "-data", data], { cwd: this.filesystem.getWorkspace(), stdio: "pipe" });
+    const child = spawn(java, ["-Declipse.application=org.eclipse.jdt.ls.core.id1", "-Dosgi.bundles.defaultStartLevel=4", "-Declipse.product=org.eclipse.jdt.ls.core.product", "-Dlog.level=ERROR", "-Xmx1G", "--add-modules=ALL-SYSTEM", "--add-opens", "java.base/java.util=ALL-UNNAMED", "--add-opens", "java.base/java.lang=ALL-UNNAMED", "-jar", path.join(distribution, "plugins", launcher), "-configuration", configuration, "-data", data], { cwd: this.filesystem.getWorkspace(), stdio: "pipe" });
     this.process = child;
     child.stderr.on("data", (data) => console.error(`[jdtls] ${data.toString().trimEnd()}`));
     const connection = createMessageConnection(new StreamMessageReader(child.stdout), new StreamMessageWriter(child.stdin));

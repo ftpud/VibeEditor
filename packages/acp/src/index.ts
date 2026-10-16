@@ -27,6 +27,13 @@ export type AiQuestionAnswer = Record<string, string | number | boolean | string
 export type AiQuestionAction = "accept" | "decline" | "cancel";
 export type AiSkillSummary = { id: string; name: string; description?: string; revision: string };
 export type AiSkillCatalogue = { threadId: string; entries: AiSkillSummary[] };
+/** Live ACP sign-in state. Never persist this alongside conversation transcripts. */
+export type AiAuthMethod = { id: string; name: string; description?: string; type: "agent" | "terminal" };
+export type AiAuthentication = { status: "unknown" | "required" | "authenticating" | "authenticated" | "error"; methods: AiAuthMethod[]; requestId?: string; methodId?: string; output?: string; url?: string; message?: string; error?: string; terminal?: boolean; awaitingConfirmation?: boolean };
+export type AiAuthInput = { requestId: string; data?: string; cols?: number; rows?: number; action?: "accept" | "cancel" };
+/** Core-host installation of a provider's ACP agent. Only installed providers are usable. */
+export type AiProviderInstallation = { provider: AiProvider; name: string; description: string; package?: string; status: "installed" | "not_installed" | "installing" | "removing"; /** `external` installations come from Core-host overrides and cannot be managed from the client. */ source?: "managed" | "external"; version?: string; latestVersion?: string; location?: string; error?: string };
+
 export type AiSession = { id?: string; createdAt?: string; updatedAt?: string; threadId?: string; model: string; reasoning: string; configuration?: AiConfiguration; /** One-shot model/reasoning override consumed by the next new turn. */ nextConfiguration?: AiConfiguration; availableOptions?: AiOption[]; availableCommands?: AiCommand[]; pendingPermission?: AiPermissionRequest; pendingQuestion?: AiQuestionRequest; skillIds?: string[]; /** Whether prior turns received Vibe skill instructions. */ skillContext?: boolean; /** Catalogue already delivered to this provider conversation. */ skillCatalogue?: AiSkillCatalogue; status: AiStatus; failure?: AiFailure; messages: AiMessage[]; context?: AiContextSnapshot; contextUsed?: number; contextLimit?: number; tokens?: AiTokenUsage; steering?: boolean; agent?: { name: string; fingerprint: string }; agentPreset?: AiAgentPreset; /** Agent preset text delivered as session system instructions; re-sent when the session is resumed. */ systemInstructions?: string };
 export type AiTokenUsage = { total: number; input: number; output: number; thought?: number; cachedRead?: number; cachedWrite?: number };
 /**
@@ -91,6 +98,14 @@ export type AcpSendRequest = {
 export abstract class AcpProvider {
   abstract readonly descriptor: AiProviderDescriptor;
   abstract get(workspace: string): Promise<AiSession>;
+  async authentication(_workspace: string, _discover = false): Promise<AiAuthentication> { return { status: "unknown", methods: [] }; }
+  async authenticate(_workspace: string, _methodId: string): Promise<AiAuthentication> { throw new Error("ACP authentication is unavailable for this provider"); }
+  async authenticationInput(_workspace: string, _input: AiAuthInput): Promise<AiAuthentication> { throw new Error("No ACP authentication is active"); }
+  /** Providers without an installable agent are always available. */
+  async installation(_checkLatest = false): Promise<AiProviderInstallation> { return { provider: this.descriptor.id, name: this.descriptor.name, description: this.descriptor.description, status: "installed", source: "external" }; }
+  async install(): Promise<AiProviderInstallation> { throw new Error(`${this.descriptor.name} cannot be installed from Vibe Editor`); }
+  async uninstall(): Promise<AiProviderInstallation> { throw new Error(`${this.descriptor.name} cannot be removed from Vibe Editor`); }
+
   abstract models(): Promise<AiModel[]>;
   abstract configure(workspace: string, configuration: AiConfiguration): Promise<AiSession>;
   /** Queues a one-shot configuration override for the next new turn, including while a turn is running. */

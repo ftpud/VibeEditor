@@ -1,5 +1,6 @@
 import type { AiConfiguration, AiModel, AiProviderDescriptor } from "@remote-ide/acp";
 import { StdioAcpProvider } from "../stdio-provider.js";
+import type { InstallationSpec } from "../provider-installations.js";
 
 /** Used only when the Copilot ACP server cannot be reached; the live list wins. */
 const FALLBACK_MODELS: { id: string; name: string; reasoningLevels: string[]; price: string; priceTier: string }[] = [
@@ -22,13 +23,17 @@ export class CopilotSessionManager extends StdioAcpProvider {
     ]
   };
 
+  /** The GitHub Copilot CLI package; `COPILOT_CLI_PATH` selects an existing CLI instead. */
+  protected readonly installationSpec: InstallationSpec = { package: "@github/copilot", bin: "npm-loader.js", override: () => process.env.COPILOT_CLI_PATH };
+
   protected command(configuration: AiConfiguration): { command: string; args: string[] } {
     const args = ["--acp", "--stdio"];
     const fixedModel = typeof configuration.model === "string" && configuration.model && configuration.model !== "auto";
     if (fixedModel) args.push(`--model=${configuration.model}`);
     if (fixedModel && typeof configuration.reasoning === "string" && configuration.reasoning && configuration.reasoning !== "none") args.push(`--reasoning-effort=${configuration.reasoning}`);
     if (typeof configuration.maxAiCredits === "number" && configuration.maxAiCredits > 0) args.push(`--max-ai-credits=${configuration.maxAiCredits}`);
-    return { command: process.env.COPILOT_CLI_PATH ?? "copilot", args };
+    if (process.env.COPILOT_CLI_PATH) return { command: process.env.COPILOT_CLI_PATH, args };
+    return { command: process.execPath, args: [this.installedAgent(), ...args] };
   }
 
   protected async fallbackModels(): Promise<AiModel[]> {

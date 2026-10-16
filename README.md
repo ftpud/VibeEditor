@@ -25,12 +25,12 @@ On your local machine:
 ```bash
 git clone https://github.com/ftpud/VibeEditor.git
 cd VibeEditor
-VIBE_SKIP_JDTLS=1 npm install
+npm install
 npm run build
 npm run gateway
 ```
 
-The install command above is for Bash or a compatible shell and skips the optional Java tooling. For Java setup or another shell, see the [technical guide](docs/TECHNICAL_GUIDE.md#optional-capabilities).
+AI providers and the optional Java tooling are installed later from **Settings → AI providers** and **Settings → Tools**. See the [technical guide](docs/TECHNICAL_GUIDE.md#optional-capabilities).
 
 In Gateway:
 

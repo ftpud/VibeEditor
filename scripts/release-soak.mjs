@@ -131,7 +131,7 @@ function rpc(socket) {
 async function startCore(port, log, compatibility) {
   const child = spawn(process.execPath, [path.join(runtime, "packages/core/dist/index.js"), "--host", "127.0.0.1", "--port", String(port), "--workspace", workspace], {
     cwd: workspace,
-    env: { ...process.env, REMOTE_IDE_STATE_DIR: path.join(sandbox, "state"), REMOTE_IDE_SESSION_TOKEN: "", REMOTE_IDE_SESSION_TOKEN_FILE: tokenFile, REMOTE_IDE_CODEX_AUTO_UPDATE: "0" },
+    env: { ...process.env, REMOTE_IDE_STATE_DIR: path.join(sandbox, "state"), REMOTE_IDE_SESSION_TOKEN: "", REMOTE_IDE_SESSION_TOKEN_FILE: tokenFile },
     stdio: ["ignore", log.fd, log.fd],
   });
   const exited = new Promise((resolve, reject) => { child.once("exit", (code, signal) => resolve({ code, signal })); child.once("error", reject); });

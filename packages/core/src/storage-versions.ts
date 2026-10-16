@@ -4,7 +4,6 @@ import crypto from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { lstat, mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { serializedStateMutation } from "./root-mutation.js";
-import { currentCodexRuntimeDirectory } from "./ai/providers/codex-runtime.js";
 import { StorageProcesses } from "./storage-processes.js";
 
 export type VersionEntry = { path: string; label: string; current: boolean };
@@ -22,7 +21,7 @@ export class StorageVersions {
   private readonly deployment: string;
   constructor(private readonly options: VersionOptions) { this.deployment = path.join(options.home, ".vibe-deploy"); }
   private currentDeployment(): string { return path.resolve(this.options.currentDeployment?.() ?? fileURLToPath(new URL("../../../", import.meta.url))); }
-  private currentRuntime(): string | undefined { return this.options.currentRuntime ? this.options.currentRuntime() : currentCodexRuntimeDirectory(); }
+  private currentRuntime(): string | undefined { return this.options.currentRuntime?.(); /* The legacy Codex runtime cache is no longer selected; provider agents are managed installations. */ }
   get supported(): boolean { return process.platform === "linux" || !!this.options.closeOtherSessions; }
   async entries(): Promise<VersionEntry[]> {
     const entries: VersionEntry[] = []; const currentRuntime = this.currentRuntime(); const currentDeployment = this.currentDeployment();

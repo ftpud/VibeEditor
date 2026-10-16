@@ -163,8 +163,10 @@ export type TerminalSessionSnapshot = { terminalId: string; status: "running" | 
 /** Resolution is always against the currently selected workspace. A stale ID means Core no longer owns that process. */
 export type TerminalAttachResult = { state: "available"; session: TerminalSessionSnapshot } | { state: "stale"; reason: "session-unavailable" };
 export type WorkspaceTask = { id: string; name: string; branch: string; baseBranch: string; status: "active" | "finished"; archived: boolean };
-export type { AiContextCategory, AiContextEntry, AiContextSection, AiContextSnapshot, AiAgent, AiAgentPreset, AiCommand, AiConfiguration, AiContentBlock, AiFailure, AiFailureKind, AiMessage, AiModel, AiMcpServer, AiOption, AiPermissionRequest, AiQuestionAction, AiQuestionAnswer, AiQuestionChoice, AiQuestionField, AiQuestionRequest, AiProvider, AiProviderCapabilities, AiProviderDescriptor, AiSession, AiSettingsLayout, AiSettingsSection, AiStatus, AiTaskSummary, AiTokenUsage, AiUsage } from "@remote-ide/acp";
-import type { AiAgent, AiAgentPreset, AiConfiguration, AiQuestionAction, AiQuestionAnswer, AiContentBlock, AiMcpServer, AiModel, AiPermissionRequest, AiProvider, AiProviderDescriptor, AiSession, AiTaskSummary, AiTokenUsage, AiUsage } from "@remote-ide/acp";
+export type { AiAuthentication, AiAuthMethod, AiAuthInput, AiProviderInstallation, AiContextCategory, AiContextEntry, AiContextSection, AiContextSnapshot, AiAgent, AiAgentPreset, AiCommand, AiConfiguration, AiContentBlock, AiFailure, AiFailureKind, AiMessage, AiModel, AiMcpServer, AiOption, AiPermissionRequest, AiQuestionAction, AiQuestionAnswer, AiQuestionChoice, AiQuestionField, AiQuestionRequest, AiProvider, AiProviderCapabilities, AiProviderDescriptor, AiSession, AiSettingsLayout, AiSettingsSection, AiStatus, AiTaskSummary, AiTokenUsage, AiUsage } from "@remote-ide/acp";
+import type { AiAuthentication, AiAuthInput, AiProviderInstallation, AiAgent, AiAgentPreset, AiConfiguration, AiQuestionAction, AiQuestionAnswer, AiContentBlock, AiMcpServer, AiModel, AiPermissionRequest, AiProvider, AiProviderDescriptor, AiSession, AiTaskSummary, AiTokenUsage, AiUsage } from "@remote-ide/acp";
+/** Optional tool downloaded to the Core host on demand (Settings → Tools). */
+export type ToolInstallation = { id: string; name: string; description: string; status: "installed" | "not_installed" | "installing" | "removing"; version?: string; /** The version this Core installs. */ availableVersion: string; requires?: string[]; location?: string; /** Download progress, 0-100, while installing. */ progress?: number; error?: string };
 export type UsefulFileScope = "global" | "local";
 export type UsefulFile = { scope: UsefulFileScope; name: string };
 export type RunConfigScope = "global" | "local";
@@ -365,8 +367,20 @@ export type ProtocolOperations = {
   "tasks.archive": { payload: { taskId: string; archived: boolean }; result: { task: WorkspaceTask } };
   "tasks.switch": { payload: { taskId?: string; includeIgnored?: boolean }; result: { workspace: string; projectName: string; tree: FileTreeNode[]; options: WorkspaceOptions; tasks: WorkspaceTask[]; selectedTaskId?: string } };
   "tasks.delete": { payload: { taskId: string }; result: { tasks: WorkspaceTask[]; selectedTaskId?: string } };
+  /** Installed providers only; see `ai.installations.list` for every known provider. */
   "ai.providers": { payload: Record<string, never>; result: { providers: AiProviderDescriptor[] } };
+  "tools.list": { payload: Record<string, never>; result: { tools: ToolInstallation[] } };
+  /** Installs or updates a tool (and missing prerequisites). Returns at once; poll `tools.list` for completion. */
+  "tools.install": { payload: { tool: string }; result: { tools: ToolInstallation[] } };
+  "tools.uninstall": { payload: { tool: string }; result: { tools: ToolInstallation[] } };
+  "ai.installations.list": { payload: { checkLatest?: boolean }; result: { installations: AiProviderInstallation[] } };
+  /** Installs or updates to the latest version. Returns at once; poll `ai.installations.list` for completion. */
+  "ai.installations.install": { payload: { provider: AiProvider }; result: { installation: AiProviderInstallation } };
+  "ai.installations.uninstall": { payload: { provider: AiProvider }; result: { installation: AiProviderInstallation } };
   "ai.get": { payload: { provider?: AiProvider }; result: { session: AiSession } };
+  "ai.auth.get": { payload: { provider?: AiProvider; discover?: boolean }; result: { authentication: AiAuthentication } };
+  "ai.auth.start": { payload: { provider?: AiProvider; methodId: string }; result: { authentication: AiAuthentication } };
+  "ai.auth.input": { payload: { provider?: AiProvider } & AiAuthInput; result: { authentication: AiAuthentication } };
   "ai.models": { payload: { provider?: AiProvider }; result: { models: AiModel[] } };
   "ai.configure": { payload: { provider?: AiProvider; model?: string; reasoning?: string; configuration?: AiConfiguration }; result: { session: AiSession } };
   "skills.list": { payload: Record<string, never>; result: SkillCatalog };
@@ -795,7 +809,16 @@ const requestTypeRegistry: Record<RequestType, true> = {
   "storage.cleanup": true,
   "tasks.delete": true,
   "ai.providers": true,
+  "tools.list": true,
+  "tools.install": true,
+  "tools.uninstall": true,
+  "ai.installations.list": true,
+  "ai.installations.install": true,
+  "ai.installations.uninstall": true,
   "ai.get": true,
+  "ai.auth.get": true,
+  "ai.auth.start": true,
+  "ai.auth.input": true,
   "ai.models": true,
   "ai.configure": true,
   "skills.list": true,
