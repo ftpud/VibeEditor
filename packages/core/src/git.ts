@@ -1,7 +1,8 @@
 import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
 import path from "node:path";
-import { chmod, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { appendFile, chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import os from "node:os";
 import { createHash } from "node:crypto";
 import type { FileRevision, GitBranch, GitBranchDeletePreview, GitCommit, GitCommitFile, GitConflictOperationKind, GitConflictWorkspace, GitDiffHunk, GitHistoryRewritePreview, GitMergePreview, GitMergeRef, GitMergeResult, GitPullPreview, GitPullResult, GitPullStrategy, GitRebasePreview, GitRebaseResult, GitRebaseTodoItem, GitRollbackFailure, GitStash, GitStashInclusion, GitStashPreview, GitStatusEntry, GitTag, GitUpstreamStatus } from "@remote-ide/protocol";
 import { CoreError } from "./errors.js";
@@ -208,9 +209,12 @@ export class GitService {
   async publishBranch(branch: string, remote: string, force: boolean, confirm: boolean): Promise<void> { validateBranchName(branch); await this.requireLocalBranch(branch); await this.requireRemote(remote); if (typeof force !== "boolean" || typeof confirm !== "boolean" || !confirm) throw new CoreError("INVALID_REQUEST", force ? "Confirm force publishing this branch" : "Confirm publishing this branch to the remote"); await this.networkGit(["push", ...(force ? ["--force-with-lease"] : []), "--set-upstream", remote, branch]); }
   async setBranchUpstream(branch: string, remote: string, upstream: string, confirm: boolean): Promise<void> { validateBranchName(branch); validateBranchName(upstream); await this.requireLocalBranch(branch); await this.branchReference(`${remote}/${upstream}`, true); if (typeof confirm !== "boolean" || !confirm) throw new CoreError("INVALID_REQUEST", "Confirm changing this branch's upstream"); await this.git(["branch", "--set-upstream-to", `${remote}/${upstream}`, branch]); }
 
-  async log(branch: string, limit = 200): Promise<GitCommit[]> {
+  /** One page of history; `hasMore` tells clients to request the next page with `skip`. */
+  async log(branch: string, limit = 200, skip = 0): Promise<{ commits: GitCommit[]; hasMore: boolean }> {
     if (!/^[\w./@{}~^:+-]+$/.test(branch)) throw new CoreError("INVALID_REQUEST", "Invalid Git branch");
-    return parseGitGraphLog(await this.git(["log", branch, "--graph", "--date-order", `--max-count=${Math.max(1, Math.min(500, limit))}`, "--format=%x1e%H%x1f%h%x1f%an%x1f%aI%x1f%s%x1f%P%x1f%D"]));
+    const count = Math.max(1, Math.min(5000, Math.floor(limit))); const offset = Math.max(0, Math.floor(skip) || 0);
+    const commits = parseGitGraphLog(await this.git(["log", branch, "--graph", "--date-order", `--skip=${offset}`, `--max-count=${count + 1}`, "--format=%x1e%H%x1f%h%x1f%an%x1f%aI%x1f%s%x1f%P%x1f%D"]));
+    return { commits: commits.slice(0, count), hasMore: commits.length > count };
   }
 
   async mergePreview(source: GitMergeRef): Promise<GitMergePreview> {
@@ -292,6 +296,7 @@ export class GitService {
   async commitDiff(hash: string, filePath: string, originalPath?: string): Promise<{ originalContent: string; modifiedContent: string }> {
     validateHash(hash); validatePath(filePath); if (originalPath) validatePath(originalPath);
     const modifiedContent = await this.show(`${hash}:${filePath}`);
+    // Root commits have no parent; their files are compared with nothing.
     const originalContent = await this.show(`${hash}^:${originalPath ?? filePath}`);
     return { originalContent, modifiedContent };
   }
@@ -401,12 +406,58 @@ export class GitService {
     return { applied: hunkIds.length };
   }
 
-  async fileHistory(filePath: string, startLine?: number, endLine?: number): Promise<GitCommit[]> {
+  /**
+   * History of a file, or of a line range in it. Each commit carries the file's
+   * path at that commit, so renamed files still show their changes. A line range
+   * refers to `content` (the editor buffer) when given and is mapped onto HEAD,
+   * because `git log -L` only understands committed line numbers.
+   */
+  async fileHistory(filePath: string, startLine?: number, endLine?: number, content?: string): Promise<{ commits: GitCommit[]; range?: { startLine: number; endLine: number }; note?: string }> {
     validatePath(filePath);
     const lineHistory = startLine !== undefined && endLine !== undefined;
-    if (lineHistory && (!Number.isInteger(startLine) || !Number.isInteger(endLine) || startLine! < 1 || endLine! < startLine!)) throw new CoreError("INVALID_REQUEST", "Invalid history line range");
-    const args = lineHistory ? ["log", `-L${startLine},${endLine}:${filePath}`, "--no-patch", "--format=%H%x00%h%x00%an%x00%aI%x00%s%x00"] : ["log", "--follow", "--format=%H%x00%h%x00%an%x00%aI%x00%s%x00", "--", filePath];
-    return parseGitLog(await this.git(args));
+    const format = "--format=%x1e%H%x1f%h%x1f%an%x1f%aI%x1f%s";
+    if (!lineHistory) return { commits: parseFollowLog(await this.git(["log", "--follow", "-z", "--name-status", format, "--", filePath])) };
+    if (!Number.isInteger(startLine) || !Number.isInteger(endLine) || startLine! < 1 || endLine! < startLine!) throw new CoreError("INVALID_REQUEST", "Invalid history line range");
+    let range = { startLine: startLine!, endLine: endLine! };
+    let committed: string;
+    try { committed = await this.git(["show", `HEAD:${filePath}`]); }
+    catch { return { commits: [], note: "This file has no committed history yet." }; }
+    if (content !== undefined && content !== committed) {
+      const mapped = mapLineRange(await this.lineDiffHunks(committed, content), range.startLine, range.endLine);
+      if (!mapped) return { commits: [], note: "The selected lines are not committed yet, so they have no history." };
+      range = mapped;
+    }
+    const lines = committed.split("\n").length - (committed.endsWith("\n") ? 1 : 0);
+    range = { startLine: Math.min(range.startLine, Math.max(1, lines)), endLine: Math.min(range.endLine, Math.max(1, lines)) };
+    const commits = parseLineLog(await this.git(["log", `-L${range.startLine},${range.endLine}:${filePath}`, format]));
+    const moved = range.startLine !== startLine || range.endLine !== endLine;
+    return { commits, ...(moved ? { range, note: `Selected lines ${startLine}-${endLine} have uncommitted edits around them; showing the history of committed lines ${range.startLine}-${range.endLine}.` } : {}) };
+  }
+
+  /** Adds an untracked path to the root .gitignore, anchored so it matches only that path. */
+  async ignore(filePath: string): Promise<string> {
+    validatePath(filePath);
+    const pattern = `/${filePath.replace(/([*?[\\#! ])/g, "\\$1")}`;
+    return serializedRootMutation(this.workspace, async () => {
+      const file = path.join(this.workspace, ".gitignore");
+      const existing = await readFile(file, "utf8").catch(() => "");
+      if (existing.split(/\r?\n/).includes(pattern)) return ".gitignore";
+      await appendFile(file, `${existing && !existing.endsWith("\n") ? "\n" : ""}${pattern}\n`);
+      return ".gitignore";
+    });
+  }
+
+  /** Zero-context hunks turning `before` into `after`, compared outside the repository. */
+  private async lineDiffHunks(before: string, after: string): Promise<LineHunk[]> {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "vibe-line-map-"));
+    try {
+      await Promise.all([writeFile(path.join(directory, "before"), before), writeFile(path.join(directory, "after"), after)]);
+      const output = await new Promise<string>((resolve, reject) => execFile("git", ["diff", "--no-index", "--no-color", "-U0", "--", path.join(directory, "before"), path.join(directory, "after")], { encoding: "utf8", maxBuffer: 16 * 1024 * 1024 }, (error, stdout) => {
+        // `git diff --no-index` exits with 1 when the files differ.
+        if (error && (error as { code?: number }).code !== 1) reject(new CoreError("GIT_FAILED", error.message)); else resolve(stdout);
+      }));
+      return parseLineHunks(output);
+    } finally { await rm(directory, { recursive: true, force: true }); }
   }
 
   async compareFiles(ref: string, filePath?: string): Promise<GitCommitFile[]> {
@@ -871,6 +922,63 @@ export function validateTagName(name: string): void {
 }
 function validatePath(filePath: string): void { if (!filePath || path.isAbsolute(filePath) || filePath.split(/[\\/]/).includes("..")) throw new CoreError("INVALID_REQUEST", "Invalid Git path"); }
 
+type LineHunk = { oldStart: number; oldLines: number; newStart: number; newLines: number };
+export function parseLineHunks(output: string): LineHunk[] {
+  const hunks: LineHunk[] = [];
+  for (const match of output.matchAll(/^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/gm)) hunks.push({ oldStart: Number(match[1]), oldLines: match[2] === undefined ? 1 : Number(match[2]), newStart: Number(match[3]), newLines: match[4] === undefined ? 1 : Number(match[4]) });
+  return hunks;
+}
+/**
+ * Maps a 1-based line range in the new text onto the old text. Edited lines map
+ * to the lines they replaced; purely added lines have no counterpart.
+ */
+export function mapLineRange(hunks: LineHunk[], startLine: number, endLine: number): { startLine: number; endLine: number } | undefined {
+  let first: number | undefined; let last: number | undefined;
+  const include = (from: number, to: number) => { first = Math.min(first ?? from, from); last = Math.max(last ?? to, to); };
+  for (let line = startLine; line <= endLine; line += 1) {
+    const hunk = hunks.find((item) => item.newLines > 0 && line >= item.newStart && line < item.newStart + item.newLines);
+    if (hunk) { if (hunk.oldLines > 0) include(hunk.oldStart, hunk.oldStart + hunk.oldLines - 1); continue; }
+    // A hunk lies before this line when all of its new lines (or, for a pure deletion, its anchor line) precede it.
+    const offset = hunks.filter((item) => item.newLines > 0 ? item.newStart + item.newLines - 1 < line : item.newStart < line).reduce((total, item) => total + item.oldLines - item.newLines, 0);
+    include(line + offset, line + offset);
+  }
+  return first === undefined || last === undefined ? undefined : { startLine: first, endLine: last };
+}
+function unquoteGitPath(value: string): string {
+  if (!value.startsWith('"')) return value;
+  const bytes: number[] = []; const body = value.slice(1, -1); const escapes: Record<string, number> = { n: 10, t: 9, '"': 34, "\\": 92, a: 7, b: 8, f: 12, r: 13, v: 11 };
+  for (let index = 0; index < body.length; index += 1) {
+    const character = body[index]!;
+    if (character !== "\\") { bytes.push(...Buffer.from(character)); continue; }
+    const octal = /^[0-7]{3}/.exec(body.slice(index + 1));
+    if (octal) { bytes.push(parseInt(octal[0], 8)); index += 3; } else { bytes.push(escapes[body[index + 1]!] ?? body.charCodeAt(index + 1)); index += 1; }
+  }
+  return Buffer.from(bytes).toString("utf8");
+}
+const commitFields = (header: string) => { const fields = header.split("\x1f"); return /^[0-9a-f]{40,64}$/i.test(fields[0] ?? "") ? { hash: fields[0]!, shortHash: fields[1] ?? "", author: fields[2] ?? "", date: fields[3] ?? "", subject: fields[4] ?? "" } : undefined; };
+/** `git log --follow -z --name-status`: each commit carries the path it changed, and the old path of a rename. */
+export function parseFollowLog(output: string): GitCommit[] {
+  const commits: GitCommit[] = [];
+  for (const chunk of output.split("\x1e")) {
+    const end = chunk.indexOf("\0"); const commit = commitFields(end < 0 ? chunk : chunk.slice(0, end)); if (!commit) continue;
+    const [status, firstPath, secondPath] = chunk.slice(end + 1).replace(/^\n/, "").split("\0").filter(Boolean);
+    const renamed = /^[RC]/.test(status ?? "") && secondPath;
+    commits.push({ ...commit, ...(firstPath ? { path: renamed ? secondPath : firstPath } : {}), ...(renamed ? { originalPath: firstPath } : {}) });
+  }
+  return commits;
+}
+/** `git log -L` with patches: each commit's path comes from its `---`/`+++` headers. */
+export function parseLineLog(output: string): GitCommit[] {
+  const commits: GitCommit[] = [];
+  for (const chunk of output.split("\x1e")) {
+    const newline = chunk.indexOf("\n"); const commit = commitFields((newline < 0 ? chunk : chunk.slice(0, newline)).trim()); if (!commit) continue;
+    const before = /^--- (?:a\/(.+)|("(?:[^"\\]|\\.)*")|\/dev\/null)$/m.exec(chunk); const after = /^\+\+\+ (?:b\/(.+)|("(?:[^"\\]|\\.)*")|\/dev\/null)$/m.exec(chunk);
+    const unq = (match: RegExpExecArray | null, prefix: string) => match?.[1] ?? (match?.[2] ? unquoteGitPath(match[2]).replace(new RegExp(`^${prefix}/`), "") : undefined);
+    const newPath = unq(after, "b"); const oldPath = unq(before, "a");
+    commits.push({ ...commit, ...(newPath ?? oldPath ? { path: (newPath ?? oldPath)! } : {}), ...(oldPath && newPath && oldPath !== newPath ? { originalPath: oldPath } : {}) });
+  }
+  return commits;
+}
 export function parseGitLog(output: string): GitCommit[] {
   const fields = output.split("\0"); const commits: GitCommit[] = [];
   for (let index = 0; index + 4 < fields.length; index += 5) {

@@ -10,14 +10,22 @@ import { GitCommitPatchDialog } from "./GitCommitPatchDialog";
 import { GitCompareDialog } from "./GitCompareDialog";
 import { GitMergeDialog } from "./GitMergeDialog";
 import { configureMonacoThemes, monacoTheme } from "./theme";
+import { gitRefNameError, requestConfirm, requestText } from "./dialogs";
 
-type Props = { client: CoreClient; height: number; onResizeStart(event: React.PointerEvent): void; onMergeConflict?(): void; onRepositoryChanged?(): void };
+/** `revision` changes whenever the repository changes (including Git used outside Vibe); the panel then reloads. */
+type Props = { client: CoreClient; height: number; revision?: number; onResizeStart(event: React.PointerEvent): void; onMergeConflict?(): void; onRepositoryChanged?(): void };
+const LOG_PAGE = 200;
 
-export function GitLogPanel({ client, height, onResizeStart, onMergeConflict, onRepositoryChanged }: Props) {
+export function GitLogPanel({ client, height, revision = 0, onResizeStart, onMergeConflict, onRepositoryChanged }: Props) {
   const [branches, setBranches] = useState<Branch[]>([]);
   const [tags, setTags] = useState<GitTag[]>([]);
   const [branch, setBranch] = useState("");
   const [commits, setCommits] = useState<GitCommit[]>([]);
+  const [hasMore, setHasMore] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const commitsRef = useRef(commits); commitsRef.current = commits;
+  const branchRef = useRef("");
+  const logGeneration = useRef(0);
   const [commit, setCommit] = useState<GitCommit>();
   const [files, setFiles] = useState<GitCommitFile[]>([]);
   const [file, setFile] = useState<GitCommitFile>();
@@ -49,12 +57,42 @@ export function GitLogPanel({ client, height, onResizeStart, onMergeConflict, on
     } catch (reason) { setError(reason instanceof Error ? reason.message : "Could not load branches"); }
     finally { setLoading(false); }
   };
+  /** Reloads from the newest commit, keeping at least as many commits as are loaded now. */
+  const reloadLog = async (count = LOG_PAGE) => {
+    const target = branchRef.current; if (!target) return;
+    const generation = ++logGeneration.current;
+    const result = await client.request("git.log", { branch: target, limit: Math.max(LOG_PAGE, count) });
+    if (generation !== logGeneration.current) return;
+    setCommits(result.commits); setHasMore(result.hasMore); setError("");
+  };
+  const loadMore = async () => {
+    const target = branchRef.current;
+    if (!target || !hasMore || loadingMore) return;
+    const generation = logGeneration.current;
+    setLoadingMore(true);
+    try {
+      const result = await client.request("git.log", { branch: target, limit: LOG_PAGE, skip: commitsRef.current.length });
+      if (generation !== logGeneration.current) return;
+      // History may have moved since the last page; never show a commit twice.
+      setCommits((current) => { const seen = new Set(current.map((item) => item.hash)); return [...current, ...result.commits.filter((item) => !seen.has(item.hash))]; });
+      setHasMore(result.hasMore);
+    } catch (reason) { setError(reason instanceof Error ? reason.message : "Could not load more commits"); }
+    finally { setLoadingMore(false); }
+  };
   useEffect(() => { void loadBranches(); }, [client]);
   useEffect(() => {
+    branchRef.current = branch;
     if (!branch) return;
-    setLoading(true); setCommit(undefined); setFiles([]); setFile(undefined); setDiff(undefined);
-    void client.request("git.log", { branch, limit: 300 }).then((result) => { setCommits(result.commits); setError(""); }).catch((reason: unknown) => setError(reason instanceof Error ? reason.message : "Could not load Git log")).finally(() => setLoading(false));
+    setLoading(true); setCommits([]); setHasMore(false); setCommit(undefined); setFiles([]); setFile(undefined); setDiff(undefined);
+    void reloadLog().catch((reason: unknown) => setError(reason instanceof Error ? reason.message : "Could not load Git log")).finally(() => setLoading(false));
   }, [branch, client]);
+  // Follow commits, checkouts, pushes and fetches made anywhere, without losing loaded pages.
+  const firstRevision = useRef(revision);
+  useEffect(() => {
+    if (revision === firstRevision.current) return;
+    void loadBranches();
+    void reloadLog(commitsRef.current.length).catch(() => undefined);
+  }, [revision]);
 
   const selectCommit = async (selected: GitCommit) => {
     setCommit(selected); setFile(undefined); setDiff(undefined);
@@ -72,23 +110,22 @@ export function GitLogPanel({ client, height, onResizeStart, onMergeConflict, on
     try {
       await client.request("git.cherryPick", { hash, commit: createCommit });
       if (createCommit) {
-        const result = await client.request("git.log", { branch, limit: 300 });
-        setCommits(result.commits);
+        await reloadLog(commitsRef.current.length);
       }
     } catch (reason) { setError(reason instanceof Error ? reason.message : `Could not ${createCommit ? "cherry-pick" : "apply"} commit`); }
     finally { onRepositoryChanged?.(); setLoading(false); }
   };
   const createTag = async () => {
     if (!commit) return;
-    const name = window.prompt(`Create a local tag at ${commit.shortHash}. This stays local; it will not be pushed.`, "");
-    if (!name?.trim()) return;
+    const name = await requestText({ title: "Create tag", message: `Create a local tag at ${commit.shortHash} “${commit.subject}”. It stays local and is not pushed.`, label: "Tag name", placeholder: "v1.0.0", validate: (value) => gitRefNameError(value) ?? (tags.some((tag) => tag.name === value) ? "This tag already exists" : undefined), confirmLabel: "Create tag" });
+    if (!name) return;
     setLoading(true); setError("");
-    try { const result = await client.request("git.createTag", { name: name.trim(), target: commit.hash }); setTags((current) => [...current.filter((tag) => tag.name !== result.tag.name), result.tag].sort((left, right) => left.name.localeCompare(right.name))); }
+    try { const result = await client.request("git.createTag", { name, target: commit.hash }); setTags((current) => [...current.filter((tag) => tag.name !== result.tag.name), result.tag].sort((left, right) => left.name.localeCompare(right.name))); }
     catch (reason) { setError(reason instanceof Error ? reason.message : "Could not create local tag"); }
     finally { setLoading(false); }
   };
   const deleteTag = async (name: string) => {
-    if (!window.confirm(`Delete local tag '${name}'? This does not delete or change any remote tag.`)) return;
+    if (!await requestConfirm({ title: "Delete tag?", message: `Delete local tag ${name}? Remote tags are not changed.`, confirmLabel: "Delete", danger: true })) return;
     setLoading(true); setError(""); setMenu(undefined);
     try { await client.request("git.deleteTag", { name }); setTags((current) => current.filter((tag) => tag.name !== name)); if (branch === name) setBranch(""); }
     catch (reason) { setError(reason instanceof Error ? reason.message : "Could not delete local tag"); }
@@ -107,7 +144,7 @@ export function GitLogPanel({ client, height, onResizeStart, onMergeConflict, on
       const result = await client.request("git.merge", { source: mergePreview.source, expectedHead: mergePreview.head, expectedRefHead: mergePreview.refHead, expectedMergeBase: mergePreview.mergeBase });
       setMergePreview(undefined); onRepositoryChanged?.();
       if (result.state === "conflicts") onMergeConflict?.();
-      else { const refreshed = await client.request("git.log", { branch, limit: 300 }); setCommits(refreshed.commits); }
+      else await reloadLog(commitsRef.current.length);
     } catch (reason) { setError(reason instanceof Error ? reason.message : "Could not merge ref"); }
     finally { setLoading(false); }
   };
@@ -115,7 +152,7 @@ export function GitLogPanel({ client, height, onResizeStart, onMergeConflict, on
   return <section className="git-log-panel" style={{ height }}>
     <div className="terminal-resize-handle" onPointerDown={onResizeStart} />
     <aside className="git-log-branches"><header><span>Refs</span><button title="Refresh branches and local tags" disabled={loading} onClick={() => void loadBranches()}><RefreshCw size={13} /></button></header><label className="git-branch-search"><Search size={12} /><input value={branchQuery} onChange={(event) => setBranchQuery(event.target.value)} placeholder="Find branch or tag" /></label><div className="git-branch-tree"><BranchGroup title="Local branches" branches={visibleBranches.filter((item) => !item.remote)} selected={branch} onSelect={setBranch} onContextMenu={(event, item) => { event.preventDefault(); setMenu({ x: event.clientX, y: event.clientY, reference: item.name, label: item.name, mergeSource: { kind: "local-branch", name: item.name } }); }} /><BranchGroup title="Remote branches" branches={visibleBranches.filter((item) => item.remote)} selected={branch} onSelect={setBranch} onContextMenu={(event, item) => { event.preventDefault(); setMenu({ x: event.clientX, y: event.clientY, reference: item.name, label: item.name, mergeSource: { kind: "remote-branch", name: item.name } }); }} /><TagGroup tags={tags.filter((item) => item.name.toLowerCase().includes(branchQuery.trim().toLowerCase()))} selected={branch} disabled={loading || !commit} onSelect={setBranch} onCreate={() => void createTag()} onContextMenu={(event, item) => { event.preventDefault(); setMenu({ x: event.clientX, y: event.clientY, reference: item.name, label: item.name, tag: true, mergeSource: { kind: "tag", name: item.name } }); }} /></div></aside>
-    <section className="git-log-commits"><header><span>Log {branch}</span><label className="git-commit-search"><Search size={12} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search commits" /></label></header><div>{filteredCommits.map((item) => <button className={commit?.hash === item.hash ? "selected" : ""} key={item.hash} onClick={() => void selectCommit(item)} onContextMenu={(event) => { event.preventDefault(); setMenu({ x: event.clientX, y: event.clientY, reference: item.hash, label: `${item.shortHash} ${item.subject}`, commit: true }); }}><CommitGraph row={graph.rows.get(item.hash)} width={graph.width} hoveredLane={hoveredLane} onHover={setHoveredLane} /><span className="commit-subject"><span>{item.subject}</span>{item.refs?.map((ref) => <small className="commit-ref" key={ref}>{ref}</small>)}</span><span className="commit-meta">{item.shortHash} · {item.author}</span><time>{new Date(item.date).toLocaleString()}</time></button>)}</div></section>
+    <section className="git-log-commits"><header><span>Log {branch}</span><label className="git-commit-search"><Search size={12} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search commits" /></label></header><div onScroll={(event) => { const list = event.currentTarget; if (list.scrollTop + list.clientHeight > list.scrollHeight - 240) void loadMore(); }}>{filteredCommits.map((item) => <button className={commit?.hash === item.hash ? "selected" : ""} key={item.hash} onClick={() => void selectCommit(item)} onContextMenu={(event) => { event.preventDefault(); setMenu({ x: event.clientX, y: event.clientY, reference: item.hash, label: `${item.shortHash} ${item.subject}`, commit: true }); }}><CommitGraph row={graph.rows.get(item.hash)} width={graph.width} hoveredLane={hoveredLane} onHover={setHoveredLane} /><span className="commit-subject"><span>{item.subject}</span>{item.refs?.map((ref) => <small className="commit-ref" key={ref}>{ref}</small>)}</span><span className="commit-meta">{item.shortHash} · {item.author}</span><time>{new Date(item.date).toLocaleString()}</time></button>)}{(hasMore || loadingMore) && <div className="git-log-more">{loadingMore ? <span role="status">Loading more commits…</span> : <button type="button" onClick={() => void loadMore()}>{query.trim() ? `Search older commits (${commits.length} loaded)` : "Load more commits"}</button>}</div>}{!hasMore && !loadingMore && commits.length > LOG_PAGE && <div className="git-log-more"><span>Beginning of history · {commits.length} commits</span></div>}</div></section>
     <section className="git-log-details"><header>{commit ? <><span>{commit.subject}</span><code>{commit.shortHash}</code></> : <span>Commit details</span>}</header>{error && <div className="git-log-error">{error}</div>}<div className="commit-files">{files.map((item) => <button className={file?.path === item.path ? "selected" : ""} key={`${item.status}:${item.path}`} onClick={() => void selectFile(item)} onContextMenu={(event) => { event.preventDefault(); if (commit) setMenu({ x: event.clientX, y: event.clientY, reference: commit.hash, label: `${commit.shortHash} · ${item.path}`, path: item.path }); }}><FileDiff size={13} /><span>{item.path}</span><code>{item.status}</code></button>)}</div><div className="commit-diff">{file && diff ? <><DiffEditor original={diff.originalContent} modified={diff.modifiedContent} language={languageFor(file.path)} beforeMount={configureMonacoThemes} theme={monacoTheme()} onMount={(instance) => { diffEditorRef.current = instance; }} options={{ automaticLayout: true, readOnly: true, renderSideBySide: false, minimap: { enabled: false }, fontSize: 11, scrollBeyondLastLine: false }} /><DiffNavigation editorRef={diffEditorRef} /></> : <div className="git-log-empty">{commit ? "Select a changed file" : "Select a commit"}</div>}</div></section>
     {menu && <div className="context-menu-layer" onMouseDown={() => setMenu(undefined)}><ContextMenu className="context-menu" style={{ left: Math.min(menu.x, window.innerWidth - 220), top: Math.min(menu.y, window.innerHeight - (menu.commit ? 210 : 110)) }} onMouseDown={(event) => event.stopPropagation()}>{menu.commit && <><button onClick={() => copy(menu.reference, "commit hash")}><ClipboardCopy size={14} /><span>Copy Commit Hash</span></button><button onClick={() => copyMessage(menu.reference)}><ClipboardCopy size={14} /><span>Copy Commit Message</span></button><button disabled={loading} onClick={() => void applyCommit(menu.reference, true)}><GitCommitVertical size={14} /><span>Cherry-pick Commit</span></button><button disabled={loading} onClick={() => { setPatchCommit({ hash: menu.reference, label: menu.label }); setMenu(undefined); }}><ClipboardPaste size={14} /><span>Apply Selected Commit Changes…</span></button><button disabled={loading} title="Apply this commit’s changes to the working tree and index without creating a commit" onClick={() => void applyCommit(menu.reference, false)}><ClipboardPaste size={14} /><span>Apply Whole Commit Without Committing</span></button></>}{menu.mergeSource && <button disabled={loading} onClick={() => void previewMerge(menu.mergeSource!)}><GitMerge size={14} /><span>Merge into Current Branch…</span></button>}<button onClick={() => { setCompare({ reference: menu.reference, label: menu.label, ...(menu.path ? { path: menu.path } : {}) }); setMenu(undefined); }}><GitCompareArrows size={14} /><span>Compare with Local</span></button>{menu.tag && <button className="danger" disabled={loading} onClick={() => void deleteTag(menu.reference)}><Trash2 size={14} /><span>Delete local tag</span></button>}</ContextMenu></div>}
     {patchCommit && <GitCommitPatchDialog client={client} hash={patchCommit.hash} label={patchCommit.label} onClose={() => setPatchCommit(undefined)} onApplied={() => onRepositoryChanged?.()} />}

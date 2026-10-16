@@ -27,6 +27,7 @@ import { WorkspaceSearch } from "./search.js";
 import { JavaProjectService } from "./java.js";
 import { JdtLanguageService } from "./jdtls.js";
 import { toolInstallations } from "./tools.js";
+import { watchGitState } from "./git-watch.js";
 import { WorkspaceTaskStore } from "./tasks.js";
 import { ServerStorage } from "./storage.js";
 import { UsefulFilesStore } from "./useful-files.js";
@@ -439,8 +440,7 @@ export async function createServer(host: string, port: number, workspacePath: st
     bridgeCommands.add(pending);
     void pending.finally(() => bridgeCommands.delete(pending)).catch((error) => console.error("[core] App command cleanup failed", error));
   });
-  const gitIndexWatcher = chokidar.watch(await gitIndexPath(workspace), { ignoreInitial: true });
-  gitIndexWatcher.on("all", () => {
+  const gitIndexWatcher = await watchGitState(workspace, () => {
     const encoded = JSON.stringify({ type: "git.changed", payload: { rootId: roots.primary().id } } satisfies ServerEvent);
     for (const socket of activeSessions) sendWebSocketData(socket, encoded);
   });
@@ -567,8 +567,7 @@ export async function createServer(host: string, port: number, workspacePath: st
         .on("error", (error) => batcher.degrade(`Filesystem watcher degraded: ${String(error)}`));
       let switchedGitIndexWatcher: ReturnType<typeof chokidar.watch> | undefined;
       try {
-        switchedGitIndexWatcher = chokidar.watch(await gitIndexPath(nextWorkspace), { ignoreInitial: true });
-        switchedGitIndexWatcher.on("all", () => {
+        switchedGitIndexWatcher = await watchGitState(nextWorkspace, () => {
           sendWebSocketData(socket, JSON.stringify({ type: "git.changed", payload: { rootId: ownerRootId } } satisfies ServerEvent));
         });
         return { watcher: switchedWatcher, gitWatcher: switchedGitIndexWatcher, batcher };
@@ -782,11 +781,6 @@ export async function createServer(host: string, port: number, workspacePath: st
     throw error;
   }
   return server;
-}
-
-async function gitIndexPath(workspace: string): Promise<string> {
-  const value = (await execFileAsync("git", ["-C", workspace, "rev-parse", "--git-path", "index"], { encoding: "utf8" })).stdout.trim();
-  return path.isAbsolute(value) ? value : path.resolve(workspace, value);
 }
 
 function parseRequest(data: RawData): Request {
@@ -1206,7 +1200,7 @@ async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStor
     }
     case "git.publishBranch": await git.publishBranch(request.payload.branch, request.payload.remote, request.payload.force, request.payload.confirm); return {};
     case "git.setBranchUpstream": await git.setBranchUpstream(request.payload.branch, request.payload.remote, request.payload.upstream, request.payload.confirm); return {};
-    case "git.log": return { commits: await git.log(request.payload.branch, request.payload.limit) };
+    case "git.log": return git.log(request.payload.branch, request.payload.limit, request.payload.skip);
     case "git.mergePreview": return git.mergePreview(request.payload.source);
     case "git.merge": return git.merge(request.payload.source, request.payload.expectedHead, request.payload.expectedRefHead, request.payload.expectedMergeBase);
     case "git.commitFiles": return { files: await git.commitFiles(request.payload.hash) };
@@ -1217,7 +1211,8 @@ async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStor
     case "git.saveCommitWorktreeResults": return git.saveCommitWorktreeResults(request.payload.hash, request.payload.files, filesystem);
     case "git.commitPatch": return git.commitPatch(request.payload.hash);
     case "git.applyCommitHunks": return git.applyCommitHunks(request.payload.hash, request.payload.indexVersion, request.payload.hunkIds);
-    case "git.fileHistory": return { commits: await git.fileHistory(request.payload.path, request.payload.startLine, request.payload.endLine) };
+    case "git.fileHistory": return git.fileHistory(request.payload.path, request.payload.startLine, request.payload.endLine, typeof request.payload.content === "string" ? request.payload.content : undefined);
+    case "git.ignore": return { file: await git.ignore(request.payload.path) };
     case "git.compareFiles": return { files: await git.compareFiles(request.payload.ref, request.payload.path) };
     case "git.compareDiff": return git.compareDiff(request.payload.ref, request.payload.path, filesystem, request.payload.originalPath);
     case "git.rollback": await git.rollback(request.payload.path); return {};

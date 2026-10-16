@@ -1,3 +1,4 @@
+import { requestConfirm } from "./dialogs";
 import { useEffect, useState } from "react";
 import { Check, FileCode2, GitMerge, X } from "lucide-react";
 import type { GitConflictWorkspace } from "@remote-ide/protocol";
@@ -33,7 +34,7 @@ export function GitConflictWorkspaceDialog({ client, initialPath, onClose, onCha
     } catch (reason) { setError(message(reason)); } finally { setBusy(false); }
   };
   const act = async (action: "continue" | "abort") => {
-    if (action === "abort" && !confirm(`Abort this ${workspace?.operation}? Git will return to its pre-operation state.`)) return;
+    if (action === "abort" && !await requestConfirm({ title: `Abort ${workspace?.operation}?`, message: `Abort this ${workspace?.operation}? Git returns to its pre-operation state.`, confirmLabel: "Abort", danger: true })) return;
     setBusy(true); setError("");
     try { await client.request("git.conflictAction", { action }); onChanged(); onClose(); }
     catch (reason) {

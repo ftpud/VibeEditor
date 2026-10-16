@@ -91,7 +91,7 @@ export type GitBranch = { name: string; current: boolean; remote: boolean };
 export type GitBranchDeletePreview = { branch: string; remote: boolean; unmerged: GitCommit[]; confirmationRequired: boolean };
 /** A tag stored in this workspace's local Git repository. It is not a remote tag operation. */
 export type GitTag = { name: string; target: string; annotated: boolean };
-export type GitCommit = { hash: string; shortHash: string; author: string; date: string; subject: string; parents?: string[]; refs?: string[]; graph?: string };
+export type GitCommit = { hash: string; shortHash: string; author: string; date: string; subject: string; parents?: string[]; refs?: string[]; graph?: string; /** File histories: the file's path at this commit, and its previous path when the commit renamed it. */ path?: string; originalPath?: string };
 export type GitMergeRef = { kind: "local-branch" | "remote-branch" | "tag"; name: string };
 export type GitMergeOutcome = "already-merged" | "fast-forward" | "merge-commit";
 /** A bounded, Core-authoritative local merge preview. The ref identity must be supplied unchanged when applying it. */
@@ -566,7 +566,7 @@ export type ProtocolOperations = {
   "git.deleteBranch": { payload: { branch: string; remote: boolean; force: boolean; confirm: boolean }; result: Record<string, never> };
   "git.publishBranch": { payload: { branch: string; remote: string; force: boolean; confirm: boolean }; result: Record<string, never> };
   "git.setBranchUpstream": { payload: { branch: string; remote: string; upstream: string; confirm: boolean }; result: Record<string, never> };
-  "git.log": { payload: { branch: string; limit?: number }; result: { commits: GitCommit[] } };
+  "git.log": { payload: { branch: string; limit?: number; /** Commits to skip, for loading further pages. */ skip?: number }; result: { commits: GitCommit[]; hasMore: boolean } };
   "git.mergePreview": { payload: { source: GitMergeRef }; result: GitMergePreview };
   "git.merge": { payload: { source: GitMergeRef; expectedHead: string; expectedRefHead: string; expectedMergeBase: string }; result: GitMergeResult };
   "git.commitFiles": { payload: { hash: string }; result: { files: GitCommitFile[] } };
@@ -577,7 +577,9 @@ export type ProtocolOperations = {
   "git.saveCommitWorktreeResults": { payload: { hash: string; files: { path: string; content: string | null; expectedRevision?: FileRevision }[] }; result: { applied: number } };
   "git.commitPatch": { payload: { hash: string }; result: GitCommitPatch };
   "git.applyCommitHunks": { payload: { hash: string; indexVersion: string; hunkIds: string[] }; result: { applied: number } };
-  "git.fileHistory": { payload: { path: string; startLine?: number; endLine?: number }; result: { commits: GitCommit[] } };
+  "git.fileHistory": { payload: { path: string; startLine?: number; endLine?: number; /** Editor buffer the line range refers to; it is mapped onto committed lines. */ content?: string }; result: { commits: GitCommit[]; /** Committed line range actually traced, when it differs from the request. */ range?: { startLine: number; endLine: number }; note?: string } };
+  /** Appends a path to the repository's root .gitignore. */
+  "git.ignore": { payload: { path: string }; result: { file: string } };
   "git.compareFiles": { payload: { ref: string; path?: string }; result: { files: GitCommitFile[] } };
   "git.compareDiff": { payload: { ref: string; path: string; originalPath?: string }; result: { originalContent: string; modifiedContent: string } };
   "git.rollback": { payload: { path: string }; result: Record<string, never> };
@@ -940,6 +942,7 @@ const requestTypeRegistry: Record<RequestType, true> = {
   "git.commitPatch": true,
   "git.applyCommitHunks": true,
   "git.fileHistory": true,
+  "git.ignore": true,
   "git.compareFiles": true,
   "git.compareDiff": true,
   "git.rollback": true,
