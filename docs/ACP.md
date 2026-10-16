@@ -1,6 +1,6 @@
 # ACP: the AI provider abstraction
 
-Vibe Editor uses one interface for Codex and GitHub Copilot. Core handles each
+Vibe Editor uses one interface for Codex, GitHub Copilot, and Claude. Core handles each
 provider through `AcpProvider`; Desktop reads the provider's capabilities and
 settings to build the AI controls. Adding a provider should not require special
 cases in the UI or shared protocol.
@@ -24,6 +24,8 @@ Codex ACP may lag the Codex CLI release. The root npm override keeps ACP's bundl
 Core checks npm's `latest` versions of `@agentclientprotocol/codex-acp` and `@openai/codex` in the background during startup by default, so registry requests and installation do not delay the Core listener or Gateway health checks. Sessions started before an update completes use the cached or bundled runtime; later sessions use the completed update. Set `REMOTE_IDE_CODEX_AUTO_UPDATE=0` to disable updates and use the bundled runtime installed from the project lockfile. With updates enabled, changed versions are installed into a new directory under `~/.remote-ide/codex-runtime`; a completed installation is selected atomically. Both ACP sessions and quota reads use the selected runtime. Registry requests have a 15-second fetch timeout and each npm command has a 60-second limit. An offline or failed update logs a warning and retains the previous cached runtime, or the bundled dependency on first startup. `REMOTE_IDE_CODEX_RUNTIME_DIR` relocates the cache. An explicit `CODEX_PATH` still overrides the Codex binary for ACP sessions. Model access depends on the account and what the agent advertises.
 
 Copilot discovers models from ACP configuration metadata, including the premium-request multiplier, cost tier, and availability published in the model option's `_meta`. Stored model and reasoning choices are passed at server launch and are also applied when their dynamic ACP options arrive. Copilot exposes a client-owned Autopilot toggle. When enabled, Core selects an advertised allow option for ACP tool permission requests; it prefers allow-once so disabling Autopilot restores prompting for subsequent requests. Enabling it during a pending permission request also approves that request without restarting the session. A per-session AI-credit ceiling remains available. Copilot documents quota details in interactive `/usage`; the shared usage view displays the context and latest-turn token data ACP reports.
+
+Claude runs through `@agentclientprotocol/claude-agent-acp`, an npm dependency of Core that bundles the Claude Code CLI through the Claude Agent SDK. It uses the existing Claude Code login on the Core host (or `ANTHROPIC_API_KEY`, Bedrock and Vertex variables in Core's environment). Models, effort levels, and extra switches such as fast mode come from the agent's ACP configuration options. The permission mode (Manual, Accept edits, Plan, Auto, Bypass permissions) is applied as a session-scoped ACP mode; modes the agent does not advertise for a session are skipped with a warning. Claude also exposes the client-owned Autopilot toggle. `CLAUDE_CODE_EXECUTABLE` overrides the bundled CLI and `CLAUDE_AGENT_ACP_PATH` overrides the adapter entry point.
 
 ## Model catalogue metadata
 

@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import type { AiConfiguration, AiModel, AiProviderDescriptor, AiSession } from "@remote-ide/acp";
 import { CodexSessionManager } from "./codex.js";
 import { CopilotSessionManager } from "./copilot.js";
+import { ClaudeSessionManager } from "./claude.js";
 import { StdioAcpProvider, type AcpTurnObserver } from "../stdio-provider.js";
 import { SkillsStore } from "../../skills.js";
 import { AcpRegistry } from "../acp.js";
@@ -342,6 +343,14 @@ describe("ACP integration", () => {
   it("passes server-scoped Copilot model and reasoning configuration at launch", () => {
     const command = new CopilotSessionManager(() => undefined)["command"]({ model: "claude-haiku-4.5", reasoning: "medium", maxAiCredits: 5 });
     expect(command.args).toEqual(["--acp", "--stdio", "--model=claude-haiku-4.5", "--reasoning-effort=medium", "--max-ai-credits=5"]);
+  });
+
+  it("launches the bundled Claude ACP adapter with session-scoped permission modes", () => {
+    const claude = new ClaudeSessionManager(() => undefined);
+    const command = claude["command"]({ mode: "plan" });
+    expect(command.command).toBe(process.execPath);
+    expect(command.args[0]).toMatch(/claude-agent-acp[\\/]dist[\\/]index\.js$/);
+    expect(claude.descriptor.options.find((option) => option.id === "mode")?.choices?.map((choice) => choice.value)).toContain("plan");
   });
 
   it("configures Codex web search with the supported top-level key", () => {

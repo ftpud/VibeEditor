@@ -53,7 +53,7 @@ Vibe Editor is a remote-workspace IDE: an Electron/React/Monaco desktop client t
 
 ## AI Integration
 
-- Pluggable **AI Capability Provider (ACP)** layer with adapters for **Codex ACP** (an npm dependency, with a managed runtime update cache) and **GitHub Copilot CLI** over Agent Client Protocol.
+- Pluggable **AI Capability Provider (ACP)** layer with adapters for **Codex ACP** (an npm dependency, with a managed runtime update cache) **GitHub Copilot CLI**, and **Claude** (via `@agentclientprotocol/claude-agent-acp`) over Agent Client Protocol.
 - Providers declare supported models, reasoning levels, extra controls, usage reporting, MCP server support, and custom-agent support; the AI panel UI is generated from those capabilities.
 - Global, repository-local, and workspace `.agents` presets with editable Markdown templates, automatic `.agents` discovery, and a persisted per-task agent selector.
 - Searchable model picker showing each model's request-cost multiplier, context window, description, reasoning levels, input modalities, and availability as advertised by the agent.

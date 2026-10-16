@@ -11,6 +11,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@agentclientprotocol/claude-agent-acp": "^0.89.1",
     "@agentclientprotocol/codex-acp": "^1.13.0",
     "@agentclientprotocol/sdk": "^1.4.0",
     "@remote-ide/acp": "0.1.0",
