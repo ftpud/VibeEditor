@@ -59,7 +59,9 @@ for (const kind of ['desktop', 'gateway']) {
   // staging tree before building Gateway, which also embeds the complete Desktop.
   await rm(staging, { recursive: true, force: true });
   const executable = process.platform === 'darwin' ? path.join(built, `${name}.app/Contents/MacOS`, name) : path.join(built, `${name}.exe`);
-  await smokeApplication(executable, kind === 'gateway' ? ['--bundle-core-smoke-test'] : []);
+  // Local Core only exists for Core targets (Linux, Apple Silicon); Windows Gateway uses WSL or SSH hosts.
+  const localCore = Boolean(cores[`${process.platform}-${process.arch}`]);
+  await smokeApplication(executable, kind === 'gateway' && localCore ? ['--bundle-core-smoke-test'] : []);
   // The embedded Editor must start on Gateway's runtime.
   if (kind === 'gateway') await smokeApplication(executable, ['--vibe-editor']);
   if (kind === 'desktop') desktopBundle = process.platform === 'darwin' ? path.join(built, `${name}.app/Contents/Resources/app`) : path.join(built, 'resources/app');

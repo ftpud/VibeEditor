@@ -363,7 +363,8 @@ describe("HarnessPanel", () => {
 
   it("persists the configured workflow concurrency", async () => {
     const { onSave } = renderZoomHarness();
-    fireEvent.click(screen.getByText("Execution settings"));
+    // Workflow settings live in the inspector when nothing is selected.
+    expect(screen.getByRole("region", { name: "Workflow settings" })).toBeTruthy();
     fireEvent.change(screen.getByLabelText("Workflow concurrency"), { target: { value: "2" } });
     fireEvent.change(screen.getByLabelText("Workflow active run limit"), { target: { value: "3" } });
     fireEvent.change(screen.getByLabelText("Workflow block attempt limit"), { target: { value: "20" } });
@@ -668,7 +669,7 @@ describe("HarnessPanel", () => {
     renderEditor(<HarnessPanel harnesses={[harness]} runs={[]} providers={[]} agents={[]} onCreate={vi.fn()} onSave={onSave} onDelete={vi.fn()} onRun={vi.fn()} onCancelRun={vi.fn()} onError={vi.fn()} />);
 
     fireEvent.click(await screen.findByRole("button", { name: "Select connection: Plan then Build" }));
-    expect(screen.getByText(/Selected connection:/).textContent).toContain("Plan → Build");
+    expect(screen.getByRole("region", { name: "Connection settings" }).textContent).toContain("Plan → Build");
     fireEvent.keyDown(window, { key: "Delete" });
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
 

@@ -13,6 +13,7 @@ import { SkillsStore } from "../../skills.js";
 import { AcpRegistry } from "../acp.js";
 
 const FAKE_AGENT = fileURLToPath(new URL("./fake-acp-agent.py", import.meta.url));
+const FAKE_V2_AGENT = fileURLToPath(new URL("./fake-acp-agent-v2.mjs", import.meta.url));
 const fakeProviders = new Set<StdioAcpProvider>();
 
 class FakeProvider extends StdioAcpProvider {
@@ -181,6 +182,53 @@ describe("ACP integration", () => {
     const registry = new AcpRegistry().register(new CodexSessionManager(() => undefined));
     expect(registry.list().map((provider) => provider.id)).toEqual(["codex"]);
     expect(() => registry.get("missing")).toThrow("Unknown AI provider");
+  });
+
+  it("runs a whole turn over the experimental ACP v2 protocol and rejects agents that only speak v1", async () => {
+    class FakeV2Provider extends FakeProvider {
+      protected command(_configuration: AiConfiguration) { return { command: process.execPath, args: [FAKE_V2_AGENT], env: this.v2Env }; }
+      protected async protocol() { return "v2" as const; }
+      constructor(state: string, private readonly v2Env: NodeJS.ProcessEnv = { FAKE_V2_REQUIRE_MCP: "1" }) { super(() => undefined, state); }
+    }
+    const state = await mkdtemp(path.join(os.tmpdir(), "remote-ide-ai-v2-"));
+    const workspace = process.cwd();
+    const provider = new FakeV2Provider(state);
+    // Vibe always passes its own stdio tool servers; v2 agents reject them unless typed.
+    await provider.send(workspace, { prompt: "ping", configuration: { model: "model-b" }, mcpServers: [{ name: "vibe-tools", command: process.execPath, args: ["-e", "0"] }] });
+    const session = await settle(provider, workspace);
+    expect(session.failure).toBeUndefined();
+    expect(session.status).toBe("done");
+    // The whole-message upsert extends the streamed "Hello" chunk; the prompt arrives after Vibe's skill catalogue.
+    const assistant = session.messages.filter((message) => message.role === "assistant").map((message) => message.text).join("");
+    expect(assistant).toMatch(/^Hello from v2: [\s\S]*ping$/);
+    expect(session.messages.find((message) => message.id === "tool-1")?.text).toContain("Run echo");
+    expect(session.tokens).toMatchObject({ total: 30, input: 10, output: 20 });
+    await provider.shutdown();
+    const v1Only = new FakeV2Provider(await mkdtemp(path.join(os.tmpdir(), "remote-ide-ai-v2-only-v1-")), { FAKE_V2_ONLY_V1: "1" });
+    await expect(v1Only.send(workspace, { prompt: "ping", configuration: {} })).rejects.toThrow("does not support ACP v2");
+  });
+
+  it("withholds credential variables from the agent when the provider uses its own sign-in", async () => {
+    class CredentialProvider extends FakeProvider {
+      withheld: string[] = [];
+      protected command(_configuration: AiConfiguration) { return { command: process.execPath, args: [FAKE_V2_AGENT], env: {} }; }
+      protected async protocol() { return "v2" as const; }
+      protected async withheldEnv() { return this.withheld; }
+    }
+    vi.stubEnv("FAKE_SECRET", "sk-test");
+    try {
+      const workspace = process.cwd();
+      const inherits = new CredentialProvider(() => undefined, await mkdtemp(path.join(os.tmpdir(), "remote-ide-ai-credentials-")));
+      await inherits.send(workspace, { prompt: "ping", configuration: {} });
+      expect((await settle(inherits, workspace)).messages.map((message) => message.text).join("")).toContain("(secret visible)");
+      await inherits.shutdown();
+      const login = new CredentialProvider(() => undefined, await mkdtemp(path.join(os.tmpdir(), "remote-ide-ai-credentials-login-")));
+      login.withheld = ["FAKE_SECRET"];
+      await login.send(workspace, { prompt: "ping", configuration: {} });
+      const session = await settle(login, workspace);
+      expect(session.status).toBe("done");
+      expect(session.messages.map((message) => message.text).join("")).not.toContain("(secret visible)");
+    } finally { vi.unstubAllEnvs(); }
   });
 
   it("coalesces streamed chunks that carry no message id into one message per segment", async () => {

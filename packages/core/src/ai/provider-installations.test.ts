@@ -11,7 +11,7 @@ async function fixture(versions: string[]) {
   const root = await mkdtemp(path.join(os.tmpdir(), "vibe-provider-installations-")); directories.push(root);
   const published = [...versions];
   const npm = {
-    latest: vi.fn(async () => { const version = published[0]; if (!version) throw new Error("offline"); return version; }),
+    latest: vi.fn(async (_name: string, _tag?: string) => { const version = published[0]; if (!version) throw new Error("offline"); return version; }),
     install: vi.fn(async (directory: string, specifier: string) => {
       const version = specifier.slice(specifier.lastIndexOf("@") + 1);
       const target = path.join(directory, "node_modules", spec.package);
@@ -64,4 +64,40 @@ it("removes managed installations and refuses to manage Core-host overrides", as
   const external = { ...spec, override: () => "/usr/local/bin/codex-acp" };
   expect(await installations.state("codex", external)).toMatchObject({ status: "installed", source: "external", location: "/usr/local/bin/codex-acp" });
   expect(() => installations.uninstall("codex", external)).toThrow("Core-host override");
+});
+
+it("stores the ACP protocol per provider and installs v2 from its release channel", async () => {
+  const { installations, npm } = await fixture(["1.0.0"]);
+  npm.latest.mockImplementation(async (_name: string, tag = "latest") => tag === "preview" ? "2.0.0-preview.3" : "1.0.0");
+  const v2 = { ...spec, protocols: { v2: { distTag: "preview" } } };
+  expect(await installations.state("codex", v2)).toMatchObject({ protocol: "v1", protocols: ["v1", "v2"] });
+  expect(await installations.state("codex", spec)).not.toHaveProperty("protocols");
+  await installations.install("codex", v2);
+  expect(npm.install.mock.calls.at(-1)?.[1]).toBe("@agentclientprotocol/codex-acp@1.0.0");
+  await installations.setProtocol("codex", "v2");
+  expect(await installations.state("codex", v2, true)).toMatchObject({ protocol: "v2", channel: "preview", version: "1.0.0", latestVersion: "2.0.0-preview.3" });
+  await installations.install("codex", v2);
+  expect(npm.latest).toHaveBeenLastCalledWith("@agentclientprotocol/codex-acp", "preview");
+  expect(npm.install.mock.calls.at(-1)?.[1]).toBe("@agentclientprotocol/codex-acp@2.0.0-preview.3");
+  // Deleting the agent keeps the choice for a later reinstall.
+  await installations.uninstall("codex", v2);
+  expect(await installations.protocol("codex")).toBe("v2");
+});
+
+it("keeps API-key credentials by default and withholds them when the provider should use its own sign-in", async () => {
+  const { installations } = await fixture(["1.0.0"]);
+  const claude = { ...spec, credentialEnv: ["VIBE_TEST_API_KEY", "VIBE_TEST_AUTH_TOKEN"] };
+  const previous = process.env.VIBE_TEST_API_KEY;
+  process.env.VIBE_TEST_API_KEY = "secret";
+  try {
+    expect(await installations.state("claude", claude)).toMatchObject({ credentials: "environment", credentialVariables: ["VIBE_TEST_API_KEY", "VIBE_TEST_AUTH_TOKEN"], credentialVariablesSet: ["VIBE_TEST_API_KEY"] });
+    expect(JSON.stringify(await installations.state("claude", claude))).not.toContain("secret");
+    expect(await installations.withheldEnv("claude", claude)).toEqual([]);
+    await installations.setProtocol("claude", "v2");
+    await installations.setCredentials("claude", "login");
+    expect(await installations.withheldEnv("claude", claude)).toEqual(["VIBE_TEST_API_KEY", "VIBE_TEST_AUTH_TOKEN"]);
+    // Both choices are kept together.
+    expect(await installations.protocol("claude")).toBe("v2");
+    expect(await installations.withheldEnv("codex", spec)).toEqual([]);
+  } finally { if (previous === undefined) delete process.env.VIBE_TEST_API_KEY; else process.env.VIBE_TEST_API_KEY = previous; }
 });

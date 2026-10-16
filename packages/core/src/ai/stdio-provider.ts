@@ -1,5 +1,6 @@
-import { AcpAuthentication, isAuthenticationError } from "./authentication.js";
-import { providerInstallations, type InstallationSpec } from "./provider-installations.js";
+import { AcpAuthentication, isAuthenticationError, withoutEnv } from "./authentication.js";
+import { providerInstallations, type CredentialSource, type InstallationSpec, type ProviderProtocol } from "./provider-installations.js";
+import { AcpV2Connection } from "./acp-v2.js";
 import type { AiAuthentication, AiAuthInput, AiProviderInstallation } from "@remote-ide/acp";
 import type { AuthMethod } from "@agentclientprotocol/sdk";
 import { captureContextInstructions, refreshContext } from "./context.js";
@@ -23,7 +24,7 @@ import { agentFingerprint } from "../agent-profile.js";
 type ToolState = { kind?: string; title: string; name?: string; status?: string; command?: string; body: string[]; content: AiContentBlock[]; completion?: string; terminalId?: string };
 type Runtime = {
   child: ChildProcessWithoutNullStreams;
-  connection: ClientSideConnection;
+  connection: AcpConnection;
   sessionId: string;
   running: boolean;
   stderr: string;
@@ -51,7 +52,9 @@ type ModeState = { currentModeId: string; availableModes: { id: string; name?: s
 type ModelState = { currentModelId?: string; availableModels: { modelId: string; name: string; description?: string | null; _meta?: Record<string, unknown> }[] } | null | undefined;
 type SelectChoice = { value: string; name: string; description?: string; _meta?: Record<string, unknown> };
 type CreatedSession = { sessionId: string; configOptions?: SessionConfigOption[] | null; modes?: ModeState; models?: ModelState };
-type Connected = { child: ChildProcessWithoutNullStreams; connection: ClientSideConnection; sessionId: string; stderr(): string; configOptions: SessionConfigOption[]; modes: ModeState; models: ModelState; steering?: SteeringMode; resumed: boolean; resumeFailed: boolean; bind(runtime: Runtime): void };
+/** The calls Vibe makes on an ACP agent; ACP v1 and the v2 adapter both provide them. */
+type AcpConnection = Pick<ClientSideConnection, "initialize" | "newSession" | "loadSession" | "prompt" | "cancel" | "setSessionConfigOption" | "setSessionMode" | "authenticate" | "extMethod">;
+type Connected = { child: ChildProcessWithoutNullStreams; connection: AcpConnection; sessionId: string; stderr(): string; configOptions: SessionConfigOption[]; modes: ModeState; models: ModelState; steering?: SteeringMode; resumed: boolean; resumeFailed: boolean; bind(runtime: Runtime): void };
 type PermissionWaiter = { workspace: string; resolve(response: RequestPermissionResponse): void };
 type QuestionWaiter = { workspace: string; resolve(response: CreateElicitationResponse): void };
 /** `extension`: the `_session/steering` method; `prompt`: the agent queues a second `session/prompt` into the live turn. */
@@ -98,7 +101,7 @@ export type AcpTurnObserver = {
 export abstract class StdioAcpProvider extends AcpProvider {
   abstract readonly descriptor: AiProviderDescriptor;
   private authenticationController?: AcpAuthentication;
-  private get auth(): AcpAuthentication { return this.authenticationController ??= new AcpAuthentication(this.descriptor.id, async () => { await this.prepareLaunch(); return this.command({}); }); }
+  private get auth(): AcpAuthentication { return this.authenticationController ??= new AcpAuthentication(this.descriptor.id, async () => { await this.prepareLaunch(); return { ...this.command({}), unsetEnv: await this.withheldEnv() }; }); }
   override authentication(workspace: string, discover = false): Promise<AiAuthentication> { return this.auth.get(workspace, discover); }
   override authenticate(workspace: string, methodId: string): Promise<AiAuthentication> { this.modelCache = undefined; return this.auth.start(workspace, methodId); }
   override authenticationInput(workspace: string, input: AiAuthInput): Promise<AiAuthentication> { this.modelCache = undefined; return this.auth.input(workspace, input); }
@@ -120,6 +123,26 @@ export abstract class StdioAcpProvider extends AcpProvider {
   override async installation(checkLatest = false): Promise<AiProviderInstallation> {
     const base = { provider: this.descriptor.id, name: this.descriptor.name, description: this.descriptor.description };
     return this.installationSpec ? { ...base, ...await providerInstallations.state(this.descriptor.id, this.installationSpec, checkLatest) } : super.installation(checkLatest);
+  }
+  /** ACP version for new connections. Only providers whose installation declares v2 offer a choice. */
+  protected async protocol(): Promise<ProviderProtocol> { return this.installationSpec?.protocols?.v2 ? providerInstallations.protocol(this.descriptor.id) : "v1"; }
+  override async setProtocol(protocol: ProviderProtocol): Promise<AiProviderInstallation> {
+    if (!this.installationSpec?.protocols?.v2) throw new CoreError("INVALID_REQUEST", `${this.descriptor.name} supports ACP v1 only`);
+    await providerInstallations.setProtocol(this.descriptor.id, protocol);
+    this.modelCache = undefined;
+    // Idle agents reconnect on their next prompt with the new protocol; busy ones finish their turn first.
+    await Promise.all([...this.runtimes].filter(([, runtime]) => !runtime.running).map(([workspace]) => this.closeRuntime(workspace)));
+    return this.installation();
+  }
+  /** API-key variables withheld from the agent so that it uses its own sign-in. */
+  protected async withheldEnv(): Promise<string[]> { return this.installationSpec ? providerInstallations.withheldEnv(this.descriptor.id, this.installationSpec) : []; }
+  override async setCredentials(credentials: CredentialSource): Promise<AiProviderInstallation> {
+    if (!this.installationSpec?.credentialEnv?.length) throw new CoreError("INVALID_REQUEST", `${this.descriptor.name} does not read credentials from the environment`);
+    await providerInstallations.setCredentials(this.descriptor.id, credentials);
+    this.modelCache = undefined;
+    // Idle agents restart with the new credentials on their next prompt; busy ones finish their turn first.
+    await Promise.all([...this.runtimes].filter(([, runtime]) => !runtime.running).map(([workspace]) => this.closeRuntime(workspace)));
+    return this.installation();
   }
   override async install(): Promise<AiProviderInstallation> { return this.changeInstallation((spec) => providerInstallations.install(this.descriptor.id, spec)); }
   override async uninstall(): Promise<AiProviderInstallation> { return this.changeInstallation((spec) => providerInstallations.uninstall(this.descriptor.id, spec)); }
@@ -775,12 +798,14 @@ export abstract class StdioAcpProvider extends AcpProvider {
   private async connect(workspace: string, configuration: AiConfiguration, servers?: AcpSendRequest["mcpServers"], savedSessionId?: string, sessionMeta?: Record<string, unknown>): Promise<Connected> {
     if (this.shuttingDown) throw new CoreError("INVALID_REQUEST", "Core is shutting down");
     await this.prepareLaunch();
-    const launch = this.command(configuration);
+    const protocol = await this.protocol();
+    const command = this.command(configuration);
+    const launch = { ...command, env: { ...command.env, ...(protocol === "v2" ? this.installationSpec?.protocols?.v2?.env : {}) }, unsetEnv: await this.withheldEnv() };
     const processContext = { workspace, rootWorkspace: await this.projectRoot(workspace), provider: this.descriptor.id, kind: "agent" as const };
     if (this.shuttingDown) throw new CoreError("INVALID_REQUEST", "Core is shutting down");
     const child = await retryProcessSpawn(() => new Promise<ChildProcessWithoutNullStreams>((resolve, reject) => {
       if (this.shuttingDown) { reject(new CoreError("INVALID_REQUEST", "Core is shutting down")); return; }
-      const child = managedProcesses.launch(processContext, (env) => spawn(launch.command, launch.args, { cwd: workspace, env: { ...env, ...launch.env }, stdio: "pipe" }));
+      const child = managedProcesses.launch(processContext, (env) => spawn(launch.command, launch.args, { cwd: workspace, env: withoutEnv({ ...env, ...launch.env }, launch.unsetEnv), stdio: "pipe" }));
       this.ownedChildren.add(child);
       child.once("close", () => this.ownedChildren.delete(child));
       child.once("error", reject);
@@ -792,7 +817,6 @@ export abstract class StdioAcpProvider extends AcpProvider {
     const spawnFailure = new Promise<never>((_resolve, reject) => { child.once("error", reject); });
     let stderr = "";
     child.stderr.on("data", (chunk: Buffer) => { stderr = (stderr + chunk.toString()).slice(-20_000); });
-    const stream = ndJsonStream(Writable.toWeb(child.stdin) as WritableStream<Uint8Array>, Readable.toWeb(child.stdout) as ReadableStream<Uint8Array>);
     let bound: ((params: SessionNotification) => Promise<void> | void) | undefined;
     let permissionBound: ((params: RequestPermissionRequest) => Promise<RequestPermissionResponse>) | undefined;
     let questionBound: ((params: CreateElicitationRequest) => Promise<CreateElicitationResponse>) | undefined;
@@ -802,7 +826,7 @@ export abstract class StdioAcpProvider extends AcpProvider {
       createElicitation: (params) => questionBound ? questionBound(params) : { action: "cancel" },
       sessionUpdate: (params) => { if (bound) return bound(params); buffered.push(params); }
     };
-    const connection = new ClientSideConnection(() => client, stream);
+    const connection: AcpConnection = protocol === "v2" ? new AcpV2Connection(client, child.stdin, child.stdout) : new ClientSideConnection(() => client, ndJsonStream(Writable.toWeb(child.stdin) as WritableStream<Uint8Array>, Readable.toWeb(child.stdout) as ReadableStream<Uint8Array>));
     let authHint = "";
     let authMethods: AuthMethod[] = [];
     try {
@@ -816,7 +840,8 @@ export abstract class StdioAcpProvider extends AcpProvider {
       authHint = initialized.authMethods?.map((method) => method.description ?? method.name).join("; ") ?? "";
       // `_session/steering` is advertised in the response `_meta`; agents built on the Claude Agent SDK
       // instead advertise that a `session/prompt` sent during a turn is queued into it.
-      const steering: SteeringMode | undefined = (initialized._meta as { steering?: { supported?: boolean } } | undefined)?.steering?.supported === true ? "extension"
+      // ACP v2 inserts a prompt sent during a turn into that turn.
+      const steering: SteeringMode | undefined = protocol === "v2" ? "prompt" : (initialized._meta as { steering?: { supported?: boolean } } | undefined)?.steering?.supported === true ? "extension"
         : (initialized.agentCapabilities?._meta as { claudeCode?: { promptQueueing?: boolean } } | undefined)?.claudeCode?.promptQueueing === true ? "prompt" : undefined;
       const meta = sessionMeta ? { _meta: sessionMeta } : {};
       let created: CreatedSession;

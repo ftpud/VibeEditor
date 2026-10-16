@@ -48,7 +48,7 @@ export function ModelPicker({ models, value, label, disabled, onChange }: { mode
   return <div className="ai-model-picker" ref={rootRef}>
     <span>Model</span>
     <button type="button" className="ai-model-trigger" aria-label={label} aria-haspopup="listbox" aria-expanded={open} disabled={disabled} onClick={() => setOpen((value) => !value)}>
-      <span className="ai-model-trigger-name">{selected?.name ?? value ?? "Select a model"}</span>
+      <span className="ai-model-trigger-name">{selected?.name ?? (value || "Default model")}</span>
       {selected?.price && <span className={`ai-model-price ${tierClass(selected)}`} title={priceTitle(selected)}>{costLabel(selected)}</span>}
       <ChevronDown size={12} />
     </button>

@@ -163,8 +163,8 @@ export type TerminalSessionSnapshot = { terminalId: string; status: "running" | 
 /** Resolution is always against the currently selected workspace. A stale ID means Core no longer owns that process. */
 export type TerminalAttachResult = { state: "available"; session: TerminalSessionSnapshot } | { state: "stale"; reason: "session-unavailable" };
 export type WorkspaceTask = { id: string; name: string; branch: string; baseBranch: string; status: "active" | "finished"; archived: boolean };
-export type { AiAuthentication, AiAuthMethod, AiAuthInput, AiProviderInstallation, AiContextCategory, AiContextEntry, AiContextSection, AiContextSnapshot, AiAgent, AiAgentPreset, AiCommand, AiConfiguration, AiContentBlock, AiFailure, AiFailureKind, AiMessage, AiModel, AiMcpServer, AiOption, AiPermissionRequest, AiQuestionAction, AiQuestionAnswer, AiQuestionChoice, AiQuestionField, AiQuestionRequest, AiProvider, AiProviderCapabilities, AiProviderDescriptor, AiSession, AiSettingsLayout, AiSettingsSection, AiStatus, AiTaskSummary, AiTokenUsage, AiUsage } from "@remote-ide/acp";
-import type { AiAuthentication, AiAuthInput, AiProviderInstallation, AiAgent, AiAgentPreset, AiConfiguration, AiQuestionAction, AiQuestionAnswer, AiContentBlock, AiMcpServer, AiModel, AiPermissionRequest, AiProvider, AiProviderDescriptor, AiSession, AiTaskSummary, AiTokenUsage, AiUsage } from "@remote-ide/acp";
+export type { AiAuthentication, AiAuthMethod, AiAuthInput, AiProviderInstallation, AiProtocolVersion, AiCredentialSource, AiContextCategory, AiContextEntry, AiContextSection, AiContextSnapshot, AiAgent, AiAgentPreset, AiCommand, AiConfiguration, AiContentBlock, AiFailure, AiFailureKind, AiMessage, AiModel, AiMcpServer, AiOption, AiPermissionRequest, AiQuestionAction, AiQuestionAnswer, AiQuestionChoice, AiQuestionField, AiQuestionRequest, AiProvider, AiProviderCapabilities, AiProviderDescriptor, AiSession, AiSettingsLayout, AiSettingsSection, AiStatus, AiTaskSummary, AiTokenUsage, AiUsage } from "@remote-ide/acp";
+import type { AiAuthentication, AiAuthInput, AiProviderInstallation, AiProtocolVersion, AiCredentialSource, AiAgent, AiAgentPreset, AiConfiguration, AiQuestionAction, AiQuestionAnswer, AiContentBlock, AiMcpServer, AiModel, AiPermissionRequest, AiProvider, AiProviderDescriptor, AiSession, AiTaskSummary, AiTokenUsage, AiUsage } from "@remote-ide/acp";
 /** Optional tool downloaded to the Core host on demand (Settings → Tools). */
 export type ToolInstallation = { id: string; name: string; description: string; status: "installed" | "not_installed" | "installing" | "removing"; version?: string; /** The version this Core installs. */ availableVersion: string; requires?: string[]; location?: string; /** Download progress, 0-100, while installing. */ progress?: number; error?: string };
 export type UsefulFileScope = "global" | "local";
@@ -377,6 +377,10 @@ export type ProtocolOperations = {
   /** Installs or updates to the latest version. Returns at once; poll `ai.installations.list` for completion. */
   "ai.installations.install": { payload: { provider: AiProvider }; result: { installation: AiProviderInstallation } };
   "ai.installations.uninstall": { payload: { provider: AiProvider }; result: { installation: AiProviderInstallation } };
+  /** Selects ACP v1 or the experimental v2 for the provider's new connections; idle agents reconnect. */
+  "ai.installations.setProtocol": { payload: { provider: AiProvider; protocol: AiProtocolVersion }; result: { installation: AiProviderInstallation } };
+  /** Chooses whether the agent gets the Core host's API-key variables or uses its own sign-in; idle agents restart. */
+  "ai.installations.setCredentials": { payload: { provider: AiProvider; credentials: AiCredentialSource }; result: { installation: AiProviderInstallation } };
   "ai.get": { payload: { provider?: AiProvider }; result: { session: AiSession } };
   "ai.auth.get": { payload: { provider?: AiProvider; discover?: boolean }; result: { authentication: AiAuthentication } };
   "ai.auth.start": { payload: { provider?: AiProvider; methodId: string }; result: { authentication: AiAuthentication } };
@@ -817,6 +821,8 @@ const requestTypeRegistry: Record<RequestType, true> = {
   "ai.installations.list": true,
   "ai.installations.install": true,
   "ai.installations.uninstall": true,
+  "ai.installations.setProtocol": true,
+  "ai.installations.setCredentials": true,
   "ai.get": true,
   "ai.auth.get": true,
   "ai.auth.start": true,

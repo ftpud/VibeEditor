@@ -7,7 +7,14 @@ import { ClientSideConnection, ndJsonStream, PROTOCOL_VERSION, type AuthMethod, 
 import type { AiAuthentication, AiAuthInput } from "@remote-ide/acp";
 import { managedProcesses } from "../managed-processes.js";
 
-type Launch = { command: string; args: string[]; env?: NodeJS.ProcessEnv };
+/** `unsetEnv` names variables removed from the inherited environment (for example API keys the user chose not to use). */
+export type Launch = { command: string; args: string[]; env?: NodeJS.ProcessEnv; unsetEnv?: string[] };
+export function withoutEnv(env: NodeJS.ProcessEnv, names: readonly string[] = []): NodeJS.ProcessEnv {
+  if (!names.length) return env;
+  const result = { ...env };
+  for (const name of names) delete result[name];
+  return result;
+}
 type Flow = { identity: string; state: AiAuthentication; methods: AuthMethod[]; child?: ChildProcessWithoutNullStreams; terminal?: IPty; connection?: ClientSideConnection; answer?: (response: CreateElicitationResponse) => void; timer?: ReturnType<typeof setTimeout> };
 const capabilities = { auth: { terminal: true }, elicitation: { url: {} } };
 /** ACP reserves -32000 for `auth_required`; some agents only describe it in the message. */
@@ -102,7 +109,7 @@ export class AcpAuthentication {
   private append(flow: Flow, output: string): void { if (flow.state.status === "authenticating") flow.state.output = ((flow.state.output ?? "") + output).slice(-20000); }
   private async open(workspace: string, flow: Flow, launch: Launch): Promise<ClientSideConnection> {
     if (this.closed) throw new Error("Core is shutting down");
-    const child = managedProcesses.launch({ workspace, rootWorkspace: workspace, provider: this.provider, sessionId: flow.identity, kind: "agent" }, env => spawn(launch.command, launch.args, { cwd: workspace, env: { ...env, ...launch.env }, stdio: "pipe" }));
+    const child = managedProcesses.launch({ workspace, rootWorkspace: workspace, provider: this.provider, sessionId: flow.identity, kind: "agent" }, env => spawn(launch.command, launch.args, { cwd: workspace, env: withoutEnv({ ...env, ...launch.env }, launch.unsetEnv), stdio: "pipe" }));
     flow.child = child;
     const failed = new Promise<never>((_resolve, reject) => {
       child.once("error", reject);
@@ -157,7 +164,7 @@ export class AcpAuthentication {
       const context = { workspace, rootWorkspace: workspace, provider: this.provider, sessionId: flow.identity, kind: "agent" as const };
       const identity = managedProcesses.prepare(context);
       try {
-        const terminal = spawnPty(launch.command, [...launch.args, ...method.args ?? []], { cwd: workspace, env: { ...identity.env, ...launch.env, ...method.env }, name: "xterm-256color", cols: 90, rows: 18 });
+        const terminal = spawnPty(launch.command, [...launch.args, ...method.args ?? []], { cwd: workspace, env: withoutEnv({ ...identity.env, ...launch.env, ...method.env }, launch.unsetEnv), name: "xterm-256color", cols: 90, rows: 18 });
         flow.terminal = terminal;
         const lifecycle = Object.assign(new EventEmitter(), { pid: terminal.pid });
         managedProcesses.track(lifecycle, context, identity.launchId);

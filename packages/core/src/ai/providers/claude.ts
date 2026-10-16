@@ -45,7 +45,11 @@ export class ClaudeSessionManager extends StdioAcpProvider {
    * The adapter bundles the Claude Code CLI; `CLAUDE_CODE_EXECUTABLE` overrides it through the inherited environment.
    * `CLAUDE_AGENT_ACP_PATH` (an adapter entry script) or `CLAUDE_ACP_COMMAND` selects an existing adapter instead.
    */
-  protected readonly installationSpec: InstallationSpec = { package: "@agentclientprotocol/claude-agent-acp", bin: "dist/index.js", override: () => process.env.CLAUDE_AGENT_ACP_PATH ?? process.env.CLAUDE_ACP_COMMAND };
+  protected readonly installationSpec: InstallationSpec = { package: "@agentclientprotocol/claude-agent-acp", bin: "dist/index.js", override: () => process.env.CLAUDE_AGENT_ACP_PATH ?? process.env.CLAUDE_ACP_COMMAND,
+    // The released adapter serves ACP v2 (experimental) when this is set, negotiating it per connection.
+    protocols: { v2: { env: { CLAUDE_AGENT_ACP_EXPERIMENTAL_V2: "1" } } },
+    // Claude Code prefers these over a subscription login when they are set.
+    credentialEnv: ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"] };
 
   protected command(_configuration: AiConfiguration): { command: string; args: string[] } {
     if (process.env.CLAUDE_AGENT_ACP_PATH) return { command: process.execPath, args: [process.env.CLAUDE_AGENT_ACP_PATH] };

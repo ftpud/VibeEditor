@@ -7,9 +7,19 @@ import type { AiProviderInstallation } from "@remote-ide/acp";
 import { serializedStateMutation } from "../root-mutation.js";
 
 /** An npm package whose `bin` file is the provider's ACP agent, started with Core's Node. */
-export type InstallationSpec = { package: string; bin: string; /** Core-host override (environment) that replaces the managed installation. */ override?: () => string | undefined };
-export type InstallationState = Pick<AiProviderInstallation, "status" | "source" | "version" | "latestVersion" | "location" | "error" | "package">;
-export type Npm = { install(directory: string, specifier: string): Promise<void>; latest(name: string): Promise<string> };
+export type ProviderProtocol = "v1" | "v2";
+export type CredentialSource = "environment" | "login";
+type ProviderSettings = { protocol?: ProviderProtocol; credentials?: CredentialSource };
+export type InstallationSpec = {
+  package: string; bin: string;
+  /** Core-host override (environment) that replaces the managed installation. */ override?: () => string | undefined;
+  /** Experimental draft ACP v2: an npm dist-tag that ships it, and launch environment that enables it. */
+  protocols?: { v2?: { distTag?: string; env?: NodeJS.ProcessEnv } };
+  /** API-key variables the agent prefers over its own sign-in; withheld when credentials are `login`. */
+  credentialEnv?: string[];
+};
+export type InstallationState = Pick<AiProviderInstallation, "status" | "source" | "version" | "latestVersion" | "location" | "error" | "package" | "protocol" | "protocols" | "channel" | "credentials" | "credentialVariables" | "credentialVariablesSet">;
+export type Npm = { install(directory: string, specifier: string): Promise<void>; latest(name: string, tag?: string): Promise<string> };
 
 const exec = promisify(execFile);
 const npmCommand = process.platform === "win32" ? "npm.cmd" : "npm";
@@ -18,8 +28,8 @@ const defaultNpm: Npm = {
   async install(directory, specifier) {
     await exec(npmCommand, ["install", "--prefix", directory, "--omit=dev", "--no-audit", "--no-fund", "--package-lock=false", specifier], { timeout: 300_000, maxBuffer: 4 * 1024 * 1024, env: npmEnvironment("30000") });
   },
-  async latest(name) {
-    const { stdout } = await exec(npmCommand, ["view", `${name}@latest`, "version", "--json"], { timeout: 30_000, maxBuffer: 1024 * 1024, env: npmEnvironment("15000") });
+  async latest(name, tag = "latest") {
+    const { stdout } = await exec(npmCommand, ["view", `${name}@${tag}`, "version", "--json"], { timeout: 30_000, maxBuffer: 1024 * 1024, env: npmEnvironment("15000") });
     const version: unknown = JSON.parse(stdout);
     if (typeof version !== "string" || !/^\d+\.\d+\.\d+(?:-[\w.-]+)?$/.test(version)) throw new Error("Invalid npm version response");
     return version;
@@ -58,17 +68,44 @@ export class ProviderInstallations {
   /** The installed agent entry point, or undefined when the provider is not installed. */
   async entry(provider: string, spec: InstallationSpec): Promise<string | undefined> { return (await this.current(provider, spec))?.entry; }
 
+  /** Per-provider choices, stored with the installation on the Core host and kept when it is deleted. */
+  private async settings(provider: string): Promise<ProviderSettings> {
+    try { const value = JSON.parse(await readFile(path.join(this.directory(provider), "settings.json"), "utf8")); return value && typeof value === "object" ? value as ProviderSettings : {}; }
+    catch { return {}; }
+  }
+  private async updateSettings(provider: string, patch: ProviderSettings): Promise<void> {
+    const directory = this.directory(provider);
+    const next = { ...await this.settings(provider), ...patch };
+    await mkdir(directory, { recursive: true });
+    const temporary = path.join(directory, `settings.${process.pid}.${Date.now()}.json`);
+    await writeFile(temporary, JSON.stringify(next));
+    await rename(temporary, path.join(directory, "settings.json"));
+  }
+  /** The ACP version selected for a provider. */
+  async protocol(provider: string): Promise<ProviderProtocol> { return (await this.settings(provider)).protocol === "v2" ? "v2" : "v1"; }
+  async setProtocol(provider: string, protocol: ProviderProtocol): Promise<void> { await this.updateSettings(provider, { protocol }); }
+  /** `environment` (the default) keeps today's behaviour: API keys set on the Core host win. */
+  async credentials(provider: string): Promise<CredentialSource> { return (await this.settings(provider)).credentials === "login" ? "login" : "environment"; }
+  async setCredentials(provider: string, credentials: CredentialSource): Promise<void> { await this.updateSettings(provider, { credentials }); }
+  /** Variables to remove from the agent's environment. */
+  async withheldEnv(provider: string, spec: InstallationSpec): Promise<string[]> { return spec.credentialEnv?.length && await this.credentials(provider) === "login" ? spec.credentialEnv : []; }
+  private async channel(provider: string, spec: InstallationSpec): Promise<string> { return spec.protocols?.v2?.distTag && await this.protocol(provider) === "v2" ? spec.protocols.v2.distTag : "latest"; }
+
   async state(provider: string, spec: InstallationSpec, checkLatest = false): Promise<InstallationState> {
+    const protocols = spec.protocols?.v2 ? { protocol: await this.protocol(provider), protocols: ["v1", "v2"] as ProviderProtocol[] } : {};
+    const channel = await this.channel(provider, spec);
+    const credentials = spec.credentialEnv?.length ? { credentials: await this.credentials(provider), credentialVariables: spec.credentialEnv, credentialVariablesSet: spec.credentialEnv.filter((name) => !!process.env[name]) } : {};
+    const channelState = { ...protocols, ...credentials, ...(channel !== "latest" ? { channel } : {}) };
     const override = spec.override?.();
-    if (override) return { status: "installed", source: "external", location: override, package: spec.package };
+    if (override) return { status: "installed", source: "external", location: override, package: spec.package, ...channelState };
     const current = await this.current(provider, spec);
     const operation = this.operations.get(provider);
-    const latestVersion = checkLatest ? await this.latest(spec.package) : this.latestVersions.get(spec.package)?.version;
+    const latestVersion = checkLatest ? await this.latest(spec.package, channel) : this.latestVersions.get(`${spec.package}@${channel}`)?.version;
     const error = this.errors.get(provider);
     return {
       status: operation?.status ?? (current ? "installed" : "not_installed"), package: spec.package,
       ...(current ? { source: "managed" as const, version: current.version, location: current.directory } : {}),
-      ...(latestVersion ? { latestVersion } : {}), ...(error ? { error } : {})
+      ...(latestVersion ? { latestVersion } : {}), ...(error ? { error } : {}), ...channelState
     };
   }
 
@@ -76,10 +113,12 @@ export class ProviderInstallations {
   install(provider: string, spec: InstallationSpec): Promise<void> {
     return this.run(provider, spec, "installing", async (directory) => {
       const previous = await this.current(provider, spec);
-      const version = await this.npm.latest(spec.package).catch(() => undefined);
-      if (version) this.latestVersions.set(spec.package, { at: Date.now(), version });
+      // ACP v2 may only ship on a pre-release channel (for example Codex's `preview`).
+      const channel = await this.channel(provider, spec);
+      const version = await this.npm.latest(spec.package, channel).catch(() => undefined);
+      if (version) this.latestVersions.set(`${spec.package}@${channel}`, { at: Date.now(), version });
       if (previous && version && previous.version === version) return;
-      const specifier = `${spec.package}@${version ?? "latest"}`;
+      const specifier = `${spec.package}@${version ?? channel}`;
       await mkdir(directory, { recursive: true });
       const candidate = await mkdtemp(path.join(directory, "installation-"));
       try {
@@ -124,14 +163,15 @@ export class ProviderInstallations {
     return done;
   }
 
-  private async latest(name: string): Promise<string | undefined> {
-    const cached = this.latestVersions.get(name);
+  private async latest(name: string, tag = "latest"): Promise<string | undefined> {
+    const key = `${name}@${tag}`;
+    const cached = this.latestVersions.get(key);
     if (cached?.pending) return cached.pending;
     if (cached && Date.now() - cached.at < LATEST_CACHE_MS) return cached.version;
-    const pending = this.npm.latest(name).catch(() => cached?.version);
-    this.latestVersions.set(name, { at: cached?.at ?? 0, version: cached?.version, pending });
+    const pending = this.npm.latest(name, tag).catch(() => cached?.version);
+    this.latestVersions.set(key, { at: cached?.at ?? 0, version: cached?.version, pending });
     const version = await pending;
-    this.latestVersions.set(name, { at: Date.now(), version });
+    this.latestVersions.set(key, { at: Date.now(), version });
     return version;
   }
 }

@@ -14,6 +14,20 @@ Core installs the `latest` published version into a fresh directory under `~/.re
 
 Core-host overrides count as installed and cannot be managed from the client: `CODEX_ACP_COMMAND` (Codex adapter command; `CODEX_PATH` selects the CLI), `CLAUDE_AGENT_ACP_PATH` (adapter entry script) or `CLAUDE_ACP_COMMAND`, and `COPILOT_CLI_PATH`. Codex account-quota reads use the CLI belonging to the installed adapter, or `CODEX_PATH`; usage polling never installs anything.
 
+### Claude credentials
+
+Claude Code prefers `ANTHROPIC_API_KEY` (or `ANTHROPIC_AUTH_TOKEN`) over a subscription login whenever the variable is set, so a key exported in a shell profile silently bills that API account. **Settings → AI providers → Credentials** on Claude's card chooses between **API key from environment** (the default, unchanged behaviour) and **Subscription login**, which starts Claude's agent — for chats, account checks and sign-in — without those variables. The card names the variables that are set on the Core host (never their values). Idle agents restart with the new choice; it is stored with the provider's settings on the Core host.
+
+## ACP v2 (experimental)
+
+Codex and Claude can use the experimental **draft ACP v2** instead of v1. Choose it per provider under **Settings → AI providers → Protocol**; the setting is stored on the Core host (`provider-runtimes/<provider>/settings.json`) and survives Delete. Idle agents reconnect with the new protocol on their next prompt and resume their saved session; a running turn finishes first.
+
+- **Claude:** the released adapter serves v2 when Core launches it with `CLAUDE_AGENT_ACP_EXPERIMENTAL_V2=1`, which Core sets for v2.
+- **Codex:** only preview builds serve v2. With v2 selected, Install and Update use the `preview` npm channel (switching back to v1 makes Update return to `latest`).
+- An agent that negotiates v1 when v2 was requested fails with a message to switch back or update the adapter.
+
+Core's v2 client (`core/src/ai/acp-v2.ts`) exposes the same calls as the v1 SDK connection, so the provider runtime, transcripts, permissions and questions are shared. It translates the v2 lifecycle: `session/prompt` only acknowledges a prompt and the turn ends on an `idle` `state_update` (an `error` stop reason fails the turn); tool calls are upserts plus content chunks; whole `agent_message` upserts are forwarded as the text they add; modes are the config option in the `mode` category; config options use `configId`; `session/load` becomes `session/resume` with replay from the start; prompts sent during a turn join it (steering). Agent-owned terminal updates and subagent updates are not shown yet. The draft still changes between SDK releases, and agents ship different snapshots, so messages are parsed leniently rather than validated against one snapshot.
+
 ## Signing in
 
 The provider account control sits in **Settings → AI providers** and in the settings (cog) section of the AI panel and workflow Chatboxes. It discovers the agent's `initialize.authMethods`; the UI uses the advertised names and descriptions rather than provider-specific login commands. Account setup runs on the selected Core host, so local and remote workspaces use the credentials belonging to that host.

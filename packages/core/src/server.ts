@@ -935,6 +935,14 @@ async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStor
     case "ai.installations.list": return { installations: await acp.installations(request.payload.checkLatest === true) };
     case "ai.installations.install": return { installation: await acp.get(request.payload.provider).install() };
     case "ai.installations.uninstall": return { installation: await acp.get(request.payload.provider).uninstall() };
+    case "ai.installations.setProtocol": {
+      if (request.payload.protocol !== "v1" && request.payload.protocol !== "v2") throw new CoreError("INVALID_REQUEST", "Protocol must be v1 or v2");
+      return { installation: await acp.get(request.payload.provider).setProtocol(request.payload.protocol) };
+    }
+    case "ai.installations.setCredentials": {
+      if (request.payload.credentials !== "environment" && request.payload.credentials !== "login") throw new CoreError("INVALID_REQUEST", "Credentials must be environment or login");
+      return { installation: await acp.get(request.payload.provider).setCredentials(request.payload.credentials) };
+    }
     case "ai.get": return { session: await acp.get(request.payload.provider).get(workspacePath) };
     case "ai.auth.get": return { authentication: await acp.get(request.payload.provider).authentication(workspacePath, request.payload.discover) };
     case "ai.auth.start": return { authentication: await acp.get(request.payload.provider).authenticate(workspacePath, request.payload.methodId) };

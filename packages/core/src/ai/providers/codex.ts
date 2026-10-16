@@ -26,7 +26,9 @@ export class CodexSessionManager extends StdioAcpProvider {
   };
 
   /** The adapter depends on its compatible Codex CLI. `CODEX_ACP_COMMAND` selects an existing adapter instead. */
-  protected readonly installationSpec: InstallationSpec = { package: "@agentclientprotocol/codex-acp", bin: "dist/index.js", override: () => process.env.CODEX_ACP_COMMAND };
+  protected readonly installationSpec: InstallationSpec = { package: "@agentclientprotocol/codex-acp", bin: "dist/index.js", override: () => process.env.CODEX_ACP_COMMAND,
+    // ACP v2 (experimental) ships only in preview builds, which negotiate it per connection.
+    protocols: { v2: { distTag: "preview" } } };
 
   protected command(configuration: AiConfiguration): { command: string; args: string[]; env: NodeJS.ProcessEnv } {
     // `features.web_search` is deprecated and makes Codex emit an error item on

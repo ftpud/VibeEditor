@@ -4,6 +4,8 @@ import { ArrowUpCircle, Bot, Check, CircleAlert, Download, LoaderCircle, Refresh
 import type { AiProviderInstallation } from "@remote-ide/protocol";
 import type { CoreClient } from "./client";
 import { AiAuthentication } from "./AiAuthentication";
+import { SegmentedControl } from "./SegmentedControl";
+import type { AiCredentialSource, AiProtocolVersion } from "@remote-ide/protocol";
 
 const busy = (item: AiProviderInstallation) => item.status === "installing" || item.status === "removing";
 const usable = (item: AiProviderInstallation) => item.status === "installed" || !!item.version;
@@ -47,6 +49,22 @@ export function AiProvidersPanel({ client, onClose, onChanged }: { client: CoreC
     return () => clearInterval(timer);
   }, [active, client]);
 
+  const setProtocol = async (provider: string, protocol: AiProtocolVersion) => {
+    setPending(provider); setError("");
+    try {
+      const { installation } = await client.request("ai.installations.setProtocol", { provider, protocol });
+      if (mounted.current) apply((installations ?? []).map((item) => item.provider === provider ? installation : item));
+      // A protocol may install from another release channel; refresh what Update would install.
+      void load(true);
+    } catch (reason) { if (mounted.current) setError(reason instanceof Error ? reason.message : "Could not change the ACP protocol"); }
+    finally { if (mounted.current) setPending(undefined); }
+  };
+  const setCredentials = async (provider: string, credentials: AiCredentialSource) => {
+    setPending(provider); setError("");
+    try { const { installation } = await client.request("ai.installations.setCredentials", { provider, credentials }); if (mounted.current) apply((installations ?? []).map((item) => item.provider === provider ? installation : item)); }
+    catch (reason) { if (mounted.current) setError(reason instanceof Error ? reason.message : "Could not change credentials"); }
+    finally { if (mounted.current) setPending(undefined); }
+  };
   const change = async (provider: string, operation: "ai.installations.install" | "ai.installations.uninstall") => {
     setPending(provider); setError(""); setConfirmRemove(undefined);
     try {
@@ -82,13 +100,38 @@ export function AiProvidersPanel({ client, onClose, onChanged }: { client: CoreC
               {usable(item) && <button className="danger" disabled={disabled} onClick={() => setConfirmRemove(item.provider)}><Trash2 size={14} />Delete</button>}
             </div>}
             {confirmRemove === item.provider && <div className="install-item-confirm" role="alertdialog" aria-label={`Confirm deleting ${item.name}`}><span>Delete {item.name} from the Core host? Chats and workflows using it stop working until it is installed again. Provider sign-in and history are kept.</span><div><button onClick={() => setConfirmRemove(undefined)}>Cancel</button><button className="danger" onClick={() => void change(item.provider, "ai.installations.uninstall")}><Trash2 size={14} />Delete</button></div></div>}
-            {usable(item) && !busy(item) && <div className="install-item-account"><span>Account</span><AiAuthentication provider={item.provider} checkOnMount /></div>}
+            {item.protocols && item.protocols.length > 1 && <div className="install-item-protocol">
+              <div><span>Protocol</span><SegmentedControl<AiProtocolVersion> label={`${item.name} ACP protocol`} value={item.protocol ?? "v1"} options={[{ value: "v1", label: "ACP v1" }, { value: "v2", label: "ACP v2 · experimental" }]} onChange={(protocol) => { if (protocol !== item.protocol && !disabled) void setProtocol(item.provider, protocol); }} /></div>
+              <small>{protocolNote(item)}</small>
+            </div>}
+            {!!item.credentialVariables?.length && <div className="install-item-protocol">
+              <div><span>Credentials</span><SegmentedControl<AiCredentialSource> label={`${item.name} credentials`} value={item.credentials ?? "environment"} options={[{ value: "login", label: "Subscription login" }, { value: "environment", label: "API key from environment" }]} onChange={(credentials) => { if (credentials !== item.credentials && !disabled) void setCredentials(item.provider, credentials); }} /></div>
+              <small className={item.credentials !== "login" && item.credentialVariablesSet?.length ? "install-item-warning" : ""}>{credentialsNote(item)}</small>
+            </div>}
+            {usable(item) && !busy(item) && <div className="install-item-account"><span>Account</span><AiAuthentication key={item.credentials ?? "environment"} provider={item.provider} checkOnMount /></div>}
           </article>;
         })}
       </div>
       <footer className="install-panel-footer"><span>Installations download from npm into <code>~/.remote-ide/provider-runtimes</code> on the Core host.</span><span>{active ? "Changes continue if you close this panel" : ""}</span></footer>
     </section>
   </div>, document.body);
+}
+
+function credentialsNote(item: AiProviderInstallation): string {
+  const set = item.credentialVariablesSet ?? []; const names = (list: string[]) => list.join(" and ");
+  if (item.credentials === "login") return `${item.name} uses its own sign-in (for example your subscription).${set.length ? ` ${names(set)} on the Core host ${set.length === 1 ? "is" : "are"} ignored.` : ""}`;
+  if (set.length) return `${names(set)} ${set.length === 1 ? "is" : "are"} set on the Core host, so ${item.name} uses ${set.length === 1 ? "it" : "them"} and bills that API account instead of your subscription. Choose Subscription login to use your plan.`;
+  return `No ${names(item.credentialVariables ?? [])} is set on the Core host, so ${item.name} uses its own sign-in.`;
+}
+
+function protocolNote(item: AiProviderInstallation): string {
+  if (item.protocol !== "v2") return "Stable Agent Client Protocol. Recommended.";
+  const base = "Experimental draft protocol: new and idle sessions reconnect with it; running turns finish first.";
+  if (item.source === "external") return `${base} The Core-host adapter must support ACP v2.`;
+  // A channel means v2 ships in pre-release builds; a stable installed version cannot speak it yet.
+  if (item.channel && item.version && !item.version.includes("-")) return `${base} ${item.name} ships ACP v2 in ${item.channel} builds — Update installs ${item.latestVersion ?? `the ${item.channel} release`}.`;
+  if (item.channel) return `${base} Installs from ${item.name}'s ${item.channel} channel.`;
+  return base;
 }
 
 function ProviderStatus({ item, update }: { item: AiProviderInstallation; update: boolean }) {
