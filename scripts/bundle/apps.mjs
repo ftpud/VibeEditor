@@ -3,6 +3,7 @@ import { cp, mkdir, readdir, readFile, rm } from 'node:fs/promises';
 import { spawn, execFileSync } from 'node:child_process';
 import path from 'node:path';
 import { macApplicationIcon } from './icon.mjs';
+import { packageGatewayInstaller } from './gateway-installer.mjs';
 import { root, output, json, writeJson, run, stageWorkspace, sha256, pruneRuntimeDependencies, copyBundledApplication, pruneElectronLocales } from './common.mjs';
 
 if (!(process.platform === 'darwin' && process.arch === 'arm64') && !(process.platform === 'win32' && process.arch === 'x64')) throw new Error('Build apps on macOS ARM64 or Windows x64');
@@ -67,12 +68,16 @@ for (const kind of ['desktop', 'gateway']) {
   if (kind === 'desktop') desktopBundle = process.platform === 'darwin' ? path.join(built, `${name}.app/Contents/Resources/app`) : path.join(built, 'resources/app');
   const destination = path.join(output, 'downloads');
   await mkdir(destination, { recursive: true });
-  const filename = `vibe-${kind}-${version}-${process.platform}-${process.arch}.zip`;
-  const archive = path.join(destination, filename);
-  if (process.platform === 'darwin') await run('ditto', ['-c', '-k', '--sequesterRsrc', '--keepParent', path.join(built, `${name}.app`), archive]);
-  // Windows' own bsdtar writes .zip with -a. Git for Windows puts GNU tar earlier on PATH,
-  // which rejects -a and reads "D:\\..." as a remote host, so name the system binary.
-  else await run(path.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'tar.exe'), ['-a', '-cf', archive, '-C', built, ...await readdir(built)]);
+  let archive;
+  if (kind === 'gateway') archive = await packageGatewayInstaller(built, destination, version, smokeApplication);
+  else {
+    archive = path.join(destination, `vibe-${kind}-${version}-${process.platform}-${process.arch}.zip`);
+    if (process.platform === 'darwin') await run('ditto', ['-c', '-k', '--sequesterRsrc', '--keepParent', path.join(built, `${name}.app`), archive]);
+    // Windows' own bsdtar writes .zip with -a. Git for Windows puts GNU tar earlier on PATH,
+    // which rejects -a and reads "D:\\..." as a remote host, so name the system binary.
+    else await run(path.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'tar.exe'), ['-a', '-cf', archive, '-C', built, ...await readdir(built)]);
+  }
+  const filename = path.basename(archive);
   const digest = await sha256(archive);
   await writeJson(`${archive}.json`, { schema: 1, channel: 'early-access', version, commit, platform: process.platform, arch: process.arch, filename, sha256: digest });
 }

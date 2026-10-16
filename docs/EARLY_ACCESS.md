@@ -3,7 +3,7 @@
 Run **Actions → Bundle Create → Run workflow** on the commit or branch you want
 packaged. The workflow uploads two artifact sets, `vibe-early-access-macos-15`
 and `vibe-early-access-windows-2025`. Download and extract the artifact wrapper;
-each contains separate Gateway and Desktop ZIP downloads and JSON manifests
+each contains a Gateway installer, a standalone Desktop ZIP, and JSON manifests
 with their version, source commit and SHA-256 checksum. No GitHub release is
 published automatically. Change the root `package.json` version before building
 bundles for a new version.
@@ -27,9 +27,9 @@ Increment the Early Access number for each promotion: `v0.1.0-early-access.1`,
 `v0.1.1-early-access.1`. Promoting an existing build preserves its embedded
 version and filenames; the Early Access number identifies the release.
 
-The action verifies the macOS and Windows Gateway ZIPs against their manifests
+The action verifies the macOS Gateway DMG and Windows Gateway setup EXE against their manifests
 and source commit, creates the tag at the build's commit, and publishes only
-those two Gateway ZIPs and their JSON manifests on the repository's **Releases**
+those two Gateway installers and their JSON manifests on the repository's **Releases**
 page. Gateway includes the embedded Desktop; standalone Desktop bundles remain
 available as build artifacts. It promotes the existing files
 without rebuilding. The built-in GitHub token supplies the required permissions;
@@ -41,12 +41,19 @@ assets remain available independently of workflow artifact retention. If an
 upload fails after draft creation, inspect and remove the incomplete draft and
 its tag before retrying with the same tag, or use a new tag.
 
-The applications are portable: macOS ZIPs contain an Apple Silicon `.app`;
-Windows ZIPs contain the x64 application and its supporting files. Extract the
-entire ZIP before launching. Keep the Windows application's files together.
+Gateway downloads use native installation formats: open the Apple Silicon macOS
+`.dmg` and drag **Vibe Gateway** to **Applications**, or run the Windows x64
+`-setup.exe`. Windows installs for the current user without administrator access,
+adds a Start menu shortcut, and supports uninstalling from Windows Settings.
+Close Gateway and its embedded Editor before reinstalling or upgrading.
+Standalone Desktop downloads remain portable ZIPs; extract the entire ZIP before
+launching and keep the Windows application's files together.
 Start with **Vibe Gateway** to configure connections and workspaces. Gateway
 contains its own complete Desktop application; users can also download Desktop
 separately to connect to an existing Core.
+
+Existing ZIP-only build runs cannot be promoted by the installer release action;
+run **Bundle Create** again after this packaging change.
 
 These are unsigned Early Access distributions (macOS uses ad-hoc signing).
 Developer ID signing/notarization and Windows certificate signing are not
@@ -125,7 +132,12 @@ After `npm ci` and building the relevant workspaces:
 - Collect all three Core archives **and** JSON metadata from the same commit
   into `artifacts/cores/` on macOS ARM64 or Windows x64.
 - `npm run build && npm run bundle:apps` creates both application downloads
-  under `artifacts/downloads/` using the lockfile's Electron version. Chromium
+  under `artifacts/downloads/` using the lockfile's Electron version. On Windows,
+  install NSIS 3.11 first (`choco install nsis --version=3.11 --yes`); set
+  `VIBE_MAKENSIS` to use a compiler outside its default Program Files location.
+  macOS uses its built-in `hdiutil`. The Windows build silently installs Gateway
+  into a temporary directory and smoke-tests Gateway and its embedded Editor
+  before uninstalling; macOS verifies the resulting disk image. Chromium
   UI translations other than English are removed from both applications.
 
 `artifacts/` is ignored by Git. Build workflows do not publish, commit generated

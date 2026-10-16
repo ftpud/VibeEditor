@@ -77,6 +77,9 @@ jobs:
         if: runner.os == 'Windows'
         run: npm exec -w @remote-ide/gateway -- vitest run --environment happy-dom
       - run: npm run test -w @remote-ide/desktop
+      - name: Install Windows installer compiler
+        if: runner.os == 'Windows'
+        run: choco install nsis --version=3.11 --yes --no-progress
       - name: Package Early Access applications
         id: bundle
         shell: bash
