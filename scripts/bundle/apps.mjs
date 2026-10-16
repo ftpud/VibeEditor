@@ -68,7 +68,9 @@ for (const kind of ['desktop', 'gateway']) {
   const filename = `vibe-${kind}-${version}-${process.platform}-${process.arch}.zip`;
   const archive = path.join(destination, filename);
   if (process.platform === 'darwin') await run('ditto', ['-c', '-k', '--sequesterRsrc', '--keepParent', path.join(built, `${name}.app`), archive]);
-  else await run('tar', ['-a', '-cf', archive, '-C', built, ...await readdir(built)]);
+  // Windows' own bsdtar writes .zip with -a. Git for Windows puts GNU tar earlier on PATH,
+  // which rejects -a and reads "D:\\..." as a remote host, so name the system binary.
+  else await run(path.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'tar.exe'), ['-a', '-cf', archive, '-C', built, ...await readdir(built)]);
   const digest = await sha256(archive);
   await writeJson(`${archive}.json`, { schema: 1, channel: 'early-access', version, commit, platform: process.platform, arch: process.arch, filename, sha256: digest });
 }
