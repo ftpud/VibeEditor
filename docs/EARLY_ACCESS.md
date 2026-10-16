@@ -20,16 +20,18 @@ Once the **Bundle Release** workflow is on the default branch:
 
 All releases from this action are mandatory **prereleases** and are never marked
 as the latest stable release. The tag's base version must match the version in
-all four bundle manifests (taken from the root `package.json` when built).
+both Gateway bundle manifests (taken from the root `package.json` when built).
 Increment the Early Access number for each promotion: `v0.1.0-early-access.1`,
 `v0.1.0-early-access.2`, and so on. For a new application version, bump the root
 `package.json` version (for example to `0.1.1`), build again, and start with
 `v0.1.1-early-access.1`. Promoting an existing build preserves its embedded
 version and filenames; the Early Access number identifies the release.
 
-The action verifies all four application ZIPs against their manifests and source
-commit, creates the tag at the build's commit, and publishes the ZIPs and JSON
-manifests on the repository's **Releases** page. It promotes the existing files
+The action verifies the macOS and Windows Gateway ZIPs against their manifests
+and source commit, creates the tag at the build's commit, and publishes only
+those two Gateway ZIPs and their JSON manifests on the repository's **Releases**
+page. Gateway includes the embedded Desktop; standalone Desktop bundles remain
+available as build artifacts. It promotes the existing files
 without rebuilding. The built-in GitHub token supplies the required permissions;
 no additional secret is needed. Existing tags and releases are refused.
 

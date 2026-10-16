@@ -52,22 +52,22 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          mkdir assets
+          mkdir bundles
           for artifact in vibe-early-access-macos-15 vibe-early-access-windows-2025; do
-            gh run download "$RUN_ID" --name "$artifact" --dir assets
+            gh run download "$RUN_ID" --name "$artifact" --dir bundles
           done
 
-      - name: Verify bundle manifests and checksums
+      - name: Verify and select Gateway bundles for release
         env:
           SOURCE_SHA: ${{ steps.source.outputs.sha }}
         shell: python
         run: |
-          import hashlib, json, os, re
+          import hashlib, json, os, re, shutil
           from pathlib import Path
 
-          assets = Path('assets')
-          manifests = sorted(assets.glob('*.zip.json'))
-          assert len(manifests) == 4, 'Expected four application manifests'
+          bundles = Path('bundles')
+          manifests = sorted(bundles.glob('vibe-gateway-*.zip.json'))
+          assert len(manifests) == 2, 'Expected two Gateway manifests'
           versions = set()
           expected = set()
           for manifest in manifests:
@@ -85,9 +85,12 @@ jobs:
           version = versions.pop()
           assert re.fullmatch(r'(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)', version), 'Expected a major.minor.patch bundle version'
           assert re.fullmatch(r'v' + re.escape(version) + r'-early-access\.[1-9][0-9]*', os.environ['TAG']), 'Release tag must match the bundle version: v' + version + '-early-access.<N>'
-          for kind in ('gateway', 'desktop'):
-              for platform in ('darwin-arm64', 'win32-x64'):
-                  assert f'vibe-{kind}-{version}-{platform}.zip' in expected
+          for platform in ('darwin-arm64', 'win32-x64'):
+              assert f'vibe-gateway-{version}-{platform}.zip' in expected
+          assets = Path('assets')
+          assets.mkdir()
+          for filename in sorted(expected):
+              shutil.copyfile(bundles / filename, assets / filename)
           assert {p.name for p in assets.iterdir()} == expected, 'Unexpected release files'
 
       - name: Publish release with existing bundles
