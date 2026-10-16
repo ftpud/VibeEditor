@@ -46,6 +46,7 @@ Optional features have additional requirements:
 - Java: Maven and a project JDK that provides `java`, `jdb`, `jimage`, and related tools. The installer downloads JDT LS and a Temurin 21 JRE used only to run the language server.
 - Codex: valid Codex authentication/configuration in the account running Core. The Codex ACP server itself is an npm dependency of this repository; a separate `codex` executable is not required.
 - Copilot: an installed and authenticated `copilot` CLI, or `COPILOT_CLI_PATH` pointing to it.
+- Claude: a Claude Code login on the Core host (`claude` then `/login`), or `ANTHROPIC_API_KEY` in Core's environment. The ACP adapter and its CLI are bundled.
 
 An `npm install` without `VIBE_SKIP_JDTLS=1` attempts to download the pinned JDT LS and Temurin runtime. A download failure is reported as a warning because Java tooling is optional. If you skipped that download, install or repair it later on the machine running Core:
 
@@ -181,7 +182,7 @@ Gateway deploys committed code from the repository and branch saved in its setti
 - **Terminal:** multiple workspace-specific `node-pty` terminals with restored tab metadata. Live Core-owned processes reattach after reconnect or task switching. If the previous session is unavailable, restoration can create a new shell; it does not reconstruct the old process environment or working directory.
 - **Git:** status and diffs, selective commits, push, checkout and branch rename, searchable graph/history, file/selection history, compare-with-ref, cherry-pick, and file or hunk rollback.
 - **Task workspaces:** isolated Git worktrees on new, existing, or remote branches. A new task copies the root's staged, unstaged, untracked, ignored, and deleted-file state but excludes `node_modules`. Tasks can be compared with their recorded base and merged back with normal or smart merge.
-- **AI:** a shared AI Capability Provider layer with Codex ACP and Copilot ACP adapters, model/configuration discovery, resumable sessions, permission prompts, usage data, attachments, steering, MCP servers, and global/local/workspace agent presets. See [docs/ACP.md](ACP.md).
+- **AI:** a shared AI Capability Provider layer with Codex ACP, Copilot ACP, and Claude ACP adapters, model/configuration discovery, resumable sessions, permission prompts, usage data, attachments, steering, MCP servers, and global/local/workspace agent presets. See [docs/ACP.md](ACP.md).
 - **Vibe MCP tools:** agents can manage task worktrees, merge completed work, inspect usage, schedule continuations, hand off to a fresh session, and call connected workflow blocks. Enable the built-in `vibe-editor` server through an agent preset. See the [tool reference and examples](MCP.md).
 - **Java/Maven:** Maven project loading, source roots, JDT LS completion/navigation/diagnostics/semantic tokens, editable launch profiles and tool settings, `jdb` debugging with object/array inspection, and paused-session HotSwap. See [Java debugging](JAVA_DEBUGGING.md).
 - **HTTP and notes:** executable requests in `.http` files, executable shell blocks in Markdown, and global or workspace-local Useful Files.

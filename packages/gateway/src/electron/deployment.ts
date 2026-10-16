@@ -1,5 +1,5 @@
 export type ProvisionedRelease = { commit: string; rebuilt: boolean; release: string };
-const releasePattern = /^[0-9a-f]{40,64}-node[0-9]+(?:-repair-[a-zA-Z0-9]+)?$/;
+const releasePattern = /^[0-9a-f]{40,64}-node[0-9]+(?:-repair-[a-zA-Z0-9]+|-bundle-[a-zA-Z0-9-]+)?$/;
 function shell(value: string): string { return `'${value.replaceAll("'", `'"'"'`)}'`; }
 
 export function parseProvisionedRelease(output: string): ProvisionedRelease {
@@ -71,12 +71,12 @@ test ! -L "$tokenfile" || { echo 'Core token file must not be a symlink' >&2; ex
 SESSION_TOKEN=$(cat "$tokenfile")
 [[ "$SESSION_TOKEN" =~ ^[A-Za-z0-9_-]+$ ]] && [ "\${#SESSION_TOKEN}" -ge 32 ] && [ "\${#SESSION_TOKEN}" -le 256 ] || { echo 'Invalid Core session token file' >&2; exit 1; }
 previous=$(cat "$selection" 2>/dev/null || true)
-if [ -n "$previous" ] && ! [[ "$previous" =~ ^[0-9a-f]{40,64}-node[0-9]+(-repair-[a-zA-Z0-9]+)?$ ]]; then echo 'Stored release reference is invalid; inspect the release sidecar before retrying' >&2; exit 1; fi
+if [ -n "$previous" ] && ! [[ "$previous" =~ ^[0-9a-f]{40,64}-node[0-9]+(-repair-[a-zA-Z0-9]+|-bundle-[a-zA-Z0-9-]+)?$ ]]; then echo 'Stored release reference is invalid; inspect the release sidecar before retrying' >&2; exit 1; fi
 ${serverStopFunctions(workspaceId, workspace)}
 start_server() {
-  (cd "$1"; REMOTE_IDE_SESSION_TOKEN="$SESSION_TOKEN" nohup node packages/core/dist/index.js --host 127.0.0.1 --port ${port} --gateway-workspace-id ${workspaceId} --workspace ${shell(workspace)} > "$logfile" 2>&1 < /dev/null & echo $! > "$pidfile")
+  (cd "$1"; if [ -x "$PWD/bin/node" ]; then export PATH="$PWD/bin:$PATH"; fi; REMOTE_IDE_SESSION_TOKEN="$SESSION_TOKEN" nohup node packages/core/dist/index.js --host 127.0.0.1 --port ${port} --gateway-workspace-id ${workspaceId} --workspace ${shell(workspace)} > "$logfile" 2>&1 < /dev/null & echo $! > "$pidfile")
 }
-health() { (cd "$1"; REMOTE_IDE_SESSION_TOKEN="$SESSION_TOKEN" node --input-type=commonjs -e ${probe}); }
+health() { (cd "$1"; if [ -x "$PWD/bin/node" ]; then export PATH="$PWD/bin:$PATH"; fi; REMOTE_IDE_SESSION_TOKEN="$SESSION_TOKEN" node --input-type=commonjs -e ${probe}); }
 candidate="$base/releases/${release}"
 test -f "$candidate/packages/core/dist/index.js"
 restore_previous() {
@@ -161,7 +161,7 @@ REMOTE_IDE_SESSION_TOKEN="$SESSION_TOKEN" node --input-type=commonjs -e ${shell(
 /** Resolve the release belonging to this workspace, with a legacy installation fallback. */
 export function workspaceReleaseDirectory(workspaceId: string): string {
   if (!/^[A-Za-z0-9_-]{1,200}$/.test(workspaceId)) throw new Error("Invalid workspace identity");
-  return `release=$(cat "$HOME/.vibe-server-${workspaceId}.release" 2>/dev/null || true); if [ -n "$release" ]; then [[ "$release" =~ ^[0-9a-f]{40,64}-node[0-9]+(-repair-[a-zA-Z0-9]+)?$ ]] || { echo 'Invalid deployed release reference' >&2; exit 1; }; release_directory="$HOME/.vibe-deploy/releases/$release"; else release_directory="$HOME/.vibe"; fi`;
+  return `release=$(cat "$HOME/.vibe-server-${workspaceId}.release" 2>/dev/null || true); if [ -n "$release" ]; then [[ "$release" =~ ^[0-9a-f]{40,64}-node[0-9]+(-repair-[a-zA-Z0-9]+|-bundle-[a-zA-Z0-9-]+)?$ ]] || { echo 'Invalid deployed release reference' >&2; exit 1; }; release_directory="$HOME/.vibe-deploy/releases/$release"; else release_directory="$HOME/.vibe"; fi`;
 }
 
 function serverStopFunctions(workspaceId: string, workspace: string): string {

@@ -9,7 +9,7 @@ export function summarizeAiSessions(sessions: AiSession[]): { status: AiStatus; 
   return {
     status: session.status,
     preview: message?.text.replace(/\s+/g, " ").trim().slice(0, 180) ?? "",
-    pendingPermission: sessions.some((item) => item.pendingPermission !== undefined)
+    pendingPermission: sessions.some((item) => item.pendingPermission !== undefined || item.pendingQuestion !== undefined)
   };
 }
 

@@ -9,7 +9,7 @@ import { StorageProcesses } from "./storage-processes.js";
 
 export type VersionEntry = { path: string; label: string; current: boolean };
 export type VersionOptions = { home: string; runtimeDirectory: string; currentDeployment?: () => string; currentRuntime?: () => string | undefined; closeOtherSessions?: (paths: string[], progress: (message: string) => void) => Promise<void> };
-const releasePattern = /^[a-f0-9]{40,64}-node\d+(?:-repair-[a-zA-Z0-9]+)?$/;
+const releasePattern = /^[a-f0-9]{40,64}-node\d+(?:-repair-[a-zA-Z0-9]+|-bundle-[a-zA-Z0-9-]+)?$/;
 const contains = (directory: string, file: string) => file === directory || file.startsWith(`${directory}${path.sep}`);
 async function names(directory: string): Promise<string[]> { try { return await readdir(directory); } catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return []; throw error; } }
 async function directory(file: string): Promise<boolean> { const meta = await lstat(file).catch(() => undefined); return !!meta?.isDirectory() && !meta.isSymbolicLink(); }
@@ -32,7 +32,7 @@ export class StorageVersions {
     }
     for (const name of await names(path.join(this.deployment, "releases"))) {
       const file = path.join(this.deployment, "releases", name);
-      if ((releasePattern.test(name) || /^\.staging-[\w.-]+$/.test(name)) && await directory(file)) entries.push({ path: file, label: `Core / Desktop · ${name}`, current: contains(file, currentDeployment) });
+      if ((releasePattern.test(name) || /^(?:\.staging-[\w.-]+|\.bundle-\d+-\d+)$/.test(name)) && await directory(file)) entries.push({ path: file, label: `Core / Desktop · ${name}`, current: contains(file, currentDeployment) });
     }
     for (const name of await names(path.join(this.deployment, "sources"))) {
       const file = path.join(this.deployment, "sources", name);

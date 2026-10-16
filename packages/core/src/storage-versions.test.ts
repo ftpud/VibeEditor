@@ -24,6 +24,17 @@ async function fixture() {
   return { home, runtimeDirectory, deployment, currentRuntime, oldRuntime, currentRelease, oldRelease, source, closeOtherSessions, service };
 }
 describe("version retention", () => {
+  it("recognizes bundled releases and preserves the loaded bundle while removing an old one", async () => {
+    const f = await fixture();
+    const current = path.join(f.deployment, "releases", `${"d".repeat(40)}-node137-bundle-1-1-linux-x64`);
+    const obsolete = path.join(f.deployment, "releases", `${"e".repeat(40)}-node137-bundle-2-1-linux-x64-repair-abc`);
+    await mkdir(current); await mkdir(obsolete);
+    const service = new StorageVersions({ home: f.home, runtimeDirectory: f.runtimeDirectory, currentDeployment: () => current, currentRuntime: () => f.currentRuntime, closeOtherSessions: f.closeOtherSessions });
+    expect((await service.entries()).find(entry => entry.path === current)?.current).toBe(true);
+    await service.keepCurrent([current, obsolete], async () => [], () => {});
+    await expect(access(current)).resolves.toBeUndefined();
+    await expect(access(obsolete)).rejects.toThrow();
+  });
   it("stops peers before deleting old versions and keeps the actual loaded runtime and release", async () => {
     const f = await fixture();
     await writeFile(path.join(f.home, ".vibe-server-other.release.previous"), path.basename(f.oldRelease));

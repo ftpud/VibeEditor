@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import os from "node:os";
 import { constants } from "node:fs";
 import { access, cp, lstat, mkdir, readFile, readdir, opendir, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
@@ -42,7 +43,7 @@ export class WorkspaceFileSystem {
   private workspace?: string;
   private readonly treeLimits: WorkspaceTreeLimits;
 
-  constructor(limits: Partial<WorkspaceTreeLimits> = {}) {
+  constructor(limits: Partial<WorkspaceTreeLimits> = {}, private readonly stateDirectory = process.env.REMOTE_IDE_STATE_DIR ?? path.join(os.homedir(), ".remote-ide", "workspaces")) {
     this.treeLimits = { ...DEFAULT_WORKSPACE_TREE_LIMITS };
     const variables = { maxNodes: "VIBE_TREE_MAX_NODES", maxPathBytes: "VIBE_TREE_MAX_PATH_BYTES", maxDepth: "VIBE_TREE_MAX_DEPTH" } as const;
     for (const key of Object.keys(variables) as (keyof WorkspaceTreeLimits)[]) {
@@ -100,6 +101,7 @@ export class WorkspaceFileSystem {
   async snapshot(relativePaths: string[]): Promise<FilesystemSnapshotEntry[]> {
     if (relativePaths.length > 256) throw new CoreError("INVALID_REQUEST", "Snapshot is limited to 256 paths");
     return Promise.all([...new Set(relativePaths)].map(async (relativePath) => {
+      if (relativePath === TRASH_DIRECTORY || relativePath.startsWith(`${TRASH_DIRECTORY}/`)) return { path: relativePath };
       const target = this.validateRelative(relativePath);
       try {
         const info = await lstat(target);
@@ -278,29 +280,66 @@ export class WorkspaceFileSystem {
       return { path: relativePath, permanentlyDeleted: true };
     }
     const recoveryId = randomUUID();
-    const trashRoot = path.join(this.getWorkspace(), TRASH_DIRECTORY);
+    const entry = path.join(this.trashRoot(), recoveryId);
+    let preserved = false;
     try {
-      await mkdir(trashRoot, { recursive: true });
-      await rename(target, path.join(trashRoot, recoveryId));
-      await writeFile(path.join(trashRoot, `${recoveryId}.json`), JSON.stringify({ path: relativePath }), { encoding: "utf8", flag: "wx" });
+      await mkdir(entry, { recursive: true, mode: 0o700 });
+      // Persist recovery metadata before changing the user's path.
+      await writeFile(path.join(entry, "metadata.json"), JSON.stringify({ path: relativePath }), { encoding: "utf8", flag: "wx", mode: 0o600 });
+      const payload = path.join(entry, "payload");
+      try { await rename(target, payload); }
+      catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "EXDEV") throw error;
+        // Core's state and the workspace can live on different filesystems.
+        await cp(target, payload, { recursive: true, force: false, errorOnExist: true, verbatimSymlinks: true });
+        preserved = true;
+        await rm(target, { recursive: true });
+      }
       return { path: relativePath, recoveryId, permanentlyDeleted: false };
     } catch (error) {
-      throw new CoreError("WRITE_FAILED", `Could not move ${relativePath} to workspace trash: ${error instanceof Error ? error.message : String(error)}. Retry with permanent delete only if recovery is not required.`);
+      if (!preserved) await rm(entry, { recursive: true, force: true }).catch(() => undefined);
+      const recovery = preserved ? ` A recovery copy is available with ID ${recoveryId}.` : "";
+      throw new CoreError("WRITE_FAILED", `Could not move ${relativePath} to workspace trash: ${error instanceof Error ? error.message : String(error)}.${recovery}`);
     }
+  }
+
+  private trashRoot(): string {
+    const key = createHash("sha256").update(this.getWorkspace()).digest("hex");
+    return path.join(this.stateDirectory, "trash", key);
   }
 
   async restore(recoveryId: string): Promise<string> {
     if (!/^[0-9a-f-]{36}$/i.test(recoveryId)) throw new CoreError("INVALID_REQUEST", "Invalid recovery ID");
-    const trashRoot = path.join(this.getWorkspace(), TRASH_DIRECTORY);
+    const entry = path.join(this.trashRoot(), recoveryId);
+    let metadataPath = path.join(entry, "metadata.json");
+    let payload = path.join(entry, "payload");
     try {
-      const metadataPath = path.join(trashRoot, `${recoveryId}.json`);
-      const metadata = JSON.parse(await readFile(metadataPath, "utf8")) as { path?: unknown };
+      let text: string;
+      try { text = await readFile(metadataPath, "utf8"); }
+      catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+        // Keep deletions from earlier versions recoverable.
+        const legacy = path.join(this.getWorkspace(), TRASH_DIRECTORY);
+        const info = await lstat(legacy);
+        if (!info.isDirectory() || info.isSymbolicLink()) throw new Error("invalid legacy workspace trash");
+        metadataPath = path.join(legacy, `${recoveryId}.json`);
+        payload = path.join(legacy, recoveryId);
+        text = await readFile(metadataPath, "utf8");
+      }
+      const metadata = JSON.parse(text) as { path?: unknown };
       if (typeof metadata.path !== "string") throw new Error("invalid recovery metadata");
       const destination = await this.resolveNew(metadata.path);
-      try { await access(destination); throw new CoreError("WRITE_FAILED", `Cannot restore because a path already exists at ${metadata.path}`); }
+      try { await lstat(destination); throw new CoreError("WRITE_FAILED", `Cannot restore because a path already exists at ${metadata.path}`); }
       catch (error) { if (error instanceof CoreError) throw error; if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
-      await rename(path.join(trashRoot, recoveryId), destination);
-      await rm(metadataPath);
+      try { await rename(payload, destination); }
+      catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "EXDEV") throw error;
+        await cp(payload, destination, { recursive: true, force: false, errorOnExist: true, verbatimSymlinks: true });
+        await rm(payload, { recursive: true });
+      }
+      // Once restored, cleanup failure must not turn success into a deletion error.
+      if (metadataPath === path.join(entry, "metadata.json")) await rm(entry, { recursive: true, force: true }).catch(() => undefined);
+      else await rm(metadataPath).catch(() => undefined);
       return metadata.path;
     } catch (error) {
       if (error instanceof CoreError) throw error;
@@ -406,11 +445,22 @@ export class WorkspaceFileSystem {
 
 async function listGitPaths(root: string, limits: WorkspaceTreeLimits): Promise<string[] | undefined> {
   try {
-    const { stdout } = await execFileAsync("git", ["-C", root, "ls-files", "--cached", "--others", "--exclude-standard", "-z"], {
+    const { stdout } = await execFileAsync("git", ["-C", root, "ls-files", "--cached", "--others", "--exclude-standard", "--exclude=.vibe-trash/", "-z"], {
       encoding: "utf8",
       maxBuffer: Math.max(4096, limits.maxPathBytes + limits.maxNodes * 2)
     });
-    return stdout.split("\0").filter((entry) => entry.length > 0);
+    const paths = stdout.split("\0").filter((entry) => entry.length > 0 && entry !== TRASH_DIRECTORY && !entry.startsWith(`${TRASH_DIRECTORY}/`));
+    const existing: string[] = [];
+    // Git's index still lists tracked files after deletion. Only render paths
+    // that currently exist, with bounded parallel filesystem requests.
+    for (let offset = 0; offset < paths.length; offset += 64) {
+      const batch = await Promise.all(paths.slice(offset, offset + 64).map(async entry => {
+        try { await lstat(path.join(root, entry)); return entry; }
+        catch (error) { if (["ENOENT", "ENOTDIR"].includes((error as NodeJS.ErrnoException).code ?? "")) return undefined; throw error; }
+      }));
+      existing.push(...batch.filter((entry): entry is string => entry !== undefined));
+    }
+    return existing;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER") throw treeTooLarge("Git output collection budget");
     return undefined;
@@ -419,7 +469,7 @@ async function listGitPaths(root: string, limits: WorkspaceTreeLimits): Promise<
 
 async function listGitDirectories(root: string, limits: WorkspaceTreeLimits): Promise<Set<string>> {
   try {
-    const { stdout } = await execFileAsync("git", ["-C", root, "ls-files", "--others", "--exclude-standard", "--directory", "-z"], {
+    const { stdout } = await execFileAsync("git", ["-C", root, "ls-files", "--others", "--exclude-standard", "--exclude=.vibe-trash/", "--directory", "-z"], {
       encoding: "utf8",
       maxBuffer: Math.max(4096, limits.maxPathBytes + limits.maxNodes * 2)
     });

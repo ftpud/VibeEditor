@@ -203,7 +203,7 @@ export class ServerStorage {
       if (!name.startsWith(prefix) || !name.endsWith(".json") || name.includes("sessions")) continue;
       const file = path.join(this.stateDirectory, name); await this.assertSafe(file);
       const value = JSON.parse(await readFile(file, "utf8"));
-      if (["in_progress", "user_prompt"].includes(value.status) || value.pendingPermission) return true;
+      if (["in_progress", "user_prompt"].includes(value.status) || value.pendingPermission || value.pendingQuestion) return true;
     }
     return false;
   }

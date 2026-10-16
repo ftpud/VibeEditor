@@ -52,7 +52,7 @@ import { TaskCheckpointStore } from "./task-checkpoints.js";
 import { RemoteTransferService } from "./remote-transfer.js";
 import { WorkspaceRootRegistry } from "./workspace-roots.js";
 import type { AiProvider, AiSession, HarnessBlock, HarnessDefinition } from "@remote-ide/protocol";
-import { AiProviderError, findAutopilotOption, normalizeAiFailure } from "@remote-ide/acp";
+import { AiProviderError, findAutopilotOption, normalizeAiFailure, type AiConfiguration, type AiOption } from "@remote-ide/acp";
 
 const execFileAsync = promisify(execFile);
 const delay = (milliseconds: number) => new Promise<void>((resolve) => setTimeout(resolve, milliseconds));
@@ -334,7 +334,7 @@ export async function createServer(host: string, port: number, workspacePath: st
       const workflowTools = appToolServer(rootWorkspace, sessionWorkspace, provider.descriptor.id, recoveryBridgeWorkspace, { ...runtime, flow: ["ai", "chatbox"].includes(block.type) });
       const mcpServers = [...appTools.servers.filter((server) => server.name !== workflowTools.name), workflowTools];
       const workflowAgent = appTools.agent ? { ...appTools.agent, mcpServers: [...new Set([...(appTools.agent.mcpServers ?? []), workflowTools.name])] } : undefined;
-      const autopilot = findAutopilotOption(provider.descriptor.options); const configuration = { ...(block.model ? { model: block.model } : {}), ...(block.reasoning ? { reasoning: block.reasoning } : {}), ...(autopilot ? { [autopilot.option.id]: block.autopilot === false ? autopilot.off : autopilot.on } : {}) };
+      const configuration = workflowConfiguration(provider.descriptor.options, block);
       const skillIds = await workflowSessionSkillIds(run?.definition, block, new SkillsStore(undefined, rootWorkspace), workspace);
       runtime.assertActive(); await provider.startFreshSession(sessionWorkspace, { prompt, configuration, mcpServers, captureSnapshots: workflowCapturesSnapshots(run, block.id), ...(skillIds ? { skillIds } : {}), agent: workflowAgent, ...(block.agent ? { agentPreset: block.agent } : {}) }); runtime.assertActive();
       managedProcesses.setWorkspaceContext(sessionWorkspace, { workflowRunId: runtime.runId, workflowBlockId: runtime.blockId });
@@ -348,7 +348,7 @@ export async function createServer(host: string, port: number, workspacePath: st
       const provider = acp.get(block.provider ?? "codex"); if (!recoveryRunner.isActive(runtime.runId)) throw new Error("Workflow is no longer active"); const current = await provider.get(runtime.workspace);
       const workflowTools = appToolServer(rootWorkspace, runtime.workspace, provider.descriptor.id, recoveryBridgeWorkspace, { runId: runtime.runId, blockId: runtime.blockId, flow: ["ai", "chatbox"].includes(block.type) });
       if (current.status === "in_progress" || current.status === "user_prompt") await provider.steer(runtime.workspace, prompt);
-      else await provider.send(runtime.workspace, { prompt, configuration: current.configuration ?? { model: current.model, reasoning: current.reasoning }, mcpServers: [workflowTools], captureSnapshots: workflowCapturesSnapshots(recovered, block.id) });
+      else await provider.send(runtime.workspace, { prompt, configuration: { ...current.configuration ?? { model: current.model, reasoning: current.reasoning }, ...workflowFeatureOptions(provider.descriptor.options, block) }, mcpServers: [workflowTools], captureSnapshots: workflowCapturesSnapshots(recovered, block.id) });
       if (!recoveryRunner.isActive(runtime.runId)) throw new Error("Workflow is no longer active");
       return settleWorkflowSession(provider, runtime.workspace, aiTimers, undefined, () => recoveryRunner.isActive(runtime.runId), runtime.activity);
     });
@@ -951,6 +951,16 @@ async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStor
       if (session.pendingPermission?.id !== request.payload.requestId) throw new CoreError("INVALID_REQUEST", "Permission request is no longer pending");
       return { session: await provider.resolvePermission(targetWorkspace, request.payload.requestId, request.payload.optionId) };
     }
+    case "ai.question.answer": {
+      // Like permission cards, a question card names the task and conversation it belongs to.
+      const targetWorkspace = request.payload.target
+        ? await permissionTargetWorkspace(tasks, rootWorkspace, request.payload.target.taskId)
+        : workspacePath;
+      const provider = acp.get(request.payload.provider);
+      const session = await provider.get(targetWorkspace);
+      if (request.payload.target?.sessionId && session.id !== request.payload.target.sessionId) throw new CoreError("INVALID_REQUEST", "Question belongs to a different conversation");
+      return { session: await provider.answerQuestion(targetWorkspace, request.payload.requestId, request.payload.action, request.payload.answer) };
+    }
     case "ai.interrupt": {
       const provider = acp.get(request.payload.provider);
       await aiTimers.cancelProvider(workspacePath, provider.descriptor.id);
@@ -1376,8 +1386,7 @@ export async function startWorkflow(input: ProtocolOperations["harnesses.run"]["
         name: workflowAgent?.name ?? block.label,
         instructions: [workflowAgent?.instructions, runtime.instructions].filter(Boolean).join("\n\n"),
       } : workflowAgent;
-      const autopilot = findAutopilotOption(provider.descriptor.options);
-      const configuration = { ...(block.model ? { model: block.model } : {}), ...(block.reasoning ? { reasoning: block.reasoning } : {}), ...(autopilot ? { [autopilot.option.id]: block.autopilot === false ? autopilot.off : autopilot.on } : {}) };
+      const configuration = workflowConfiguration(provider.descriptor.options, block);
       const run = await harnessRunner.readRun(runtime.runId);
       const skillIds = await workflowSessionSkillIds(run?.definition, block, new SkillsStore(undefined, rootWorkspace), workspacePath);
       runtime.assertActive();
@@ -1393,7 +1402,7 @@ export async function startWorkflow(input: ProtocolOperations["harnesses.run"]["
       if (!harnessRunner.isActive(runtime.runId)) throw new Error("Workflow is no longer active");
       const workflowTools = appToolServer(rootWorkspace, runtime.workspace, provider.descriptor.id, bridgeWorkspace, { runId: runtime.runId, blockId: runtime.blockId, flow: ["ai", "chatbox"].includes(block.type) });
       if (current.status === "in_progress" || current.status === "user_prompt") await provider.steer(runtime.workspace, prompt);
-      else await provider.send(runtime.workspace, { prompt, configuration: current.configuration ?? { model: current.model, reasoning: current.reasoning }, mcpServers: [workflowTools], captureSnapshots: workflowCapturesSnapshots(await harnessRunner.readRun(runtime.runId), block.id) });
+      else await provider.send(runtime.workspace, { prompt, configuration: { ...current.configuration ?? { model: current.model, reasoning: current.reasoning }, ...workflowFeatureOptions(provider.descriptor.options, block) }, mcpServers: [workflowTools], captureSnapshots: workflowCapturesSnapshots(await harnessRunner.readRun(runtime.runId), block.id) });
       if (!harnessRunner.isActive(runtime.runId)) throw new Error("Workflow is no longer active");
       return settleWorkflowSession(provider, runtime.workspace, aiTimers, block.watchdog ? runtime : undefined, () => harnessRunner.isActive(runtime.runId), runtime.activity);
     });
@@ -1473,6 +1482,17 @@ async function workflowSessionWorkspace(workspace: string, runId: string, blockI
   catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; }
   if (await realpath(alias) !== await availableWorkflowWorkspace(workspace)) throw new CoreError("INVALID_REQUEST", "Workflow session alias points to a different worktree");
   return alias;
+}
+
+/** Workflow sessions never wait for a person: interactive switches are forced off, other feature switches follow the block. */
+export function workflowFeatureOptions(options: AiOption[], block: Pick<HarnessBlock, "options">): AiConfiguration {
+  const chosen = Object.entries(block.options ?? {}).filter(([id]) => options.some((option) => option.id === id && !option.interactive && !option.permissionApproval));
+  return { ...Object.fromEntries(chosen), ...Object.fromEntries(options.filter((option) => option.interactive).map((option) => [option.id, false])) };
+}
+
+export function workflowConfiguration(options: AiOption[], block: Pick<HarnessBlock, "model" | "reasoning" | "autopilot" | "options">): AiConfiguration {
+  const autopilot = findAutopilotOption(options);
+  return { ...(block.model ? { model: block.model } : {}), ...(block.reasoning ? { reasoning: block.reasoning } : {}), ...workflowFeatureOptions(options, block), ...(autopilot ? { [autopilot.option.id]: block.autopilot === false ? autopilot.off : autopilot.on } : {}) };
 }
 
 export async function settleWorkflowSession(provider: ReturnType<AcpRegistry["get"]>, workspace: string, timers: Pick<AiTimerService, "next" | "scheduleAt">, watchdog?: { runId: string; blockId: string }, active: () => boolean = () => true, activity?: (session: AiSession, waitingUntil?: string) => Promise<void>) {

@@ -22,6 +22,8 @@ export class GitService {
         maxBuffer: 4 * 1024 * 1024
       });
       const status = parseGitStatus(stdout);
+      // Older Core versions stored recovery payloads inside the worktree.
+      status.entries = status.entries.filter(entry => !isUntracked(entry) || (entry.path !== ".vibe-trash" && !entry.path.startsWith(".vibe-trash/")));
       const upstream = await this.upstreamStatus();
       return { ...status, ...(upstream ? { upstream } : {}) };
     } catch (error) {

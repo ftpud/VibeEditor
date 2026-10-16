@@ -138,6 +138,8 @@ AI configuration: provider, model, reasoning, agent:{scope,name}, autopilot.
 Choose values from configuration_list(include_models:true); do not invent IDs.
 When the provider supports autopilot, it is enabled unless autopilot:false; this
 controls provider permission behavior. Keep the user's requested permission mode.
+Optional options:{id:value} sets non-interactive provider feature switches such as
+liveSteering; interactive ones such as askQuestions are always off in workflows.
 Optional inputSchema/outputSchema describe JSON values using type:string|number|
 boolean|object|array, object properties and required arrays, or array items.
 These are a limited schema subset, not arbitrary JSON Schema. An associated

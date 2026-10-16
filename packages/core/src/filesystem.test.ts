@@ -3,8 +3,13 @@ import { promisify } from "node:util";
 import { access, mkdtemp, mkdir, readdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import * as fileOperations from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import { GitService } from "./git.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MAX_FILE_SIZE, WorkspaceFileSystem } from "./filesystem.js";
+
+vi.mock("node:fs/promises", async importOriginal => ({ ...await importOriginal<typeof import("node:fs/promises")>() }));
 
 const execFileAsync = promisify(execFile);
 
@@ -16,8 +21,10 @@ describe("WorkspaceFileSystem", () => {
     root = await mkdtemp(path.join(tmpdir(), "remote-ide-"));
     await mkdir(path.join(root, "src"));
     await writeFile(path.join(root, "src", "index.ts"), "export const value = 1;\n");
-    fs = new WorkspaceFileSystem();
+    fs = new WorkspaceFileSystem({}, `${root}-state`);
   });
+
+  afterEach(async () => { vi.restoreAllMocks(); await Promise.all([root, `${root}-state`].map(directory => rm(directory, { recursive: true, force: true }))); });
 
   it("opens an existing workspace and builds its tree", async () => {
     const tree = await fs.open(root);
@@ -138,6 +145,59 @@ describe("WorkspaceFileSystem", () => {
     expect((await fs.listTree(true)).some((node) => node.name === ".vibe-trash")).toBe(false);
     expect(await fs.restore(deleted.recoveryId!)).toBe("src");
     expect(await readFile(path.join(root, "src", "index.ts"), "utf8")).toContain("value = 1");
+  });
+
+  it("removes tracked deletions from refreshed trees without adding recovery files to Git", async () => {
+    await execFileAsync("git", ["-C", root, "init", "-q"]);
+    await execFileAsync("git", ["-C", root, "add", "src/index.ts"]);
+    await fs.open(root);
+    const result = await fs.delete("src");
+    expect(await fs.listTree()).toEqual([]);
+    expect(await fs.listTree(true)).not.toEqual(expect.arrayContaining([expect.objectContaining({ name: ".vibe-trash" })]));
+    await expect(access(path.join(root, ".vibe-trash"))).rejects.toMatchObject({ code: "ENOENT" });
+    expect((await new GitService(root).status()).entries.map(entry => entry.path)).toEqual(["src/index.ts"]);
+    // Recovery survives a new service instance selecting the same worktree.
+    const restarted = new WorkspaceFileSystem({}, `${root}-state`);
+    await restarted.initialize(root);
+    await restarted.restore(result.recoveryId!);
+    expect((await restarted.listTree())[0]?.children?.[0]?.path).toBe("src/index.ts");
+  });
+
+  it("does not fail a filesystem update batch because it contains legacy trash events", async () => {
+    await fs.open(root);
+    expect(await fs.snapshot(["src/index.ts", ".vibe-trash/deleted.json", "gone.txt"])).toEqual([
+      { path: "src/index.ts", type: "file" }, { path: ".vibe-trash/deleted.json" }, { path: "gone.txt" }
+    ]);
+  });
+
+  it("preserves older trash for recovery and keeps it out of untracked Git changes", async () => {
+    await execFileAsync("git", ["-C", root, "init", "-q"]);
+    const id = randomUUID();
+    await mkdir(path.join(root, ".vibe-trash"));
+    await writeFile(path.join(root, ".vibe-trash", id), "older contents");
+    await writeFile(path.join(root, ".vibe-trash", `${id}.json`), JSON.stringify({ path: "restored.txt" }));
+    await fs.open(root);
+    expect((await new GitService(root).status()).entries.map(entry => entry.path)).toEqual(["src/index.ts"]);
+    await fs.restore(id);
+    expect(await readFile(path.join(root, "restored.txt"), "utf8")).toBe("older contents");
+  });
+
+  it("leaves the original intact when recovery metadata cannot be written", async () => {
+    await fs.open(root);
+    vi.spyOn(fileOperations, "writeFile").mockRejectedValueOnce(Object.assign(new Error("metadata write denied"), { code: "EACCES" }));
+    await expect(fs.delete("src/index.ts")).rejects.toMatchObject({ code: "WRITE_FAILED" });
+    expect(await readFile(path.join(root, "src/index.ts"), "utf8")).toContain("value = 1");
+  });
+
+  it("supports deletion and restore across filesystem boundaries", async () => {
+    await fs.open(root);
+    const rename = vi.spyOn(fileOperations, "rename");
+    rename.mockRejectedValueOnce(Object.assign(new Error("different filesystems"), { code: "EXDEV" }));
+    const deleted = await fs.delete("src");
+    await expect(access(path.join(root, "src"))).rejects.toMatchObject({ code: "ENOENT" });
+    rename.mockRejectedValueOnce(Object.assign(new Error("different filesystems"), { code: "EXDEV" }));
+    await fs.restore(deleted.recoveryId!);
+    expect(await readFile(path.join(root, "src/index.ts"), "utf8")).toContain("value = 1");
   });
 
   it("supports explicit permanent delete and rejects the workspace trash namespace", async () => {

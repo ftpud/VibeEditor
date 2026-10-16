@@ -2,7 +2,7 @@ import os from "node:os";
 import path from "node:path";
 import { readFile } from "node:fs/promises";
 import type { AiConfiguration, AiModel, AiProviderDescriptor, AiUsage } from "@remote-ide/acp";
-import { StdioAcpProvider } from "../stdio-provider.js";
+import { ASK_QUESTIONS_OPTION, LIVE_STEERING_OPTION, StdioAcpProvider } from "../stdio-provider.js";
 import { readCodexAccountQuota } from "./codex-usage.js";
 import { resolveCodexRuntime } from "./codex-runtime.js";
 
@@ -14,11 +14,13 @@ type CodexCatalogueEntry = { slug?: unknown; display_name?: unknown; description
 export class CodexSessionManager extends StdioAcpProvider {
   readonly descriptor: AiProviderDescriptor = {
     id: "codex", name: "Codex ACP", description: "Codex through the standard Agent Client Protocol.",
-    settings: { title: "Codex settings", description: "These settings are applied through ACP session modes and configuration options.", sections: [{ id: "tools", name: "Tools & access", description: "Capabilities available while Codex works." }] },
+    settings: { title: "Codex settings", description: "These settings are applied through ACP session modes and configuration options.", sections: [{ id: "tools", name: "Tools & access", description: "Capabilities available while Codex works." }, { id: "features", name: "Session features", description: "How Vibe Editor works with the running session." }] },
     capabilities: { models: true, usage: true, mcp: true, agents: true, contextWindow: true, skills: true },
     options: [
       { id: "mode", name: "Agent mode", description: "Choose read-only analysis, normal workspace editing, or full access when advertised by the ACP server.", section: "tools", type: "select", defaultValue: "agent", choices: [{ value: "read-only", name: "Read only" }, { value: "agent", name: "Workspace agent" }, { value: "agent-full-access", name: "Full access" }] },
-      { id: "webSearch", name: "Web search", description: "Codex searches the web by default. Choose a different source, or disable it entirely.", section: "tools", type: "select", defaultValue: "default", choices: [{ value: "default", name: "Codex default" }, { value: "live", name: "Live" }, { value: "indexed", name: "Indexed" }, { value: "cached", name: "Cached" }, { value: "disabled", name: "Disabled" }] }
+      { id: "webSearch", name: "Web search", description: "Codex searches the web by default. Choose a different source, or disable it entirely.", section: "tools", type: "select", defaultValue: "default", choices: [{ value: "default", name: "Codex default" }, { value: "live", name: "Live" }, { value: "indexed", name: "Indexed" }, { value: "cached", name: "Cached" }, { value: "disabled", name: "Disabled" }] },
+      { ...ASK_QUESTIONS_OPTION, section: "features" },
+      { ...LIVE_STEERING_OPTION, section: "features" }
     ]
   };
 

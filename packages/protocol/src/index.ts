@@ -22,7 +22,7 @@ export type FileRevision = { identity: string; version: string };
  * Desktop can prove it is safe to talk to a newly deployed Core.
  */
 export type ProtocolCompatibility = { minimum: number; maximum: number };
-export const protocolCompatibility: ProtocolCompatibility = { minimum: 18, maximum: 18 };
+export const protocolCompatibility: ProtocolCompatibility = { minimum: 19, maximum: 19 };
 
 export function protocolRangeIsValid(range: ProtocolCompatibility): boolean {
   return Number.isInteger(range.minimum) && Number.isInteger(range.maximum) && range.minimum > 0 && range.minimum <= range.maximum;
@@ -163,8 +163,8 @@ export type TerminalSessionSnapshot = { terminalId: string; status: "running" | 
 /** Resolution is always against the currently selected workspace. A stale ID means Core no longer owns that process. */
 export type TerminalAttachResult = { state: "available"; session: TerminalSessionSnapshot } | { state: "stale"; reason: "session-unavailable" };
 export type WorkspaceTask = { id: string; name: string; branch: string; baseBranch: string; status: "active" | "finished"; archived: boolean };
-export type { AiContextCategory, AiContextEntry, AiContextSection, AiContextSnapshot, AiAgent, AiAgentPreset, AiCommand, AiConfiguration, AiContentBlock, AiFailure, AiFailureKind, AiMessage, AiModel, AiMcpServer, AiOption, AiPermissionRequest, AiProvider, AiProviderCapabilities, AiProviderDescriptor, AiSession, AiSettingsLayout, AiSettingsSection, AiStatus, AiTaskSummary, AiTokenUsage, AiUsage } from "@remote-ide/acp";
-import type { AiAgent, AiAgentPreset, AiConfiguration, AiContentBlock, AiMcpServer, AiModel, AiPermissionRequest, AiProvider, AiProviderDescriptor, AiSession, AiTaskSummary, AiTokenUsage, AiUsage } from "@remote-ide/acp";
+export type { AiContextCategory, AiContextEntry, AiContextSection, AiContextSnapshot, AiAgent, AiAgentPreset, AiCommand, AiConfiguration, AiContentBlock, AiFailure, AiFailureKind, AiMessage, AiModel, AiMcpServer, AiOption, AiPermissionRequest, AiQuestionAction, AiQuestionAnswer, AiQuestionChoice, AiQuestionField, AiQuestionRequest, AiProvider, AiProviderCapabilities, AiProviderDescriptor, AiSession, AiSettingsLayout, AiSettingsSection, AiStatus, AiTaskSummary, AiTokenUsage, AiUsage } from "@remote-ide/acp";
+import type { AiAgent, AiAgentPreset, AiConfiguration, AiQuestionAction, AiQuestionAnswer, AiContentBlock, AiMcpServer, AiModel, AiPermissionRequest, AiProvider, AiProviderDescriptor, AiSession, AiTaskSummary, AiTokenUsage, AiUsage } from "@remote-ide/acp";
 export type UsefulFileScope = "global" | "local";
 export type UsefulFile = { scope: UsefulFileScope; name: string };
 export type RunConfigScope = "global" | "local";
@@ -207,7 +207,7 @@ export type AiContinuationTimer = { id: string; workspace: string; provider: AiP
 export type HarnessAppAction = "start" | "status" | "kill" | "tail";
 export type HarnessAppState = { name: string; status: "not_found" | "starting" | "running" | "descendants-running" | "exited"; output: string; pid?: number; exitCode?: number | null; signal?: string | null };
 export type HarnessAppOptions = { action?: HarnessAppAction; actions?: HarnessAppAction[]; name: string; lines?: number };
-export type HarnessBlock = { id: string; type: "ai" | "chatbox" | "skill" | "task_controls" | "terminal_control" | "text" | "timer" | "user_prompt" | "yes_no_prompt" | "markdown" | "script" | "run_app" | "start_button" | "start_input" | "prompt" | "task" | "review" | "verification"; seconds?: number; command?: string; app?: HarnessAppOptions; autopilot?: boolean; label: string; description?: string; skillId?: string; prompt: string; inputSchema?: HarnessDataSchema; outputSchema?: HarnessDataSchema; provider?: AiProvider; model?: string; reasoning?: string; agent?: AgentFileReference; watchdog?: boolean; review?: HarnessReview; verification?: HarnessVerification; join?: "all" | "any"; routing?: "all" | "ai"; position: { x: number; y: number } };
+export type HarnessBlock = { id: string; type: "ai" | "chatbox" | "skill" | "task_controls" | "terminal_control" | "text" | "timer" | "user_prompt" | "yes_no_prompt" | "markdown" | "script" | "run_app" | "start_button" | "start_input" | "prompt" | "task" | "review" | "verification"; seconds?: number; command?: string; app?: HarnessAppOptions; autopilot?: boolean; label: string; description?: string; skillId?: string; prompt: string; inputSchema?: HarnessDataSchema; outputSchema?: HarnessDataSchema; provider?: AiProvider; model?: string; reasoning?: string; /** Non-interactive provider feature switches; interactive ones are always off in workflows. */ options?: AiConfiguration; agent?: AgentFileReference; watchdog?: boolean; review?: HarnessReview; verification?: HarnessVerification; join?: "all" | "any"; routing?: "all" | "ai"; position: { x: number; y: number } };
 export type HarnessEdge = { timeoutMs?: number; type?: "use" | "follow" | "path"; id: string; from: string; to: string; label?: string; loop?: boolean; execution?: "sync" | "async" };
 export type HarnessRetryPolicy = { maxAttempts?: number };
 export type HarnessSettings = { concurrency?: number; maxActiveRuns?: number; maxBlockAttempts?: number; maxStackSize?: number; maxLoopCount?: number; maxChildTasks?: number; promptLimitChars?: number; contextBudgetChars?: number; retry?: HarnessRetryPolicy; outputLimitChars?: number; logLimitEntries?: number; maxRunDurationMs?: number; tokenBudget?: number };
@@ -226,7 +226,7 @@ export type HarnessPauseStatus = "awaiting_permission" | "awaiting_user_input" |
 export type HarnessBlockStatus = "queued" | "running" | "succeeded" | "failed" | "blocked" | "cancelled" | "waiting" | "skipped" | HarnessPauseStatus;
 export type HarnessRunStatus = "queued" | "running" | "succeeded" | "failed" | "blocked" | "cancelled" | "waiting" | HarnessPauseStatus;
 /** Per-run Chatbox settings. An empty model selects the provider default. */
-export type HarnessChatSettings = Pick<HarnessBlock, "provider" | "model" | "autopilot">;
+export type HarnessChatSettings = Pick<HarnessBlock, "provider" | "model" | "autopilot" | "options">;
 export type HarnessChatMessage = { id: string; role: "user" | "assistant"; text: string; timestamp: string };
 export type HarnessAgentActivity = { id: string; timestamp: string; text: string };
 export type HarnessBlockRun = { blockId: string; context?: import("@remote-ide/acp").AiContextSnapshot; contextUsed?: number; contextLimit?: number; chatSettings?: HarnessChatSettings; deliveredContextChars?: number; autopilot?: boolean; agentActivity?: HarnessAgentActivity[]; chatMessages?: HarnessChatMessage[]; status: HarnessBlockStatus; startedAt?: string; completedAt?: string; prompt?: string; output?: string; structuredInput?: unknown; structuredOutput?: unknown; tokens?: AiTokenUsage; error?: string; failureReason?: HarnessFailureReason; retryAt?: string; retryStartedAt?: string; provider?: AiProvider; sessionId?: string; workspace?: string; selectedRoute?: string; plannedRuns?: number; iterations?: HarnessBlockIteration[]; attempts?: HarnessBlockAttempt[]; log?: HarnessLogEntry[]; waitingUntil?: string; recoveryAttempts?: number; pendingPermission?: AiPermissionRequest; question?: string; pauseId?: string };
@@ -378,6 +378,7 @@ export type ProtocolOperations = {
   "ai.skills": { payload: { provider?: AiProvider; ids: string[]; sessionId: string; agentPreset?: AiAgentPreset | null }; result: { session: AiSession } };
   "ai.send": { payload: { provider?: AiProvider; prompt: string; content?: AiContentBlock[]; model?: string; reasoning?: string; configuration?: AiConfiguration; mcpServers?: AiMcpServer[]; agent?: AiAgent; agentPreset?: AiAgentPreset }; result: { session: AiSession } };
   "ai.permission.resolve": { payload: { provider?: AiProvider; requestId: string; optionId?: string; target?: { taskId?: string; sessionId?: string } }; result: { session: AiSession } };
+  "ai.question.answer": { payload: { provider?: AiProvider; requestId: string; action: AiQuestionAction; answer?: AiQuestionAnswer; target?: { taskId?: string; sessionId?: string } }; result: { session: AiSession } };
   "ai.interrupt": { payload: { provider?: AiProvider }; result: { session: AiSession } };
   "ai.steer": { payload: { provider?: AiProvider; prompt: string }; result: { session: AiSession } };
   "ai.clear": { payload: { provider?: AiProvider }; result: { session: AiSession } };
@@ -806,6 +807,7 @@ const requestTypeRegistry: Record<RequestType, true> = {
   "ai.skills": true,
   "ai.send": true,
   "ai.permission.resolve": true,
+  "ai.question.answer": true,
   "ai.interrupt": true,
   "ai.steer": true,
   "ai.clear": true,

@@ -19,7 +19,7 @@ Vibe Editor is a remote-workspace IDE: an Electron/React/Monaco desktop client t
 - Filesystem tree (Project tool window) with automatic single-path expansion, file-type icons, persisted per-file icon colors, Git `M`/`C` status indicators, and external-change monitoring.
 - Keyboard-first **Quick Open / Go to File** (`Ctrl+P` / `Cmd+P`) with fuzzy workspace-path matching, ranked results, and arrow-key navigation.
 - Recursive **Find in Files** search with context, case matching, include/exclude filters, and previewed replacement that rejects files changed since the preview.
-- Project file/directory creation, rename, copy/move with collision previews, recoverable deletion, and local upload/remote download through a separate binary channel.
+- Project file/directory creation, rename, copy/move with collision previews, recoverable deletion, and local upload/remote download through a separate binary channel. Deletion recovery data lives in Core’s workspace state directory, outside project worktrees; older `.vibe-trash` entries remain restorable.
 - Tabs support keyboard navigation (`Ctrl+Tab` / `Ctrl+Shift+Tab`, with wraparound), keyboard close (`Ctrl+W` / `Cmd+W`), drag-and-drop reordering, middle-click close, pinning, Close All Unpinned, Close Unpinned to the Right, and modified/created markers.
 - Autosave after a short pause; clean buffers reload automatically on external edits, dirty buffers keep a conflict warning instead of being overwritten.
 - Monaco gutter markers highlight changed blocks (not whole lines); clicking a marker shows previous content and offers a block-level rollback.
@@ -53,7 +53,7 @@ Vibe Editor is a remote-workspace IDE: an Electron/React/Monaco desktop client t
 
 ## AI Integration
 
-- Pluggable **AI Capability Provider (ACP)** layer with adapters for **Codex ACP** (an npm dependency, with a managed runtime update cache) and **GitHub Copilot CLI** over Agent Client Protocol.
+- Pluggable **AI Capability Provider (ACP)** layer with adapters for **Codex ACP** (an npm dependency, with a managed runtime update cache) **GitHub Copilot CLI**, and **Claude** (via `@agentclientprotocol/claude-agent-acp`) over Agent Client Protocol.
 - Providers declare supported models, reasoning levels, extra controls, usage reporting, MCP server support, and custom-agent support; the AI panel UI is generated from those capabilities.
 - Global, repository-local, and workspace `.agents` presets with editable Markdown templates, automatic `.agents` discovery, and a persisted per-task agent selector.
 - Searchable model picker showing each model's request-cost multiplier, context window, description, reasoning levels, input modalities, and availability as advertised by the agent.
@@ -105,6 +105,7 @@ Vibe Editor is a remote-workspace IDE: an Electron/React/Monaco desktop client t
 
 - Core persists workspace layout, tasks, useful files, AI session metadata, file colors, terminal restoration data, root registrations, run configurations, workflow definitions/history, AI timers, and Git commit drafts outside the project, under `~/.remote-ide/workspaces` (overridable via `REMOTE_IDE_STATE_DIR`).
 - Desktop persists client-side UI preferences (tool window visibility, side panel widths, stacked panel sizes, bottom panel heights, layout mode, theme, fonts) per remote workspace in `settings.json` inside its Electron application-data directory, so panel geometry survives client restarts.
+- Buttons at the bottom of the left and right tool rails independently extend each sidebar through the lower panel area, narrowing the lower panel. Both layout modes support this, and the client-wide extension settings are restored on restart.
 - Gateway stores its own connection/workspace data in the platform's Electron application-data directory.
 
 ## Security Model

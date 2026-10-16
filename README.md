@@ -51,3 +51,5 @@ To use AI agents, authenticate your chosen provider on the machine running the w
 - [Why Vibe Editor exists](WHY.md).
 
 Available under the [MIT License](LICENSE.md).
+
+Early Access packaging and the manual **Bundle Create** action are documented in [Early Access bundles](docs/EARLY_ACCESS.md).

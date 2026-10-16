@@ -17,7 +17,7 @@ export async function workspaceWatchOptions(workspace: string): Promise<Chokidar
     followSymlinks: false,
     ignored: (target) => {
       const relative = path.relative(workspace, target);
-      if (relative.split(path.sep).some((part) => part === ".git" || part === "node_modules")) return true;
+      if (relative.split(path.sep).some((part) => part === ".git" || part === "node_modules" || part === ".vibe-trash")) return true;
       for (let current = path.resolve(target); current !== workspace && current !== path.dirname(current); current = path.dirname(current)) {
         if (ignoredDirectories.has(current)) return true;
       }

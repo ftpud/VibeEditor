@@ -8,8 +8,8 @@ import { pathToFileURL } from "node:url";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { mkdir, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { Readable, Writable } from "node:stream";
-import { ClientSideConnection, PROTOCOL_VERSION, ndJsonStream, type Client, type ContentBlock, type McpServer, type RequestPermissionRequest, type RequestPermissionResponse, type SessionConfigOption, type SessionNotification } from "@agentclientprotocol/sdk";
-import { AcpProvider, applyConfiguration, normalizeAiFailure, type AcpSendRequest, type AiConfiguration, type AiContentBlock, type AiMessage, type AiModel, type AiModelDetails, type AiOption, type AiProviderDescriptor, type AiSession, type AiUsage } from "@remote-ide/acp";
+import { ClientSideConnection, PROTOCOL_VERSION, ndJsonStream, type Client, type ContentBlock, type CreateElicitationRequest, type CreateElicitationResponse, type ElicitationSchema, type McpServer, type PromptResponse, type RequestPermissionRequest, type RequestPermissionResponse, type SessionConfigOption, type SessionNotification } from "@agentclientprotocol/sdk";
+import { AcpProvider, applyConfiguration, mergeConfiguration, normalizeAiFailure, type AcpSendRequest, type AiConfiguration, type AiContentBlock, type AiMessage, type AiModel, type AiModelDetails, type AiOption, type AiProviderDescriptor, type AiQuestionAction, type AiQuestionAnswer, type AiQuestionField, type AiSession, type AiUsage } from "@remote-ide/acp";
 import type { TaskCheckpointProvenance } from "@remote-ide/protocol";
 import { skillToolServer } from "../app-tools.js";
 import { SkillsStore } from "../skills.js";
@@ -28,8 +28,13 @@ type Runtime = {
   anchors: { assistant?: string; thought?: string };
   /** Bumped for every turn so a superseded turn cannot write a stale status. */
   generation: number;
-  /** True when the agent implements the `_session/steering` extension. */
+  /** True when the agent can fold input into a running turn. */
   steering: boolean;
+  steeringMode?: SteeringMode;
+  /** Prompts sent into the running turn of an agent that queues prompts; the turn settles after them. */
+  queuedTurns: Promise<PromptResponse | undefined>[];
+  /** Session `_meta` the agent was started with; a change restarts and resumes the session. */
+  sessionMetaKey: string;
   /** Follow-ups typed mid-turn that agents without steering run next. */
   pending: { prompt: string; senderModel?: string }[];
   checkpointIds: string[];
@@ -42,10 +47,18 @@ type ModeState = { currentModeId: string; availableModes: { id: string; name?: s
 type ModelState = { currentModelId?: string; availableModels: { modelId: string; name: string; description?: string | null; _meta?: Record<string, unknown> }[] } | null | undefined;
 type SelectChoice = { value: string; name: string; description?: string; _meta?: Record<string, unknown> };
 type CreatedSession = { sessionId: string; configOptions?: SessionConfigOption[] | null; modes?: ModeState; models?: ModelState };
-type Connected = { child: ChildProcessWithoutNullStreams; connection: ClientSideConnection; sessionId: string; stderr(): string; configOptions: SessionConfigOption[]; modes: ModeState; models: ModelState; steering: boolean; resumed: boolean; resumeFailed: boolean; bind(runtime: Runtime): void };
+type Connected = { child: ChildProcessWithoutNullStreams; connection: ClientSideConnection; sessionId: string; stderr(): string; configOptions: SessionConfigOption[]; modes: ModeState; models: ModelState; steering?: SteeringMode; resumed: boolean; resumeFailed: boolean; bind(runtime: Runtime): void };
 type PermissionWaiter = { workspace: string; resolve(response: RequestPermissionResponse): void };
+type QuestionWaiter = { workspace: string; resolve(response: CreateElicitationResponse): void };
+/** `extension`: the `_session/steering` method; `prompt`: the agent queues a second `session/prompt` into the live turn. */
+type SteeringMode = "extension" | "prompt";
 
 const STEERING_METHOD = "_session/steering";
+
+/** Feature switches shared by ACP providers. A provider lists the ones its agent supports. */
+export const ASK_QUESTIONS_OPTION: AiOption = { id: "askQuestions", name: "Questions", description: "Let the agent pause a turn to ask you multiple-choice or free-text questions. Changing this restarts and resumes the session. Always off in workflows.", type: "boolean", defaultValue: false, interactive: true };
+export const LIVE_STEERING_OPTION: AiOption = { id: "liveSteering", name: "Steer running turns", description: "Deliver messages sent while the agent works into the running turn. When off, they wait and run as the next turn.", type: "boolean", defaultValue: true, client: true };
+export const SYSTEM_INSTRUCTIONS_OPTION: AiOption = { id: "agentSystemInstructions", name: "Agent presets as system instructions", description: "Send the selected agent preset as session system instructions, so it survives compaction. Changing the preset restarts and resumes the session. When off, it is sent inside the first prompt.", type: "boolean", defaultValue: true };
 
 function checkpointProvenance(session: AiSession, content?: AiContentBlock[], agent?: AcpSendRequest["agent"]): TaskCheckpointProvenance {
   const attachments = content?.filter((block) => block.type !== "text").slice(0, 20).map((block) => ({
@@ -64,7 +77,7 @@ function stamp(session: AiSession): number { return Date.parse(session.updatedAt
 /** Everything the session picker needs to label a conversation, without its transcript. */
 function summarize(session: AiSession): AiSession {
   const first = session.messages?.find((message) => message.role === "user");
-  return { ...session, context: undefined, pendingPermission: undefined, availableCommands: undefined, availableOptions: undefined, messages: first ? [{ id: first.id, role: first.role, text: first.text.slice(0, 2000), timestamp: first.timestamp }] : [] };
+  return { ...session, context: undefined, pendingPermission: undefined, pendingQuestion: undefined, availableCommands: undefined, availableOptions: undefined, messages: first ? [{ id: first.id, role: first.role, text: first.text.slice(0, 2000), timestamp: first.timestamp }] : [] };
 }
 
 const MODEL_CACHE_MS = 5 * 60_000;
@@ -95,7 +108,7 @@ export abstract class StdioAcpProvider extends AcpProvider {
     for (const [workspace, runtime] of runtimes) {
       runtime.generation += 1; runtime.running = false; runtime.pending = [];
       this.freshSessions.delete(workspace); this.cancelPermissionWaiters(workspace);
-      runtime.session.pendingPermission = undefined;
+      runtime.session.pendingPermission = undefined; runtime.session.pendingQuestion = undefined;
       if (runtime.session.status === "in_progress" || runtime.session.status === "user_prompt") {
         runtime.session.status = "idle";
         runtime.session.messages.push(this.message("activity", "Interrupted because Core is shutting down"));
@@ -139,6 +152,7 @@ export abstract class StdioAcpProvider extends AcpProvider {
   private modelDiscovery?: Promise<AiModel[]>;
   private lastWorkspace = process.cwd();
   private readonly permissionWaiters = new Map<string, PermissionWaiter>();
+  private readonly questionWaiters = new Map<string, QuestionWaiter>();
   private readonly blankSessions = new Map<string, AiSession>();
   private readonly archiveIndex = new Map<string, { at: number; sessions: AiSession[] }>();
 
@@ -162,7 +176,7 @@ export abstract class StdioAcpProvider extends AcpProvider {
     try {
       const saved = JSON.parse(await readFile(this.file(workspace), "utf8")) as AiSession & { _ownerPid?: number };
       const now = new Date().toISOString();
-      const { _ownerPid, ...session } = saved;
+      const { _ownerPid, pendingQuestion: _question, ...session } = saved;
       return { ...session, id: saved.id ?? crypto.randomUUID(), createdAt: saved.createdAt ?? now, updatedAt: saved.updatedAt ?? now, model: saved.model ?? "auto", reasoning: saved.reasoning ?? "medium", status: saved.status === "in_progress" && !processExists(_ownerPid) ? "error" : saved.status, messages: Array.isArray(saved.messages) ? saved.messages.slice(-1000) : [] };
     } catch (error) {
       // A workspace that never talked to the agent still needs a stable id: minting a
@@ -197,15 +211,18 @@ export abstract class StdioAcpProvider extends AcpProvider {
   protected async describeModels(models: AiModel[]): Promise<AiModel[]> { return models; }
 
   async configure(workspace: string, configuration: AiConfiguration | string, legacyReasoning?: string): Promise<AiSession> {
-    const clientOptions = new Set(this.descriptor.options.filter((option) => option.permissionApproval).map((option) => option.id));
+    const clientOptions = new Set(this.descriptor.options.filter((option) => option.permissionApproval || option.client).map((option) => option.id));
     const clientOnly = typeof configuration !== "string" && Object.keys(configuration).every((key) => clientOptions.has(key));
     if (this.runtimes.get(workspace)?.running && !clientOnly) throw new CoreError("INVALID_REQUEST", `${this.descriptor.name} is currently working`);
     const runtime = this.runtimes.get(workspace);
     const session = runtime?.session ?? await this.get(workspace);
     const previousModel = session.model;
     const desired = typeof configuration === "string" ? { model: configuration, reasoning: legacyReasoning ?? session.reasoning } : configuration;
-    if (Object.entries(desired).some(([key, value]) => clientOptions.has(key) && typeof value !== "boolean")) throw new CoreError("INVALID_REQUEST", "Autopilot must be a boolean");
+    const invalid = Object.entries(desired).find(([key, value]) => clientOptions.has(key) && typeof value !== "boolean");
+    if (invalid) throw new CoreError("INVALID_REQUEST", `${this.descriptor.options.find((option) => option.id === invalid[0])?.permissionApproval ? "Autopilot" : invalid[0]} must be a boolean`);
+    const before = mergeConfiguration(session, {});
     applyConfiguration(session, desired);
+    if (runtime) session.steering = this.steersLive(runtime);
     if (typeof desired.model === "string" || typeof desired.reasoning === "string") session.nextConfiguration = undefined;
     const restartForModel = runtime && this.needsUnlistedModelLaunch(runtime, session.model);
     if (restartForModel) { await this.closeRuntime(workspace); session.threadId = undefined; }
@@ -214,7 +231,8 @@ export abstract class StdioAcpProvider extends AcpProvider {
       const warnings = await this.applyAcpConfiguration(runtime, runtime.configOptions, runtime.modes);
       if (warnings.length > 0) session.messages.push(this.message("activity", `Session configuration\n${warnings.join("\n")}`));
       const dynamic = new Set(["model", "reasoning", "mode", ...runtime.configOptions.map((option) => option.id), ...clientOptions]);
-      if (Object.keys(desired).some((key) => !dynamic.has(key))) await this.closeRuntime(workspace);
+      // Only a changed launch-scoped value restarts the agent; the saved session is resumed on the next send.
+      if (Object.entries(desired).some(([key, value]) => !dynamic.has(key) && before[key] !== value)) await this.closeRuntime(workspace);
     }
     await this.save(workspace, session); this.onChanged(workspace);
     const permission = session.pendingPermission;
@@ -246,10 +264,11 @@ export abstract class StdioAcpProvider extends AcpProvider {
     // turn never consumes it; a failed runtime/prompt start leaves it queued.
     const allowedServers = request.agent?.mcpServers ? request.mcpServers?.filter((server) => request.agent!.mcpServers!.includes(server.name)) : request.mcpServers;
     const servers = this.descriptor.capabilities.skills ? [...(allowedServers ?? []).filter((server) => server.name !== "vibe-skills"), skillToolServer(await this.projectRoot(workspace), workspace, this.descriptor.id, this.bridgeWorkspace)] : allowedServers;
-    const runtime = await this.ensureRuntime(workspace, session, servers);
+    const sessionMeta = this.sessionInstructions(session, request.agent);
+    const runtime = await this.ensureRuntime(workspace, session, servers, sessionMeta);
     runtime.captureSnapshots = request.captureSnapshots ?? runtime.captureSnapshots;
     if (nextConfiguration) runtime.session.nextConfiguration = undefined;
-    const agentContent = this.withSessionAgent(content, request.agent, request.agentPreset, runtime.session);
+    const agentContent = this.withSessionAgent(content, request.agent, request.agentPreset, runtime.session, sessionMeta !== undefined);
     const turnContent = await this.withSkillCatalogue(workspace, runtime.session, agentContent);
     const visible = [prompt, ...(request.content ?? []).map(contentLabel)].filter(Boolean).join("\n");
     runtime.session.messages.push({ ...this.message("user", visible), content: request.content });
@@ -271,9 +290,17 @@ export abstract class StdioAcpProvider extends AcpProvider {
     runtime.session.messages.push({ ...this.message("user", prompt), ...(options?.senderModel ? { senderModel: options.senderModel } : {}) });
     if (this.turns && runtime.captureSnapshots) try { runtime.checkpointIds.push(await this.turns.begin(workspace, this.descriptor.id, prompt, runtime.session.id, checkpointProvenance(runtime.session))); } catch (error) { runtime.session.messages.push(this.message("activity", `Prompt checkpoint could not be created: ${error instanceof Error ? error.message : String(error)}`)); }
     runtime.anchors = {};
-    if (runtime.steering && !options?.queue) {
+    const live = !options?.queue && this.steersLive(runtime);
+    if (live && runtime.steeringMode === "extension") {
       try { await runtime.connection.extMethod(STEERING_METHOD, { sessionId: runtime.sessionId, prompt: [{ type: "text", text: prompt }] }); }
       catch (error) { runtime.session.messages.push(this.message("activity", `Could not steer the running turn, queued instead: ${error instanceof Error ? error.message : String(error)}`)); runtime.pending.push({ prompt, senderModel: options?.senderModel }); }
+    } else if (live && runtime.steeringMode === "prompt") {
+      // The turn may have settled while the checkpoint was recorded; then this simply starts the next turn.
+      if (runtime.running) runtime.queuedTurns.push(runtime.connection.prompt({ sessionId: runtime.sessionId, prompt: [{ type: "text", text: prompt }] }).catch((error: unknown) => {
+        runtime.session.messages.push(this.message("activity", `Steering message failed: ${error instanceof Error ? error.message : String(error)}`));
+        return undefined;
+      }));
+      else this.runPrompt(workspace, runtime, [{ type: "text", text: prompt }]);
     } else runtime.pending.push({ prompt, senderModel: options?.senderModel });
     await this.save(workspace, runtime.session); this.onChanged(workspace);
     return this.get(workspace);
@@ -296,7 +323,8 @@ export abstract class StdioAcpProvider extends AcpProvider {
     // completion status (agents may still report `end_turn`) lands afterwards.
     runtime.generation += 1;
     this.freshSessions.delete(workspace);
-    runtime.running = false; runtime.anchors = {}; runtime.pending = [];
+    runtime.running = false; runtime.anchors = {}; runtime.pending = []; runtime.queuedTurns = [];
+    this.cancelQuestionWaiters(workspace); runtime.session.pendingQuestion = undefined;
     try { await runtime.connection.cancel({ sessionId: runtime.sessionId }); }
     catch (error) { runtime.session.messages.push(this.message("activity", `Cancel request failed: ${error instanceof Error ? error.message : String(error)}`)); }
     runtime.session.status = "idle"; runtime.session.messages.push(this.message("activity", "Interrupted by user"));
@@ -313,8 +341,14 @@ export abstract class StdioAcpProvider extends AcpProvider {
     runtime.session.failure = undefined;
     // The completion handlers go through the same queue as `session/update` so a
     // final status never overtakes text the agent streamed just before it.
-    void runtime.connection.prompt({ sessionId: runtime.sessionId, prompt }).then((result) => this.queue(workspace, async () => {
+    const finish = (result: PromptResponse): Promise<void> => this.queue(workspace, async () => {
       if (runtime.generation !== generation) return;
+      // Prompts steered into this turn settle with it; the latest outcome describes the turn.
+      if (runtime.queuedTurns.length > 0) {
+        const steered = runtime.queuedTurns.splice(0);
+        void Promise.all(steered).then((results) => finish(results.reduce<PromptResponse>((latest, item) => item ?? latest, result)));
+        return;
+      }
       runtime.running = false; runtime.anchors = {};
       const usage = result.usage;
       if (usage) runtime.session.tokens = { total: usage.totalTokens, input: usage.inputTokens, output: usage.outputTokens, ...(usage.thoughtTokens != null ? { thought: usage.thoughtTokens } : {}), ...(usage.cachedReadTokens != null ? { cachedRead: usage.cachedReadTokens } : {}), ...(usage.cachedWriteTokens != null ? { cachedWrite: usage.cachedWriteTokens } : {}) };
@@ -340,9 +374,10 @@ export abstract class StdioAcpProvider extends AcpProvider {
       if (queued === undefined) await this.completeCheckpoints(workspace, runtime, result.stopReason === "cancelled" ? "interrupted" : result.stopReason === "refusal" ? "error" : "completed");
       await this.save(workspace, runtime.session); this.onChanged(workspace);
       if (fresh) { await this.clear(workspace); await this.send(workspace, fresh); }
-    })).catch((error: unknown) => this.queue(workspace, async () => {
+    });
+    void runtime.connection.prompt({ sessionId: runtime.sessionId, prompt }).then(finish).catch((error: unknown) => this.queue(workspace, async () => {
       if (runtime.generation !== generation) return;
-      runtime.running = false; runtime.anchors = {}; runtime.pending = [];
+      runtime.running = false; runtime.anchors = {}; runtime.pending = []; runtime.queuedTurns = [];
       runtime.session.skillCatalogue = undefined;
       this.freshSessions.delete(workspace);
       const message = this.describe(error, runtime);
@@ -421,14 +456,81 @@ export abstract class StdioAcpProvider extends AcpProvider {
   }
 
   /** Agent presets are durable session instructions, not per-turn user content. */
-  private withSessionAgent(content: ContentBlock[], agent: AcpSendRequest["agent"] | undefined, preset: AcpSendRequest["agentPreset"] | undefined, session: AiSession): ContentBlock[] {
+  private withSessionAgent(content: ContentBlock[], agent: AcpSendRequest["agent"] | undefined, preset: AcpSendRequest["agentPreset"] | undefined, session: AiSession, deliveredAsSystem = false): ContentBlock[] {
     if (!agent) { session.agent = undefined; session.agentPreset = undefined; return content; }
     const fingerprint = agentFingerprint(agent);
     session.agentPreset = preset;
     if (session.agent?.fingerprint === fingerprint) return content;
     session.agent = { name: agent.name, fingerprint };
     if (agent.instructions.trim()) captureContextInstructions(session, `Agent: ${agent.name}`, agent.instructions.trim());
-    return this.withAgent(content, agent);
+    return deliveredAsSystem ? content : this.withAgent(content, agent);
+  }
+
+  /**
+   * Provider hook: session `_meta` that carries agent instructions as system instructions.
+   * Agents without such an extension return undefined and receive the preset inside the prompt.
+   */
+  protected sessionInstructionsMeta(_instructions: string): Record<string, unknown> | undefined { return undefined; }
+
+  /** Provider hook for `_meta` an agent attaches to `usage_update`, such as account rate limits. */
+  protected observeUsage(_meta: Record<string, unknown> | undefined): void {}
+
+  /**
+   * The preset delivered as system instructions stays with the conversation, like prompt-injected
+   * instructions stay in its history: a send without an agent keeps it, a different agent replaces it.
+   */
+  private sessionInstructions(session: AiSession, agent: AcpSendRequest["agent"]): Record<string, unknown> | undefined {
+    const enabled = this.optionEnabled(session.configuration, SYSTEM_INSTRUCTIONS_OPTION.id);
+    if (!enabled) {
+      // Fall back to prompt delivery: the next send re-injects the preset.
+      if (session.systemInstructions !== undefined) { session.systemInstructions = undefined; session.agent = undefined; }
+      return undefined;
+    }
+    const instructions = agent?.instructions.trim();
+    if (agent && instructions) {
+      const text = [`Selected agent: ${agent.name}`, ...(agent.description?.trim() ? [`Agent description: ${agent.description.trim()}`] : []), "", "<agent_instructions>", instructions, "</agent_instructions>"].join("\n");
+      if (this.sessionInstructionsMeta(text)) session.systemInstructions = text;
+    }
+    return session.systemInstructions ? this.sessionInstructionsMeta(session.systemInstructions) : undefined;
+  }
+
+  private optionEnabled(configuration: AiConfiguration | undefined, id: string): boolean {
+    const option = this.descriptor.options.find((item) => item.id === id);
+    return option !== undefined && (configuration?.[id] ?? option.defaultValue) === true;
+  }
+
+  /** Steering is on unless the provider offers the switch and it was turned off. */
+  private steersLive(runtime: Runtime): boolean {
+    const option = this.descriptor.options.find((item) => item.id === LIVE_STEERING_OPTION.id);
+    return runtime.steering && (!option || (runtime.session.configuration?.[option.id] ?? option.defaultValue) === true);
+  }
+
+  async answerQuestion(workspace: string, requestId: string, action: AiQuestionAction, answer?: AiQuestionAnswer): Promise<AiSession> {
+    const waiter = this.questionWaiters.get(requestId);
+    const session = this.runtimes.get(workspace)?.session;
+    const question = session?.pendingQuestion;
+    if (!waiter || waiter.workspace !== workspace || !session || question?.id !== requestId) throw new CoreError("INVALID_REQUEST", "Question is no longer pending");
+    if (!["accept", "decline", "cancel"].includes(action)) throw new CoreError("INVALID_REQUEST", "Unknown question action");
+    const content = action === "accept" ? questionAnswer(question.fields, answer ?? {}) : undefined;
+    this.questionWaiters.delete(requestId);
+    session.pendingQuestion = undefined;
+    waiter.resolve(content ? { action: "accept", content } : { action });
+    await this.save(workspace, session); this.onChanged(workspace);
+    return this.get(workspace);
+  }
+
+  private async requestQuestion(workspace: string, runtime: Runtime, params: CreateElicitationRequest): Promise<CreateElicitationResponse> {
+    const schema = (params as { requestedSchema?: ElicitationSchema }).requestedSchema;
+    // Only forms are declared; anything else, or a question after the switch was turned off, is declined.
+    if (params.mode !== "form" || !schema || !this.optionEnabled(runtime.session.configuration, ASK_QUESTIONS_OPTION.id)) return { action: "decline" };
+    const fields = questionFields(schema);
+    if (fields.length === 0) return { action: "decline" };
+    const id = crypto.randomUUID();
+    this.cancelQuestionWaiters(workspace);
+    runtime.session.pendingQuestion = { id, message: params.message, fields };
+    const response = new Promise<CreateElicitationResponse>((resolve) => { this.questionWaiters.set(id, { workspace, resolve }); });
+    await this.save(workspace, runtime.session); this.onChanged(workspace);
+    return response;
   }
 
   async resolvePermission(workspace: string, requestId: string, optionId?: string): Promise<AiSession> {
@@ -475,7 +577,7 @@ export abstract class StdioAcpProvider extends AcpProvider {
     if (!target) throw new CoreError("INVALID_REQUEST", "That session is no longer available");
     await this.closeRuntime(workspace);
     await this.archive(workspace, current);
-    const restored: AiSession = { ...target, id: target.id ?? crypto.randomUUID(), createdAt: target.createdAt ?? new Date().toISOString(), updatedAt: new Date().toISOString(), pendingPermission: undefined, status: target.status === "in_progress" ? "error" : target.status, messages: (target.messages ?? []).slice(-1000) };
+    const restored: AiSession = { ...target, id: target.id ?? crypto.randomUUID(), createdAt: target.createdAt ?? new Date().toISOString(), updatedAt: new Date().toISOString(), pendingPermission: undefined, pendingQuestion: undefined, status: target.status === "in_progress" ? "error" : target.status, messages: (target.messages ?? []).slice(-1000) };
     this.blankSessions.delete(workspace);
     await this.save(workspace, restored); this.onChanged(workspace); return restored;
   }
@@ -493,7 +595,7 @@ export abstract class StdioAcpProvider extends AcpProvider {
     const newest = (await this.index(workspace))[0]?.id;
     const next = newest ? await this.readArchived(workspace, newest) : undefined;
     const session: AiSession = next?.id
-      ? { ...next, updatedAt: new Date().toISOString(), pendingPermission: undefined, status: next.status === "in_progress" ? "error" : next.status, messages: (next.messages ?? []).slice(-1000) }
+      ? { ...next, updatedAt: new Date().toISOString(), pendingPermission: undefined, pendingQuestion: undefined, status: next.status === "in_progress" ? "error" : next.status, messages: (next.messages ?? []).slice(-1000) }
       : { ...this.emptySession(), model: current.model, reasoning: current.reasoning, configuration: current.configuration, availableOptions: current.availableOptions };
     await this.save(workspace, session); this.onChanged(workspace); return session;
   }
@@ -506,7 +608,7 @@ export abstract class StdioAcpProvider extends AcpProvider {
     if (!session.id || session.messages.length === 0) return;
     const directory = this.archiveDirectory(workspace);
     await mkdir(directory, { recursive: true });
-    const serialized = `${JSON.stringify({ ...session, pendingPermission: undefined, status: session.status === "in_progress" ? "error" : session.status, messages: session.messages.slice(-1000) }, null, 2)}\n`;
+    const serialized = `${JSON.stringify({ ...session, pendingPermission: undefined, pendingQuestion: undefined, status: session.status === "in_progress" ? "error" : session.status, messages: session.messages.slice(-1000) }, null, 2)}\n`;
     const file = this.archiveFile(workspace, session.id);
     const temp = `${file}.${process.pid}.${crypto.randomUUID()}.tmp`;
     await writeFile(temp, serialized);
@@ -585,11 +687,12 @@ export abstract class StdioAcpProvider extends AcpProvider {
     return { supported: true, label: "Context window", used: session.contextUsed, ...(session.contextLimit !== undefined ? { limit: session.contextLimit } : {}), unit: "tokens", ...extra };
   }
 
-  private async ensureRuntime(workspace: string, session: AiSession, servers?: AcpSendRequest["mcpServers"]): Promise<Runtime> {
+  private async ensureRuntime(workspace: string, session: AiSession, servers?: AcpSendRequest["mcpServers"], sessionMeta?: Record<string, unknown>): Promise<Runtime> {
     if (this.shuttingDown) throw new CoreError("INVALID_REQUEST", "Core is shutting down");
     let existing = this.runtimes.get(workspace);
     const mcpKey = JSON.stringify(this.mcpServers(servers));
-    if (existing && servers !== undefined && existing.mcpKey !== mcpKey) { await this.closeRuntime(workspace); existing = undefined; }
+    const sessionMetaKey = JSON.stringify(sessionMeta ?? null);
+    if (existing && ((servers !== undefined && existing.mcpKey !== mcpKey) || existing.sessionMetaKey !== sessionMetaKey)) { await this.closeRuntime(workspace); existing = undefined; }
     if (existing) {
       applyConfiguration(existing.session, session.configuration ?? {});
       if (this.needsUnlistedModelLaunch(existing, existing.session.model)) {
@@ -604,16 +707,16 @@ export abstract class StdioAcpProvider extends AcpProvider {
       return existing;
     }
     this.lastWorkspace = workspace;
-    const connected = await this.connect(workspace, session.configuration ?? {}, servers, session.threadId);
+    const connected = await this.connect(workspace, session.configuration ?? {}, servers, session.threadId, sessionMeta);
     if (this.shuttingDown) { connected.child.stdin.end(); connected.child.kill("SIGTERM"); throw new CoreError("INVALID_REQUEST", "Core is shutting down"); }
     // A fresh provider session has no prior prompt context, even when the local
     // transcript still records which preset the previous session received.
     if (!connected.resumed) { session.agent = undefined; session.skillCatalogue = undefined; session.context = undefined; session.contextUsed = undefined; session.contextLimit = undefined; }
     if (connected.resumeFailed) session.messages.push(this.message("activity", "The saved ACP session could not be resumed; a new agent session was started."));
-    const runtime: Runtime = { child: connected.child, connection: connected.connection, sessionId: connected.sessionId, running: false, stderr: connected.stderr(), session, tools: new Map(), anchors: {}, generation: 0, steering: connected.steering, pending: [], checkpointIds: [], captureSnapshots: true, configOptions: connected.configOptions, modes: connected.modes, mcpKey };
+    const runtime: Runtime = { child: connected.child, connection: connected.connection, sessionId: connected.sessionId, running: false, stderr: connected.stderr(), session, tools: new Map(), anchors: {}, generation: 0, steering: connected.steering !== undefined, steeringMode: connected.steering, queuedTurns: [], sessionMetaKey, pending: [], checkpointIds: [], captureSnapshots: true, configOptions: connected.configOptions, modes: connected.modes, mcpKey };
     connected.bind(runtime);
     session.threadId = connected.sessionId;
-    session.steering = connected.steering;
+    session.steering = this.steersLive(runtime);
     session.availableOptions = this.toUiOptions(connected.configOptions, connected.modes);
     this.runtimes.set(workspace, runtime);
     const warnings = await this.applyAcpConfiguration(runtime, connected.configOptions, connected.modes);
@@ -629,7 +732,7 @@ export abstract class StdioAcpProvider extends AcpProvider {
   }
 
   /** Spawns the agent, performs the ACP handshake and opens a session. */
-  private async connect(workspace: string, configuration: AiConfiguration, servers?: AcpSendRequest["mcpServers"], savedSessionId?: string): Promise<Connected> {
+  private async connect(workspace: string, configuration: AiConfiguration, servers?: AcpSendRequest["mcpServers"], savedSessionId?: string, sessionMeta?: Record<string, unknown>): Promise<Connected> {
     if (this.shuttingDown) throw new CoreError("INVALID_REQUEST", "Core is shutting down");
     const launch = this.command(configuration);
     const processContext = { workspace, rootWorkspace: await this.projectRoot(workspace), provider: this.descriptor.id, kind: "agent" as const };
@@ -651,33 +754,40 @@ export abstract class StdioAcpProvider extends AcpProvider {
     const stream = ndJsonStream(Writable.toWeb(child.stdin) as WritableStream<Uint8Array>, Readable.toWeb(child.stdout) as ReadableStream<Uint8Array>);
     let bound: ((params: SessionNotification) => Promise<void> | void) | undefined;
     let permissionBound: ((params: RequestPermissionRequest) => Promise<RequestPermissionResponse>) | undefined;
+    let questionBound: ((params: CreateElicitationRequest) => Promise<CreateElicitationResponse>) | undefined;
     const buffered: SessionNotification[] = [];
     const client: Client = {
       requestPermission: (params) => permissionBound ? permissionBound(params) : { outcome: { outcome: "cancelled" } },
+      createElicitation: (params) => questionBound ? questionBound(params) : { action: "cancel" },
       sessionUpdate: (params) => { if (bound) return bound(params); buffered.push(params); }
     };
     const connection = new ClientSideConnection(() => client, stream);
     let authHint = "";
     try {
       const initialized = await Promise.race([
-        connection.initialize({ protocolVersion: PROTOCOL_VERSION, clientCapabilities: {}, clientInfo: { name: "Vibe Editor", version: "0.1.0" } }),
+        // Questions are declared only when enabled: agents then drop their question tools instead of blocking.
+        connection.initialize({ protocolVersion: PROTOCOL_VERSION, clientCapabilities: this.optionEnabled(configuration, ASK_QUESTIONS_OPTION.id) ? { elicitation: { form: {} } } : {}, clientInfo: { name: "Vibe Editor", version: "0.1.0" } }),
         spawnFailure
       ]);
       authHint = initialized.authMethods?.map((method) => method.description ?? method.name).join("; ") ?? "";
-      const steering = (initialized._meta as { steering?: { supported?: boolean } } | undefined)?.steering?.supported === true;
+      // `_session/steering` is advertised in the response `_meta`; agents built on the Claude Agent SDK
+      // instead advertise that a `session/prompt` sent during a turn is queued into it.
+      const steering: SteeringMode | undefined = (initialized._meta as { steering?: { supported?: boolean } } | undefined)?.steering?.supported === true ? "extension"
+        : (initialized.agentCapabilities?._meta as { claudeCode?: { promptQueueing?: boolean } } | undefined)?.claudeCode?.promptQueueing === true ? "prompt" : undefined;
+      const meta = sessionMeta ? { _meta: sessionMeta } : {};
       let created: CreatedSession;
       let resumed = false;
       let resumeFailed = false;
       if (savedSessionId && initialized.agentCapabilities?.loadSession) {
         try {
-          const loaded = await connection.loadSession({ cwd: workspace, mcpServers: this.mcpServers(servers), sessionId: savedSessionId });
+          const loaded = await connection.loadSession({ cwd: workspace, mcpServers: this.mcpServers(servers), sessionId: savedSessionId, ...meta });
           created = { sessionId: savedSessionId, configOptions: loaded.configOptions, modes: loaded.modes };
           resumed = true;
         } catch {
           resumeFailed = true;
-          created = await connection.newSession({ cwd: workspace, mcpServers: this.mcpServers(servers) }) as CreatedSession;
+          created = await connection.newSession({ cwd: workspace, mcpServers: this.mcpServers(servers), ...meta }) as CreatedSession;
         }
-      } else created = await connection.newSession({ cwd: workspace, mcpServers: this.mcpServers(servers) }) as CreatedSession;
+      } else created = await connection.newSession({ cwd: workspace, mcpServers: this.mcpServers(servers), ...meta }) as CreatedSession;
       managedProcesses.setSession(child.pid, created.sessionId);
       const configOptions = created.configOptions ?? [];
       this.rememberModels(configOptions, created.models);
@@ -687,6 +797,7 @@ export abstract class StdioAcpProvider extends AcpProvider {
           child.stderr.on("data", () => { runtime.stderr = stderr; });
           bound = (params) => this.queue(workspace, () => this.consumeUpdate(workspace, runtime, params));
           permissionBound = (params) => this.requestPermission(workspace, runtime, params);
+          questionBound = (params) => this.requestQuestion(workspace, runtime, params);
           for (const params of buffered.splice(0)) {
             // Resuming replays the whole conversation. Those updates land after the freshly typed
             // prompt was already appended, which would push it to the top of the transcript, so the
@@ -840,7 +951,7 @@ export abstract class StdioAcpProvider extends AcpProvider {
         break;
       }
       case "available_commands_update": session.availableCommands = update.availableCommands.map((command) => ({ name: command.name, description: command.description, inputHint: command.input?.hint })); break;
-      case "usage_update": session.contextUsed = update.used; if (update.size != null) { session.contextLimit = update.size; this.rememberContextWindow(session.model, update.size); } refreshContext(session, true); break;
+      case "usage_update": this.observeUsage(update._meta ?? undefined); session.contextUsed = update.used; if (update.size != null) { session.contextLimit = update.size; this.rememberContextWindow(session.model, update.size); } refreshContext(session, true); break;
       case "compaction_update": {
         refreshContext(session);
         session.context!.compactions++;
@@ -982,11 +1093,12 @@ export abstract class StdioAcpProvider extends AcpProvider {
     const runtime = this.runtimes.get(workspace); if (!runtime) return;
     this.runtimes.delete(workspace);
     this.cancelPermissionWaiters(workspace);
-    runtime.session.pendingPermission = undefined;
+    runtime.session.pendingPermission = undefined; runtime.session.pendingQuestion = undefined;
     runtime.child.stdin.end(); runtime.child.kill("SIGTERM");
   }
-  private cancelPermissionWaiters(workspace: string): void { for (const [id, waiter] of this.permissionWaiters) if (waiter.workspace === workspace) { this.permissionWaiters.delete(id); waiter.resolve({ outcome: { outcome: "cancelled" } }); } }
-  private async runtimeFailed(workspace: string, message: string): Promise<void> { const session = await this.get(workspace); session.pendingPermission = undefined; if (session.status === "in_progress") { session.status = "error"; session.failure = normalizeAiFailure(message); session.messages.push(this.message("error", message)); await this.save(workspace, session); this.onChanged(workspace); } }
+  private cancelPermissionWaiters(workspace: string): void { for (const [id, waiter] of this.permissionWaiters) if (waiter.workspace === workspace) { this.permissionWaiters.delete(id); waiter.resolve({ outcome: { outcome: "cancelled" } }); } this.cancelQuestionWaiters(workspace); }
+  private cancelQuestionWaiters(workspace: string): void { for (const [id, waiter] of this.questionWaiters) if (waiter.workspace === workspace) { this.questionWaiters.delete(id); waiter.resolve({ action: "cancel" }); } }
+  private async runtimeFailed(workspace: string, message: string): Promise<void> { const session = await this.get(workspace); session.pendingPermission = undefined; session.pendingQuestion = undefined; if (session.status === "in_progress") { session.status = "error"; session.failure = normalizeAiFailure(message); session.messages.push(this.message("error", message)); await this.save(workspace, session); this.onChanged(workspace); } }
 }
 
 function processExists(pid?: number): boolean {
@@ -1078,4 +1190,48 @@ function appendTaskCompletion(session: AiSession, toolCallId: string, tool: Tool
   const existing = session.messages.find((message) => message.id === id);
   if (existing) existing.text = text;
   else session.messages.push({ id, role: "assistant", text, timestamp: new Date().toISOString() });
+}
+
+/** Normalizes an ACP form schema (a flat JSON Schema object) into fields the UI renders. */
+function questionFields(schema: ElicitationSchema): AiQuestionField[] {
+  const required = new Set(schema.required ?? []);
+  const text = (value: unknown): string | undefined => typeof value === "string" && value.trim() ? value : undefined;
+  const choices = (items: unknown): AiQuestionField["choices"] => Array.isArray(items)
+    ? items.flatMap((item) => typeof item === "string" ? [{ value: item, label: item }] : item && typeof item === "object" && typeof (item as { const?: unknown }).const === "string" ? [{ value: (item as { const: string }).const, label: text((item as { title?: unknown }).title) ?? (item as { const: string }).const, ...(text((item as { description?: unknown }).description) ? { description: (item as { description: string }).description } : {}) }] : [])
+    : undefined;
+  return Object.entries(schema.properties ?? {}).flatMap(([id, property]): AiQuestionField[] => {
+    const raw = property as Record<string, unknown>;
+    const common = { id, ...(text(raw.title) ? { title: raw.title as string } : {}), ...(text(raw.description) ? { description: raw.description as string } : {}), ...(required.has(id) ? { required: true } : {}) };
+    if (raw.type === "boolean") return [{ ...common, type: "boolean", ...(typeof raw.default === "boolean" ? { defaultValue: raw.default } : {}) }];
+    if (raw.type === "number" || raw.type === "integer") return [{ ...common, type: raw.type, ...(typeof raw.default === "number" ? { defaultValue: raw.default } : {}) }];
+    if (raw.type === "array") {
+      const items = (raw.items ?? {}) as Record<string, unknown>;
+      const options = choices(items.anyOf ?? items.oneOf ?? items.enum);
+      return options?.length ? [{ ...common, type: "multi", choices: options, ...(Array.isArray(raw.default) ? { defaultValue: raw.default.filter((item): item is string => typeof item === "string") } : {}), ...(typeof raw.minItems === "number" ? { minItems: raw.minItems } : {}), ...(typeof raw.maxItems === "number" ? { maxItems: raw.maxItems } : {}) }] : [];
+    }
+    if (raw.type !== "string") return [];
+    const options = choices(raw.oneOf ?? raw.anyOf ?? raw.enum);
+    return [{ ...common, type: options?.length ? "choice" : "text", ...(options?.length ? { choices: options } : {}), ...(typeof raw.default === "string" ? { defaultValue: raw.default } : {}) }];
+  });
+}
+
+/** Validates an answer against the question it belongs to; empty values are omitted. */
+function questionAnswer(fields: AiQuestionField[], answer: AiQuestionAnswer): Record<string, string | number | boolean | string[]> {
+  const result: Record<string, string | number | boolean | string[]> = {};
+  for (const key of Object.keys(answer)) if (!fields.some((field) => field.id === key)) throw new CoreError("INVALID_REQUEST", `Unknown question field: ${key}`);
+  for (const field of fields) {
+    const value = answer[field.id];
+    const empty = value === undefined || value === "" || (Array.isArray(value) && value.length === 0);
+    if (empty) { if (field.required) throw new CoreError("INVALID_REQUEST", `${field.title ?? field.id} is required`); continue; }
+    const allowed = new Set(field.choices?.map((choice) => choice.value));
+    const valid = field.type === "boolean" ? typeof value === "boolean"
+      : field.type === "number" ? typeof value === "number" && Number.isFinite(value)
+      : field.type === "integer" ? Number.isInteger(value)
+      : field.type === "multi" ? Array.isArray(value) && value.every((item) => allowed.has(item)) && (field.minItems === undefined || value.length >= field.minItems) && (field.maxItems === undefined || value.length <= field.maxItems)
+      : field.type === "choice" ? typeof value === "string" && allowed.has(value)
+      : typeof value === "string" && value.length <= 20_000;
+    if (!valid) throw new CoreError("INVALID_REQUEST", `Invalid answer for ${field.title ?? field.id}`);
+    result[field.id] = value;
+  }
+  return result;
 }

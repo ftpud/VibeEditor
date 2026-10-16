@@ -11,7 +11,7 @@ interface Window {
   gateway: {
     platform?: string;
     onFullscreenChange?(listener: (fullscreen: boolean) => void): () => void;
-    get(): Promise<{ state: GatewayState; repository: GatewayRepositorySettings; runtimes: Record<string, GatewayRuntime>; tunnelRuntimes: Record<string, GatewayTunnelRuntime>; connectionRuntimes: Record<string, GatewayConnectionRuntime> }>;
+    get(): Promise<{ state: GatewayState; distribution?: "source" | "bundled"; repository: GatewayRepositorySettings; runtimes: Record<string, GatewayRuntime>; tunnelRuntimes: Record<string, GatewayTunnelRuntime>; connectionRuntimes: Record<string, GatewayConnectionRuntime> }>;
     saveRepository(value: GatewayRepositorySettings): Promise<GatewayRepositorySettings>;
     refreshStatuses(connectionId?: string): Promise<void>;
     copyDiagnostics(connectionId: string): Promise<{ copiedAt: string }>;
