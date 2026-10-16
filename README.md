@@ -12,7 +12,9 @@ Each task has its own workspace with files, terminals, AI conversations, and not
 
 This is an actively developed experiment. Expect rough edges and breaking changes; it currently runs from source.
 
-<img width="2940" height="1912" alt="Vibe Editor desktop interface" src="https://github.com/user-attachments/assets/1a1cfd39-f127-4e07-b843-e4b8a8c71d90" />
+<img width="1392" height="912" alt="image" src="https://github.com/user-attachments/assets/de8cb0c2-82d4-48b1-b82a-270799bed5d4" />
+
+
 
 ## First run
 
