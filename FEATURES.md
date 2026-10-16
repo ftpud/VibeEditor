@@ -19,7 +19,7 @@ Vibe Editor is a remote-workspace IDE: an Electron/React/Monaco desktop client t
 - Filesystem tree (Project tool window) with automatic single-path expansion, file-type icons, persisted per-file icon colors, Git `M`/`C` status indicators, and external-change monitoring.
 - Keyboard-first **Quick Open / Go to File** (`Ctrl+P` / `Cmd+P`) with fuzzy workspace-path matching, ranked results, and arrow-key navigation.
 - Recursive **Find in Files** search with context, case matching, include/exclude filters, and previewed replacement that rejects files changed since the preview.
-- Project file/directory creation, rename, copy/move with collision previews, recoverable deletion, and local upload/remote download through a separate binary channel.
+- Project file/directory creation, rename, copy/move with collision previews, recoverable deletion, and local upload/remote download through a separate binary channel. Deletion recovery data lives in Core’s workspace state directory, outside project worktrees; older `.vibe-trash` entries remain restorable.
 - Tabs support keyboard navigation (`Ctrl+Tab` / `Ctrl+Shift+Tab`, with wraparound), keyboard close (`Ctrl+W` / `Cmd+W`), drag-and-drop reordering, middle-click close, pinning, Close All Unpinned, Close Unpinned to the Right, and modified/created markers.
 - Autosave after a short pause; clean buffers reload automatically on external edits, dirty buffers keep a conflict warning instead of being overwritten.
 - Monaco gutter markers highlight changed blocks (not whole lines); clicking a marker shows previous content and offers a block-level rollback.

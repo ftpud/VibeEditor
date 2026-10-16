@@ -13,10 +13,11 @@ it("prunes ignored build trees while watching tracked files under an ignore rule
   try {
     await promisify(execFile)("git", ["init", "-q", root]);
     await writeFile(path.join(root, ".gitignore"), "build/\npartial/\n");
-    for (const directory of ["build/large/cache", "partial", "src"]) await mkdir(path.join(root, directory), { recursive: true });
+    for (const directory of ["build/large/cache", "partial", "src", ".vibe-trash"]) await mkdir(path.join(root, directory), { recursive: true });
     await writeFile(path.join(root, "build/large/cache/log"), "generated");
     await writeFile(path.join(root, "partial/tracked.txt"), "tracked");
     await writeFile(path.join(root, "src/main.ts"), "source");
+    await writeFile(path.join(root, ".vibe-trash/recovery.json"), "private recovery data");
     await promisify(execFile)("git", ["-C", root, "add", "-f", "partial/tracked.txt"]);
     const options = await workspaceWatchOptions(root);
     expect(options.followSymlinks).toBe(false);
@@ -26,5 +27,6 @@ it("prunes ignored build trees while watching tracked files under an ignore rule
     expect(watched[path.join(root, "src")]).toContain("main.ts");
     expect(watched[path.join(root, "partial")]).toContain("tracked.txt");
     expect(Object.keys(watched).some((directory) => directory.startsWith(path.join(root, "build")))).toBe(false);
+    expect(Object.keys(watched).some(directory => directory.startsWith(path.join(root, ".vibe-trash")))).toBe(false);
   } finally { await watcher?.close(); await rm(root, { recursive: true, force: true }); }
 });
