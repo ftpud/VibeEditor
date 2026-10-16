@@ -13,7 +13,8 @@ async function setup(blocks: HarnessBlock[]) {
   const created = await store.create("Context");
   const definition = await store.update({ ...created, blocks, edges: blocks.slice(1).map((child) => ({ id: child.id, from: blocks[0]!.id, to: child.id, type: "use" as const })) });
   const runner = new HarnessRunner(store, () => {});
-  const finished = async () => { await vi.waitFor(() => expect(runner.isActive(runId)).toBe(false)); return runner.readRun(runId); };
+  // Hosted macOS runners can take well over the default 1s to settle a run.
+  const finished = async () => { await vi.waitFor(() => expect(runner.isActive(runId)).toBe(false), { timeout: 10_000 }); return runner.readRun(runId); };
   let runId = "";
   return { store, definition, runner, finished, setRunId: (id: string) => { runId = id; } };
 }
