@@ -1,0 +1,90 @@
+name: Bundle Create
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bundle-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  cores:
+    name: Core (${{ matrix.target }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            target: linux-x64
+          - os: ubuntu-22.04-arm
+            target: linux-arm64
+          - os: macos-15
+            target: darwin-arm64
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24.20.0
+          cache: npm
+      - run: npm ci
+      - name: Require bundled Java runtime
+        run: npm run install:jdtls
+      - run: npm run build -w @remote-ide/acp
+      - run: npm run build -w @remote-ide/protocol
+      - run: npm run build -w @remote-ide/core
+      - run: npm run typecheck -w @remote-ide/core
+      - run: npm run test -w @remote-ide/core
+      - name: Build and smoke test portable Core
+        run: npm run bundle:core
+      - uses: actions/upload-artifact@v4
+        with:
+          name: core-${{ matrix.target }}
+          path: artifacts/cores/*
+          if-no-files-found: error
+          retention-days: 14
+  apps:
+    name: Apps (${{ matrix.os }})
+    needs: cores
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    env:
+      VIBE_SKIP_JDTLS: '1'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24.20.0
+          cache: npm
+      - run: npm ci
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: core-*
+          merge-multiple: true
+          path: artifacts/cores
+      - run: npm run build
+      - run: npm run typecheck
+      - run: npm run typecheck -w @remote-ide/gateway
+      - name: Gateway deployment and renderer tests
+        if: runner.os != 'Windows'
+        run: npm run test -w @remote-ide/gateway
+      - name: Gateway renderer tests
+        if: runner.os == 'Windows'
+        run: npm exec -w @remote-ide/gateway -- vitest run --environment happy-dom
+      - run: npm run test -w @remote-ide/desktop
+      - name: Package Early Access applications
+        run: npm run bundle:apps
+      - uses: actions/upload-artifact@v4
+        with:
+          name: vibe-early-access-${{ matrix.os }}
+          path: artifacts/downloads/*
+          if-no-files-found: error
+          retention-days: 30

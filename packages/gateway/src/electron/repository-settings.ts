@@ -27,7 +27,7 @@ export function repositorySettingsOrDefault(value: Partial<RepositorySettings> |
 
 export function provisionCommand(settings: RepositorySettings, remoteNodeEnvironment: string, repair = false, preferredRelease?: string): string {
   const { repository, branch, autoUpdate } = normalizeRepositorySettings(settings);
-  if (preferredRelease && !/^[0-9a-f]{40,64}-node[0-9]+(?:-repair-[a-zA-Z0-9]+)?$/.test(preferredRelease)) throw new Error("Invalid preferred release identity");
+  if (preferredRelease && !/^[0-9a-f]{40,64}-node[0-9]+(?:-repair-[a-zA-Z0-9]+|-bundle-[a-zA-Z0-9-]+)?$/.test(preferredRelease)) throw new Error("Invalid preferred release identity");
   const lines = [
     "set -eu",
     "umask 077",

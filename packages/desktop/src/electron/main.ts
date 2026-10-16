@@ -7,6 +7,7 @@ import { restoreWindowInputFocus } from "./window-focus.js";
 import { isTrustedIpcFrame, isTrustedRendererUrl } from "./navigation-policy.js";
 import { connectionToken } from "./connection-token.js";
 
+const bundleSmokeTest = app.isPackaged && process.argv.includes("--bundle-smoke-test");
 const directory = path.dirname(fileURLToPath(import.meta.url));
 const appIcon = path.join(directory, "../assets/app-icon.png");
 const rendererFilePath = path.resolve(directory, "../dist-renderer/index.html");
@@ -88,6 +89,7 @@ function createWindow(extraQuery: Record<string, string> = {}): void {
   const window = new BrowserWindow({
     title: extraQuery.detached === "1" ? (extraQuery.path?.split("/").pop() ?? "Vibe Editor") : "Vibe Editor",
     icon: appIcon,
+    show: !bundleSmokeTest,
     width: 1280,
     height: 800,
     minWidth: 760,
@@ -143,6 +145,14 @@ function createWindow(extraQuery: Record<string, string> = {}): void {
         return window.loadURL(url.toString());
       })()
     : window.loadFile(rendererFilePath, { query });
+  if (bundleSmokeTest) {
+    const timeout = setTimeout(() => app.exit(1), 30_000);
+    void load.then(async () => {
+      const healthy = await window.webContents.executeJavaScript("Boolean(window.desktop && document.getElementById('root'))");
+      if (!healthy) throw new Error("Packaged Desktop renderer or preload failed");
+      clearTimeout(timeout); app.exit(0);
+    }).catch(error => { console.error(error); app.exit(1); });
+  }
   void load.catch((error: unknown) => console.error("[desktop] page load failed", error));
 }
 

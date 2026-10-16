@@ -16,3 +16,5 @@ coverage/
 .electron-runtime/
 /TODO.md
 /DONE.md
+
+/artifacts/

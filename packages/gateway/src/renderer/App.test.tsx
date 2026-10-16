@@ -201,3 +201,21 @@ describe("Gateway workspace page", () => {
     expect(output.scrollTop).toBe(1000);
   });
 });
+
+
+describe("Early Access Gateway", () => {
+  it.each(["source", "bundled"] as const)("shows repository settings only for source deployments (%s)", async distribution => {
+    window.gateway = {
+      get: vi.fn().mockResolvedValue({ state: { connections: [], workspaces: [], portTunnels: [] }, distribution, repository: { repository: "https://example.test/repo.git", branch: "dev", autoUpdate: true }, runtimes: {}, connectionRuntimes: {}, tunnelRuntimes: {} }),
+      onStatus: vi.fn(() => () => undefined), onTunnelStatus: vi.fn(() => () => undefined), onConnectionStatus: vi.fn(() => () => undefined),
+    } as unknown as Window["gateway"];
+    render(<App />);
+    await waitFor(() => expect(window.gateway.get).toHaveBeenCalledOnce());
+    await waitFor(() => expect(Boolean(screen.queryByRole("button", { name: "Gateway repository settings" }))).toBe(distribution === "source"));
+  });
+  it("offers SSH connections when a local Core runtime is unavailable", () => {
+    render(<ConnectionDialog allowLocal={false} value={{ kind: "ssh", password: "", passphrase: "" }} onClose={vi.fn()} onSave={vi.fn()} />);
+    expect(screen.queryByRole("option", { name: "This Mac" })).toBeNull();
+    expect(screen.getByRole("option", { name: "SSH host" })).toBeTruthy();
+  });
+});
