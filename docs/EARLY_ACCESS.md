@@ -5,7 +5,39 @@ packaged. The workflow uploads two artifact sets, `vibe-early-access-macos-15`
 and `vibe-early-access-windows-2025`. Download and extract the artifact wrapper;
 each contains separate Gateway and Desktop ZIP downloads and JSON manifests
 with their version, source commit and SHA-256 checksum. No GitHub release is
-published automatically. Change the root `package.json` version before a release.
+published automatically. Change the root `package.json` version before building
+bundles for a new version.
+
+## Promote a build to a GitHub release
+
+Once the **Bundle Release** workflow is on the default branch:
+
+1. Open a successful **Bundle Create** run and copy its numeric run ID from the
+   Actions URL (`.../actions/runs/123456789`). Existing builds can be promoted.
+2. Open **Actions → Bundle Release → Run workflow**. Enter that run ID and a
+   new tag in the form `v<BUNDLE_VERSION>-early-access.<N>`, for example
+   `v0.1.0-early-access.1`, then run the workflow.
+
+All releases from this action are mandatory **prereleases** and are never marked
+as the latest stable release. The tag's base version must match the version in
+all four bundle manifests (taken from the root `package.json` when built).
+Increment the Early Access number for each promotion: `v0.1.0-early-access.1`,
+`v0.1.0-early-access.2`, and so on. For a new application version, bump the root
+`package.json` version (for example to `0.1.1`), build again, and start with
+`v0.1.1-early-access.1`. Promoting an existing build preserves its embedded
+version and filenames; the Early Access number identifies the release.
+
+The action verifies all four application ZIPs against their manifests and source
+commit, creates the tag at the build's commit, and publishes the ZIPs and JSON
+manifests on the repository's **Releases** page. It promotes the existing files
+without rebuilding. The built-in GitHub token supplies the required permissions;
+no additional secret is needed. Existing tags and releases are refused.
+
+Promote before the application artifacts expire (30 days after the build).
+Expired or deleted artifacts require another **Bundle Create** run. Release
+assets remain available independently of workflow artifact retention. If an
+upload fails after draft creation, inspect and remove the incomplete draft and
+its tag before retrying with the same tag, or use a new tag.
 
 The applications are portable: macOS ZIPs contain an Apple Silicon `.app`;
 Windows ZIPs contain the x64 application and its supporting files. Extract the
@@ -94,5 +126,6 @@ After `npm ci` and building the relevant workspaces:
   under `artifacts/downloads/` using the lockfile's Electron version. Chromium
   UI translations other than English are removed from both applications.
 
-`artifacts/` is ignored by Git. CI does not publish, commit generated files or
-read local provider/MCP credentials. Workflow permissions are read-only.
+`artifacts/` is ignored by Git. Build workflows do not publish, commit generated
+files or read local provider/MCP credentials, and have read-only permissions.
+Only the manually triggered **Bundle Release** workflow has release write access.

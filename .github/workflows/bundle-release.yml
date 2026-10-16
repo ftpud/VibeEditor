@@ -1,0 +1,106 @@
+name: Bundle Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: Successful Bundle Create run ID (from its Actions URL)
+        required: true
+        type: string
+      tag:
+        description: Versioned prerelease tag (v<BUNDLE_VERSION>-early-access.<N>, e.g. v0.1.0-early-access.1)
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  contents: write
+
+concurrency:
+  group: bundle-release-${{ inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      RUN_ID: ${{ inputs.run_id }}
+      TAG: ${{ inputs.tag }}
+    steps:
+      - name: Validate source build and release tag
+        id: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$RUN_ID" =~ ^[0-9]+$ ]] || { echo 'Expected a numeric run ID'; exit 1; }
+          [[ "$TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-early-access\.([1-9][0-9]*)$ ]] || {
+            echo 'Expected v<major>.<minor>.<patch>-early-access.<positive number>, e.g. v0.1.0-early-access.1'
+            exit 1
+          }
+          git check-ref-format "refs/tags/$TAG"
+          gh api "repos/$GH_REPO/actions/runs/$RUN_ID" > run.json
+          jq -e '.path == ".github/workflows/bundle-create.yml" and .event == "workflow_dispatch" and .status == "completed" and .conclusion == "success"' run.json
+          echo "sha=$(jq -r .head_sha run.json)" >> "$GITHUB_OUTPUT"
+          # Require a new tag so existing releases and tags cannot be overwritten.
+          gh api --paginate "repos/$GH_REPO/git/matching-refs/tags/$TAG" > refs.json
+          jq -e --arg ref "refs/tags/$TAG" 'all(.[]; .ref != $ref)' refs.json
+
+      - name: Download existing application bundles
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir assets
+          for artifact in vibe-early-access-macos-15 vibe-early-access-windows-2025; do
+            gh run download "$RUN_ID" --name "$artifact" --dir assets
+          done
+
+      - name: Verify bundle manifests and checksums
+        env:
+          SOURCE_SHA: ${{ steps.source.outputs.sha }}
+        shell: python
+        run: |
+          import hashlib, json, os, re
+          from pathlib import Path
+
+          assets = Path('assets')
+          manifests = sorted(assets.glob('*.zip.json'))
+          assert len(manifests) == 4, 'Expected four application manifests'
+          versions = set()
+          expected = set()
+          for manifest in manifests:
+              data = json.loads(manifest.read_text())
+              assert data['schema'] == 1
+              assert data['commit'] == os.environ['SOURCE_SHA'], 'Source commit mismatch'
+              archive = manifest.with_suffix('')
+              assert data['filename'] == archive.name, 'Archive filename mismatch'
+              with archive.open('rb') as stream:
+                  digest = hashlib.file_digest(stream, 'sha256').hexdigest()
+              assert digest == data['sha256'], 'Archive checksum mismatch'
+              versions.add(data['version'])
+              expected.update((archive.name, manifest.name))
+          assert len(versions) == 1, 'Bundle versions differ'
+          version = versions.pop()
+          assert re.fullmatch(r'(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)', version), 'Expected a major.minor.patch bundle version'
+          assert re.fullmatch(r'v' + re.escape(version) + r'-early-access\.[1-9][0-9]*', os.environ['TAG']), 'Release tag must match the bundle version: v' + version + '-early-access.<N>'
+          for kind in ('gateway', 'desktop'):
+              for platform in ('darwin-arm64', 'win32-x64'):
+                  assert f'vibe-{kind}-{version}-{platform}.zip' in expected
+          assert {p.name for p in assets.iterdir()} == expected, 'Unexpected release files'
+
+      - name: Publish release with existing bundles
+        env:
+          SOURCE_SHA: ${{ steps.source.outputs.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf 'Bundles promoted from [Bundle Create run %s](https://github.com/%s/actions/runs/%s).\n\nSource commit: `%s`.\n' \
+            "$RUN_ID" "$GH_REPO" "$RUN_ID" "$SOURCE_SHA" > notes.md
+          printf '\nVery early Early Access prerelease. Applications are unsigned; macOS uses ad-hoc signing.\n' >> notes.md
+          # Upload everything while still a draft, then make the complete release visible.
+          gh release create "$TAG" assets/* --target "$SOURCE_SHA" \
+            --title "Vibe $TAG (Early Access)" --notes-file notes.md --draft --prerelease --latest=false
+          gh release edit "$TAG" --draft=false --prerelease --latest=false
+          gh release view "$TAG" --json url --jq .url >> "$GITHUB_STEP_SUMMARY"
