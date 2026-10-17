@@ -28,6 +28,7 @@ import { JavaProjectService } from "./java.js";
 import { JdtLanguageService } from "./jdtls.js";
 import { LanguageRegistry, LanguageSessions } from "./language/registry.js";
 import { JavaLanguageService, JAVA_DESCRIPTOR } from "./language/java-service.js";
+import { NODE_DESCRIPTOR, NodeLanguageService } from "./language/node-service.js";
 import { handleLanguageRequest } from "./language/routes.js";
 import { toolInstallations } from "./tools.js";
 import { watchGitState } from "./git-watch.js";
@@ -555,6 +556,12 @@ export async function createServer(host: string, port: number, workspacePath: st
           : event.type === "debug" ? { type: "java.debug.state", payload: { ...event.state, rootId: ownerRootId } }
           : { type: "java.exit", payload: { rootId: ownerRootId, exitCode: event.exitCode, signal: event.signal } }),
         semanticChanged: () => send({ type: "java.semantic.changed", payload: { rootId: ownerRootId } })
+      }));
+      languageRegistry.register(NODE_DESCRIPTOR, (workspace) => new NodeLanguageService(workspace, {
+        output: (data, stream) => send({ type: "language.output", payload: { rootId: ownerRootId, language: "node", data, stream } }),
+        exit: (exitCode, signal) => send({ type: "language.exit", payload: { rootId: ownerRootId, language: "node", exitCode, signal } }),
+        debugState: () => undefined,
+        semanticChanged: () => undefined
       }));
       const languages = new LanguageSessions(languageRegistry, nextWorkspace);
       const javaService = languages.get("java") as JavaLanguageService;

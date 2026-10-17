@@ -79,8 +79,8 @@ requests in `protocol/src/index.ts` (~96 lines), `server.ts` (~52 refs),
 - [ ] Rename Java-named generic UI (Git dialogs, `model.ts` fields) where they are not Java-specific.
 
 ### 2.6 Prove the interface with a second language
-- [ ] Add a minimal second `LanguageService` (e.g. Node/TypeScript via `typescript-language-server`, or Python via `pyright`) as a built-in.
-- [ ] Fix whatever in the contract turns out to be Java-shaped.
+- [x] Add a minimal second `LanguageService` (Node via npm scripts in core/src/language/node-service.ts; no LSP yet) (e.g. Node/TypeScript via `typescript-language-server`, or Python via `pyright`) as a built-in.
+- [x] Fix whatever in the contract turns out to be Java-shaped (opaque revision, debug commands, optional LSP methods).
 
 ## Part 3: Plugin loader (after Parts 1 and 2)
 
