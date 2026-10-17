@@ -28,7 +28,7 @@ Section "Install"
   CreateShortcut "$SMPROGRAMS\Vibe Gateway.lnk" "$INSTDIR\Vibe Gateway.exe"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\VibeGateway" "DisplayName" "Vibe Gateway (Early Access)"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\VibeGateway" "DisplayVersion" "${VERSION}"
-  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\VibeGateway" "UninstallString" '$"$INSTDIR\Uninstall.exe$"'
+  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\VibeGateway" "UninstallString" '$\"$INSTDIR\Uninstall.exe$\"'
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\VibeGateway" "InstallLocation" "$INSTDIR"
   WriteRegDWORD HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\VibeGateway" "NoModify" 1
   WriteRegDWORD HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\VibeGateway" "NoRepair" 1

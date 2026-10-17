@@ -24,6 +24,15 @@ it("allows only the configured dev origin and document route", () => {
   expect(isTrustedRendererUrl("https://localhost:5173/", renderer, dev)).toBe(false);
   expect(isTrustedRendererUrl("http://user@localhost:5173/", renderer, dev)).toBe(false);
 });
+it("accepts equivalent file URL encoding without trusting other renderer files", () => {
+  const renderer = path.resolve("/Users/RUNNER~1/Vibe Gateway/dist-renderer/index.html");
+  const document = pathToFileURL(renderer).href;
+  expect(isTrustedIpcFrame({ url: document.replace("~", "%7E"), isMainFrame: true }, true, renderer)).toBe(true);
+  expect(isTrustedRendererUrl(document.replace("~", "%7e"), renderer)).toBe(true);
+  for (const candidate of [document.replace("index.html", "other.html"), document.replace("index.html", "index.html%2Fother"), document + "%", document.replace("RUNNER~1", "OTHER~1")]) {
+    expect(isTrustedRendererUrl(candidate, renderer)).toBe(false);
+  }
+});
 
 it("trusts IPC only from an owned window's trusted top-level frame", () => {
   expect(isTrustedIpcFrame({ url: `${rendererUrl}?detached=1`, isMainFrame: true }, true, renderer)).toBe(true);

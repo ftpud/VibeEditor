@@ -67,7 +67,14 @@ jobs:
 
           bundles = Path('bundles')
           manifests = sorted([*bundles.glob('vibe-gateway-*.dmg.json'), *bundles.glob('vibe-gateway-*-setup.exe.json')])
-          assert len(manifests) == 2, 'Expected two Gateway manifests'
+          if len(manifests) != 2:
+              found = ', '.join(sorted(p.name for p in bundles.iterdir())) or '(no files)'
+              raise SystemExit(
+                  'Expected macOS Gateway .dmg and Windows Gateway -setup.exe with JSON manifests. '
+                  'ZIP-only builds predate installer packaging and cannot be promoted. '
+                  'Run Bundle Create on current main, wait for both OS jobs to succeed, '
+                  'then use that new run ID. Downloaded files: ' + found
+              )
           versions = set()
           expected = set()
           for manifest in manifests:

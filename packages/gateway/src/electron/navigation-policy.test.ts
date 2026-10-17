@@ -13,6 +13,15 @@ test("development trust is limited to the configured origin and document route",
   assert.equal(isTrustedRendererUrl("http://localhost:5174/?x=1", renderer, "http://localhost:5174/"), true);
   for (const url of ["http://localhost:5174/other", "http://localhost:5174.evil.test/", "http://localhost:5173/", "http://user@localhost:5174/"]) assert.equal(isTrustedRendererUrl(url, renderer, "http://localhost:5174/"), false);
 });
+test("packaged renderer trust handles Chromium's escaped Windows temp directory names", () => {
+  const renderer = "/Users/RUNNER~1/Vibe Gateway/dist-renderer/index.html";
+  const document = pathToFileURL(renderer).href;
+  assert.equal(isTrustedIpcFrame({ url: document.replace("~", "%7E"), isMainFrame: true }, true, renderer), true);
+  assert.equal(isTrustedRendererUrl(document.replace("~", "%7e"), renderer), true);
+  for (const candidate of [document.replace("index.html", "other.html"), document.replace("index.html", "index.html%2Fother"), document + "%", document.replace("RUNNER~1", "OTHER~1")]) {
+    assert.equal(isTrustedRendererUrl(candidate, renderer), false);
+  }
+});
 test("IPC requires an app-owned window and the trusted top-level frame", () => {
   assert.equal(isTrustedIpcFrame({ url: document, isMainFrame: true }, true, renderer), true);
   assert.equal(isTrustedIpcFrame({ url: document, isMainFrame: false }, true, renderer), false);

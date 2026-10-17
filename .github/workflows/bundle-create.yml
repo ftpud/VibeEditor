@@ -76,6 +76,9 @@ jobs:
       - name: Gateway renderer tests
         if: runner.os == 'Windows'
         run: npm exec -w @remote-ide/gateway -- vitest run --environment happy-dom
+      - name: Gateway Windows renderer trust tests
+        if: runner.os == 'Windows'
+        run: node --test packages/gateway/dist-electron/navigation-policy.test.js
       - run: npm run test -w @remote-ide/desktop
       - name: Install Windows installer compiler
         if: runner.os == 'Windows'

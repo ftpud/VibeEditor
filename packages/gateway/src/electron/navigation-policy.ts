@@ -1,5 +1,5 @@
 import path from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 
 export type IpcFrame = { url: string; isMainFrame: boolean };
 
@@ -19,8 +19,10 @@ export function isTrustedRendererUrl(candidate: string, rendererFilePath: string
   }
 
   if (actual.protocol !== "file:" || actual.host) return false;
-  const expected = pathToFileURL(path.resolve(rendererFilePath));
-  return actual.pathname === expected.pathname;
+  // Chromium may escape characters such as ~ that Node leaves literal. Compare
+  // decoded filesystem paths, while rejecting invalid file URLs/encoded separators.
+  try { return fileURLToPath(actual) === path.resolve(rendererFilePath); }
+  catch { return false; }
 }
 
 export function isTrustedIpcFrame(
