@@ -67,7 +67,7 @@ requests in `protocol/src/index.ts` (~96 lines), `server.ts` (~52 refs),
 - [ ] Decide how language-specific extras are typed (typed union per built-in language vs. an opaque `extra` payload with a schema from the service descriptor).
 
 ### 2.4 Move Java onto the contract
-- [ ] Implement `JavaLanguageService` by wrapping the existing modules (`java.ts`, `jdtls.ts`, `java-configuration.ts`, caches); no behaviour change.
+- [x] Implement `JavaLanguageService` by wrapping (adapter in core/src/language/java-service.ts, not yet routed from server.ts) the existing modules (`java.ts`, `jdtls.ts`, `java-configuration.ts`, caches); no behaviour change.
 - [ ] Move `.settings/java.json` handling and Maven loading inside it.
 - [ ] Replace Java calls in `server.ts`, `workspace-state.ts` and `tools.ts` with registry lookups.
 - [ ] Keep `java.test.ts`, `jdtls.test.ts`, `java-debug.integration.test.ts` passing unchanged as the regression suite.

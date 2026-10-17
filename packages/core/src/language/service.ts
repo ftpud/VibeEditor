@@ -51,6 +51,11 @@ export interface LanguageToolCheck { tool: string; executable: string; ok: boole
 export interface LanguageDiagnostic { path: string; line: number; column: number; severity: "error" | "warning"; message: string }
 export interface LanguageSymbol { name: string; kind: number; path: string; line: number; column: number; container?: string }
 
+export interface LanguageRange { startLine: number; startColumn: number; endLine: number; endColumn: number }
+export interface LanguageCompletion { label: string; detail?: string; insertText: string; range?: LanguageRange; additionalTextEdits: { range: LanguageRange; text: string }[] }
+export type LanguageLocation = { path: string } & LanguageRange;
+export type LanguageSemanticToken = LanguageRange & { type: string; modifiers: string[] };
+
 export interface LanguageRunTarget { id: string; name: string; path?: string; extra?: LanguageExtra }
 
 /** Reuses `run-configs.ts` and `project-processes.ts`; a service only describes what to launch. */
@@ -69,7 +74,8 @@ export interface LanguageDebugState {
   busy?: boolean;
   extra?: LanguageExtra;
 }
-export type LanguageDebugCommand = "continue" | "pause" | "stepOver" | "stepInto" | "stepOut" | "stop";
+/** Stopping a session is `stop()`; pausing is not part of the contract (JDB cannot pause a running VM). */
+export type LanguageDebugCommand = "continue" | "stepOver" | "stepInto" | "stepOut";
 
 /** How Core's single generic LSP host should start this language's server. */
 export interface LanguageServerLaunch {
@@ -101,8 +107,9 @@ export interface LanguageService {
   addSourceRoot(path: string): Promise<void>;
   workspaceSymbols(query: string, limit?: number): Promise<{ symbols: LanguageSymbol[]; truncated?: boolean }>;
   checkTools(content?: string): Promise<LanguageToolCheck[]>;
-  readConfiguration(): Promise<{ content: string; revision: string; path: string }>;
-  saveConfiguration(content: string, expectedRevision?: string): Promise<{ revision: string }>;
+  /** `revision` is an opaque optimistic-concurrency token the service round-trips unchanged. */
+  readConfiguration(): Promise<{ path: string; content: string; revision?: unknown; template?: string }>;
+  saveConfiguration(content: string, expectedRevision?: unknown): Promise<{ content: string; revision: unknown; options?: LanguageExtra }>;
   check(): Promise<LanguageDiagnostic[]>;
 
   listRunTargets(): Promise<LanguageRunTarget[]>;
@@ -114,9 +121,18 @@ export interface LanguageService {
 
   setBreakpoints(breakpoints: LanguageBreakpoint[]): Promise<void>;
   startDebug(breakpoints: LanguageBreakpoint[]): Promise<void>;
-  debugVariables(reference: string, start?: number): Promise<{ variables: LanguageDebugVariable[] }>;
+  debugVariables(reference: string, start?: number): Promise<{ variables: LanguageDebugVariable[]; nextStart?: number }>;
   debugCommand(command: LanguageDebugCommand): void;
   applyChanges(): Promise<LanguageExtra>;
+
+  /**
+   * Editor intelligence. Until Core owns a generic LSP host (see `languageServer`),
+   * services that set `capabilities.lsp` answer these directly; Java does so through JDT.
+   */
+  completion?(path: string, content: string, line: number, column: number): Promise<LanguageCompletion[]>;
+  definition?(path: string, content: string, line: number, column: number): Promise<LanguageLocation[]>;
+  references?(path: string, content: string, line: number, column: number): Promise<LanguageLocation[]>;
+  semanticTokens?(path: string, content: string): Promise<LanguageSemanticToken[]>;
 
   /** Launch spec for the generic LSP host; undefined when `capabilities.lsp` is false. */
   languageServer(): LanguageServerLaunch | undefined;
