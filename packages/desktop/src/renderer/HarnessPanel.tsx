@@ -852,10 +852,13 @@ function WorkflowChatActivity({ block, run, state, busy }: { block: HarnessBlock
     const target = run?.definition?.blocks.find((item) => item.id === input?.args?.block_id);
     return input?.name === "workflow_use_block" ? `${target?.label ?? input.args?.block_id ?? "Connected block"}${input.args?.action ? ` · ${input.args.action}` : ""}${input.args?.lines ? ` · ${input.args.lines} lines` : ""}` : input?.name ?? "Tool call";
   };
+  const active = busy ? state?.activeToolCalls?.at(-1) : undefined;
+  const activeTarget = run?.definition?.blocks.find((item) => item.id === active?.blockId);
+  const activeDescription = active ? `${activeTarget?.label ?? active.blockId}${active.action ? ` · ${active.action}` : ""}${active.lines ? ` · ${active.lines} lines` : ""}` : undefined;
   const pending = [...operations].reverse().find((item) => item.status === "intent");
   const latest = activities.at(-1);
   const status = state && waitingStatus(block, state);
-  const summary = status ?? (pending ? `Running ${describe(pending)}` : busy ? latest?.text.split("\n")[0] || "Agent working…" : "Agent activity");
+  const summary = status ?? (activeDescription ? `Running ${activeDescription}` : pending ? `Running ${describe(pending)}` : busy ? latest?.text.split("\n")[0] || "Agent working…" : "Agent activity");
   if (!busy && !activities.length && !operations.length) return null;
   const entries = [...activities.map((item) => ({ id: `activity:${item.id}`, timestamp: item.timestamp, label: item.text.split("\n")[0] || "Agent activity", detail: item.text, status: "" })), ...operations.map((item) => ({ id: item.id, timestamp: item.createdAt, label: describe(item), detail: item.error ?? (item.result !== undefined ? JSON.stringify(item.result, null, 2) : JSON.stringify(item.input, null, 2)) ?? "", status: item.status === "intent" ? "Running" : item.status === "succeeded" ? "Completed" : "Failed" }))].sort((a, b) => Date.parse(a.timestamp) - Date.parse(b.timestamp));
   return <details className="workflow-chat-activity" aria-label="Chatbox agent activity"><summary><Terminal size={13} aria-hidden="true" /><span role="status" aria-label="Agent current activity" title={summary}>{summary}</span><small>{entries.length || "Live"}</small></summary><div className="workflow-chat-activity-list">{!entries.length && <p>Waiting for agent activity…</p>}{entries.map((item) => <details key={item.id}><summary><time>{new Date(item.timestamp).toLocaleTimeString()}</time><span title={item.label}>{item.label}</span>{item.status && <small className={item.status.toLowerCase()}>{item.status}</small>}</summary><pre>{item.detail.slice(-12000)}</pre></details>)}</div></details>;

@@ -676,6 +676,7 @@ export class HarnessRunner {
   private async execute(run: HarnessRun, blocks: HarnessBlock[], edges: HarnessEdge[], order: string[], dispatch: Dispatch, defaultProvider: string, append: Append, recovering = false, startBlockId?: string): Promise<void> {
     edges = harnessExecutionEdges({ blocks, edges });
     const outputs = new Map(run.blocks.flatMap((state) => state.status === "succeeded" && state.output !== undefined ? [[state.blockId, state.output] as const] : []));
+    for (const state of run.blocks) state.activeToolCalls = undefined;
     const concurrency = run.definition?.settings?.concurrency ?? this.concurrency;
     run.status = this.runActivityStatus(run); run.startedAt ??= new Date().toISOString(); const background = new Set<Promise<void>>(); this.executions.set(run.id, { run, blocks, edges, outputs, dispatch, append, defaultProvider, background, stackInvocations: new Map(), loopInvocations: new Map(), turnClaims: new Map(), scheduler: new ExecutionScheduler(concurrency, () => this.assertActive(run.id)) });
     if (recovering) for (const state of run.blocks) if (isActiveStatus(state.status)) this.log(state, "lifecycle", "Core restarted and reconciled this workflow stage");
@@ -752,6 +753,23 @@ export class HarnessRunner {
   }
 
   async flowTool(runId: string, blockId: string, name: string, args: Record<string, unknown>): Promise<unknown> {
+    const execution = this.activeExecution(runId);
+    const caller = execution.run.blocks.find((item) => item.blockId === blockId);
+    const target = execution.blocks.find((item) => item.id === args.block_id);
+    if (name !== "workflow_use_block" || !caller || !target) return this.executeFlowTool(runId, blockId, name, args);
+    const call = { id: crypto.randomUUID(), blockId: target.id, ...(typeof args.action === "string" ? { action: args.action } : target.type === "meeting" ? { action: "diff" } : {}), ...(typeof args.lines === "number" && Number.isInteger(args.lines) ? { lines: args.lines } : {}) };
+    caller.activeToolCalls = [...caller.activeToolCalls ?? [], call];
+    try {
+      await this.update(execution.run);
+      return await this.executeFlowTool(runId, blockId, name, args);
+    } finally {
+      caller.activeToolCalls = caller.activeToolCalls?.filter((item) => item.id !== call.id);
+      if (!caller.activeToolCalls?.length) caller.activeToolCalls = undefined;
+      await this.update(execution.run);
+    }
+  }
+
+  private async executeFlowTool(runId: string, blockId: string, name: string, args: Record<string, unknown>): Promise<unknown> {
     // Polling and Meeting cursor updates are saved without growing the operation journal.
     const execution = this.activeExecution(runId);
     const caller = execution.run.blocks.find((item) => item.blockId === blockId);

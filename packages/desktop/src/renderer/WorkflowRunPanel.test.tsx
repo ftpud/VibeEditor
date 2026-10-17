@@ -535,6 +535,21 @@ describe("workflow chat links", () => {
     expect(onChat).toHaveBeenCalledTimes(1);
   });
 
+  it("shows the target and action for live reads and waits without journal entries", () => {
+    const timestamp = "2026-10-08T12:00:00Z";
+    const state: HarnessRun["blocks"][number] = { blockId: "chat", status: "running", agentActivity: [{ id: "tool", timestamp, text: "workflow_use_block (in_progress)" }], activeToolCalls: [{ id: "wait", blockId: "room", action: "wait" }] };
+    const definition: HarnessDefinition = { ...workflow, blocks: [chat, { id: "room", type: "meeting", label: "Team meeting", prompt: "", position: { x: 0, y: 0 } }], edges: [] };
+    const activeRun: HarnessRun = { ...run, definition, blocks: [state], operations: [] };
+    const view = render(<BlockRunDetails block={chat} run={activeRun} state={state} onClose={vi.fn()} />);
+    expect(screen.getByRole("status", { name: "Agent current activity" }).textContent).toBe("Running Team meeting · wait");
+    view.rerender(<BlockRunDetails block={chat} run={activeRun} state={{ ...state, activeToolCalls: [{ id: "tail", blockId: "room", action: "tail", lines: 5 }] }} onClose={vi.fn()} />);
+    expect(screen.getByRole("status", { name: "Agent current activity" }).textContent).toBe("Running Team meeting · tail · 5 lines");
+    view.rerender(<BlockRunDetails block={chat} run={activeRun} state={{ ...state, activeToolCalls: [{ id: "unknown", blockId: "removed-block", action: "status" }] }} onClose={vi.fn()} />);
+    expect(screen.getByRole("status", { name: "Agent current activity" }).textContent).toBe("Running removed-block · status");
+    view.rerender(<BlockRunDetails block={chat} run={activeRun} state={{ ...state, activeToolCalls: undefined, agentActivity: [{ id: "next", timestamp, text: "Reviewing results" }] }} onClose={vi.fn()} />);
+    expect(screen.getByRole("status", { name: "Agent current activity" }).textContent).toBe("Reviewing results");
+  });
+
   it("shows live provider activity, connected app calls and their results", () => {
     const timestamp = "2026-10-08T12:00:00Z";
     const state: HarnessRun["blocks"][number] = { blockId: "chat", status: "running", startedAt: timestamp, agentActivity: [{ id: "tool", timestamp, text: "Running npm test\nTest output" }] };

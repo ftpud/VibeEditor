@@ -27,6 +27,33 @@ async function setup(blocks: HarnessBlock[], edges: HarnessEdge[], concurrency =
 // Workflow journals use disk-backed queues; allow bounded disk latency under the full CI suite.
 
 describe("typed workflows", () => {
+  it("reports live block and action details for unjournaled waits and clears each completed call", async () => {
+    const { runner, definition, finished } = await setup([block("chat", "chatbox"), block("room", "meeting", { prompt: "" })], [edge("chat", "room", "use")]);
+    let ready!: () => void;
+    const started = new Promise<void>((resolve) => { ready = resolve; });
+    const run = await runner.start(definition.id, "Listen", async (current, _input, runtime) => {
+      const use = (args: Record<string, unknown>) => runner.flowTool(runtime.runId, current.id, "workflow_use_block", { block_id: "room", ...args });
+      const first = use({ action: "wait", timeout_seconds: 2, lines: 5 });
+      const second = use({ action: "wait", timeout_seconds: 2 });
+      ready();
+      for (const pending of [first, second]) expect(await pending).toMatchObject({ meeting: { status: "updated", messages: [{ text: "Hello" }] } });
+      expect((await runner.readRun(runtime.runId))?.blocks.find((item) => item.blockId === "chat")?.activeToolCalls?.filter((call) => call.action === "wait") ?? []).toHaveLength(0);
+      await expect(use({ action: "wait", timeout_seconds: 0 })).rejects.toThrow("timeout_seconds");
+      expect((await runner.readRun(runtime.runId))?.blocks.find((item) => item.blockId === "chat")?.activeToolCalls?.filter((call) => call.action === "wait") ?? []).toHaveLength(0);
+      return session("Done");
+    });
+    await started;
+    const live = (await runner.readRun(run.id))?.blocks.find((item) => item.blockId === "chat")?.activeToolCalls;
+    expect(live).toMatchObject([{ blockId: "room", action: "wait", lines: 5 }, { blockId: "room", action: "wait" }]);
+    expect(new Set(live?.map((call) => call.id)).size).toBe(2);
+    await runner.flowTool(run.id, "chat", "workflow_use_block", { block_id: "room", action: "publish", message: "Hello" });
+    const result = await finished();
+    expect(result.error).toBeUndefined();
+    expect(result.status).toBe("succeeded");
+    expect(result.blocks.find((item) => item.blockId === "chat")?.activeToolCalls).toBeUndefined();
+    expect(result.operations?.some((operation) => (operation.input as { args?: { action?: string } })?.args?.action === "wait")).toBe(false);
+  });
+
   it("waits for meeting updates without holding an execution slot or losing unread messages", async () => {
     const { runner, definition, finished } = await setup([
       block("lead", "ai"), block("reader", "ai"), block("publisher", "chatbox"), block("room", "meeting", { prompt: "" })
