@@ -24,6 +24,7 @@ export function TriggerForm({ tasks, workflows, providers, selectedTaskId, defau
   const [taskId, setTaskId] = useState(selectedTaskId ?? "");
   const [type, setType] = useState<"prompt" | "workflow">("prompt");
   const [provider, setProvider] = useState(defaultProvider);
+  const [newSession, setNewSession] = useState(false);
   const [model, setModel] = useState("");
   const [reasoning, setReasoning] = useState("");
   const [agents, setAgents] = useState<AgentFile[]>([]);
@@ -53,7 +54,7 @@ export function TriggerForm({ tasks, workflows, providers, selectedTaskId, defau
     void onCreate({
       name, taskId: taskId || undefined, debounceSeconds: debounce, maxFiresPerHour: maxPerHour,
       source: sourceType === "file" ? { type: "file", path: path.trim(), events } : { type: "fifo", path: path.trim() },
-      action: type === "workflow" ? { type, provider, harnessId, input: prompt, ...(startBlockId ? { startBlockId } : {}) } : { type, provider, prompt, ...(agent ? { agent: { scope: agent.scope, name: agent.name } } : {}), ...(model ? { model } : {}), ...(reasoning ? { reasoning } : {}) }
+      action: type === "workflow" ? { type, provider, harnessId, input: prompt, ...(startBlockId ? { startBlockId } : {}) } : { type, provider, prompt, ...(newSession ? { newSession, ...(agent ? { agent: { scope: agent.scope, name: agent.name } } : {}), ...(model ? { model } : {}), ...(reasoning ? { reasoning } : {}) } : {}) }
     }).then(onCancel).catch((error) => setError(error instanceof Error ? error.message : "Could not create trigger")).finally(() => setSaving(false));
   }}>
     <header className="schedule-form-heading"><Zap size={15} aria-hidden="true" /><strong>New trigger</strong><button type="button" aria-label="Close new trigger" title="Close new trigger" disabled={saving} onClick={onCancel}><X size={14} aria-hidden="true" /></button></header>
@@ -63,15 +64,16 @@ export function TriggerForm({ tasks, workflows, providers, selectedTaskId, defau
     {sourceType === "file" ? <fieldset className="trigger-events"><legend>Fire when it is</legend>{FILE_EVENTS.map((item) => <label key={item.id}><input type="checkbox" checked={events.includes(item.id)} onChange={() => toggleEvent(item.id)} />{item.label}</label>)}</fieldset> : <p className="timers-help">Each write to the pipe (for example <code>echo "build failed" &gt; pipe</code>) starts the action, and the text received is added to the prompt.</p>}
     <label>Action<select value={type} onChange={(event) => setType(event.target.value as typeof type)}><option value="prompt">Send a prompt</option><option value="workflow">Start a workflow</option></select></label>
     <label>Target task<select value={taskId} onChange={(event) => setTaskId(event.target.value)}><option value="">Root workspace</option>{tasks.filter((task) => task.status !== "finished" && !task.archived).map((task) => <option key={task.id} value={task.id}>{task.name}</option>)}</select></label>
-    <label>AI provider<select required value={provider} onChange={(event) => setProvider(event.target.value)}>{providers.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
-    {type === "prompt" ? <label>Agent preset<select value={agentKey} disabled={agentsLoading} onChange={(event) => setAgentKey(event.target.value)}><option value="">Default agent</option>{agents.map((agent) => <option key={`${agent.scope}:${agent.name}`} value={`${agent.scope}:${agent.name}`}>{agent.agent.name} ({agent.scope})</option>)}</select></label> : <label>Workflow<select required value={harnessId} onChange={(event) => setHarnessId(event.target.value)}><option value="" disabled>Select workflow</option>{workflows.map((workflow) => <option key={workflow.id} value={workflow.id}>{workflow.name}</option>)}</select></label>}
-    {type === "prompt" && <ActionModelFields provider={provider} model={model} reasoning={reasoning} onLoadModels={onLoadModels} onChange={(value) => { setModel(value.model); setReasoning(value.reasoning); }} />}
+    {type === "prompt" && <label>Session<select value={newSession ? "new" : "continue"} onChange={(event) => setNewSession(event.target.value === "new")}><option value="continue">Continue the current session</option><option value="new">Start a new session</option></select></label>}
+    {type === "prompt" && <label>AI provider<select required value={provider} onChange={(event) => setProvider(event.target.value)}>{providers.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>}
+    {type === "prompt" ? !newSession ? null : <label>Agent preset<select value={agentKey} disabled={agentsLoading} onChange={(event) => setAgentKey(event.target.value)}><option value="">Default agent</option>{agents.map((agent) => <option key={`${agent.scope}:${agent.name}`} value={`${agent.scope}:${agent.name}`}>{agent.agent.name} ({agent.scope})</option>)}</select></label> : <label>Workflow<select required value={harnessId} onChange={(event) => setHarnessId(event.target.value)}><option value="" disabled>Select workflow</option>{workflows.map((workflow) => <option key={workflow.id} value={workflow.id}>{workflow.name}</option>)}</select></label>}
+    {type === "prompt" && newSession && <ActionModelFields provider={provider} model={model} reasoning={reasoning} onLoadModels={onLoadModels} onChange={(value) => { setModel(value.model); setReasoning(value.reasoning); }} />}
     {type === "workflow" && starts.length > 1 && <label>Start block<select required value={startBlockId} onChange={(event) => setStartBlockId(event.target.value)}>{starts.map((block) => <option key={block.id} value={block.id}>{block.label}</option>)}</select></label>}
-    {type === "prompt" && agentsError && <p role="alert">{agentsError}</p>}
+    {type === "prompt" && newSession && agentsError && <p role="alert">{agentsError}</p>}
     <label>{type === "prompt" ? "Prompt" : "Workflow input"}<textarea placeholder={type === "prompt" ? "Describe what the agent should do when this fires…" : "Optional input to start the workflow…"} required={type === "prompt"} rows={4} value={prompt} onChange={(event) => setPrompt(event.target.value)} /></label>
     <div className="schedule-interval"><label>Quiet period (seconds)<input type="number" min={0} max={3600} step={1} required value={debounce} onChange={(event) => setDebounce(Number(event.target.value))} /></label><label>Max runs per hour<input type="number" min={1} max={1000} step={1} required value={maxPerHour} onChange={(event) => setMaxPerHour(Number(event.target.value))} /></label></div>
     <p className="timers-help">Events are grouped until the quiet period passes, and ignored while the target agent or previous workflow is still busy. If the hourly limit is hit the trigger disables itself to stop feedback loops. Core must be running; changes made while it is stopped are not replayed.</p>
     {error && <p role="alert">{error}</p>}
-    <div className="timer-actions"><button className="primary" type="submit" disabled={saving || (type === "prompt" && (agentsLoading || Boolean(agentsError)))}><Plus size={13} aria-hidden="true" />{saving ? "Saving…" : "Create trigger"}</button><button type="button" disabled={saving} onClick={onCancel}><X size={13} aria-hidden="true" />Cancel</button></div>
+    <div className="timer-actions"><button className="primary" type="submit" disabled={saving || (type === "prompt" && newSession && (agentsLoading || Boolean(agentsError)))}><Plus size={13} aria-hidden="true" />{saving ? "Saving…" : "Create trigger"}</button><button type="button" disabled={saving} onClick={onCancel}><X size={13} aria-hidden="true" />Cancel</button></div>
   </form>;
 }

@@ -53,12 +53,24 @@ describe("Triggers tool window", () => {
     fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Modelled" } });
     fireEvent.change(screen.getByLabelText("File or folder path"), { target: { value: "/tmp/f" } });
     fireEvent.change(screen.getByLabelText("Prompt"), { target: { value: "Go" } });
+    expect(screen.queryByRole("button", { name: "codex model" })).toBeNull();
+    fireEvent.change(screen.getByLabelText("Session"), { target: { value: "new" } });
     await waitFor(() => expect((screen.getByRole("button", { name: "codex model" }) as HTMLButtonElement).disabled).toBe(false));
     fireEvent.click(screen.getByRole("button", { name: "codex model" }));
     fireEvent.click(screen.getByText("Model One"));
     fireEvent.change(screen.getByLabelText("Reasoning effort"), { target: { value: "high" } });
     await waitFor(() => expect((screen.getByRole("button", { name: "Create trigger" }) as HTMLButtonElement).disabled).toBe(false));
     fireEvent.click(screen.getByRole("button", { name: "Create trigger" }));
-    await waitFor(() => expect(onCreate).toHaveBeenCalledWith(expect.objectContaining({ action: expect.objectContaining({ type: "prompt", model: "m1", reasoning: "high" }) })));
+    await waitFor(() => expect(onCreate).toHaveBeenCalledWith(expect.objectContaining({ action: expect.objectContaining({ type: "prompt", newSession: true, model: "m1", reasoning: "high" }) })));
+  });
+
+  it("hides provider, agent and model choices for workflow triggers", () => {
+    setup();
+    fireEvent.click(screen.getByRole("button", { name: "New trigger" }));
+    fireEvent.change(screen.getByLabelText("Action"), { target: { value: "workflow" } });
+    expect(screen.queryByLabelText("AI provider")).toBeNull();
+    expect(screen.queryByLabelText("Session")).toBeNull();
+    expect(screen.queryByLabelText("Agent preset")).toBeNull();
+    expect(screen.queryByRole("button", { name: "codex model" })).toBeNull();
   });
 });

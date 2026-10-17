@@ -20,7 +20,7 @@ is the root project. Use catalogue IDs rather than guessed filesystem locations.
   or workflow). triggers/new.json is a starter; Core persists triggers and re-arms them
   after restart. Format: {name, enabled, source: {type: "file", path, events:
   ["created"|"changed"|"deleted"]} | {type: "fifo", path}, action: {type: "prompt",
-  provider, prompt, agent?, model?, reasoning?} | {type: "workflow", provider, harnessId, input,
+  provider, prompt, newSession?, agent?, model?, reasoning?} | {type: "workflow", provider, harnessId, input,
   startBlockId?}, taskId?, debounceSeconds? (0-3600, default 2), maxFiresPerHour?
   (1-1000, default 20)}. Relative paths resolve against the root project; a missing
   pipe is created. Triggers cannot be deleted through configuration. Writing new.json

@@ -195,7 +195,7 @@ export type HarnessReviewFinding = { id: string; message: string; ownerBlockId: 
 export type HarnessCorrectionCycle = { reviewBlockId: string; ownerBlockId: string; verificationBlockId?: string; cycle: number; revision: string; findings: HarnessReviewFinding[]; status: "requested" | "corrected" | "blocked"; correctedRevision?: string; requestedAt: string; completedAt?: string; error?: string };
 export type HarnessVerification = { command: string; revision?: string; workingDirectory?: string; timeoutMs?: number };
 export type ScheduledAction =
-  | { type: "prompt"; provider: AiProvider; prompt: string; agent?: AgentFileReference; /** Overrides the session's model for this prompt. */ model?: string; /** Overrides the session's reasoning effort for this prompt. */ reasoning?: string }
+  | { type: "prompt"; provider: AiProvider; prompt: string; agent?: AgentFileReference; /** Start a context-empty session instead of continuing the current one; agent, model and reasoning only apply then. */ newSession?: boolean; /** Overrides the session's model for this prompt. */ model?: string; /** Overrides the session's reasoning effort for this prompt. */ reasoning?: string }
   | { type: "workflow"; provider: AiProvider; harnessId: string; input: string; startBlockId?: string };
 export type ScheduleInput = { name: string; dueAt: string; intervalSeconds?: number; taskId?: string; action: ScheduledAction };
 export type WorkspaceSchedule = ScheduleInput & { id: string; rootId: WorkspaceRootId; createdAt: string; enabled: boolean; lastRunAt?: string; lastError?: string; lastWorkflowRunId?: string };

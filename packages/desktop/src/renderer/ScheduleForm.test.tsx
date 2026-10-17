@@ -19,6 +19,7 @@ function setup() {
 describe("schedule creation", () => {
   it("creates a recurring prompt with the selected task's agent and an ISO time", async () => {
     const { onCreate, onCancel, onLoadAgents } = setup();
+    fireEvent.change(screen.getByLabelText("Session"), { target: { value: "new" } });
     await screen.findByRole("option", { name: "Reviewer task-a (workspace)" });
     expect(onLoadAgents).toHaveBeenCalledWith("task-a");
     fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Review daily" } });
@@ -28,12 +29,13 @@ describe("schedule creation", () => {
     fireEvent.change(screen.getByLabelText("Interval unit"), { target: { value: "86400" } });
     fireEvent.submit(screen.getByRole("form", { name: "New schedule" }));
     await waitFor(() => expect(onCreate).toHaveBeenCalledOnce());
-    expect(onCreate).toHaveBeenCalledWith(expect.objectContaining({ name: "Review daily", taskId: "task-a", intervalSeconds: 86400, dueAt: expect.stringMatching(/Z$/), action: { type: "prompt", provider: "codex", prompt: "Review changes", agent: { scope: "workspace", name: "task-a-reviewer.md" } } }));
+    expect(onCreate).toHaveBeenCalledWith(expect.objectContaining({ name: "Review daily", taskId: "task-a", intervalSeconds: 86400, dueAt: expect.stringMatching(/Z$/), action: { type: "prompt", provider: "codex", prompt: "Review changes", newSession: true, agent: { scope: "workspace", name: "task-a-reviewer.md" } } }));
     await waitFor(() => expect(onCancel).toHaveBeenCalledOnce());
   });
 
   it("loads presets for a changed target and creates a one-time workflow", async () => {
     const { onCreate, onLoadAgents } = setup();
+    fireEvent.change(screen.getByLabelText("Session"), { target: { value: "new" } });
     await screen.findByRole("option", { name: "Reviewer task-a (workspace)" });
     fireEvent.change(screen.getByLabelText("Target task"), { target: { value: "task-b" } });
     await screen.findByRole("option", { name: "Reviewer task-b (workspace)" });
