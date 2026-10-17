@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import { mkdir, open, readFile, rename, unlink } from "node:fs/promises";
-import type { ScheduleInput, WorkspaceSchedule } from "@remote-ide/protocol";
+import type { ScheduledAction, ScheduleInput, WorkspaceSchedule } from "@remote-ide/protocol";
 import { CoreError } from "./errors.js";
 import { serializedStateMutation } from "./root-mutation.js";
 
@@ -11,7 +11,11 @@ export function validateSchedule(input: ScheduleInput): void {
   if (typeof input.dueAt !== "string" || !Number.isFinite(Date.parse(input.dueAt))) throw new CoreError("INVALID_REQUEST", "Choose a valid first run time");
   if (input.intervalSeconds !== undefined && (!Number.isInteger(input.intervalSeconds) || input.intervalSeconds < 60 || input.intervalSeconds > 31_536_000)) throw new CoreError("INVALID_REQUEST", "Repeat intervals must be between 60 seconds and one year");
   if (input.taskId !== undefined && (typeof input.taskId !== "string" || !input.taskId)) throw new CoreError("INVALID_REQUEST", "Choose a valid task");
-  const action = input.action;
+  validateScheduledAction(input.action);
+}
+
+/** Shared by schedules and triggers: both run the same prompt/workflow action. */
+export function validateScheduledAction(action: ScheduledAction): void {
   if (!action || typeof action.provider !== "string" || !action.provider || !["prompt", "workflow"].includes(action.type)) throw new CoreError("INVALID_REQUEST", "Choose a schedule action and provider");
   if (action.type === "prompt" && (typeof action.prompt !== "string" || !action.prompt.trim())) throw new CoreError("INVALID_REQUEST", "Enter a prompt");
   if (action.type === "prompt" && action.agent && (typeof action.agent.name !== "string" || !["global", "local", "workspace"].includes(action.agent.scope))) throw new CoreError("INVALID_REQUEST", "Choose a valid agent preset");

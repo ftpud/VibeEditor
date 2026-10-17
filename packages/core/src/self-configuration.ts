@@ -8,7 +8,7 @@ export const CONFIGURATION_AGENT_NAME = "vibe-configurator.md";
 export const CONFIGURATION_SKILL_ID = "global/vibe-self-configuration";
 export const CONFIGURATION_AGENT = `---
 name: Vibe Configurator
-description: Configure Vibe Editor workflows, agents, skills, tasks and useful files.
+description: Configure Vibe Editor workflows, triggers, agents, skills, tasks and useful files.
 mcpServers:
   - vibe-editor
 ---
@@ -84,13 +84,21 @@ Choose script for short, non-interactive commands, tests, builds and data transf
 Choose run_app for a named managed service. Use terminal_control only for persistent
 terminal sessions where interactive input may be needed; do not use it for small tasks,
 one-shot scripts or spawning AI agents. List terminals first and reuse suitable sessions.
+
+Triggers (triggers/{id}.json) start a prompt or workflow when a file changes or data
+arrives on a named pipe. Read triggers/new.json for a starter and the format in
+configuration_list. Core persists and re-arms them after restart. Create them disabled
+(enabled: false) unless the user asks for them to be active, and keep the quiet period
+and maxFiresPerHour conservative: an agent that edits the file it is triggered by can
+loop. Triggers cannot be deleted through configuration; the Triggers panel does that.
 `;
 
 // Exact fingerprints of previously shipped skills; never replace user-edited instructions.
 const PREVIOUS_CONFIGURATION_SKILL_HASHES = new Set([
   "56930e7d161a65f291803724978469e20af359e3dc2a7e43c55e32cd9c901ea6",
   "22c077677a7c43786df14bc1fd7126b31a3901508aae14b3b7727229c61f5155",
-  "497f968c35f9f855f3dcacab9aa0aafd0524567701ef97e2a1c5f88da87a457b"
+  "497f968c35f9f855f3dcacab9aa0aafd0524567701ef97e2a1c5f88da87a457b",
+  "9117b20c14d3d139f68318a20837c7c5633c1114bc89e2976c877b5f7e9da894"
 ]);
 
 /** Install shipped global defaults on every Core host, preserving user edits. */

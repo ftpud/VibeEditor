@@ -16,6 +16,15 @@ is the root project. Use catalogue IDs rather than guessed filesystem locations.
 - useful/{global|local}/{filename}: arbitrary text, not necessarily Markdown.
 - skills/policy.json: project skill selection and agent assignments.
 - workflows/{id}.json: project workflow definition. workflows/new.json is a starter.
+- triggers/{id}.json: reactive trigger (file change or named-pipe data starts a prompt
+  or workflow). triggers/new.json is a starter; Core persists triggers and re-arms them
+  after restart. Format: {name, enabled, source: {type: "file", path, events:
+  ["created"|"changed"|"deleted"]} | {type: "fifo", path}, action: {type: "prompt",
+  provider, prompt, agent?} | {type: "workflow", provider, harnessId, input,
+  startBlockId?}, taskId?, debounceSeconds? (0-3600, default 2), maxFiresPerHour?
+  (1-1000, default 20)}. Relative paths resolve against the root project; a missing
+  pipe is created. Triggers cannot be deleted through configuration. Writing new.json
+  creates one and returns its resource ID; use that for edits and retries.
 - tasks/{id}.json: existing task metadata only.
 
 Global is shared across projects on this Core host. Local is Core state shared by

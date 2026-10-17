@@ -199,6 +199,11 @@ export type ScheduledAction =
   | { type: "workflow"; provider: AiProvider; harnessId: string; input: string; startBlockId?: string };
 export type ScheduleInput = { name: string; dueAt: string; intervalSeconds?: number; taskId?: string; action: ScheduledAction };
 export type WorkspaceSchedule = ScheduleInput & { id: string; rootId: WorkspaceRootId; createdAt: string; enabled: boolean; lastRunAt?: string; lastError?: string; lastWorkflowRunId?: string };
+export type TriggerFileEvent = "created" | "changed" | "deleted";
+/** What a trigger watches: a file/directory (polled for changes) or a named pipe (FIFO) whose incoming data fires it. */
+export type TriggerSource = { type: "file"; path: string; events: TriggerFileEvent[] } | { type: "fifo"; path: string };
+export type TriggerInput = { name: string; source: TriggerSource; taskId?: string; action: ScheduledAction; debounceSeconds?: number; maxFiresPerHour?: number };
+export type WorkspaceTrigger = TriggerInput & { id: string; rootId: WorkspaceRootId; createdAt: string; enabled: boolean; fireCount: number; lastFiredAt?: string; lastEvent?: string; lastSkipped?: string; lastError?: string; lastWorkflowRunId?: string };
 /** One explicitly registered Run App launch, including surviving descendants. */
 export type ManagedWorkflowApp = { kind: "workflow-app"; id: string; name: string; pid: number; launcherPid?: number; command: string; status: "running" | "descendants-running"; processCount: number; workspace: string; rootWorkspace: string; taskId?: string; taskName?: string; workflowRunId?: string; workflowBlockId?: string };
 export type ManagedProcess = { id: string; pid: number; command: string; status: "running"; workspace: string; rootWorkspace: string; taskId?: string; taskName?: string; workflowRunId?: string; workflowBlockId?: string; provider?: string; sessionId?: string; kind: "agent" | "command" | "workflow-app"; appName?: string; parentPid?: number };
@@ -359,6 +364,11 @@ export type ProtocolOperations = {
   "schedules.enabled": { payload: { scheduleId: string; enabled: boolean }; result: { schedule: WorkspaceSchedule } };
   "schedules.delete": { payload: { scheduleId: string }; result: { deleted: boolean } };
   "schedules.fire": { payload: { scheduleId: string }; result: { fired: boolean } };
+  "triggers.list": { payload: Record<string, never>; result: { triggers: WorkspaceTrigger[] } };
+  "triggers.create": { payload: TriggerInput; result: { trigger: WorkspaceTrigger } };
+  "triggers.enabled": { payload: { triggerId: string; enabled: boolean }; result: { trigger: WorkspaceTrigger } };
+  "triggers.delete": { payload: { triggerId: string }; result: { deleted: boolean } };
+  "triggers.fire": { payload: { triggerId: string }; result: { fired: boolean } };
   "processes.list": { payload: Record<string, never>; result: { processes: ManagedWorkflowApp[] } };
   "processes.kill": { payload: { processId: string }; result: { killed: boolean } };
   "timers.list": { payload: Record<string, never>; result: { timers: AiContinuationTimer[] } };
@@ -803,6 +813,11 @@ const requestTypeRegistry: Record<RequestType, true> = {
   "schedules.enabled": true,
   "schedules.delete": true,
   "schedules.fire": true,
+  "triggers.list": true,
+  "triggers.create": true,
+  "triggers.enabled": true,
+  "triggers.delete": true,
+  "triggers.fire": true,
   "processes.list": true,
   "processes.kill": true,
   "timers.list": true,

@@ -44,8 +44,9 @@ describe("Proc navigation persistence", () => {
     expect(initialTaskPanel("classic", "task", () => "proc")).toEqual({ classic: "proc" });
   });
   it("restores focused Proc exclusively while retaining Tasks and handling older saved preferences", () => {
-    const current = { tasks: true, ai: true, harness: false, timers: false, proc: false };
-    expect(restoredFocusedLeftPanels(current, { proc: true })).toEqual({ tasks: true, ai: false, harness: false, timers: false, proc: true });
-    expect(restoredFocusedLeftPanels(current, { timers: true })).toEqual({ tasks: true, ai: false, harness: false, timers: true, proc: false });
+    const current = { tasks: true, ai: true, harness: false, timers: false, triggers: false, proc: false };
+    expect(restoredFocusedLeftPanels(current, { proc: true })).toEqual({ tasks: true, ai: false, harness: false, timers: false, triggers: false, proc: true });
+    expect(restoredFocusedLeftPanels(current, { timers: true })).toEqual({ tasks: true, ai: false, harness: false, timers: true, triggers: false, proc: false });
+    expect(restoredFocusedLeftPanels(current, { triggers: true })).toEqual({ tasks: true, ai: false, harness: false, timers: false, triggers: true, proc: false });
   });
 });

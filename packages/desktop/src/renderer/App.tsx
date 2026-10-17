@@ -10,9 +10,9 @@ import { ConnectionMenu } from "./ConnectionMenu";
 import { startBackgroundLoading } from "./background-loading";
 import { javaConfigurationPath, resolveSkillIds, skillAllowedForAgent } from "@remote-ide/protocol";
 import { DiffEditor, type Monaco } from "@monaco-editor/react";
-import { Archive, Bookmark, GraduationCap, Sparkles, History, Minus, RotateCcw, ArrowDown, ArrowUp, ArrowUpRight, Bot, Bug, Check, ChevronDown, ChevronRight, CircleAlert, Clock, ClipboardCopy, Coffee, Columns2, Eye, EyeOff, File, FileCode2, FileDiff, FileText, Folder, FolderOpen, GitBranch, GitCompareArrows, GitMerge, Library, ListTodo, ListTree, LoaderCircle, LogOut, MoreVertical, Package, Palette, Pencil, Pin, PinOff, Play, Plus, RefreshCw, Save, Search, Settings, ShieldAlert, Square, SquareTerminal, Trash2, Workflow, X } from "lucide-react";
+import { Archive, Bookmark, GraduationCap, Sparkles, History, Minus, RotateCcw, ArrowDown, ArrowUp, ArrowUpRight, Bot, Bug, Check, ChevronDown, ChevronRight, CircleAlert, Clock, ClipboardCopy, Zap, Coffee, Columns2, Eye, EyeOff, File, FileCode2, FileDiff, FileText, Folder, FolderOpen, GitBranch, GitCompareArrows, GitMerge, Library, ListTodo, ListTree, LoaderCircle, LogOut, MoreVertical, Package, Palette, Pencil, Pin, PinOff, Play, Plus, RefreshCw, Save, Search, Settings, ShieldAlert, Square, SquareTerminal, Trash2, Workflow, X } from "lucide-react";
 import { Children, isValidElement, useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
-import type { ManagedWorkflowApp, SkillCatalog, AgentFile, AgentFileScope, AiContinuationTimer, AiConfiguration, AiModel, AiProvider, AiProviderDescriptor, AiSession, AiStatus, AiTaskSummary, AiUsage, FileColor, FileRevision, FileTreeNode, GitBranch as GitBranchInfo, GitDiffHunk, GitHistoryRewritePreview, GitStatusEntry, GitUpstreamStatus, HarnessDefinition, HarnessRun, HarnessStateDiagnostic, HttpResponse, JavaBreakpoint, JavaDebugState, JavaProjectNode, JavaProjectOptions, JavaTypeSuggestion, ProtocolOperations, RootedJavaDiagnostic, RootedJavaLspLocation, RootedWorkspaceSymbol, RunConfig, RunConfigScope, SearchResult, TaskCheckpoint, TaskCheckpointFile, UsefulFile, UsefulFileScope, WorkspaceSchedule, WorkspaceOptions, WorkspaceRoot, WorkspaceSearchQueries, WorkspaceTask } from "@remote-ide/protocol";
+import type { ManagedWorkflowApp, SkillCatalog, AgentFile, AgentFileScope, AiContinuationTimer, AiConfiguration, AiModel, AiProvider, AiProviderDescriptor, AiSession, AiStatus, AiTaskSummary, AiUsage, FileColor, FileRevision, FileTreeNode, GitBranch as GitBranchInfo, GitDiffHunk, GitHistoryRewritePreview, GitStatusEntry, GitUpstreamStatus, HarnessDefinition, HarnessRun, HarnessStateDiagnostic, HttpResponse, JavaBreakpoint, JavaDebugState, JavaProjectNode, JavaProjectOptions, JavaTypeSuggestion, ProtocolOperations, RootedJavaDiagnostic, RootedJavaLspLocation, RootedWorkspaceSymbol, RunConfig, RunConfigScope, SearchResult, TaskCheckpoint, TaskCheckpointFile, UsefulFile, UsefulFileScope, WorkspaceSchedule, WorkspaceTrigger, WorkspaceOptions, WorkspaceRoot, WorkspaceSearchQueries, WorkspaceTask } from "@remote-ide/protocol";
 import type { editor } from "monaco-editor";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -51,6 +51,7 @@ import { SkillsPanel, type SkillsActions } from "./SkillsPanel";
 import { AiPanel, type AiAttachment } from "./AiPanel";
 import { ProcessesPanel } from "./ProcessesPanel";
 import { TimersPanel } from "./TimersPanel";
+import { TriggersPanel } from "./TriggersPanel";
 import { WorkflowRunPanel } from "./WorkflowRunPanel";
 import { workflowDocumentOptions, restoreWorkflowDocuments } from "./workflow-documents";
 import { HarnessPanel } from "./HarnessPanel";
@@ -200,7 +201,7 @@ export function App() {
   const [leftSidebarWidth, setLeftSidebarWidth] = useState(520);
   const [rightSidebarWidth, setRightSidebarWidth] = useState(360);
   const [workflowPanelMode, setWorkflowPanelMode] = useState<"design" | "run">("run");
-  const [leftPanels, setLeftPanels] = useState({ tasks: true, ai: true, harness: false, timers: false, proc: false });
+  const [leftPanels, setLeftPanels] = useState({ tasks: true, ai: true, harness: false, timers: false, triggers: false, proc: false });
   const [rightPanels, setRightPanels] = useState({ project: true, git: true, taskGit: false, promptHistory: false, java: false, useful: false, agents: false, skills: false });
   const [classicSideView, setClassicSideView] = useState<ClassicTaskPanel>("project");
   const [classicLeftWidth, setClassicLeftWidth] = useState(260);
@@ -272,6 +273,7 @@ export function App() {
   const emptyAiSummary: AiTaskSummary = { status: "idle", preview: "", additions: 0, deletions: 0, pendingPermission: false };
   const [aiStatuses, setAiStatuses] = useState<{ root: AiTaskSummary; tasks: Record<string, AiTaskSummary> }>({ root: emptyAiSummary, tasks: {} });
   const [schedules, setSchedules] = useState<WorkspaceSchedule[]>([]);
+  const [triggers, setTriggers] = useState<WorkspaceTrigger[]>([]);
   const [activeTimers, setActiveTimers] = useState<AiContinuationTimer[]>([]);
   const aiStatusesRequested = useRef(0);
   const aiStatusesApplied = useRef(0);
@@ -562,13 +564,14 @@ export function App() {
   const refreshAiStatuses = useCallback(async (client = clientRef.current, canApply: () => boolean = () => true) => {
     if (!client) return;
     const sequence = ++aiStatusesRequested.current; const requestedRoot = client.getRoot();
-    const [statuses, timerResult, scheduleResult] = await Promise.all([client.request("ai.statuses", {}), client.request("timers.list", {}), client.request("schedules.list", {})]);
+    const [statuses, timerResult, scheduleResult, triggerResult] = await Promise.all([client.request("ai.statuses", {}), client.request("timers.list", {}), client.request("schedules.list", {}), client.request("triggers.list", {})]);
     if (!canApply() || sequence <= aiStatusesApplied.current || client.getRoot() !== requestedRoot) return;
     aiStatusesApplied.current = sequence;
     setAiStatuses(statuses);
     setActiveTimers(timerResult.timers);
     void refreshProcesses();
     setSchedules(scheduleResult.schedules);
+    setTriggers(triggerResult.triggers);
   }, []);
   const loadScheduleAgents = useCallback(async (taskId?: string) => {
     const client = clientRef.current; if (!client) throw new Error("Backend is disconnected");
@@ -826,7 +829,7 @@ export function App() {
     setHarnesses([]); setHarnessRuns([]); setHarnessesLoading(true); setHarnessRunsLoading(true);
     setAgents([]); setSelectedAgentKey(""); setUsefulFiles([]); setRunConfigs([]);
     setSkillCatalog({ skills: [], policy: { allowed: [], defaults: [] } });
-    setAiStatuses({ root: emptyAiSummary, tasks: {} }); setActiveTimers([]); setSchedules([]);
+    setAiStatuses({ root: emptyAiSummary, tasks: {} }); setActiveTimers([]); setSchedules([]); setTriggers([]);
     setStatus("connecting"); setStatusMessage(`Opening connection to ${host.trim()}:${port}…`);
     const client = new CoreClient();
     clientRef.current = client;
@@ -1067,7 +1070,7 @@ export function App() {
         const savedTasksOpen = setting("classic.tasksOpen"); if (savedTasksOpen === "true" || savedTasksOpen === "false") setClassicTasksOpen(savedTasksOpen === "true");
         const savedAiOpen = setting("classic.aiOpen"); if (savedAiOpen === "true" || savedAiOpen === "false") setClassicAiOpen(savedAiOpen === "true");
         const savedSplit = Number(setting("classic.split")); if (savedSplit >= 10 && savedSplit <= 90) setClassicSplit(savedSplit);
-        const savedSideView = setting("classic.sideView"); if (["project", "git", "taskGit", "java", "useful", "agents", "harness", "workflowRuns", "timers", "proc"].includes(savedSideView ?? "")) setClassicSideView(savedSideView as typeof classicSideView);
+        const savedSideView = setting("classic.sideView"); if (["project", "git", "taskGit", "java", "useful", "agents", "harness", "workflowRuns", "timers", "triggers", "proc"].includes(savedSideView ?? "")) setClassicSideView(savedSideView as typeof classicSideView);
         const savedTerminalHeight = Number(setting("bottom.terminalHeight")); if (savedTerminalHeight >= 130 && savedTerminalHeight <= 520) setTerminalHeight(savedTerminalHeight);
         const savedJavaHeight = Number(setting("bottom.javaHeight")); if (savedJavaHeight >= 140 && savedJavaHeight <= 1200) setJavaPanelHeight(savedJavaHeight);
         const savedProblemsHeight = Number(setting("bottom.problemsHeight")); if (savedProblemsHeight >= 120 && savedProblemsHeight <= 520) setProblemsHeight(savedProblemsHeight);
@@ -1761,7 +1764,7 @@ export function App() {
   }, [refreshTaskGit]);
 
   const openTask = useCallback((taskId?: string, pendingPermission = false) => {
-    openTaskFromSummary({ taskId, pendingPermission, sideLayout, openClassicAi: () => setClassicAiOpen(true), openFocusedAi: () => setLeftPanels((current) => ({ ...current, tasks: true, ai: true, harness: false, timers: false, proc: false })), switchTask: (id) => void switchTask(id) });
+    openTaskFromSummary({ taskId, pendingPermission, sideLayout, openClassicAi: () => setClassicAiOpen(true), openFocusedAi: () => setLeftPanels((current) => ({ ...current, tasks: true, ai: true, harness: false, timers: false, triggers: false, proc: false })), switchTask: (id) => void switchTask(id) });
   }, [sideLayout, switchTask]);
 
   const currentAiAttachmentKey = selectedTaskId ?? "root";
@@ -1786,7 +1789,7 @@ export function App() {
       return { ...current, [key]: [...attachments, { id: `workspace:${path}`, name: path.split("/").pop() ?? path, path }] };
     });
     if (sideLayout === "classic") setClassicAiOpen(true);
-    else setLeftPanels((current) => ({ ...current, ai: true, harness: false, timers: false, proc: false }));
+    else setLeftPanels((current) => ({ ...current, ai: true, harness: false, timers: false, triggers: false, proc: false }));
     void refreshAi(); setEditorGitMenu(undefined);
   }, [refreshAi, selectedTaskId, sideLayout]);
   const sendAiPrompt = useCallback(async (prompt: string, configuration: AiConfiguration, attachments: AiAttachment[]) => {
@@ -1855,7 +1858,7 @@ export function App() {
   }, [aiToken, applyAiSession, refreshAi]);
   const followUpCheckpoint = useCallback((checkpoint: TaskCheckpoint) => {
     updateAiDraft(`Review the changes from this checkpoint and continue: ${checkpoint.prompt}`);
-    if (sideLayout === "classic") setClassicAiOpen(true); else setLeftPanels((current) => ({ ...current, ai: true, harness: false, timers: false, proc: false }));
+    if (sideLayout === "classic") setClassicAiOpen(true); else setLeftPanels((current) => ({ ...current, ai: true, harness: false, timers: false, triggers: false, proc: false }));
   }, [sideLayout, updateAiDraft]);
   const configureAi = useCallback(async (configuration: AiConfiguration) => {
     if (!clientRef.current) return;
@@ -2931,7 +2934,7 @@ export function App() {
     { id: "terminal.new", label: "New Terminal", category: "Terminal", when: (context) => context.connected, execute: () => { void createTerminal(); } },
     { id: "terminal.toggle", label: "Toggle Terminal Panel", category: "Terminal", when: (context) => context.connected, execute: toggleTerminalPanel },
     { id: "task.create", label: "Create Task", category: "Task", when: (context) => context.connected && !context.taskSwitching, execute: () => setShowCreateTaskDialog(true) },
-    { id: "ai.open", label: "Open AI", category: "AI", when: (context) => context.connected, execute: () => { if (sideLayout === "classic") setClassicAiOpen(true); else setLeftPanels((current) => ({ ...current, ai: true, harness: false, timers: false, proc: false })); void refreshAi(); } },
+    { id: "ai.open", label: "Open AI", category: "AI", when: (context) => context.connected, execute: () => { if (sideLayout === "classic") setClassicAiOpen(true); else setLeftPanels((current) => ({ ...current, ai: true, harness: false, timers: false, triggers: false, proc: false })); void refreshAi(); } },
     { id: "java.configuration", label: "Edit Java Run/Debug Configuration", category: "Java", when: (context) => context.connected, execute: () => setShowRunConfigurationDialog(true) },
     { id: "editor.save", label: "Save Active Editor", category: "Editor", when: (context) => context.hasActiveEditor && context.activeEditorDirty, execute: () => saveActive() }
   ];
@@ -2962,6 +2965,15 @@ export function App() {
     const client = clientRef.current; if (!client) throw new Error("Backend is disconnected. Reconnect and try again.");
     await client.request("processes.kill", { processId }); await refreshProcesses();
   }} />;
+  const triggersPanel = <TriggersPanel key={selectedRootId} triggers={triggers} workflows={harnesses} roots={workspaceRoots} selectedTaskId={selectedTaskId} defaultProvider={aiProvider} providers={aiProviders} tasks={tasks} disabled={taskSwitching} onLoadAgents={loadScheduleAgents} onRefresh={refreshAiStatuses} onError={setStatusMessage}
+    onCreate={async (input) => { const client = clientRef.current; if (!client) throw new Error("Backend is disconnected"); await client.request("triggers.create", input); await refreshAiStatuses(client); }}
+    onAction={async (triggerId, action) => {
+      const client = clientRef.current; if (!client) throw new Error("Backend is disconnected");
+      if (action === "fire") await client.request("triggers.fire", { triggerId });
+      else if (action === "delete") await client.request("triggers.delete", { triggerId });
+      else await client.request("triggers.enabled", { triggerId, enabled: action === "resume" });
+      await refreshAiStatuses(client);
+    }} />;
   const timersPanel = <TimersPanel key={selectedRootId} timers={activeTimers} schedules={schedules} workflows={harnesses} roots={workspaceRoots} selectedTaskId={selectedTaskId} defaultProvider={aiProvider} onLoadAgents={loadScheduleAgents}
     onCreateSchedule={async (input) => { const client = clientRef.current; if (!client) throw new Error("Backend is disconnected"); await client.request("schedules.create", input); await refreshAiStatuses(client); }}
     onScheduleAction={async (scheduleId, action) => {
@@ -3009,16 +3021,17 @@ export function App() {
       {sideLayout === "ai-focused" ? <>
       <FocusDock edge="left" active={focusMode}><nav className="tool-stripe" aria-label="Left tool windows">
         <button className={`tool-stripe-button ${leftPanels.tasks ? "active" : ""}`} title={leftPanels.tasks ? "Hide Tasks" : "Show Tasks"} onClick={() => setLeftPanels((current) => ({ ...current, tasks: !current.tasks }))}><ListTodo size={15} /><span>Tasks</span>{tasks.length > 0 && <span className="tool-badge">{tasks.length > 99 ? "99+" : tasks.length}</span>}</button>
-        <button className={`tool-stripe-button ${leftPanels.ai ? "active" : ""}`} title={leftPanels.ai ? "Hide AI" : "Show AI"} onClick={() => setLeftPanels((current) => { if (!current.ai) void refreshAi(); return { ...current, ai: !current.ai, harness: false, timers: false, proc: false }; })}><Sparkles size={15} /><span>AI</span>{aiSession.status === "in_progress" && <span className="tool-badge">...</span>}</button>
-        <button className={`tool-stripe-button ${leftPanels.harness && workflowPanelMode === "run" ? "active" : ""}`} title="Workflows · View / Run" onClick={() => { setWorkflowPanelMode("run"); setLeftPanels((current) => ({ ...current, harness: true, ai: false, timers: false, proc: false })); void Promise.all([refreshHarnesses(), refreshHarnessRuns()]); }}><Play size={15} /><span>Workflows</span></button>
+        <button className={`tool-stripe-button ${leftPanels.ai ? "active" : ""}`} title={leftPanels.ai ? "Hide AI" : "Show AI"} onClick={() => setLeftPanels((current) => { if (!current.ai) void refreshAi(); return { ...current, ai: !current.ai, harness: false, timers: false, triggers: false, proc: false }; })}><Sparkles size={15} /><span>AI</span>{aiSession.status === "in_progress" && <span className="tool-badge">...</span>}</button>
+        <button className={`tool-stripe-button ${leftPanels.harness && workflowPanelMode === "run" ? "active" : ""}`} title="Workflows · View / Run" onClick={() => { setWorkflowPanelMode("run"); setLeftPanels((current) => ({ ...current, harness: true, ai: false, timers: false, triggers: false, proc: false })); void Promise.all([refreshHarnesses(), refreshHarnessRuns()]); }}><Play size={15} /><span>Workflows</span></button>
         <div className="tool-stripe-bottom">
-          <button className={`tool-stripe-button ${leftPanels.harness && workflowPanelMode === "design" ? "active" : ""}`} title="Workflow design" onClick={() => { setWorkflowPanelMode("design"); setLeftPanels((current) => ({ ...current, harness: true, ai: false, timers: false, proc: false })); void refreshHarnesses(); }}><Workflow size={15} /><span>Workflow design</span></button>
-          <button className={`tool-stripe-button ${leftPanels.timers ? "active" : ""}`} title={leftPanels.timers ? "Hide Timers" : "Show Timers"} onClick={() => setLeftPanels((current) => ({ ...current, timers: !current.timers, proc: false, ai: false, harness: false }))}><Clock size={15} /><span>Timers</span>{(activeTimers.length + schedules.filter((item) => item.enabled).length) > 0 && <span className="tool-badge">{activeTimers.length + schedules.filter((item) => item.enabled).length}</span>}</button>
-          <button className={`tool-stripe-button ${leftPanels.proc ? "active" : ""}`} title={leftPanels.proc ? "Hide Processes" : "Show Processes"} onClick={() => { setLeftPanels((current) => ({ ...current, proc: !current.proc, ai: false, harness: false, timers: false })); void refreshProcesses(); }}><SquareTerminal size={15} /><span>Proc</span>{managedProcessList.length > 0 && <span className="tool-badge">{managedProcessList.length}</span>}</button>
+          <button className={`tool-stripe-button ${leftPanels.harness && workflowPanelMode === "design" ? "active" : ""}`} title="Workflow design" onClick={() => { setWorkflowPanelMode("design"); setLeftPanels((current) => ({ ...current, harness: true, ai: false, timers: false, triggers: false, proc: false })); void refreshHarnesses(); }}><Workflow size={15} /><span>Workflow design</span></button>
+          <button className={`tool-stripe-button ${leftPanels.timers ? "active" : ""}`} title={leftPanels.timers ? "Hide Timers" : "Show Timers"} onClick={() => setLeftPanels((current) => ({ ...current, timers: !current.timers, triggers: false, proc: false, ai: false, harness: false }))}><Clock size={15} /><span>Timers</span>{(activeTimers.length + schedules.filter((item) => item.enabled).length) > 0 && <span className="tool-badge">{activeTimers.length + schedules.filter((item) => item.enabled).length}</span>}</button>
+          <button className={`tool-stripe-button ${leftPanels.triggers ? "active" : ""}`} title={leftPanels.triggers ? "Hide Triggers" : "Show Triggers"} onClick={() => setLeftPanels((current) => ({ ...current, triggers: !current.triggers, timers: false, proc: false, ai: false, harness: false }))}><Zap size={15} /><span>Triggers</span>{triggers.some((item) => item.enabled) && <span className="tool-badge">{triggers.filter((item) => item.enabled).length}</span>}</button>
+          <button className={`tool-stripe-button ${leftPanels.proc ? "active" : ""}`} title={leftPanels.proc ? "Hide Processes" : "Show Processes"} onClick={() => { setLeftPanels((current) => ({ ...current, proc: !current.proc, ai: false, harness: false, timers: false, triggers: false })); void refreshProcesses(); }}><SquareTerminal size={15} /><span>Proc</span>{managedProcessList.length > 0 && <span className="tool-badge">{managedProcessList.length}</span>}</button>
           <SidebarExtentButton edge="left" extended={leftSidebarExtended} onChange={setLeftSidebarExtended} />
         </div>
       </nav></FocusDock>
-      {(leftPanels.tasks || leftPanels.ai || leftPanels.harness || leftPanels.timers || leftPanels.proc) && <><aside className="side-panel side-panel-left" style={{ width: leftSidebarWidth }}><ResizablePanelStack workspace={activeWorkspace} setting="focused.leftSizes" ids={[...(leftPanels.tasks ? ["tasks"] : []), ...((leftPanels.ai || leftPanels.harness || leftPanels.timers || leftPanels.proc) ? ["ai"] : [])]}>
+      {(leftPanels.tasks || leftPanels.ai || leftPanels.harness || leftPanels.timers || leftPanels.triggers || leftPanels.proc) && <><aside className="side-panel side-panel-left" style={{ width: leftSidebarWidth }}><ResizablePanelStack workspace={activeWorkspace} setting="focused.leftSizes" ids={[...(leftPanels.tasks ? ["tasks"] : []), ...((leftPanels.ai || leftPanels.harness || leftPanels.timers || leftPanels.triggers || leftPanels.proc) ? ["ai"] : [])]}>
         {leftPanels.tasks && <section key="tasks" className="stacked-panel"><header className="panel-header"><span>Tasks</span><button title="Create task" disabled={taskSwitching} onClick={() => setShowCreateTaskDialog(true)}><Plus size={15} /></button></header><div className="task-filters"><QuickFilter value={taskFilter} placeholder="Filter tasks" label="Filter tasks" onChange={setTaskFilter} /><select aria-label="Task lifecycle filter" value={taskLifecycleFilter} onChange={(event) => setTaskLifecycleFilter(event.target.value as typeof taskLifecycleFilter)}><option value="active">Active</option><option value="finished">Finished</option><option value="archived">Archived</option><option value="all">All</option></select></div><div className="tasks-list">
           {showRootTask && <TaskRow icon={<Folder size={15} />} name="Root workspace" summary={aiStatuses.root} selected={selectedTaskId === undefined} disabled={taskSwitching} onClick={() => openTask(undefined, aiStatuses.root.pendingPermission)} onCancelTimer={() => void timerAction(undefined, "cancel")} onFireTimer={() => void timerAction(undefined, "fire")} />}
           {filteredTasks.map((task) => { const summary = aiStatuses.tasks[task.id] ?? emptyAiSummary; return <TaskRow key={task.id} icon={<ListTodo size={15} />} name={task.name} branch={task.branch} summary={summary} finished={task.status === "finished"} archived={task.archived} selected={selectedTaskId === task.id} disabled={taskSwitching} onClick={() => openTask(task.id, summary.pendingPermission)} onSetFinished={() => void setTaskStatus(task, task.status === "finished" ? "active" : "finished")} onRename={() => void renameTask(task)} onSetArchived={() => void setTaskArchived(task, !task.archived)} onMerge={() => setMergeDialog(task)} onDelete={() => void deleteTask(task)} onCancelTimer={() => void timerAction(task, "cancel")} onFireTimer={() => void timerAction(task, "fire")} />; })}
@@ -3028,6 +3041,7 @@ export function App() {
         {leftPanels.harness && <section key="harness" className="stacked-panel"><header className="panel-header"><span>{workflowPanelMode === "design" ? "Workflow design" : "Workflows"}</span><button title="Refresh workflows" onClick={() => void Promise.all([refreshHarnesses(), refreshHarnessRuns()])}><RefreshCw size={14} /></button></header>{workflowPanels}</section>}
         {leftPanels.proc && <section key="proc" className="stacked-panel">{processesPanel}</section>}
         {leftPanels.timers && <section key="timers" className="stacked-panel">{timersPanel}</section>}
+        {leftPanels.triggers && <section key="triggers" className="stacked-panel">{triggersPanel}</section>}
       </ResizablePanelStack></aside><div className="resize-handle" role="separator" aria-label="Resize left sidebar" aria-orientation="vertical" aria-valuemin={280} aria-valuemax={Math.round(Math.min(900, window.innerWidth * .65))} aria-valuenow={Math.round(leftSidebarWidth)} tabIndex={0} onKeyDown={(event) => keyboardResize(event, leftSidebarWidth, setLeftSidebarWidth, 280, Math.min(900, window.innerWidth * .65))} onPointerDown={beginLeftSidebarResize} /></>}
       </> : <>
       <FocusDock edge="left" active={focusMode}><nav className="tool-stripe" aria-label="Left tool windows">
@@ -3042,12 +3056,13 @@ export function App() {
         <div className="tool-stripe-bottom">
           <button className={`tool-stripe-button ${classicSideView === "harness" ? "active" : ""}`} title="Workflow design" onClick={() => { selectClassicSideView("harness"); void refreshHarnesses(); }}><Workflow size={15} /><span>Workflow design</span></button>
           <button className={`tool-stripe-button ${classicSideView === "timers" ? "active" : ""}`} title="Timers" onClick={() => selectClassicSideView("timers")}><Clock size={15} /><span>Timers</span>{(activeTimers.length + schedules.filter((item) => item.enabled).length) > 0 && <span className="tool-badge">{activeTimers.length + schedules.filter((item) => item.enabled).length}</span>}</button>
+          <button className={`tool-stripe-button ${classicSideView === "triggers" ? "active" : ""}`} title="Triggers" onClick={() => selectClassicSideView("triggers")}><Zap size={15} /><span>Triggers</span>{triggers.some((item) => item.enabled) && <span className="tool-badge">{triggers.filter((item) => item.enabled).length}</span>}</button>
           <button className={`tool-stripe-button ${classicSideView === "proc" ? "active" : ""}`} title="Processes" onClick={() => { selectClassicSideView("proc"); void refreshProcesses(); }}><SquareTerminal size={15} /><span>Proc</span>{managedProcessList.length > 0 && <span className="tool-badge">{managedProcessList.length}</span>}</button>
           <SidebarExtentButton edge="left" extended={leftSidebarExtended} onChange={setLeftSidebarExtended} />
         </div>
       </nav></FocusDock>
       <aside className="side-panel classic-left-panel" style={{ width: classicLeftWidth }}>
-        {classicSideView === "proc" ? processesPanel : classicSideView === "timers" ? timersPanel : classicSideView === "project" ? <>
+        {classicSideView === "proc" ? processesPanel : classicSideView === "timers" ? timersPanel : classicSideView === "triggers" ? triggersPanel : classicSideView === "project" ? <>
           <header className="panel-header"><span>Project</span><div className="panel-header-actions"><button title={showIgnored ? "Hide ignored files" : "Show all files (including Git-ignored)"} className={showIgnored ? "active" : ""} onClick={toggleShowIgnored}>{showIgnored ? <Eye size={14} /> : <EyeOff size={14} />}</button><button title="Synchronize files" onClick={() => void refreshTree()}><RefreshCw size={14} /></button></div></header>
           <QuickFilter value={projectFilter} placeholder={projectContentFilter ? "Filter by file contents" : "Filter files"} label={projectContentFilter ? "Filter files by contents" : "Filter project files"} onChange={setProjectFilter} contentSearch={projectContentFilter} contentSearchLoading={projectContentFilterLoading} onContentSearchChange={setProjectContentFilter} />
           <div className="workspace-name"><select aria-label="Workspace root" value={selectedRootId} disabled={taskSwitching} onChange={(event) => void selectWorkspaceRoot(event.target.value)}>{workspaceRoots.map((root) => <option key={root.id} value={root.id}>{root.alias}</option>)}</select><button title="Add remote workspace root" onClick={() => setWorkspaceRootDialogOpen(true)}><Plus size={13} /></button><button title="Unregister an inactive workspace root" disabled={!workspaceRoots.some((root) => !root.primary && root.id !== selectedRootId)} onClick={() => void removeWorkspaceRoot()}><Trash2 size={13} /></button></div>

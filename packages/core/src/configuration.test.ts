@@ -14,6 +14,7 @@ import { validateHarness } from "./harness-graph.js";
 import { isHarnessDefinition } from "./harnesses.js";
 import { AppToolService, appToolDefinitions, flowToolDefinitions } from "./app-tools.js";
 import type { AcpRegistry } from "./ai/acp.js";
+import { TriggerService } from "./triggers.js";
 
 const temporary: string[] = [];
 afterEach(async () => { await Promise.all(temporary.splice(0).map((directory) => rm(directory, { force: true, recursive: true }))); });
@@ -180,5 +181,26 @@ describe("global configuration defaults", () => {
     await ensureSelfConfiguration(state);
     expect(await stores.agents.read("global", global.name, workspace)).toBe("Custom configuration agent");
     expect(await stores.skills.read("global/vibe-self-configuration", workspace)).toBe("Custom configuration skill");
+  });
+
+  it("creates, lists and edits persistent triggers through the configuration interface", async () => {
+    const { root, workspace, stores, acp, taskWorkspace } = await fixture();
+    const triggers = new TriggerService(workspace, async () => ({}), vi.fn(), path.join(root, "trigger-state"));
+    await triggers.start();
+    try {
+      const service = new ConfigurationService(workspace, taskWorkspace, { ...stores, triggers: { service: triggers, rootId: "root" } }, { ...acp, get: vi.fn(() => ({})) } as unknown as AcpRegistry);
+      const starter = JSON.parse((await service.read("triggers/new.json")).content);
+      expect(starter).toMatchObject({ enabled: false, source: { type: "file" } });
+      const created = await service.write("triggers/new.json", JSON.stringify({ ...starter, name: "Build log", source: { type: "file", path: "logs/build.log", events: ["changed"] } }), null);
+      const listed = triggers.list();
+      expect(listed).toHaveLength(1);
+      expect(listed[0]).toMatchObject({ name: "Build log", enabled: false, source: { path: path.join(workspace, "logs/build.log") } });
+      expect(created.resource).toBe(`triggers/${listed[0]!.id}.json`);
+      expect((await service.list()).resources.some((item) => item.resource === created.resource)).toBe(true);
+      const edited = await service.write(created.resource, JSON.stringify({ ...JSON.parse(created.content), name: "Renamed", enabled: true }), created.revision);
+      expect(JSON.parse(edited.content)).toMatchObject({ name: "Renamed", enabled: true });
+      expect(triggers.list()[0]).toMatchObject({ id: listed[0]!.id, name: "Renamed", enabled: true });
+      await expect(service.write("triggers/new.json", JSON.stringify({ ...starter, bogus: true }), null)).rejects.toThrow("Trigger document");
+    } finally { await triggers.close(); }
   });
 });
