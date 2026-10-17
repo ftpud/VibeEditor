@@ -13,6 +13,25 @@ function renderEditor(ui: Parameters<typeof render>[0]) {
 }
 
 describe("HarnessPanel", () => {
+  it("adds a Meeting and displays its attributed discussion", async () => {
+    const harness: HarnessDefinition = { id: "meeting", name: "Meeting", version: 1, createdAt: "now", updatedAt: "now", blocks: [], edges: [] };
+    const onSave = vi.fn(async (definition) => definition);
+    const view = renderEditor(<HarnessPanel harnesses={[harness]} runs={[]} providers={[]} agents={[]} onCreate={vi.fn()} onSave={onSave} onDelete={vi.fn()} onRun={vi.fn()} onCancelRun={vi.fn()} onError={vi.fn()} />);
+    fireEvent.change(screen.getByLabelText("Add block type"), { target: { value: "meeting" } });
+    expect(screen.queryByLabelText("AI model")).toBeNull();
+    expect(screen.queryByLabelText("Block prompt")).toBeNull();
+    expect(screen.getByText(/Connect AI Agents and Chatboxes to this Meeting/)).toBeTruthy();
+    fireEvent.click(screen.getByTitle("Save workflow"));
+    await waitFor(() => expect(onSave).toHaveBeenCalled());
+    const block = onSave.mock.calls[0]![0].blocks[0] as HarnessBlock;
+    expect(block).toMatchObject({ type: "meeting", prompt: "" });
+    view.unmount();
+    render(<BlockRunDetails block={block} state={{ blockId: block.id, status: "succeeded", meeting: { sequence: 1, cursors: {}, messages: [{ sequence: 1, blockId: "sonnet", author: "Sonnet", model: "sonnet", timestamp: "2026-10-17T12:00:00Z", text: "Proposal for the team" }] } }} onClose={vi.fn()} />);
+    expect(screen.getByRole("log", { name: `${block.label} conversation` })).toBeTruthy();
+    expect(screen.getByText("Sonnet")).toBeTruthy();
+    expect(screen.getByText("Proposal for the team")).toBeTruthy();
+  });
+
   it("toggles Chatbox Autopilot while permission is pending and reports failures", async () => {
     const block = { id: "chat", type: "chatbox", label: "Chat", prompt: "", position: { x: 0, y: 0 } } as const;
     const state = { blockId: "chat", status: "awaiting_permission", sessionId: "session", autopilot: false } as const;

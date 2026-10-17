@@ -201,6 +201,28 @@ For workflow_use_block, pass prompt text as input, with action and other fields 
 the top level. Results appear in task_controls. Reuse an idempotency_key only when
 retrying the same intended operation; use a new key for a distinct operation.
 
+### meeting — Meeting
+
+Shared, attributed chat log for a single workflow run. prompt may be empty.
+Connect multiple ai/chatbox participants to it with incoming use edges. It accepts
+no outgoing edges or follow/path inputs. Publishing does not start or notify agents;
+participants read on demand through workflow_use_block:
+- action:"publish", message:"Proposal" (or input): append a message, returning
+  published and latestSequence. Maximum 10000 text characters and 16000 serialized
+  characters including attribution; author/provider/model come from the caller.
+- action:"tail", lines:20: read recent messages and advance this participant's cursor.
+- action:"diff", lines:20: read messages after this participant's last read.
+  Optional after is an explicit nonnegative sequence number for replay/pagination.
+  Omitted action defaults to diff. lines is 1–50, default 20.
+
+Results are in meeting: messages, cursor, latestSequence, hasMore and
+historyTruncated. Continue diff reads while hasMore is true. For explicit replay,
+pass each returned cursor as after on the next page. Pages fit the tool context
+budget. Read positions are independent per calling block and persist with the run;
+explicit replay never rewinds the saved cursor. The latest 1000 messages are kept;
+historyTruncated reports when unread history has expired. The Meeting run panel
+shows the shared transcript. New workflow runs start with an empty meeting.
+
 ### terminal_control — Terminal Control
 
 prompt may be empty. Provides persistent workspace-scoped terminals for interactive

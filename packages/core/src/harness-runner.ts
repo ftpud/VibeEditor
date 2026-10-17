@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { useMeeting } from "./workflow-meeting.js";
 import type { HarnessDefinition, HarnessBlock, HarnessConnectionTrace, HarnessBlockAttempt, HarnessBlockIteration, HarnessBlockRun, HarnessEdge, HarnessRun, HarnessLogEntry, HarnessChildTask, HarnessFailureReason, HarnessPauseStatus, HarnessOperation, HarnessOperationKind, HarnessFeature, HarnessReviewFinding, HarnessCorrectionCycle, AiSession } from "@remote-ide/protocol";
 import { AiProviderError, findAutopilotOption, normalizeAiFailure, type AiFailure } from "@remote-ide/acp";
 import { CoreError } from "./errors.js";
@@ -748,7 +749,7 @@ export class HarnessRunner {
   }
 
   async flowTool(runId: string, blockId: string, name: string, args: Record<string, unknown>): Promise<unknown> {
-    // Read-only polling does not need a durable operation journal entry.
+    // Polling and Meeting cursor updates are saved without growing the operation journal.
     const execution = this.activeExecution(runId);
     const caller = execution.run.blocks.find((item) => item.blockId === blockId);
     if (!caller) throw new Error("Unknown workflow caller block");
@@ -759,7 +760,8 @@ export class HarnessRunner {
       await this.update(execution.run);
       return result;
     };
-    if (name === "workflow_connections" || name === "workflow_block_output" || name === "workflow_block_messages" || (name === "workflow_use_block" && ["status", "tail"].includes(String(args.action)) && ["ai", "chatbox"].includes(execution.blocks.find((item) => item.id === args.block_id)?.type ?? ""))) return project(await this.callFlowTool(runId, blockId, name, args));
+    const meetingRead = name === "workflow_use_block" && execution.blocks.some((block) => block.id === args.block_id && block.type === "meeting") && ["tail", "diff"].includes(String(args.action ?? "diff"));
+    if (meetingRead || name === "workflow_connections" || name === "workflow_block_output" || name === "workflow_block_messages" || (name === "workflow_use_block" && ["status", "tail"].includes(String(args.action)) && ["ai", "chatbox"].includes(execution.blocks.find((item) => item.id === args.block_id)?.type ?? ""))) return project(await this.callFlowTool(runId, blockId, name, args));
     const { run } = this.activeExecution(runId);
     const operation = await this.beginOperation(run, "tool_command", `flow-tool:${crypto.randomUUID()}`, blockId, { name, args });
     try {
@@ -782,13 +784,14 @@ export class HarnessRunner {
   }
 
   private projectFlowResult(runId: string, blockId: string, name: string, args: Record<string, unknown>, value: unknown): unknown {
+    const target = this.activeExecution(runId).blocks.find((item) => item.id === args.block_id);
+    if (target?.type === "meeting") return contextResult(value);
     const context = this.callerContext(runId, blockId);
     const key = JSON.stringify([name, args.block_id, args.action, args.count, args.lines, args.offset, args.limit]);
     const hash = contextHash(value);
     const previous = context.reads.get(key);
     context.reads.set(key, hash);
     if (previous === hash && !args.include_unchanged) return { blockId: args.block_id, ...(value && typeof value === "object" && "block_status" in value ? { block_status: value.block_status } : {}), unchanged: true };
-    const target = this.activeExecution(runId).blocks.find((item) => item.id === args.block_id);
     // Changed snapshots should not replay unchanged messages and activity.
     if (value && typeof value === "object" && "messages" in value) {
       const snapshot = value as Record<string, unknown>;
@@ -839,6 +842,21 @@ export class HarnessRunner {
       const result = this.flowBlockMessages(execution.run, target.id, count);
       return result;
     }
+    if (target.type === "meeting") {
+      if (["terminal_id", "name", "data", "command", "task_id", "branch", "status", "idempotency_key"].some((key) => args[key] !== undefined)) throw new Error("Meeting accepts action, message, input, lines and after");
+      // The transcript mutation is synchronous; save through the run update queue.
+      // It needs no execution permit, even when several callers publish at once.
+      this.assertActive(runId);
+      const meetingState = execution.run.blocks.find((item) => item.blockId === target.id)!;
+      const callerBlock = execution.blocks.find((item) => item.id === blockId)!;
+      const result = useMeeting(meetingState, { ...callerBlock, ...state.chatSettings, provider: state.provider ?? callerBlock.provider ?? execution.defaultProvider }, args);
+      meetingState.status = "succeeded";
+      meetingState.output = meetingState.meeting!.messages.map((message) => `[${message.sequence}] ${message.author}: ${message.text}`).join("\n\n").slice(-200000);
+      execution.outputs.set(target.id, meetingState.output);
+      await this.update(execution.run);
+      return { blockId: target.id, meeting: result };
+    }
+    if (args.after !== undefined) throw new Error("after is only available for Meeting blocks");
     if (target.type !== "task_controls" && ["task_id", "branch", "status", "message", "idempotency_key"].some((key) => args[key] !== undefined)) throw new Error("Task arguments are only available for Task controls blocks");
     if (target.type !== "terminal_control" && ["terminal_id", "name", "data", "command"].some((key) => args[key] !== undefined)) throw new Error("Terminal arguments are only available for Terminal Control blocks");
     const agentTarget = ["ai", "chatbox"].includes(target.type);
@@ -1014,6 +1032,7 @@ export class HarnessRunner {
             output = loaded.messages.filter((message) => message.role === "assistant").at(-1)?.text ?? "";
           } else output = prompt;
         }
+        else if (block.type === "meeting") output = JSON.stringify(useMeeting(state, block, { action: "tail" }));
         else if (block.type === "markdown") output = block.prompt.trim() ? prompt : input;
         else if (block.type === "user_prompt" || block.type === "yes_no_prompt") {
           state.status = "awaiting_user_input"; state.question = prompt || input; state.pauseId = crypto.randomUUID(); state.sessionId = `flow:${id}`;
@@ -1671,7 +1690,7 @@ export function isolatedBlockDefinition(definition: HarnessDefinition, blockId: 
 
 /** Skill catalogues expose when to use a skill; its instructions load on demand. */
 function workflowBlockDescription(block: HarnessBlock | undefined): string | undefined {
-  const description = block?.type === "skill" ? block.description : block?.type === "terminal_control" ? 'Only for long-running apps and services. Do not spawn agents in terminals. List first and reuse existing terminals whenever possible; avoid spawning new terminals unnecessarily. Control terminals in this task workspace. Pass JSON in input: {"action":"list"}, {"action":"open","name":"Server"}, {"action":"open_and_run","name":"Server","command":"npm run dev"}, {"action":"write","terminal_id":"ID","data":"command\\n"}, or {"action":"read","terminal_id":"ID","lines":100}. open_and_run appends a newline automatically and returns the terminalId immediately. Writes are raw input; include a newline to execute commands.' : block?.type === "task_controls" ? "Create tasks, check task and AI status, send prompts with the designed AI settings, set tasks active or finished, set commit-message drafts, and rewrite the latest unpushed commit message." : block?.description ?? block?.prompt;
+  const description = block?.type === "meeting" ? 'Shared meeting chat for this workflow run. Use action publish with message (or input) to post; tail with lines (1–50) to read recent messages; diff to read new messages since your own last read, optionally after a sequence number. Read pages while hasMore is true. Messages include author and sequence; each participant has an independent durable cursor. Keeps the latest 1000 messages and reports historyTruncated if older unread messages were removed. Publishing does not invoke other agents.' : block?.type === "skill" ? block.description : block?.type === "terminal_control" ? 'Only for long-running apps and services. Do not spawn agents in terminals. List first and reuse existing terminals whenever possible; avoid spawning new terminals unnecessarily. Control terminals in this task workspace. Pass JSON in input: {"action":"list"}, {"action":"open","name":"Server"}, {"action":"open_and_run","name":"Server","command":"npm run dev"}, {"action":"write","terminal_id":"ID","data":"command\\n"}, or {"action":"read","terminal_id":"ID","lines":100}. open_and_run appends a newline automatically and returns the terminalId immediately. Writes are raw input; include a newline to execute commands.' : block?.type === "task_controls" ? "Create tasks, check task and AI status, send prompts with the designed AI settings, set tasks active or finished, set commit-message drafts, and rewrite the latest unpushed commit message." : block?.description ?? block?.prompt;
   return description && description.length > 512 ? `${description.slice(0, 512)}… (preview; use the block to load its content)` : description;
 }
 

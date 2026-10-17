@@ -21,12 +21,53 @@ async function setup(blocks: HarnessBlock[], edges: HarnessEdge[], concurrency =
   const definition = await store.update({ ...created, blocks, edges });
   const runner = new HarnessRunner(store, () => {}, concurrency, undefined, undefined, steer);
   const finished = async () => { await vi.waitFor(async () => expect((await store.runs())[0]?.status).toMatch(/^(succeeded|failed|cancelled)$/), { timeout: 4_000 }); return (await store.runs())[0]!; };
-  return { store, definition, runner, finished };
+  return { store, definition, runner, finished, directory };
 }
 
 // Workflow journals use disk-backed queues; allow bounded disk latency under the full CI suite.
 
 describe("typed workflows", () => {
+  it("shares a durable Meeting between agents and chatboxes through Use, even at concurrency one", async () => {
+    const { runner, definition, finished, directory } = await setup([
+      block("agent", "ai"), block("chat", "chatbox"), block("room", "meeting", { prompt: "" }), block("private", "meeting", { prompt: "" })
+    ], [edge("agent", "room", "use"), edge("agent", "chat", "use"), edge("chat", "room", "use")]);
+    const run = await runner.start(definition.id, "Discuss", async (current, _input, runtime) => {
+      const use = (args: Record<string, unknown>) => runner.flowTool(runtime.runId, current.id, "workflow_use_block", { block_id: "room", ...args });
+      if (current.id === "chat") {
+        expect(await use({ action: "diff" })).toMatchObject({ meeting: { messages: [{ sequence: 1, author: "agent", text: "Proposal" }] } });
+        await use({ action: "publish", message: "Feedback" });
+        return session("Reviewed");
+      }
+      expect(await runner.flowTool(runtime.runId, current.id, "workflow_connections", {})).toEqual(expect.arrayContaining([expect.objectContaining({ blockType: "meeting", description: expect.stringContaining("Shared meeting chat") })]));
+      await expect(runner.flowTool(runtime.runId, current.id, "workflow_use_block", { block_id: "private", action: "publish", message: "Forbidden" })).rejects.toThrow("connected block");
+      await use({ action: "publish", input: "Proposal" });
+      await runner.flowTool(runtime.runId, current.id, "workflow_use_block", { block_id: "chat", input: "Review" });
+      expect(await use({ action: "diff", lines: 1 })).toMatchObject({ meeting: { messages: [{ sequence: 1 }], hasMore: true } });
+      expect(await use({ action: "diff" })).toMatchObject({ meeting: { messages: [{ sequence: 2, author: "chat", text: "Feedback" }], hasMore: false } });
+      expect(await use({ action: "diff" })).toMatchObject({ meeting: { messages: [], cursor: 2 } });
+      expect(await use({ action: "diff" })).toMatchObject({ meeting: { messages: [], cursor: 2 } });
+      await Promise.all([use({ action: "publish", message: "One" }), use({ action: "publish", message: "Two" })]);
+      return session("Done");
+    }, "test", undefined, "agent");
+    const result = await finished();
+    expect(result.error).toBeUndefined();
+    expect(result.status).toBe("succeeded");
+    const saved = (await new HarnessStore("/workspace", directory).runs()).find((item) => item.id === run.id)!;
+    expect(saved.blocks.find((item) => item.blockId === "room")?.meeting).toMatchObject({ sequence: 4, cursors: { agent: 2, chat: 1 }, messages: [{ sequence: 1 }, { sequence: 2 }, { sequence: 3 }, { sequence: 4 }] });
+    await runner.start(definition.id, "New discussion", async (current, _input, runtime) => {
+      expect(await runner.flowTool(runtime.runId, current.id, "workflow_use_block", { block_id: "room", action: "diff" })).toMatchObject({ meeting: { messages: [], latestSequence: 0 } });
+      return session("Empty new meeting");
+    }, "test", undefined, "agent");
+    expect((await finished()).status).toBe("succeeded");
+  });
+
+  it("rejects Meeting follow connections and outgoing connections", async () => {
+    const { definition } = await setup([block("agent", "ai"), block("room", "meeting", { prompt: "" })], [edge("agent", "room", "use")]);
+    expect(validateHarness(definition).valid).toBe(true);
+    expect(validateHarness({ ...definition, edges: [edge("agent", "room")] }).valid).toBe(false);
+    expect(validateHarness({ ...definition, edges: [edge("room", "agent")] }).valid).toBe(false);
+  });
+
   it("exposes Terminal Control through Use connections and forwards structured arguments", async () => {
     const { runner, definition, store, finished } = await setup([block("agent", "ai"), block("terminals", "terminal_control", { prompt: "" })], [edge("agent", "terminals", "use")]);
     expect((await store.read(definition.id)).blocks[1]?.type).toBe("terminal_control");

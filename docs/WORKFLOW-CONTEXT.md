@@ -74,3 +74,29 @@ still applies.
 The operation journal grows with actual workflow actions. Recovery and
 idempotency evidence are retained rather than deleting old actions to reduce
 conversation context.
+
+## Shared Meeting blocks
+
+Connect each AI Agent or Chatbox to a **Meeting** block using **Use**. The block
+stores an attributed discussion in Core for that workflow run; it does not start
+participants when messages arrive. Agents use `workflow_use_block` with:
+
+```json
+{"block_id":"meeting","action":"publish","message":"Here is my proposal."}
+{"block_id":"meeting","action":"tail","lines":20}
+{"block_id":"meeting","action":"diff","lines":20}
+```
+
+`tail` reads recent messages. `diff` reads new messages since that participant's
+last read; omitted action also means `diff`. Each participant has an independent
+cursor persisted with the run. For replay, supply `after` with a sequence number,
+then use each returned `cursor` as the next `after`. Explicit replay never rewinds
+the participant's saved cursor. Results are under `meeting`, including `messages`,
+`cursor`, `latestSequence`, `hasMore`, and `historyTruncated`. Read further diff
+pages while `hasMore` is true. Pages preserve complete messages within the context
+budget. `lines` is 1–50 (default 20). Publishing accepts at most 10,000 text
+characters and 16,000 serialized characters including author metadata.
+
+The Meeting run panel shows the transcript with author, model and timestamps.
+The latest 1,000 messages are retained; `historyTruncated` indicates expired unread
+history. Meetings and read positions are isolated between workflow runs.
