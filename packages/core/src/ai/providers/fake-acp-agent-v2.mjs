@@ -31,6 +31,8 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
   if (message.method === "session/new") { if (process.env.FAKE_V2_REQUIRE_MCP === "1" && !(message.params.mcpServers ?? []).length) return send({ id: message.id, error: { code: -32602, message: "Expected Vibe MCP servers" } }); return ok({ sessionId: "v2-session", configOptions: options() }); }
   if (message.method === "session/resume") return ok({ configOptions: options() });
   if (message.method === "session/set_config_option") {
+    // Real v2 agents require the value `type` discriminator.
+    if (!["id", "boolean"].includes(message.params.type)) return send({ id: message.id, error: { code: -32602, message: "Invalid params" } });
     if (!configFeedback) return ok({ configOptions: options(message.params.value) });
     configWrites++;
     if (configWrites > 8) return send({ id: message.id, error: { code: -32602, message: "Configuration feedback loop" } });

@@ -76,7 +76,8 @@ export class AcpV2Connection {
   async cancel(params: CancelNotification): Promise<void> { this.notify("session/cancel", { sessionId: params.sessionId }); }
 
   async setSessionConfigOption(params: SetSessionConfigOptionRequest): Promise<SetSessionConfigOptionResponse> {
-    const result = await this.request("session/set_config_option", params as unknown as Json);
+    // v2 discriminates the value by `type`; v1-shaped select requests omit it and are rejected as invalid params.
+    const result = await this.request("session/set_config_option", { ...params, type: "type" in params ? params.type : "id" } as unknown as Json);
     return { configOptions: this.rememberOptions(params.sessionId, result?.configOptions) } as SetSessionConfigOptionResponse;
   }
 
