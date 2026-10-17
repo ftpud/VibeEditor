@@ -782,7 +782,7 @@ export class HarnessRunner {
       await this.update(execution.run);
       return result;
     };
-    const meetingRead = name === "workflow_use_block" && execution.blocks.some((block) => block.id === args.block_id && block.type === "meeting") && ["tail", "diff", "fetch", "wait"].includes(String(args.action ?? "diff"));
+    const meetingRead = name === "workflow_use_block" && execution.blocks.some((block) => block.id === args.block_id && block.type === "meeting") && ["tail", "diff", "fetch", "wait", "status"].includes(String(args.action ?? "diff"));
     if (meetingRead || (name === "workflow_use_block" && args.action === "fetch") || name === "workflow_connections" || name === "workflow_block_output" || name === "workflow_block_messages" || (name === "workflow_use_block" && ["status", "tail"].includes(String(args.action)) && ["ai", "chatbox"].includes(execution.blocks.find((item) => item.id === args.block_id)?.type ?? ""))) return project(await this.callFlowTool(runId, blockId, name, args));
     const { run } = this.activeExecution(runId);
     const operation = await this.beginOperation(run, "tool_command", `flow-tool:${crypto.randomUUID()}`, blockId, { name, args });
@@ -879,6 +879,48 @@ export class HarnessRunner {
     }
     if (target.type === "meeting") {
       if (["terminal_id", "name", "data", "command", "task_id", "branch", "status", "idempotency_key"].some((key) => args[key] !== undefined)) throw new Error("Meeting accepts action, message, input, lines and after");
+      if (args.action === "status" || args.action === "shake") {
+        if (["lines", "after"].some((key) => args[key] !== undefined)) throw new Error("Meeting status/shake does not accept lines or after");
+        const peers = execution.blocks.filter((peer) => execution.edges.some((connection) => connection.to === target.id && connection.from === peer.id && (connection.type === "use" || peer.type === "chatbox")));
+        if (args.action === "status") {
+          if (["peer_block_id", "message", "input"].some((key) => args[key] !== undefined)) throw new Error("Meeting status accepts only the room block_id and action");
+          return { blockId: target.id, meeting: { peers: peers.map((peer) => {
+            const live = execution.run.blocks.find((item) => item.blockId === peer.id)!;
+            const starting = this.agentStarts.has(`${runId}:${peer.id}`);
+            return { blockId: peer.id, name: peer.label, type: peer.type, self: peer.id === blockId, online: live.status === "running" || starting, block_status: live.status, hasSession: !!live.sessionId, provider: live.provider ?? peer.provider ?? execution.defaultProvider, ...(live.error ? { error: live.error } : {}) };
+          }) } };
+        }
+        const peer = peers.find((item) => item.id === args.peer_block_id);
+        if (!peer || peer.id === blockId || !["ai", "chatbox"].includes(peer.type)) throw new Error("Shake requires peer_block_id of another AI Agent or Chatbox connected to this Meeting");
+        const message = args.message ?? args.input ?? "Please check the Meeting room and respond.";
+        if (typeof message !== "string" || !message.trim() || message.length > 10000) throw new Error("Meeting shake message must contain 1 to 10000 characters");
+        const caller = execution.blocks.find((item) => item.id === blockId)!;
+        const input = `Shake from ${caller.label} in Meeting "${target.label}" (${target.id}):\n${message}`;
+        const child = execution.run.blocks.find((item) => item.blockId === peer.id)!;
+        const key = `${runId}:${peer.id}`;
+        if (child.status === "running" || execution.flowBusy?.has(peer.id) || this.agentStarts.has(key)) {
+          if (!child.workspace || !child.provider || !this.steerAgent) throw new Error("Peer is starting or cannot receive live messages; check status and retry once ready");
+          await execution.scheduler.control(peer.id, async () => {
+            this.assertActive(runId);
+            if (child.status !== "running") throw new Error("Peer turn ended; check status and shake again");
+            this.chargeContext(execution.run, child, input.length);
+            if (peer.type === "chatbox") this.appendChatSteering(child, input);
+            this.log(child, "prompt", input);
+            await this.update(execution.run);
+            await this.steerAgent!(child.provider!, child.workspace!, input);
+            this.assertActive(runId);
+          });
+          return { blockId: target.id, meeting: { shake: { blockId: peer.id, delivery: "steered" } } };
+        }
+        const invoke = this.flowInvocations.get(runId);
+        if (!invoke) throw new Error("Flow is unavailable");
+        this.agentStarts.add(key);
+        const result = invoke(peer.id, input, [blockId]);
+        const pending = result.then(() => {}, () => {}).finally(() => { execution.background.delete(pending); this.agentStarts.delete(key); });
+        execution.background.add(pending);
+        return { blockId: target.id, meeting: { shake: { blockId: peer.id, delivery: "started" } } };
+      }
+      if (args.peer_block_id !== undefined) throw new Error("peer_block_id is only available for Meeting shake");
       // The transcript mutation is synchronous; save through the run update queue.
       // It needs no execution permit, even when several callers publish at once.
       this.assertActive(runId);
@@ -914,6 +956,7 @@ export class HarnessRunner {
       if (args.action === "publish") this.meetingUpdates.publish(runId, target.id);
       return { blockId: target.id, meeting: result };
     }
+    if (args.peer_block_id !== undefined) throw new Error("peer_block_id is only available for Meeting shake");
     if (args.after !== undefined) throw new Error("after is only available for Meeting blocks");
     if (target.type !== "task_controls" && ["task_id", "branch", "status", "message", "idempotency_key"].some((key) => args[key] !== undefined)) throw new Error("Task arguments are only available for Task controls blocks");
     if (target.type !== "terminal_control" && ["terminal_id", "name", "data", "command"].some((key) => args[key] !== undefined)) throw new Error("Terminal arguments are only available for Terminal Control blocks");
@@ -1814,7 +1857,7 @@ export function isolatedBlockDefinition(definition: HarnessDefinition, blockId: 
 
 /** Skill catalogues expose when to use a skill; its instructions load on demand. */
 function workflowBlockDescription(block: HarnessBlock | undefined): string | undefined {
-  const description = block?.type === "meeting" ? 'Shared meeting chat for this workflow run. Use action publish with message (or input) to post; tail with lines (1–50) to read recent messages; diff to read new messages since your own last read; wait to sleep until unread messages arrive (timeout_seconds defaults to the connection timeout). Optional after selects a sequence. Wait returns messages with status updated or timed_out. Read pages while hasMore is true. Messages include author and sequence; each participant has an independent durable cursor. Keeps the latest 1000 messages and reports historyTruncated if older unread messages were removed. Publishing does not invoke other agents.' : block?.type === "skill" ? block.description : block?.type === "terminal_control" ? 'Only for long-running apps and services. Do not spawn agents in terminals. List first and reuse existing terminals whenever possible; avoid spawning new terminals unnecessarily. Control terminals in this task workspace. Pass JSON in input: {"action":"list"}, {"action":"open","name":"Server"}, {"action":"open_and_run","name":"Server","command":"npm run dev"}, {"action":"write","terminal_id":"ID","data":"command\\n"}, or {"action":"read","terminal_id":"ID","lines":100}. open_and_run appends a newline automatically and returns the terminalId immediately. Writes are raw input; include a newline to execute commands.' : block?.type === "task_controls" ? "Create tasks, check task and AI status, send prompts with the designed AI settings, set tasks active or finished, set commit-message drafts, and rewrite the latest unpushed commit message." : block?.description ?? block?.prompt;
+  const description = block?.type === "meeting" ? 'Shared meeting chat for this workflow run. Use action publish with message (or input) to post; tail with lines (1–50) to read recent messages; diff to read new messages since your own last read; wait to sleep until unread messages arrive (timeout_seconds defaults to the connection timeout). Optional after selects a sequence. Wait returns messages with status updated or timed_out. Read pages while hasMore is true. Messages include author and sequence; each participant has an independent durable cursor. Keeps the latest 1000 messages and reports historyTruncated if older unread messages were removed. Publishing does not invoke other agents. Use status to list connected peers and their online/block status. Use shake with peer_block_id and optional message to notify an active AI peer or start an idle peer turn; only peers connected to this room can be shaken.' : block?.type === "skill" ? block.description : block?.type === "terminal_control" ? 'Only for long-running apps and services. Do not spawn agents in terminals. List first and reuse existing terminals whenever possible; avoid spawning new terminals unnecessarily. Control terminals in this task workspace. Pass JSON in input: {"action":"list"}, {"action":"open","name":"Server"}, {"action":"open_and_run","name":"Server","command":"npm run dev"}, {"action":"write","terminal_id":"ID","data":"command\\n"}, or {"action":"read","terminal_id":"ID","lines":100}. open_and_run appends a newline automatically and returns the terminalId immediately. Writes are raw input; include a newline to execute commands.' : block?.type === "task_controls" ? "Create tasks, check task and AI status, send prompts with the designed AI settings, set tasks active or finished, set commit-message drafts, and rewrite the latest unpushed commit message." : block?.description ?? block?.prompt;
   return description && description.length > 512 ? `${description.slice(0, 512)}… (preview; use the block to load its content)` : description;
 }
 

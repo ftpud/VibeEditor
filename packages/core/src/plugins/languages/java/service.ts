@@ -60,7 +60,10 @@ export class JavaLanguageService implements LanguageService {
     const { options, tree } = await this.java.loadMavenProject(pomPath as string);
     return { options, tree: tree.map(node) };
   }
-  async options(): Promise<LanguageExtra> { return extra(await this.java.getOptions()); }
+  async options(): Promise<LanguageExtra> {
+    const options = await this.java.getOptions();
+    return options ? { ...extra(options), configured: true } : { configured: false, runConfigurations: [] };
+  }
   async projectTree(): Promise<LanguageProjectNode[]> { return (await this.java.getProjectTree()).map(node); }
   async addSourceRoot(path: string): Promise<void> { await this.java.addSourceRoot(path); }
   workspaceSymbols(query: string, limit?: number) { return this.jdt.workspaceSymbols(query, limit); }

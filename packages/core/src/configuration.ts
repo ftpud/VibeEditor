@@ -1,3 +1,5 @@
+import type { LanguageSessions } from "./language/registry.js";
+import type { RunConfigService } from "./run-configs.js";
 import crypto from "node:crypto";
 import path from "node:path";
 import type { AcpRegistry } from "./ai/acp.js";
@@ -12,7 +14,7 @@ import { CoreError } from "./errors.js";
 import { validateTrigger, type TriggerService } from "./triggers.js";
 
 export type ConfigurationDocument = { resource: string; exists: boolean; content: string; revision: string | null; baseDirectory?: string };
-type Resource = { kind: "agents"; scope: AgentFileScope; name: string } | { kind: "skills"; scope: SkillScope; name: string } | { kind: "useful"; scope: "global" | "local"; name: string } | { kind: "policy" } | { kind: "workflows"; id: string } | { kind: "triggers"; id: string } | { kind: "tasks"; id: string };
+type Resource = { kind: "languages"; id: string } | { kind: "runs"; scope: "local" | "global"; name: string } | { kind: "agents"; scope: AgentFileScope; name: string } | { kind: "skills"; scope: SkillScope; name: string } | { kind: "useful"; scope: "global" | "local"; name: string } | { kind: "policy" } | { kind: "workflows"; id: string } | { kind: "triggers"; id: string } | { kind: "tasks"; id: string };
 const queues = new Map<string, Promise<unknown>>();
 const json = (value: unknown) => `${JSON.stringify(value, null, 2)}\n`;
 const starterTrigger = { name: "New Trigger", enabled: false, source: { type: "file", path: "logs/build.log", events: ["changed"] }, action: { type: "prompt", provider: "codex", prompt: "Review what changed." }, debounceSeconds: 2, maxFiresPerHour: 20 };
@@ -26,6 +28,8 @@ function parseResource(resource: string): Resource {
   if (resource === "skills/policy.json") return { kind: "policy" };
   const parts = resource.split("/");
   const [kind, scope, name] = parts;
+  if (kind === "languages" && parts.length === 2 && /^[a-z0-9-]+\.json$/.test(scope!)) return { kind, id: scope!.slice(0, -5) };
+  if (kind === "runs" && parts.length === 3 && ["local", "global"].includes(scope!) && name!.endsWith(".sh") && name!.length <= 123) return { kind, scope: scope as "local" | "global", name: name! };
   if (kind === "agents" && parts.length === 3 && ["global", "local", "workspace"].includes(scope!) && name!.length <= 180 && /\.md$/i.test(name!)) return { kind, scope: scope as AgentFileScope, name: name! };
   if (kind === "skills" && parts.length === 4 && ["global", "local", "workspace"].includes(scope!) && /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,79}$/.test(name!) && parts[3] === "SKILL.md") return { kind, scope: scope as SkillScope, name: name! };
   if (kind === "useful" && parts.length === 3 && ["global", "local"].includes(scope!) && name!.length <= 180) return { kind, scope: scope as "global" | "local", name: name! };
@@ -35,12 +39,15 @@ function parseResource(resource: string): Resource {
 
 /** A logical document interface, never an interface to private registry files. */
 export class ConfigurationService {
-  constructor(private readonly rootWorkspace: string, private readonly workspace: string, private readonly stores: { agents: AgentsStore; skills: SkillsStore; useful: UsefulFilesStore; workflows: HarnessStore; tasks: WorkspaceTaskStore; triggers?: { service: TriggerService; rootId: string } }, private readonly acp: AcpRegistry, private readonly changed: (resource: string, global: boolean) => Promise<void> = async () => undefined) {}
+  constructor(private readonly rootWorkspace: string, private readonly workspace: string, private readonly stores: { agents: AgentsStore; skills: SkillsStore; useful: UsefulFilesStore; workflows: HarnessStore; tasks: WorkspaceTaskStore; triggers?: { service: TriggerService; rootId: string }; languages?: LanguageSessions; runs?: RunConfigService }, private readonly acp: AcpRegistry, private readonly changed: (resource: string, global: boolean) => Promise<void> = async () => undefined) {}
 
   async list(includeModels = false) {
     const triggers = this.stores.triggers?.service.list() ?? [];
     const [agents, skills, useful, workflows, registry] = await Promise.all([this.stores.agents.list(this.workspace), this.stores.skills.list(this.workspace), this.stores.useful.list(), this.stores.workflows.list(), this.stores.tasks.list()]);
+    const runs = await this.stores.runs?.list(this.workspace) ?? [];
     const resources = [
+      ...(this.stores.languages?.registry.list().filter((item) => item.capabilities.configuration && item.capabilities.run).map((item) => ({ resource: `languages/${item.id}.json`, title: `${item.name} run configurations` })) ?? []),
+      ...runs.map((item) => ({ resource: `runs/${item.scope}/${item.name}.sh`, title: item.name })),
       ...agents.map((file) => ({ resource: `agents/${file.scope}/${file.name}`, title: file.agent.name, description: file.agent.description })),
       ...skills.skills.map((file) => ({ resource: `skills/${file.id}/SKILL.md`, title: file.title, description: file.description })),
       ...useful.map((file) => ({ resource: `useful/${file.scope}/${file.name}`, title: file.name })),
@@ -51,6 +58,8 @@ export class ConfigurationService {
     ];
     const providers = await Promise.all((await this.acp.available()).map(async (provider) => ({ ...provider, ...(includeModels ? { models: await this.acp.get(provider.id).models() } : {}) })));
     return { rootWorkspace: this.rootWorkspace, workspace: this.workspace, resources, providers, formats: {
+      languages: "languages/{language-id}.json: full project/run configuration in the invoking checkout (node for npm, java for Maven). Read to obtain plugin defaults, then edit the complete JSON preserving unrelated fields. Writing validates through the plugin and registers the project; saving never runs it. Use the returned document and live format; configurations include names, targets, arguments, environment, working directory, tool paths and selected configuration. Paths are workspace-relative unless the plugin specifies otherwise.",
+      runs: "runs/{local|global}/{name}.sh: shell commands. Local files belong to the root project and are shared by tasks; global files are shared across projects. Create with null revision; editing a running configuration is rejected. Saving never executes commands.",
       agents: "agents/{global|local|workspace}/{file.md}: Markdown with name, description and optional mcpServers frontmatter. Global/local are Core state; workspace is the invoking checkout's .agents directory.",
       skills: "skills/{global|local|workspace}/{name}/SKILL.md: Markdown instructions. Global is shared across projects on Core; local is Core state shared by all tasks of the root project; workspace is the invoking checkout's .agents/skills directory.",
       useful: "useful/{global|local}/{filename}: arbitrary text. Local belongs to the root project, global is shared across projects on Core.",
@@ -64,7 +73,14 @@ export class ConfigurationService {
   async read(resource: string): Promise<ConfigurationDocument> {
     const target = parseResource(resource);
     let content = ""; let exists = false; let baseDirectory: string | undefined;
-    if (target.kind === "agents") {
+    if (target.kind === "languages") {
+      const document = await this.language(target.id).readConfiguration();
+      content = document.content; exists = document.revision !== undefined && document.revision !== null;
+    } else if (target.kind === "runs") {
+      if (!this.stores.runs) throw new CoreError("INVALID_REQUEST", "Shell configuration is unavailable");
+      const item = (await this.stores.runs.list(this.workspace)).find((item) => item.scope === target.scope && `${item.name}.sh` === target.name);
+      exists = !!item; content = item?.commands ?? "#!/bin/sh\n";
+    } else if (target.kind === "agents") {
       exists = (await this.stores.agents.list(this.workspace)).some((file) => file.scope === target.scope && file.name === target.name);
       if (exists) content = await this.stores.agents.read(target.scope, target.name, this.workspace);
     } else if (target.kind === "skills") {
@@ -107,7 +123,18 @@ export class ConfigurationService {
       const previous = await this.read(resource);
       if (previous.revision !== expectedRevision) throw new CoreError("CONFLICT", "Configuration changed since it was read. Reload and reconcile before writing.");
       let writtenResource = resource;
-      if (target.kind === "agents") {
+      if (target.kind === "languages") {
+        const language = this.language(target.id);
+        // Re-read the native token so concurrent editor saves are checked by the plugin too.
+        const current = await language.readConfiguration();
+        const revision = current.revision === undefined || current.revision === null ? null : crypto.createHash("sha256").update(current.content).digest("hex");
+        if (revision !== expectedRevision) throw new CoreError("CONFLICT", "Configuration changed since it was read. Reload and reconcile before writing.");
+        await language.saveConfiguration(content, current.revision);
+      } else if (target.kind === "runs") {
+        if (!this.stores.runs) throw new CoreError("INVALID_REQUEST", "Shell configuration is unavailable");
+        if (previous.exists) await this.stores.runs.write(this.workspace, target.scope, target.name, content);
+        else await this.stores.runs.create(this.workspace, target.scope, target.name, content);
+      } else if (target.kind === "agents") {
         if (!previous.exists) {
           if (target.scope === "workspace") await this.stores.agents.createWorkspace(target.name, this.workspace);
           else await this.stores.agents.create(target.scope, target.name, this.workspace);
@@ -154,6 +181,11 @@ export class ConfigurationService {
     });
     queues.set(queueKey, operation);
     try { return await operation; } finally { if (queues.get(queueKey) === operation) queues.delete(queueKey); }
+  }
+
+  private language(id: string) {
+    if (!this.stores.languages) throw new CoreError("INVALID_REQUEST", "Language configuration is unavailable");
+    return this.stores.languages.require(id, "configuration");
   }
 
   private parseJson(content: string): Record<string, unknown> {

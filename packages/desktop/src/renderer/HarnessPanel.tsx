@@ -1,3 +1,5 @@
+import { useWorkflowTranscript, workflowWriterColor } from "./workflow-transcript";
+import "./workflow-transcript.css";
 import { AiAuthentication } from "./AiAuthentication";
 import { WorkflowError } from "./WorkflowError";
 import { useCallback, useEffect, useLayoutEffect, useId, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type SetStateAction } from "react";
@@ -731,13 +733,7 @@ export function BlockRunDetails({ providers, defaultProvider, onLoadModels, bloc
   const [killing, setKilling] = useState(false);
   const [killError, setKillError] = useState("");
   const [appRefresh, setAppRefresh] = useState(0);
-  if (block.type === "meeting") return <section className="harness-run-details workflow-chatbox" aria-label={`${block.label} run details`}>
-    <header><div><MessageSquare size={16} aria-hidden="true" /><strong>{block.label}</strong><small>Meeting</small></div><button aria-label="Close run details" onClick={onClose}><X size={16} /></button></header>
-    <div className="workflow-chat-messages" role="log" aria-label={`${block.label} conversation`} aria-live="off">
-      {!state?.meeting?.messages.length && <p>Connected agents can publish messages here and read the discussion.</p>}
-      {state?.meeting?.messages.map((message) => <article className="workflow-chat-message assistant" key={message.sequence}><strong>{message.author}</strong><small> #{message.sequence} · {message.model ?? message.provider} · {new Date(message.timestamp).toLocaleTimeString()}</small><p style={{ whiteSpace: "pre-wrap" }}>{message.text}</p></article>)}
-    </div>
-  </section>;
+  if (block.type === "meeting") return <WorkflowMeetingTranscript block={block} run={run} state={state} onClose={onClose} />;
   if (block.type === "chatbox") return <WorkflowChatbox providers={providers} defaultProvider={defaultProvider} onLoadModels={onLoadModels} block={block} run={run} state={state} onClose={onClose} onSend={onChat} onSteer={onSteer} onStop={onCancelChat} onAutopilot={onAutopilot} definition={definition} />;
   const totalTokens = run?.blocks.reduce((total, item) => total + (item.tokens?.total ?? 0), 0) ?? 0;
   const tokenBudget = run?.definition?.settings?.tokenBudget;
@@ -764,6 +760,19 @@ export function BlockRunDetails({ providers, defaultProvider, onLoadModels, bloc
 
       </div></details>
     </>}</div>
+  </section>;
+}
+
+function WorkflowMeetingTranscript({ block, run, state, onClose }: { block: HarnessBlock; run?: HarnessRun; state?: HarnessRun["blocks"][number]; onClose(): void }) {
+  const transcript = useRef<HTMLDivElement>(null);
+  const messages = state?.meeting?.messages ?? [];
+  const { onScroll } = useWorkflowTranscript(transcript, `${run?.id ?? "draft"}:${block.id}`, `${messages.length}:${messages.at(-1)?.sequence ?? ""}:${messages.at(-1)?.text ?? ""}`);
+  return <section className="harness-run-details workflow-chatbox" aria-label={`${block.label} run details`}>
+    <header><div><MessageSquare size={16} aria-hidden="true" /><strong>{block.label}</strong><small>Meeting</small></div><button aria-label="Close run details" onClick={onClose}><X size={16} /></button></header>
+    <div className="workflow-chat-messages" ref={transcript} role="log" aria-label={`${block.label} conversation`} aria-live="off" onScroll={onScroll}>
+      {!messages.length && <p>Connected agents can publish messages here and read the discussion.</p>}
+      {messages.map((message) => <article className="workflow-chat-message assistant" style={{ borderInlineStartColor: workflowWriterColor(message.author) }} key={message.sequence}><strong>{message.author}</strong><small> #{message.sequence} · {message.model ?? message.provider} · {new Date(message.timestamp).toLocaleTimeString()}</small><p style={{ whiteSpace: "pre-wrap" }}>{message.text}</p></article>)}
+    </div>
   </section>;
 }
 
@@ -823,19 +832,18 @@ function WorkflowChatbox({ providers = [], defaultProvider, onLoadModels, block,
   const [sending, setSending] = useState(false);
   const [error, setError] = useState("");
   const transcript = useRef<HTMLDivElement>(null);
-  const followMessages = useRef(true);
   const messages = state?.chatMessages ?? [];
   const busy = sending || !!state && ["queued", "running", "waiting", "awaiting_permission", "awaiting_user_input", "waiting_timer", "retry_scheduled"].includes(state.status);
   const graph = run?.definition ?? definition;
   const connected = (graph?.edges ?? []).filter((edge) => edge.from === block.id).map((edge) => graph?.blocks.find((item) => item.id === edge.to)?.label).filter(Boolean);
-  useLayoutEffect(() => { if (followMessages.current && transcript.current) transcript.current.scrollTop = transcript.current.scrollHeight; }, [messages.length, messages.at(-1)?.text, busy]);
+  const { onScroll: onTranscriptScroll, followLatest } = useWorkflowTranscript(transcript, `${run?.id ?? "draft"}:${block.id}:${state?.sessionId ?? ""}`, `${messages.length}:${messages.at(-1)?.id ?? ""}:${messages.at(-1)?.text ?? ""}:${busy}`);
   const send = async () => {
     const action = busy ? (state?.status === "running" ? onSteer : undefined) : onSend;
     if (!action || sending || !message.trim()) return;
     const input = message;
     const revision = messageRevision.current;
     setMessage("");
-    setSending(true); setError(""); followMessages.current = true;
+    setSending(true); setError(""); followLatest();
     try {
       if (busy) await onSteer!(input);
       else await onSend!(input, { provider: effectiveProvider, model: modelOverride || (effectiveProvider !== (block.provider || defaultProvider || state?.provider) ? "" : block.model ?? ""), autopilot, ...(Object.keys(optionOverrides).length ? { options: optionOverrides } : {}) });
@@ -859,7 +867,7 @@ function WorkflowChatbox({ providers = [], defaultProvider, onLoadModels, block,
       <small>Overrides apply to this Chatbox on the next message. Changing provider or model starts a fresh session. Autopilot approves tool permission requests automatically.</small>
     </div>}
     {!!connected.length && <div className="workflow-chat-tools" aria-label="Connected chat tools"><span>Connected</span>{connected.map((label, index) => <span className="workflow-chat-tool" key={`${label}:${index}`}>{label}</span>)}</div>}
-    <div className="workflow-chat-messages" ref={transcript} role="log" aria-label={`${block.label} conversation`} aria-live="off" onScroll={() => { const element = transcript.current; if (element) followMessages.current = element.scrollHeight - element.scrollTop - element.clientHeight < 60; }}>
+    <div className="workflow-chat-messages" ref={transcript} role="log" aria-label={`${block.label} conversation`} aria-live="off" onScroll={onTranscriptScroll}>
       {!messages.length && <div className="workflow-chat-empty"><MessageSquare size={28} aria-hidden="true" /><strong>Start a conversation</strong><p>Ask a question or put the connected blocks to work.</p></div>}
       {messages.map((item) => <article key={item.id} className={`workflow-chat-message ${item.role}`}><strong>{item.role === "user" ? "You" : block.label}</strong>{item.text ? item.role === "assistant" ? <WorkflowMarkdown>{item.text}</WorkflowMarkdown> : <p>{item.text}</p> : <span className="workflow-chat-thinking">{busy ? "Thinking…" : "No response"}</span>}</article>)}
       {state?.error && <WorkflowError message={state.error} />}

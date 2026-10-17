@@ -1,3 +1,9 @@
+import { BUILT_IN_LANGUAGES } from "./plugins/builtin.js";
+import { LanguageRegistry, LanguageSessions } from "./language/registry.js";
+import { WorkspaceFileSystem } from "./filesystem.js";
+import { WorkspaceStateStore } from "./workspace-state.js";
+import { RunConfigService } from "./run-configs.js";
+import type { TerminalSessionHost } from "./process-manager.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -122,7 +128,7 @@ describe("global configuration defaults", () => {
     const { state, stores, workspace, service } = await fixture();
     const directory = path.join(state, "skills/global/vibe-self-configuration");
     await mkdir(directory, { recursive: true });
-    const previous = CONFIGURATION_SKILL.split("\n\n## Detailed reference")[0]! + "\n";
+    const previous = CONFIGURATION_SKILL.replace("task metadata, run configurations and global or local useful files", "task metadata and global or local useful files").replace(/Run configurations are editable through[\s\S]*?(?=After a write, read back)/, "").split("\n\n## Detailed reference")[0]! + "\n";
     await writeFile(path.join(directory, "SKILL.md"), previous);
     await ensureSelfConfiguration(state);
     expect(await stores.skills.read("global/vibe-self-configuration", workspace)).toBe(CONFIGURATION_SKILL);
@@ -167,7 +173,7 @@ describe("global configuration defaults", () => {
 
   it("upgrades the unedited shipped skill when project-local scopes change", async () => {
     const { state, stores, workspace } = await fixture();
-    const previous = CONFIGURATION_SKILL.split("\n\n## Detailed reference")[0]! + "\n";
+    const previous = CONFIGURATION_SKILL.replace("task metadata, run configurations and global or local useful files", "task metadata and global or local useful files").replace(/Run configurations are editable through[\s\S]*?(?=After a write, read back)/, "").split("\n\n## Detailed reference")[0]! + "\n";
     const legacy = previous
       .replace("local agents, local skills, skill policy,\nuseful files and workflows belong to its root project and are shared by every task, while\nworkspace agents and workspace skills belong to the invoking checkout.", "local agents, useful files\nand workflows belong to its root project, while workspace agents, local skills\nand skill policy belong to the invoking checkout.")
       .replace("Use skills/local/{name}/SKILL.md for skills shared by all tasks in this project,\nskills/workspace/{name}/SKILL.md for checkout files and skills/global/{name}/SKILL.md\nfor host-wide skills. All three scopes can be created and edited through the tools.\n\n", "");
@@ -211,5 +217,45 @@ describe("global configuration defaults", () => {
       expect(triggers.list()[0]).toMatchObject({ id: listed[0]!.id, name: "Renamed", enabled: true });
       await expect(service.write("triggers/new.json", JSON.stringify({ ...starter, bogus: true }), null)).rejects.toThrow("Trigger document");
     } finally { await triggers.close(); }
+  });
+});
+
+
+describe("configurator run configuration documents", () => {
+  it("discovers and edits npm, Java and shell profiles without executing them, preserving UI edits", async () => {
+    const { workspace, taskWorkspace, stores, acp, changed, state } = await fixture();
+    await writeFile(path.join(taskWorkspace, "package.json"), JSON.stringify({ scripts: { start: "node app.js", test: "node test.js" } }));
+    await writeFile(path.join(taskWorkspace, "pom.xml"), "<project><artifactId>app</artifactId></project>");
+    const filesystem = new WorkspaceFileSystem(); await filesystem.initialize(taskWorkspace);
+    const registry = new LanguageRegistry();
+    for (const language of BUILT_IN_LANGUAGES) registry.register(language.descriptor, (workspace) => language.create({ workspace, filesystem, state: new WorkspaceStateStore(workspace, state), rootId: "test", events: { output: vi.fn(), exit: vi.fn(), debugState: vi.fn(), semanticChanged: vi.fn() }, emit: vi.fn() }));
+    const languages = new LanguageSessions(registry, taskWorkspace);
+    const terminals = { create: vi.fn() } as unknown as TerminalSessionHost;
+    const runs = new RunConfigService(terminals, vi.fn(), workspace, state);
+    const service = new ConfigurationService(workspace, taskWorkspace, { ...stores, languages, runs }, acp, changed);
+    try {
+      expect((await service.list()).resources.map((item) => item.resource)).toEqual(expect.arrayContaining(["languages/node.json", "languages/java.json"]));
+      for (const [id, profile] of [["node", { id: "dev", name: "Dev", script: "start", arguments: ["--port", "3000"], nodeOptions: ["--enable-source-maps"], environment: { MODE: "dev" }, workingDirectory: "." }], ["java", { id: "dev", name: "Dev", mainClass: "app.Main", programArguments: ["hello world"], vmArguments: ["-ea"], environment: { MODE: "dev" }, workingDirectory: "." }]] as const) {
+        const resource = `languages/${id}.json`;
+        const document = await service.read(resource);
+        expect(document).toMatchObject({ exists: false, revision: null });
+        const options = { ...JSON.parse(document.content), runConfigurations: [profile], selectedRunConfigurationId: "dev" };
+        const saved = await service.write(resource, JSON.stringify(options), null);
+        expect(saved.exists).toBe(true);
+        expect(JSON.parse(saved.content).runConfigurations).toEqual([profile]);
+        const plugin = languages.get(id);
+        const uiDocument = await plugin.readConfiguration();
+        await plugin.saveConfiguration(JSON.stringify({ ...options, runConfigurations: [{ ...profile, name: "UI edit" }] }), uiDocument.revision);
+        await expect(service.write(resource, saved.content, saved.revision)).rejects.toThrow("Reload");
+        expect(JSON.parse((await service.read(resource)).content).runConfigurations[0].name).toBe("UI edit");
+      }
+      const shell = await service.write("runs/local/build.sh", "npm run build\n", null);
+      expect(shell).toMatchObject({ exists: true, content: "npm run build\n" });
+      await service.write(shell.resource, "npm test\n", shell.revision);
+      expect((await service.list()).resources.some((item) => item.resource === shell.resource)).toBe(true);
+      expect(terminals.create).not.toHaveBeenCalled();
+      expect(changed).toHaveBeenCalledWith("languages/java.json", false);
+      expect(changed).toHaveBeenCalledWith("runs/local/build.sh", false);
+    } finally { await languages.dispose(); }
   });
 });

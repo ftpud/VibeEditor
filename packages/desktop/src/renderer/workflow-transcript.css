@@ -1,0 +1,6 @@
+.workflow-chat-messages .workflow-chat-message.assistant,
+.workflow-chat-messages .workflow-chat-message.user {
+  border-inline-start: 3px solid var(--success);
+  padding-inline-start: 12px;
+}
+.workflow-chat-messages .workflow-chat-message.user { border-inline-start-color: var(--accent); }

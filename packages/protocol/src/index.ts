@@ -663,6 +663,7 @@ export type ProtocolOperations = {
   "language.listRunTargets": { payload: { language: string }; result: { targets: LanguageRunTarget[] } };
   "language.addRunConfiguration": { payload: { language: string; name: string; target: string }; result: { options: LanguageExtra } };
   "language.selectRunConfiguration": { payload: { language: string; id: string }; result: { options: LanguageExtra } };
+  "language.removeRunConfiguration": { payload: { language: string; id: string }; result: { options: LanguageExtra } };
   "language.build": { payload: { language: string }; result: Record<string, never> };
   "language.run": { payload: { language: string }; result: Record<string, never> };
   "language.stop": { payload: { language: string }; result: Record<string, never> };
@@ -1064,6 +1065,7 @@ const requestTypeRegistry: Record<RequestType, true> = {
   "language.listRunTargets": true,
   "language.addRunConfiguration": true,
   "language.selectRunConfiguration": true,
+  "language.removeRunConfiguration": true,
   "language.build": true,
   "language.run": true,
   "language.stop": true,

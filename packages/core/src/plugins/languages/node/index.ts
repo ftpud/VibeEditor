@@ -5,5 +5,5 @@ export { NODE_DESCRIPTOR, NodeLanguageService };
 
 export const nodeLanguage: BuiltInLanguage = {
   descriptor: NODE_DESCRIPTOR,
-  create: ({ workspace, events }) => new NodeLanguageService(workspace, events)
+  create: ({ workspace, events, filesystem }) => new NodeLanguageService(workspace, events, filesystem)
 };

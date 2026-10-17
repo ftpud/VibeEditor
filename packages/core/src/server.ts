@@ -449,16 +449,25 @@ export async function createServer(host: string, port: number, workspacePath: st
         operation: <T>(kind: "timer_create" | "task_create" | "prompt_delivery" | "merge", key: string, input: unknown, effect: () => Promise<T>, reconcile?: () => Promise<T | null | undefined>) => harnessRunner(rootId).runOperation(workflow.runId, workflow.blockId, kind, key, input, effect, reconcile),
         recordTool: (name: string, args: Record<string, unknown>, result?: unknown, error?: unknown) => harnessRunner(rootId).recordTool(workflow.runId, workflow.blockId, name, args, result, error)
       } : undefined;
-      const configuration = new ConfigurationService(root.path, currentWorkspace, { agents: context.agents, skills: new SkillsStore(undefined, root.path), useful: context.usefulFiles, workflows: context.harnesses, tasks: context.tasks, triggers: { service: triggers, rootId: root.id } }, acp, async (resource, global) => {
+      const configurationFilesystem = new WorkspaceFileSystem();
+      await configurationFilesystem.initialize(currentWorkspace);
+      const configurationRegistry = new LanguageRegistry();
+      const configurationEvents: LanguageServiceEvents = { output() {}, exit() {}, debugState() {}, semanticChanged() {} };
+      const configurationState = new WorkspaceStateStore(currentWorkspace, process.env.REMOTE_IDE_STATE_DIR);
+      for (const language of BUILT_IN_LANGUAGES) configurationRegistry.register(language.descriptor, (workspace) => language.create({ workspace, filesystem: configurationFilesystem, state: configurationState, events: configurationEvents, rootId, emit() {} }));
+      for (const language of plugins.languages) configurationRegistry.register(language.descriptor, (workspace) => language.create(workspace, configurationEvents));
+      const configurationLanguages = new LanguageSessions(configurationRegistry, currentWorkspace);
+      runConfigs.registerWorkspace(currentWorkspace, root.path);
+      const configuration = new ConfigurationService(root.path, currentWorkspace, { agents: context.agents, skills: new SkillsStore(undefined, root.path), useful: context.usefulFiles, workflows: context.harnesses, tasks: context.tasks, triggers: { service: triggers, rootId: root.id }, languages: configurationLanguages, runs: runConfigs }, acp, async (resource, global) => {
         const encoded = JSON.stringify({ type: "configuration.changed", payload: { rootId, resource, global } } satisfies ServerEvent);
         for (const socket of activeSessions) sendWebSocketData(socket, encoded);
         if (resource.startsWith("tasks/")) await changed();
       });
-      return new AppToolService(context.tasks, acp, currentWorkspace, changed, onCommitMessageChanged, command.currentProvider, context.agents, root.path, aiTimers, rootWorkspace, ownedWorkflow, configuration, async (id) => {
+      try { return await new AppToolService(context.tasks, acp, currentWorkspace, changed, onCommitMessageChanged, command.currentProvider, context.agents, root.path, aiTimers, rootWorkspace, ownedWorkflow, configuration, async (id) => {
         if (!command.currentProvider) throw new CoreError("INVALID_REQUEST", "Skill loading requires a provider conversation");
         const session = await acp.get(command.currentProvider).get(currentWorkspace);
         return new SkillsStore(undefined, root.path).load(currentWorkspace, id, session);
-      }).call(command.name, command.args);
+      }).call(command.name, command.args); } finally { await configurationLanguages.dispose(); }
     });
     bridgeCommands.add(pending);
     void pending.finally(() => bridgeCommands.delete(pending)).catch((error) => console.error("[core] App command cleanup failed", error));
@@ -1303,7 +1312,7 @@ async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStor
       return checkpoints.restore(request.payload.checkpointId);
     }
     case "plugins.list": return { enabled: pluginsDirectory() !== undefined, plugins: services.plugins };
-    case "language.list": case "language.load": case "language.options": case "language.configuration.read": case "language.configuration.save": case "language.tools.check": case "language.addSourceRoot": case "language.projectTree": case "language.symbols": case "language.listRunTargets": case "language.addRunConfiguration": case "language.selectRunConfiguration": case "language.build": case "language.run": case "language.stop": case "language.debug.setBreakpoints": case "language.debug.start": case "language.debug.applyChanges": case "language.debug.variables": case "language.debug.command": case "language.check": case "language.lsp.completion": case "language.lsp.definition": case "language.lsp.references": case "language.lsp.semanticTokens":
+    case "language.list": case "language.load": case "language.options": case "language.configuration.read": case "language.configuration.save": case "language.tools.check": case "language.addSourceRoot": case "language.projectTree": case "language.symbols": case "language.listRunTargets": case "language.addRunConfiguration": case "language.selectRunConfiguration": case "language.removeRunConfiguration": case "language.build": case "language.run": case "language.stop": case "language.debug.setBreakpoints": case "language.debug.start": case "language.debug.applyChanges": case "language.debug.variables": case "language.debug.command": case "language.check": case "language.lsp.completion": case "language.lsp.definition": case "language.lsp.references": case "language.lsp.semanticTokens":
       return handleLanguageRequest(services.languages.registry, services.languages, request.rootId, request);
     case "java.loadMavenProject": {
       if (typeof request.payload.pomPath !== "string") throw new CoreError("INVALID_REQUEST", "pomPath must be a string");

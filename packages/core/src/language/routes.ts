@@ -37,6 +37,11 @@ export async function handleLanguageRequest(registry: LanguageRegistry, sessions
     case "language.listRunTargets": return { targets: await sessions.require(language, "run").listRunTargets() };
     case "language.addRunConfiguration": return { options: await sessions.require(language, "runConfigurations").addRunConfiguration(request.payload.name, request.payload.target) };
     case "language.selectRunConfiguration": return { options: await sessions.require(language, "runConfigurations").selectRunConfiguration(request.payload.id) };
+    case "language.removeRunConfiguration": {
+      const service = sessions.require(language, "runConfigurations");
+      if (!service.removeRunConfiguration) throw new CoreError("INVALID_REQUEST", `Language '${language}' cannot remove run configurations`);
+      return { options: await service.removeRunConfiguration(request.payload.id) };
+    }
     case "language.build": await sessions.require(language, "build").build(); return {};
     case "language.run": await sessions.require(language, "run").run(); return {};
     case "language.stop": {

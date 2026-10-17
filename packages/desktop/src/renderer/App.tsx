@@ -10,7 +10,7 @@ import { ConnectionMenu } from "./ConnectionMenu";
 import { startBackgroundLoading } from "./background-loading";
 import { javaConfigurationPath, resolveSkillIds, skillAllowedForAgent } from "@remote-ide/protocol";
 import { DiffEditor, type Monaco } from "@monaco-editor/react";
-import { Archive, Bookmark, GraduationCap, Sparkles, History, Minus, RotateCcw, ArrowDown, ArrowUp, ArrowUpRight, Bot, Bug, Check, ChevronDown, ChevronRight, CircleAlert, Clock, ClipboardCopy, Zap, Coffee, Columns2, Eye, EyeOff, File, FileCode2, FileDiff, FileText, Folder, FolderOpen, GitBranch, GitCompareArrows, GitMerge, Library, ListTodo, ListTree, LoaderCircle, LogOut, MoreVertical, Package, Palette, Pencil, Pin, PinOff, Play, Plus, RefreshCw, Save, Search, Settings, ShieldAlert, Square, SquareTerminal, Trash2, Workflow, X } from "lucide-react";
+import { Archive, Bookmark, GraduationCap, Sparkles, History, Minus, RotateCcw, ArrowDown, ArrowUp, ArrowUpRight, Bot, Bug, Check, ChevronDown, ChevronRight, CircleAlert, Clock, ClipboardCopy, Zap, Coffee, Columns2, Eye, EyeOff, File, FileDiff, FileText, Folder, FolderOpen, GitBranch, GitCompareArrows, GitMerge, Library, ListTodo, ListTree, LoaderCircle, LogOut, MoreVertical, Package, Palette, Pencil, Pin, PinOff, Play, Plus, RefreshCw, Save, Search, Settings, ShieldAlert, Square, SquareTerminal, Trash2, Workflow, X } from "lucide-react";
 import { Children, isValidElement, useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
 import type { ManagedWorkflowApp, SkillCatalog, AgentFile, AgentFileScope, AiContinuationTimer, AiConfiguration, AiModel, AiProvider, AiProviderDescriptor, AiSession, AiStatus, AiTaskSummary, AiUsage, FileColor, FileRevision, FileTreeNode, GitBranch as GitBranchInfo, GitDiffHunk, GitHistoryRewritePreview, GitStatusEntry, GitUpstreamStatus, HarnessDefinition, HarnessRun, HarnessStateDiagnostic, HttpResponse, JavaApplyChangesResult, LanguageDebugCommand, LanguageDescriptor, JavaBreakpoint, JavaDebugState, JavaProjectNode, JavaProjectOptions, JavaTypeSuggestion, ProtocolOperations, RootedJavaDiagnostic, RootedJavaLspLocation, RootedWorkspaceSymbol, RunConfig, RunConfigScope, SearchResult, TaskCheckpoint, TaskCheckpointFile, UsefulFile, UsefulFileScope, WorkspaceSchedule, WorkspaceTrigger, WorkspaceOptions, WorkspaceRoot, WorkspaceSearchQueries, WorkspaceTask } from "@remote-ide/protocol";
 import type { editor } from "monaco-editor";
@@ -36,7 +36,10 @@ import { clearViewedTerminalActivity, markTerminalActivity } from "./terminal-ac
 import { JavaConfigurationDialog } from "./plugins/languages/java";
 import { languageClient, loadJavaProjectTree } from "./language-client";
 import { attachDebugEditor } from "./debug-editor";
-import { LanguageTools } from "./LanguageTools";
+import { RunConfigurationsPanel, RunConfigurationToolbar } from "./RunConfigurationsPanel";
+import { projectRegistration, runProject, type RunProject, type RunProjectProcess } from "./run-projects";
+import { GenericProjectConfigurationDialog } from "./GenericProjectConfigurationDialog";
+import { projectConfigurationEditors } from "./plugins/languages/configuration-editors";
 import { JavaPanel } from "./plugins/languages/java";
 import { ProblemsPanel } from "./ProblemsPanel";
 import { GitLogPanel } from "./GitLogPanel";
@@ -311,9 +314,14 @@ export function App() {
   const [gitError, setGitError] = useState("");
   const [workspaceOptionsReady, setWorkspaceOptionsReady] = useState(false);
   const [languages, setLanguages] = useState<LanguageDescriptor[]>([]);
-  const [languageToolsOpen, setLanguageToolsOpen] = useState(false);
+  const [runConfigurationsOpen, setRunConfigurationsOpen] = useState(false);
+  const [runProjects, setRunProjects] = useState<RunProject[]>([]);
+  const [runProjectProcesses, setRunProjectProcesses] = useState<Record<string, RunProjectProcess>>({});
+  const [runConfigurationEditor, setRunConfigurationEditor] = useState<string>();
+  const [runProjectBusy, setRunProjectBusy] = useState(false);
+  const runProjectGeneration = useRef(0);
   const [selectedLanguage, setSelectedLanguage] = useState<string>();
-  const openLanguageTools = (language?: string) => { setSelectedLanguage(language); setLanguageToolsOpen(true); };
+  const openRunConfigurations = (language?: string) => { if (language) setSelectedLanguage(language); setRunConfigurationsOpen(true); };
   const [javaOptions, setJavaOptions] = useState<JavaProjectOptions>();
   const [javaTree, setJavaTree] = useState<JavaProjectNode[]>([]);
   const [javaLog, setJavaLog] = useState("");
@@ -2268,15 +2276,6 @@ export function App() {
     catch (error) { setStatusMessage(error instanceof Error ? error.message : "Could not refresh Java project"); }
   };
 
-  const loadMavenProject = async (pomPath: string) => {
-    setTreeContextMenu(undefined);
-    try {
-      const result = await clientRef.current!.request("java.loadMavenProject", { pomPath });
-      setJavaOptions(result.options); javaOptionsRef.current = result.options; setJavaTree(result.tree);
-      if (sideLayout === "classic") setClassicSideView("java"); else setRightPanels((current) => ({ ...current, java: true }));
-    } catch (error) { setStatusMessage(error instanceof Error ? error.message : "Could not load Maven project"); }
-  };
-
   const addJavaSourceRoot = async (sourcePath: string) => {
     setTreeContextMenu(undefined);
     try {
@@ -2471,13 +2470,6 @@ export function App() {
       message: item.message, source: "Maven"
     }; }));
   }, [activeTab?.path, javaDiagnostics]);
-
-  const selectRunConfiguration = async (id: string) => {
-    try {
-      const result = await clientRef.current!.request("java.selectRunConfiguration", { id });
-      setJavaOptions(result.options); javaOptionsRef.current = result.options;
-    } catch (error) { setStatusMessage(error instanceof Error ? error.message : "Could not select run configuration"); }
-  };
 
   useEffect(() => {
     debugEditorRef.current?.update({ ...javaDebugState, busy: javaDebugState.applyingChanges });
@@ -2941,7 +2933,7 @@ export function App() {
     try { const result = await client.request("workspace.removeRoot", { rootId: root.id }); setWorkspaceRoots(result.roots); }
     catch (error) { setStatusMessage(error instanceof Error ? error.message : "Could not remove workspace root"); }
   };
-  const rightSidebarOpen = rightPanels.project || rightPanels.git || rightPanels.useful || rightPanels.agents || rightPanels.skills || ((rightPanels.taskGit || rightPanels.promptHistory) && Boolean(selectedTaskId)) || (rightPanels.java && Boolean(javaOptions));
+  const rightSidebarOpen = runConfigurationsOpen || rightPanels.project || rightPanels.git || rightPanels.useful || rightPanels.agents || rightPanels.skills || ((rightPanels.taskGit || rightPanels.promptHistory) && Boolean(selectedTaskId)) || (rightPanels.java && Boolean(javaOptions));
   useEffect(() => {
     const client = clientRef.current;
     setLanguages([]);
@@ -2950,6 +2942,103 @@ export function App() {
     void client.request("language.list", {}).then(({ languages }) => { if (current) setLanguages(languages); }).catch((error: unknown) => { if (current) setStatusMessage(error instanceof Error ? error.message : "Could not list language services"); });
     return () => { current = false; };
   }, [status, selectedRootId, selectedTaskId]);
+  const refreshRunProjects = useCallback(async (client = clientRef.current) => {
+    if (!client || !client.isConnected() || taskSwitchActive.current) return;
+    const root = client.getRoot(); const task = selectedTaskIdRef.current; const workspace = activeWorkspaceRef.current;
+    const generation = ++runProjectGeneration.current;
+    const results = await Promise.allSettled(languages.filter((language) => language.capabilities.run).map(async (language) => {
+      const { options } = await client.request("language.options", { language: language.id });
+      return runProject(language, options);
+    }));
+    if (generation !== runProjectGeneration.current || clientRef.current !== client || client.getRoot() !== root || selectedTaskIdRef.current !== task || activeWorkspaceRef.current !== workspace || taskSwitchActive.current) return;
+    const projects = results.flatMap((result) => result.status === "fulfilled" && result.value ? [result.value] : []);
+    setRunProjects(projects);
+    setSelectedLanguage((current) => projects.some((project) => project.language === current) ? current : projects[0]?.language);
+  }, [languages]);
+  useEffect(() => {
+    runProjectGeneration.current++;
+    setRunProjects([]); setRunProjectProcesses({}); setRunConfigurationEditor(undefined); setRunProjectBusy(false);
+    if (status === "connected") void refreshRunProjects().catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : "Could not load run configurations"));
+  }, [status, selectedRootId, selectedTaskId, refreshRunProjects]);
+  useEffect(() => {
+    const client = clientRef.current;
+    if (!client || status !== "connected") return;
+    const root = client.getRoot(); const task = selectedTaskIdRef.current;
+    return client.subscribeServerEvents((event) => {
+      if (clientRef.current !== client || client.getRoot() !== root || task !== selectedTaskIdRef.current || taskSwitchActive.current) return;
+      if (event.type === "configuration.changed" && event.payload.rootId === root && event.payload.resource.startsWith("languages/")) {
+        void refreshRunProjects().catch(() => undefined); return;
+      }
+      if (event.type === "filesystem.changed" && event.payload.rootId === root && (event.payload.overflow || event.payload.paths.some((path) => /(^|\/)(package\.json|pom\.xml)$/.test(path) || /^\.settings\/(npm|java)\.json$/.test(path)))) {
+        void refreshRunProjects().catch(() => undefined); return;
+      }
+      if ((event.type !== "language.output" && event.type !== "language.exit" && event.type !== "language.debug.state") || event.payload.rootId !== root) return;
+      const language = event.payload.language;
+      setRunProjectProcesses((current) => {
+        const previous = current[language] ?? { running: false, log: "" };
+        if (event.type === "language.output") return { ...current, [language]: { ...previous, log: (previous.log + event.payload.data).slice(-1_000_000) } };
+        if (event.type === "language.exit") return { ...current, [language]: { ...previous, running: false, log: `${previous.log}\nProcess exited${event.payload.exitCode === null ? "" : ` with code ${event.payload.exitCode}`}\n` } };
+        return { ...current, [language]: { ...previous, running: event.payload.status !== "stopped" } };
+      });
+    });
+  }, [status, selectedRootId, selectedTaskId, refreshRunProjects]);
+  useEffect(() => { if (languages.length && status === "connected") void refreshRunProjects().catch(() => undefined); }, [javaOptions]);
+  const selectProjectRunConfiguration = async (language: string, id: string) => {
+    const client = clientRef.current;
+    if (!client || taskSwitchActive.current) return;
+    const root = client.getRoot(); const task = selectedTaskIdRef.current;
+    setRunProjectBusy(true);
+    try {
+      await languageClient(client, language).request("language.selectRunConfiguration", { id });
+      if (clientRef.current !== client || client.getRoot() !== root || task !== selectedTaskIdRef.current) return;
+      setSelectedLanguage(language);
+      await refreshRunProjects(client);
+      const java = await client.request("java.getOptions", {});
+      if (clientRef.current === client && client.getRoot() === root && task === selectedTaskIdRef.current) { setJavaOptions(java.options); javaOptionsRef.current = java.options; }
+    } catch (error) { if (clientRef.current === client && client.getRoot() === root) setStatusMessage(error instanceof Error ? error.message : "Could not select run configuration"); }
+    finally { if (clientRef.current === client && client.getRoot() === root && task === selectedTaskIdRef.current) setRunProjectBusy(false); }
+  };
+  const registerRunProject = async (path: string) => {
+    const registration = projectRegistration(path); const client = clientRef.current;
+    setTreeContextMenu(undefined);
+    if (!registration || !client || taskSwitchActive.current) return;
+    const root = client.getRoot(); const task = selectedTaskIdRef.current;
+    setRunProjectBusy(true);
+    try {
+      await languageClient(client, registration.language).request("language.load", { extra: registration.extra });
+      if (clientRef.current !== client || client.getRoot() !== root || task !== selectedTaskIdRef.current) return;
+      const java = await client.request("java.getOptions", {});
+      if (clientRef.current !== client || client.getRoot() !== root || task !== selectedTaskIdRef.current) return;
+      setJavaOptions(java.options); javaOptionsRef.current = java.options;
+      if (java.options) void refreshJavaTree();
+      await refreshRunProjects(client);
+      if (clientRef.current !== client || client.getRoot() !== root || task !== selectedTaskIdRef.current || taskSwitchActive.current) return;
+      openRunConfigurations(registration.language);
+      setRunConfigurationEditor(registration.language);
+      void refreshTree();
+    } catch (error) { if (clientRef.current === client && client.getRoot() === root) setStatusMessage(error instanceof Error ? error.message : "Could not add project"); }
+    finally { if (clientRef.current === client && client.getRoot() === root && task === selectedTaskIdRef.current) setRunProjectBusy(false); }
+  };
+  const launchProjectConfiguration = async (language: string, debug = false) => {
+    if (runProjectBusy || taskSwitchActive.current || runProjectProcesses[language]?.running) return;
+    const client = clientRef.current; if (!client) return;
+    const root = client.getRoot(); const task = selectedTaskIdRef.current;
+    const current = () => clientRef.current === client && client.getRoot() === root && selectedTaskIdRef.current === task && !taskSwitchActive.current;
+    setSelectedLanguage(language); setRunConfigurationsOpen(true);
+    setRunProjectProcesses((states) => ({ ...states, [language]: { ...(states[language] ?? { log: "" }), running: true, error: undefined } }));
+    try {
+      await saveLaunchFiles();
+      if (!current()) return;
+      if (debug) await languageClient(client, language).startDebug(language === "java" ? javaBreakpoints.map(({ className, ...breakpoint }) => ({ ...breakpoint, extra: { className } })) : [], { timeoutMs: 10 * 60_000 });
+      else await languageClient(client, language).request("language.run", {}, { timeoutMs: 10 * 60_000 });
+    } catch (error) {
+      if (current()) setRunProjectProcesses((states) => ({ ...states, [language]: { ...(states[language] ?? { log: "" }), running: false, error: error instanceof Error ? error.message : "Run failed" } }));
+    }
+  };
+  const stopProjectConfiguration = async (language: string) => {
+    try { await languageClient(clientRef.current!, language).request("language.stop", {}); }
+    catch (error) { setStatusMessage(error instanceof Error ? error.message : "Could not stop project"); }
+  };
   const commandContext: CommandContext = { connected: status === "connected", hasActiveEditor: Boolean(activeTab), activeEditorDirty: Boolean(activeTab?.dirty), gitBusy: gitOperationRunning, taskSwitching, aiBusy: aiSession.status === "in_progress" };
   const commands: Command[] = [
     { id: "project.commandPalette", label: "Show Command Palette", category: "Project", when: (context) => context.connected, execute: () => setCommandPaletteOpen(true) },
@@ -2964,8 +3053,8 @@ export function App() {
     { id: "terminal.toggle", label: "Toggle Terminal Panel", category: "Terminal", when: (context) => context.connected, execute: toggleTerminalPanel },
     { id: "task.create", label: "Create Task", category: "Task", when: (context) => context.connected && !context.taskSwitching, execute: () => setShowCreateTaskDialog(true) },
     { id: "ai.open", label: "Open AI", category: "AI", when: (context) => context.connected, execute: () => { if (sideLayout === "classic") setClassicAiOpen(true); else setLeftPanels((current) => ({ ...current, ai: true, harness: false, timers: false, triggers: false, proc: false })); void refreshAi(); } },
-    { id: "language.tools", label: "Open Language Tools", category: "Language", when: (context) => context.connected, execute: () => openLanguageTools() },
-    ...languageCommands(languages, openLanguageTools),
+    { id: "language.tools", label: "Open Run Configurations", category: "Language", when: (context) => context.connected, execute: () => openRunConfigurations() },
+    ...languageCommands(languages.filter((language) => runProjects.some((project) => project.language === language.id)), openRunConfigurations),
     { id: "editor.save", label: "Save Active Editor", category: "Editor", when: (context) => context.hasActiveEditor && context.activeEditorDirty, execute: () => saveActive() }
   ];
 
@@ -3021,6 +3110,25 @@ export function App() {
     }}
     onCancelAll={async () => { const client = clientRef.current; if (!client) return; await client.request("timers.cancelAll", {}); await refreshAiStatuses(client); }} />;
 
+  const projectProcessStates: Record<string, RunProjectProcess> = { ...runProjectProcesses, java: { ...(runProjectProcesses.java ?? { log: "" }), running: javaRunning || !!runProjectProcesses.java?.running } };
+  const runProjectActions = {
+    projects: runProjects, selectedLanguage,
+    processes: projectProcessStates,
+    busy: runProjectBusy || taskSwitching || status !== "connected",
+    onSelect: (language: string, id: string) => { void selectProjectRunConfiguration(language, id); },
+    onConfigure: (language: string) => { setSelectedLanguage(language); setRunConfigurationEditor(language); },
+    onRun: (language: string, debug?: boolean) => { void launchProjectConfiguration(language, debug); },
+    onStop: (language: string) => { void stopProjectConfiguration(language); }
+  };
+  const runConfigurationsPane = <RunConfigurationsPanel key="runConfigurations" {...runProjectActions} onClose={() => setRunConfigurationsOpen(false)} onRefresh={() => { void refreshRunProjects().catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : "Could not refresh run configurations")); }} onClear={(language) => setRunProjectProcesses((states) => ({ ...states, [language]: { ...(states[language] ?? { running: false }), log: "" } }))} />;
+  const rightBottomTools = <><div className="tool-stripe-spacer" aria-hidden="true" /><div className="right-bottom-tools">
+    <button className={`tool-stripe-button right ${rightPanels.useful ? "active" : ""}`} title={rightPanels.useful ? "Hide Useful Files" : "Show Useful Files"} onClick={() => setRightPanels((current) => { if (!current.useful) void refreshUsefulFiles(); return { ...current, useful: !current.useful }; })}><Bookmark size={15} /><span>Useful</span></button>
+    <button className={`tool-stripe-button right ${runConfigurationsOpen ? "active" : ""}`} aria-label="Run Configurations" title={runConfigurationsOpen ? "Hide Run Configurations" : "Show Run Configurations"} onClick={() => setRunConfigurationsOpen((open) => !open)}><Play size={15} /><span>Run</span></button>
+    <button className={`tool-stripe-button right ${rightPanels.agents ? "active" : ""}`} title={rightPanels.agents ? "Hide Agents" : "Show Agents"} onClick={() => setRightPanels((current) => { if (!current.agents) void refreshAgents(); return { ...current, agents: !current.agents }; })}><Bot size={15} /><span>Agents</span></button>
+    <button className={`tool-stripe-button right ${rightPanels.skills ? "active" : ""}`} title={rightPanels.skills ? "Hide Skills" : "Show Skills"} onClick={() => setRightPanels((current) => { if (!current.skills) void refreshSkills(); return { ...current, skills: !current.skills }; })}><GraduationCap size={15} /><span>Skills</span></button>
+    <SidebarExtentButton edge="right" extended={rightSidebarExtended} onChange={setRightSidebarExtended} />
+  </div></>;
+  const ProjectConfigurationEditor = runConfigurationEditor ? projectConfigurationEditors[runConfigurationEditor] ?? GenericProjectConfigurationDialog : undefined;
   // Keep live buffers mounted during automatic recovery; commands still see disconnected.
   if (status !== "connected" && status !== "disconnected") return <ConnectionScreen {...{ host, port, status, statusMessage, setHost, setPort, connect }} />;
 
@@ -3037,13 +3145,7 @@ export function App() {
       <div className="workspace-identity" title={activeWorkspace}><Workflow size={20} /><span>{projectName}</span></div>
       <BranchPicker current={gitBranch} menu={branchMenu} onToggle={() => void toggleBranchMenu()} onClose={() => setBranchMenu(undefined)} onRefresh={() => void loadBranchMenu()} onCreate={() => void createBranch()} onCheckout={checkoutBranch} onRename={renameBranch} onDelete={deleteBranch} onPublish={publishBranch} onSetUpstream={setBranchUpstream} />
       <div className="titlebar-spacer" />
-      {javaOptions && <div className="top-java-run" role="toolbar" aria-label="Java run controls">
-        <button aria-label="Run selected Java configuration" title="Run selected Java configuration" disabled={javaRunning || !javaOptions.selectedRunConfigurationId} onClick={() => void runJavaAction("language.run")}><Play size={14} /></button>
-        <button aria-label="Debug selected Java configuration" title="Debug selected Java configuration" disabled={javaRunning || !javaOptions.selectedRunConfigurationId} onClick={() => void debugJava()}><Bug size={14} /></button>
-        <button aria-label="Stop Java process" title="Stop Java process" disabled={!javaRunning} onClick={() => void stopJava()}><Square size={13} /></button>
-        <button aria-label="Edit Java run/debug configuration" title="Edit Java run/debug configuration" onClick={() => setShowRunConfigurationDialog(true)}><Settings size={14} /></button>
-        <select aria-label="Java run configuration" value={javaOptions.selectedRunConfigurationId ?? ""} onChange={(event) => event.target.value === "__create__" ? setShowRunConfigurationDialog(true) : void selectRunConfiguration(event.target.value)}><option value="" disabled>Select run configuration</option>{javaOptions.runConfigurations.map((configuration) => <option key={configuration.id} value={configuration.id}>{configuration.name}</option>)}<option value="__create__">Edit configurations…</option></select>
-      </div>}
+      <RunConfigurationToolbar {...runProjectActions} />
       {storageOpen && clientRef.current && <StoragePanel client={clientRef.current} onClose={() => setStorageOpen(false)} />}{aiProvidersOpen && clientRef.current && <AiProvidersPanel client={clientRef.current} onClose={() => setAiProvidersOpen(false)} onChanged={() => void refreshAiProviders()} />}{pluginsOpen && clientRef.current && <PluginsPanel client={clientRef.current} onClose={() => setPluginsOpen(false)} />}{toolsOpen && clientRef.current && <ToolsPanel client={clientRef.current} onClose={() => setToolsOpen(false)} />}<div className="workspace-utilities"><FocusModeButton active={focusMode} onChange={changeFocusMode} /><span className="workspace-utility-divider" aria-hidden="true" /><ConnectionMenu host={host} port={port} connected={status === "connected"} onDisconnect={disconnect} /><div className="settings-anchor"><button className="workspace-settings-button" aria-label="Settings" title="Settings" aria-expanded={settingsOpen} onClick={() => setSettingsOpen((open) => !open)}><Settings size={16} /><span>Settings</span></button>{settingsOpen && <SettingsMenu onClose={() => setSettingsOpen(false)} onStorage={() => { setSettingsOpen(false); setStorageOpen(true); }} onAiProviders={() => { setSettingsOpen(false); setAiProvidersOpen(true); }} onPlugins={() => { setSettingsOpen(false); setPluginsOpen(true); }} onTools={() => { setSettingsOpen(false); setToolsOpen(true); }} workspace={activeWorkspace} sideLayout={sideLayout} onSideLayoutChange={changeSideLayout} commands={commands} shortcutBindings={shortcutBindings} platform={platform} onShortcutChange={changeShortcut} onShortcutsReset={resetShortcuts} values={{ theme, highlightTheme, uiFontFamily, uiFontWeight, uiFontSize, uiLineHeight }} isWorkspaceOverride={(setting) => hasWorkspaceSetting(activeWorkspace, setting)} onChange={(setting, value) => { workspaceDefaultsRef.current.delete(setting); if (setting === "theme") setTheme(value as DesktopSettings["theme"]); else if (setting === "highlightTheme") setHighlightTheme(value as DesktopSettings["highlightTheme"]); else if (setting === "uiFontFamily") setUiFontFamily(value as DesktopSettings["uiFontFamily"]); else if (setting === "uiFontWeight") setUiFontWeight(value as number); else if (setting === "uiFontSize") setUiFontSize(value as number); else setUiLineHeight(value as number); }} onReset={(setting) => { resetWorkspaceSetting(activeWorkspace, setting); workspaceDefaultsRef.current.add(setting); const value = readSetting(setting); if (setting === "theme") setTheme(value === "dark" ? "dark" : "light"); else if (setting === "highlightTheme") setHighlightTheme(value === "ftpud" || value === "ftpud-dark" ? "ftpud" : "default"); else if (setting === "uiFontFamily") setUiFontFamily(value === "jetbrains" ? "jetbrains" : "inter"); else if (setting === "uiFontWeight") setUiFontWeight(readSettingNumber(setting, 450, 350, 600)); else if (setting === "uiFontSize") setUiFontSize(readSettingNumber(setting, 13, 10, 20)); else setUiLineHeight(readSettingNumber(setting, 1.2, 1, 2)); setSettingsRevision((revision) => revision + 1); }} />}</div></div>
     </header>
     <div className={`workspace-row${leftSidebarExtended ? " extend-left" : ""}${rightSidebarExtended ? " extend-right" : ""}`}>
@@ -3079,8 +3181,6 @@ export function App() {
         <button className={`tool-stripe-button ${classicSideView === "git" ? "active" : ""}`} title="Git changes" onClick={() => { selectClassicSideView("git"); void refreshGit(); }}><GitBranch size={15} /><span>Git</span>{gitEntries.length > 0 && <span className="tool-badge">{gitEntries.length > 99 ? "99+" : gitEntries.length}</span>}</button>
         {selectedTaskId && <button className={`tool-stripe-button ${classicSideView === "taskGit" ? "active" : ""}`} title="Changes from task base branch" onClick={() => { selectClassicSideView("taskGit"); void refreshTaskGit(); }}><GitCompareArrows size={15} /><span>Task Git</span>{taskGitEntries.length > 0 && <span className="tool-badge">{taskGitEntries.length > 99 ? "99+" : taskGitEntries.length}</span>}</button>}
         {selectedTaskId && <button className={`tool-stripe-button ${rightPanels.promptHistory ? "active" : ""}`} title={rightPanels.promptHistory ? "Hide Prompt History" : "Show Prompt History"} onClick={() => setRightPanels((current) => { if (!current.promptHistory) void refreshTaskGit(); return { ...current, promptHistory: !current.promptHistory }; })}><History size={15} /><span>History</span>{taskCheckpoints.length > 0 && <span className="tool-badge">{taskCheckpoints.length > 99 ? "99+" : taskCheckpoints.length}</span>}</button>}
-        <button className={`tool-stripe-button ${classicSideView === "useful" ? "active" : ""}`} title="Useful Files" onClick={() => { selectClassicSideView("useful"); void refreshUsefulFiles(); }}><Bookmark size={15} /><span>Useful</span></button>
-        <button className={`tool-stripe-button ${classicSideView === "agents" ? "active" : ""}`} title="Agents" onClick={() => { selectClassicSideView("agents"); void refreshAgents(); }}><Bot size={15} /><span>Agents</span></button>
         <button className={`tool-stripe-button ${classicSideView === "workflowRuns" ? "active" : ""}`} title="Workflows · View / Run" onClick={() => { selectClassicSideView("workflowRuns"); void Promise.all([refreshHarnesses(), refreshHarnessRuns()]); }}><Play size={15} /><span>Workflows</span></button>
         {javaOptions && <button className={`tool-stripe-button ${classicSideView === "java" ? "active" : ""}`} title="Java project" onClick={() => { selectClassicSideView("java"); void refreshJavaTree(); }}><Coffee size={15} /><span>Java</span></button>}
         <div className="tool-stripe-bottom">
@@ -3140,7 +3240,8 @@ export function App() {
       <div className="workspace-sidebar workspace-sidebar-right">
       {sideLayout === "ai-focused" ? <>
       {rightSidebarOpen && <><div className="right-resize-handle" role="separator" aria-label="Resize right sidebar" aria-orientation="vertical" aria-valuemin={180} aria-valuemax={Math.round(Math.min(700, window.innerWidth * .55))} aria-valuenow={Math.round(rightSidebarWidth)} tabIndex={0} onKeyDown={(event) => keyboardResize(event, rightSidebarWidth, setRightSidebarWidth, 180, Math.min(700, window.innerWidth * .55), true)} onPointerDown={beginRightSidebarResize} />
-      <aside className="side-panel side-panel-right" style={{ width: rightSidebarWidth }}><ResizablePanelStack workspace={activeWorkspace} setting="focused.rightSizes" ids={[...(rightPanels.project ? ["project"] : []), ...(rightPanels.git ? ["git"] : []), ...(rightPanels.taskGit && selectedTaskId ? ["taskGit"] : []), ...(rightPanels.promptHistory && selectedTaskId ? ["promptHistory"] : []), ...(rightPanels.java && javaOptions ? ["java"] : []), ...(rightPanels.useful ? ["useful"] : []), ...(rightPanels.agents ? ["agents"] : []), ...(rightPanels.skills ? ["skills"] : [])]}>
+      <aside className="side-panel side-panel-right" style={{ width: rightSidebarWidth }}><ResizablePanelStack workspace={activeWorkspace} setting="focused.rightSizes" ids={[...(runConfigurationsOpen ? ["runConfigurations"] : []), ...(rightPanels.project ? ["project"] : []), ...(rightPanels.git ? ["git"] : []), ...(rightPanels.taskGit && selectedTaskId ? ["taskGit"] : []), ...(rightPanels.promptHistory && selectedTaskId ? ["promptHistory"] : []), ...(rightPanels.java && javaOptions ? ["java"] : []), ...(rightPanels.useful ? ["useful"] : []), ...(rightPanels.agents ? ["agents"] : []), ...(rightPanels.skills ? ["skills"] : [])]}>
+        {runConfigurationsOpen && runConfigurationsPane}
         {rightPanels.project && <section key="project" className="stacked-panel">
           <header className="panel-header"><span>Project</span><div className="panel-header-actions"><button title={showIgnored ? "Hide ignored files" : "Show all files (including Git-ignored)"} className={showIgnored ? "active" : ""} onClick={toggleShowIgnored}>{showIgnored ? <Eye size={14} /> : <EyeOff size={14} />}</button><button title="Synchronize files" onClick={() => void refreshTree()}><RefreshCw size={14} /></button></div></header>
           <QuickFilter value={projectFilter} placeholder={projectContentFilter ? "Filter by file contents" : "Filter files"} label={projectContentFilter ? "Filter files by contents" : "Filter project files"} onChange={setProjectFilter} contentSearch={projectContentFilter} contentSearchLoading={projectContentFilterLoading} onContentSearchChange={setProjectContentFilter} />
@@ -3166,12 +3267,13 @@ export function App() {
         {selectedTaskId && <button className={`tool-stripe-button right ${rightPanels.taskGit ? "active" : ""}`} title={rightPanels.taskGit ? "Hide Task Git" : "Show Task Git"} onClick={toggleFocusedTaskGit}><GitCompareArrows size={15} /><span>Task Git</span>{taskGitEntries.length > 0 && <span className="tool-badge">{taskGitEntries.length > 99 ? "99+" : taskGitEntries.length}</span>}</button>}
         {selectedTaskId && <button className={`tool-stripe-button right ${rightPanels.promptHistory ? "active" : ""}`} title={rightPanels.promptHistory ? "Hide Prompt History" : "Show Prompt History"} onClick={() => setRightPanels((current) => { if (!current.promptHistory) void refreshTaskGit(); return { ...current, promptHistory: !current.promptHistory }; })}><History size={15} /><span>History</span>{taskCheckpoints.length > 0 && <span className="tool-badge">{taskCheckpoints.length > 99 ? "99+" : taskCheckpoints.length}</span>}</button>}
         {javaOptions && <button className={`tool-stripe-button right ${rightPanels.java ? "active" : ""}`} title={rightPanels.java ? "Hide Java project" : "Show Java project"} onClick={() => setRightPanels((current) => { if (!current.java) void refreshJavaTree(); return { ...current, java: !current.java }; })}><Coffee size={15} /><span>Java</span></button>}
-        <button className={`tool-stripe-button right ${rightPanels.useful ? "active" : ""}`} title={rightPanels.useful ? "Hide Useful Files" : "Show Useful Files"} onClick={() => setRightPanels((current) => { if (!current.useful) void refreshUsefulFiles(); return { ...current, useful: !current.useful }; })}><Bookmark size={15} /><span>Useful</span></button>
-        <button className={`tool-stripe-button right ${rightPanels.agents ? "active" : ""}`} title={rightPanels.agents ? "Hide Agents" : "Show Agents"} onClick={() => setRightPanels((current) => { if (!current.agents) void refreshAgents(); return { ...current, agents: !current.agents }; })}><Bot size={15} /><span>Agents</span></button>
-        <button className={`tool-stripe-button right ${rightPanels.skills ? "active" : ""}`} title={rightPanels.skills ? "Hide Skills" : "Show Skills"} onClick={() => setRightPanels((current) => { if (!current.skills) void refreshSkills(); return { ...current, skills: !current.skills }; })}><GraduationCap size={15} /><span>Skills</span></button>
-      <div className="tool-stripe-bottom"><SidebarExtentButton edge="right" extended={rightSidebarExtended} onChange={setRightSidebarExtended} /></div></nav></FocusDock>
+        {rightBottomTools}
+      </nav></FocusDock>
       </> : <>
-      {(classicTasksOpen || classicAiOpen || rightPanels.skills || (rightPanels.promptHistory && selectedTaskId)) && <><div className="right-resize-handle" role="separator" aria-label="Resize right sidebar" aria-orientation="vertical" aria-valuemin={240} aria-valuemax={Math.round(Math.min(960, window.innerWidth * .72))} aria-valuenow={Math.round(classicRightWidth)} tabIndex={0} onKeyDown={(event) => keyboardResize(event, classicRightWidth, setClassicRightWidth, 240, Math.min(960, window.innerWidth * .72), true)} onPointerDown={beginClassicRightResize} /><aside className="side-panel classic-right-panel" style={{ width: classicRightWidth }}>
+      {(runConfigurationsOpen || rightPanels.useful || rightPanels.agents || classicTasksOpen || classicAiOpen || rightPanels.skills || (rightPanels.promptHistory && selectedTaskId)) && <><div className="right-resize-handle" role="separator" aria-label="Resize right sidebar" aria-orientation="vertical" aria-valuemin={240} aria-valuemax={Math.round(Math.min(960, window.innerWidth * .72))} aria-valuenow={Math.round(classicRightWidth)} tabIndex={0} onKeyDown={(event) => keyboardResize(event, classicRightWidth, setClassicRightWidth, 240, Math.min(960, window.innerWidth * .72), true)} onPointerDown={beginClassicRightResize} /><aside className="side-panel classic-right-panel" style={{ width: classicRightWidth }}>
+        {runConfigurationsOpen && runConfigurationsPane}
+        {rightPanels.useful && <section key="useful" className="stacked-panel"><header className="panel-header"><span>Useful Files</span><button title="Refresh useful files" onClick={() => void refreshUsefulFiles()}><RefreshCw size={14} /></button></header><div className="useful-files-list"><UsefulFileSection title="Global" scope="global" files={usefulFiles} activeTab={activeTab} onOpen={openUsefulFile} onCreate={(scope) => setUsefulDialog({ mode: "create", scope })} onRename={(file) => setUsefulDialog({ mode: "rename", scope: file.scope, file })} onDelete={(file) => void deleteUsefulFile(file)} /><UsefulFileSection title="Local" scope="local" files={usefulFiles} activeTab={activeTab} onOpen={openUsefulFile} onCreate={(scope) => setUsefulDialog({ mode: "create", scope })} onRename={(file) => setUsefulDialog({ mode: "rename", scope: file.scope, file })} onDelete={(file) => void deleteUsefulFile(file)} /></div></section>}
+        {rightPanels.agents && <section key="agents" className="stacked-panel"><AgentsPanel agents={agents} activeTab={activeTab} onRefresh={() => void refreshAgents()} onOpen={(file) => void openAgentFile(file)} onCreate={(scope) => setAgentDialog({ mode: "create", scope })} onRename={(file) => { if (file.scope !== "workspace") setAgentDialog({ mode: "rename", scope: file.scope, file }); }} onDelete={(file) => void deleteAgent(file)} /></section>}
         {classicTasksOpen && <section className="stacked-panel" style={classicAiOpen ? { flex: `0 0 ${classicSplit}%` } : undefined}><header className="panel-header"><span>Tasks</span><button title="Create task" disabled={taskSwitching} onClick={() => setShowCreateTaskDialog(true)}><Plus size={15} /></button></header><div className="task-filters"><QuickFilter value={taskFilter} placeholder="Filter tasks" label="Filter tasks" onChange={setTaskFilter} /><select aria-label="Task lifecycle filter" value={taskLifecycleFilter} onChange={(event) => setTaskLifecycleFilter(event.target.value as typeof taskLifecycleFilter)}><option value="active">Active</option><option value="finished">Finished</option><option value="archived">Archived</option><option value="all">All</option></select></div><div className="tasks-list">
           {showRootTask && <TaskRow icon={<Folder size={15} />} name="Root workspace" summary={aiStatuses.root} selected={selectedTaskId === undefined} disabled={taskSwitching} onClick={() => openTask(undefined, aiStatuses.root.pendingPermission)} onCancelTimer={() => void timerAction(undefined, "cancel")} onFireTimer={() => void timerAction(undefined, "fire")} />}
           {filteredTasks.map((task) => { const summary = aiStatuses.tasks[task.id] ?? emptyAiSummary; return <TaskRow key={task.id} icon={<ListTodo size={15} />} name={task.name} branch={task.branch} summary={summary} finished={task.status === "finished"} archived={task.archived} selected={selectedTaskId === task.id} disabled={taskSwitching} onClick={() => openTask(task.id, summary.pendingPermission)} onSetFinished={() => void setTaskStatus(task, task.status === "finished" ? "active" : "finished")} onRename={() => void renameTask(task)} onSetArchived={() => void setTaskArchived(task, !task.archived)} onMerge={() => setMergeDialog(task)} onDelete={() => void deleteTask(task)} onCancelTimer={() => void timerAction(task, "cancel")} onFireTimer={() => void timerAction(task, "fire")} />; })}
@@ -3182,7 +3284,7 @@ export function App() {
         {rightPanels.skills && <section className="stacked-panel"><SkillsPanel key={activeWorkspace} catalog={skillCatalog} agents={agents} agentPreset={selectedAgentReference} selected={selectedSkillIds} running={aiSession.status === "in_progress"} disabled={taskSwitching} onRefresh={() => refreshSkills()} onSelection={selectSkills} onOpen={openSkillFile} activeSkillId={activeTab?.type === "skill" ? activeTab.skillId : undefined} actions={skillActions} /></section>}
         {rightPanels.promptHistory && selectedTaskId && <TaskCheckpointHistory checkpoints={taskCheckpoints} onOpen={openCheckpointDiff} onReview={reviewCheckpointFile} onRestore={restoreCheckpoint} onFollowUp={followUpCheckpoint} onClose={() => setRightPanels((current) => ({ ...current, promptHistory: false }))} />}
       </aside></>}
-      <FocusDock edge="right" active={focusMode}><nav className="right-tool-stripe" aria-label="Right tool windows"><button className={`tool-stripe-button right ${classicTasksOpen ? "active" : ""}`} title={classicTasksOpen ? "Hide Tasks" : "Show Tasks"} onClick={() => setClassicTasksOpen((open) => !open)}><ListTodo size={15} /><span>Tasks</span>{tasks.length > 0 && <span className="tool-badge">{tasks.length > 99 ? "99+" : tasks.length}</span>}</button><button className={`tool-stripe-button right ${classicAiOpen ? "active" : ""}`} title={classicAiOpen ? "Hide AI" : "Show AI"} onClick={() => { setClassicAiOpen((open) => { if (!open) void refreshAi(); return !open; }); }}><Sparkles size={15} /><span>AI</span>{aiSession.status === "in_progress" && <span className="tool-badge">...</span>}</button><button className={`tool-stripe-button right ${rightPanels.skills ? "active" : ""}`} title={rightPanels.skills ? "Hide Skills" : "Show Skills"} onClick={() => { setRightPanels((current) => ({ ...current, skills: !current.skills })); void refreshSkills(); }}><GraduationCap size={15} /><span>Skills</span></button><div className="tool-stripe-bottom"><SidebarExtentButton edge="right" extended={rightSidebarExtended} onChange={setRightSidebarExtended} /></div></nav></FocusDock>
+      <FocusDock edge="right" active={focusMode}><nav className="right-tool-stripe" aria-label="Right tool windows"><button className={`tool-stripe-button right ${classicTasksOpen ? "active" : ""}`} title={classicTasksOpen ? "Hide Tasks" : "Show Tasks"} onClick={() => setClassicTasksOpen((open) => !open)}><ListTodo size={15} /><span>Tasks</span>{tasks.length > 0 && <span className="tool-badge">{tasks.length > 99 ? "99+" : tasks.length}</span>}</button><button className={`tool-stripe-button right ${classicAiOpen ? "active" : ""}`} title={classicAiOpen ? "Hide AI" : "Show AI"} onClick={() => { setClassicAiOpen((open) => { if (!open) void refreshAi(); return !open; }); }}><Sparkles size={15} /><span>AI</span>{aiSession.status === "in_progress" && <span className="tool-badge">...</span>}</button>{rightBottomTools}</nav></FocusDock>
       </>}
       </div>
       <div className="workspace-bottom-panels">
@@ -3194,7 +3296,6 @@ export function App() {
     </div>
     <FocusDock edge="bottom" active={focusMode}><footer className="bottom-tool-bar">
       <button className={`bottom-tool-button ${layout.panels.some((panel) => panel.type === "terminal") ? "active" : ""}`} onClick={toggleTerminalPanel}><SquareTerminal size={14} /><span>Terminal</span>{hasUnreadTerminalOutput && <span className="terminal-activity-dot" role="img" aria-label="New terminal output" />}{layout.terminalGroup.tabs.length > 0 && <span className="bottom-tool-count">{layout.terminalGroup.tabs.length}</span>}</button>
-      <button className="bottom-tool-button" onClick={() => openLanguageTools()}><FileCode2 size={14} /><span>Languages</span></button>
       {javaOptions && <button className={`bottom-tool-button ${layout.panels.some((panel) => panel.type === "languageOutput") ? "active" : ""}`} onClick={toggleJavaPanel}><Coffee size={14} /><span>Java</span>{javaRunning && <span className="running-indicator" />}</button>}
       {javaOptions && <button className={`bottom-tool-button ${layout.panels.some((panel) => panel.type === "problems") ? "active" : ""}`} onClick={toggleProblemsPanel}><CircleAlert size={14} /><span>Problems</span>{javaDiagnostics.length > 0 && <span className="bottom-tool-count">{javaDiagnostics.length}</span>}</button>}
       <button className={`bottom-tool-button ${layout.panels.some((panel) => panel.type === "gitlog") ? "active" : ""}`} onClick={toggleGitLogPanel}><GitBranch size={14} /><span>Git</span></button>
@@ -3217,7 +3318,7 @@ export function App() {
         <div className="context-menu-separator" role="separator" />
         <div className="context-submenu-trigger"><button role="menuitem" aria-haspopup="menu" aria-label="Copy paths"><ClipboardCopy size={14} /><span>Copy Paths</span><ChevronRight size={13} /></button><ContextMenu className="context-menu context-submenu copy-submenu" role="menu" aria-label="Copy path actions">{copyProjectTreeActions.map(({ action, label }) => <button key={action} role="menuitem" onClick={() => { runProjectTreeAction(action, treeContextMenu.nodes); setTreeContextMenu(undefined); }}><ClipboardCopy size={14} /><span>{label}</span></button>)}</ContextMenu></div>
         <div className="context-menu-separator" role="separator" />
-        {treeContextMenu.nodes.length === 1 && treeContextMenu.nodes[0]?.type === "file" && treeContextMenu.nodes[0].name === "pom.xml" && <button onClick={() => void loadMavenProject(treeContextMenu.nodes[0]!.path)}><Package size={14} /><span>Load as Maven Project</span></button>}
+        {treeContextMenu.nodes.length === 1 && treeContextMenu.nodes[0]?.type === "file" && projectRegistration(treeContextMenu.nodes[0].path) && <button role="menuitem" disabled={runProjectBusy || taskSwitching} onClick={() => void registerRunProject(treeContextMenu.nodes[0]!.path)}><Package size={14} /><span>{projectRegistration(treeContextMenu.nodes[0].path)!.label}</span></button>}
         {treeContextMenu.nodes.length === 1 && javaOptions && treeContextMenu.nodes[0]?.type === "directory" && treeContextMenu.nodes[0].path && <button onClick={() => void addJavaSourceRoot(treeContextMenu.nodes[0]!.path)}><Coffee size={14} /><span>Mark as Sources Root</span></button>}
         {treeContextMenu.nodes.length === 1 && treeContextMenu.nodes[0]?.path && <div className="context-submenu-trigger"><button><Palette size={14} /><span>Color</span><ChevronRight size={13} /></button><ContextMenu className="context-menu context-submenu color-submenu">{fileColorChoices.map((color) => <button key={color.id} onClick={() => { const target = treeContextMenu.nodes[0]!.path; setFileColors((current) => ({ ...current, [target]: color.id })); setTreeContextMenu(undefined); }}><span className={`file-color-swatch ${color.id}`} /><span>{color.label}</span>{fileColors[treeContextMenu.nodes[0]!.path] === color.id && <Check size={13} />}</button>)}<button disabled={!fileColors[treeContextMenu.nodes[0]!.path]} onClick={() => { const target = treeContextMenu.nodes[0]!.path; setFileColors((current) => { const next = { ...current }; delete next[target]; return next; }); setTreeContextMenu(undefined); }}><X size={14} /><span>Clear Color</span></button></ContextMenu></div>}
         <button className="danger" disabled={treeContextMenu.nodes.length !== 1} onClick={() => { runProjectTreeAction("delete", treeContextMenu.nodes); setTreeContextMenu(undefined); }}><Trash2 size={14} /><span>Delete...</span></button>
@@ -3255,7 +3356,12 @@ export function App() {
     {gitRebaseDialog && <GitRebaseDialog preview={gitRebaseDialog.preview} busy={gitRebasing} error={gitRebaseDialog.error} onClose={() => { if (!gitRebasing) setGitRebaseDialog(undefined); }} onConfirm={(items) => void executeInteractiveRebase(items)} />}
     {gitHunkDialog && <div className="context-menu-layer" onMouseDown={() => setGitHunkDialog(undefined)}><section className="git-hunk-popup" role="dialog" aria-label={`Previous content in ${gitHunkDialog.path}`} style={{ left: gitHunkDialog.x, top: gitHunkDialog.y }} onMouseDown={(event) => event.stopPropagation()}><header><div><strong>Before this change</strong><span>{gitHunkDialog.path.split("/").pop()} · line {gitHunkDialog.hunk.originalStart}</span></div><button title="Close" onClick={() => setGitHunkDialog(undefined)}><X size={14} /></button></header>{gitHunkDialog.error && <div className="git-hunk-error">{gitHunkDialog.error}</div>}<pre>{gitHunkDialog.hunk.originalLines === 0 ? "This block did not exist before." : gitHunkDialog.originalContent.split("\n").slice(Math.max(0, gitHunkDialog.hunk.originalStart - 1), Math.max(0, gitHunkDialog.hunk.originalStart - 1) + gitHunkDialog.hunk.originalLines).join("\n")}</pre><footer>{gitHunkDialog.hunk.source === "worktree" ? <button onClick={() => void updateGitIndex("stage", gitHunkDialog.path, gitHunkDialog.hunk)}><Check size={13} /><span>Stage Hunk</span></button> : <button onClick={() => void updateGitIndex("unstage", gitHunkDialog.path, gitHunkDialog.hunk)}><X size={13} /><span>Unstage Hunk</span></button>}<button className="danger" disabled={gitHunkDialog.hunk.source !== "worktree"} onClick={() => void rollbackGitHunk()}><RefreshCw size={13} /><span>Rollback</span></button></footer></section></div>}
     {externalConflict && <ExternalChangeConflict dialog={externalConflict} onClose={() => setExternalConflict(undefined)} onReload={() => { updateGroup((tabs, active) => ({ tabs: tabs.map((tab) => tab.id === externalConflict.tabId ? { ...tab, content: externalConflict.externalContent, savedContent: externalConflict.externalContent, revision: externalConflict.externalRevision, dirty: false, error: undefined } : tab), activeTabId: active })); setExternalConflict(undefined); }} onOverwrite={() => { const tab = layoutRef.current.editorGroups[0]?.tabs.find((item) => item.id === externalConflict.tabId); if (!tab || !clientRef.current) return; void clientRef.current.request("filesystem.writeFile", { path: externalConflict.path, content: tab.content, expectedRevision: externalConflict.externalRevision, force: true }).then((saved) => { updateGroup((tabs, active) => ({ tabs: tabs.map((item) => item.id === tab.id ? { ...item, savedContent: tab.content, dirty: false, revision: saved.revision, error: undefined } : item), activeTabId: active })); setExternalConflict(undefined); }).catch((error: unknown) => setExternalConflict((current) => current ? { ...current, error: error instanceof Error ? error.message : "Could not overwrite" } : current)); }} onSaveAs={(target) => { const tab = layoutRef.current.editorGroups[0]?.tabs.find((item) => item.id === externalConflict.tabId); if (!tab || !clientRef.current) return; void clientRef.current.request("filesystem.writeFile", { path: target, content: tab.content, create: true }).then(() => { setExternalConflict(undefined); void refreshTree(); }).catch((error: unknown) => setExternalConflict((current) => current ? { ...current, error: error instanceof Error ? error.message : "Could not save as" } : current)); }} />}
-    {status === "connected" && clientRef.current && <LanguageTools key={`language-tools:${selectedRootId}:${selectedTaskId ?? ""}`} client={clientRef.current} languages={languages} selected={selectedLanguage} open={languageToolsOpen} onSelect={setSelectedLanguage} onClose={() => setLanguageToolsOpen(false)} onOpenFile={(path) => { setLanguageToolsOpen(false); void openFile({ name: path.split("/").pop() ?? path, path, type: "file" }); }} beforeLaunch={saveLaunchFiles} />}
+    {ProjectConfigurationEditor && clientRef.current && <ProjectConfigurationEditor key={`project-configuration:${selectedRootId}:${selectedTaskId ?? ""}:${runConfigurationEditor}`} client={clientRef.current} language={runConfigurationEditor} running={!!runProjectActions.processes[runConfigurationEditor ?? ""]?.running} onClose={() => setRunConfigurationEditor(undefined)} onSaved={() => {
+      setRunConfigurationEditor(undefined);
+      void refreshRunProjects();
+      const client = clientRef.current; const root = client?.getRoot(); const task = selectedTaskIdRef.current;
+      void client?.request("java.getOptions", {}).then(({ options }) => { if (clientRef.current === client && client.getRoot() === root && task === selectedTaskIdRef.current) { setJavaOptions(options); javaOptionsRef.current = options; } }).catch((error: unknown) => { if (clientRef.current === client && client?.getRoot() === root && task === selectedTaskIdRef.current) setStatusMessage(error instanceof Error ? error.message : "Could not refresh Java project"); });
+    }} />}
     {showRunConfigurationDialog && <JavaConfigurationDialog key={`java-configuration:${selectedRootId}`} client={clientRef.current!} running={javaRunning} onClose={() => setShowRunConfigurationDialog(false)} onSaved={(options) => { setJavaOptions(options); javaOptionsRef.current = options; setShowRunConfigurationDialog(false); void refreshJavaTree(); void refreshTree(); }} />}
     {showCreateTaskDialog && <CreateTaskDialog client={clientRef.current!} onClose={() => setShowCreateTaskDialog(false)} onCreate={createTask} />}
     {mergeDialog && <MergeTaskDialog task={mergeDialog} onClose={() => setMergeDialog(undefined)} onMerge={(strategy) => void mergeTask(mergeDialog, strategy)} />}

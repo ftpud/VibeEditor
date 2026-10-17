@@ -27,6 +27,67 @@ async function setup(blocks: HarnessBlock[], edges: HarnessEdge[], concurrency =
 // Workflow journals use disk-backed queues; allow bounded disk latency under the full CI suite.
 
 describe("typed workflows", () => {
+  it("lists room peers without consuming messages and shakes an offline peer at concurrency one", async () => {
+    const { runner, definition, finished } = await setup([block("lead", "ai"), block("peer", "chatbox"), block("outsider", "ai"), block("note", "text"), block("room", "meeting")], [edge("lead", "room", "use"), edge("peer", "room", "use")]);
+    const prompts: string[] = [];
+    await runner.start(definition.id, "Discuss", async (current, input, runtime) => {
+      const use = (args: Record<string, unknown>) => runner.flowTool(runtime.runId, current.id, "workflow_use_block", { block_id: "room", ...args });
+      if (current.id === "lead") {
+        await use({ action: "publish", message: "Plan" });
+        expect(await use({ action: "status" })).toMatchObject({ meeting: { peers: [
+          { blockId: "lead", self: true, online: true, block_status: "running" },
+          { blockId: "peer", self: false, online: false, hasSession: false }
+        ] } });
+        expect(await use({ action: "diff" })).toMatchObject({ meeting: { messages: [{ text: "Plan" }] } });
+        for (const peer_block_id of ["outsider", "lead", "note", "missing"]) await expect(use({ action: "shake", peer_block_id })).rejects.toThrow("another AI Agent or Chatbox connected");
+        await expect(use({ action: "shake", peer_block_id: "peer", message: " " })).rejects.toThrow("1 to 10000");
+        expect(await use({ action: "shake", peer_block_id: "peer", message: "Please review" })).toMatchObject({ meeting: { shake: { blockId: "peer", delivery: "started" } } });
+        expect(await use({ action: "wait", timeout_seconds: 2 })).toMatchObject({ meeting: { messages: [{ author: "peer", text: "Awake" }] } });
+      } else {
+        prompts.push(input);
+        await use({ action: "publish", message: "Awake" });
+      }
+      return session("Done");
+    }, "test", undefined, "lead");
+    expect((await finished()).status).toBe("succeeded");
+    expect(prompts).toHaveLength(1);
+    expect(prompts[0]).toContain('Shake from lead in Meeting "room" (room):\nPlease review');
+  });
+
+  it("targets live shakes and resumes an idle peer's existing session without broadcasting", async () => {
+    let release!: () => void;
+    const waiting = new Promise<void>((resolve) => { release = resolve; });
+    const steer = vi.fn(async () => session("Steered"));
+    const { runner, definition, finished } = await setup([block("lead", "chatbox"), block("peer", "ai"), block("room", "meeting")], [edge("lead", "room", "use"), edge("peer", "room", "use"), edge("lead", "peer", "use")], 2, steer);
+    let active = false;
+    const appended = vi.fn(async (_peer: HarnessBlock, input: string) => { expect(input).toContain("Please check the Meeting room and respond."); return session("Resumed"); });
+    await runner.start(definition.id, "Discuss", async (current, _input, runtime) => {
+      if (current.id === "peer") {
+        await runtime.started("/sessions/peer");
+        await runtime.activity({ ...session("Working"), status: "in_progress" });
+        active = true;
+        await waiting;
+      } else {
+        const use = (args: Record<string, unknown>) => runner.flowTool(runtime.runId, current.id, "workflow_use_block", { block_id: "room", ...args });
+        try {
+          await runner.flowTool(runtime.runId, current.id, "workflow_use_block", { block_id: "peer", action: "start", input: "Work" });
+          await vi.waitFor(() => expect(active).toBe(true));
+          expect(await use({ action: "status" })).toMatchObject({ meeting: { peers: [{ blockId: "lead" }, { blockId: "peer", online: true, hasSession: true }] } });
+          expect(await use({ action: "shake", peer_block_id: "peer", message: "Check in" })).toMatchObject({ meeting: { shake: { delivery: "steered" } } });
+          expect(steer).toHaveBeenCalledWith("test", "/sessions/peer", 'Shake from lead in Meeting "room" (room):\nCheck in');
+          expect(await use({ action: "diff" })).toMatchObject({ meeting: { messages: [] } });
+          release();
+          await vi.waitFor(async () => expect(await use({ action: "status" })).toMatchObject({ meeting: { peers: [{ blockId: "lead" }, { blockId: "peer", online: false, hasSession: true }] } }));
+          expect(await use({ action: "shake", peer_block_id: "peer" })).toMatchObject({ meeting: { shake: { delivery: "started" } } });
+        } finally { release(); }
+      }
+      return session("Done");
+    }, "test", appended, "lead");
+    expect((await finished()).status).toBe("succeeded");
+    expect(appended).toHaveBeenCalledOnce();
+    expect(steer).toHaveBeenCalledOnce();
+  });
+
   it("reports live block and action details for unjournaled waits and clears each completed call", async () => {
     const { runner, definition, finished } = await setup([block("chat", "chatbox"), block("room", "meeting", { prompt: "" })], [edge("chat", "room", "use")]);
     let ready!: () => void;

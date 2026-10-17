@@ -1,0 +1,42 @@
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { afterEach, expect, it, vi } from "vitest";
+import { RunConfigurationToolbar, RunConfigurationsPanel } from "./RunConfigurationsPanel";
+import { runConfigurationKey, type RunProject } from "./run-projects";
+afterEach(cleanup);
+const capabilities = { run: true, build: true, projectTree: true, configuration: true, debug: false, lsp: false, workspaceSymbols: false, runConfigurations: true };
+const npm: RunProject = { language: "node", name: "Web app", path: "web/package.json", capabilities, configurations: [{ id: "dev", name: "Development" }, { id: "test", name: "Tests" }], selectedId: "dev" };
+const java: RunProject = { language: "java", name: "Maven app", path: "pom.xml", capabilities: { ...capabilities, debug: true }, configurations: [{ id: "app", name: "Application" }], selectedId: "app" };
+const actions = () => ({ projects: [npm, java], selectedLanguage: "node", processes: {}, onSelect: vi.fn(), onConfigure: vi.fn(), onRun: vi.fn(), onStop: vi.fn() });
+it("explains registration instead of exposing unused language controls", () => {
+  const props = actions();
+  render(<RunConfigurationsPanel {...props} projects={[]} onClose={vi.fn()} onRefresh={vi.fn()} onClear={vi.fn()} />);
+  expect(screen.getByText("Add a project to get started")).toBeTruthy();
+  expect(screen.getByText("Add as npm project")).toBeTruthy();
+  expect(screen.getByText("Add as Maven project")).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "Run" })).toBeNull();
+});
+it("uses the sidebar and top bar to select and run the same project configuration", () => {
+  const props = actions();
+  const view = render(<RunConfigurationToolbar {...props} />);
+  expect(screen.queryByRole("button", { name: "Debug selected configuration" })).toBeNull();
+  fireEvent.change(screen.getByLabelText("Run configuration"), { target: { value: runConfigurationKey("java", "app") } });
+  expect(props.onSelect).toHaveBeenCalledWith("java", "app");
+  view.rerender(<RunConfigurationToolbar {...props} selectedLanguage="java" />);
+  fireEvent.click(screen.getByRole("button", { name: "Debug selected configuration" }));
+  expect(props.onRun).toHaveBeenCalledWith("java", true);
+  view.rerender(<RunConfigurationsPanel {...props} onClose={vi.fn()} onRefresh={vi.fn()} onClear={vi.fn()} />);
+  fireEvent.click(screen.getByRole("button", { name: /Tests/ }));
+  expect(props.onSelect).toHaveBeenCalledWith("node", "test");
+  fireEvent.click(screen.getByRole("button", { name: "Run" }));
+  expect(props.onRun).toHaveBeenCalledWith("node");
+});
+it("keeps Stop usable while a selected configuration is running", () => {
+  const props = { ...actions(), processes: { node: { running: true, log: "Server listening on port 3000" } } };
+  render(<><RunConfigurationToolbar {...props} /><RunConfigurationsPanel {...props} onClose={vi.fn()} onRefresh={vi.fn()} onClear={vi.fn()} /></>);
+  const toolbar = screen.getByRole("toolbar", { name: "Run configuration controls" });
+  expect(within(toolbar).getByRole("button", { name: "Run selected configuration" })).toHaveProperty("disabled", true);
+  expect(within(toolbar).getByRole("button", { name: "Stop selected project" })).toHaveProperty("disabled", false);
+  fireEvent.click(within(toolbar).getByRole("button", { name: "Stop selected project" }));
+  expect(props.onStop).toHaveBeenCalledWith("node");
+  expect(screen.getByLabelText("Web app output").textContent).toContain("Server listening");
+});

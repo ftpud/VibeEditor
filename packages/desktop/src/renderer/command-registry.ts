@@ -64,17 +64,10 @@ export function rankCommands(commands: Command[], query: string): Command[] {
 
 /** Contributions come from Core descriptors, including installed language plugins. */
 export function languageCommands(languages: LanguageDescriptor[], open: (language: string) => void): Command[] {
-  return languages.flatMap((language): Command[] => {
-    const entries: ["project" | "configuration" | "targets", string, boolean][] = [
-      ["project", "Open project tree", language.capabilities.projectTree],
-      ["configuration", "Edit configuration", language.capabilities.configuration],
-      ["targets", "Run configurations and targets", language.capabilities.run]
-    ];
-    return entries.filter(([, , supported]) => supported).map(([action, label]) => ({
-      id: `language.${language.id}.${action}`, label: `${language.name}: ${label}`, category: "Language",
-      when: (context) => context.connected && !context.taskSwitching, execute: () => open(language.id)
-    }));
-  });
+  return languages.filter((language) => language.capabilities.run).map((language) => ({
+    id: `language.${language.id}.targets`, label: `${language.name}: Run Configurations`, category: "Language",
+    when: (context) => context.connected && !context.taskSwitching, execute: () => open(language.id)
+  }));
 }
 
 export function isCommandId(value: unknown): value is CommandId {

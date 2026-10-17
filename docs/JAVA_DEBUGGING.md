@@ -1,7 +1,8 @@
 # Java debugging
 
-Load a Maven project, select a run configuration, set line breakpoints in Java
-source files, and choose **Debug**. Core builds the project with line and local
+Right-click `pom.xml` and choose **Add as Maven project**. Configure a launch
+profile in **Run Configurations**, set line breakpoints in Java source files,
+and choose **Debug** from the panel or top bar. Core builds the project with line and local
 variable debug information and launches `jdb` from the project JDK.
 
 ## Inspect a paused application

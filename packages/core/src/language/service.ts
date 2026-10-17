@@ -106,6 +106,11 @@ export interface LanguageService {
   detect(workspace: string): Promise<boolean>;
   /** Load or reload the project; returns the service's view of it. */
   load(input?: LanguageExtra): Promise<LanguageExtra>;
+  /**
+   * Convention for every service, so the UI needs no per-language branches:
+   * `{ configured: boolean, runConfigurations: { id, name }[], selectedRunConfigurationId?: string, ...language-specific }`.
+   * `configured` is false until the user adds the project (e.g. "Add as npm project").
+   */
   options(): Promise<LanguageExtra>;
   projectTree(): Promise<LanguageProjectNode[]>;
   addSourceRoot(path: string): Promise<void>;
@@ -119,6 +124,8 @@ export interface LanguageService {
   listRunTargets(): Promise<LanguageRunTarget[]>;
   addRunConfiguration(name: string, target: string): Promise<LanguageExtra>;
   selectRunConfiguration(id: string): Promise<LanguageExtra>;
+  /** Optional; services that advertise `runConfigurations` and let users delete entries implement it. */
+  removeRunConfiguration?(id: string): Promise<LanguageExtra>;
   build(): Promise<void>;
   run(): Promise<void>;
   stop(): void;

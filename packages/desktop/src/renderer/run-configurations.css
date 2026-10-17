@@ -1,0 +1,31 @@
+.run-configurations-panel { min-height: 0; height: 100%; display: flex; flex-direction: column; }
+.run-configurations-body { flex: 1; min-height: 0; overflow: auto; padding: 10px; }
+.run-configurations-empty { padding: 20px 8px; color: var(--text-muted); line-height: 1.6; }
+.run-configurations-empty > svg { color: var(--accent); }
+.run-configurations-empty h3 { color: var(--text-primary); font-size: 13px; }
+.run-configurations-empty p { margin: 10px 0; }
+.run-project-group { margin-bottom: 12px; border: 1px solid var(--border-subtle); border-radius: var(--radius-control); overflow: hidden; }
+.run-project-group > header { display: flex; align-items: center; justify-content: space-between; padding: 9px; background: var(--surface-panel); }
+.run-project-group header > div { min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.run-project-group small { color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.run-project-group button, .run-selection-actions button { border: 0; background: transparent; cursor: pointer; color: var(--text-secondary); }
+.run-project-group button:disabled, .run-selection-actions button:disabled { opacity: .4; cursor: default; }
+.run-project-group header button { padding: 5px; }
+.run-configuration-row, .run-config-add { width: 100%; display: flex; align-items: center; gap: 8px; padding: 9px; text-align: left; }
+.run-configuration-row > span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.run-configuration-row:hover, .run-config-add:hover { background: var(--surface-hover); }
+.run-configuration-row.selected { background: var(--accent-soft); color: var(--text-primary); }
+.run-selection-actions { display: flex; gap: 5px; padding: 4px 0 12px; }
+.run-selection-actions button { display: flex; gap: 5px; align-items: center; padding: 7px; border: 1px solid var(--border-subtle); border-radius: var(--radius-control); }
+.run-selection-actions .run-primary { color: var(--success); }
+.run-project-output { border-top: 1px solid var(--border-subtle); padding-top: 9px; }
+.run-project-output summary { display: flex; align-items: center; gap: 5px; cursor: pointer; color: var(--text-secondary); }
+.run-project-output summary span { margin-left: auto; font-size: 11px; color: var(--text-muted); }
+.run-project-output pre { max-height: 350px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font: 11px/1.5 monospace; }
+.run-output-clear { border: 0; background: transparent; color: var(--text-muted); cursor: pointer; display: block; margin: 7px 0 0 auto; }
+.run-configuration-error { color: var(--danger); white-space: pre-wrap; overflow-wrap: anywhere; }
+.right-tool-stripe .tool-stripe-spacer { flex: 1 0 16px; min-height: 16px; }
+.right-tool-stripe .right-bottom-tools { margin-top: 0; position: sticky; bottom: 0; display: flex; flex-direction: column; flex-shrink: 0; gap: 4px; width: 100%; background: inherit; }
+.project-run-toolbar button[aria-label="Stop selected project"] { color: var(--danger); }
+.project-run-toolbar button[aria-label="Edit run configurations"] { color: var(--text-secondary); }
+.project-run-toolbar button[aria-label="Debug selected configuration"] { color: var(--warning); }

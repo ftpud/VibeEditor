@@ -53,7 +53,7 @@ Reviewed in `packages/core/src/plugins/loader.ts`:
   separate process.
 - The renderer half (contributing UI bundles from the remote Core) is not
   implemented. Desktop lists plugin status and exposes language capabilities
-  through its shared Language tools view; plugins cannot supply custom UI bundles.
+  through its shared Run Configurations panel; plugins cannot supply custom UI bundles.
 
 ## Built-in plugin layout
 
@@ -78,16 +78,17 @@ host tools register through `registerTools`.
 
 ## Shared language controls
 
-The **Languages** button and **Open Language Tools** command discover services
-through `language.list` for the selected root/task. Descriptors contribute project,
-configuration and run-target commands. The shared view exposes only advertised
-capabilities and uses `language.*` operations for trees, revision-checked settings,
-build/run/stop, and debugger inspection/stepping.
+The **Run Configurations** right sidebar panel and command discover services
+through `language.list` for the selected root/task. Only configured projects
+contribute run choices to the sidebar and top bar. The shared controls use
+`language.*` operations and advertised capabilities; built-in Java and npm
+projects provide structured configuration forms. Other language plugins use a
+revision-checked configuration editor. See [run configurations](RUN_CONFIGS.md).
 
 `capabilities.runConfigurations` and `capabilities.sourceRoots` are optional and
 independent of `run` and `projectTree`. Services supporting run configurations
 return `runConfigurations` (entries with `id` and `name`) and
 `selectedRunConfigurationId` in `language.options` and add/select results. Other
 options remain opaque. Java advertises both capabilities; Node's npm-script
-service advertises neither. Java's Maven form and HotSwap details remain in its
+service supports run configurations but does not expose source-root editing. Java's Maven form and HotSwap details remain in its
 static Desktop contribution.

@@ -8,7 +8,7 @@ export const CONFIGURATION_AGENT_NAME = "vibe-configurator.md";
 export const CONFIGURATION_SKILL_ID = "global/vibe-self-configuration";
 export const CONFIGURATION_AGENT = `---
 name: Vibe Configurator
-description: Configure Vibe Editor workflows, triggers, agents, skills, tasks and useful files.
+description: Configure Vibe Editor workflows, triggers, agents, skills, tasks, run configurations and useful files.
 mcpServers:
   - vibe-editor
 ---
@@ -24,7 +24,7 @@ credentials unchanged, preserve the user's requested scope, and report what chan
 
 export const CONFIGURATION_SKILL = `---
 name: vibe-self-configuration
-description: Create or edit Vibe Editor workflows, agent presets, skills, task metadata and global or local useful files through the app configuration MCP interface.
+description: Create or edit Vibe Editor workflows, agent presets, skills, task metadata, run configurations and global or local useful files through the app configuration MCP interface.
 ---
 
 Use configuration_list to discover documents and their formats. The workspace
@@ -62,6 +62,15 @@ execution is separately requested. Task documents expose only name, status and a
 create or start tasks through task_create or task_create_and_start. Do not edit task
 worktree paths, branches, provider transcripts or workflow-run state as configuration.
 
+Run configurations are editable through languages/{id}.json (node for npm,
+java for Maven) in the invoking checkout. Read the plugin's defaults and preserve
+unrelated project settings. Set the project manifest path, named run profiles,
+selected profile, arguments, environment, working directory and tool overrides
+as requested. Saving registers the project and never starts a process. Shell
+configurations use runs/{local|global}/{name}.sh; their content is shell commands.
+Local shell configurations are shared by the root project's tasks. Read before
+writing and pass the returned revision, or null when creating a configuration.
+
 After a write, read back the resource and report the affected scope and behavior.
 The app receives a configuration change event and refreshes the relevant panels.
 Global agent and skill edits affect every project on this host; do not broaden a
@@ -95,6 +104,7 @@ loop. Triggers cannot be deleted through configuration; the Triggers panel does 
 
 // Exact fingerprints of previously shipped skills; never replace user-edited instructions.
 const PREVIOUS_CONFIGURATION_SKILL_HASHES = new Set([
+  "c75c693c7248e855cd6b2d26589c66593c43257f04b10e0a5baa46aee39a18af",
   "56930e7d161a65f291803724978469e20af359e3dc2a7e43c55e32cd9c901ea6",
   "22c077677a7c43786df14bc1fd7126b31a3901508aae14b3b7727229c61f5155",
   "497f968c35f9f855f3dcacab9aa0aafd0524567701ef97e2a1c5f88da87a457b",
@@ -103,7 +113,9 @@ const PREVIOUS_CONFIGURATION_SKILL_HASHES = new Set([
 
 /** Exact fingerprints of earlier shipped references, keyed by file name. */
 const PREVIOUS_REFERENCE_HASHES: Record<string, Set<string>> = {
-  "configuration.md": new Set(["268e8d9d5f5fbe4e2784f0d6381388d7840081c31c1e3e048134daac99dd1a2b"])
+  "blocks.md": new Set(["552a116bbe89d3faf58e23852218084d9850ef4c27d6d39210ee535f6640b86e"]),
+  "commands.md": new Set(["5054464943837a9225c2bc0d2b59e51443497642ff5e958209a89dc1d97892ff"]),
+  "configuration.md": new Set(["926ce68a7662b262f717bb9359cd6da26d90cdc0b4243184464bb6f4efad22c2", "268e8d9d5f5fbe4e2784f0d6381388d7840081c31c1e3e048134daac99dd1a2b"])
 };
 
 /** Install shipped global defaults on every Core host, preserving user edits. */

@@ -26,6 +26,19 @@ is the root project. Use catalogue IDs rather than guessed filesystem locations.
   pipe is created. Triggers cannot be deleted through configuration. Writing new.json
   creates one and returns its resource ID; use that for edits and retries.
 - tasks/{id}.json: existing task metadata only.
+- languages/{id}.json: invoking checkout project/run configuration. node is npm,
+  java is Maven. Reading a missing configuration returns editable plugin defaults
+  and null revision. Save the complete JSON to register the project. npm exposes
+  packageJsonPath, packageManager (npm|pnpm|yarn), executable, runConfigurations
+  ({id,name,script,arguments?,nodeOptions?,workingDirectory?,environmentFile?,environment?})
+  and selectedRunConfigurationId. Java exposes pomPath, mavenExecutable, javaHome,
+  mavenArguments, buildGoals, sourceRoots, outputPath, testOutputPath,
+  runConfigurations ({id,name,mainClass,programArguments?,vmArguments?,environment?,workingDirectory?})
+  and selectedRunConfigurationId. Use the actual returned document and preserve
+  unrelated fields. Native plugin validation and revision checks also apply.
+- runs/{local|global}/{name}.sh: shell command text. Create using null revision;
+  running configurations must be stopped before editing. Saving configurations
+  never launches a process.
 
 Global is shared across projects on this Core host. Local is Core state shared by
 all tasks of the root project. Workspace agents/skills are files in the invoking
@@ -234,6 +247,17 @@ starting new agent turns. Participants use workflow_use_block:
 - action:"diff", lines:20: read messages after this participant's last read.
   Optional after is an explicit nonnegative sequence number for replay/pagination.
   Omitted action defaults to diff. lines is 1–50, default 20.
+- action:"status": list peers connected to this room under meeting.peers. Each
+  entry includes blockId, name, type, self, online, block_status, hasSession and
+  provider. online means an active workflow turn (including waiting), not a network
+  heartbeat. Completed, failed or not-yet-started peers are offline.
+- action:"shake", peer_block_id:"PEER_ID", message:"Please check in": send a
+  targeted message to another AI Agent or Chatbox connected to this room. message
+  is optional (1–10000 characters if supplied); input is an alias. A running peer
+  receives live steering; an idle peer starts in the background, reusing its session
+  when available. Returns meeting.shake with blockId and delivery: started|steered.
+  Shakes do not broadcast to the room or advance transcript cursors. Use status
+  to discover IDs; you cannot shake yourself or unrelated blocks.
 - action:"fetch": alias of diff, the common incremental read for every data block.
 - action:"wait": return unread messages immediately, or wait for the next publish
   without polling. Uses the same lines/after options and saved cursor as diff.

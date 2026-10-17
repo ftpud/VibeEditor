@@ -86,6 +86,8 @@ participants when messages arrive. Agents use `workflow_use_block` with:
 {"block_id":"meeting","action":"tail","lines":20}
 {"block_id":"meeting","action":"diff","lines":20}
 {"block_id":"meeting","action":"wait","timeout_seconds":300}
+{"block_id":"meeting","action":"status"}
+{"block_id":"meeting","action":"shake","peer_block_id":"reviewer","message":"Please check in."}
 ```
 
 `tail` reads recent messages. `diff` reads new messages since that participant's
@@ -103,6 +105,21 @@ the participant's saved cursor. Results are under `meeting`, including `messages
 pages while `hasMore` is true. Pages preserve complete messages within the context
 budget. `lines` is 1–50 (default 20). Publishing accepts at most 10,000 text
 characters and 16,000 serialized characters including author metadata.
+
+`status` returns `meeting.peers`: connected block IDs, names, types, `online`,
+`block_status`, `hasSession`, provider and a `self` marker. Online means the peer
+has an active workflow turn, including a turn waiting for input; it does not imply
+network reachability. Completed, failed and not-yet-started peers are offline.
+Status does not consume unread messages.
+
+`shake` targets another AI Agent or Chatbox connected to this room using
+`peer_block_id` from status. An optional `message` (or `input`) overrides the
+standard check-in message. A running peer receives live steering; an idle peer
+starts a turn in the background, reusing its conversation if one exists. The result
+is `meeting.shake: {blockId, delivery: "steered" | "started"}`. No direct connection
+between the two peers is needed. Shakes do not broadcast or change read cursors.
+Unrelated blocks, the caller itself and non-AI blocks cannot be shaken. If a peer
+is still starting and cannot accept steering yet, retry after checking status.
 
 The Meeting run panel shows the transcript with author, model and timestamps.
 The latest 1,000 messages are retained; `historyTruncated` indicates expired unread
@@ -124,7 +141,7 @@ means nothing new.
 | Block | Actions | `fetch` returns |
 | --- | --- | --- |
 | AI Agent (`ai`), Chatbox (`chatbox`) | omitted (run and wait), `start`, `status`, `tail`, `steer`, `fetch` | messages and activity not yet delivered to this caller (changed messages are re-sent) |
-| Meeting (`meeting`) | `publish`, `tail`, `diff` (default), `wait`, `fetch` | unread messages from the caller's saved cursor (same as `diff`) |
+| Meeting (`meeting`) | `publish`, `tail`, `diff` (default), `wait`, `fetch`, `status`, `shake` | unread messages from the caller's saved cursor (same as `diff`) |
 | Run App (`run_app`) | `start`, `status`, `kill`, `tail` (only those configured), `fetch` | log text since the last fetch (needs `tail` allowed) |
 | Terminal Control (`terminal_control`) | `list`, `open`, `open_and_run`, `run_and_wait`, `read`, `write`, `fetch` | terminal text since the last fetch (needs `terminal_id`) |
 | Task controls (`task_controls`) | `create`, `create_and_start`, `status`, `prompt`, `set_status`, `set_commit_message`, `update_commit_message`, `fetch` | task status, only when changed since the last fetch (optional `task_id`) |
