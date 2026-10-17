@@ -13,6 +13,32 @@ function renderEditor(ui: Parameters<typeof render>[0]) {
 }
 
 describe("HarnessPanel", () => {
+  it.each(["ai", "chatbox"] as const)("exposes reasoning in %s block configuration and saves explicit or default effort", async (type) => {
+    const harness: HarnessDefinition = { id: "reasoning", name: "Reasoning", version: 1, createdAt: "now", updatedAt: "now", blocks: [], edges: [] };
+    const onSave = vi.fn(async (definition) => definition);
+    const onLoadModels = vi.fn().mockResolvedValue([
+      { id: "reasoning-model", name: "Reasoning model", defaultReasoning: "low", reasoningLevels: ["low", "high"] },
+      { id: "simple-model", name: "Simple model", defaultReasoning: "", reasoningLevels: [] }
+    ]);
+    renderEditor(<HarnessPanel harnesses={[harness]} runs={[]} providers={[]} agents={[]} defaultProvider="codex" onLoadModels={onLoadModels} onCreate={vi.fn()} onSave={onSave} onDelete={vi.fn()} onRun={vi.fn()} onCancelRun={vi.fn()} onError={vi.fn()} />);
+    fireEvent.change(screen.getByLabelText("Add block type"), { target: { value: type } });
+    expect(screen.getByLabelText("Workflow reasoning effort")).toHaveProperty("disabled", true);
+    expect(screen.getByText("Select a model to choose reasoning effort.")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "AI model" }));
+    fireEvent.click(await screen.findByRole("option", { name: /Reasoning model/ }));
+    expect(screen.getByLabelText("Workflow reasoning effort")).toHaveProperty("disabled", false);
+    fireEvent.change(screen.getByLabelText("Workflow reasoning effort"), { target: { value: "high" } });
+    fireEvent.click(screen.getByTitle("Save workflow"));
+    await waitFor(() => expect(onSave.mock.calls.at(-1)?.[0].blocks[0]).toMatchObject({ type, model: "reasoning-model", reasoning: "high" }));
+    fireEvent.change(screen.getByLabelText("Workflow reasoning effort"), { target: { value: "" } });
+    fireEvent.click(screen.getByTitle("Save workflow"));
+    await waitFor(() => expect(onSave.mock.calls.at(-1)?.[0].blocks[0].reasoning).toBeUndefined());
+    fireEvent.click(screen.getByRole("button", { name: "AI model" }));
+    fireEvent.click(screen.getByRole("option", { name: /Simple model/ }));
+    expect(screen.getByLabelText("Workflow reasoning effort")).toHaveProperty("disabled", true);
+    expect(screen.getByText("This model does not advertise reasoning levels.")).toBeTruthy();
+  });
+
   it("adds a Meeting and displays its attributed discussion", async () => {
     const harness: HarnessDefinition = { id: "meeting", name: "Meeting", version: 1, createdAt: "now", updatedAt: "now", blocks: [], edges: [] };
     const onSave = vi.fn(async (definition) => definition);
