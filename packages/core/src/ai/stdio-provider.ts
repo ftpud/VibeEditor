@@ -1278,7 +1278,7 @@ function toolBody(update: { rawInput?: unknown; content?: unknown }): { command?
   const input = update.rawInput as Record<string, unknown> | undefined;
   const command = input && typeof input.command === "string" ? input.command : undefined;
   const completion = input && typeof input.summary === "string" ? input.summary.trim() : undefined;
-  for (const key of ["path", "filePath", "url", "scope"] as const) if (input && typeof input[key] === "string") lines.push(`${key}: ${input[key]}`);
+  for (const key of ["path", "filePath", "url", "scope", "block_id", "action"] as const) if (input && typeof input[key] === "string") lines.push(`${key}: ${input[key]}`);
   let terminalId: string | undefined;
   for (const item of Array.isArray(update.content) ? update.content : []) {
     const entry = item as { type?: string; content?: { type?: string; text?: string }; path?: string; newText?: string; terminalId?: string };
