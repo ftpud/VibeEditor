@@ -156,6 +156,15 @@ describe("global configuration defaults", () => {
     expect((await service.write("workflows/new.json", JSON.stringify(example), null)).validation?.valid).toBe(true);
   });
 
+  it("refreshes an untouched earlier reference but keeps a user-edited one", async () => {
+    const { state } = await fixture();
+    const directory = path.join(state, "skills/global/vibe-self-configuration/references");
+    await mkdir(directory, { recursive: true });
+    await writeFile(path.join(directory, "configuration.md"), "My own notes");
+    await ensureSelfConfiguration(state);
+    expect(await readFile(path.join(directory, "configuration.md"), "utf8")).toBe("My own notes");
+  });
+
   it("upgrades the unedited shipped skill when project-local scopes change", async () => {
     const { state, stores, workspace } = await fixture();
     const previous = CONFIGURATION_SKILL.split("\n\n## Detailed reference")[0]! + "\n";

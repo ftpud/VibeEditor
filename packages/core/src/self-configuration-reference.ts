@@ -128,7 +128,8 @@ Optional settings (integer ranges):
 - contextBudgetChars, tokenBudget: 1000–10000000.
 - retry:{maxAttempts}: 1–10.
 - logLimitEntries: 10–500.
-- maxRunDurationMs: 60000–86400000.
+- maxRunDurationMs: 60000–86400000. When maxRunDurationMs or tokenBudget is omitted the
+  run has no time limit or token budget.
 
 Use limits proportional to the job; retain existing settings unless changing them
 is part of the request. Provider/model/agent availability is runtime-dependent:

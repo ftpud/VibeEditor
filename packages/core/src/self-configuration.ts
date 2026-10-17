@@ -101,6 +101,11 @@ const PREVIOUS_CONFIGURATION_SKILL_HASHES = new Set([
   "9117b20c14d3d139f68318a20837c7c5633c1114bc89e2976c877b5f7e9da894"
 ]);
 
+/** Exact fingerprints of earlier shipped references, keyed by file name. */
+const PREVIOUS_REFERENCE_HASHES: Record<string, Set<string>> = {
+  "configuration.md": new Set(["268e8d9d5f5fbe4e2784f0d6381388d7840081c31c1e3e048134daac99dd1a2b"])
+};
+
 /** Install shipped global defaults on every Core host, preserving user edits. */
 export async function ensureSelfConfiguration(stateDirectory = process.env.REMOTE_IDE_STATE_DIR ?? path.join(os.homedir(), ".remote-ide", "workspaces")): Promise<void> {
   const skillDirectory = path.join(stateDirectory, "skills", "global", "vibe-self-configuration");
@@ -108,7 +113,12 @@ export async function ensureSelfConfiguration(stateDirectory = process.env.REMOT
     const target = path.join(skillDirectory, "references", name);
     await mkdir(path.dirname(target), { recursive: true });
     try { await writeFile(target, content, { encoding: "utf8", flag: "wx" }); }
-    catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      // Only an untouched copy of an earlier shipped reference is refreshed; user edits are kept.
+      const current = await readFile(target, "utf8");
+      if (PREVIOUS_REFERENCE_HASHES[name]?.has(crypto.createHash("sha256").update(current).digest("hex"))) await writeFile(target, content, "utf8");
+    }
   }
   for (const [target, content] of [
     [path.join(stateDirectory, "agents", "global", CONFIGURATION_AGENT_NAME), CONFIGURATION_AGENT],
