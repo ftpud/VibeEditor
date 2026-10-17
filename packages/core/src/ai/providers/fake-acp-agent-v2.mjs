@@ -10,6 +10,9 @@ let turn = 0;
 let active = false;
 const steering = process.env.FAKE_V2_STEERING === "on";
 const promptQueueing = process.env.FAKE_V2_STEERING === "prompt";
+// "queue": like Claude, a prompt sent mid-turn waits; the turn goes idle and the queued prompt starts at once.
+const queueNext = process.env.FAKE_V2_STEERING === "queue";
+const queued = [];
 let oauthAttempts = 0;
 const failOAuth = (message) => {
   if (process.env.FAKE_OAUTH_STAGE !== (message.method === "session/new" ? "new" : "prompt")) return false;
@@ -48,6 +51,7 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
     return;
   }
   if (message.method === "session/prompt") {
+    if (queueNext && active) { ok({ messageId: "queued-user" }); queued.push({ sessionId: message.params.sessionId, text: message.params.prompt.map((block) => block.text ?? "").join("") }); return; }
     if (steering && active) return send({ id: message.id, error: { code: -32600, message: "Use the advertised steering extension during an active turn" } });
     if (promptQueueing && active) {
       ok({ messageId: "steered-user" });
@@ -66,7 +70,17 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
     update(sessionId, { sessionUpdate: "tool_call_update", toolCallId: `tool-${turn}`, status: "completed" });
     update(sessionId, { sessionUpdate: "agent_message", messageId: id, content: [{ type: "text", text: `Hello from v2${process.env.FAKE_SECRET ? " (secret visible)" : ""}: ${text}` }] });
     update(sessionId, { sessionUpdate: "usage_update", used: 120, size: 1000 });
-    if (!steering && !promptQueueing) setTimeout(() => { active = false; update(sessionId, { sessionUpdate: "state_update", state: "idle", stopReason: "end_turn", usage: { totalTokens: 30, inputTokens: 10, outputTokens: 20 } }); }, 20);
+    if (!steering && !promptQueueing) setTimeout(() => {
+      active = false; update(sessionId, { sessionUpdate: "state_update", state: "idle", stopReason: "end_turn", usage: { totalTokens: 30, inputTokens: 10, outputTokens: 20 } });
+      const next = queued.shift();
+      if (!next) return;
+      // The queued prompt starts the instant the previous turn is idle, with no gap for the client to settle it.
+      active = true;
+      update(sessionId, { sessionUpdate: "state_update", state: "running" });
+      update(sessionId, { sessionUpdate: "tool_call_update", toolCallId: "queued-tool", title: "Queued work", kind: "execute", status: "in_progress" });
+      update(sessionId, { sessionUpdate: "agent_message_chunk", messageId: "queued-answer", content: { type: "text", text: `Answering queued: ${next.text}` } });
+      setTimeout(() => { active = false; update(sessionId, { sessionUpdate: "state_update", state: "idle", stopReason: "end_turn" }); }, 60);
+    }, queueNext ? 200 : 20);
     // FAKE_V2_AGENT_TURN=1: after the first turn goes idle, resume by itself as if background work finished.
     if (process.env.FAKE_V2_AGENT_TURN === "1" && turn === 1) setTimeout(() => {
       update(sessionId, { sessionUpdate: "state_update", state: "running" });

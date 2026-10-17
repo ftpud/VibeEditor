@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import { execFile } from "node:child_process";
-import { constants as fsConstants, openSync, unwatchFile, watchFile, type Stats } from "node:fs";
+import { constants as fsConstants, openSync, statSync, type Stats } from "node:fs";
 import { mkdir, open, readFile, rename, stat, unlink } from "node:fs/promises";
 import net from "node:net";
 import os from "node:os";
@@ -154,16 +154,26 @@ export class TriggerService {
     }
   }
 
+  /** Polls with an explicit baseline taken now, so a file that appears right after arming is never missed. */
   private watchPath(trigger: WorkspaceTrigger, events: TriggerFileEvent[]): () => void {
     const target = trigger.source.path;
-    const exists = (stats: Stats) => stats.nlink > 0 || stats.mtimeMs > 0;
-    const listener = (current: Stats, previous: Stats) => {
-      const before = exists(previous); const after = exists(current);
-      const event: TriggerFileEvent | undefined = !before && after ? "created" : before && !after ? "deleted" : before && after && (current.mtimeMs !== previous.mtimeMs || current.size !== previous.size || current.ino !== previous.ino) ? "changed" : undefined;
-      if (event && events.includes(event)) this.queue(trigger.id, { description: `${event}: ${target}` });
-    };
-    watchFile(target, { interval: POLL_INTERVAL_MS, persistent: false }, listener);
-    return () => unwatchFile(target, listener);
+    type Snapshot = { mtimeMs: number; size: number; ino: number } | undefined;
+    const snapshot = (stats: Stats | undefined): Snapshot => stats && { mtimeMs: stats.mtimeMs, size: stats.size, ino: stats.ino };
+    let previous: Snapshot;
+    try { previous = snapshot(statSync(target)); } catch { previous = undefined; }
+    let polling = false;
+    const timer = setInterval(() => {
+      if (polling) return;
+      polling = true;
+      void stat(target).catch(() => undefined).then((stats) => {
+        const current = snapshot(stats);
+        const event: TriggerFileEvent | undefined = !previous && current ? "created" : previous && !current ? "deleted" : previous && current && (current.mtimeMs !== previous.mtimeMs || current.size !== previous.size || current.ino !== previous.ino) ? "changed" : undefined;
+        previous = current;
+        if (event && events.includes(event)) this.queue(trigger.id, { description: `${event}: ${target}` });
+      }).finally(() => { polling = false; });
+    }, POLL_INTERVAL_MS);
+    timer.unref();
+    return () => clearInterval(timer);
   }
 
   /** O_RDWR keeps the pipe open without a writer, so opening never blocks and readers never see EOF between writers. */

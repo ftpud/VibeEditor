@@ -226,6 +226,22 @@ describe("ACP integration", () => {
     await provider.shutdown();
   });
 
+  it("keeps showing a prompt an ACP v2 agent queued behind the turn it was steered into", async () => {
+    class QueueingV2Provider extends FakeProvider {
+      protected command(_configuration: AiConfiguration) { return { command: process.execPath, args: [FAKE_V2_AGENT], env: { FAKE_V2_STEERING: "queue" } }; }
+      protected async protocol() { return "v2" as const; }
+    }
+    const provider = new QueueingV2Provider(() => undefined, await mkdtemp(path.join(os.tmpdir(), "remote-ide-v2-queued-steer-")));
+    const workspace = process.cwd();
+    await provider.send(workspace, { prompt: "first", configuration: {} });
+    await provider.steer(workspace, "hi");
+    const answered = await until(provider, workspace, (session) => session.messages.some((message) => message.text.includes("Answering queued: hi")));
+    expect(answered.messages.some((message) => message.text.includes("Queued work"))).toBe(true);
+    const done = await until(provider, workspace, (session) => session.status === "done" && session.messages.some((message) => message.text.includes("Answering queued: hi")));
+    expect(done.failure).toBeUndefined();
+    await provider.shutdown();
+  });
+
   it("does not replay configuration notifications after an ACP v2 reasoning rejection", async () => {
     class FeedbackV2Provider extends FakeProvider {
       protected command(_configuration: AiConfiguration) { return { command: process.execPath, args: [FAKE_V2_AGENT], env: { FAKE_CONFIG_FEEDBACK: "on" } }; }

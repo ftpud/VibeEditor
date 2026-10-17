@@ -39,6 +39,8 @@ type Runtime = {
   generation: number;
   /** Generation of the running turn when the agent started it without a prompt (ACP v2). */
   agentTurn?: number;
+  /** An ACP v2 agent began a turn while the previous one was still settling here; tracked once that settles. */
+  agentTurnPending?: boolean;
   /** True when the agent can fold input into a running turn. */
   steering: boolean;
   steeringMode?: SteeringMode;
@@ -483,6 +485,8 @@ export abstract class StdioAcpProvider extends AcpProvider {
     }
     if (queued === undefined) await this.completeCheckpoints(workspace, runtime, result.stopReason === "cancelled" ? "interrupted" : result.stopReason === "refusal" ? "error" : "completed");
     await this.save(workspace, runtime.session); this.onChanged(workspace);
+    const resumed = runtime.agentTurnPending && !runtime.running; runtime.agentTurnPending = false;
+    if (resumed && !fresh) await this.agentTurnStarted(workspace, runtime);
     if (fresh) { await this.clear(workspace); await this.send(workspace, fresh); }
   }
 
@@ -493,7 +497,10 @@ export abstract class StdioAcpProvider extends AcpProvider {
    * session reports it as working until the agent goes idle again.
    */
   private async agentTurnStarted(workspace: string, runtime: Runtime): Promise<void> {
-    if (runtime.running || this.runtimes.get(workspace) !== runtime) return;
+    if (this.runtimes.get(workspace) !== runtime) return;
+    // Idle and the next turn's start can arrive back to back (a prompt the agent queued behind the
+    // turn): the finished turn is still being settled, so pick this one up when it has been.
+    if (runtime.running) { runtime.agentTurnPending = true; return; }
     runtime.retryAbort?.abort(); runtime.retryAbort = undefined; runtime.retrying = false;
     runtime.agentTurn = (runtime.generation += 1);
     runtime.running = true; runtime.anchors = {};
@@ -503,6 +510,7 @@ export abstract class StdioAcpProvider extends AcpProvider {
   }
 
   private async agentTurnEnded(workspace: string, runtime: Runtime, result: PromptResponse | Error): Promise<void> {
+    if (runtime.agentTurnPending) { runtime.agentTurnPending = false; return; }
     const generation = runtime.agentTurn;
     if (generation === undefined || runtime.generation !== generation || this.runtimes.get(workspace) !== runtime) return;
     if (!(result instanceof Error)) { await this.finishTurn(workspace, runtime, generation, result); return; }

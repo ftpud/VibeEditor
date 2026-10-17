@@ -33,6 +33,7 @@ describe("reactive triggers", () => {
     const { service, dir, deliver } = await harness();
     const target = path.join(dir, "watched.txt");
     const trigger = await service.create("root", { name: "watch", source: { type: "file", path: target, events: ["created", "changed", "deleted"] }, debounceSeconds: 0, action });
+    await new Promise((resolve) => setTimeout(resolve, 300)); // let the watcher record the file as absent before it appears
     await writeFile(target, "one");
     await vi.waitFor(() => expect(events(deliver).map((event) => event.description)).toEqual([`created: ${target}`]), { timeout: 5000 });
     await new Promise((resolve) => setTimeout(resolve, 20));
@@ -123,8 +124,9 @@ describe("reactive triggers", () => {
     const deliver = vi.fn(async (): Promise<TriggerDelivery> => ({}));
     const second = new TriggerService("/workspace", deliver, vi.fn(), path.join(first.dir, "state"));
     services.push(second); await second.start();
+    await new Promise((resolve) => setTimeout(resolve, 300)); // let the watcher record the file as absent before it appears
     await writeFile(target, "after restart");
     await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(1), { timeout: 5000 });
-    expect(second.list()[0]).toMatchObject({ enabled: true, fireCount: 1 });
+    await vi.waitFor(() => expect(second.list()[0]).toMatchObject({ enabled: true, fireCount: 1 }));
   });
 });
