@@ -2,9 +2,9 @@ import { parse as parseEnv } from "dotenv";
 import os from "node:os";
 import path from "node:path";
 import { javaConfigurationPath, type FileRevision, type JavaProjectOptions, type JavaRunConfiguration } from "@remote-ide/protocol";
-import { CoreError } from "./errors.js";
-import type { WorkspaceFileSystem } from "./filesystem.js";
-import { validateJavaProjectOptions } from "./workspace-state.js";
+import { CoreError } from "../../../errors.js";
+import type { WorkspaceFileSystem } from "../../../filesystem.js";
+import { validateJavaProjectOptions } from "./java-settings.js";
 
 export function parseJavaConfiguration(content: string): JavaProjectOptions {
   if (typeof content !== "string" || Buffer.byteLength(content) > 200_000) throw new CoreError("INVALID_REQUEST", "Java configuration must be JSON text under 200 KB");

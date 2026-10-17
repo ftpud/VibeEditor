@@ -1,3 +1,4 @@
+import "./plugins/languages/java/java-settings.js"; // registers the Java workspace-state validators
 import { mkdtemp, readdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";

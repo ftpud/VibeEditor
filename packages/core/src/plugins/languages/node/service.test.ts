@@ -2,9 +2,9 @@ import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { LanguageRegistry, LanguageSessions } from "./registry.js";
-import { handleLanguageRequest, type LanguageRequestType } from "./routes.js";
-import { NODE_DESCRIPTOR, NodeLanguageService } from "./node-service.js";
+import { LanguageRegistry, LanguageSessions } from "../../../language/registry.js";
+import { handleLanguageRequest, type LanguageRequestType } from "../../../language/routes.js";
+import { NODE_DESCRIPTOR, NodeLanguageService } from "./service.js";
 import type { Request } from "@remote-ide/protocol";
 
 describe("NodeLanguageService", () => {

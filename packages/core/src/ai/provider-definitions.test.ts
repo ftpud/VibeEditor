@@ -7,7 +7,7 @@ import type { ProviderFactory } from "./stdio-provider.js";
 import { createAcpRegistry } from "./index.js";
 import { loadProviderDefinitions, validateProviderDefinition } from "./provider-definitions.js";
 
-const AGENT = fileURLToPath(new URL("./providers/fake-acp-agent.mjs", import.meta.url));
+const AGENT = fileURLToPath(new URL("./fake-acp-agent.mjs", import.meta.url));
 const base = { id: "custom-agent", name: "Custom", description: "Declared", command: process.execPath, args: [AGENT], models: [{ id: "model-a", name: "Model A", reasoningLevels: ["low"] }] };
 
 afterEach(() => vi.unstubAllEnvs());

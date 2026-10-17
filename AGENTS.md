@@ -8,7 +8,8 @@ processes, and durable state; Electron clients own interaction. Read and change
 
 | Change | Start here | Keep true |
 | --- | --- | --- |
-| AI provider behavior | `packages/acp/src/index.ts`, `packages/core/src/ai/`; read `docs/ACP.md` | ACP is provider-neutral; adapters stay in `core/src/ai/providers/`. |
+| AI provider behavior | `packages/acp/src/index.ts`, `packages/core/src/ai/`; read `docs/ACP.md` | ACP is provider-neutral; each built-in adapter lives in its own `core/src/plugins/ai/<id>/`. |
+| Built-in language (Java, Node) | `packages/core/src/plugins/languages/<id>/`, `plugins/builtin.ts`, `language/service.ts` | One directory per plugin with its tests; shared Core reaches plugins only via `plugins/builtin.ts` (guard: `plugins/isolation.test.ts`). |
 | Core/Desktop operation | `packages/protocol/src/index.ts` -> `packages/core/src/server.ts` -> `packages/desktop/src/renderer/client.ts` | Define protocol types/registry first, then Core routing, then Desktop callers. |
 | Renderer feature | `packages/desktop/src/renderer/{main.tsx,App.tsx,client.ts}` | Request workspace state from Core; do not access it locally. |
 | Electron integration | package `src/electron/`, renderer `global.d.ts`, renderer callers | Search the IPC channel across all three. |
@@ -26,7 +27,7 @@ provider descriptor metadata can express the behavior.
 - Core services are sibling modules of `packages/core/src/server.ts` (filesystem,
   search, Git, terminals, tasks/state, HTTP, Java/JDT LS).
 - Colocated tests use `*.test.ts`/`*.test.tsx`; ACP fixture agents live at
-  `packages/core/src/ai/providers/fake-acp-agent.{mjs,py}`.
+  `packages/core/src/ai/fake-acp-agent.{mjs,py}`.
 - Product and operating context: `README.md`, `WHY.md`, `FEATURES.md`, and `docs/`.
 
 ## Checks and generated files

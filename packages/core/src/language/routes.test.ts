@@ -25,3 +25,16 @@ describe("language routes", () => {
     await expect(call("language.lsp.completion", { language: "stub", path: "a", content: "", line: 1, column: 1 })).rejects.toThrow("does not support lsp");
   });
 });
+
+it.each(["build", "debug"] as const)("can stop a service that supports only %s processes", async (capability) => {
+  const descriptor: LanguageDescriptor = { id: "process-only", name: "Process", extensions: [], projectMarkers: [], capabilities: { ...caps, [capability]: true } };
+  const stop = vi.fn();
+  const registry = new LanguageRegistry().register(descriptor, () => ({ descriptor, stop }) as unknown as LanguageService);
+  const sessions = new LanguageSessions(registry, "/w");
+  await expect(handleLanguageRequest(registry, sessions, "root-1", { id: "stop", rootId: "root-1", type: "language.stop", payload: { language: descriptor.id } })).resolves.toEqual({});
+  expect(stop).toHaveBeenCalledOnce();
+});
+
+it("rejects stop when the service has no process capabilities", async () => {
+  await expect(call("language.stop", { language: "stub" })).rejects.toThrow("does not support processes");
+});

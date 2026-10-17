@@ -5,12 +5,10 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { AiConfiguration, AiModel, AiProviderDescriptor, AiSession } from "@remote-ide/acp";
-import { CodexSessionManager } from "./codex.js";
-import { CopilotSessionManager } from "./copilot.js";
-import { ClaudeSessionManager } from "./claude.js";
-import { ASK_QUESTIONS_OPTION, LIVE_STEERING_OPTION, StdioAcpProvider, SYSTEM_INSTRUCTIONS_OPTION, type AcpTurnObserver } from "../stdio-provider.js";
-import { SkillsStore } from "../../skills.js";
-import { AcpRegistry } from "../acp.js";
+import { CodexSessionManager, CopilotSessionManager, ClaudeSessionManager } from "../plugins/builtin.js";
+import { ASK_QUESTIONS_OPTION, LIVE_STEERING_OPTION, StdioAcpProvider, SYSTEM_INSTRUCTIONS_OPTION, type AcpTurnObserver } from "./stdio-provider.js";
+import { SkillsStore } from "../skills.js";
+import { AcpRegistry } from "./acp.js";
 
 const FAKE_AGENT = fileURLToPath(new URL("./fake-acp-agent.py", import.meta.url));
 const FAKE_V2_AGENT = fileURLToPath(new URL("./fake-acp-agent-v2.mjs", import.meta.url));

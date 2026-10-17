@@ -11,6 +11,7 @@ it("expands nested objects, loads more array values, and clears them on resume",
     .mockResolvedValueOnce({ variables: [{ name: "[0]", value: "42" }], nextStart: 50 })
     .mockResolvedValueOnce({ variables: [{ name: "[50]", value: "99" }] });
   const props = {
+    capabilities: { build: true, run: true, debug: true, lsp: true, projectTree: true, workspaceSymbols: true, configuration: true },
     height: 250, log: "", running: true,
     options: { type: "maven" as const, pomPath: "pom.xml", mavenExecutable: "mvn", sourceRoots: [], outputPath: "target/classes", testOutputPath: "target/test-classes", runConfigurations: [] },
     debugState: { status: "paused" as const, variables: [{ name: "obj", value: "instance of Probe(id=1)", reference: "object" }] },
@@ -29,6 +30,7 @@ it("expands nested objects, loads more array values, and clears them on resume",
 
 function applyProps(onApplyChanges: React.ComponentProps<typeof JavaPanel>["onApplyChanges"]): React.ComponentProps<typeof JavaPanel> {
   return {
+    capabilities: { build: true, run: true, debug: true, lsp: true, projectTree: true, workspaceSymbols: true, configuration: true },
     height: 250, log: "", running: true,
     options: { type: "maven", pomPath: "pom.xml", mavenExecutable: "mvn", sourceRoots: [], outputPath: "target/classes", testOutputPath: "target/test-classes", runConfigurations: [] },
     debugState: { status: "paused", variables: [] },
@@ -86,4 +88,13 @@ it("resizes debugger width and height with the keyboard", () => {
   expect(Number(width.getAttribute("aria-valuenow"))).toBe(initial - 20);
   fireEvent.keyDown(screen.getByRole("separator", { name: "Resize debugger height" }), { key: "ArrowUp" });
   expect(onHeightChange).toHaveBeenCalledWith(260);
+});
+
+it("hides toolbar actions and debugger when the descriptor disables them", () => {
+  const props = applyProps(vi.fn());
+  render(<JavaPanel {...props} capabilities={{ ...props.capabilities, build: false, run: false, debug: false, configuration: false }} />);
+  expect(screen.queryByTitle("Build Maven project")).toBeNull();
+  expect(screen.queryByTitle("Run selected configuration")).toBeNull();
+  expect(screen.queryByTitle("Debug selected configuration")).toBeNull();
+  expect(screen.queryByText("Debugger")).toBeNull();
 });

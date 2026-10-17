@@ -2,12 +2,12 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { cp, mkdir, readdir } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL, fileURLToPath } from "node:url";
-import { toolInstallations } from "./tools.js";
+import { toolInstallations } from "../../../tools.js";
 import { createMessageConnection, StreamMessageReader, StreamMessageWriter, type MessageConnection } from "vscode-jsonrpc/node.js";
 import type { JavaLspCompletion, JavaLspLocation, JavaSemanticToken, WorkspaceSymbol } from "@remote-ide/protocol";
 import { JavaSemanticCache, javaLanguageStateDirectory } from "./java-semantic-cache.js";
-import { CoreError } from "./errors.js";
-import { WorkspaceFileSystem } from "./filesystem.js";
+import { CoreError } from "../../../errors.js";
+import { WorkspaceFileSystem } from "../../../filesystem.js";
 
 type LspPosition = { line: number; character: number };
 type LspRange = { start: LspPosition; end: LspPosition };
@@ -151,7 +151,7 @@ export class JdtLanguageService {
   }
 
   private async start(): Promise<void> {
-    const [distribution, java] = await Promise.all([toolInstallations.directory("jdtls"), toolInstallations.java()]);
+    const [distribution, java] = await Promise.all([toolInstallations.directory("jdtls"), toolInstallations.executable("java")]);
     if (!distribution) throw new CoreError("JAVA_PROCESS_FAILED", "The Java language server is not installed on this Core host. Install it from Settings → Tools.");
     if (!java) throw new CoreError("JAVA_PROCESS_FAILED", "The Java runtime is not installed on this Core host. Install it from Settings → Tools.");
     let plugins: string[];

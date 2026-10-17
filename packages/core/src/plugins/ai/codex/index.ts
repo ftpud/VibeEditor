@@ -1,11 +1,12 @@
+import type { ProviderContext } from "../../../ai/stdio-provider.js";
 import os from "node:os";
 import path from "node:path";
 import { readFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import type { AiConfiguration, AiModel, AiProviderDescriptor, AiUsage } from "@remote-ide/acp";
-import { ASK_QUESTIONS_OPTION, LIVE_STEERING_OPTION, StdioAcpProvider } from "../stdio-provider.js";
+import { ASK_QUESTIONS_OPTION, LIVE_STEERING_OPTION, StdioAcpProvider } from "../../../ai/stdio-provider.js";
 import { readCodexAccountQuota } from "./codex-usage.js";
-import { providerInstallations, type InstallationSpec } from "../provider-installations.js";
+import { providerInstallations, type InstallationSpec } from "../../../ai/provider-installations.js";
 
 const WEB_SEARCH_MODES = ["live", "indexed", "cached", "disabled"];
 const GPT_6_SOL: AiModel = { id: "gpt-6-sol", name: "GPT-6 Sol", defaultReasoning: "medium", reasoningLevels: ["none", "low", "medium", "high", "xhigh", "max"], note: "When Codex does not advertise this model, selecting it starts a new Codex thread. Access depends on your account." };
@@ -98,3 +99,6 @@ export class CodexSessionManager extends StdioAcpProvider {
     return [GPT_6_SOL];
   }
 }
+
+export { PROVIDER_API_VERSION as apiVersion } from "../../../ai/stdio-provider.js";
+export const createProvider = (context: ProviderContext) => new CodexSessionManager(context);

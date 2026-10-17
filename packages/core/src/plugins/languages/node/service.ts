@@ -1,8 +1,8 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
-import { CoreError } from "../errors.js";
-import type { LanguageDescriptor, LanguageExtra, LanguageProjectNode, LanguageService, LanguageServiceEvents } from "./service.js";
+import { CoreError } from "../../../errors.js";
+import type { LanguageDescriptor, LanguageExtra, LanguageProjectNode, LanguageService, LanguageServiceEvents } from "../../../language/service.js";
 
 /**
  * Minimal second built-in language: Node projects described by `package.json`.

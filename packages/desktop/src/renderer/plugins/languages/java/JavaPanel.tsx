@@ -1,10 +1,11 @@
-import { DebugVariable } from "./DebugVariable";
-import { readSettingNumber, writeSetting } from "./settings";
+import { DebugVariable } from "../../../DebugVariable";
+import { readSettingNumber, writeSetting } from "../../../settings";
 import { Settings, RefreshCw, ArrowDownToLine, ArrowRight, ArrowUpFromLine, Bug, CornerDownRight, Hammer, Play, Square, Trash2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import type { JavaApplyChangesResult, JavaDebugState, JavaProjectOptions, ProtocolOperations } from "@remote-ide/protocol";
+import type { JavaApplyChangesResult, LanguageCapabilities, JavaDebugState, JavaProjectOptions, ProtocolOperations } from "@remote-ide/protocol";
 
 type Props = {
+  capabilities: LanguageCapabilities;
   height: number;
   log: string;
   running: boolean;
@@ -23,7 +24,7 @@ type Props = {
   onHeightChange?(height: number): void;
 };
 
-export function JavaPanel({ height, log, running, options, debugState, onConfigure, onBuild, onRun, onDebug, onStop, onDebugCommand, onApplyChanges, onInspect, onClear, onResizeStart, onHeightChange }: Props) {
+export function JavaPanel({ capabilities, height, log, running, options, debugState, onConfigure, onBuild, onRun, onDebug, onStop, onDebugCommand, onApplyChanges, onInspect, onClear, onResizeStart, onHeightChange }: Props) {
   const panelRef = useRef<HTMLElement>(null);
   const [debugWidth, setDebugWidth] = useState(() => readSettingNumber("debugger.width", 380, 180, 1200));
   useEffect(() => writeSetting("debugger.width", String(debugWidth)), [debugWidth]);
@@ -75,17 +76,17 @@ export function JavaPanel({ height, log, running, options, debugState, onConfigu
         <span>Build Output</span>
         <span className={`java-process-status ${running ? "running" : ""}`}>{running ? "Running" : "Idle"}</span>
         <div className="panel-header-actions java-actions" role="toolbar" aria-label="Java controls">
-          <button title="Build Maven project" disabled={running} onClick={onBuild}><Hammer size={16} /></button>
-          <button title="Run selected configuration" disabled={running || !options.selectedRunConfigurationId} onClick={onRun}><Play size={16} /></button>
-          <button title="Debug selected configuration" disabled={running || !options.selectedRunConfigurationId} onClick={onDebug}><Bug size={16} /></button>
+          {capabilities.build && <button title="Build Maven project" disabled={running} onClick={onBuild}><Hammer size={16} /></button>}
+          {capabilities.run && <button title="Run selected configuration" disabled={running || !options.selectedRunConfigurationId} onClick={onRun}><Play size={16} /></button>}
+          {capabilities.debug && <button title="Debug selected configuration" disabled={running || !options.selectedRunConfigurationId} onClick={onDebug}><Bug size={16} /></button>}
           <button title="Stop Java process" disabled={!running} onClick={onStop}><Square size={15} /></button>
-          <button title="Edit Java run/debug configuration" onClick={onConfigure}><Settings size={16} /></button>
+          {capabilities.configuration && <button title="Edit Java run/debug configuration" onClick={onConfigure}><Settings size={16} /></button>}
           <button title="Clear build log" onClick={onClear}><Trash2 size={15} /></button>
         </div>
       </header>
       <pre ref={logRef}>{log || "Java build output will appear here."}</pre>
     </div>
-    {debugState.status !== "stopped" && <aside className="debug-view" style={{ width: debugWidth }}>
+    {capabilities.debug && debugState.status !== "stopped" && <aside className="debug-view" style={{ width: debugWidth }}>
       <div className="debug-resize-handle" role="separator" aria-label="Resize debugger width" aria-orientation="vertical" aria-valuenow={debugWidth} tabIndex={0} onPointerDown={resizeDebugger} onKeyDown={(event) => {
         if (!["ArrowLeft", "ArrowRight"].includes(event.key)) return;
         event.preventDefault();

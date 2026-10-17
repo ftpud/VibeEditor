@@ -28,18 +28,23 @@ export async function handleLanguageRequest(registry: LanguageRegistry, sessions
     case "language.configuration.read": return sessions.require(language, "configuration").readConfiguration();
     case "language.configuration.save": return sessions.require(language, "configuration").saveConfiguration(request.payload.content, request.payload.expectedRevision);
     case "language.tools.check": return { checks: await sessions.get(language).checkTools(request.payload.content) };
-    case "language.addSourceRoot": await sessions.require(language, "projectTree").addSourceRoot(request.payload.path); return {};
+    case "language.addSourceRoot": await sessions.require(language, "sourceRoots").addSourceRoot(request.payload.path); return {};
     case "language.projectTree": return { tree: await sessions.require(language, "projectTree").projectTree() };
     case "language.symbols": {
       const result = await sessions.require(language, "workspaceSymbols").workspaceSymbols(request.payload.query, request.payload.limit);
       return { ...result, symbols: result.symbols.map((symbol) => ({ ...symbol, rootId })) };
     }
     case "language.listRunTargets": return { targets: await sessions.require(language, "run").listRunTargets() };
-    case "language.addRunConfiguration": return { options: await sessions.require(language, "run").addRunConfiguration(request.payload.name, request.payload.target) };
-    case "language.selectRunConfiguration": return { options: await sessions.require(language, "run").selectRunConfiguration(request.payload.id) };
+    case "language.addRunConfiguration": return { options: await sessions.require(language, "runConfigurations").addRunConfiguration(request.payload.name, request.payload.target) };
+    case "language.selectRunConfiguration": return { options: await sessions.require(language, "runConfigurations").selectRunConfiguration(request.payload.id) };
     case "language.build": await sessions.require(language, "build").build(); return {};
     case "language.run": await sessions.require(language, "run").run(); return {};
-    case "language.stop": sessions.require(language, "run").stop(); return {};
+    case "language.stop": {
+      const capabilities = registry.descriptor(language).capabilities;
+      if (!capabilities.build && !capabilities.run && !capabilities.debug) throw new CoreError("INVALID_REQUEST", `Language '${language}' does not support processes`);
+      sessions.get(language).stop();
+      return {};
+    }
     case "language.debug.setBreakpoints": await sessions.require(language, "debug").setBreakpoints(request.payload.breakpoints); return {};
     case "language.debug.start": await sessions.require(language, "debug").startDebug(request.payload.breakpoints); return {};
     case "language.debug.applyChanges": return sessions.require(language, "debug").applyChanges();

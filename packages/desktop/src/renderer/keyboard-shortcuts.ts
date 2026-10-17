@@ -1,5 +1,6 @@
 import {
   commandIds,
+  isCommandId,
   defaultShortcutBindings,
   normalizeShortcut,
   type CommandId,
@@ -28,8 +29,10 @@ export function parseShortcutSetting(
       Array.isArray(candidate)
     )
       return result;
-    for (const id of commandIds) {
-      const stored = (candidate as Record<string, unknown>)[id];
+    for (const rawId of Object.keys(candidate)) {
+      const id = rawId === "java.configuration" ? "language.java.configuration" : rawId;
+      if (!isCommandId(id)) continue;
+      const stored = (candidate as Record<string, unknown>)[rawId];
       if (stored === null) delete result[id];
       else if (typeof stored === "string") {
         const normalized = normalizeShortcut(stored);
@@ -37,7 +40,7 @@ export function parseShortcutSetting(
       }
     }
     if (versioned && Array.isArray((parsed as { disabled?: unknown }).disabled)) {
-      for (const id of (parsed as unknown as { disabled: unknown[] }).disabled) if (commandIds.includes(id as CommandId)) delete result[id as CommandId];
+      for (const id of (parsed as unknown as { disabled: unknown[] }).disabled) if (isCommandId(id)) delete result[id as CommandId];
     }
   } catch {
     /* Damaged settings retain safe defaults. */
@@ -46,7 +49,7 @@ export function parseShortcutSetting(
 }
 export function serializeShortcutSetting(bindings: ShortcutBindings): string {
   const safe: ShortcutBindings = {};
-  for (const id of commandIds) if (bindings[id]) safe[id] = bindings[id];
+  for (const id of Object.keys(bindings)) if (isCommandId(id) && bindings[id]) safe[id] = bindings[id];
   return JSON.stringify({ version: 1, bindings: safe, disabled: commandIds.filter((id) => !bindings[id]) });
 }
 /** Returns a validated v1 replacement only for the legacy unversioned command-id map. */

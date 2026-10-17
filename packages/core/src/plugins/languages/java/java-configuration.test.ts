@@ -3,9 +3,9 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { javaConfigurationPath } from "@remote-ide/protocol";
-import { WorkspaceFileSystem } from "./filesystem.js";
+import { WorkspaceFileSystem } from "../../../filesystem.js";
 import { JavaProjectService } from "./java.js";
-import { WorkspaceStateStore } from "./workspace-state.js";
+import { WorkspaceStateStore } from "../../../workspace-state.js";
 import { javaLaunchEnvironment, javaToolEnvironment, javaToolExecutable, parseJavaConfiguration } from "./java-configuration.js";
 
 const directories: string[] = [];

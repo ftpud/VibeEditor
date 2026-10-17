@@ -1,8 +1,9 @@
+import type { LanguageDescriptor } from "@remote-ide/protocol";
 /** A provider-neutral Desktop command contract. Commands carry their own availability
  * rather than relying on UI event names or button text. */
-export type CommandCategory = "Project" | "Git" | "Terminal" | "Task" | "AI" | "Editor" | "Java";
-export const commandIds = ["project.commandPalette", "project.quickOpen", "project.workspaceSymbols", "project.refresh", "project.findInFiles", "editor.navigateBack", "editor.navigateForward", "editor.save", "java.configuration", "git.refresh", "terminal.new", "terminal.toggle", "task.create", "ai.open"] as const;
-export type CommandId = typeof commandIds[number];
+export type CommandCategory = "Project" | "Git" | "Terminal" | "Task" | "AI" | "Editor" | "Language";
+export const commandIds = ["project.commandPalette", "project.quickOpen", "project.workspaceSymbols", "project.refresh", "project.findInFiles", "editor.navigateBack", "editor.navigateForward", "editor.save", "language.tools", "git.refresh", "terminal.new", "terminal.toggle", "task.create", "ai.open"] as const;
+export type CommandId = typeof commandIds[number] | `language.${string}.${"project" | "configuration" | "targets"}`;
 export type DesktopPlatform = "mac" | "windows" | "linux";
 export type ShortcutBindings = Partial<Record<CommandId, string>>;
 
@@ -48,7 +49,7 @@ export function shortcutMatches(event: Pick<KeyboardEvent, "key" | "ctrlKey" | "
 export function shortcutConflict(commandId: CommandId, shortcut: string, bindings: ShortcutBindings, platform: DesktopPlatform): string | undefined {
   const normalized = normalizeShortcut(shortcut); if (!normalized) return "Enter a shortcut with a modifier key.";
   const reservedBy = reserved[platform][normalized]; if (reservedBy) return `Reserved by ${reservedBy}.`;
-  const duplicate = commandIds.find((id) => id !== commandId && bindings[id] === normalized); return duplicate ? `Already assigned to ${duplicate}.` : undefined;
+  const duplicate = (Object.keys(bindings) as CommandId[]).find((id) => id !== commandId && bindings[id] === normalized); return duplicate ? `Already assigned to ${duplicate}.` : undefined;
 }
 export function formatShortcut(shortcut: string, platform: DesktopPlatform): string { return platform === "mac" ? shortcut.replace("Meta", "Cmd").replace("Alt", "Option") : shortcut; }
 
@@ -59,4 +60,23 @@ export function commandEnabled(command: Command, context: CommandContext): boole
 export function rankCommands(commands: Command[], query: string): Command[] {
   const terms = query.trim().toLocaleLowerCase().split(/\s+/).filter(Boolean);
   return commands.filter((command) => terms.every((term) => `${command.label} ${command.category} ${command.id}`.toLocaleLowerCase().includes(term)));
+}
+
+/** Contributions come from Core descriptors, including installed language plugins. */
+export function languageCommands(languages: LanguageDescriptor[], open: (language: string) => void): Command[] {
+  return languages.flatMap((language): Command[] => {
+    const entries: ["project" | "configuration" | "targets", string, boolean][] = [
+      ["project", "Open project tree", language.capabilities.projectTree],
+      ["configuration", "Edit configuration", language.capabilities.configuration],
+      ["targets", "Run configurations and targets", language.capabilities.run]
+    ];
+    return entries.filter(([, , supported]) => supported).map(([action, label]) => ({
+      id: `language.${language.id}.${action}`, label: `${language.name}: ${label}`, category: "Language",
+      when: (context) => context.connected && !context.taskSwitching, execute: () => open(language.id)
+    }));
+  });
+}
+
+export function isCommandId(value: unknown): value is CommandId {
+  return typeof value === "string" && ((commandIds as readonly string[]).includes(value) || /^language\.[a-zA-Z0-9._-]+\.(project|configuration|targets)$/.test(value));
 }

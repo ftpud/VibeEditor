@@ -2,9 +2,9 @@ import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { WorkspaceFileSystem } from "./filesystem.js";
+import { WorkspaceFileSystem } from "../../../filesystem.js";
 import { JavaProjectService } from "./java.js";
-import { WorkspaceStateStore } from "./workspace-state.js";
+import { WorkspaceStateStore } from "../../../workspace-state.js";
 
 async function createMavenWorkspace(onEvent: ConstructorParameters<typeof JavaProjectService>[2] = () => undefined, onBuildSucceeded?: () => Promise<void>) {
   const root = await mkdtemp(path.join(tmpdir(), "remote-ide-java-"));

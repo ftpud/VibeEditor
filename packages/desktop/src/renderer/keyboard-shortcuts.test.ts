@@ -19,3 +19,10 @@ describe("keyboard shortcut settings", () => {
     expect(JSON.parse(serializeShortcutSetting(bindings)).version).toBe(1);
   });
 });
+
+it("round trips plugin language shortcuts and migrates the Java configuration command", () => {
+  const bindings = parseShortcutSetting(JSON.stringify({ "java.configuration": "Ctrl+J", "language.custom.targets": "Ctrl+R" }), "linux");
+  expect(bindings["language.java.configuration"]).toBe("Ctrl+J");
+  expect(bindings["language.custom.targets"]).toBe("Ctrl+R");
+  expect(parseShortcutSetting(serializeShortcutSetting(bindings), "linux")).toEqual(bindings);
+});

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { assertWorkflowModelAvailable, settleWorkflowSession, workflowCapturesSnapshots, workflowConfiguration, workflowTurnInstructions } from "./server.js";
-import { ClaudeSessionManager } from "./ai/providers/claude.js";
+import { ClaudeSessionManager } from "./plugins/builtin.js";
 import { WebSocket } from "ws";
 import { assertRequestRoot, assertRootRemovalAllowed, assertSessionChangeAllowed, LiveRootSelections, permissionTargetWorkspace, protocolHandshake, renameWorkspacePaths, rootRemovalBlocker, selectRootWorkspace, sendWebSocketData, transactionalRootSelection, WorkspaceWatchBatcher } from "./server.js";
 

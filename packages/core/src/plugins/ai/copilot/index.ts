@@ -1,6 +1,7 @@
+import type { ProviderContext } from "../../../ai/stdio-provider.js";
 import type { AiConfiguration, AiModel, AiProviderDescriptor } from "@remote-ide/acp";
-import { StdioAcpProvider } from "../stdio-provider.js";
-import type { InstallationSpec } from "../provider-installations.js";
+import { StdioAcpProvider } from "../../../ai/stdio-provider.js";
+import type { InstallationSpec } from "../../../ai/provider-installations.js";
 
 /** Used only when the Copilot ACP server cannot be reached; the live list wins. */
 const FALLBACK_MODELS: { id: string; name: string; reasoningLevels: string[]; price: string; priceTier: string }[] = [
@@ -40,3 +41,6 @@ export class CopilotSessionManager extends StdioAcpProvider {
     return FALLBACK_MODELS.map((model) => ({ id: model.id, name: model.name, defaultReasoning: model.reasoningLevels.includes("medium") ? "medium" : "", reasoningLevels: model.reasoningLevels, ...(model.price ? { price: model.price, priceTier: model.priceTier } : {}) }));
   }
 }
+
+export { PROVIDER_API_VERSION as apiVersion } from "../../../ai/stdio-provider.js";
+export const createProvider = (context: ProviderContext) => new CopilotSessionManager(context);

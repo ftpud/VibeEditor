@@ -43,7 +43,7 @@ the composition root `createAcpRegistry` (`packages/core/src/ai/index.ts`).
 
 ## Part 2: Language support (Java first)
 
-Current state: Java is wired through `core/src/java*.ts`, `jdtls.ts`, the `java.*`
+Current state: Java is wired through `core/src/plugins/languages/java/`, the `java.*`
 requests in `protocol/src/index.ts` (~96 lines), `server.ts` (~52 refs),
 `workspace-state.ts` (~22), `tools.ts`, and renderer `model.ts`,
 `command-registry.ts`, `debug-editor.tsx`, `DebugVariable.tsx`.
@@ -67,19 +67,19 @@ requests in `protocol/src/index.ts` (~96 lines), `server.ts` (~52 refs),
 - [x] Decide how language-specific extras (opaque `extra` validated by `validateExtra`) are typed (typed union per built-in language vs. an opaque `extra` payload with a schema from the service descriptor).
 
 ### 2.4 Move Java onto the contract
-- [x] Implement `JavaLanguageService` by wrapping (adapter in core/src/language/java-service.ts, not yet routed from server.ts) the existing modules (`java.ts`, `jdtls.ts`, `java-configuration.ts`, caches); no behaviour change.
-- [ ] Move `.settings/java.json` handling and Maven loading inside it.
-- [ ] Replace Java calls in `server.ts`, `workspace-state.ts` and `tools.ts` with registry lookups.
-- [ ] Keep `java.test.ts`, `jdtls.test.ts`, `java-debug.integration.test.ts` passing unchanged as the regression suite.
+- [x] Implement `JavaLanguageService` by wrapping (adapter in core/src/plugins/languages/java/service.ts, routed through LanguageSessions) the existing modules (`java.ts`, `jdtls.ts`, `java-configuration.ts`, caches); no behaviour change.
+- [x] Move `.settings/java.json` handling and Maven loading inside it (validation in core/src/plugins/languages/java/java-settings.ts; JavaLanguageService owns the project service).
+- [x] Replace Java calls in `server.ts`, `workspace-state.ts` and `tools.ts` with registry lookups (tool specs in plugins/languages/java/tools.ts; workspace-state delegates to java-settings.ts).
+- [x] Keep `java.test.ts`, `jdtls.test.ts`, `java-debug.integration.test.ts` passing unchanged as the regression suite.
 
 ### 2.5 Renderer side
 - [x] Switch Desktop callers in `client.ts` to the `language.*` requests. (Done for build/run/stop/check/symbols/LSP/debug/project tree/output/exit/semantic events. Still `java.*` by design: Maven load, configuration dialog, run-config select, options, main classes, `java.debug.state`.)
-- [x] Make debug UI (`debug-editor.tsx`, `DebugVariable.tsx`) driven by generic debug types (capability-flag gating of the toolbar is still open).
-- [ ] Drive project tree, run configurations and commands (`command-registry.ts`) from the language descriptor.
-- [ ] Rename Java-named generic UI (Git dialogs, `model.ts` fields) where they are not Java-specific.
+- [x] Make debug UI (`debug-editor.tsx`, `DebugVariable.tsx`) driven by generic debug types (including capability-driven toolbar gating).
+- [x] Drive project tree, run configurations and commands (`command-registry.ts`) from the language descriptor. Shared LanguageTools discovers all services, gates controls by capabilities, and keeps Maven/HotSwap extras in the Java views.
+- [x] Rename Java-named generic UI (Git dialogs, `model.ts` fields) where they are not Java-specific. The generic panel identity is `languageOutput` (legacy setting migrated); Git dialogs already use shared editor types and only retain Java in multi-language syntax maps.
 
 ### 2.6 Prove the interface with a second language
-- [x] Add a minimal second `LanguageService` (Node via npm scripts in core/src/language/node-service.ts; no LSP yet) (e.g. Node/TypeScript via `typescript-language-server`, or Python via `pyright`) as a built-in.
+- [x] Add a minimal second `LanguageService` (Node via npm scripts in core/src/plugins/languages/node/service.ts; no LSP yet) (e.g. Node/TypeScript via `typescript-language-server`, or Python via `pyright`) as a built-in.
 - [x] Fix whatever in the contract turns out to be Java-shaped (opaque revision, debug commands, optional LSP methods).
 
 ## Part 3: Plugin loader (after Parts 1 and 2)

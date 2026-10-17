@@ -10,7 +10,7 @@ const BUILT_IN = /["'](codex|claude|copilot)["']/;
 function sources(directory: string): string[] {
   return readdirSync(directory).flatMap((name) => {
     const full = path.join(directory, name);
-    if (statSync(full).isDirectory()) return full.endsWith(path.join("ai", "providers")) ? [] : sources(full);
+    if (statSync(full).isDirectory()) return full.endsWith(path.join("plugins", "ai")) ? [] : sources(full);
     return /\.tsx?$/.test(name) && !/\.test\.tsx?$/.test(name) ? [full] : [];
   });
 }

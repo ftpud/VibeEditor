@@ -2,9 +2,9 @@ import { mkdtemp, mkdir, writeFile, rm, realpath } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { CodexSessionManager } from "./codex.js";
-import { StdioAcpProvider } from "../stdio-provider.js";
-import { providerInstallations } from "../provider-installations.js";
+import { CodexSessionManager } from "./index.js";
+import { StdioAcpProvider } from "../../../ai/stdio-provider.js";
+import { providerInstallations } from "../../../ai/provider-installations.js";
 import { readCodexAccountQuota } from "./codex-usage.js";
 
 vi.mock("./codex-usage.js", () => ({ readCodexAccountQuota: vi.fn() }));

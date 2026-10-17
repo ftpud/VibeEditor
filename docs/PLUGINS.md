@@ -53,3 +53,24 @@ Reviewed in `packages/core/src/plugins/loader.ts`:
   separate process.
 - The renderer half (contributing UI bundles from the remote Core) is not
   implemented: the only Desktop surface is the read-only plugin list.
+
+## Built-in plugin layout
+
+Built-ins use the same contracts as external plugins and each lives in its own
+directory inside the Core package, with its tests and fixtures:
+
+```
+packages/core/src/plugins/
+  builtin.ts            the only module shared Core imports to reach built-ins
+  ai/<id>/              AI providers (index.ts exports the provider factory)
+  languages/java/       Java service, JDT LS, Maven/config, caches, host tools
+  languages/node/       Node (npm scripts) service
+  loader.ts             external plugin loader (REMOTE_IDE_PLUGINS_DIR)
+```
+
+Java-only Desktop UI mirrors this under `packages/desktop/src/renderer/plugins/languages/java/` (bundled statically; remote renderer bundles stay deferred). Shared pieces such as `DebugVariable` and `ProjectTree` stay in the renderer root.
+
+`plugins/isolation.test.ts` fails when shared code imports a plugin directory
+directly, or when one plugin imports another. Plugin-owned workspace-state
+fields (Java) register their validators with `registerWorkspaceStateValidator`;
+host tools register through `registerTools`.

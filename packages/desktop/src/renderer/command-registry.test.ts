@@ -22,3 +22,13 @@ describe("command registry", () => {
     expect(shortcutMatches({ key: "p", ctrlKey: true, metaKey: false, altKey: false, shiftKey: false }, "Ctrl+Shift+P")).toBe(false);
   });
 });
+
+it("creates language commands only for advertised capabilities", async () => {
+  const { languageCommands } = await import("./command-registry");
+  const open = vi.fn();
+  const commands = languageCommands([{ id: "custom", name: "Custom", extensions: [], projectMarkers: [], capabilities: { projectTree: true, build: false, run: true, debug: false, lsp: false, workspaceSymbols: false, configuration: false } }], open);
+  expect(commands.map(({ id }) => id)).toEqual(["language.custom.project", "language.custom.targets"]);
+  expect(commands.every((command) => !commandEnabled(command, { ...context, connected: false }))).toBe(true);
+  commands[0]!.execute();
+  expect(open).toHaveBeenCalledWith("custom");
+});

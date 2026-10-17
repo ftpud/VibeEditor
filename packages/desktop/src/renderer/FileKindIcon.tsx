@@ -1,6 +1,6 @@
 import { Braces, File, FileCode2, FileJson, FileText, Hash } from "lucide-react";
 import type { JavaFileType } from "@remote-ide/protocol";
-import { JavaFileIcon } from "./JavaFileIcon";
+import { JavaFileIcon } from "./plugins/languages/java";
 
 export function FileKindIcon({ name, javaType }: { name: string; javaType?: JavaFileType }) {
   const extension = name.split(".").pop()?.toLowerCase() ?? "";

@@ -24,11 +24,9 @@ import { TerminalSessionHost } from "./process-manager.js";
 import { GitService } from "./git.js";
 import { WorkspaceStateStore, flushWorkspaceStateWrites } from "./workspace-state.js";
 import { WorkspaceSearch } from "./search.js";
-import { JavaProjectService } from "./java.js";
-import { JdtLanguageService } from "./jdtls.js";
 import { LanguageRegistry, LanguageSessions } from "./language/registry.js";
-import { JavaLanguageService, JAVA_DESCRIPTOR } from "./language/java-service.js";
-import { NODE_DESCRIPTOR, NodeLanguageService } from "./language/node-service.js";
+import type { LanguageServiceEvents } from "./language/service.js";
+import { BUILT_IN_LANGUAGES, JavaLanguageService } from "./plugins/builtin.js";
 import type { PluginStatus } from "@remote-ide/protocol";
 import { loadPlugins, pluginsDirectory } from "./plugins/loader.js";
 import { handleLanguageRequest } from "./language/routes.js";
@@ -71,8 +69,6 @@ type SessionServices = {
   filesystem: WorkspaceFileSystem;
   search: WorkspaceSearch;
   git: GitService;
-  java: JavaProjectService;
-  jdt: JdtLanguageService;
   languages: LanguageSessions;
   plugins: PluginStatus[];
   workspaceState: WorkspaceStateStore;
@@ -273,7 +269,7 @@ export async function createServer(host: string, port: number, workspacePath: st
   const checkpointStore = (target: string) => { const key = path.resolve(target); let store = checkpointStores.get(key); if (!store) { store = new TaskCheckpointStore(key); checkpointStores.set(key, store); } return store; };
   await Promise.all([rootWorkspace, ...savedTasks.tasks.map((task) => tasks.taskPath(task.id))].map((target) => checkpointStore(target).recover()));
   const taskGitChanged = (changedWorkspace: string) => { void ownerRootId(changedWorkspace).then((rootId) => { if (!rootId) return; const encoded = JSON.stringify({ type: "taskGit.changed", payload: { rootId } } satisfies ServerEvent); for (const socket of activeSessions) sendWebSocketData(socket, encoded); }); };
-  const plugins = await loadPlugins(undefined, { builtInLanguages: new Set([JAVA_DESCRIPTOR.id, NODE_DESCRIPTOR.id]) });
+  const plugins = await loadPlugins(undefined, { builtInLanguages: new Set(BUILT_IN_LANGUAGES.map((language) => language.descriptor.id)) });
   for (const plugin of plugins.status) if (plugin.state === "failed") console.warn(`Plugin ${plugin.id} not loaded: ${plugin.error}`);
   const acp = createAcpRegistry(aiChanged, {
     begin: async (target, provider, prompt, sessionId, provenance) => { const id = await checkpointStore(target).begin(provider as AiProvider, prompt, sessionId, undefined, provenance); taskGitChanged(target); return id; },
@@ -556,38 +552,24 @@ export async function createServer(host: string, port: number, workspacePath: st
       const search = new WorkspaceSearch(filesystem);
       const git = new GitService(nextWorkspace);
       const send = (message: ServerEvent) => { if (socket.readyState === WebSocket.OPEN) sendWebSocketData(socket, JSON.stringify(message)); };
-      // Java is the first LanguageService; `java`/`jdt` stay available for the legacy java.* routes until callers move.
-      const languageRegistry = new LanguageRegistry().register(JAVA_DESCRIPTOR, () => new JavaLanguageService(filesystem, workspaceState, {
-        output: (data, stream) => send({ type: "language.output", payload: { rootId: ownerRootId, language: "java", data, stream } }),
-        exit: (exitCode, signal) => send({ type: "language.exit", payload: { rootId: ownerRootId, language: "java", exitCode, signal } }),
-        debugState: (state) => send({ type: "language.debug.state", payload: { ...state, rootId: ownerRootId, language: "java" } }),
-        semanticChanged: () => send({ type: "language.semantic.changed", payload: { rootId: ownerRootId, language: "java" } })
-      }, undefined, {
-        // Debug state is the only legacy event Desktop still consumes: it needs Java's class and method fields.
-        process: (event) => { if (event.type === "debug") send({ type: "java.debug.state", payload: { ...event.state, rootId: ownerRootId } }); },
-        semanticChanged: () => undefined
-      }));
-      languageRegistry.register(NODE_DESCRIPTOR, (workspace) => new NodeLanguageService(workspace, {
-        output: (data, stream) => send({ type: "language.output", payload: { rootId: ownerRootId, language: "node", data, stream } }),
-        exit: (exitCode, signal) => send({ type: "language.exit", payload: { rootId: ownerRootId, language: "node", exitCode, signal } }),
-        debugState: () => undefined,
-        semanticChanged: () => undefined
-      }));
+      const eventsFor = (language: string): LanguageServiceEvents => ({
+        output: (data, stream) => send({ type: "language.output", payload: { rootId: ownerRootId, language, data, stream } }),
+        exit: (exitCode, signal) => send({ type: "language.exit", payload: { rootId: ownerRootId, language, exitCode, signal } }),
+        debugState: (state) => send({ type: "language.debug.state", payload: { ...state, rootId: ownerRootId, language } }),
+        semanticChanged: () => send({ type: "language.semantic.changed", payload: { rootId: ownerRootId, language } })
+      });
+      const languageRegistry = new LanguageRegistry();
+      for (const language of BUILT_IN_LANGUAGES) {
+        languageRegistry.register(language.descriptor, (workspace) => language.create({ workspace, filesystem, state: workspaceState, events: eventsFor(language.descriptor.id), rootId: ownerRootId, emit: send }));
+      }
       for (const contribution of plugins.languages) {
         const language = contribution.descriptor.id;
-        languageRegistry.register(contribution.descriptor, (workspace) => contribution.create(workspace, {
-          output: (data, stream) => send({ type: "language.output", payload: { rootId: ownerRootId, language, data, stream } }),
-          exit: (exitCode, signal) => send({ type: "language.exit", payload: { rootId: ownerRootId, language, exitCode, signal } }),
-          debugState: (state) => send({ type: "language.debug.state", payload: { ...state, rootId: ownerRootId, language } }),
-          semanticChanged: () => send({ type: "language.semantic.changed", payload: { rootId: ownerRootId, language } })
-        }));
+        languageRegistry.register(contribution.descriptor, (workspace) => contribution.create(workspace, eventsFor(language)));
       }
       const languages = new LanguageSessions(languageRegistry, nextWorkspace);
-      const javaService = languages.get("java") as JavaLanguageService;
-      const { java, jdt } = javaService;
       const checkpoints = checkpointStore(nextWorkspace); await checkpoints.recover();
       if (socket.readyState !== WebSocket.OPEN) { await languages.dispose(); throw new CoreError("INVALID_REQUEST", "Session closed while services were being prepared"); }
-      return { workspacePath: nextWorkspace, filesystem, search, git, java, jdt, languages, plugins: plugins.status, workspaceState, checkpoints };
+      return { workspacePath: nextWorkspace, filesystem, search, git, languages, plugins: plugins.status, workspaceState, checkpoints };
     };
     let servicesPromise: Promise<SessionServices> | undefined;
     /** Resolves once no task switch is in flight for this connection. */
@@ -879,7 +861,9 @@ async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStor
       if (!(await agents.list(task ? tasks.taskPath(task.id) : rootWorkspace)).some((item) => item.scope === preset.scope && item.name === preset.name)) throw new CoreError("FILE_NOT_FOUND", "Agent preset does not exist in the selected task");
     }
   };
-  const { filesystem, search, git, java, jdt, workspaceState, workspacePath, checkpoints } = services;
+  const { filesystem, search, git, workspaceState, workspacePath, checkpoints } = services;
+  // Legacy java.* requests resolve the Java service through the registry; language.* is the generic path.
+  const javaOf = () => services.languages.get("java") as JavaLanguageService;
   if (request.type !== "workspace.open") filesystem.getWorkspace();
   if (request.type === "filesystem.remoteTransferBegin") return remoteTransfers.begin(workspacePath, request.payload);
   if (request.type === "filesystem.remoteTransferCancel") return { cancelled: remoteTransfers.cancel(request.payload.token) };
@@ -1323,47 +1307,47 @@ async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStor
       return handleLanguageRequest(services.languages.registry, services.languages, request.rootId, request);
     case "java.loadMavenProject": {
       if (typeof request.payload.pomPath !== "string") throw new CoreError("INVALID_REQUEST", "pomPath must be a string");
-      return java.loadMavenProject(request.payload.pomPath);
+      return javaOf().java.loadMavenProject(request.payload.pomPath);
     }
-    case "java.configuration.read": return java.readConfiguration();
-    case "java.configuration.save": return java.saveConfiguration(request.payload.content, request.payload.expectedRevision);
-    case "java.tools.check": return { checks: await java.checkTools(request.payload.content) };
-    case "java.getOptions": return { options: await java.getOptions() };
+    case "java.configuration.read": return javaOf().java.readConfiguration();
+    case "java.configuration.save": return javaOf().java.saveConfiguration(request.payload.content, request.payload.expectedRevision);
+    case "java.tools.check": return { checks: await javaOf().java.checkTools(request.payload.content) };
+    case "java.getOptions": return { options: await javaOf().java.getOptions() };
     case "java.addSourceRoot": {
       if (typeof request.payload.path !== "string") throw new CoreError("INVALID_REQUEST", "path must be a string");
-      return java.addSourceRoot(request.payload.path);
+      return javaOf().java.addSourceRoot(request.payload.path);
     }
-    case "java.getProjectTree": return { tree: await java.getProjectTree() };
+    case "java.getProjectTree": return { tree: await javaOf().java.getProjectTree() };
     case "java.workspaceSymbols": {
-      const result = await jdt.workspaceSymbols(request.payload.query, request.payload.limit);
+      const result = await javaOf().jdt.workspaceSymbols(request.payload.query, request.payload.limit);
       return { ...result, symbols: result.symbols.map((symbol) => ({ ...symbol, rootId: request.rootId })) };
     }
-    case "java.listMainClasses": return { classes: await java.listMainClasses() };
+    case "java.listMainClasses": return { classes: await javaOf().java.listMainClasses() };
     case "java.addRunConfiguration": {
       if (typeof request.payload.name !== "string" || typeof request.payload.mainClass !== "string") throw new CoreError("INVALID_REQUEST", "name and mainClass must be strings");
-      return { options: await java.addRunConfiguration(request.payload.name, request.payload.mainClass) };
+      return { options: await javaOf().java.addRunConfiguration(request.payload.name, request.payload.mainClass) };
     }
     case "java.selectRunConfiguration": {
       if (typeof request.payload.id !== "string") throw new CoreError("INVALID_REQUEST", "id must be a string");
-      return { options: await java.selectRunConfiguration(request.payload.id) };
+      return { options: await javaOf().java.selectRunConfiguration(request.payload.id) };
     }
-    case "java.build": await java.build(); return {};
-    case "java.run": await java.run(); return {};
-    case "java.stop": java.stop(); return {};
-    case "java.debug.setBreakpoints": await java.setDebugBreakpoints(request.payload.breakpoints); return {};
-    case "java.debug.start": await java.debug(request.payload.breakpoints); return {};
-    case "java.debug.applyChanges": return java.applyDebugChanges();
-    case "java.debug.variables": return java.debugVariables(request.payload.reference, request.payload.start);
-    case "java.debug.command": java.debugCommand(request.payload.command); return {};
-    case "java.check": return { diagnostics: (await java.check()).map((diagnostic) => ({ ...diagnostic, rootId: request.rootId })) };
+    case "java.build": await javaOf().java.build(); return {};
+    case "java.run": await javaOf().java.run(); return {};
+    case "java.stop": javaOf().java.stop(); return {};
+    case "java.debug.setBreakpoints": await javaOf().java.setDebugBreakpoints(request.payload.breakpoints); return {};
+    case "java.debug.start": await javaOf().java.debug(request.payload.breakpoints); return {};
+    case "java.debug.applyChanges": return javaOf().java.applyDebugChanges();
+    case "java.debug.variables": return javaOf().java.debugVariables(request.payload.reference, request.payload.start);
+    case "java.debug.command": javaOf().java.debugCommand(request.payload.command); return {};
+    case "java.check": return { diagnostics: (await javaOf().java.check()).map((diagnostic) => ({ ...diagnostic, rootId: request.rootId })) };
     case "java.completeType": {
       if (typeof request.payload.prefix !== "string") throw new CoreError("INVALID_REQUEST", "prefix must be a string");
-      return { suggestions: await java.completeType(request.payload.prefix) };
+      return { suggestions: await javaOf().java.completeType(request.payload.prefix) };
     }
-    case "java.completion": return { items: await jdt.completion(request.payload.path, request.payload.content, request.payload.line, request.payload.column) };
-    case "java.definition": return { locations: (await jdt.definition(request.payload.path, request.payload.content, request.payload.line, request.payload.column)).map((location) => ({ ...location, rootId: request.rootId })) };
-    case "java.references": return { locations: (await jdt.references(request.payload.path, request.payload.content, request.payload.line, request.payload.column)).map((location) => ({ ...location, rootId: request.rootId })) };
-    case "java.semanticTokens": return { tokens: await jdt.semanticTokens(request.payload.path, request.payload.content) };
+    case "java.completion": return { items: await javaOf().jdt.completion(request.payload.path, request.payload.content, request.payload.line, request.payload.column) };
+    case "java.definition": return { locations: (await javaOf().jdt.definition(request.payload.path, request.payload.content, request.payload.line, request.payload.column)).map((location) => ({ ...location, rootId: request.rootId })) };
+    case "java.references": return { locations: (await javaOf().jdt.references(request.payload.path, request.payload.content, request.payload.line, request.payload.column)).map((location) => ({ ...location, rootId: request.rootId })) };
+    case "java.semanticTokens": return { tokens: await javaOf().jdt.semanticTokens(request.payload.path, request.payload.content) };
   }
 }
 

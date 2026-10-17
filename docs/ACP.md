@@ -62,7 +62,7 @@ An ACP plugin supplies:
 - model discovery, resumable session persistence, configuration, typed-content send, permission resolution, clear, and optional usage operations;
 - translation of the common MCP server and custom-agent structures to its native CLI/API.
 
-To add a provider, subclass `AcpProvider`, implement its required session/model/configuration operations under `ai/providers`, and register one instance in `ai/index.ts`. `AiProvider` is an open string, and the desktop builds its provider selector and extra controls from `ai.providers`, so no protocol or UI enum needs editing.
+To add a provider, subclass `AcpProvider`, implement its required session/model/configuration operations in a dedicated `plugins/ai/<id>/` directory and contribute its factory through `plugins/builtin.ts`. `AiProvider` is an open string, and the desktop builds its provider selector and extra controls from `ai.providers`, so no protocol or UI enum needs editing.
 
 ## Declarative providers
 
@@ -420,3 +420,19 @@ Successful writes broadcast `configuration.changed`; Desktop refreshes its agent
 skills, useful files, workflows and tasks panels. Global changes refresh every
 connected project's panels. Global here means projects sharing the same Core
 state directory, rather than an installation across unrelated Core hosts.
+
+
+## Built-in provider source layout
+
+Each built-in provider is isolated under `packages/core/src/plugins/ai/<id>/`:
+`codex`, `claude`, and `copilot`. Its `index.ts` exports `createProvider(context)`
+and `apiVersion`, alongside the provider class. Provider-specific helpers and
+unit tests live in the same directory (for example Codex account-usage parsing).
+`plugins/builtin.ts` is the composition boundary that lists built-in factories;
+shared Core modules import that boundary instead of individual provider files.
+
+The ACP host, registry, authentication and installation machinery remain shared
+under `core/src/ai/`. Fake ACP agents and cross-provider integration tests also
+stay there because they exercise the common protocol rather than one plugin.
+This layout groups source files; it does not change runtime provider installation
+paths or load executable code from workspace plugin directories.

@@ -1,14 +1,14 @@
 import type { JavaBreakpoint, JavaDebugState, JavaProjectNode } from "@remote-ide/protocol";
-import { CoreError } from "../errors.js";
-import { JavaProjectService, type JavaProcessEvent } from "../java.js";
-import { JdtLanguageService } from "../jdtls.js";
-import type { WorkspaceFileSystem } from "../filesystem.js";
-import type { WorkspaceStateStore } from "../workspace-state.js";
-import type { LanguageBreakpoint, LanguageDebugState, LanguageDescriptor, LanguageExtra, LanguageProjectNode, LanguageService, LanguageServiceEvents } from "./service.js";
+import { CoreError } from "../../../errors.js";
+import { JavaProjectService, type JavaProcessEvent } from "./java.js";
+import { JdtLanguageService } from "./jdtls.js";
+import type { WorkspaceFileSystem } from "../../../filesystem.js";
+import type { WorkspaceStateStore } from "../../../workspace-state.js";
+import type { LanguageBreakpoint, LanguageDebugState, LanguageDescriptor, LanguageExtra, LanguageProjectNode, LanguageService, LanguageServiceEvents } from "../../../language/service.js";
 
 export const JAVA_DESCRIPTOR: LanguageDescriptor = {
   id: "java", name: "Java", extensions: ["java"], projectMarkers: ["pom.xml", ".settings/java.json"],
-  capabilities: { projectTree: true, build: true, run: true, debug: true, lsp: true, workspaceSymbols: true, configuration: true }
+  capabilities: { projectTree: true, build: true, run: true, debug: true, lsp: true, workspaceSymbols: true, configuration: true, runConfigurations: true, sourceRoots: true }
 };
 
 const extra = (value: unknown): LanguageExtra => (value && typeof value === "object" ? { ...(value as object) } : {}) as LanguageExtra;

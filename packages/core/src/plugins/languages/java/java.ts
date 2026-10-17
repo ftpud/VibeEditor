@@ -7,11 +7,12 @@ import { XMLParser } from "fast-xml-parser";
 import type { FileRevision, JavaToolCheck, JavaRunConfiguration, JavaApplyChangesResult, JavaBreakpoint, JavaDebugVariable, JavaDebugState, JavaDiagnostic, JavaMainClass, JavaProjectNode, JavaProjectOptions, JavaTypeSuggestion } from "@remote-ide/protocol";
 import { javaBuildKey, javaBuildFingerprint, javaOutputFingerprint } from "./java-launch-cache.js";
 import { javaFileType } from "./java-file-type.js";
-import { CoreError } from "./errors.js";
-import { WorkspaceFileSystem } from "./filesystem.js";
+import { CoreError } from "../../../errors.js";
+import { WorkspaceFileSystem } from "../../../filesystem.js";
 import { javaConfigurationPath } from "@remote-ide/protocol";
 import { javaLaunchEnvironment, expandJavaToolPath, javaConfigurationTemplate, javaSpawnError, javaToolEnvironment, javaToolExecutable, parseJavaConfiguration, readJavaConfiguration, writeJavaConfiguration } from "./java-configuration.js";
-import { validateJavaBreakpoints, WorkspaceStateStore } from "./workspace-state.js";
+import { validateJavaBreakpoints } from "./java-settings.js";
+import type { WorkspaceStateStore } from "../../../workspace-state.js";
 
 export type JavaProcessEvent =
   | { type: "output"; data: string }

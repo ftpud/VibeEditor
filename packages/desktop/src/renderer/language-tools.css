@@ -1,0 +1,16 @@
+.language-tools { width: min(1000px, 92vw); max-height: 88vh; overflow: auto; padding: 20px; border: 1px solid var(--border-subtle); border-radius: 8px; background: var(--surface-panel); color: var(--text-primary); }
+.language-tools header, .language-tools-actions { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
+.language-tools header { justify-content: space-between; }
+.language-tools h2, .language-tools h3 { margin: 8px 0; }
+.language-tools label { display: block; margin: 8px 0; }
+.language-tools input, .language-tools select, .language-tools textarea { background: var(--surface-base); color: var(--text-primary); border: 1px solid var(--border-subtle); border-radius: var(--radius-control); padding: 5px; }
+.language-tools input, .language-tools select { margin-left: 8px; max-width: 100%; }
+.language-tools button { background: var(--surface-raised); border: 1px solid var(--border-subtle); border-radius: var(--radius-control); padding: 5px 8px; cursor: pointer; }
+.language-tools button:disabled { opacity: .5; cursor: default; }
+.language-tools textarea { display: block; box-sizing: border-box; width: 100%; min-height: 180px; font-family: monospace; }
+.language-tools-columns { display: grid; grid-template-columns: minmax(160px, 1fr) minmax(280px, 2fr); gap: 20px; }
+.language-project-tree { list-style: none; padding-left: 16px; }
+.language-project-tree button { text-align: left; }
+.language-tools-output { max-height: 240px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
+.language-tools-error { color: var(--danger); white-space: pre-wrap; }
+@media (max-width: 650px) { .language-tools-columns { grid-template-columns: 1fr; } }

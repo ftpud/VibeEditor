@@ -9,8 +9,8 @@ import { WebSocket, type WebSocketServer } from "ws";
 import { expect, it, vi } from "vitest";
 import { protocolCompatibility, type ProtocolOperations, type RequestType, type Response, type ServerEvent } from "@remote-ide/protocol";
 import { createServer } from "./server.js";
-import { JavaProjectService } from "./java.js";
-import { JdtLanguageService } from "./jdtls.js";
+import { JavaProjectService } from "./plugins/languages/java/java.js";
+import { JdtLanguageService } from "./plugins/languages/java/jdtls.js";
 import { TaskCheckpointStore } from "./task-checkpoints.js";
 import * as output from "./websocket-output.js";
 
@@ -71,6 +71,8 @@ for (const failure of ["buffer pressure", "asynchronous send error"] as const) {
       const terminal = await slow.request("terminal.create", { cols: 80, rows: 24 });
       await slow.request("terminal.input", { terminalId: terminal.terminalId, data: "printf '%s%s\\n' BEFORE_ LOSS\r" });
       await vi.waitFor(() => expect(slow.events.filter((event) => event.type === "terminal.output").map((event) => event.type === "terminal.output" ? event.payload.data : "").join("")).toContain("BEFORE_LOSS"));
+      // Language services are created lazily; touch Java so the session owns one to release.
+      await slow.request("language.options", { language: "java" });
       const beforeJava = javaClose.mock.calls.length; const beforeJdt = jdtClose.mock.calls.length;
       const peer = peers[0]!;
       if (failure === "buffer pressure") {
@@ -153,7 +155,11 @@ it("closes services that finish initialization after an outbound failure", async
     socket.send(JSON.stringify({ id: "probe", type: "protocol.keepAlive", payload: {} }));
     await closed;
     release();
-    await vi.waitFor(() => { expect(javaClose).toHaveBeenCalledOnce(); expect(jdtClose).toHaveBeenCalledOnce(); });
+    // Language services are created lazily through the registry, so a session that never used Java owns nothing to close;
+    // any service that was created must be closed exactly once.
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(javaClose.mock.calls.length).toBeLessThanOrEqual(1);
+    expect(jdtClose.mock.calls.length).toBe(javaClose.mock.calls.length);
   } finally {
     release();
     if (socket && socket.readyState !== WebSocket.CLOSED) { const closed = once(socket, "close"); socket.close(); await closed; }

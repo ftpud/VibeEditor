@@ -12,7 +12,7 @@ import { javaConfigurationPath, resolveSkillIds, skillAllowedForAgent } from "@r
 import { DiffEditor, type Monaco } from "@monaco-editor/react";
 import { Archive, Bookmark, GraduationCap, Sparkles, History, Minus, RotateCcw, ArrowDown, ArrowUp, ArrowUpRight, Bot, Bug, Check, ChevronDown, ChevronRight, CircleAlert, Clock, ClipboardCopy, Zap, Coffee, Columns2, Eye, EyeOff, File, FileCode2, FileDiff, FileText, Folder, FolderOpen, GitBranch, GitCompareArrows, GitMerge, Library, ListTodo, ListTree, LoaderCircle, LogOut, MoreVertical, Package, Palette, Pencil, Pin, PinOff, Play, Plus, RefreshCw, Save, Search, Settings, ShieldAlert, Square, SquareTerminal, Trash2, Workflow, X } from "lucide-react";
 import { Children, isValidElement, useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
-import type { ManagedWorkflowApp, SkillCatalog, AgentFile, AgentFileScope, AiContinuationTimer, AiConfiguration, AiModel, AiProvider, AiProviderDescriptor, AiSession, AiStatus, AiTaskSummary, AiUsage, FileColor, FileRevision, FileTreeNode, GitBranch as GitBranchInfo, GitDiffHunk, GitHistoryRewritePreview, GitStatusEntry, GitUpstreamStatus, HarnessDefinition, HarnessRun, HarnessStateDiagnostic, HttpResponse, JavaApplyChangesResult, LanguageDebugCommand, JavaBreakpoint, JavaDebugState, JavaProjectNode, JavaProjectOptions, JavaTypeSuggestion, ProtocolOperations, RootedJavaDiagnostic, RootedJavaLspLocation, RootedWorkspaceSymbol, RunConfig, RunConfigScope, SearchResult, TaskCheckpoint, TaskCheckpointFile, UsefulFile, UsefulFileScope, WorkspaceSchedule, WorkspaceTrigger, WorkspaceOptions, WorkspaceRoot, WorkspaceSearchQueries, WorkspaceTask } from "@remote-ide/protocol";
+import type { ManagedWorkflowApp, SkillCatalog, AgentFile, AgentFileScope, AiContinuationTimer, AiConfiguration, AiModel, AiProvider, AiProviderDescriptor, AiSession, AiStatus, AiTaskSummary, AiUsage, FileColor, FileRevision, FileTreeNode, GitBranch as GitBranchInfo, GitDiffHunk, GitHistoryRewritePreview, GitStatusEntry, GitUpstreamStatus, HarnessDefinition, HarnessRun, HarnessStateDiagnostic, HttpResponse, JavaApplyChangesResult, LanguageDebugCommand, LanguageDescriptor, JavaBreakpoint, JavaDebugState, JavaProjectNode, JavaProjectOptions, JavaTypeSuggestion, ProtocolOperations, RootedJavaDiagnostic, RootedJavaLspLocation, RootedWorkspaceSymbol, RunConfig, RunConfigScope, SearchResult, TaskCheckpoint, TaskCheckpointFile, UsefulFile, UsefulFileScope, WorkspaceSchedule, WorkspaceTrigger, WorkspaceOptions, WorkspaceRoot, WorkspaceSearchQueries, WorkspaceTask } from "@remote-ide/protocol";
 import type { editor } from "monaco-editor";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -33,10 +33,11 @@ import { readAiPromptDraft, writeAiPromptDraft } from "./ai-prompt-drafts";
 import { editorTabLabel, initialLayout, type EditorTab, type LayoutModel, type Panel } from "./model";
 import { TerminalPanel } from "./TerminalPanel";
 import { clearViewedTerminalActivity, markTerminalActivity } from "./terminal-activity";
-import { JavaConfigurationDialog } from "./JavaConfigurationDialog";
+import { JavaConfigurationDialog } from "./plugins/languages/java";
 import { languageClient, loadJavaProjectTree } from "./language-client";
 import { attachDebugEditor } from "./debug-editor";
-import { JavaPanel } from "./JavaPanel";
+import { LanguageTools } from "./LanguageTools";
+import { JavaPanel } from "./plugins/languages/java";
 import { ProblemsPanel } from "./ProblemsPanel";
 import { GitLogPanel } from "./GitLogPanel";
 import { GitHistoryDialog } from "./GitHistoryDialog";
@@ -66,7 +67,7 @@ import { MarkdownPreview } from "./MarkdownPreview";
 import { FindInFilesDialog } from "./FindInFilesDialog";
 import { restoredFocusedLeftPanels, initialTaskPanel, switchedTaskPanel, taskPanelPreferenceKey, type ClassicTaskPanel } from "./task-panel-state";
 import { ProjectTree } from "./ProjectTree";
-import { JavaFileIcon } from "./JavaFileIcon";
+import { JavaFileIcon } from "./plugins/languages/java";
 import { FileKindIcon } from "./FileKindIcon";
 import { menuPosition } from "./menu-position";
 import { projectTreeActions, type ProjectTreeAction } from "./project-tree-actions";
@@ -74,7 +75,7 @@ import { copyProjectTreeActions } from "./project-context-menu";
 import { QuickOpenDialog, workspaceFiles } from "./QuickOpenDialog";
 import { CommandPalette } from "./CommandPalette";
 import { WorkspaceSymbolDialog } from "./WorkspaceSymbolDialog";
-import { commandEnabled, defaultShortcutBindings, desktopPlatform, shortcutMatches, type Command, type CommandContext, type CommandId } from "./command-registry";
+import { languageCommands, commandEnabled, defaultShortcutBindings, desktopPlatform, shortcutMatches, type Command, type CommandContext, type CommandId } from "./command-registry";
 import { KEYBOARD_SHORTCUTS_SETTING, migrateShortcutSetting, parseShortcutSetting, serializeShortcutSetting, updateShortcut } from "./keyboard-shortcuts";
 import { EditorStatusBar, type EditorStatusBarHandle } from "./EditorStatusBar";
 import { adjacentEditorTabId, editorShortcutEligible, editorTabShortcut } from "./editor-shortcuts";
@@ -87,7 +88,7 @@ import { ModalFocusManager } from "./accessibility";
 
 type ConnectionStatus = "idle" | "connecting" | "connected" | "failed" | "disconnected" | "workspace-error";
 type StatusKind = "progress" | "success" | "error";
-type BottomPanelType = Extract<Panel["type"], "terminal" | "java" | "problems" | "gitlog">;
+type BottomPanelType = Extract<Panel["type"], "terminal" | "languageOutput" | "problems" | "gitlog">;
 const languageByExtension: Record<string, string> = {
   ts: "typescript", tsx: "typescript", js: "javascript", jsx: "javascript", json: "json", html: "html",
   css: "css", md: "markdown", java: "java", py: "python", yaml: "yaml", yml: "yaml", mta: "yaml", mtaext: "yaml",
@@ -309,6 +310,10 @@ export function App() {
   const [taskGitError, setTaskGitError] = useState("");
   const [gitError, setGitError] = useState("");
   const [workspaceOptionsReady, setWorkspaceOptionsReady] = useState(false);
+  const [languages, setLanguages] = useState<LanguageDescriptor[]>([]);
+  const [languageToolsOpen, setLanguageToolsOpen] = useState(false);
+  const [selectedLanguage, setSelectedLanguage] = useState<string>();
+  const openLanguageTools = (language?: string) => { setSelectedLanguage(language); setLanguageToolsOpen(true); };
   const [javaOptions, setJavaOptions] = useState<JavaProjectOptions>();
   const [javaTree, setJavaTree] = useState<JavaProjectNode[]>([]);
   const [javaLog, setJavaLog] = useState("");
@@ -416,7 +421,7 @@ export function App() {
 
   useEffect(() => {
     if (status !== "connected" || !workspaceOptionsReady || !workspaceKeyRef.current) return;
-    const activePanel = layout.panels.find((panel): panel is Panel & { type: BottomPanelType } => ["terminal", "java", "problems", "gitlog"].includes(panel.type));
+    const activePanel = layout.panels.find((panel): panel is Panel & { type: BottomPanelType } => ["terminal", "languageOutput", "problems", "gitlog"].includes(panel.type));
     writeWorkspaceSetting(workspaceKeyRef.current, "bottom.activePanel", activePanel?.type ?? "");
   }, [layout.panels, status, workspaceOptionsReady]);
   useEffect(() => { if (workspaceOptionsReady && workspaceKeyRef.current) writeWorkspaceSetting(workspaceKeyRef.current, "bottom.terminalHeight", String(terminalHeight)); }, [terminalHeight, workspaceOptionsReady]);
@@ -811,16 +816,17 @@ export function App() {
     }));
     ensureCurrent();
     const activeTerminal = restoredTerminals.find((item) => item.index === options.terminal?.activeTabIndex)?.tab ?? restoredTerminals[0]?.tab;
-    const savedBottomPanel = workspaceKeyRef.current ? readWorkspaceSetting(workspaceKeyRef.current, "bottom.activePanel") : null;
+    const legacyBottomPanel = workspaceKeyRef.current ? readWorkspaceSetting(workspaceKeyRef.current, "bottom.activePanel") : null;
+    const savedBottomPanel = legacyBottomPanel === "java" ? "languageOutput" : legacyBottomPanel;
     const validBottomPanel = savedBottomPanel === "gitlog"
       || (savedBottomPanel === "terminal" && restoredTerminals.length > 0)
-      || ((savedBottomPanel === "java" || savedBottomPanel === "problems") && Boolean(options.javaProject));
+      || ((savedBottomPanel === "languageOutput" || savedBottomPanel === "problems") && Boolean(options.javaProject));
     const bottomPanel: BottomPanelType | undefined = validBottomPanel
       ? savedBottomPanel as BottomPanelType
       : savedBottomPanel === null && (options.terminal?.panelOpen || discovered.length > 0) && restoredTerminals.length > 0 ? "terminal" : undefined;
     setLayout((layout) => current() ? ({
       ...layout,
-      panels: recovery ? layout.panels : [...layout.panels.filter((panel) => !["terminal", "java", "problems", "gitlog"].includes(panel.type)), ...(bottomPanel ? [{ id: bottomPanel, type: bottomPanel }] : [])],
+      panels: recovery ? layout.panels : [...layout.panels.filter((panel) => !["terminal", "languageOutput", "problems", "gitlog"].includes(panel.type)), ...(bottomPanel ? [{ id: bottomPanel, type: bottomPanel }] : [])],
       editorGroups: recovery ? recoverEditorGroups(layout.editorGroups, tabs, activeTabId, rootId, current)
         : layout.editorGroups.map((item, index) => index === 0 ? { ...item, tabs, activeTabId } : item),
       terminalGroup: { ...layout.terminalGroup, tabs: restoredTerminals.map((item) => item.tab), activeTabId: activeTerminal?.id }
@@ -965,7 +971,7 @@ export function App() {
       }
       if (event.type === "java.debug.state") {
         setJavaDebugState(event.payload);
-        if (event.payload.status === "paused") setLayout((current) => ({ ...current, panels: [...current.panels.filter((panel) => !["terminal", "java", "problems", "gitlog"].includes(panel.type)), { id: "java", type: "java" }] }));
+        if (event.payload.status === "paused") setLayout((current) => ({ ...current, panels: [...current.panels.filter((panel) => !["terminal", "languageOutput", "problems", "gitlog"].includes(panel.type)), { id: "languageOutput", type: "languageOutput" }] }));
         return;
       }
       if (event.type === "ai.changed") {
@@ -1718,7 +1724,7 @@ export function App() {
       const result = await client.request("tasks.switch", { ...(taskId ? { taskId } : {}), includeIgnored: showIgnoredRef.current });
       if (!isCurrent()) return;
       terminalWriters.current.clear(); terminalBuffers.current.clear(); markdownBlockTerminals.current.clear();
-      setLayout((current) => { const tabs = current.terminalGroup.tabs.filter((tab) => tab.rootId && tab.rootId !== selectedRootIdRef.current); return { ...current, panels: current.panels.filter((panel) => !["terminal", "java", "problems"].includes(panel.type)), terminalGroup: { ...current.terminalGroup, tabs, activeTabId: tabs[0]?.id } }; });
+      setLayout((current) => { const tabs = current.terminalGroup.tabs.filter((tab) => tab.rootId && tab.rootId !== selectedRootIdRef.current); return { ...current, panels: current.panels.filter((panel) => !["terminal", "languageOutput", "problems"].includes(panel.type)), terminalGroup: { ...current.terminalGroup, tabs, activeTabId: tabs[0]?.id } }; });
       setTasks(result.tasks); setSelectedTaskId(result.selectedTaskId); selectedTaskIdRef.current = result.selectedTaskId; activeTaskRef.current = result.tasks.find((task) => task.id === result.selectedTaskId); setTree(result.tree);
       const switchedPanel = switchedTaskPanel(result.selectedTaskId);
       if (switchedPanel.classic) setClassicSideView(switchedPanel.classic);
@@ -2127,7 +2133,7 @@ export function App() {
         const tab = { id, rootId: selectedRootIdRef.current, terminalId: result.terminalId, title: `Terminal ${current.tabs.length + 1}`, status: "running" as const };
         return { ...current, tabs: [...current.tabs, tab], activeTabId: id };
       });
-      setLayout((current) => ({ ...current, panels: [...current.panels.filter((panel) => !["terminal", "java", "problems", "gitlog"].includes(panel.type)), { id: "terminal", type: "terminal" }] }));
+      setLayout((current) => ({ ...current, panels: [...current.panels.filter((panel) => !["terminal", "languageOutput", "problems", "gitlog"].includes(panel.type)), { id: "terminal", type: "terminal" }] }));
       if (command) await client.request("terminal.input", { terminalId: result.terminalId, data: `${command.replace(/\s+$/, "")}\n` });
       return result.terminalId;
     } catch (error) {
@@ -2145,7 +2151,7 @@ export function App() {
       terminalBuffers.current.set(attached.session.terminalId, attached.session.output);
       updateTerminalGroup((current) => { const alreadyOpen = current.tabs.find((tab) => tab.terminalId === attached.session.terminalId); if (alreadyOpen) return { ...current, activeTabId: alreadyOpen.id }; const id = crypto.randomUUID(); return { ...current, tabs: [...current.tabs, { id, rootId: selectedRootIdRef.current, terminalId: attached.session.terminalId, title, status: attached.session.status === "running" ? "running" : "exited", ...(attached.session.exitCode === undefined ? {} : { exitCode: attached.session.exitCode }), ...(attached.session.status === "running" ? { recovery: "reattached" as const } : {}) }], activeTabId: id }; });
     } else updateTerminalGroup((current) => ({ ...current, activeTabId: existing.id }));
-    setLayout((current) => ({ ...current, panels: [...current.panels.filter((panel) => !["terminal", "java", "problems", "gitlog"].includes(panel.type)), { id: "terminal", type: "terminal" }] }));
+    setLayout((current) => ({ ...current, panels: [...current.panels.filter((panel) => !["terminal", "languageOutput", "problems", "gitlog"].includes(panel.type)), { id: "terminal", type: "terminal" }] }));
     return true;
   };
 
@@ -2172,7 +2178,7 @@ export function App() {
     const existing = terminalId ? layoutRef.current.terminalGroup.tabs.find((tab) => tab.terminalId === terminalId && tab.status === "running") : undefined;
     if (existing && clientRef.current) {
       updateTerminalGroup((current) => ({ ...current, activeTabId: existing.id }));
-      setLayout((current) => ({ ...current, panels: [...current.panels.filter((panel) => !["terminal", "java", "problems", "gitlog"].includes(panel.type)), { id: "terminal", type: "terminal" }] }));
+      setLayout((current) => ({ ...current, panels: [...current.panels.filter((panel) => !["terminal", "languageOutput", "problems", "gitlog"].includes(panel.type)), { id: "terminal", type: "terminal" }] }));
       try { await clientRef.current.request("terminal.input", { terminalId: existing.terminalId, data: `${command.replace(/\s+$/, "")}\n` }); return; }
       catch { markdownBlockTerminals.current.delete(blockId); }
     }
@@ -2195,7 +2201,7 @@ export function App() {
     if (visible) {
       setLayout((current) => ({ ...current, panels: current.panels.filter((panel) => panel.type !== "terminal") }));
     } else if (layout.terminalGroup.tabs.length > 0) {
-      setLayout((current) => ({ ...current, panels: [...current.panels.filter((panel) => !["java", "problems", "gitlog"].includes(panel.type)), { id: "terminal", type: "terminal" }] }));
+      setLayout((current) => ({ ...current, panels: [...current.panels.filter((panel) => !["languageOutput", "problems", "gitlog"].includes(panel.type)), { id: "terminal", type: "terminal" }] }));
     } else {
       void createTerminal();
     }
@@ -2345,38 +2351,38 @@ export function App() {
   };
 
   const toggleJavaPanel = () => {
-    const visible = layout.panels.some((panel) => panel.type === "java");
+    const visible = layout.panels.some((panel) => panel.type === "languageOutput");
     setLayout((current) => ({
       ...current,
-      panels: visible ? current.panels.filter((panel) => panel.type !== "java") : [...current.panels.filter((panel) => !["terminal", "java", "problems", "gitlog"].includes(panel.type)), { id: "java", type: "java" }]
+      panels: visible ? current.panels.filter((panel) => panel.type !== "languageOutput") : [...current.panels.filter((panel) => !["terminal", "languageOutput", "problems", "gitlog"].includes(panel.type)), { id: "languageOutput", type: "languageOutput" }]
     }));
   };
 
   const toggleProblemsPanel = () => {
     const visible = layout.panels.some((panel) => panel.type === "problems");
-    setLayout((current) => ({ ...current, panels: visible ? current.panels.filter((panel) => panel.type !== "problems") : [...current.panels.filter((panel) => !["terminal", "java", "problems", "gitlog"].includes(panel.type)), { id: "problems", type: "problems" }] }));
+    setLayout((current) => ({ ...current, panels: visible ? current.panels.filter((panel) => panel.type !== "problems") : [...current.panels.filter((panel) => !["terminal", "languageOutput", "problems", "gitlog"].includes(panel.type)), { id: "problems", type: "problems" }] }));
     if (!visible) void checkJava();
   };
 
   const toggleGitLogPanel = () => {
     const visible = layout.panels.some((panel) => panel.type === "gitlog");
-    setLayout((current) => ({ ...current, panels: visible ? current.panels.filter((panel) => panel.type !== "gitlog") : [...current.panels.filter((panel) => !["terminal", "java", "problems", "gitlog"].includes(panel.type)), { id: "gitlog", type: "gitlog" }] }));
+    setLayout((current) => ({ ...current, panels: visible ? current.panels.filter((panel) => panel.type !== "gitlog") : [...current.panels.filter((panel) => !["terminal", "languageOutput", "problems", "gitlog"].includes(panel.type)), { id: "gitlog", type: "gitlog" }] }));
   };
 
-  const saveJavaLaunchFiles = async () => {
+  const saveLaunchFiles = async () => {
     const client = clientRef.current!;
     const rootId = client.getRoot();
     for (const tab of layoutRef.current.editorGroups.flatMap((group) => group.tabs)) {
-      if (tab.type === "file" && (!tab.rootId || tab.rootId === rootId) && tab.dirty && !await saveFileTab(tab)) throw new Error(`Could not save ${tab.path} before launching Java`);
+      if (tab.type === "file" && (!tab.rootId || tab.rootId === rootId) && tab.dirty && !await saveFileTab(tab)) throw new Error(`Could not save ${tab.path} before launching a process`);
     }
     if (clientRef.current !== client || client.getRoot() !== rootId) throw new Error("Workspace changed while saving edits");
     return client;
   };
 
   const runJavaAction = async (action: "language.build" | "language.run") => {
-    setLayout((current) => ({ ...current, panels: [...current.panels.filter((panel) => !["terminal", "java", "problems", "gitlog"].includes(panel.type)), { id: "java", type: "java" }] }));
+    setLayout((current) => ({ ...current, panels: [...current.panels.filter((panel) => !["terminal", "languageOutput", "problems", "gitlog"].includes(panel.type)), { id: "languageOutput", type: "languageOutput" }] }));
     setJavaRunning(true);
-    try { const client = await saveJavaLaunchFiles(); await client.request(action, { language: "java" }, { timeoutMs: 10 * 60_000 }); }
+    try { const client = await saveLaunchFiles(); await client.request(action, { language: "java" }, { timeoutMs: 10 * 60_000 }); }
     catch (error) { setJavaRunning(false); setJavaLog((current) => `${current}${error instanceof Error ? error.message : "Java process failed"}\n`); if (error instanceof Error && error.message.includes("Java configuration")) setShowRunConfigurationDialog(true); }
   };
 
@@ -2385,10 +2391,10 @@ export function App() {
   };
 
   const debugJava = async () => {
-    setLayout((current) => ({ ...current, panels: [...current.panels.filter((panel) => !["terminal", "java", "problems", "gitlog"].includes(panel.type)), { id: "java", type: "java" }] }));
+    setLayout((current) => ({ ...current, panels: [...current.panels.filter((panel) => !["terminal", "languageOutput", "problems", "gitlog"].includes(panel.type)), { id: "languageOutput", type: "languageOutput" }] }));
     setJavaRunning(true);
     try {
-      const client = await saveJavaLaunchFiles();
+      const client = await saveLaunchFiles();
       await languageClient(client, "java").startDebug(javaBreakpoints.map(({ className, ...breakpoint }) => ({ ...breakpoint, extra: { className } })), { timeoutMs: 10 * 60_000 });
     }
     catch (error) { setJavaRunning(false); setJavaDebugState({ status: "stopped", variables: [] }); setJavaLog((current) => `${current}${error instanceof Error ? error.message : "Debugger failed"}\n`); if (error instanceof Error && error.message.includes("Java configuration")) setShowRunConfigurationDialog(true); }
@@ -2936,6 +2942,14 @@ export function App() {
     catch (error) { setStatusMessage(error instanceof Error ? error.message : "Could not remove workspace root"); }
   };
   const rightSidebarOpen = rightPanels.project || rightPanels.git || rightPanels.useful || rightPanels.agents || rightPanels.skills || ((rightPanels.taskGit || rightPanels.promptHistory) && Boolean(selectedTaskId)) || (rightPanels.java && Boolean(javaOptions));
+  useEffect(() => {
+    const client = clientRef.current;
+    setLanguages([]);
+    if (status !== "connected" || !client) return;
+    let current = true;
+    void client.request("language.list", {}).then(({ languages }) => { if (current) setLanguages(languages); }).catch((error: unknown) => { if (current) setStatusMessage(error instanceof Error ? error.message : "Could not list language services"); });
+    return () => { current = false; };
+  }, [status, selectedRootId, selectedTaskId]);
   const commandContext: CommandContext = { connected: status === "connected", hasActiveEditor: Boolean(activeTab), activeEditorDirty: Boolean(activeTab?.dirty), gitBusy: gitOperationRunning, taskSwitching, aiBusy: aiSession.status === "in_progress" };
   const commands: Command[] = [
     { id: "project.commandPalette", label: "Show Command Palette", category: "Project", when: (context) => context.connected, execute: () => setCommandPaletteOpen(true) },
@@ -2950,7 +2964,8 @@ export function App() {
     { id: "terminal.toggle", label: "Toggle Terminal Panel", category: "Terminal", when: (context) => context.connected, execute: toggleTerminalPanel },
     { id: "task.create", label: "Create Task", category: "Task", when: (context) => context.connected && !context.taskSwitching, execute: () => setShowCreateTaskDialog(true) },
     { id: "ai.open", label: "Open AI", category: "AI", when: (context) => context.connected, execute: () => { if (sideLayout === "classic") setClassicAiOpen(true); else setLeftPanels((current) => ({ ...current, ai: true, harness: false, timers: false, triggers: false, proc: false })); void refreshAi(); } },
-    { id: "java.configuration", label: "Edit Java Run/Debug Configuration", category: "Java", when: (context) => context.connected, execute: () => setShowRunConfigurationDialog(true) },
+    { id: "language.tools", label: "Open Language Tools", category: "Language", when: (context) => context.connected, execute: () => openLanguageTools() },
+    ...languageCommands(languages, openLanguageTools),
     { id: "editor.save", label: "Save Active Editor", category: "Editor", when: (context) => context.hasActiveEditor && context.activeEditorDirty, execute: () => saveActive() }
   ];
 
@@ -3172,14 +3187,15 @@ export function App() {
       </div>
       <div className="workspace-bottom-panels">
     {layout.terminalGroup.tabs.length > 0 && <TerminalPanel visible={terminalPanelOpen} onActivity={markUnreadTerminalOutput} theme={theme} fontFamily={terminalFontFamily} fontSize={uiFontSize} lineHeight={uiLineHeight} client={clientRef.current!} group={layout.terminalGroup} height={terminalHeight} highlightedTerminalIds={new Set(runConfigs.filter((config) => ["starting", "running", "stopping"].includes(config.status)).flatMap((config) => config.terminalId ? [config.terminalId] : []))} onActivate={activateTerminalTab} onCreate={() => void createTerminal()} onClose={closeTerminal} onRename={renameTerminal} onDuplicate={(tab) => void duplicateTerminal(tab)} onMove={moveTerminal} onRecoveryShown={(tabId) => updateTerminalGroup((group) => ({ ...group, tabs: group.tabs.map((tab) => tab.id === tabId ? { ...tab, recovery: undefined } : tab) }))} onResizeStart={beginTerminalResize} registerWriter={registerTerminalWriter} />}
-    {layout.panels.some((panel) => panel.type === "java") && javaOptions && <JavaPanel key={`java-panel:${selectedRootId}`} height={javaPanelHeight} log={javaLog} running={javaRunning} options={javaOptions} debugState={javaDebugState} onConfigure={() => setShowRunConfigurationDialog(true)} onApplyChanges={applyJavaChanges} onInspect={(reference, start) => languageClient(clientRef.current!, "java").debugVariables(reference, start)} onBuild={() => void runJavaAction("language.build")} onRun={() => void runJavaAction("language.run")} onDebug={() => void debugJava()} onStop={() => void stopJava()} onDebugCommand={(command) => void commandJavaDebugger(command)} onClear={() => setJavaLog("")} onResizeStart={beginJavaResize} onHeightChange={setJavaPanelHeight} />}
+    {layout.panels.some((panel) => panel.type === "languageOutput") && javaOptions && languages.find((language) => language.id === "java") && <JavaPanel key={`java-panel:${selectedRootId}`} capabilities={languages.find((language) => language.id === "java")!.capabilities} height={javaPanelHeight} log={javaLog} running={javaRunning} options={javaOptions} debugState={javaDebugState} onConfigure={() => setShowRunConfigurationDialog(true)} onApplyChanges={applyJavaChanges} onInspect={(reference, start) => languageClient(clientRef.current!, "java").debugVariables(reference, start)} onBuild={() => void runJavaAction("language.build")} onRun={() => void runJavaAction("language.run")} onDebug={() => void debugJava()} onStop={() => void stopJava()} onDebugCommand={(command) => void commandJavaDebugger(command)} onClear={() => setJavaLog("")} onResizeStart={beginJavaResize} onHeightChange={setJavaPanelHeight} />}
     {layout.panels.some((panel) => panel.type === "problems") && javaOptions && <ProblemsPanel language="java" height={problemsHeight} diagnostics={javaDiagnostics} checking={javaChecking} onRefresh={() => void checkJava()} onOpen={(diagnostic) => void openDiagnostic(diagnostic)} onResizeStart={beginProblemsResize} />}
     {layout.panels.some((panel) => panel.type === "gitlog") && <GitLogPanel client={clientRef.current!} height={gitLogHeight} revision={gitRevision} onResizeStart={beginGitLogResize} onRepositoryChanged={() => { void Promise.all([refreshGit(), refreshTree()]); }} onMergeConflict={() => { void clientRef.current?.request("git.conflicts", {}).then((conflicts) => setGitConflictPath(conflicts.files[0]?.path ?? "")); }} />}
       </div>
     </div>
     <FocusDock edge="bottom" active={focusMode}><footer className="bottom-tool-bar">
       <button className={`bottom-tool-button ${layout.panels.some((panel) => panel.type === "terminal") ? "active" : ""}`} onClick={toggleTerminalPanel}><SquareTerminal size={14} /><span>Terminal</span>{hasUnreadTerminalOutput && <span className="terminal-activity-dot" role="img" aria-label="New terminal output" />}{layout.terminalGroup.tabs.length > 0 && <span className="bottom-tool-count">{layout.terminalGroup.tabs.length}</span>}</button>
-      {javaOptions && <button className={`bottom-tool-button ${layout.panels.some((panel) => panel.type === "java") ? "active" : ""}`} onClick={toggleJavaPanel}><Coffee size={14} /><span>Java</span>{javaRunning && <span className="running-indicator" />}</button>}
+      <button className="bottom-tool-button" onClick={() => openLanguageTools()}><FileCode2 size={14} /><span>Languages</span></button>
+      {javaOptions && <button className={`bottom-tool-button ${layout.panels.some((panel) => panel.type === "languageOutput") ? "active" : ""}`} onClick={toggleJavaPanel}><Coffee size={14} /><span>Java</span>{javaRunning && <span className="running-indicator" />}</button>}
       {javaOptions && <button className={`bottom-tool-button ${layout.panels.some((panel) => panel.type === "problems") ? "active" : ""}`} onClick={toggleProblemsPanel}><CircleAlert size={14} /><span>Problems</span>{javaDiagnostics.length > 0 && <span className="bottom-tool-count">{javaDiagnostics.length}</span>}</button>}
       <button className={`bottom-tool-button ${layout.panels.some((panel) => panel.type === "gitlog") ? "active" : ""}`} onClick={toggleGitLogPanel}><GitBranch size={14} /><span>Git</span></button>
       {runConfigs.map((config, index) => <button key={`${config.scope}:${config.name}`} className={`bottom-tool-button run-config-entry ${index === 0 ? "first" : ""} ${["starting", "running", "stopping"].includes(config.status) ? "active-run" : ""}`} aria-label={`${config.name}, ${config.scope}, ${config.status}`} title={`${config.scope} Run Config: ${config.name} (${config.status})`} onClick={() => void runConfigAction(config, config.terminalId ? "openTerminal" : "run")} onContextMenu={(event) => { event.preventDefault(); setRunConfigMenu({ x: Math.min(event.clientX, window.innerWidth - 218), y: Math.min(event.clientY, window.innerHeight - 126), config }); }}><Play size={12} /><span>{config.name}</span><span className={`run-config-indicator ${config.status}`} aria-hidden="true" /></button>)}
@@ -3239,6 +3255,7 @@ export function App() {
     {gitRebaseDialog && <GitRebaseDialog preview={gitRebaseDialog.preview} busy={gitRebasing} error={gitRebaseDialog.error} onClose={() => { if (!gitRebasing) setGitRebaseDialog(undefined); }} onConfirm={(items) => void executeInteractiveRebase(items)} />}
     {gitHunkDialog && <div className="context-menu-layer" onMouseDown={() => setGitHunkDialog(undefined)}><section className="git-hunk-popup" role="dialog" aria-label={`Previous content in ${gitHunkDialog.path}`} style={{ left: gitHunkDialog.x, top: gitHunkDialog.y }} onMouseDown={(event) => event.stopPropagation()}><header><div><strong>Before this change</strong><span>{gitHunkDialog.path.split("/").pop()} · line {gitHunkDialog.hunk.originalStart}</span></div><button title="Close" onClick={() => setGitHunkDialog(undefined)}><X size={14} /></button></header>{gitHunkDialog.error && <div className="git-hunk-error">{gitHunkDialog.error}</div>}<pre>{gitHunkDialog.hunk.originalLines === 0 ? "This block did not exist before." : gitHunkDialog.originalContent.split("\n").slice(Math.max(0, gitHunkDialog.hunk.originalStart - 1), Math.max(0, gitHunkDialog.hunk.originalStart - 1) + gitHunkDialog.hunk.originalLines).join("\n")}</pre><footer>{gitHunkDialog.hunk.source === "worktree" ? <button onClick={() => void updateGitIndex("stage", gitHunkDialog.path, gitHunkDialog.hunk)}><Check size={13} /><span>Stage Hunk</span></button> : <button onClick={() => void updateGitIndex("unstage", gitHunkDialog.path, gitHunkDialog.hunk)}><X size={13} /><span>Unstage Hunk</span></button>}<button className="danger" disabled={gitHunkDialog.hunk.source !== "worktree"} onClick={() => void rollbackGitHunk()}><RefreshCw size={13} /><span>Rollback</span></button></footer></section></div>}
     {externalConflict && <ExternalChangeConflict dialog={externalConflict} onClose={() => setExternalConflict(undefined)} onReload={() => { updateGroup((tabs, active) => ({ tabs: tabs.map((tab) => tab.id === externalConflict.tabId ? { ...tab, content: externalConflict.externalContent, savedContent: externalConflict.externalContent, revision: externalConflict.externalRevision, dirty: false, error: undefined } : tab), activeTabId: active })); setExternalConflict(undefined); }} onOverwrite={() => { const tab = layoutRef.current.editorGroups[0]?.tabs.find((item) => item.id === externalConflict.tabId); if (!tab || !clientRef.current) return; void clientRef.current.request("filesystem.writeFile", { path: externalConflict.path, content: tab.content, expectedRevision: externalConflict.externalRevision, force: true }).then((saved) => { updateGroup((tabs, active) => ({ tabs: tabs.map((item) => item.id === tab.id ? { ...item, savedContent: tab.content, dirty: false, revision: saved.revision, error: undefined } : item), activeTabId: active })); setExternalConflict(undefined); }).catch((error: unknown) => setExternalConflict((current) => current ? { ...current, error: error instanceof Error ? error.message : "Could not overwrite" } : current)); }} onSaveAs={(target) => { const tab = layoutRef.current.editorGroups[0]?.tabs.find((item) => item.id === externalConflict.tabId); if (!tab || !clientRef.current) return; void clientRef.current.request("filesystem.writeFile", { path: target, content: tab.content, create: true }).then(() => { setExternalConflict(undefined); void refreshTree(); }).catch((error: unknown) => setExternalConflict((current) => current ? { ...current, error: error instanceof Error ? error.message : "Could not save as" } : current)); }} />}
+    {status === "connected" && clientRef.current && <LanguageTools key={`language-tools:${selectedRootId}:${selectedTaskId ?? ""}`} client={clientRef.current} languages={languages} selected={selectedLanguage} open={languageToolsOpen} onSelect={setSelectedLanguage} onClose={() => setLanguageToolsOpen(false)} onOpenFile={(path) => { setLanguageToolsOpen(false); void openFile({ name: path.split("/").pop() ?? path, path, type: "file" }); }} beforeLaunch={saveLaunchFiles} />}
     {showRunConfigurationDialog && <JavaConfigurationDialog key={`java-configuration:${selectedRootId}`} client={clientRef.current!} running={javaRunning} onClose={() => setShowRunConfigurationDialog(false)} onSaved={(options) => { setJavaOptions(options); javaOptionsRef.current = options; setShowRunConfigurationDialog(false); void refreshJavaTree(); void refreshTree(); }} />}
     {showCreateTaskDialog && <CreateTaskDialog client={clientRef.current!} onClose={() => setShowCreateTaskDialog(false)} onCreate={createTask} />}
     {mergeDialog && <MergeTaskDialog task={mergeDialog} onClose={() => setMergeDialog(undefined)} onMerge={(strategy) => void mergeTask(mergeDialog, strategy)} />}

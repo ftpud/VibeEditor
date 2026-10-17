@@ -9,7 +9,7 @@ import { pipeline } from "node:stream/promises";
 import type { ToolInstallation } from "@remote-ide/protocol";
 import { serializedStateMutation } from "./root-mutation.js";
 
-export type ToolId = "java" | "jdtls" | (string & {});
+export type ToolId = string;
 /** Fetches `url` into `file`, reporting downloaded bytes; returns the SHA-256 of what was written. */
 export type Download = (url: string, file: string, progress: (received: number, total?: number) => void) => Promise<string>;
 export type ToolSpec = {
@@ -21,37 +21,6 @@ export type ToolSpec = {
   /** Relative path proving the installation is complete. */
   entry(): string;
 };
-
-const TEMURIN = "21.0.8+9";
-const JDTLS = "1.61.0-202608051627";
-const temurinPlatform = () => {
-  const osName = ({ darwin: "mac", linux: "linux", win32: "windows" } as Record<string, string>)[process.platform];
-  const architecture = ({ arm64: "aarch64", x64: "x64" } as Record<string, string>)[process.arch];
-  if (!osName || !architecture) throw new Error(`No Java runtime is available for ${process.platform}/${process.arch}`);
-  return { osName, architecture };
-};
-
-export const TOOLS: readonly ToolSpec[] = [
-  {
-    id: "java", name: "Java runtime", description: `Eclipse Temurin ${TEMURIN} JRE. Runs the Java language server only; builds, runs and debugging use the project's own JDK.`, version: TEMURIN, stripRoot: true,
-    async source() {
-      const { osName, architecture } = temurinPlatform();
-      const format = osName === "windows" ? "zip" : "tar.gz";
-      const base = `https://github.com/adoptium/temurin21-binaries/releases/download/jdk-${encodeURIComponent(TEMURIN)}`;
-      const file = `OpenJDK21U-jre_${architecture}_${osName}_hotspot_${TEMURIN.replace("+", "_")}.${format}`;
-      // Temurin publishes one checksum per platform archive next to it.
-      const response = await fetch(`${base}/${file}.sha256.txt`);
-      if (!response.ok) throw new Error(`Java runtime checksum download failed: HTTP ${response.status}`);
-      return { url: `${base}/${file}`, sha256: (await response.text()).trim().split(/\s+/)[0]!, format };
-    },
-    entry: () => process.platform === "darwin" ? "Contents/Home/bin/java" : process.platform === "win32" ? "bin/java.exe" : "bin/java"
-  },
-  {
-    id: "jdtls", name: "Java language server", description: `Eclipse JDT LS ${JDTLS}. Java highlighting, completion, navigation and symbols.`, version: JDTLS, requires: ["java"],
-    async source() { return { url: `https://download.eclipse.org/jdtls/snapshots/jdt-language-server-${JDTLS}.tar.gz`, sha256: "02478201484f60a27fe5438899e98cc7bf56aaf380a856d1409eab14d228e153", format: "tar.gz" }; },
-    entry: () => "plugins"
-  }
-];
 
 const defaultDownload: Download = async (url, file, progress) => {
   const response = await fetch(url);
@@ -83,6 +52,9 @@ const extract = async (archive: string, format: "tar.gz" | "zip", target: string
   await rename(source, target);
   await rm(unpacked, { recursive: true, force: true });
 };
+const registered: ToolSpec[] = [];
+/** Plugins contribute the tools they need on the Core host; later registrations of the same id are ignored. */
+export function registerTools(specs: readonly ToolSpec[]): void { for (const spec of specs) if (!registered.some((known) => known.id === spec.id)) registered.push(spec); }
 type Current = { directory: string; version: string };
 
 /**
@@ -93,7 +65,8 @@ type Current = { directory: string; version: string };
 export class ToolInstallations {
   private readonly operations = new Map<ToolId, { status: "installing" | "removing"; done: Promise<void>; progress?: number }>();
   private readonly errors = new Map<ToolId, string>();
-  constructor(private readonly root: () => string = () => process.env.REMOTE_IDE_TOOLS_DIR ?? path.join(os.homedir(), ".remote-ide", "tools"), private readonly download: Download = defaultDownload, private readonly tools: readonly ToolSpec[] = TOOLS) {}
+  constructor(private readonly root: () => string = () => process.env.REMOTE_IDE_TOOLS_DIR ?? path.join(os.homedir(), ".remote-ide", "tools"), private readonly download: Download = defaultDownload, private readonly fixedTools?: readonly ToolSpec[]) {}
+  private get tools(): readonly ToolSpec[] { return this.fixedTools ?? registered; }
 
   private spec(id: string): ToolSpec {
     const spec = this.tools.find((tool) => tool.id === id);
@@ -112,8 +85,8 @@ export class ToolInstallations {
 
   /** Installed directory of a tool, or undefined. */
   async directory(id: ToolId): Promise<string | undefined> { return (await this.current(this.spec(id)))?.directory; }
-  /** The Java executable of the installed runtime, or undefined. */
-  async java(): Promise<string | undefined> { const directory = await this.directory("java"); return directory ? path.join(directory, this.spec("java").entry()) : undefined; }
+  /** Absolute path of a tool's entry file, or undefined when it is not installed. */
+  async executable(id: ToolId): Promise<string | undefined> { const directory = await this.directory(id); return directory ? path.join(directory, this.spec(id).entry()) : undefined; }
 
   async list(): Promise<ToolInstallation[]> {
     return Promise.all(this.tools.map(async (spec) => {

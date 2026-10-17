@@ -2,9 +2,9 @@ import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { WorkspaceFileSystem } from "../filesystem.js";
-import { WorkspaceStateStore } from "../workspace-state.js";
-import { JavaLanguageService } from "./java-service.js";
+import { WorkspaceFileSystem } from "../../../filesystem.js";
+import { WorkspaceStateStore } from "../../../workspace-state.js";
+import { JavaLanguageService } from "./service.js";
 
 async function create() {
   const root = await mkdtemp(path.join(tmpdir(), "remote-ide-lang-java-"));

@@ -10,6 +10,11 @@ export class CoreClient {
   onConnectionProgress?: (message: string) => void;
   onDisconnected?: (message: string) => void;
   onServerEvent?: (event: ServerEvent) => void;
+  private readonly eventListeners = new Set<(event: ServerEvent) => void>();
+  subscribeServerEvents(listener: (event: ServerEvent) => void): () => void {
+    this.eventListeners.add(listener);
+    return () => { this.eventListeners.delete(listener); };
+  }
   private rootId?: string;
   private invalidMessageDiagnostics = 0;
   private cancelConnect?: (error: Error) => void;
@@ -173,7 +178,10 @@ export class CoreClient {
     try { message = JSON.parse(data); } catch { this.invalidMessage(); return; }
     if (!message || typeof message !== "object" || Array.isArray(message)) { this.invalidMessage(); return; }
     if ("type" in message) {
-      if (isServerEvent(message)) this.onServerEvent?.(message);
+      if (isServerEvent(message)) {
+        this.onServerEvent?.(message);
+        for (const listener of this.eventListeners) listener(message);
+      }
       else this.invalidMessage();
       return;
     }

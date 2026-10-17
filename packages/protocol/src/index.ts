@@ -331,7 +331,7 @@ export type JavaFileType = {
 
 /** Language-neutral wire data; Core service implementations must not be imported here. */
 export type LanguageExtra = Record<string, unknown>;
-export type LanguageCapabilities = { projectTree: boolean; build: boolean; run: boolean; debug: boolean; lsp: boolean; workspaceSymbols: boolean; configuration: boolean };
+export type LanguageCapabilities = { projectTree: boolean; build: boolean; run: boolean; debug: boolean; lsp: boolean; workspaceSymbols: boolean; configuration: boolean; runConfigurations?: boolean; sourceRoots?: boolean };
 export type PluginStatus = { id: string; version?: string; name?: string; state: "loaded" | "failed"; error?: string; providers: string[]; languages: string[] };
 export type LanguageDescriptor = { id: string; name: string; extensions: string[]; projectMarkers: string[]; capabilities: LanguageCapabilities };
 export type LanguageProjectNode = { name: string; path: string; type: string; sourceKind?: "source" | "test"; children?: LanguageProjectNode[]; extra?: LanguageExtra };

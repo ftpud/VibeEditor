@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import type { MessageConnection } from "vscode-jsonrpc/node.js";
-import { WorkspaceFileSystem } from "./filesystem.js";
+import { WorkspaceFileSystem } from "../../../filesystem.js";
 import { JdtLanguageService } from "./jdtls.js";
 import { JavaSemanticCache, javaLanguageStateDirectory } from "./java-semantic-cache.js";
 

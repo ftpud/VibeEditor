@@ -21,6 +21,10 @@ export interface LanguageCapabilities {
   lsp: boolean;
   workspaceSymbols: boolean;
   configuration: boolean;
+  /** Optional: the service can add and select named run configurations. */
+  runConfigurations?: boolean;
+  /** Optional: the service can add source roots. */
+  sourceRoots?: boolean;
 }
 
 export interface LanguageDescriptor {

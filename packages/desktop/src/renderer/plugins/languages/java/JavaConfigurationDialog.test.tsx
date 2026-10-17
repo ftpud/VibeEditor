@@ -2,7 +2,7 @@ import React from "react";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
 import { JavaConfigurationDialog } from "./JavaConfigurationDialog";
-import type { CoreClient } from "./client";
+import type { CoreClient } from "../../../client";
 
 const options = { type: "maven", pomPath: "pom.xml", mavenExecutable: "mvn", sourceRoots: ["src/main/java"], outputPath: "target/classes", testOutputPath: "target/test-classes", runConfigurations: [{ id: "app", name: "App", mainClass: "demo.App" }], selectedRunConfigurationId: "app" };
 const revision = { identity: "file", version: "1" };

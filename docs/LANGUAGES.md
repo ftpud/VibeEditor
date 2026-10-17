@@ -106,3 +106,30 @@ and tool installation infrastructure; avoid a parallel launch/install path.
 Defer an executable plugin loader until Java and the second built-in have tested
 the interface. An open question for 2.2 is typed built-in extras versus a
 schema-validated extension payload; renaming JVM fields alone will not settle it.
+
+## Desktop language contributions
+
+The **Languages** button and **Open Language Tools** command discover services
+through `language.list` for the current root/task. Each descriptor contributes
+project-tree, configuration and run-target commands to the command palette;
+unsupported controls are omitted. The shared tools view uses `language.*` for
+project trees, revision-checked configuration editing, source roots, run targets,
+run configurations, build/run/stop and debugger inspection/stepping. Process
+output and debugger state are kept separately by language and filtered by root.
+Dirty editor files are saved before a launch. Changing roots or tasks discards
+the old tools view and ignores its pending responses.
+
+`capabilities.runConfigurations` and `capabilities.sourceRoots` are optional,
+independent capabilities. Java advertises both; Node advertises neither because
+its npm-script runner has no saved run configurations or source-root editor.
+Services that support run configurations return `runConfigurations` (entries with
+`id` and `name`) and `selectedRunConfigurationId` in `language.options` and in
+add/select results. Other options remain opaque to the shared view.
+
+Java's Maven configuration form, import actions, JVM breakpoint metadata and
+HotSwap result details remain Java-specific views. Their reusable output toolbar
+is capability-gated. The generic bottom-panel identity is `languageOutput`, with
+migration of the saved `java` panel preference; legacy `java.configuration`
+shortcuts migrate to the descriptor command `language.java.configuration`.
+Remote renderer code is still deferred as described in `docs/PLUGINS.md`; language
+plugins use the shared controls without loading UI bundles.

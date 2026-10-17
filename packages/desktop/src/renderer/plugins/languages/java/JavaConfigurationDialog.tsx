@@ -2,7 +2,7 @@ import { useEffect, useId, useRef, useState } from "react";
 import { Copy, Plus, Trash2, X } from "lucide-react";
 import type { FileRevision, JavaMainClass, JavaProjectOptions, JavaRunConfiguration, JavaToolCheck } from "@remote-ide/protocol";
 import { javaConfigurationPath } from "@remote-ide/protocol";
-import type { CoreClient } from "./client";
+import type { CoreClient } from "../../../client";
 
 type Props = { client: CoreClient; running: boolean; onClose(): void; onSaved(options: JavaProjectOptions): void };
 const tabs = [{ id: "launch", label: "Launch profiles" }, { id: "tools", label: "Tools & build" }, { id: "environment", label: "Environment" }, { id: "paths", label: "Project paths" }, { id: "json", label: "JSON" }] as const;

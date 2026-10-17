@@ -4,9 +4,9 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { JavaDebugState } from "@remote-ide/protocol";
-import { WorkspaceFileSystem } from "./filesystem.js";
+import { WorkspaceFileSystem } from "../../../filesystem.js";
 import { JavaProjectService } from "./java.js";
-import { WorkspaceStateStore } from "./workspace-state.js";
+import { WorkspaceStateStore } from "../../../workspace-state.js";
 
 const hasJdk = ["javac", "jdb"].every((command) => spawnSync(command, ["-version"]).status === 0);
 

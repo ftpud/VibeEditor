@@ -1,6 +1,7 @@
+import type { ProviderContext } from "../../../ai/stdio-provider.js";
 import type { AiAccountQuota, AiConfiguration, AiModel, AiProviderDescriptor, AiQuotaWindow, AiUsage } from "@remote-ide/acp";
-import type { InstallationSpec } from "../provider-installations.js";
-import { ASK_QUESTIONS_OPTION, LIVE_STEERING_OPTION, StdioAcpProvider, SYSTEM_INSTRUCTIONS_OPTION } from "../stdio-provider.js";
+import type { InstallationSpec } from "../../../ai/provider-installations.js";
+import { ASK_QUESTIONS_OPTION, LIVE_STEERING_OPTION, StdioAcpProvider, SYSTEM_INSTRUCTIONS_OPTION } from "../../../ai/stdio-provider.js";
 
 const REASONING_LEVELS = ["low", "medium", "high", "xhigh", "max"];
 const RATE_LIMIT_META = "_claude/rateLimit";
@@ -92,3 +93,6 @@ export class ClaudeSessionManager extends StdioAcpProvider {
     return { ...usage, supported: true, details, ...(primary || secondary ? { accountQuota } : {}) };
   }
 }
+
+export { PROVIDER_API_VERSION as apiVersion } from "../../../ai/stdio-provider.js";
+export const createProvider = (context: ProviderContext) => new ClaudeSessionManager(context);
