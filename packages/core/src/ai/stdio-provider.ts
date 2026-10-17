@@ -269,7 +269,7 @@ export abstract class StdioAcpProvider extends AcpProvider {
     if (this.modelCache && Date.now() - this.modelCache.at < MODEL_CACHE_MS) return this.modelCache.models;
     this.modelDiscovery ??= this.discoverModels().finally(() => { this.modelDiscovery = undefined; });
     const discovered = await this.modelDiscovery.catch(() => [] as AiModel[]);
-    if (discovered.length > 0) { const described = await this.describeModels(discovered); this.modelCache = { at: Date.now(), models: described }; return described; }
+    if (discovered.length > 0) { const described = await this.describeModels(await this.withFallbackReasoning(discovered)); this.modelCache = { at: Date.now(), models: described }; return described; }
     return this.modelCache?.models ?? this.describeModels(await this.fallbackModels());
   }
 
@@ -278,6 +278,16 @@ export abstract class StdioAcpProvider extends AcpProvider {
    * context window sizes the CLI keeps in its own model cache.
    */
   protected async describeModels(models: AiModel[]): Promise<AiModel[]> { return models; }
+
+  /** Agents that acknowledge a model switch without re-advertising effort levels would otherwise lose the picker; reuse the provider's static levels for those models. */
+  private async withFallbackReasoning(models: AiModel[]): Promise<AiModel[]> {
+    if (models.every((model) => model.reasoningLevels.length > 0)) return models;
+    const fallback = new Map((await this.fallbackModels().catch(() => [] as AiModel[])).map((model) => [model.id, model] as const));
+    return models.map((model) => {
+      const known = fallback.get(model.id);
+      return model.reasoningLevels.length === 0 && known && known.reasoningLevels.length > 0 ? { ...model, defaultReasoning: known.defaultReasoning, reasoningLevels: known.reasoningLevels } : model;
+    });
+  }
 
   async configure(workspace: string, configuration: AiConfiguration | string, legacyReasoning?: string): Promise<AiSession> {
     const clientOptions = new Set(this.descriptor.options.filter((option) => option.permissionApproval || option.client).map((option) => option.id));
@@ -1081,7 +1091,12 @@ export abstract class StdioAcpProvider extends AcpProvider {
       const option = connected.configOptions.find((item) => item.category === "model");
       const advertised = option ? selectOptions(option) : (connected.models?.availableModels ?? []).map((model) => ({ value: model.modelId, name: model.name, description: model.description ?? undefined, _meta: model._meta }));
       if (advertised.length === 0) return [];
-      if (!option || option.type !== "select") return advertised.map((item) => ({ id: item.value, name: item.name, defaultReasoning: "", reasoningLevels: [], ...modelDetails(item) }));
+      if (!option || option.type !== "select") {
+        // Without a switchable model option the agent's single effort option applies to every model.
+        const thought = connected.configOptions.find((candidate) => candidate.category === "thought_level");
+        const shared = thought ? { defaultReasoning: String(thought.currentValue), reasoningLevels: selectValues(thought), ...(Object.keys(reasoningDescriptions(thought)).length > 0 ? { reasoningDescriptions: reasoningDescriptions(thought) } : {}) } : { defaultReasoning: "", reasoningLevels: [] };
+        return advertised.map((item) => ({ id: item.value, name: item.name, ...shared, ...modelDetails(item) }));
+      }
       const models: AiModel[] = [];
       for (const item of advertised) {
         let reasoningLevels: string[] = [];
