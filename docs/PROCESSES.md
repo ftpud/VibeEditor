@@ -48,24 +48,6 @@ success; Linux rechecks start ticks immediately at each signal. Status/tail reus
 current state instead of doing a whole-host scan for every tool call. Operations on
 independently named apps are not serialized together.
 
-## Growing-count investigation (TODO-007)
-
-The previous Proc count was a count of every live managed PID. Idle provider hosts,
-MCP/helpers, agent activity, and multiple children of one app increased that count
-without representing additional workflow apps. These can be real running processes;
-filtering this view does not terminate them. Discovery stores one row per process
-lifetime, and focused repeated-lifecycle checks did not reproduce duplicated rows or
-stale tracking after a whole tree exited.
-
-A confirmed Run App lifecycle defect could produce real surviving app processes:
-when a launcher closed while detached children continued, Run App marked it exited,
-allowed a new Start, and skipped Kill because the launcher had exited. Process-group
-Kill also missed children that had detached into a different group. Launch grouping
-now keeps those children visible and stoppable; Start reuses their launch until the
-tree is stopped. Real subprocess checks cover concurrent starts, four start/stop
-cycles, natural exits, detached survivors, isolated termination, and multiple apps
-across task/workflow/root contexts with active ACP sessions excluded from app counts.
-
 ## Platform and coverage limits
 
 Linux `/proc` under the Core user's permissions provides inherited-identity coverage.

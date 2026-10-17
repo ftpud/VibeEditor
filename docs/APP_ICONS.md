@@ -15,9 +15,9 @@ The outer tile has a thin neutral border, without a shadow.
 
 The built-in image generation tool produced initial drafts; the final assets were
 authored as SVG and rasterized using `@resvg/resvg-js` so geometry, flat colors and
-alpha edges are exact. [Draft prompts](APP_ICON_PROMPTS.md) are retained for reference.
+alpha edges are exact.
 The SVGs are the source of truth for future exports. Export at width 1024 with the
 SVG canvas background left transparent.
 
 Existing Electron window and macOS Dock configuration consumes the PNG paths.
-Restart the applications to load updated assets. No project dependencies changed.
+Restart the applications to load updated assets.

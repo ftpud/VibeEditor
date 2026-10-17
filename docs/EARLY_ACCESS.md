@@ -61,7 +61,8 @@ before distributing them outside the Early Access group.
 
 ## Bundled runtime behavior
 
-Every Gateway and Desktop download includes all three portable Core archives:
+Gateway downloads include these three portable Core archives. Standalone Desktop
+downloads contain the client only:
 
 | Target | Core host |
 | --- | --- |
@@ -105,8 +106,8 @@ of the shipped Core rather than rebuilding or fetching source.
 Windows Gateway uses SSH connections to Linux/WSL hosts. Automatic startup in a
 local WSL distribution is not implemented. Enable SSH in the intended WSL2
 distribution and configure it as an SSH connection. Windows-native Core and
-Intel macOS Core are not shipped. Desktop remains a client; its included Core
-archives do not automatically start a server when Desktop opens.
+Intel macOS Core are not shipped. Standalone Desktop connects to an existing
+Core; it does not ship Core archives or start a server.
 
 Core hosts still need Git and the tools required by users' projects. SSH hosts
 need Bash, tar and either `sha256sum` or `shasum`, and writable application-data

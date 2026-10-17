@@ -122,7 +122,9 @@ For direct network access, bind Core beyond loopback only on a trusted private n
 npm run core -- --host 0.0.0.0 --port 7331 --workspace /srv/projects/example
 ```
 
-Core has no authentication or TLS. An SSH tunnel is the safer default:
+Core uses a session token for authentication. SSH tunnelling keeps its listener
+on remote loopback; see [release operations](RELEASE_OPERATIONS.md#core-session-credentials-and-origins)
+for token handling and origin checks:
 
 ```bash
 # Run Core on 127.0.0.1:7331 on the remote host, then tunnel it locally.
@@ -140,7 +142,7 @@ local Vibe Gateway
     | SSH: provision, start, stop, and transfer client artifacts
     v
 remote host
-    +-- ~/.vibe                         VibeEditor application checkout
+    +-- ~/.vibe-deploy/releases/       immutable Vibe Core builds
     +-- configured project directory    repository and development state
     +-- Core on 127.0.0.1:<remote-port>
     |
@@ -152,24 +154,26 @@ remote host
 local Electron/Monaco Desktop
 ```
 
-The deployment flow is:
+Gateway saves SSH credentials and an explicitly trusted host-key fingerprint.
+Source-mode provisioning builds immutable releases under `~/.vibe-deploy/`;
+packaged Gateway uploads a matching bundled Core archive. Activation verifies
+an authenticated protocol handshake and can roll back a failed candidate.
+Desktop runs locally and reaches remote Core through Gateway's SSH tunnel.
+Filesystem access, terminals, Git, builds, language services and durable state
+remain on Core.
 
-1. **Save a connection and workspace.** Gateway supports password, a local SSH private-key file, or keys already loaded in the OS SSH agent. Private keys remain local and are read only by Electron while connecting; agent authentication saves no key material. Passwords and passphrases are encrypted with Electron `safeStorage` and are not shown after saving. Use **Test connection** before saving to review and trust the server's SHA-256 host-key fingerprint; Gateway pins it and rejects changed keys until you explicitly test and trust the replacement.
-2. **Provision the remote application.** **Start server** connects over SSH and clones the repository and branch saved in Gateway repository settings into `~/.vibe`. The defaults are `https://github.com/ftpud/VibeEditor` and `main`. With auto-update enabled (the default), an existing checkout is updated and force-reset to the configured branch; with it disabled, Gateway retains the existing checkout. This is the application installation; the configured project workspace remains in its own remote directory.
-3. **Build only when needed.** Gateway records the deployed Git revision in `~/.vibe-build`. If the revision changed, dependencies or build outputs are missing, or `node_modules` is absent, it runs `npm install` and builds ACP, Protocol, Core, and Desktop. Otherwise it reuses the existing build.
-4. **Start remote Core.** Gateway tries the configured Core port and chooses a free fallback when it is occupied. It launches Core with `nohup`, bound only to remote loopback, and passes the configured project directory as the workspace root. Each Gateway workspace gets its own PID and log files in the remote home directory.
-5. **Prepare the local client.** **Start client** identifies the remote deployment by Git revision. If that Desktop build is not already cached locally, Gateway archives the remotely built Electron main process and renderer, downloads them over SFTP, and extracts them under Gateway's application-data directory.
-6. **Create the private connection.** Gateway opens an SSH connection and exposes a temporary port on local `127.0.0.1`. Connections to that port are forwarded to Core's remote loopback port, so Core does not need a public listener, authentication layer, or TLS endpoint.
-7. **Launch the UI locally.** Gateway starts the downloaded Desktop code with the local Electron runtime and passes the tunnel's host and port. The UI is rendered locally; filesystem access, terminals, Git, builds, language services, agents, and durable task state continue to run remotely.
+Keep Gateway open while using a client because it owns the SSH tunnel. Closing
+Gateway closes its tunnels but leaves remote Core running; **Stop server** stops
+the selected workspace's server. Source deployment uses committed code from the
+configured repository/branch and does not copy uncommitted local changes.
 
-Keep Gateway open while using a client because it owns the SSH tunnel. Closing Gateway closes its tunnels but leaves remote Core running; **Stop server** closes the tunnel and terminates the Core process recorded for that workspace.
-
-Gateway deploys committed code from the repository and branch saved in its settings. With auto-update enabled, it resets the remote application checkout to the configured branch; it never copies uncommitted local source changes.
+See [release operations](RELEASE_OPERATIONS.md) for provisioning, repair and
+rollback, and [Early Access bundles](EARLY_ACCESS.md) for packaged runtime behavior.
 
 ## Features
 
 - **Editor:** Monaco editing and diffs, autosave, external-change handling, detached windows, tab reordering, recursive search, Git gutter markers and block rollback, Markdown preview, and persisted themes/fonts/layout.
-- **Terminal:** multiple workspace-specific `node-pty` terminals with restored tab metadata. Live Core-owned processes reattach after reconnect or task switching. If the previous session is unavailable, restoration can create a new shell; it does not reconstruct the old process environment or working directory.
+- **Terminal:** multiple workspace-specific `node-pty` terminals with restored tab metadata. Live Core-owned processes reattach after reconnect or task switching. If the previous session is unavailable during recovery, Desktop reports it and requires an explicit replacement; it does not reconstruct the old process environment or working directory.
 - **Git:** status and diffs, selective commits, push, checkout and branch rename, searchable graph/history, file/selection history, compare-with-ref, cherry-pick, and file or hunk rollback.
 - **Task workspaces:** isolated Git worktrees on new, existing, or remote branches. A new task copies the root's staged, unstaged, untracked, ignored, and deleted-file state but excludes `node_modules`. Tasks can be compared with their recorded base and merged back with normal or smart merge.
 - **AI:** a shared AI Capability Provider layer with Codex ACP, Copilot ACP, and Claude ACP adapters, model/configuration discovery, resumable sessions, permission prompts, usage data, attachments, steering, MCP servers, and global/local/workspace agent presets. See [docs/ACP.md](ACP.md).
@@ -227,7 +231,7 @@ Workflow errors appear as one-line disclosures with a scrollable full diagnostic
 
 ## Current limitations and security
 
-- Core can register multiple workspace roots per process and has no authentication, authorization, or TLS. Anyone who can reach its port can modify files and run commands with Core's operating-system permissions. Do not expose it to the public internet.
+- Core supports multiple workspace roots and authenticates clients with a session token. Authenticated clients operate with the Core user's filesystem and process permissions; there is no per-user authorization sandbox. Gateway uses SSH tunnelling, and Core has no native TLS endpoint. See [release operations](RELEASE_OPERATIONS.md#core-session-credentials-and-origins) for deployment controls.
 - Filesystem methods reject parent traversal and symlinks escaping the active workspace, but this boundary does not make an exposed Core safe. Text files, useful files, agent files, HTTP bodies, and HTTP responses are limited to 2 MB where applicable; HTTP requests time out after 30 seconds.
 - Task workspaces require the root to be a Git repository. Each task has an independent dependency tree, so run its package installation after switching when needed. Deleting a task forcibly removes its worktree and local task branch. Merging first commits all task changes; smart merge may stash and restore root changes.
 - Gateway supports password, local private-key, and OS SSH-agent authentication. It pins the explicitly trusted server SHA-256 host-key fingerprint, deploys the saved repository and branch, and owns non-persistent tunnels. Closing Gateway closes its tunnels but does not stop remote Core unless **Stop server** is used.

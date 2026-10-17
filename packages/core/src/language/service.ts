@@ -1,5 +1,5 @@
 /**
- * Language service contract (plugins-todo.md 2.2).
+ * Shared language service contract for built-in and external plugins.
  *
  * A language service owns everything language-specific for one workspace root:
  * project detection and loading, source roots, build/run/debug, tool checks and

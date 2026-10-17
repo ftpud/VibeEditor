@@ -1,23 +1,17 @@
 # Release operations
 
-This guide describes the implemented Core and Gateway deployment behavior. The
-project is still in release hardening: passing focused tests or CI jobs does not
-certify a stable release. Review [release readiness](../rediness.md) before
-promoting a build.
+This guide describes Core and Gateway deployment, authentication, shutdown, and
+state recovery. For packaging and publishing, see [Early Access bundles](EARLY_ACCESS.md).
 
 ## Runtime and protocol compatibility
 
 Core and Gateway hosts require Node.js **22.12 or newer**. Gateway checks the
 remote SSH user's Node version before provisioning. CI is configured for Node
-22 and 24 on Linux and macOS; use `npm ci`, build, both typechecks, dependency
-audit, and the full tests when validating a candidate. The implementation at
-`36181e0` passed all four hosted combinations, including twelve restart cycles
-per job: [verification run](https://github.com/ftpud/VibeEditor/actions/runs/38700222350).
-See [the final report](../report.md) for soak evidence and remaining release gates.
+22 and 24 on Linux and macOS; see [CI](CI.md) for validation commands.
 
-The current Core wire compatibility range is **protocol 16–16**. A client is
-accepted only when its declared range overlaps Core's range. A protocol 15-only
-Desktop therefore cannot connect. Gateway reads the remote compatibility
+The Core wire compatibility range is defined by `protocolCompatibility` in
+`packages/protocol/src/index.ts`. A client is accepted only when its declared
+range overlaps Core's range. Gateway reads the remote compatibility
 metadata and uses a compatible cached Desktop when possible; otherwise it
 downloads and verifies the Desktop artifacts from the selected release. If a
 verified compatible cached Desktop is available, Gateway can offer it as a
@@ -166,25 +160,6 @@ after their approved byte count is received. Restart an interrupted transfer
 from Desktop; transfer resumption is not implemented. Do not assume
 terminal or app processes survive a graceful Core shutdown. Restart Core before
 expecting scheduled or recovered work to continue.
-
-## Verification and remaining release gates
-
-Automated coverage currently exercises Core token/origin checks, signal-handler
-success, failure and timeout behavior, workspace writes draining during
-shutdown, SIGTERM/SIGINT child-process shutdown, and persistence after those
-signals. Gateway tests exercise release identity validation, generated Bash
-syntax, provisioning into immutable release directories, reuse and repair,
-failure preservation, authenticated protocol health checks, successful
-activation, rollback after failed health checks, and lock contention/unknown
-owner diagnostics. The CI workflow is configured to run clean installs, builds,
-typechecks, audit, and workspace tests on Linux and macOS with Node 22 and 24.
-
-Treat those tests as automated regression coverage, not release certification.
-The configured macOS jobs still need to pass on the hosted platform. Signed and
-platform-appropriate packaged artifacts, signing/notarization checks, and
-extended crash/restart and workflow/timer soak tests remain release gates. The
-project has not certified a stable release; see the readiness document for the
-current status and broader outstanding work.
 
 ## Isolated restart soak
 

@@ -52,7 +52,8 @@ Reviewed in `packages/core/src/plugins/loader.ts`:
   version 1; do not run untrusted plugins. A future version may run plugins in a
   separate process.
 - The renderer half (contributing UI bundles from the remote Core) is not
-  implemented: the only Desktop surface is the read-only plugin list.
+  implemented. Desktop lists plugin status and exposes language capabilities
+  through its shared Language tools view; plugins cannot supply custom UI bundles.
 
 ## Built-in plugin layout
 
@@ -74,3 +75,19 @@ Java-only Desktop UI mirrors this under `packages/desktop/src/renderer/plugins/l
 directly, or when one plugin imports another. Plugin-owned workspace-state
 fields (Java) register their validators with `registerWorkspaceStateValidator`;
 host tools register through `registerTools`.
+
+## Shared language controls
+
+The **Languages** button and **Open Language Tools** command discover services
+through `language.list` for the selected root/task. Descriptors contribute project,
+configuration and run-target commands. The shared view exposes only advertised
+capabilities and uses `language.*` operations for trees, revision-checked settings,
+build/run/stop, and debugger inspection/stepping.
+
+`capabilities.runConfigurations` and `capabilities.sourceRoots` are optional and
+independent of `run` and `projectTree`. Services supporting run configurations
+return `runConfigurations` (entries with `id` and `name`) and
+`selectedRunConfigurationId` in `language.options` and add/select results. Other
+options remain opaque. Java advertises both capabilities; Node's npm-script
+service advertises neither. Java's Maven form and HotSwap details remain in its
+static Desktop contribution.
