@@ -13,7 +13,7 @@ export const BUILT_IN_PROVIDERS: ProviderFactory[] = [
 ];
 
 /** Application composition root for built-in and externally supplied providers. */
-export function createAcpRegistry(onChanged: (workspace: string) => void, turns?: AcpTurnObserver, projectRoot?: (workspace: string) => Promise<string>, bridgeWorkspace?: string, factories: ProviderFactory[] = [...BUILT_IN_PROVIDERS, ...loadProviderDefinitions().map(definitionFactory)]): AcpRegistry {
+export function createAcpRegistry(onChanged: (workspace: string) => void, turns?: AcpTurnObserver, projectRoot?: (workspace: string) => Promise<string>, bridgeWorkspace?: string, additional: ProviderFactory[] = [], factories: ProviderFactory[] = [...BUILT_IN_PROVIDERS, ...loadProviderDefinitions().map(definitionFactory), ...additional]): AcpRegistry {
   const ctx: ProviderContext = { onChanged, turns, projectRoot, bridgeWorkspace };
   return factories.reduce((registry, create) => registry.register(create(ctx)), new AcpRegistry());
 }

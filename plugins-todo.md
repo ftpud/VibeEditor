@@ -84,8 +84,8 @@ requests in `protocol/src/index.ts` (~96 lines), `server.ts` (~52 refs),
 
 ## Part 3: Plugin loader (after Parts 1 and 2)
 
-- [ ] Plugin manifest: `id`, `version`, `apiVersion`, `contributes` (providers, languages, run kinds, workflow steps), `core` entry, optional `renderer` entry.
-- [ ] Core loader with opt-in directory, version checks, per-plugin error isolation and a status listing request.
+- [x] Plugin manifest: `id`, `version`, `apiVersion`, `contributes` (providers, languages, run kinds, workflow steps), `core` entry, optional `renderer` entry.
+- [x] Core loader with opt-in directory, version checks, per-plugin error isolation and a status listing request.
 - [ ] Renderer half: contribute debug/inspector UI only via declared capabilities; decide how renderer bundles are delivered from the remote Core to Desktop.
 - [ ] Settings UI to list, enable and disable plugins.
 - [ ] Security review (`/security-review`): plugins run arbitrary code on the Core host.

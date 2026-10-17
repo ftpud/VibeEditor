@@ -29,6 +29,8 @@ import { JdtLanguageService } from "./jdtls.js";
 import { LanguageRegistry, LanguageSessions } from "./language/registry.js";
 import { JavaLanguageService, JAVA_DESCRIPTOR } from "./language/java-service.js";
 import { NODE_DESCRIPTOR, NodeLanguageService } from "./language/node-service.js";
+import type { PluginStatus } from "@remote-ide/protocol";
+import { loadPlugins, pluginsDirectory } from "./plugins/loader.js";
 import { handleLanguageRequest } from "./language/routes.js";
 import { toolInstallations } from "./tools.js";
 import { watchGitState } from "./git-watch.js";
@@ -72,6 +74,7 @@ type SessionServices = {
   java: JavaProjectService;
   jdt: JdtLanguageService;
   languages: LanguageSessions;
+  plugins: PluginStatus[];
   workspaceState: WorkspaceStateStore;
   checkpoints: TaskCheckpointStore;
 };
@@ -264,10 +267,12 @@ export async function createServer(host: string, port: number, workspacePath: st
   const checkpointStore = (target: string) => { const key = path.resolve(target); let store = checkpointStores.get(key); if (!store) { store = new TaskCheckpointStore(key); checkpointStores.set(key, store); } return store; };
   await Promise.all([rootWorkspace, ...savedTasks.tasks.map((task) => tasks.taskPath(task.id))].map((target) => checkpointStore(target).recover()));
   const taskGitChanged = (changedWorkspace: string) => { void ownerRootId(changedWorkspace).then((rootId) => { if (!rootId) return; const encoded = JSON.stringify({ type: "taskGit.changed", payload: { rootId } } satisfies ServerEvent); for (const socket of activeSessions) sendWebSocketData(socket, encoded); }); };
+  const plugins = await loadPlugins(undefined, { builtInLanguages: new Set([JAVA_DESCRIPTOR.id, NODE_DESCRIPTOR.id]) });
+  for (const plugin of plugins.status) if (plugin.state === "failed") console.warn(`Plugin ${plugin.id} not loaded: ${plugin.error}`);
   const acp = createAcpRegistry(aiChanged, {
     begin: async (target, provider, prompt, sessionId, provenance) => { const id = await checkpointStore(target).begin(provider as AiProvider, prompt, sessionId, undefined, provenance); taskGitChanged(target); return id; },
     complete: async (target, ids, status, provenance) => { await Promise.all(ids.map((id) => checkpointStore(target).complete(id, status, provenance))); taskGitChanged(target); }
-  }, async (target) => { const rootId = await ownerRootId(target); return rootId ? roots.get(rootId).path : rootWorkspace; }, rootWorkspace);
+  }, async (target) => { const rootId = await ownerRootId(target); return rootId ? roots.get(rootId).path : rootWorkspace; }, rootWorkspace, plugins.providers);
   const harnessRunners = new Map<string, HarnessRunner>();
   const storage = new ServerStorage({
     roots: () => roots.list().map((root) => root.path),
@@ -563,12 +568,21 @@ export async function createServer(host: string, port: number, workspacePath: st
         debugState: () => undefined,
         semanticChanged: () => undefined
       }));
+      for (const contribution of plugins.languages) {
+        const language = contribution.descriptor.id;
+        languageRegistry.register(contribution.descriptor, (workspace) => contribution.create(workspace, {
+          output: (data, stream) => send({ type: "language.output", payload: { rootId: ownerRootId, language, data, stream } }),
+          exit: (exitCode, signal) => send({ type: "language.exit", payload: { rootId: ownerRootId, language, exitCode, signal } }),
+          debugState: (state) => send({ type: "language.debug.state", payload: { ...state, rootId: ownerRootId, language } }),
+          semanticChanged: () => send({ type: "language.semantic.changed", payload: { rootId: ownerRootId, language } })
+        }));
+      }
       const languages = new LanguageSessions(languageRegistry, nextWorkspace);
       const javaService = languages.get("java") as JavaLanguageService;
       const { java, jdt } = javaService;
       const checkpoints = checkpointStore(nextWorkspace); await checkpoints.recover();
       if (socket.readyState !== WebSocket.OPEN) { await languages.dispose(); throw new CoreError("INVALID_REQUEST", "Session closed while services were being prepared"); }
-      return { workspacePath: nextWorkspace, filesystem, search, git, java, jdt, languages, workspaceState, checkpoints };
+      return { workspacePath: nextWorkspace, filesystem, search, git, java, jdt, languages, plugins: plugins.status, workspaceState, checkpoints };
     };
     let servicesPromise: Promise<SessionServices> | undefined;
     /** Resolves once no task switch is in flight for this connection. */
@@ -1299,6 +1313,7 @@ async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStor
       if (sessions.some((session) => session.status === "in_progress" || session.status === "user_prompt")) throw new CoreError("INVALID_REQUEST", "Stop the running task agent before restoring a checkpoint");
       return checkpoints.restore(request.payload.checkpointId);
     }
+    case "plugins.list": return { enabled: pluginsDirectory() !== undefined, plugins: services.plugins };
     case "language.list": case "language.load": case "language.options": case "language.configuration.read": case "language.configuration.save": case "language.tools.check": case "language.addSourceRoot": case "language.projectTree": case "language.symbols": case "language.listRunTargets": case "language.addRunConfiguration": case "language.selectRunConfiguration": case "language.build": case "language.run": case "language.stop": case "language.debug.setBreakpoints": case "language.debug.start": case "language.debug.applyChanges": case "language.debug.variables": case "language.debug.command": case "language.check": case "language.lsp.completion": case "language.lsp.definition": case "language.lsp.references": case "language.lsp.semanticTokens":
       return handleLanguageRequest(services.languages.registry, services.languages, request.rootId, request);
     case "java.loadMavenProject": {

@@ -332,6 +332,7 @@ export type JavaFileType = {
 /** Language-neutral wire data; Core service implementations must not be imported here. */
 export type LanguageExtra = Record<string, unknown>;
 export type LanguageCapabilities = { projectTree: boolean; build: boolean; run: boolean; debug: boolean; lsp: boolean; workspaceSymbols: boolean; configuration: boolean };
+export type PluginStatus = { id: string; version?: string; name?: string; state: "loaded" | "failed"; error?: string; providers: string[]; languages: string[] };
 export type LanguageDescriptor = { id: string; name: string; extensions: string[]; projectMarkers: string[]; capabilities: LanguageCapabilities };
 export type LanguageProjectNode = { name: string; path: string; type: string; sourceKind?: "source" | "test"; children?: LanguageProjectNode[]; extra?: LanguageExtra };
 export type LanguageToolCheck = { tool: string; executable: string; ok: boolean; message: string };
@@ -647,6 +648,8 @@ export type ProtocolOperations = {
   /** Applies selected checkpoint files only when a three-way comparison has no conflict. Git's index is untouched. */
   "taskGit.review": { payload: { checkpointId: string; paths: string[] }; result: TaskCheckpointApplyResult };
   "taskGit.restore": { payload: { checkpointId: string }; result: TaskCheckpointApplyResult };
+  /** Plugins are installed on the Core host; this lists what was found and whether each loaded. */
+  "plugins.list": { payload: Record<string, never>; result: { enabled: boolean; plugins: PluginStatus[] } };
   /** Registry discovery is root-scoped like all language operations. */
   "language.list": { payload: Record<string, never>; result: { languages: LanguageDescriptor[] } };
   "language.load": { payload: { language: string; extra?: LanguageExtra }; result: { options: LanguageExtra } };
@@ -1048,6 +1051,7 @@ const requestTypeRegistry: Record<RequestType, true> = {
   "taskGit.diff": true,
   "taskGit.review": true,
   "taskGit.restore": true,
+  "plugins.list": true,
   "language.list": true,
   "language.load": true,
   "language.options": true,
