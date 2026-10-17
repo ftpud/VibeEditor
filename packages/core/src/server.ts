@@ -200,6 +200,12 @@ export async function createServer(host: string, port: number, workspacePath: st
   let inFlight = 0;
   const idleWaiters = new Set<() => void>();
   const sessionCleanups = new Set<Promise<void>>();
+  /** Runs a cleanup in the background but keeps it visible to shutdown and logs failures instead of leaving them unhandled. */
+  const trackCleanup = (cleanup: Promise<void>) => {
+    const tracked = cleanup.catch((error) => console.error("[core] Language service cleanup failed", error));
+    sessionCleanups.add(tracked);
+    void tracked.finally(() => sessionCleanups.delete(tracked));
+  };
   const bridgeCommands = new Set<Promise<void>>();
   const socketMonitors = new Set<() => void>();
   const remoteTransfers = new RemoteTransferService();
@@ -759,7 +765,7 @@ export async function createServer(host: string, port: number, workspacePath: st
               selectedRoot = nextRoot; liveRootSelections.select(socket, nextRoot.id);
               servicesPromise = Promise.resolve(nextServices);
               terminalSubscriptions.set(socket, { rootId: nextRoot.id, workspace: nextServices.workspacePath, terminalIds: new Set() });
-              void previousServices.languages.dispose();
+              trackCleanup(previousServices.languages.dispose());
             }, async ({ nextServices, nextWatch }) => {
               await nextServices.languages.dispose(); if (nextWatch) await closeSwitchedWatch(nextRoot.id, nextWatch);
             }); } catch (error) { liveRootSelections.cancelSelection(socket); throw error; }
@@ -767,7 +773,7 @@ export async function createServer(host: string, port: number, workspacePath: st
           } else if (parsed.type === "tasks.switch" || (parsed.type === "tasks.delete" && (await rootContext.tasks.list()).selectedTaskId === parsed.payload.taskId)) {
             admission.assertOpen();
             const selected = await rootContext.tasks.select(parsed.type === "tasks.switch" ? parsed.payload.taskId : undefined);
-            void services.languages.dispose();
+            trackCleanup(services.languages.dispose());
             servicesPromise = makeServices(selected.workspace);
             services = await servicesPromise!;
             terminalSubscriptions.set(socket, { rootId: selectedRoot.id, workspace: selected.workspace, terminalIds: new Set() });
@@ -808,7 +814,7 @@ export async function createServer(host: string, port: number, workspacePath: st
       const cleanup = (async () => {
         await Promise.all([...switchedWatches].map(([rootId, subscription]) => closeSwitchedWatch(rootId, subscription)));
         const services = await servicesPromise?.catch(() => undefined);
-        services?.java.close(); services?.jdt.close();
+        await services?.languages.dispose();
       })();
       sessionCleanups.add(cleanup);
       void cleanup.finally(() => sessionCleanups.delete(cleanup)).catch((error) => console.error("[core] Session cleanup failed", error));

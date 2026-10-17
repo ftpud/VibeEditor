@@ -29,7 +29,13 @@ export function createAcpRegistry(onChanged: (workspace: string) => void, turns?
     { origin: "plugin", factories: plugins.map(isolated) }
   ];
   const registry = new AcpRegistry();
-  for (const { origin, factories } of sources) for (const create of factories) { const provider = create(ctx); if (provider) registry.register(provider, origin); }
+  for (const { origin, factories } of sources) for (const create of factories) {
+    const provider = create(ctx);
+    if (!provider) continue;
+    // Definitions and plugins must never take down startup, even on an ID collision the manifest could not predict.
+    if (origin === "built-in") registry.register(provider, origin);
+    else try { registry.register(provider, origin); } catch (error) { console.warn(`Skipping ${origin} provider: ${error instanceof Error ? error.message : String(error)}`); }
+  }
   return registry;
 }
 

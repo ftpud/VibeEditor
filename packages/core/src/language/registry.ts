@@ -69,7 +69,7 @@ export class LanguageSessions {
   async dispose(): Promise<void> {
     const services = [...this.services.values()];
     this.services.clear();
-    const results = await Promise.allSettled(services.map((service) => service.dispose()));
+    const results = await Promise.allSettled(services.map((service) => Promise.resolve().then(() => service.dispose())));
     const failures = results.filter((result): result is PromiseRejectedResult => result.status === "rejected");
     if (failures.length) throw new AggregateError(failures.map((result) => result.reason), "Could not dispose language services");
   }

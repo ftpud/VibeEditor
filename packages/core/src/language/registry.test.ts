@@ -40,3 +40,16 @@ describe("LanguageSessions", () => {
     expect(sessions.get("java")).not.toBe(built);
   });
 });
+
+describe("LanguageSessions disposal", () => {
+  it("disposes every service even when one throws synchronously", async () => {
+    const make = (id: string, dispose: () => Promise<void>) => { const d = descriptor(id, [], []); return { d, svc: { descriptor: d, dispose } as unknown as LanguageService }; };
+    const good = vi.fn(async () => undefined);
+    const bad = make("bad", () => { throw new Error("sync failure"); });
+    const fine = make("fine", good);
+    const sessions = new LanguageSessions(new LanguageRegistry().register(bad.d, () => bad.svc).register(fine.d, () => fine.svc), "/w");
+    sessions.get("bad"); sessions.get("fine");
+    await expect(sessions.dispose()).rejects.toThrow("Could not dispose");
+    expect(good).toHaveBeenCalledTimes(1);
+  });
+});

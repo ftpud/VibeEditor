@@ -3,6 +3,7 @@ import { mkdtemp, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import type { ProviderFactory } from "./stdio-provider.js";
 import { createAcpRegistry } from "./index.js";
 import { loadProviderDefinitions, validateProviderDefinition } from "./provider-definitions.js";
 
@@ -71,6 +72,15 @@ describe("plugin provider isolation", () => {
   it("skips a plugin factory that throws and keeps the other providers", () => {
     vi.stubEnv("REMOTE_IDE_PROVIDER_DEFINITIONS_DIR", path.join(os.tmpdir(), "no-provider-definitions"));
     const registry = createAcpRegistry(() => undefined, undefined, undefined, undefined, [() => { throw new Error("plugin exploded"); }]);
+    expect(registry.list().map((descriptor) => descriptor.id)).toEqual(["codex", "copilot", "claude"]);
+  });
+});
+
+describe("provider id collisions", () => {
+  it("skips a plugin provider whose runtime id collides instead of failing startup", () => {
+    vi.stubEnv("REMOTE_IDE_PROVIDER_DEFINITIONS_DIR", path.join(os.tmpdir(), "no-provider-definitions"));
+    const clash: ProviderFactory = (ctx) => createAcpRegistry(ctx.onChanged).get("codex");
+    const registry = createAcpRegistry(() => undefined, undefined, undefined, undefined, [clash]);
     expect(registry.list().map((descriptor) => descriptor.id)).toEqual(["codex", "copilot", "claude"]);
   });
 });
