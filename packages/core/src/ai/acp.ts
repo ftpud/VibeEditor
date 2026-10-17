@@ -35,7 +35,8 @@ export class AcpRegistry {
     return first.value;
   }
 
-  get(id: string = this.defaultId): AcpProvider {
+  get(requested?: string): AcpProvider {
+    const id = requested || this.defaultId;
     const provider = this.providers.get(id);
     if (!provider) throw new CoreError("INVALID_REQUEST", `Unknown AI provider '${id}'`);
     return provider;

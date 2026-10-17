@@ -263,7 +263,7 @@ export function App() {
   const [aiSession, setAiSession] = useState<AiSession>({ model: "gpt-5.6-sol", reasoning: "low", status: "idle", messages: [] });
   const [skillCatalog, setSkillCatalog] = useState<SkillCatalog>({ skills: [], policy: { allowed: [], defaults: [] } });
   const [aiSessions, setAiSessions] = useState<AiSession[]>([]);
-  const [aiProvider, setAiProvider] = useState<AiProvider>(() => readSetting("aiProvider") === "copilot" ? "copilot" : "codex");
+  const [aiProvider, setAiProvider] = useState<AiProvider>(() => readSetting("aiProvider") ?? "");
   const [aiModels, setAiModels] = useState<AiModel[]>([]);
   // True from the moment the provider changes until its own model list arrives, so the picker never shows another provider's models.
   const [aiModelsLoading, setAiModelsLoading] = useState(false);
@@ -381,7 +381,7 @@ export function App() {
   }, [selectedRootId, refreshProcesses]);
   const projectContentFilterVersion = useRef(0);
   const gitRollbackRunningRef = useRef(false);
-  const aiProviderRef = useRef<AiProvider>(readSetting("aiProvider") === "copilot" ? "copilot" : "codex");
+  const aiProviderRef = useRef<AiProvider>(readSetting("aiProvider") ?? "");
   const didAutoConnect = useRef(false);
   const layoutRef = useRef(layout);
   const navigationHistory = useRef(new NavigationHistory());
@@ -1100,7 +1100,7 @@ export function App() {
         const taskProvider = setting(aiProviderTaskKey(taskResult.selectedTaskId)) as AiProvider | null;
         const wsProvider = setting("aiProvider") as AiProvider | null;
         const known = (candidate: AiProvider | null) => Boolean(candidate) && providerResult.providers.some((item) => item.id === candidate);
-        const provider = known(taskProvider) ? taskProvider! : known(wsProvider) ? wsProvider! : (providerResult.providers[0]?.id ?? "codex");
+        const provider = known(taskProvider) ? taskProvider! : known(wsProvider) ? wsProvider! : (providerResult.providers[0]?.id ?? "");
         aiProviderRef.current = provider; setAiProvider(provider);
         wsSave(aiProviderTaskKey(taskResult.selectedTaskId), provider);
         setStatusMessage(`Loading ${providerResult.providers.find((item) => item.id === provider)?.name ?? provider} models…`);
