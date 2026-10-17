@@ -61,10 +61,10 @@ requests in `protocol/src/index.ts` (~96 lines), `server.ts` (~52 refs),
 - [x] A `LanguageRegistry` with file-type/project detection (generalise `java-file-type.ts`).
 
 ### 2.3 Generic protocol surface
-- [ ] Add language-neutral requests/events to `packages/protocol/src/index.ts` (e.g. `language.projectTree`, `language.build`, `language.run`, `language.debug.*`), carrying a `language` id.
-- [ ] Route them in `server.ts` through `LanguageRegistry`.
-- [ ] Keep the existing `java.*` requests as thin aliases during migration, then remove them once Desktop callers move.
-- [ ] Decide how language-specific extras are typed (typed union per built-in language vs. an opaque `extra` payload with a schema from the service descriptor).
+- [x] Add language-neutral requests/events to `packages/protocol/src/index.ts` (e.g. `language.projectTree`, `language.build`, `language.run`, `language.debug.*`), carrying a `language` id.
+- [x] Route them in `server.ts` through `LanguageRegistry`.
+- [x] Keep the existing `java.*` requests during migration (still served by the same Java instances; remove after 2.5).
+- [x] Decide how language-specific extras (opaque `extra` validated by `validateExtra`) are typed (typed union per built-in language vs. an opaque `extra` payload with a schema from the service descriptor).
 
 ### 2.4 Move Java onto the contract
 - [x] Implement `JavaLanguageService` by wrapping (adapter in core/src/language/java-service.ts, not yet routed from server.ts) the existing modules (`java.ts`, `jdtls.ts`, `java-configuration.ts`, caches); no behaviour change.

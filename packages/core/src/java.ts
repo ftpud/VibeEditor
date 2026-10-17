@@ -13,7 +13,7 @@ import { javaConfigurationPath } from "@remote-ide/protocol";
 import { javaLaunchEnvironment, expandJavaToolPath, javaConfigurationTemplate, javaSpawnError, javaToolEnvironment, javaToolExecutable, parseJavaConfiguration, readJavaConfiguration, writeJavaConfiguration } from "./java-configuration.js";
 import { validateJavaBreakpoints, WorkspaceStateStore } from "./workspace-state.js";
 
-type JavaProcessEvent =
+export type JavaProcessEvent =
   | { type: "output"; data: string }
   | { type: "exit"; exitCode: number | null; signal: string | null }
   | { type: "debug"; state: JavaDebugState };

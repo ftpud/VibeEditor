@@ -52,7 +52,7 @@ export class LanguageRegistry {
 /** Per-root cache of live services with guaranteed disposal. */
 export class LanguageSessions {
   private readonly services = new Map<string, LanguageService>();
-  constructor(private readonly registry: LanguageRegistry, private readonly workspace: string) {}
+  constructor(readonly registry: LanguageRegistry, private readonly workspace: string) {}
 
   get(id: string): LanguageService {
     let service = this.services.get(id);

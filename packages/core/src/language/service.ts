@@ -90,7 +90,7 @@ export interface LanguageServerLaunch {
 /** Events a service pushes; Core adds the language id and root. */
 export interface LanguageServiceEvents {
   output(text: string, stream: "stdout" | "stderr"): void;
-  exit(code: number | null): void;
+  exit(code: number | null, signal?: string | null): void;
   debugState(state: LanguageDebugState): void;
   semanticChanged(): void;
 }

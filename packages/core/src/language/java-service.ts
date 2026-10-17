@@ -1,6 +1,6 @@
 import type { JavaBreakpoint, JavaDebugState, JavaProjectNode } from "@remote-ide/protocol";
 import { CoreError } from "../errors.js";
-import { JavaProjectService } from "../java.js";
+import { JavaProjectService, type JavaProcessEvent } from "../java.js";
 import { JdtLanguageService } from "../jdtls.js";
 import type { WorkspaceFileSystem } from "../filesystem.js";
 import type { WorkspaceStateStore } from "../workspace-state.js";
@@ -29,6 +29,9 @@ function debugState(state: JavaDebugState): LanguageDebugState {
   };
 }
 
+/** Legacy `java.*` event hooks, kept until Desktop callers move to `language.*` events. */
+export interface JavaLegacyEvents { process(event: JavaProcessEvent): void; semanticChanged(): void }
+
 /**
  * Wraps the existing Java/Maven and JDT modules behind the language contract
  * without changing their behaviour. Java-only data (class names, hot-swap
@@ -39,14 +42,15 @@ export class JavaLanguageService implements LanguageService {
   readonly java: JavaProjectService;
   readonly jdt: JdtLanguageService;
 
-  constructor(private readonly filesystem: WorkspaceFileSystem, state: WorkspaceStateStore, events: LanguageServiceEvents, stateDirectory?: string) {
+    constructor(private readonly filesystem: WorkspaceFileSystem, state: WorkspaceStateStore, events: LanguageServiceEvents, stateDirectory?: string, legacy?: JavaLegacyEvents) {
     this.jdt = new JdtLanguageService(filesystem, stateDirectory);
     this.java = new JavaProjectService(filesystem, state, (event) => {
       if (event.type === "output") events.output(event.data, "stdout");
-      else if (event.type === "exit") events.exit(event.exitCode);
+      else if (event.type === "exit") events.exit(event.exitCode, event.signal);
       else events.debugState(debugState(event.state));
+      legacy?.process(event);
     }, async () => {
-      try { await this.jdt.rebuild(); } finally { events.semanticChanged(); }
+      try { await this.jdt.rebuild(); } finally { events.semanticChanged(); legacy?.semanticChanged(); }
     });
   }
 

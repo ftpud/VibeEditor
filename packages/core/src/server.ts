@@ -26,6 +26,9 @@ import { WorkspaceStateStore, flushWorkspaceStateWrites } from "./workspace-stat
 import { WorkspaceSearch } from "./search.js";
 import { JavaProjectService } from "./java.js";
 import { JdtLanguageService } from "./jdtls.js";
+import { LanguageRegistry, LanguageSessions } from "./language/registry.js";
+import { JavaLanguageService, JAVA_DESCRIPTOR } from "./language/java-service.js";
+import { handleLanguageRequest } from "./language/routes.js";
 import { toolInstallations } from "./tools.js";
 import { watchGitState } from "./git-watch.js";
 import { WorkspaceTaskStore } from "./tasks.js";
@@ -67,6 +70,7 @@ type SessionServices = {
   git: GitService;
   java: JavaProjectService;
   jdt: JdtLanguageService;
+  languages: LanguageSessions;
   workspaceState: WorkspaceStateStore;
   checkpoints: TaskCheckpointStore;
 };
@@ -539,20 +543,25 @@ export async function createServer(host: string, port: number, workspacePath: st
       const workspaceState = new WorkspaceStateStore(nextWorkspace, process.env.REMOTE_IDE_STATE_DIR);
       const search = new WorkspaceSearch(filesystem);
       const git = new GitService(nextWorkspace);
-      const jdt = new JdtLanguageService(filesystem);
-      const java = new JavaProjectService(filesystem, workspaceState, (event) => {
-      if (socket.readyState !== WebSocket.OPEN) return;
-      const message: ServerEvent = event.type === "output" ? { type: "java.output", payload: { rootId: ownerRootId, data: event.data } }
-        : event.type === "debug" ? { type: "java.debug.state", payload: { ...event.state, rootId: ownerRootId } }
-        : { type: "java.exit", payload: { rootId: ownerRootId, exitCode: event.exitCode, signal: event.signal } };
-      sendWebSocketData(socket, JSON.stringify(message));
-      }, async () => {
-        try { await jdt.rebuild(); }
-        finally { if (socket.readyState === WebSocket.OPEN) sendWebSocketData(socket, JSON.stringify({ type: "java.semantic.changed", payload: { rootId: ownerRootId } } satisfies ServerEvent)); }
-      });
+      const send = (message: ServerEvent) => { if (socket.readyState === WebSocket.OPEN) sendWebSocketData(socket, JSON.stringify(message)); };
+      // Java is the first LanguageService; `java`/`jdt` stay available for the legacy java.* routes until callers move.
+      const languageRegistry = new LanguageRegistry().register(JAVA_DESCRIPTOR, () => new JavaLanguageService(filesystem, workspaceState, {
+        output: (data, stream) => send({ type: "language.output", payload: { rootId: ownerRootId, language: "java", data, stream } }),
+        exit: (exitCode, signal) => send({ type: "language.exit", payload: { rootId: ownerRootId, language: "java", exitCode, signal } }),
+        debugState: (state) => send({ type: "language.debug.state", payload: { ...state, rootId: ownerRootId, language: "java" } }),
+        semanticChanged: () => send({ type: "language.semantic.changed", payload: { rootId: ownerRootId, language: "java" } })
+      }, undefined, {
+        process: (event) => send(event.type === "output" ? { type: "java.output", payload: { rootId: ownerRootId, data: event.data } }
+          : event.type === "debug" ? { type: "java.debug.state", payload: { ...event.state, rootId: ownerRootId } }
+          : { type: "java.exit", payload: { rootId: ownerRootId, exitCode: event.exitCode, signal: event.signal } }),
+        semanticChanged: () => send({ type: "java.semantic.changed", payload: { rootId: ownerRootId } })
+      }));
+      const languages = new LanguageSessions(languageRegistry, nextWorkspace);
+      const javaService = languages.get("java") as JavaLanguageService;
+      const { java, jdt } = javaService;
       const checkpoints = checkpointStore(nextWorkspace); await checkpoints.recover();
-      if (socket.readyState !== WebSocket.OPEN) { java.close(); jdt.close(); throw new CoreError("INVALID_REQUEST", "Session closed while services were being prepared"); }
-      return { workspacePath: nextWorkspace, filesystem, search, git, java, jdt, workspaceState, checkpoints };
+      if (socket.readyState !== WebSocket.OPEN) { await languages.dispose(); throw new CoreError("INVALID_REQUEST", "Session closed while services were being prepared"); }
+      return { workspacePath: nextWorkspace, filesystem, search, git, java, jdt, languages, workspaceState, checkpoints };
     };
     let servicesPromise: Promise<SessionServices> | undefined;
     /** Resolves once no task switch is in flight for this connection. */
@@ -720,7 +729,7 @@ export async function createServer(host: string, port: number, workspacePath: st
                 nextWatch = await prepareSwitchedWatch(nextServices.workspacePath, nextRoot.id);
                 const result = { root: nextRoot, workspace: nextServices.workspacePath, projectName: nextRoot.alias, tree: await nextServices.filesystem.listTree(parsed.payload.includeIgnored === true), options: await nextServices.workspaceState.load() };
                 return { nextServices, nextWatch, result };
-              } catch (error) { nextServices.java.close(); nextServices.jdt.close(); if (nextWatch) await closeSwitchedWatch(nextRoot.id, nextWatch); throw error; }
+              } catch (error) { await nextServices.languages.dispose(); if (nextWatch) await closeSwitchedWatch(nextRoot.id, nextWatch); throw error; }
             }, async ({ nextServices, nextWatch }) => {
               admission.assertOpen();
               await commitSwitchedWatch(nextRoot.id, nextWatch);
@@ -730,15 +739,15 @@ export async function createServer(host: string, port: number, workspacePath: st
               selectedRoot = nextRoot; liveRootSelections.select(socket, nextRoot.id);
               servicesPromise = Promise.resolve(nextServices);
               terminalSubscriptions.set(socket, { rootId: nextRoot.id, workspace: nextServices.workspacePath, terminalIds: new Set() });
-              previousServices.java.close(); previousServices.jdt.close();
+              void previousServices.languages.dispose();
             }, async ({ nextServices, nextWatch }) => {
-              nextServices.java.close(); nextServices.jdt.close(); if (nextWatch) await closeSwitchedWatch(nextRoot.id, nextWatch);
+              await nextServices.languages.dispose(); if (nextWatch) await closeSwitchedWatch(nextRoot.id, nextWatch);
             }); } catch (error) { liveRootSelections.cancelSelection(socket); throw error; }
             services = candidate.nextServices; rootSelectionResult = candidate.result;
           } else if (parsed.type === "tasks.switch" || (parsed.type === "tasks.delete" && (await rootContext.tasks.list()).selectedTaskId === parsed.payload.taskId)) {
             admission.assertOpen();
             const selected = await rootContext.tasks.select(parsed.type === "tasks.switch" ? parsed.payload.taskId : undefined);
-            services.java.close(); services.jdt.close();
+            void services.languages.dispose();
             servicesPromise = makeServices(selected.workspace);
             services = await servicesPromise!;
             terminalSubscriptions.set(socket, { rootId: selectedRoot.id, workspace: selected.workspace, terminalIds: new Set() });
@@ -1283,6 +1292,8 @@ async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStor
       if (sessions.some((session) => session.status === "in_progress" || session.status === "user_prompt")) throw new CoreError("INVALID_REQUEST", "Stop the running task agent before restoring a checkpoint");
       return checkpoints.restore(request.payload.checkpointId);
     }
+    case "language.list": case "language.load": case "language.options": case "language.configuration.read": case "language.configuration.save": case "language.tools.check": case "language.addSourceRoot": case "language.projectTree": case "language.symbols": case "language.listRunTargets": case "language.addRunConfiguration": case "language.selectRunConfiguration": case "language.build": case "language.run": case "language.stop": case "language.debug.setBreakpoints": case "language.debug.start": case "language.debug.applyChanges": case "language.debug.variables": case "language.debug.command": case "language.check": case "language.lsp.completion": case "language.lsp.definition": case "language.lsp.references": case "language.lsp.semanticTokens":
+      return handleLanguageRequest(services.languages.registry, services.languages, request.rootId, request);
     case "java.loadMavenProject": {
       if (typeof request.payload.pomPath !== "string") throw new CoreError("INVALID_REQUEST", "pomPath must be a string");
       return java.loadMavenProject(request.payload.pomPath);
