@@ -1001,6 +1001,7 @@ export function App() {
         }).catch(() => undefined);
       };
       if (event.type === "git.changed") { refreshDiffs(); setGitRevision((revision) => revision + 1); return; }
+      if (event.type !== "filesystem.changed") return;
       const changedPaths = event.payload.paths;
       if (changedPaths.includes(javaConfigurationPath) || event.payload.overflow) {
         const rootId = client.getRoot();

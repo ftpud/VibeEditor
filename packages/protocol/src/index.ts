@@ -329,6 +329,25 @@ export type JavaFileType = {
   implements?: boolean;
 };
 
+/** Language-neutral wire data; Core service implementations must not be imported here. */
+export type LanguageExtra = Record<string, unknown>;
+export type LanguageCapabilities = { projectTree: boolean; build: boolean; run: boolean; debug: boolean; lsp: boolean; workspaceSymbols: boolean; configuration: boolean };
+export type LanguageDescriptor = { id: string; name: string; extensions: string[]; projectMarkers: string[]; capabilities: LanguageCapabilities };
+export type LanguageProjectNode = { name: string; path: string; type: string; sourceKind?: "source" | "test"; children?: LanguageProjectNode[]; extra?: LanguageExtra };
+export type LanguageToolCheck = { tool: string; executable: string; ok: boolean; message: string };
+export type LanguageDiagnostic = { path: string; line: number; column: number; severity: "error" | "warning"; message: string };
+export type RootedLanguageDiagnostic = LanguageDiagnostic & { rootId: WorkspaceRootId; language: string };
+export type LanguageRange = { startLine: number; startColumn: number; endLine: number; endColumn: number };
+export type LanguageCompletion = { label: string; detail?: string; insertText: string; range?: LanguageRange; additionalTextEdits: { range: LanguageRange; text: string }[] };
+export type LanguageLocation = { path: string } & LanguageRange;
+export type RootedLanguageLocation = LanguageLocation & { rootId: WorkspaceRootId; language: string };
+export type LanguageSemanticToken = LanguageRange & { type: string; modifiers: string[] };
+export type LanguageRunTarget = { id: string; name: string; path?: string; extra?: LanguageExtra };
+export type LanguageBreakpoint = { path: string; line: number; extra?: LanguageExtra };
+export type LanguageDebugVariable = { name: string; value: string; reference?: string; type?: string; indexedCount?: number; extra?: LanguageExtra };
+export type LanguageDebugState = { status: "starting" | "running" | "paused" | "stopped"; path?: string; line?: number; frame?: string; variables: LanguageDebugVariable[]; stopReason?: string; inspectionError?: string; busy?: boolean; extra?: LanguageExtra };
+export type LanguageDebugCommand = "continue" | "stepOver" | "stepInto" | "stepOut";
+
 export type SearchContextLine = { line: number; text: string; truncated: boolean };
 export type SearchMatchContext = { before: SearchContextLine[]; after: SearchContextLine[]; truncatedBefore: boolean; truncatedAfter: boolean };
 export type SearchResult = { rootId: WorkspaceRootId; path: string; line: number; column: number; preview: string; previewTruncated?: boolean; context?: SearchMatchContext };
@@ -628,6 +647,32 @@ export type ProtocolOperations = {
   /** Applies selected checkpoint files only when a three-way comparison has no conflict. Git's index is untouched. */
   "taskGit.review": { payload: { checkpointId: string; paths: string[] }; result: TaskCheckpointApplyResult };
   "taskGit.restore": { payload: { checkpointId: string }; result: TaskCheckpointApplyResult };
+  /** Registry discovery is root-scoped like all language operations. */
+  "language.list": { payload: Record<string, never>; result: { languages: LanguageDescriptor[] } };
+  "language.load": { payload: { language: string; extra?: LanguageExtra }; result: { options: LanguageExtra } };
+  "language.options": { payload: { language: string }; result: { options: LanguageExtra } };
+  "language.configuration.read": { payload: { language: string }; result: { path: string; content: string; revision?: FileRevision; template?: string } };
+  "language.configuration.save": { payload: { language: string; content: string; expectedRevision?: FileRevision }; result: { content: string; revision: FileRevision; options?: LanguageExtra } };
+  "language.tools.check": { payload: { language: string; content?: string }; result: { checks: LanguageToolCheck[] } };
+  "language.addSourceRoot": { payload: { language: string; path: string }; result: Record<string, never> };
+  "language.projectTree": { payload: { language: string }; result: { tree: LanguageProjectNode[] } };
+  "language.symbols": { payload: { language: string; query: string; limit?: number }; result: { symbols: RootedWorkspaceSymbol[]; truncated?: boolean } };
+  "language.listRunTargets": { payload: { language: string }; result: { targets: LanguageRunTarget[] } };
+  "language.addRunConfiguration": { payload: { language: string; name: string; target: string }; result: { options: LanguageExtra } };
+  "language.selectRunConfiguration": { payload: { language: string; id: string }; result: { options: LanguageExtra } };
+  "language.build": { payload: { language: string }; result: Record<string, never> };
+  "language.run": { payload: { language: string }; result: Record<string, never> };
+  "language.stop": { payload: { language: string }; result: Record<string, never> };
+  "language.debug.setBreakpoints": { payload: { language: string; breakpoints: LanguageBreakpoint[] }; result: Record<string, never> };
+  "language.debug.start": { payload: { language: string; breakpoints: LanguageBreakpoint[] }; result: Record<string, never> };
+  "language.debug.applyChanges": { payload: { language: string }; result: LanguageExtra };
+  "language.debug.variables": { payload: { language: string; reference: string; start?: number }; result: { variables: LanguageDebugVariable[]; nextStart?: number } };
+  "language.debug.command": { payload: { language: string; command: LanguageDebugCommand }; result: Record<string, never> };
+  "language.check": { payload: { language: string }; result: { diagnostics: RootedLanguageDiagnostic[] } };
+  "language.lsp.completion": { payload: { language: string; path: string; content: string; line: number; column: number }; result: { items: LanguageCompletion[] } };
+  "language.lsp.definition": { payload: { language: string; path: string; content: string; line: number; column: number }; result: { locations: RootedLanguageLocation[] } };
+  "language.lsp.references": { payload: { language: string; path: string; content: string; line: number; column: number }; result: { locations: RootedLanguageLocation[] } };
+  "language.lsp.semanticTokens": { payload: { language: string; path: string; content: string }; result: { tokens: LanguageSemanticToken[] } };
   "java.loadMavenProject": {
     payload: { pomPath: string };
     result: { options: JavaProjectOptions; tree: JavaProjectNode[] };
@@ -772,6 +817,13 @@ export type TerminalExitEvent = {
 export type GitChangedEvent = { type: "git.changed"; payload: { rootId: WorkspaceRootId } };
 export type TaskGitChangedEvent = { type: "taskGit.changed"; payload: { rootId: WorkspaceRootId } };
 
+export type LanguageSemanticChangedEvent = { type: "language.semantic.changed"; payload: { rootId: WorkspaceRootId; language: string } };
+export type LanguageOutputEvent = { type: "language.output"; payload: { rootId: WorkspaceRootId; language: string; data: string; stream: "stdout" | "stderr" } };
+export type LanguageExitEvent = { type: "language.exit"; payload: { rootId: WorkspaceRootId; language: string; exitCode: number | null; signal?: string | null } };
+export type LanguageDebugStateEvent = { type: "language.debug.state"; payload: LanguageDebugState & { rootId: WorkspaceRootId; language: string } };
+/** Language-neutral events carry the originating root and service id. */
+export type LanguageServerEvent = LanguageSemanticChangedEvent | LanguageOutputEvent | LanguageExitEvent | LanguageDebugStateEvent;
+
 export type JavaSemanticChangedEvent = { type: "java.semantic.changed"; payload: { rootId: WorkspaceRootId } };
 export type JavaOutputEvent = { type: "java.output"; payload: { rootId: WorkspaceRootId; data: string } };
 export type JavaExitEvent = { type: "java.exit"; payload: { rootId: WorkspaceRootId; exitCode: number | null; signal: string | null } };
@@ -787,7 +839,7 @@ export type HarnessChangedEvent = { type: "harness.changed"; payload: { rootId: 
 export type WorkflowDocumentEvent = { type: "workflow.document"; payload: { rootId: WorkspaceRootId; runId: string; blockId: string; title: string; content: string } };
 export type ConfigurationChangedEvent = { type: "configuration.changed"; payload: { rootId: WorkspaceRootId; resource: string; global: boolean } };
 export type ProcessesChangedEvent = { type: "processes.changed"; payload: Record<string, never> };
-export type ServerEvent = ProcessesChangedEvent | ConfigurationChangedEvent | TimersChangedEvent | WorkflowDocumentEvent | FilesystemChangedEvent | TerminalOpenedEvent | TerminalOutputEvent | TerminalExitEvent | GitChangedEvent | TaskGitChangedEvent | JavaSemanticChangedEvent | JavaOutputEvent | JavaExitEvent | JavaDebugStateEvent | AiChangedEvent | TasksChangedEvent | CommitMessageChangedEvent | RunConfigChangedEvent | HarnessChangedEvent;
+export type ServerEvent = LanguageServerEvent | ProcessesChangedEvent | ConfigurationChangedEvent | TimersChangedEvent | WorkflowDocumentEvent | FilesystemChangedEvent | TerminalOpenedEvent | TerminalOutputEvent | TerminalExitEvent | GitChangedEvent | TaskGitChangedEvent | JavaSemanticChangedEvent | JavaOutputEvent | JavaExitEvent | JavaDebugStateEvent | AiChangedEvent | TasksChangedEvent | CommitMessageChangedEvent | RunConfigChangedEvent | HarnessChangedEvent;
 
 /**
  * Every request the core accepts. Declaring it as a fully keyed record makes TypeScript
@@ -996,6 +1048,31 @@ const requestTypeRegistry: Record<RequestType, true> = {
   "taskGit.diff": true,
   "taskGit.review": true,
   "taskGit.restore": true,
+  "language.list": true,
+  "language.load": true,
+  "language.options": true,
+  "language.configuration.read": true,
+  "language.configuration.save": true,
+  "language.tools.check": true,
+  "language.addSourceRoot": true,
+  "language.projectTree": true,
+  "language.symbols": true,
+  "language.listRunTargets": true,
+  "language.addRunConfiguration": true,
+  "language.selectRunConfiguration": true,
+  "language.build": true,
+  "language.run": true,
+  "language.stop": true,
+  "language.debug.setBreakpoints": true,
+  "language.debug.start": true,
+  "language.debug.applyChanges": true,
+  "language.debug.variables": true,
+  "language.debug.command": true,
+  "language.check": true,
+  "language.lsp.completion": true,
+  "language.lsp.definition": true,
+  "language.lsp.references": true,
+  "language.lsp.semanticTokens": true,
   "java.loadMavenProject": true,
   "java.getOptions": true,
   "java.configuration.read": true,

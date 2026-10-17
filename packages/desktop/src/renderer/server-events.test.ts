@@ -13,6 +13,10 @@ const examples = {
   "terminal.exit": { type: "terminal.exit", payload: { rootId: "root", terminalId: "terminal", exitCode: 0 } },
   "git.changed": { type: "git.changed", payload: { rootId: "root" } },
   "taskGit.changed": { type: "taskGit.changed", payload: { rootId: "root" } },
+  "language.semantic.changed": { type: "language.semantic.changed", payload: { rootId: "root", language: "python" } },
+  "language.output": { type: "language.output", payload: { rootId: "root", language: "python", data: "text", stream: "stderr" } },
+  "language.exit": { type: "language.exit", payload: { rootId: "root", language: "python", exitCode: null } },
+  "language.debug.state": { type: "language.debug.state", payload: { rootId: "root", language: "python", status: "paused", variables: [{ name: "a", value: "1", reference: "r", extra: { scope: "local" } }], frame: "main", line: 5, busy: false, extra: { reason: "breakpoint" } } },
   "java.semantic.changed": { type: "java.semantic.changed", payload: { rootId: "root" } },
   "java.output": { type: "java.output", payload: { rootId: "root", data: "text" } },
   "java.exit": { type: "java.exit", payload: { rootId: "root", exitCode: null, signal: null } },
@@ -29,13 +33,18 @@ describe("Protocol server event validation", () => {
     expect(Object.keys(examples).sort()).toEqual([...serverEventTypes].sort());
     for (const example of Object.values(examples)) {
       expect(isServerEvent(JSON.parse(JSON.stringify(example)))).toBe(true);
-      expect(isServerEvent({ ...example, extra: "compatible", payload: { ...example.payload, extra: true } })).toBe(true);
+      expect(isServerEvent({ ...example, extra: "compatible", payload: { ...example.payload, futureField: true } })).toBe(true);
       for (const payload of [undefined, null, [], "wrong"]) expect(isServerEvent({ ...example, payload })).toBe(false);
       expect(isServerEvent({ ...example, id: "response" })).toBe(false);
     }
   });
   it("checks required and optional primitives and nested arrays", () => {
     const invalid = [
+      { type: "language.semantic.changed", payload: { rootId: "r" } },
+      { type: "language.output", payload: { rootId: "r", language: "python", data: "", stream: "other" } },
+      { type: "language.exit", payload: { rootId: "r", language: "python", exitCode: "0" } },
+      { ...examples["language.debug.state"], payload: { ...examples["language.debug.state"].payload, extra: [] } },
+      { ...examples["language.debug.state"], payload: { ...examples["language.debug.state"].payload, variables: [{ name: "x", value: "1", extra: false }] } },
       { type: "terminal.output", payload: { rootId: "r", terminalId: "t", data: 3 } },
       { type: "git.changed", payload: {} },
       { type: "timers.changed", payload: { rootId: null } },
