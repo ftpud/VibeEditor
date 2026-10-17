@@ -2,10 +2,9 @@
 
 ## Project run configurations
 
-Open **Run Configurations** from the right tool stripe, immediately after the
-Useful Files bookmark. The panel is closed by default. Useful Files, Run,
-Agents, and Skills sit below a spacer at the bottom of the right stripe in both
-sidebar layouts.
+Use the run controls in the title bar to select, run, debug or stop a registered
+project configuration. The settings button opens its configuration editor.
+Useful Files, Agents and Skills stay below a spacer at the bottom of the right stripe.
 
 Register a project from its file context menu:
 
@@ -18,11 +17,14 @@ Manifests can be in subdirectories. Registration opens the matching configuratio
 editor. Existing project settings are retained when the same project is added
 again. Installed language services alone do not create top-bar run controls.
 
-The sidebar lists registered projects and configurations, provides Run/Stop and
-Java Debug controls, and shows process output. The top bar uses the same selected
-configuration. Use the settings button to edit, duplicate, rename or delete
+Use the title-bar settings button to edit, duplicate, rename or delete
 configurations. Dirty editor files are saved before launch. Stop a running project
-before editing its configuration.
+before editing its configuration. **Run** opens an interactive terminal tab for
+the application. Its name comes from the selected configuration; input, Ctrl+C,
+output replay and exit status use the normal terminal controls. Runs stay alive
+when the renderer reconnects. The title-bar
+Stop button terminates that run, and closing its terminal also stops it. Java
+Debug continues to use the debugger controls.
 
 ### npm projects
 

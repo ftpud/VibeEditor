@@ -1,3 +1,4 @@
+import { runLanguageInTerminal, hasLanguageTerminalRun, stopLanguageTerminalRun } from "./language/terminal.js";
 import { validateRequestPayload } from "./request-validation.js";
 import { coreAccessPolicy, type CoreAccessOptions } from "./access-policy.js";
 import { executeTerminalControlAsync } from "./workflow-terminal.js";
@@ -1311,8 +1312,14 @@ async function handleRequest(services: SessionServices, tasks: WorkspaceTaskStor
       if (sessions.some((session) => session.status === "in_progress" || session.status === "user_prompt")) throw new CoreError("INVALID_REQUEST", "Stop the running task agent before restoring a checkpoint");
       return checkpoints.restore(request.payload.checkpointId);
     }
+    case "language.options": return { options: { ...await services.languages.get(request.payload.language).options(), terminalRunning: hasLanguageTerminalRun(terminalHost, workspacePath, request.payload.language) } };
+    case "language.stop": {
+      if (stopLanguageTerminalRun(terminalHost, workspacePath, request.payload.language)) return {};
+      return handleLanguageRequest(services.languages.registry, services.languages, request.rootId, request);
+    }
+    case "language.run": return runLanguageInTerminal(services.languages.require(request.payload.language, "run"), terminalHost, workspacePath);
     case "plugins.list": return { enabled: pluginsDirectory() !== undefined, plugins: services.plugins };
-    case "language.list": case "language.load": case "language.options": case "language.configuration.read": case "language.configuration.save": case "language.tools.check": case "language.addSourceRoot": case "language.projectTree": case "language.symbols": case "language.listRunTargets": case "language.addRunConfiguration": case "language.selectRunConfiguration": case "language.removeRunConfiguration": case "language.build": case "language.run": case "language.stop": case "language.debug.setBreakpoints": case "language.debug.start": case "language.debug.applyChanges": case "language.debug.variables": case "language.debug.command": case "language.check": case "language.lsp.completion": case "language.lsp.definition": case "language.lsp.references": case "language.lsp.semanticTokens":
+    case "language.list": case "language.load": case "language.configuration.read": case "language.configuration.save": case "language.tools.check": case "language.addSourceRoot": case "language.projectTree": case "language.symbols": case "language.listRunTargets": case "language.addRunConfiguration": case "language.selectRunConfiguration": case "language.removeRunConfiguration": case "language.build": case "language.debug.setBreakpoints": case "language.debug.start": case "language.debug.applyChanges": case "language.debug.variables": case "language.debug.command": case "language.check": case "language.lsp.completion": case "language.lsp.definition": case "language.lsp.references": case "language.lsp.semanticTokens":
       return handleLanguageRequest(services.languages.registry, services.languages, request.rootId, request);
     case "java.loadMavenProject": {
       if (typeof request.payload.pomPath !== "string") throw new CoreError("INVALID_REQUEST", "pomPath must be a string");

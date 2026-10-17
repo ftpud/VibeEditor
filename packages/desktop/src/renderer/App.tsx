@@ -36,7 +36,7 @@ import { clearViewedTerminalActivity, markTerminalActivity } from "./terminal-ac
 import { JavaConfigurationDialog } from "./plugins/languages/java";
 import { languageClient, loadJavaProjectTree } from "./language-client";
 import { attachDebugEditor } from "./debug-editor";
-import { RunConfigurationsPanel, RunConfigurationToolbar } from "./RunConfigurationsPanel";
+import { RunConfigurationToolbar } from "./RunConfigurationToolbar";
 import { projectRegistration, runProject, type RunProject, type RunProjectProcess } from "./run-projects";
 import { GenericProjectConfigurationDialog } from "./GenericProjectConfigurationDialog";
 import { projectConfigurationEditors } from "./plugins/languages/configuration-editors";
@@ -314,14 +314,16 @@ export function App() {
   const [gitError, setGitError] = useState("");
   const [workspaceOptionsReady, setWorkspaceOptionsReady] = useState(false);
   const [languages, setLanguages] = useState<LanguageDescriptor[]>([]);
-  const [runConfigurationsOpen, setRunConfigurationsOpen] = useState(false);
   const [runProjects, setRunProjects] = useState<RunProject[]>([]);
   const [runProjectProcesses, setRunProjectProcesses] = useState<Record<string, RunProjectProcess>>({});
   const [runConfigurationEditor, setRunConfigurationEditor] = useState<string>();
   const [runProjectBusy, setRunProjectBusy] = useState(false);
   const runProjectGeneration = useRef(0);
   const [selectedLanguage, setSelectedLanguage] = useState<string>();
-  const openRunConfigurations = (language?: string) => { if (language) setSelectedLanguage(language); setRunConfigurationsOpen(true); };
+  const openRunConfigurations = (language?: string) => {
+    const projectLanguage = language ?? selectedLanguage ?? runProjects[0]?.language;
+    if (projectLanguage) { setSelectedLanguage(projectLanguage); setRunConfigurationEditor(projectLanguage); }
+  };
   const [javaOptions, setJavaOptions] = useState<JavaProjectOptions>();
   const [javaTree, setJavaTree] = useState<JavaProjectNode[]>([]);
   const [javaLog, setJavaLog] = useState("");
@@ -2219,7 +2221,7 @@ export function App() {
     if (tab.rootId && tab.rootId !== selectedRootIdRef.current) await selectWorkspaceRootRef.current(tab.rootId);
     const owner = runConfigs.find((config) => config.terminalId === tab.terminalId && ["starting", "running", "stopping"].includes(config.status));
     if (owner && clientRef.current) void clientRef.current.request("runConfig.stop", { scope: owner.scope, name: owner.name }).then((result) => setRunConfigs((items) => items.map((item) => item.scope === result.config.scope && item.name === result.config.name ? result.config : item))).catch(() => undefined);
-    else if (tab.status !== "unavailable") void clientRef.current?.request("terminal.close", { terminalId: tab.terminalId }).catch(() => undefined);
+    else if (tab.status !== "unavailable") void clientRef.current?.request("terminal.close", { terminalId: tab.terminalId }).then(() => refreshRunProjects()).catch(() => undefined);
     terminalBuffers.current.delete(tab.terminalId);
     for (const [blockId, terminalId] of markdownBlockTerminals.current) if (terminalId === tab.terminalId) markdownBlockTerminals.current.delete(blockId);
     setLayout((current) => {
@@ -2933,7 +2935,7 @@ export function App() {
     try { const result = await client.request("workspace.removeRoot", { rootId: root.id }); setWorkspaceRoots(result.roots); }
     catch (error) { setStatusMessage(error instanceof Error ? error.message : "Could not remove workspace root"); }
   };
-  const rightSidebarOpen = runConfigurationsOpen || rightPanels.project || rightPanels.git || rightPanels.useful || rightPanels.agents || rightPanels.skills || ((rightPanels.taskGit || rightPanels.promptHistory) && Boolean(selectedTaskId)) || (rightPanels.java && Boolean(javaOptions));
+  const rightSidebarOpen = rightPanels.project || rightPanels.git || rightPanels.useful || rightPanels.agents || rightPanels.skills || ((rightPanels.taskGit || rightPanels.promptHistory) && Boolean(selectedTaskId)) || (rightPanels.java && Boolean(javaOptions));
   useEffect(() => {
     const client = clientRef.current;
     setLanguages([]);
@@ -2966,7 +2968,7 @@ export function App() {
     const root = client.getRoot(); const task = selectedTaskIdRef.current;
     return client.subscribeServerEvents((event) => {
       if (clientRef.current !== client || client.getRoot() !== root || task !== selectedTaskIdRef.current || taskSwitchActive.current) return;
-      if (event.type === "configuration.changed" && event.payload.rootId === root && event.payload.resource.startsWith("languages/")) {
+      if ((event.type === "terminal.exit" && event.payload.rootId === root) || (event.type === "configuration.changed" && event.payload.rootId === root && event.payload.resource.startsWith("languages/"))) {
         void refreshRunProjects().catch(() => undefined); return;
       }
       if (event.type === "filesystem.changed" && event.payload.rootId === root && (event.payload.overflow || event.payload.paths.some((path) => /(^|\/)(package\.json|pom\.xml)$/.test(path) || /^\.settings\/(npm|java)\.json$/.test(path)))) {
@@ -3014,7 +3016,6 @@ export function App() {
       await refreshRunProjects(client);
       if (clientRef.current !== client || client.getRoot() !== root || task !== selectedTaskIdRef.current || taskSwitchActive.current) return;
       openRunConfigurations(registration.language);
-      setRunConfigurationEditor(registration.language);
       void refreshTree();
     } catch (error) { if (clientRef.current === client && client.getRoot() === root) setStatusMessage(error instanceof Error ? error.message : "Could not add project"); }
     finally { if (clientRef.current === client && client.getRoot() === root && task === selectedTaskIdRef.current) setRunProjectBusy(false); }
@@ -3024,15 +3025,22 @@ export function App() {
     const client = clientRef.current; if (!client) return;
     const root = client.getRoot(); const task = selectedTaskIdRef.current;
     const current = () => clientRef.current === client && client.getRoot() === root && selectedTaskIdRef.current === task && !taskSwitchActive.current;
-    setSelectedLanguage(language); setRunConfigurationsOpen(true);
+    setSelectedLanguage(language);
     setRunProjectProcesses((states) => ({ ...states, [language]: { ...(states[language] ?? { log: "" }), running: true, error: undefined } }));
     try {
       await saveLaunchFiles();
       if (!current()) return;
       if (debug) await languageClient(client, language).startDebug(language === "java" ? javaBreakpoints.map(({ className, ...breakpoint }) => ({ ...breakpoint, extra: { className } })) : [], { timeoutMs: 10 * 60_000 });
-      else await languageClient(client, language).request("language.run", {}, { timeoutMs: 10 * 60_000 });
+      else {
+        const { terminal } = await languageClient(client, language).request("language.run", {}, { timeoutMs: 10 * 60_000 });
+        if (current()) await openTerminalReference(terminal.terminalId, terminal.displayName ?? "Run");
+      }
     } catch (error) {
-      if (current()) setRunProjectProcesses((states) => ({ ...states, [language]: { ...(states[language] ?? { log: "" }), running: false, error: error instanceof Error ? error.message : "Run failed" } }));
+      if (current()) {
+        const message = error instanceof Error ? error.message : "Run failed";
+        setRunProjectProcesses((states) => ({ ...states, [language]: { ...(states[language] ?? { log: "" }), running: false, error: message } }));
+        setStatusMessage(message);
+      }
     }
   };
   const stopProjectConfiguration = async (language: string) => {
@@ -3053,7 +3061,7 @@ export function App() {
     { id: "terminal.toggle", label: "Toggle Terminal Panel", category: "Terminal", when: (context) => context.connected, execute: toggleTerminalPanel },
     { id: "task.create", label: "Create Task", category: "Task", when: (context) => context.connected && !context.taskSwitching, execute: () => setShowCreateTaskDialog(true) },
     { id: "ai.open", label: "Open AI", category: "AI", when: (context) => context.connected, execute: () => { if (sideLayout === "classic") setClassicAiOpen(true); else setLeftPanels((current) => ({ ...current, ai: true, harness: false, timers: false, triggers: false, proc: false })); void refreshAi(); } },
-    { id: "language.tools", label: "Open Run Configurations", category: "Language", when: (context) => context.connected, execute: () => openRunConfigurations() },
+    { id: "language.tools", label: "Open Run Configurations", category: "Language", when: (context) => context.connected && runProjects.length > 0, execute: () => openRunConfigurations() },
     ...languageCommands(languages.filter((language) => runProjects.some((project) => project.language === language.id)), openRunConfigurations),
     { id: "editor.save", label: "Save Active Editor", category: "Editor", when: (context) => context.hasActiveEditor && context.activeEditorDirty, execute: () => saveActive() }
   ];
@@ -3111,6 +3119,7 @@ export function App() {
     onCancelAll={async () => { const client = clientRef.current; if (!client) return; await client.request("timers.cancelAll", {}); await refreshAiStatuses(client); }} />;
 
   const projectProcessStates: Record<string, RunProjectProcess> = { ...runProjectProcesses, java: { ...(runProjectProcesses.java ?? { log: "" }), running: javaRunning || !!runProjectProcesses.java?.running } };
+  for (const project of runProjects) if (project.terminalRunning) projectProcessStates[project.language] = { ...(projectProcessStates[project.language] ?? { log: "" }), running: true };
   const runProjectActions = {
     projects: runProjects, selectedLanguage,
     processes: projectProcessStates,
@@ -3120,10 +3129,8 @@ export function App() {
     onRun: (language: string, debug?: boolean) => { void launchProjectConfiguration(language, debug); },
     onStop: (language: string) => { void stopProjectConfiguration(language); }
   };
-  const runConfigurationsPane = <RunConfigurationsPanel key="runConfigurations" {...runProjectActions} onClose={() => setRunConfigurationsOpen(false)} onRefresh={() => { void refreshRunProjects().catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : "Could not refresh run configurations")); }} onClear={(language) => setRunProjectProcesses((states) => ({ ...states, [language]: { ...(states[language] ?? { running: false }), log: "" } }))} />;
   const rightBottomTools = <><div className="tool-stripe-spacer" aria-hidden="true" /><div className="right-bottom-tools">
     <button className={`tool-stripe-button right ${rightPanels.useful ? "active" : ""}`} title={rightPanels.useful ? "Hide Useful Files" : "Show Useful Files"} onClick={() => setRightPanels((current) => { if (!current.useful) void refreshUsefulFiles(); return { ...current, useful: !current.useful }; })}><Bookmark size={15} /><span>Useful</span></button>
-    <button className={`tool-stripe-button right ${runConfigurationsOpen ? "active" : ""}`} aria-label="Run Configurations" title={runConfigurationsOpen ? "Hide Run Configurations" : "Show Run Configurations"} onClick={() => setRunConfigurationsOpen((open) => !open)}><Play size={15} /><span>Run</span></button>
     <button className={`tool-stripe-button right ${rightPanels.agents ? "active" : ""}`} title={rightPanels.agents ? "Hide Agents" : "Show Agents"} onClick={() => setRightPanels((current) => { if (!current.agents) void refreshAgents(); return { ...current, agents: !current.agents }; })}><Bot size={15} /><span>Agents</span></button>
     <button className={`tool-stripe-button right ${rightPanels.skills ? "active" : ""}`} title={rightPanels.skills ? "Hide Skills" : "Show Skills"} onClick={() => setRightPanels((current) => { if (!current.skills) void refreshSkills(); return { ...current, skills: !current.skills }; })}><GraduationCap size={15} /><span>Skills</span></button>
     <SidebarExtentButton edge="right" extended={rightSidebarExtended} onChange={setRightSidebarExtended} />
@@ -3240,8 +3247,7 @@ export function App() {
       <div className="workspace-sidebar workspace-sidebar-right">
       {sideLayout === "ai-focused" ? <>
       {rightSidebarOpen && <><div className="right-resize-handle" role="separator" aria-label="Resize right sidebar" aria-orientation="vertical" aria-valuemin={180} aria-valuemax={Math.round(Math.min(700, window.innerWidth * .55))} aria-valuenow={Math.round(rightSidebarWidth)} tabIndex={0} onKeyDown={(event) => keyboardResize(event, rightSidebarWidth, setRightSidebarWidth, 180, Math.min(700, window.innerWidth * .55), true)} onPointerDown={beginRightSidebarResize} />
-      <aside className="side-panel side-panel-right" style={{ width: rightSidebarWidth }}><ResizablePanelStack workspace={activeWorkspace} setting="focused.rightSizes" ids={[...(runConfigurationsOpen ? ["runConfigurations"] : []), ...(rightPanels.project ? ["project"] : []), ...(rightPanels.git ? ["git"] : []), ...(rightPanels.taskGit && selectedTaskId ? ["taskGit"] : []), ...(rightPanels.promptHistory && selectedTaskId ? ["promptHistory"] : []), ...(rightPanels.java && javaOptions ? ["java"] : []), ...(rightPanels.useful ? ["useful"] : []), ...(rightPanels.agents ? ["agents"] : []), ...(rightPanels.skills ? ["skills"] : [])]}>
-        {runConfigurationsOpen && runConfigurationsPane}
+      <aside className="side-panel side-panel-right" style={{ width: rightSidebarWidth }}><ResizablePanelStack workspace={activeWorkspace} setting="focused.rightSizes" ids={[...(rightPanels.project ? ["project"] : []), ...(rightPanels.git ? ["git"] : []), ...(rightPanels.taskGit && selectedTaskId ? ["taskGit"] : []), ...(rightPanels.promptHistory && selectedTaskId ? ["promptHistory"] : []), ...(rightPanels.java && javaOptions ? ["java"] : []), ...(rightPanels.useful ? ["useful"] : []), ...(rightPanels.agents ? ["agents"] : []), ...(rightPanels.skills ? ["skills"] : [])]}>
         {rightPanels.project && <section key="project" className="stacked-panel">
           <header className="panel-header"><span>Project</span><div className="panel-header-actions"><button title={showIgnored ? "Hide ignored files" : "Show all files (including Git-ignored)"} className={showIgnored ? "active" : ""} onClick={toggleShowIgnored}>{showIgnored ? <Eye size={14} /> : <EyeOff size={14} />}</button><button title="Synchronize files" onClick={() => void refreshTree()}><RefreshCw size={14} /></button></div></header>
           <QuickFilter value={projectFilter} placeholder={projectContentFilter ? "Filter by file contents" : "Filter files"} label={projectContentFilter ? "Filter files by contents" : "Filter project files"} onChange={setProjectFilter} contentSearch={projectContentFilter} contentSearchLoading={projectContentFilterLoading} onContentSearchChange={setProjectContentFilter} />
@@ -3270,8 +3276,7 @@ export function App() {
         {rightBottomTools}
       </nav></FocusDock>
       </> : <>
-      {(runConfigurationsOpen || rightPanels.useful || rightPanels.agents || classicTasksOpen || classicAiOpen || rightPanels.skills || (rightPanels.promptHistory && selectedTaskId)) && <><div className="right-resize-handle" role="separator" aria-label="Resize right sidebar" aria-orientation="vertical" aria-valuemin={240} aria-valuemax={Math.round(Math.min(960, window.innerWidth * .72))} aria-valuenow={Math.round(classicRightWidth)} tabIndex={0} onKeyDown={(event) => keyboardResize(event, classicRightWidth, setClassicRightWidth, 240, Math.min(960, window.innerWidth * .72), true)} onPointerDown={beginClassicRightResize} /><aside className="side-panel classic-right-panel" style={{ width: classicRightWidth }}>
-        {runConfigurationsOpen && runConfigurationsPane}
+      {(rightPanels.useful || rightPanels.agents || classicTasksOpen || classicAiOpen || rightPanels.skills || (rightPanels.promptHistory && selectedTaskId)) && <><div className="right-resize-handle" role="separator" aria-label="Resize right sidebar" aria-orientation="vertical" aria-valuemin={240} aria-valuemax={Math.round(Math.min(960, window.innerWidth * .72))} aria-valuenow={Math.round(classicRightWidth)} tabIndex={0} onKeyDown={(event) => keyboardResize(event, classicRightWidth, setClassicRightWidth, 240, Math.min(960, window.innerWidth * .72), true)} onPointerDown={beginClassicRightResize} /><aside className="side-panel classic-right-panel" style={{ width: classicRightWidth }}>
         {rightPanels.useful && <section key="useful" className="stacked-panel"><header className="panel-header"><span>Useful Files</span><button title="Refresh useful files" onClick={() => void refreshUsefulFiles()}><RefreshCw size={14} /></button></header><div className="useful-files-list"><UsefulFileSection title="Global" scope="global" files={usefulFiles} activeTab={activeTab} onOpen={openUsefulFile} onCreate={(scope) => setUsefulDialog({ mode: "create", scope })} onRename={(file) => setUsefulDialog({ mode: "rename", scope: file.scope, file })} onDelete={(file) => void deleteUsefulFile(file)} /><UsefulFileSection title="Local" scope="local" files={usefulFiles} activeTab={activeTab} onOpen={openUsefulFile} onCreate={(scope) => setUsefulDialog({ mode: "create", scope })} onRename={(file) => setUsefulDialog({ mode: "rename", scope: file.scope, file })} onDelete={(file) => void deleteUsefulFile(file)} /></div></section>}
         {rightPanels.agents && <section key="agents" className="stacked-panel"><AgentsPanel agents={agents} activeTab={activeTab} onRefresh={() => void refreshAgents()} onOpen={(file) => void openAgentFile(file)} onCreate={(scope) => setAgentDialog({ mode: "create", scope })} onRename={(file) => { if (file.scope !== "workspace") setAgentDialog({ mode: "rename", scope: file.scope, file }); }} onDelete={(file) => void deleteAgent(file)} /></section>}
         {classicTasksOpen && <section className="stacked-panel" style={classicAiOpen ? { flex: `0 0 ${classicSplit}%` } : undefined}><header className="panel-header"><span>Tasks</span><button title="Create task" disabled={taskSwitching} onClick={() => setShowCreateTaskDialog(true)}><Plus size={15} /></button></header><div className="task-filters"><QuickFilter value={taskFilter} placeholder="Filter tasks" label="Filter tasks" onChange={setTaskFilter} /><select aria-label="Task lifecycle filter" value={taskLifecycleFilter} onChange={(event) => setTaskLifecycleFilter(event.target.value as typeof taskLifecycleFilter)}><option value="active">Active</option><option value="finished">Finished</option><option value="archived">Archived</option><option value="all">All</option></select></div><div className="tasks-list">

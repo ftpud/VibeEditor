@@ -1,3 +1,4 @@
+import type { LanguageRunLauncher, LanguageRunHandle } from "../../../language/service.js";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import crypto from "node:crypto";
 import { mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
@@ -42,6 +43,7 @@ export class JavaProjectService {
   private pendingInspection?: { quiet?: boolean; resolve: (output: string) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> };
   private pendingDebugAttach?: { resolve: () => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> };
   private dependencyTypes?: JavaTypeSuggestion[];
+  private terminalRun?: LanguageRunHandle;
   private launchBuild?: { key: string; inputs: string; outputs: string; classpath: string };
 
   constructor(
@@ -102,7 +104,7 @@ export class JavaProjectService {
   }
 
   async saveConfiguration(content: string, expectedRevision?: FileRevision): Promise<{ options: JavaProjectOptions; content: string; revision: FileRevision }> {
-    if (this.process || this.debugStarting || this.applyingChanges) throw new CoreError("JAVA_PROCESS_FAILED", "Stop the Java process before changing its configuration");
+    if (this.process || this.terminalRun || this.debugStarting || this.applyingChanges) throw new CoreError("JAVA_PROCESS_FAILED", "Stop the Java process before changing its configuration");
     const options = parseJavaConfiguration(content);
     await this.filesystem.resolveExisting(options.pomPath);
     for (const profile of options.runConfigurations) await this.launchDirectory(profile);
@@ -201,7 +203,7 @@ export class JavaProjectService {
 
   async build(): Promise<void> { const options = await this.requireOptions(); await this.start(options.buildGoals ?? ["package", "-DskipTests"], "Build"); }
   async check(): Promise<JavaDiagnostic[]> {
-    if (this.process || this.debugStarting) throw new CoreError("JAVA_PROCESS_FAILED", "Java checks are unavailable while a build, run, or debug process is active");
+    if (this.process || this.terminalRun || this.debugStarting) throw new CoreError("JAVA_PROCESS_FAILED", "Java checks are unavailable while a build, run, or debug process is active");
     const options = await this.requireOptions();
     const output = await this.capture(options.mavenExecutable, ["-f", options.pomPath, "compile", "-DskipTests", "-Dstyle.color=never"], options, "Java check");
     const diagnostics: JavaDiagnostic[] = [];
@@ -251,8 +253,8 @@ export class JavaProjectService {
       .sort((a, b) => Number(b.simpleName === normalized) - Number(a.simpleName === normalized) || a.simpleName.localeCompare(b.simpleName) || a.qualifiedName.localeCompare(b.qualifiedName))
       .slice(0, 100);
   }
-  async run(): Promise<void> {
-    if (this.process || this.debugStarting) throw new CoreError("JAVA_PROCESS_FAILED", "A Java process is already active");
+  async run(terminal?: LanguageRunLauncher): Promise<void> {
+    if (this.process || this.terminalRun || this.debugStarting) throw new CoreError("JAVA_PROCESS_FAILED", "A Java process is already active");
     this.debugStarting = true;
     const launch = ++this.debugLaunchGeneration;
     try {
@@ -266,6 +268,12 @@ export class JavaProjectService {
       const cwd = await this.launchDirectory(configuration);
       if (launch !== this.debugLaunchGeneration) throw new CoreError("JAVA_PROCESS_FAILED", "Java run was cancelled");
       const executable = javaToolExecutable(options, "java", this.filesystem.getWorkspace());
+      if (terminal) {
+        const handle = terminal({ command: executable, args: [...(configuration.vmArguments ?? []), "-classpath", classpath, configuration.mainClass, ...(configuration.programArguments ?? [])], cwd, env: javaToolEnvironment(options, this.filesystem.getWorkspace(), environment), name: configuration.name });
+        this.terminalRun = handle;
+        void handle.completion.then((exitCode) => { if (this.terminalRun === handle) { this.terminalRun = undefined; this.onProcessEvent({ type: "exit", exitCode, signal: null }); } });
+        return;
+      }
       const child = spawn(executable, [...(configuration.vmArguments ?? []), "-classpath", classpath, configuration.mainClass, ...(configuration.programArguments ?? [])], { cwd, env: javaToolEnvironment(options, this.filesystem.getWorkspace(), environment), stdio: "pipe" });
       this.process = child;
       this.onProcessEvent({ type: "output", data: `> Run ${configuration.name} (${configuration.mainClass})\n` });
@@ -342,7 +350,7 @@ export class JavaProjectService {
   }
 
   async debug(breakpoints: JavaBreakpoint[]): Promise<void> {
-    if (this.process || this.debugStarting) throw new CoreError("JAVA_PROCESS_FAILED", "A Java build, run, or debug process is already active");
+    if (this.process || this.terminalRun || this.debugStarting) throw new CoreError("JAVA_PROCESS_FAILED", "A Java build, run, or debug process is already active");
     this.debugStarting = true;
     const launch = ++this.debugLaunchGeneration;
     const ensureLaunching = () => {
@@ -705,6 +713,7 @@ export class JavaProjectService {
 
   stop(): void {
     this.debugLaunchGeneration++;
+    this.terminalRun?.stop();
     this.applyBuildProcess?.kill("SIGTERM");
     this.debugTarget?.kill("SIGTERM");
     if (!this.process) return;
@@ -718,13 +727,13 @@ export class JavaProjectService {
     child.kill("SIGTERM");
   }
 
-  close(): void { this.stop(); }
+  close(): void { if (!this.terminalRun) this.stop(); }
 
   private async start(goals: string[], label: string): Promise<void> {
-    if (this.process || this.debugStarting) throw new CoreError("JAVA_PROCESS_FAILED", "A Java build or run process is already active");
+    if (this.process || this.terminalRun || this.debugStarting) throw new CoreError("JAVA_PROCESS_FAILED", "A Java build or run process is already active");
     const options = await this.requireOptions();
     const buildGeneration = this.debugLaunchGeneration;
-    if (this.process || this.debugStarting) throw new CoreError("JAVA_PROCESS_FAILED", "A Java process is already active");
+    if (this.process || this.terminalRun || this.debugStarting) throw new CoreError("JAVA_PROCESS_FAILED", "A Java process is already active");
     this.onProcessEvent({ type: "output", data: `> ${options.mavenExecutable} -f ${options.pomPath} ${goals.join(" ")}\n` });
     try {
       const executable = expandJavaToolPath(options.mavenExecutable, this.filesystem.getWorkspace());

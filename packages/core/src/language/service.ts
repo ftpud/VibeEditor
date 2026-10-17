@@ -63,7 +63,9 @@ export type LanguageSemanticToken = LanguageRange & { type: string; modifiers: s
 export interface LanguageRunTarget { id: string; name: string; path?: string; extra?: LanguageExtra }
 
 /** Reuses `run-configs.ts` and `project-processes.ts`; a service only describes what to launch. */
-export interface LanguageRunSpec { command: string; args: string[]; cwd?: string; env?: Record<string, string> }
+export interface LanguageRunSpec { command: string; args: string[]; cwd?: string; env?: Record<string, string | undefined>; name?: string }
+export interface LanguageRunHandle { stop(): void; completion: Promise<number> }
+export type LanguageRunLauncher = (spec: LanguageRunSpec) => LanguageRunHandle;
 
 export interface LanguageBreakpoint { path: string; line: number; extra?: LanguageExtra }
 export interface LanguageDebugVariable { name: string; value: string; reference?: string; type?: string; indexedCount?: number; extra?: LanguageExtra }
@@ -128,6 +130,8 @@ export interface LanguageService {
   removeRunConfiguration?(id: string): Promise<LanguageExtra>;
   build(): Promise<void>;
   run(): Promise<void>;
+  /** Launch the selected configuration in Core's interactive terminal host. */
+  runInTerminal?(launch: LanguageRunLauncher): Promise<void>;
   stop(): void;
 
   setBreakpoints(breakpoints: LanguageBreakpoint[]): Promise<void>;

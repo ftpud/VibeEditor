@@ -80,6 +80,7 @@ export class JavaLanguageService implements LanguageService {
   async selectRunConfiguration(id: string) { return extra(await this.java.selectRunConfiguration(id)); }
   build() { return this.java.build(); }
   run() { return this.java.run(); }
+  runInTerminal(launch: import("../../../language/service.js").LanguageRunLauncher) { return this.java.run(launch); }
   stop() { this.java.stop(); }
 
   private breakpoints(breakpoints: LanguageBreakpoint[]): JavaBreakpoint[] {

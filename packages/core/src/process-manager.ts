@@ -15,8 +15,9 @@ export type TerminalEvent =
 export type TerminalSnapshot = { terminalId: string; status: "running" | "exited"; output: string; exitCode?: number; displayName?: string };
 
 type TerminalPty = Pick<IPty, "write" | "resize" | "kill" | "onData" | "onExit">;
-export type TerminalPtyFactory = (cwd: string, cols: number, rows: number) => TerminalPty;
-type TerminalSession = { id: string; workspace: string; pty?: TerminalPty; output: string; exitCode?: number; stream?: boolean; displayName?: string; write?(data: string): void; resize?(cols: number, rows: number): void; dispose?(): void };
+export type TerminalLaunch = { command: string; args: string[]; env?: Record<string, string | undefined> };
+export type TerminalPtyFactory = (cwd: string, cols: number, rows: number, launch?: TerminalLaunch) => TerminalPty;
+type TerminalSession = { id: string; workspace: string; pty?: TerminalPty; output: string; exitCode?: number; stream?: boolean; displayName?: string; write?(data: string): void; resize?(cols: number, rows: number): void; dispose?(): void; onExit?(code: number): void };
 
 /** Owns PTYs for the backend lifetime, independently of renderer sockets. */
 export class TerminalSessionHost {
@@ -27,13 +28,13 @@ export class TerminalSessionHost {
     private readonly createPty: TerminalPtyFactory = defaultPtyFactory
   ) {}
 
-  create(workspace: string, cols: number, rows: number, cwd = workspace, displayName?: string): TerminalSnapshot {
+  create(workspace: string, cols: number, rows: number, cwd = workspace, displayName?: string, launch?: TerminalLaunch & { onExit(code: number): void }): TerminalSnapshot {
     this.validateSize(cols, rows);
     const terminalId = crypto.randomUUID();
     const scopedWorkspace = path.resolve(workspace);
     try {
-      const pty = this.createPty(path.resolve(cwd), cols, rows);
-      const session: TerminalSession = { id: terminalId, workspace: scopedWorkspace, pty, output: "", displayName };
+      const pty = launch ? this.createPty(path.resolve(cwd), cols, rows, { command: launch.command, args: launch.args, env: launch.env }) : this.createPty(path.resolve(cwd), cols, rows);
+      const session: TerminalSession = { id: terminalId, workspace: scopedWorkspace, pty, output: "", displayName, onExit: launch?.onExit };
       this.sessions.set(terminalId, session);
       pty.onData((data) => {
         if (this.sessions.get(terminalId) !== session) return;
@@ -44,6 +45,7 @@ export class TerminalSessionHost {
         if (this.sessions.get(terminalId) !== session) return;
         session.pty = undefined;
         session.exitCode = exitCode;
+        session.onExit?.(exitCode); session.onExit = undefined;
         this.onEvent({ type: "exit", workspace: scopedWorkspace, terminalId, exitCode });
       });
       this.onEvent({ type: "opened", workspace: scopedWorkspace, session: this.snapshot(session) });
@@ -102,6 +104,7 @@ export class TerminalSessionHost {
     const session = this.get(workspace, terminalId);
     this.sessions.delete(terminalId);
     session.dispose?.();
+    session.onExit?.(130); session.onExit = undefined;
     session.pty?.kill();
   }
 
@@ -116,6 +119,7 @@ export class TerminalSessionHost {
       if (session.workspace !== scopedWorkspace) continue;
       this.sessions.delete(session.id);
       session.dispose?.();
+      session.onExit?.(130); session.onExit = undefined;
       session.pty?.kill();
     }
   }
@@ -126,7 +130,7 @@ export class TerminalSessionHost {
   }
 
   closeAll(): void {
-    for (const session of this.sessions.values()) { session.dispose?.(); session.pty?.kill(); }
+    for (const session of this.sessions.values()) { session.dispose?.(); session.onExit?.(130); session.onExit = undefined; session.pty?.kill(); }
     this.sessions.clear();
   }
 
@@ -153,7 +157,7 @@ export class TerminalSessionHost {
   }
 }
 
-function defaultPtyFactory(cwd: string, cols: number, rows: number): TerminalPty {
+function defaultPtyFactory(cwd: string, cols: number, rows: number, launch?: TerminalLaunch): TerminalPty {
   const shell = workspaceShell();
-  return spawn(shell, [], { name: "xterm-256color", cols, rows, cwd, env: { ...process.env, TERM: "xterm-256color", COLORTERM: "truecolor" } });
+  return spawn(launch?.command ?? shell, launch?.args ?? [], { name: "xterm-256color", cols, rows, cwd, env: { ...process.env, ...launch?.env, TERM: "xterm-256color", COLORTERM: "truecolor" } });
 }

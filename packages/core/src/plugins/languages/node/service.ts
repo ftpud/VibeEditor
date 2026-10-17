@@ -5,7 +5,7 @@ import type { FileRevision } from "@remote-ide/protocol";
 import { CoreError } from "../../../errors.js";
 import type { WorkspaceFileSystem } from "../../../filesystem.js";
 import { defaultRunConfigurations, npmConfigurationPath, parseNpmConfiguration, validatePackageJsonPath, validateNpmRunConfiguration, type NpmProjectOptions, type NpmRunConfiguration, type PackageManager } from "./npm-settings.js";
-import type { LanguageDescriptor, LanguageExtra, LanguageProjectNode, LanguageService, LanguageServiceEvents } from "../../../language/service.js";
+import type { LanguageDescriptor, LanguageExtra, LanguageProjectNode, LanguageService, LanguageServiceEvents, LanguageRunLauncher, LanguageRunHandle } from "../../../language/service.js";
 
 /**
  * Minimal second built-in language: Node projects described by `package.json`.
@@ -30,6 +30,7 @@ const stringify = (options: NpmProjectOptions) => JSON.stringify(options, null, 
 export class NodeLanguageService implements LanguageService {
   readonly descriptor = NODE_DESCRIPTOR;
   private process?: ChildProcess;
+  private terminalRun?: LanguageRunHandle;
 
   constructor(private readonly workspace: string, private readonly events: LanguageServiceEvents, private readonly filesystem: WorkspaceFileSystem, private readonly npm?: string) {}
 
@@ -133,6 +134,7 @@ export class NodeLanguageService implements LanguageService {
     return { path: npmConfigurationPath, content: template, template };
   }
   async saveConfiguration(content: string, expectedRevision?: unknown) {
+    if (this.process || this.terminalRun) throw new CoreError("INVALID_REQUEST", "Stop the Node.js process before changing its configuration");
     const options = parseNpmConfiguration(content);
     if (!await this.manifest(options.packageJsonPath)) throw new CoreError("INVALID_REQUEST", `${options.packageJsonPath} is missing or is not valid JSON`);
     const saved = await this.write(options, expectedRevision as FileRevision | undefined);
@@ -176,19 +178,20 @@ export class NodeLanguageService implements LanguageService {
     const settings = await this.settings();
     await this.launch(settings?.options, { id: "build", name: "build", script: "build" }, true);
   }
-  async run(): Promise<void> {
+  async runInTerminal(launch: LanguageRunLauncher) { return this.run(launch); }
+  async run(terminal?: LanguageRunLauncher): Promise<void> {
     const settings = await this.settings();
     const selected = settings?.options.runConfigurations.find((item) => item.id === settings.options.selectedRunConfigurationId);
     // Without a selected configuration, keep the plain `start` script behaviour.
     // Servers outlive any request: resolve once the process has started and report its end through the exit event.
-    await this.launch(settings?.options, selected ?? { id: "start", name: "start", script: "start" }, false);
+    await this.launch(settings?.options, selected ?? { id: "start", name: "start", script: "start" }, false, terminal);
   }
 
-  private async launch(options: NpmProjectOptions | undefined, config: NpmRunConfiguration, untilExit: boolean): Promise<void> {
+  private async launch(options: NpmProjectOptions | undefined, config: NpmRunConfiguration, untilExit: boolean, terminal?: LanguageRunLauncher): Promise<void> {
     const packageJsonPath = options?.packageJsonPath ?? DEFAULT_PACKAGE_JSON;
     const scripts = (await this.manifest(packageJsonPath))?.scripts ?? {};
     if (!scripts[config.script]) throw new CoreError("INVALID_REQUEST", `${packageJsonPath} has no '${config.script}' script`);
-    if (this.process) throw new CoreError("INVALID_REQUEST", "A Node.js process is already running");
+    if (this.process || this.terminalRun) throw new CoreError("INVALID_REQUEST", "A Node.js process is already running");
     const directory = path.posix.normalize(config.workingDirectory ?? path.posix.dirname(packageJsonPath));
     const cwd = directory === "." ? this.filesystem.getWorkspace() : await this.filesystem.resolveExisting(directory);
     const fileEnvironment = config.environmentFile ? parseEnv((await this.filesystem.read(config.environmentFile)).content) : {};
@@ -196,6 +199,12 @@ export class NodeLanguageService implements LanguageService {
     const args = ["run", config.script, ...(config.arguments?.length ? (manager === "npm" ? ["--", ...config.arguments] : config.arguments) : [])];
     const env: NodeJS.ProcessEnv = { ...process.env, ...fileEnvironment, ...config.environment };
     if (config.nodeOptions?.length) env.NODE_OPTIONS = [env.NODE_OPTIONS, ...config.nodeOptions].filter(Boolean).join(" ");
+    if (terminal) {
+      const handle = terminal({ command: this.executable(options), args, cwd, env, name: config.name });
+      this.terminalRun = handle;
+      void handle.completion.then((code) => { if (this.terminalRun === handle) { this.terminalRun = undefined; this.events.exit(code); } });
+      return;
+    }
     await new Promise<void>((resolve, reject) => {
       const child = spawn(this.executable(options), args, { cwd, env, detached: process.platform !== "win32" });
       this.process = child;
@@ -208,6 +217,7 @@ export class NodeLanguageService implements LanguageService {
   }
   /** npm starts the script as a child, so the whole process tree is signalled, not just npm. */
   stop(): void {
+    this.terminalRun?.stop();
     const child = this.process;
     if (!child?.pid) return;
     if (process.platform === "win32") spawn("taskkill", ["/pid", String(child.pid), "/T", "/F"], { stdio: "ignore" }).on("error", () => child.kill());
@@ -226,5 +236,5 @@ export class NodeLanguageService implements LanguageService {
     if (kind === "runConfiguration") validateNpmRunConfiguration(record);
     return record;
   }
-  async dispose(): Promise<void> { this.stop(); this.process = undefined; }
+  async dispose(): Promise<void> { if (!this.terminalRun) { this.stop(); this.process = undefined; } }
 }

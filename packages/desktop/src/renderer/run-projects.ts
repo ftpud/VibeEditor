@@ -8,6 +8,7 @@ export type RunProject = {
   capabilities: LanguageDescriptor["capabilities"];
   configurations: ProjectRunConfiguration[];
   selectedId?: string;
+  terminalRunning?: boolean;
 };
 export type RunProjectProcess = { running: boolean; log: string; error?: string };
 
@@ -20,6 +21,7 @@ export function runProject(descriptor: LanguageDescriptor, options: LanguageExtr
   const path = typeof options.packageJsonPath === "string" ? options.packageJsonPath : typeof options.pomPath === "string" ? options.pomPath : undefined;
   return {
     language: descriptor.id,
+    terminalRunning: options.terminalRunning === true,
     name: typeof options.name === "string" && options.name ? options.name : descriptor.name,
     path,
     capabilities: descriptor.capabilities,

@@ -1,0 +1,5 @@
+.right-tool-stripe .tool-stripe-spacer { flex: 1 0 16px; min-height: 16px; }
+.right-tool-stripe .right-bottom-tools { margin-top: 0; position: sticky; bottom: 0; display: flex; flex-direction: column; flex-shrink: 0; gap: 4px; width: 100%; background: inherit; }
+.project-run-toolbar button[aria-label="Stop selected project"] { color: var(--danger); }
+.project-run-toolbar button[aria-label="Edit run configurations"] { color: var(--text-secondary); }
+.project-run-toolbar button[aria-label="Debug selected configuration"] { color: var(--warning); }

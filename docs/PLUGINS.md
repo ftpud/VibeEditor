@@ -53,7 +53,7 @@ Reviewed in `packages/core/src/plugins/loader.ts`:
   separate process.
 - The renderer half (contributing UI bundles from the remote Core) is not
   implemented. Desktop lists plugin status and exposes language capabilities
-  through its shared Run Configurations panel; plugins cannot supply custom UI bundles.
+  through its shared run configuration controls; plugins cannot supply custom UI bundles.
 
 ## Built-in plugin layout
 
@@ -78,12 +78,18 @@ host tools register through `registerTools`.
 
 ## Shared language controls
 
-The **Run Configurations** right sidebar panel and command discover services
+The title-bar **Run Configurations** controls and command discover services
 through `language.list` for the selected root/task. Only configured projects
-contribute run choices to the sidebar and top bar. The shared controls use
+contribute run choices to the title bar. The shared controls use
 `language.*` operations and advertised capabilities; built-in Java and npm
 projects provide structured configuration forms. Other language plugins use a
-revision-checked configuration editor. See [run configurations](RUN_CONFIGS.md).
+revision-checked configuration editor. Normal Run uses `runInTerminal(launch)`:
+the plugin prepares a `LanguageRunSpec` (command, argument array, working directory,
+environment and optional name), then calls Core's launcher and tracks its returned
+completion/stop handle. Core creates the interactive PTY and returns its terminal
+snapshot from `language.run`; plugins must implement this optional hook to support
+title-bar terminal runs. Debugging keeps the plugin's debug session path.
+See [run configurations](RUN_CONFIGS.md).
 
 `capabilities.runConfigurations` and `capabilities.sourceRoots` are optional and
 independent of `run` and `projectTree`. Services supporting run configurations

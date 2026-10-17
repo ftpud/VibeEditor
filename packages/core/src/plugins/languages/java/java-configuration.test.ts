@@ -1,7 +1,7 @@
 import { chmod, mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { javaConfigurationPath } from "@remote-ide/protocol";
 import { WorkspaceFileSystem } from "../../../filesystem.js";
 import { JavaProjectService } from "./java.js";
@@ -100,6 +100,24 @@ describe("Java configuration", () => {
     expect(() => parseJavaConfiguration(JSON.stringify({ ...base, runConfigurations: [...base.runConfigurations, ...base.runConfigurations] }))).toThrow("different id");
     expect(() => parseJavaConfiguration(JSON.stringify({ ...base, runConfigurations: [{ ...base.runConfigurations[0], vmArguments: "-ea" }] }))).toThrow("vmArguments must be an array");
     expect(() => parseJavaConfiguration(JSON.stringify({ ...base, runConfigurations: [{ ...base.runConfigurations[0], environment: { PORT: 8080 } }] }))).toThrow("environment must be a JSON object");
+  });
+
+  it("launches the selected Java profile in a terminal and tracks stop/exit", async () => {
+    const { service, options, root, waitForExit } = await workspace();
+    const executable = path.join(root, "fake-maven");
+    await writeFile(executable, `#!${process.execPath}\nconst fs = require('node:fs'); fs.mkdirSync('target/classes', {recursive:true}); const file = process.argv.find(arg => arg.startsWith('-Dmdep.outputFile=')); if (file) fs.writeFileSync(file.slice('-Dmdep.outputFile='.length), '');\n`);
+    await chmod(executable, 0o755);
+    await service.saveConfiguration(JSON.stringify({ ...options, mavenExecutable: "./fake-maven", javaHome: "/opt/test-jdk", runConfigurations: [{ id: "app", name: "Application", mainClass: "demo.App", vmArguments: ["-ea"], programArguments: ["hello world"], environment: { MODE: "terminal" }, workingDirectory: "." }], selectedRunConfigurationId: "app" }));
+    let finish!: (code: number) => void;
+    const stop = vi.fn(() => finish(130));
+    const launch = vi.fn(() => ({ completion: new Promise<number>((resolve) => { finish = resolve; }), stop }));
+    await service.run(launch);
+    expect(launch).toHaveBeenCalledWith(expect.objectContaining({ command: "/opt/test-jdk/bin/java", args: ["-ea", "-classpath", expect.any(String), "demo.App", "hello world"], cwd: root, env: expect.objectContaining({ MODE: "terminal", JAVA_HOME: "/opt/test-jdk" }), name: "Application" }));
+    await expect(service.run(launch)).rejects.toThrow("already active");
+    const document = await service.readConfiguration();
+    await expect(service.saveConfiguration(document.content, document.revision)).rejects.toThrow("Stop the Java process");
+    service.stop(); await waitForExit();
+    expect(stop).toHaveBeenCalledOnce();
   });
 
   it("uses configured Maven arguments and JDK home during builds", async () => {

@@ -665,7 +665,7 @@ export type ProtocolOperations = {
   "language.selectRunConfiguration": { payload: { language: string; id: string }; result: { options: LanguageExtra } };
   "language.removeRunConfiguration": { payload: { language: string; id: string }; result: { options: LanguageExtra } };
   "language.build": { payload: { language: string }; result: Record<string, never> };
-  "language.run": { payload: { language: string }; result: Record<string, never> };
+  "language.run": { payload: { language: string }; result: { terminal: TerminalSessionSnapshot } };
   "language.stop": { payload: { language: string }; result: Record<string, never> };
   "language.debug.setBreakpoints": { payload: { language: string; breakpoints: LanguageBreakpoint[] }; result: Record<string, never> };
   "language.debug.start": { payload: { language: string; breakpoints: LanguageBreakpoint[] }; result: Record<string, never> };
