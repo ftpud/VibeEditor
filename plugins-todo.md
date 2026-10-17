@@ -86,9 +86,9 @@ requests in `protocol/src/index.ts` (~96 lines), `server.ts` (~52 refs),
 
 - [x] Plugin manifest: `id`, `version`, `apiVersion`, `contributes` (providers, languages, run kinds, workflow steps), `core` entry, optional `renderer` entry.
 - [x] Core loader with opt-in directory, version checks, per-plugin error isolation and a status listing request.
-- [ ] Renderer half: contribute debug/inspector UI only via declared capabilities; decide how renderer bundles are delivered from the remote Core to Desktop.
-- [ ] Settings UI to list, enable and disable plugins.
-- [ ] Security review (`/security-review`): plugins run arbitrary code on the Core host.
+- [ ] Renderer half: DECISION — deferred. Capability-driven UI already covers debug/inspector; remote renderer bundles are out of scope until a sandboxing story exists (docs/PLUGINS.md).
+- [x] Settings UI to list plugins (read-only; enabling is a Core-host decision via `REMOTE_IDE_PLUGINS_DIR`, see docs/PLUGINS.md).
+- [x] Security review: trust model and findings in docs/PLUGINS.md (plugin provider factories now isolated).
 
 ## Later candidates (not part of this effort)
 

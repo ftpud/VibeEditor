@@ -64,3 +64,11 @@ describe("provider definitions", () => {
     } finally { await registry.shutdown(); }
   });
 });
+
+describe("plugin provider isolation", () => {
+  it("skips a plugin factory that throws and keeps the other providers", () => {
+    vi.stubEnv("REMOTE_IDE_PROVIDER_DEFINITIONS_DIR", path.join(os.tmpdir(), "no-provider-definitions"));
+    const registry = createAcpRegistry(() => undefined, undefined, undefined, undefined, [() => { throw new Error("plugin exploded"); }]);
+    expect(registry.list().map((descriptor) => descriptor.id)).toEqual(["codex", "copilot", "claude"]);
+  });
+});
