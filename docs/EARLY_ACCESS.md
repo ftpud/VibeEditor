@@ -1,7 +1,9 @@
 # Early Access bundles
 
 Run **Actions → Bundle Create → Run workflow** on the commit or branch you want
-packaged. The workflow uploads two artifact sets, `vibe-early-access-macos-15`
+packaged. Packaging script, bundle workflow, and renderer navigation policy
+changes pushed to `main` also start Bundle Create automatically. The workflow
+uploads two artifact sets, `vibe-early-access-macos-15`
 and `vibe-early-access-windows-2025`. Download and extract the artifact wrapper;
 each contains a Gateway installer, a standalone Desktop ZIP, and JSON manifests
 with their version, source commit and SHA-256 checksum. No GitHub release is

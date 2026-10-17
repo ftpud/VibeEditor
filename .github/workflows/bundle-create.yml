@@ -2,6 +2,13 @@ name: Bundle Create
 
 on:
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/bundle-create.yml
+      - scripts/bundle/**
+      - packages/gateway/src/electron/navigation-policy*
+      - packages/desktop/src/electron/navigation-policy*
 
 permissions:
   contents: read

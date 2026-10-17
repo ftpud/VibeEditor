@@ -16,9 +16,9 @@ test("development trust is limited to the configured origin and document route",
 test("packaged renderer trust handles Chromium's escaped Windows temp directory names", () => {
   const renderer = "/Users/RUNNER~1/Vibe Gateway/dist-renderer/index.html";
   const document = pathToFileURL(renderer).href;
-  assert.equal(isTrustedIpcFrame({ url: document.replace("~", "%7E"), isMainFrame: true }, true, renderer), true);
-  assert.equal(isTrustedRendererUrl(document.replace("~", "%7e"), renderer), true);
-  for (const candidate of [document.replace("index.html", "other.html"), document.replace("index.html", "index.html%2Fother"), document + "%", document.replace("RUNNER~1", "OTHER~1")]) {
+  assert.equal(isTrustedIpcFrame({ url: document.replace(/~|%7e/i, "%7E"), isMainFrame: true }, true, renderer), true);
+  assert.equal(isTrustedRendererUrl(document.replace(/~|%7e/i, "%7e"), renderer), true);
+  for (const candidate of [document.replace("index.html", "other.html"), document.replace("index.html", "index.html%2Fother"), document + "%", document.replace(/RUNNER(?:~|%7e)1/i, "OTHER~1")]) {
     assert.equal(isTrustedRendererUrl(candidate, renderer), false);
   }
 });

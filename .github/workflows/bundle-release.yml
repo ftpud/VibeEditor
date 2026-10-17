@@ -42,7 +42,7 @@ jobs:
           }
           git check-ref-format "refs/tags/$TAG"
           gh api "repos/$GH_REPO/actions/runs/$RUN_ID" > run.json
-          jq -e '.path == ".github/workflows/bundle-create.yml" and .event == "workflow_dispatch" and .status == "completed" and .conclusion == "success"' run.json
+          jq -e '.path == ".github/workflows/bundle-create.yml" and (.event == "workflow_dispatch" or (.event == "push" and .head_branch == "main")) and .status == "completed" and .conclusion == "success"' run.json
           echo "sha=$(jq -r .head_sha run.json)" >> "$GITHUB_OUTPUT"
           # Require a new tag so existing releases and tags cannot be overwritten.
           gh api --paginate "repos/$GH_REPO/git/matching-refs/tags/$TAG" > refs.json

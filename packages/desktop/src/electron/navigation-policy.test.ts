@@ -27,9 +27,9 @@ it("allows only the configured dev origin and document route", () => {
 it("accepts equivalent file URL encoding without trusting other renderer files", () => {
   const renderer = path.resolve("/Users/RUNNER~1/Vibe Gateway/dist-renderer/index.html");
   const document = pathToFileURL(renderer).href;
-  expect(isTrustedIpcFrame({ url: document.replace("~", "%7E"), isMainFrame: true }, true, renderer)).toBe(true);
-  expect(isTrustedRendererUrl(document.replace("~", "%7e"), renderer)).toBe(true);
-  for (const candidate of [document.replace("index.html", "other.html"), document.replace("index.html", "index.html%2Fother"), document + "%", document.replace("RUNNER~1", "OTHER~1")]) {
+  expect(isTrustedIpcFrame({ url: document.replace(/~|%7e/i, "%7E"), isMainFrame: true }, true, renderer)).toBe(true);
+  expect(isTrustedRendererUrl(document.replace(/~|%7e/i, "%7e"), renderer)).toBe(true);
+  for (const candidate of [document.replace("index.html", "other.html"), document.replace("index.html", "index.html%2Fother"), document + "%", document.replace(/RUNNER(?:~|%7e)1/i, "OTHER~1")]) {
     expect(isTrustedRendererUrl(candidate, renderer)).toBe(false);
   }
 });
