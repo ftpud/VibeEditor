@@ -847,6 +847,12 @@ export class HarnessRunner {
     const textInput = args.input ?? "";
     if (!edge || typeof textInput !== "string" || textInput.length > 100_000) throw new Error("Use a connected block ID and a text input of at most 100000 characters");
     const target = execution.blocks.find((block) => block.id === edge.to)!;
+    // Calls that answer immediately never reach the traced invocation below;
+    // pulse the connection both ways so every use of it is visible.
+    if (name !== "workflow_use_block" || target.type === "meeting" || (["ai", "chatbox"].includes(target.type) && ["status", "tail", "steer"].includes(String(args.action)))) {
+      await this.traceConnection(execution.run, edge, "forward", "succeeded");
+      await this.traceConnection(execution.run, edge, "return", "succeeded");
+    }
     if (name === "workflow_block_output") {
       if (target.type === "skill") throw new Error("Load skills through workflow_use_block so current policy is checked");
       const offset = args.offset ?? 0;
