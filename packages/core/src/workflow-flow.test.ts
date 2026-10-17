@@ -27,6 +27,54 @@ async function setup(blocks: HarnessBlock[], edges: HarnessEdge[], concurrency =
 // Workflow journals use disk-backed queues; allow bounded disk latency under the full CI suite.
 
 describe("typed workflows", () => {
+  it("waits for meeting updates without holding an execution slot or losing unread messages", async () => {
+    const { runner, definition, finished } = await setup([
+      block("lead", "ai"), block("reader", "ai"), block("publisher", "chatbox"), block("room", "meeting", { prompt: "" })
+    ], [edge("lead", "reader", "use"), edge("lead", "publisher", "use"), edge("reader", "room", "use"), edge("publisher", "room", "use")]);
+    let waiting = false;
+    await runner.start(definition.id, "Discuss", async (current, _input, runtime) => {
+      const use = (args: Record<string, unknown>) => runner.flowTool(runtime.runId, current.id, "workflow_use_block", { block_id: "room", ...args });
+      if (current.id === "lead") {
+        await runner.flowTool(runtime.runId, current.id, "workflow_use_block", { block_id: "reader", action: "start", input: "Listen" });
+        await runner.flowTool(runtime.runId, current.id, "workflow_use_block", { block_id: "publisher", input: "Speak" });
+      } else if (current.id === "reader") {
+        const pending = use({ action: "wait", timeout_seconds: 2 });
+        waiting = true;
+        expect(await pending).toMatchObject({ meeting: { status: "updated", messages: [{ sequence: 1, text: "Hello" }], cursor: 1 } });
+        expect(await use({ action: "wait", after: 0, timeout_seconds: 0.01 })).toMatchObject({ meeting: { status: "updated", messages: [{ sequence: 1 }] } });
+        expect(await use({ action: "wait", timeout_seconds: 0.01 })).toMatchObject({ meeting: { status: "timed_out", messages: [], cursor: 1 } });
+        await expect(use({ action: "wait", timeout_seconds: 0 })).rejects.toThrow("timeout_seconds");
+      } else {
+        expect(waiting).toBe(true);
+        await use({ action: "publish", message: "Hello" });
+      }
+      return session("Done");
+    }, "test", undefined, "lead");
+    const result = await finished();
+    expect(result.error).toBeUndefined();
+    expect(result.status).toBe("succeeded");
+  });
+
+  it.each(["cancel", "suspend"])("releases a meeting wait on %s", async (action) => {
+    const { runner, definition, finished } = await setup([block("agent", "ai"), block("room", "meeting", { prompt: "" })], [edge("agent", "room", "use")]);
+    let ready!: () => void;
+    const started = new Promise<void>((resolve) => { ready = resolve; });
+    let released = false;
+    const run = await runner.start(definition.id, "Listen", async (current, _input, runtime) => {
+      const waiting = runner.flowTool(runtime.runId, current.id, "workflow_use_block", { block_id: "room", action: "wait", timeout_seconds: 60 });
+      ready();
+      try { await waiting; } finally { released = true; }
+      return session("Done");
+    });
+    await started;
+    if (action === "cancel") {
+      await runner.cancel(run.id, async () => {});
+      expect((await finished()).status).toBe("cancelled");
+    } else await runner.suspend();
+    await runner.drain();
+    expect(released).toBe(true);
+  });
+
   it("shares a durable Meeting between agents and chatboxes through Use, even at concurrency one", async () => {
     const { runner, definition, finished, directory } = await setup([
       block("agent", "ai"), block("chat", "chatbox"), block("room", "meeting", { prompt: "" }), block("private", "meeting", { prompt: "" })

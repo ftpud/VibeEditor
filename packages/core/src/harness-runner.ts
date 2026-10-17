@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { useMeeting } from "./workflow-meeting.js";
+import { MeetingUpdates, useMeeting } from "./workflow-meeting.js";
 import type { HarnessDefinition, HarnessBlock, HarnessConnectionTrace, HarnessBlockAttempt, HarnessBlockIteration, HarnessBlockRun, HarnessEdge, HarnessRun, HarnessLogEntry, HarnessChildTask, HarnessFailureReason, HarnessPauseStatus, HarnessOperation, HarnessOperationKind, HarnessFeature, HarnessReviewFinding, HarnessCorrectionCycle, AiSession } from "@remote-ide/protocol";
 import { AiProviderError, findAutopilotOption, normalizeAiFailure, type AiFailure } from "@remote-ide/acp";
 import { CoreError } from "./errors.js";
@@ -25,6 +25,7 @@ export type HarnessRecoveryInspector = {
 };
 
 export class HarnessRunner {
+  private readonly meetingUpdates = new MeetingUpdates();
   private readonly flowInvocations = new Map<string, (id: string, input: string, ancestors?: string[]) => Promise<string>>();
   private readonly appToolCalls = new Map<string, Promise<unknown>>();
   private readonly contextReads = new Map<string, { sessionId?: string; outputs: Map<string, string>; reads: Map<string, string> }>();
@@ -41,7 +42,7 @@ export class HarnessRunner {
   private suspended = false;
   private readonly executionTasks = new Set<Promise<void>>();
   /** Freeze durable snapshots so restart recovery sees in-flight operations, not a false cancellation. */
-  async suspend(): Promise<void> { this.suspended = true; await this.updateQueue; }
+  async suspend(): Promise<void> { this.suspended = true; this.meetingUpdates.cancel(); await this.updateQueue; }
   async drain(): Promise<void> { await Promise.all([...this.executionTasks]); }
   private launchExecution(...args: Parameters<HarnessRunner["execute"]>): void {
     if (this.suspended) return;
@@ -376,6 +377,7 @@ export class HarnessRunner {
     if (!run) throw new CoreError("FILE_NOT_FOUND", "Harness run does not exist");
     if (!isActiveStatus(run.status)) return run;
     if (this.activeRuns.has(runId)) this.cancelled.add(runId);
+    this.meetingUpdates.cancel(runId);
     const active = run.blocks.filter((block) => providerActiveStatuses.has(block.status) && block.provider);
     const completedAt = new Date().toISOString(); run.status = "cancelled"; run.completedAt = completedAt; run.error = undefined;
     for (const block of run.blocks) if (isActiveStatus(block.status)) { block.status = "cancelled"; block.completedAt = completedAt; block.error = undefined; }
@@ -744,6 +746,7 @@ export class HarnessRunner {
         for (const block of run.blocks) if (isActiveStatus(block.status)) { block.status = "cancelled"; block.completedAt = completedAt; block.error = undefined; }
         await this.update(run);
       }
+      this.meetingUpdates.cancel(run.id);
       this.flowInvocations.delete(run.id); this.cancelled.delete(run.id); this.activeRuns.delete(run.id); this.activeProviders.delete(run.id); this.executions.delete(run.id);
     }
   }
@@ -760,7 +763,7 @@ export class HarnessRunner {
       await this.update(execution.run);
       return result;
     };
-    const meetingRead = name === "workflow_use_block" && execution.blocks.some((block) => block.id === args.block_id && block.type === "meeting") && ["tail", "diff"].includes(String(args.action ?? "diff"));
+    const meetingRead = name === "workflow_use_block" && execution.blocks.some((block) => block.id === args.block_id && block.type === "meeting") && ["tail", "diff", "wait"].includes(String(args.action ?? "diff"));
     if (meetingRead || name === "workflow_connections" || name === "workflow_block_output" || name === "workflow_block_messages" || (name === "workflow_use_block" && ["status", "tail"].includes(String(args.action)) && ["ai", "chatbox"].includes(execution.blocks.find((item) => item.id === args.block_id)?.type ?? ""))) return project(await this.callFlowTool(runId, blockId, name, args));
     const { run } = this.activeExecution(runId);
     const operation = await this.beginOperation(run, "tool_command", `flow-tool:${crypto.randomUUID()}`, blockId, { name, args });
@@ -849,11 +852,34 @@ export class HarnessRunner {
       this.assertActive(runId);
       const meetingState = execution.run.blocks.find((item) => item.blockId === target.id)!;
       const callerBlock = execution.blocks.find((item) => item.id === blockId)!;
-      const result = useMeeting(meetingState, { ...callerBlock, ...state.chatSettings, provider: state.provider ?? callerBlock.provider ?? execution.defaultProvider }, args);
+      const participant = { ...callerBlock, ...state.chatSettings, provider: state.provider ?? callerBlock.provider ?? execution.defaultProvider };
+      if (args.action === "wait") {
+        const timeoutMs = args.timeout_seconds === undefined ? edge.timeoutMs ?? 300000 : typeof args.timeout_seconds === "number" ? Math.round(args.timeout_seconds * 1000) : NaN;
+        if (!Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 86400000) throw new Error("Use timeout_seconds greater than zero and at most 86400");
+        const initial = useMeeting(meetingState, participant, { ...args, action: "diff" });
+        if (initial.messages?.length) {
+          await this.update(execution.run);
+          return { blockId: target.id, meeting: { ...initial, status: "updated" } };
+        }
+        const duration = execution.run.definition?.settings?.maxRunDurationMs;
+        const remaining = duration === undefined ? timeoutMs : Math.max(1, duration - (Date.now() - Date.parse(execution.run.startedAt!)));
+        // Subscribe before yielding, and release this agent's execution permit so
+        // another participant can publish even at workflow concurrency one.
+        const waiting = this.meetingUpdates.wait(runId, target.id, Math.min(timeoutMs, remaining));
+        return execution.scheduler.suspend(blockId, async () => {
+          const status = await waiting;
+          this.assertActive(runId);
+          const result = useMeeting(meetingState, participant, { ...args, action: "diff", after: initial.cursor });
+          await this.update(execution.run);
+          return { blockId: target.id, meeting: { ...result, status: result.messages?.length ? "updated" : status } };
+        });
+      }
+      const result = useMeeting(meetingState, participant, args);
       meetingState.status = "succeeded";
       meetingState.output = meetingState.meeting!.messages.map((message) => `[${message.sequence}] ${message.author}: ${message.text}`).join("\n\n").slice(-200000);
       execution.outputs.set(target.id, meetingState.output);
       await this.update(execution.run);
+      if (args.action === "publish") this.meetingUpdates.publish(runId, target.id);
       return { blockId: target.id, meeting: result };
     }
     if (args.after !== undefined) throw new Error("after is only available for Meeting blocks");
@@ -1690,7 +1716,7 @@ export function isolatedBlockDefinition(definition: HarnessDefinition, blockId: 
 
 /** Skill catalogues expose when to use a skill; its instructions load on demand. */
 function workflowBlockDescription(block: HarnessBlock | undefined): string | undefined {
-  const description = block?.type === "meeting" ? 'Shared meeting chat for this workflow run. Use action publish with message (or input) to post; tail with lines (1–50) to read recent messages; diff to read new messages since your own last read, optionally after a sequence number. Read pages while hasMore is true. Messages include author and sequence; each participant has an independent durable cursor. Keeps the latest 1000 messages and reports historyTruncated if older unread messages were removed. Publishing does not invoke other agents.' : block?.type === "skill" ? block.description : block?.type === "terminal_control" ? 'Only for long-running apps and services. Do not spawn agents in terminals. List first and reuse existing terminals whenever possible; avoid spawning new terminals unnecessarily. Control terminals in this task workspace. Pass JSON in input: {"action":"list"}, {"action":"open","name":"Server"}, {"action":"open_and_run","name":"Server","command":"npm run dev"}, {"action":"write","terminal_id":"ID","data":"command\\n"}, or {"action":"read","terminal_id":"ID","lines":100}. open_and_run appends a newline automatically and returns the terminalId immediately. Writes are raw input; include a newline to execute commands.' : block?.type === "task_controls" ? "Create tasks, check task and AI status, send prompts with the designed AI settings, set tasks active or finished, set commit-message drafts, and rewrite the latest unpushed commit message." : block?.description ?? block?.prompt;
+  const description = block?.type === "meeting" ? 'Shared meeting chat for this workflow run. Use action publish with message (or input) to post; tail with lines (1–50) to read recent messages; diff to read new messages since your own last read; wait to sleep until unread messages arrive (timeout_seconds defaults to the connection timeout). Optional after selects a sequence. Wait returns messages with status updated or timed_out. Read pages while hasMore is true. Messages include author and sequence; each participant has an independent durable cursor. Keeps the latest 1000 messages and reports historyTruncated if older unread messages were removed. Publishing does not invoke other agents.' : block?.type === "skill" ? block.description : block?.type === "terminal_control" ? 'Only for long-running apps and services. Do not spawn agents in terminals. List first and reuse existing terminals whenever possible; avoid spawning new terminals unnecessarily. Control terminals in this task workspace. Pass JSON in input: {"action":"list"}, {"action":"open","name":"Server"}, {"action":"open_and_run","name":"Server","command":"npm run dev"}, {"action":"write","terminal_id":"ID","data":"command\\n"}, or {"action":"read","terminal_id":"ID","lines":100}. open_and_run appends a newline automatically and returns the terminalId immediately. Writes are raw input; include a newline to execute commands.' : block?.type === "task_controls" ? "Create tasks, check task and AI status, send prompts with the designed AI settings, set tasks active or finished, set commit-message drafts, and rewrite the latest unpushed commit message." : block?.description ?? block?.prompt;
   return description && description.length > 512 ? `${description.slice(0, 512)}… (preview; use the block to load its content)` : description;
 }
 

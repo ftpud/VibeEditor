@@ -1,5 +1,30 @@
 import type { HarnessBlock, HarnessBlockRun, HarnessMeetingMessage } from "@remote-ide/protocol";
 
+/** Event-driven subscriptions; registering is synchronous to avoid lost updates. */
+export class MeetingUpdates {
+  private readonly listeners = new Set<{ runId: string; blockId: string; finish(status: "updated" | "timed_out" | "cancelled"): void }>();
+
+  wait(runId: string, blockId: string, timeoutMs: number): Promise<"updated" | "timed_out" | "cancelled"> {
+    return new Promise((resolve) => {
+      const listener = { runId, blockId, finish: (status: "updated" | "timed_out" | "cancelled") => {
+        clearTimeout(timer);
+        this.listeners.delete(listener);
+        resolve(status);
+      } };
+      const timer = setTimeout(() => listener.finish("timed_out"), timeoutMs);
+      this.listeners.add(listener);
+    });
+  }
+
+  publish(runId: string, blockId: string): void {
+    for (const listener of this.listeners) if (listener.runId === runId && listener.blockId === blockId) listener.finish("updated");
+  }
+
+  cancel(runId?: string): void {
+    for (const listener of this.listeners) if (runId === undefined || listener.runId === runId) listener.finish("cancelled");
+  }
+}
+
 /** Synchronous mutations are atomic between callers; all state is saved with its run. */
 export function useMeeting(state: HarnessBlockRun, caller: HarnessBlock, args: Record<string, unknown>) {
   const action = args.action ?? "diff";

@@ -205,8 +205,8 @@ retrying the same intended operation; use a new key for a distinct operation.
 
 Shared, attributed chat log for a single workflow run. prompt may be empty.
 Connect multiple ai/chatbox participants to it with incoming use edges. It accepts
-no outgoing edges or follow/path inputs. Publishing does not start or notify agents;
-participants read on demand through workflow_use_block:
+no outgoing edges or follow/path inputs. Publishing wakes pending wait calls without
+starting new agent turns. Participants use workflow_use_block:
 - action:"publish", message:"Proposal" (or input): append a message, returning
   published and latestSequence. Maximum 10000 text characters and 16000 serialized
   characters including attribution; author/provider/model come from the caller.
@@ -214,6 +214,12 @@ participants read on demand through workflow_use_block:
 - action:"diff", lines:20: read messages after this participant's last read.
   Optional after is an explicit nonnegative sequence number for replay/pagination.
   Omitted action defaults to diff. lines is 1–50, default 20.
+- action:"wait": return unread messages immediately, or wait for the next publish
+  without polling. Uses the same lines/after options and saved cursor as diff.
+  timeout_seconds overrides the connection timeout (default 300 seconds, maximum
+  86400). Returns status:"updated" or status:"timed_out" inside meeting. The wait
+  releases workflow execution capacity so other agents can publish. Run cancellation
+  and Core shutdown release pending waits.
 
 Results are in meeting: messages, cursor, latestSequence, hasMore and
 historyTruncated. Continue diff reads while hasMore is true. For explicit replay,

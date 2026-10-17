@@ -85,11 +85,18 @@ participants when messages arrive. Agents use `workflow_use_block` with:
 {"block_id":"meeting","action":"publish","message":"Here is my proposal."}
 {"block_id":"meeting","action":"tail","lines":20}
 {"block_id":"meeting","action":"diff","lines":20}
+{"block_id":"meeting","action":"wait","timeout_seconds":300}
 ```
 
 `tail` reads recent messages. `diff` reads new messages since that participant's
 last read; omitted action also means `diff`. Each participant has an independent
-cursor persisted with the run. For replay, supply `after` with a sequence number,
+cursor persisted with the run. `wait` returns unread messages immediately or holds
+until another message is published, without polling. It returns `status: "updated"`
+or `status: "timed_out"` inside `meeting` with the normal diff fields. It accepts
+`lines` and `after`; `timeout_seconds` overrides the connection timeout (default
+300 seconds, maximum 86,400). Waiting releases workflow execution capacity, so
+other participants can publish even with concurrency one. Run cancellation and
+Core shutdown release pending waits. For replay, supply `after` with a sequence number,
 then use each returned `cursor` as the next `after`. Explicit replay never rewinds
 the participant's saved cursor. Results are under `meeting`, including `messages`,
 `cursor`, `latestSequence`, `hasMore`, and `historyTruncated`. Read further diff

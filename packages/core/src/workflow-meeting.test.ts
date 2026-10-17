@@ -1,11 +1,35 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { HarnessBlock, HarnessBlockRun } from "@remote-ide/protocol";
-import { useMeeting } from "./workflow-meeting.js";
+import { MeetingUpdates, useMeeting } from "./workflow-meeting.js";
 
 const agent = (id: string): HarnessBlock => ({ id, label: id, type: "ai", provider: "claude", model: "sonnet", prompt: "", position: { x: 0, y: 0 } });
 const room = (): HarnessBlockRun => ({ blockId: "meeting", status: "queued" });
 
 describe("Meeting transcript", () => {
+  it("broadcasts updates only to matching subscribers and cleans up timeouts and cancellation", async () => {
+    vi.useFakeTimers();
+    try {
+      const updates = new MeetingUpdates();
+      const first = updates.wait("run", "room", 1000);
+      const second = updates.wait("run", "room", 1000);
+      const otherRoom = updates.wait("run", "other", 1000);
+      const otherRun = updates.wait("other", "room", 1000);
+      updates.publish("run", "room");
+      await expect(first).resolves.toBe("updated");
+      await expect(second).resolves.toBe("updated");
+      expect(vi.getTimerCount()).toBe(2);
+      updates.cancel("run");
+      await expect(otherRoom).resolves.toBe("cancelled");
+      expect(vi.getTimerCount()).toBe(1);
+      await vi.advanceTimersByTimeAsync(1000);
+      await expect(otherRun).resolves.toBe("timed_out");
+      const shutdown = updates.wait("last", "room", 1000);
+      updates.cancel();
+      await expect(shutdown).resolves.toBe("cancelled");
+      expect(vi.getTimerCount()).toBe(0);
+    } finally { vi.useRealTimers(); }
+  });
+
   it("keeps independent cursors, supports replay and recent tails, and survives serialization", () => {
     const state = room();
     const publish = (text: string) => useMeeting(state, agent("a"), { action: "publish", message: text });
