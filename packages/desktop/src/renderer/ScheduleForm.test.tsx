@@ -12,7 +12,7 @@ function setup() {
   const onCreate = vi.fn(async (_input: ScheduleInput) => undefined);
   const onCancel = vi.fn();
   const onLoadAgents = vi.fn(async (taskId?: string) => [{ scope: "workspace", name: `${taskId}-reviewer.md`, agent: { name: `Reviewer ${taskId}` } }] as never);
-  render(<ScheduleForm tasks={tasks} workflows={workflows} providers={providers} selectedTaskId="task-a" defaultProvider="codex" onLoadAgents={onLoadAgents} onCreate={onCreate} onCancel={onCancel} />);
+  render(<ScheduleForm tasks={tasks} workflows={workflows} providers={providers} selectedTaskId="task-a" defaultProvider="codex" onLoadAgents={onLoadAgents} onLoadModels={async () => []} onCreate={onCreate} onCancel={onCancel} />);
   return { onCreate, onCancel, onLoadAgents };
 }
 
@@ -49,7 +49,7 @@ describe("schedule creation", () => {
   });
   it("lets a workflow with multiple starts choose its entry block", async () => {
     const onCreate = vi.fn(async (_input: ScheduleInput) => undefined);
-    render(<ScheduleForm tasks={tasks} workflows={[{ id: "multi", name: "Multi-start", blocks: [{ id: "check", type: "start_button", label: "Check" }, { id: "release", type: "start_input", label: "Release" }] }] as never} providers={providers} defaultProvider="codex" onLoadAgents={async () => []} onCreate={onCreate} onCancel={vi.fn()} />);
+    render(<ScheduleForm tasks={tasks} workflows={[{ id: "multi", name: "Multi-start", blocks: [{ id: "check", type: "start_button", label: "Check" }, { id: "release", type: "start_input", label: "Release" }] }] as never} providers={providers} defaultProvider="codex" onLoadAgents={async () => []} onLoadModels={async () => []} onCreate={onCreate} onCancel={vi.fn()} />);
     fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Release schedule" } });
     fireEvent.change(screen.getByLabelText("Action"), { target: { value: "workflow" } });
     fireEvent.change(screen.getByLabelText("Start block"), { target: { value: "release" } });

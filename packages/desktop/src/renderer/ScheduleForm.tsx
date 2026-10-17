@@ -1,15 +1,19 @@
 import { CalendarClock, Plus, X } from "lucide-react";
 import { useEffect, useState } from "react";
-import type { AgentFile, AiProviderDescriptor, HarnessDefinition, ScheduleInput, WorkspaceTask } from "@remote-ide/protocol";
+
+import type { AgentFile, AiModel, AiProviderDescriptor, HarnessDefinition, ScheduleInput, WorkspaceTask } from "@remote-ide/protocol";
+
+import { ActionModelFields } from "./ActionModelFields";
 
 function localDateTime(date: Date): string {
   return new Date(date.getTime() - date.getTimezoneOffset() * 60_000).toISOString().slice(0, 16);
 }
 
-export function ScheduleForm({ tasks, workflows, providers, selectedTaskId, defaultProvider, onLoadAgents, onCreate, onCancel }: {
+export function ScheduleForm({ tasks, workflows, providers, selectedTaskId, defaultProvider, onLoadAgents, onLoadModels, onCreate, onCancel }: {
   tasks: WorkspaceTask[]; workflows: HarnessDefinition[]; providers: AiProviderDescriptor[];
   selectedTaskId?: string; defaultProvider: string;
   onLoadAgents(taskId?: string): Promise<AgentFile[]>;
+  onLoadModels(provider: string): Promise<AiModel[]>;
   onCreate(input: ScheduleInput): Promise<void>;
   onCancel(): void;
 }) {
@@ -17,6 +21,8 @@ export function ScheduleForm({ tasks, workflows, providers, selectedTaskId, defa
   const [taskId, setTaskId] = useState(selectedTaskId ?? "");
   const [type, setType] = useState<"prompt" | "workflow">("prompt");
   const [provider, setProvider] = useState(defaultProvider);
+  const [model, setModel] = useState("");
+  const [reasoning, setReasoning] = useState("");
   const [agents, setAgents] = useState<AgentFile[]>([]);
   const [agentKey, setAgentKey] = useState("");
   const [agentsLoading, setAgentsLoading] = useState(true);
@@ -45,7 +51,7 @@ export function ScheduleForm({ tasks, workflows, providers, selectedTaskId, defa
     if (!Number.isFinite(date.getTime()) || date.getTime() <= Date.now()) { setError("Choose a first run time in the future."); return; }
     const agent = agents.find((item) => `${item.scope}:${item.name}` === agentKey);
     setSaving(true); setError("");
-    void onCreate({ name, dueAt: date.toISOString(), ...(repeat ? { intervalSeconds: interval * unit } : {}), ...(taskId ? { taskId } : {}), action: type === "workflow" ? { type, provider, harnessId, input: prompt, ...(startBlockId ? { startBlockId } : {}) } : { type, provider, prompt, ...(agent ? { agent: { scope: agent.scope, name: agent.name } } : {}) } }).then(onCancel).catch((error) => setError(error instanceof Error ? error.message : "Could not create schedule")).finally(() => setSaving(false));
+    void onCreate({ name, dueAt: date.toISOString(), ...(repeat ? { intervalSeconds: interval * unit } : {}), ...(taskId ? { taskId } : {}), action: type === "workflow" ? { type, provider, harnessId, input: prompt, ...(startBlockId ? { startBlockId } : {}) } : { type, provider, prompt, ...(agent ? { agent: { scope: agent.scope, name: agent.name } } : {}), ...(model ? { model } : {}), ...(reasoning ? { reasoning } : {}) } }).then(onCancel).catch((error) => setError(error instanceof Error ? error.message : "Could not create schedule")).finally(() => setSaving(false));
   }}>
     <header className="schedule-form-heading"><CalendarClock size={15} aria-hidden="true" /><strong>New schedule</strong><button type="button" aria-label="Close new schedule" title="Close new schedule" disabled={saving} onClick={onCancel}><X size={14} aria-hidden="true" /></button></header>
     <label>Name<input placeholder="e.g. Daily workspace review" required maxLength={180} value={name} onChange={(event) => setName(event.target.value)} /></label>
@@ -53,6 +59,7 @@ export function ScheduleForm({ tasks, workflows, providers, selectedTaskId, defa
     <label>Target task<select value={taskId} onChange={(event) => setTaskId(event.target.value)}><option value="">Root workspace</option>{tasks.filter((task) => task.status !== "finished" && !task.archived).map((task) => <option key={task.id} value={task.id}>{task.name}</option>)}</select></label>
     <label>AI provider<select required value={provider} onChange={(event) => setProvider(event.target.value)}>{providers.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
     {type === "prompt" ? <label>Agent preset<select value={agentKey} disabled={agentsLoading} onChange={(event) => setAgentKey(event.target.value)}><option value="">Default agent</option>{agents.map((agent) => <option key={`${agent.scope}:${agent.name}`} value={`${agent.scope}:${agent.name}`}>{agent.agent.name} ({agent.scope})</option>)}</select></label> : <label>Workflow<select required value={harnessId} onChange={(event) => setHarnessId(event.target.value)}><option value="" disabled>Select workflow</option>{workflows.map((workflow) => <option key={workflow.id} value={workflow.id}>{workflow.name}</option>)}</select></label>}
+    {type === "prompt" && <ActionModelFields provider={provider} model={model} reasoning={reasoning} onLoadModels={onLoadModels} onChange={(value) => { setModel(value.model); setReasoning(value.reasoning); }} />}
     {type === "workflow" && starts.length > 1 && <label>Start block<select required value={startBlockId} onChange={(event) => setStartBlockId(event.target.value)}>{starts.map((block) => <option key={block.id} value={block.id}>{block.label}</option>)}</select></label>}
     {type === "prompt" && agentsError && <p role="alert">{agentsError}</p>}
     <label>{type === "prompt" ? "Prompt" : "Workflow input"}<textarea placeholder={type === "prompt" ? "Describe what the agent should do…" : "Optional input to start the workflow…"} required={type === "prompt"} rows={4} value={prompt} onChange={(event) => setPrompt(event.target.value)} /></label>

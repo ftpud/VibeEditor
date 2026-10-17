@@ -8,7 +8,7 @@ function setup(schedules: WorkspaceSchedule[] = []) {
   const onAction = vi.fn(async () => undefined);
   const onScheduleAction = vi.fn(async () => undefined);
   const onError = vi.fn();
-  render(<TimersPanel timers={[{ id: "hidden-timer", workspace: "/state/workflow-sessions/hash/session", provider: "codex", prompt: "Wake and check", dueAt: "2099-01-01T00:00:00.000Z", createdAt: "2026-10-07T00:00:00.000Z" }]} schedules={schedules} workflows={[]} roots={[]} providers={[]} tasks={[]} runs={[]} defaultProvider="codex" onLoadAgents={async () => []} onCreateSchedule={async () => {}} onScheduleAction={onScheduleAction} onAction={onAction} onRefresh={async () => {}} onCancelAll={async () => {}} onError={onError} />);
+  render(<TimersPanel timers={[{ id: "hidden-timer", workspace: "/state/workflow-sessions/hash/session", provider: "codex", prompt: "Wake and check", dueAt: "2099-01-01T00:00:00.000Z", createdAt: "2026-10-07T00:00:00.000Z" }]} schedules={schedules} workflows={[]} roots={[]} providers={[]} tasks={[]} runs={[]} defaultProvider="codex" onLoadAgents={async () => []} onLoadModels={async () => []} onCreateSchedule={async () => {}} onScheduleAction={onScheduleAction} onAction={onAction} onRefresh={async () => {}} onCancelAll={async () => {}} onError={onError} />);
   return { onAction, onScheduleAction, onError };
 }
 

@@ -1,10 +1,10 @@
 import { Bot, Clock, Pause, Play, RefreshCw, Square, Plus, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
-import type { AgentFile, AiContinuationTimer, AiProviderDescriptor, HarnessDefinition, HarnessRun, ScheduleInput, WorkspaceRoot, WorkspaceSchedule, WorkspaceTask } from "@remote-ide/protocol";
+import type { AgentFile, AiModel, AiContinuationTimer, AiProviderDescriptor, HarnessDefinition, HarnessRun, ScheduleInput, WorkspaceRoot, WorkspaceSchedule, WorkspaceTask } from "@remote-ide/protocol";
 
 import { ScheduleForm } from "./ScheduleForm";
 
-export function TimersPanel({ timers, schedules, workflows, roots, providers, tasks, runs, selectedTaskId, defaultProvider, onLoadAgents, onCreateSchedule, onScheduleAction, disabled = false, onRefresh, onAction, onCancelAll, onError }: {
+export function TimersPanel({ timers, schedules, workflows, roots, providers, tasks, runs, selectedTaskId, defaultProvider, onLoadAgents, onLoadModels, onCreateSchedule, onScheduleAction, disabled = false, onRefresh, onAction, onCancelAll, onError }: {
   timers: AiContinuationTimer[];
   schedules: WorkspaceSchedule[];
   workflows: HarnessDefinition[];
@@ -12,6 +12,7 @@ export function TimersPanel({ timers, schedules, workflows, roots, providers, ta
   selectedTaskId?: string;
   defaultProvider: string;
   onLoadAgents(taskId?: string): Promise<AgentFile[]>;
+  onLoadModels(provider: string): Promise<AiModel[]>;
   onCreateSchedule(input: ScheduleInput): Promise<void>;
   onScheduleAction(id: string, action: "fire" | "pause" | "resume" | "delete"): Promise<void>;
   providers: AiProviderDescriptor[];
@@ -48,10 +49,10 @@ export function TimersPanel({ timers, schedules, workflows, roots, providers, ta
     </div></header>
     <div className="timers-panel">
       <p className="timers-help">Schedule prompts and workflows, or manage upcoming AI continuations.</p>
-      {creating && <ScheduleForm tasks={tasks} workflows={workflows} providers={providers} selectedTaskId={selectedTaskId} defaultProvider={defaultProvider} onLoadAgents={onLoadAgents} onCreate={onCreateSchedule} onCancel={() => setCreating(false)} />}
+      {creating && <ScheduleForm tasks={tasks} workflows={workflows} providers={providers} selectedTaskId={selectedTaskId} defaultProvider={defaultProvider} onLoadAgents={onLoadAgents} onLoadModels={onLoadModels} onCreate={onCreateSchedule} onCancel={() => setCreating(false)} />}
       {schedules.length > 0 && <section className="timer-section" aria-label="Schedules"><header className="timer-section-header"><Clock size={13} aria-hidden="true" /><span>Schedules</span><span>{schedules.length}</span></header>{schedules.map((schedule) => <article className="timer-entry" key={schedule.id} aria-label={`${schedule.name} schedule`}>
         <div className="timer-title"><Clock size={14} /><strong title={schedule.name}>{schedule.name}</strong><span className={`timer-state ${schedule.enabled ? "scheduled" : schedule.lastError ? "error" : "paused"}`}>{schedule.enabled ? "Scheduled" : schedule.lastRunAt && !schedule.intervalSeconds && !schedule.lastError ? "Completed" : "Paused"}</span></div>
-        <p>{schedule.action.type === "workflow" ? `Workflow: ${workflows.find((item) => item.id === ("harnessId" in schedule.action ? schedule.action.harnessId : ""))?.name ?? schedule.action.harnessId}` : `Prompt · ${providers.find((item) => item.id === schedule.action.provider)?.name ?? schedule.action.provider}${schedule.action.agent ? ` · ${schedule.action.agent.name}` : ""}`}</p>
+        <p>{schedule.action.type === "workflow" ? `Workflow: ${workflows.find((item) => item.id === ("harnessId" in schedule.action ? schedule.action.harnessId : ""))?.name ?? schedule.action.harnessId}` : `Prompt · ${providers.find((item) => item.id === schedule.action.provider)?.name ?? schedule.action.provider}${schedule.action.agent ? ` · ${schedule.action.agent.name}` : ""}${schedule.action.model ? ` · ${schedule.action.model}${schedule.action.reasoning ? ` (${schedule.action.reasoning})` : ""}` : ""}`}</p>
         <p>{roots.find((root) => root.id === schedule.rootId)?.alias ?? schedule.rootId} · {schedule.taskId ? tasks.find((item) => item.id === schedule.taskId)?.name ?? `Task ${schedule.taskId}` : "Root workspace"} · {schedule.intervalSeconds ? `Every ${schedule.intervalSeconds / 60} minutes` : "One time"}</p>
         {schedule.enabled && <><div className="timer-countdown" role="timer">{Date.parse(schedule.dueAt) <= now ? "Due now" : `Next run in ${Math.ceil((Date.parse(schedule.dueAt) - now) / 60_000)}m`}</div><time dateTime={schedule.dueAt}>{new Date(schedule.dueAt).toLocaleString()}</time></>}
         {schedule.lastRunAt && <p>Last run: {new Date(schedule.lastRunAt).toLocaleString()}</p>}

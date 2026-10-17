@@ -27,6 +27,8 @@ describe("reactive triggers", () => {
     expect(() => validateTrigger({ ...base, debounceSeconds: -1 })).toThrow("Quiet period");
     expect(() => validateTrigger({ ...base, maxFiresPerHour: 0 })).toThrow("Hourly limit");
     expect(() => validateTrigger({ ...base, action: { type: "prompt", provider: "codex", prompt: " " } })).toThrow("prompt");
+    expect(() => validateTrigger({ ...base, action: { ...action, model: "m1", reasoning: "high" } })).not.toThrow();
+    expect(() => validateTrigger({ ...base, action: { ...action, model: "" } })).toThrow("model");
   });
 
   it("fires when a watched file is created, changed and deleted", async () => {

@@ -573,6 +573,11 @@ export function App() {
     setSchedules(scheduleResult.schedules);
     setTriggers(triggerResult.triggers);
   }, []);
+  const loadActionModels = useCallback(async (provider: string) => {
+    const client = clientRef.current;
+    if (!client) throw new Error("Backend is disconnected");
+    return (await client.request("ai.models", { provider: provider as AiProvider })).models;
+  }, []);
   const loadScheduleAgents = useCallback(async (taskId?: string) => {
     const client = clientRef.current; if (!client) throw new Error("Backend is disconnected");
     return (await client.request("schedules.agents", { taskId })).agents;
@@ -2965,7 +2970,7 @@ export function App() {
     const client = clientRef.current; if (!client) throw new Error("Backend is disconnected. Reconnect and try again.");
     await client.request("processes.kill", { processId }); await refreshProcesses();
   }} />;
-  const triggersPanel = <TriggersPanel key={selectedRootId} triggers={triggers} workflows={harnesses} roots={workspaceRoots} selectedTaskId={selectedTaskId} defaultProvider={aiProvider} providers={aiProviders} tasks={tasks} disabled={taskSwitching} onLoadAgents={loadScheduleAgents} onRefresh={refreshAiStatuses} onError={setStatusMessage}
+  const triggersPanel = <TriggersPanel key={selectedRootId} triggers={triggers} workflows={harnesses} roots={workspaceRoots} selectedTaskId={selectedTaskId} defaultProvider={aiProvider} providers={aiProviders} tasks={tasks} disabled={taskSwitching} onLoadAgents={loadScheduleAgents} onLoadModels={loadActionModels} onRefresh={refreshAiStatuses} onError={setStatusMessage}
     onCreate={async (input) => { const client = clientRef.current; if (!client) throw new Error("Backend is disconnected"); await client.request("triggers.create", input); await refreshAiStatuses(client); }}
     onAction={async (triggerId, action) => {
       const client = clientRef.current; if (!client) throw new Error("Backend is disconnected");
@@ -2974,7 +2979,7 @@ export function App() {
       else await client.request("triggers.enabled", { triggerId, enabled: action === "resume" });
       await refreshAiStatuses(client);
     }} />;
-  const timersPanel = <TimersPanel key={selectedRootId} timers={activeTimers} schedules={schedules} workflows={harnesses} roots={workspaceRoots} selectedTaskId={selectedTaskId} defaultProvider={aiProvider} onLoadAgents={loadScheduleAgents}
+  const timersPanel = <TimersPanel key={selectedRootId} timers={activeTimers} schedules={schedules} workflows={harnesses} roots={workspaceRoots} selectedTaskId={selectedTaskId} defaultProvider={aiProvider} onLoadAgents={loadScheduleAgents} onLoadModels={loadActionModels}
     onCreateSchedule={async (input) => { const client = clientRef.current; if (!client) throw new Error("Backend is disconnected"); await client.request("schedules.create", input); await refreshAiStatuses(client); }}
     onScheduleAction={async (scheduleId, action) => {
       const client = clientRef.current; if (!client) throw new Error("Backend is disconnected");

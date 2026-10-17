@@ -9,7 +9,7 @@ function setup(triggers: WorkspaceTrigger[] = []) {
   const onAction = vi.fn(async () => undefined);
   const onCreate = vi.fn(async () => undefined);
   const onError = vi.fn();
-  render(<TriggersPanel triggers={triggers} workflows={[]} roots={[]} providers={[{ id: "codex", name: "Codex" } as never]} tasks={[]} defaultProvider="codex" onLoadAgents={async () => []} onCreate={onCreate} onAction={onAction} onRefresh={async () => undefined} onError={onError} />);
+  render(<TriggersPanel triggers={triggers} workflows={[]} roots={[]} providers={[{ id: "codex", name: "Codex" } as never]} tasks={[]} defaultProvider="codex" onLoadAgents={async () => []} onLoadModels={async () => []} onCreate={onCreate} onAction={onAction} onRefresh={async () => undefined} onError={onError} />);
   return { onAction, onCreate, onError };
 }
 
@@ -43,5 +43,22 @@ describe("Triggers tool window", () => {
     await waitFor(() => expect((screen.getByRole("button", { name: "Create trigger" }) as HTMLButtonElement).disabled).toBe(false));
     fireEvent.click(screen.getByRole("button", { name: "Create trigger" }));
     await waitFor(() => expect(onCreate).toHaveBeenCalledWith(expect.objectContaining({ name: "Pipe", source: { type: "fifo", path: "/tmp/events" }, action: expect.objectContaining({ type: "prompt", prompt: "Handle it" }) })));
+  });
+
+  it("sends the chosen model and reasoning effort with a prompt trigger", async () => {
+    const onCreate = vi.fn(async () => undefined);
+    const models = [{ id: "m1", name: "Model One", reasoningLevels: ["low", "high"], defaultReasoning: "low" }] as never[];
+    render(<TriggersPanel triggers={[]} workflows={[]} roots={[]} providers={[{ id: "codex", name: "Codex" } as never]} tasks={[]} defaultProvider="codex" onLoadAgents={async () => []} onLoadModels={async () => models} onCreate={onCreate} onAction={vi.fn()} onRefresh={async () => undefined} onError={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: "New trigger" }));
+    fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Modelled" } });
+    fireEvent.change(screen.getByLabelText("File or folder path"), { target: { value: "/tmp/f" } });
+    fireEvent.change(screen.getByLabelText("Prompt"), { target: { value: "Go" } });
+    await waitFor(() => expect((screen.getByRole("button", { name: "codex model" }) as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(screen.getByRole("button", { name: "codex model" }));
+    fireEvent.click(screen.getByText("Model One"));
+    fireEvent.change(screen.getByLabelText("Reasoning effort"), { target: { value: "high" } });
+    await waitFor(() => expect((screen.getByRole("button", { name: "Create trigger" }) as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(screen.getByRole("button", { name: "Create trigger" }));
+    await waitFor(() => expect(onCreate).toHaveBeenCalledWith(expect.objectContaining({ action: expect.objectContaining({ type: "prompt", model: "m1", reasoning: "high" }) })));
   });
 });

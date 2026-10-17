@@ -18,6 +18,7 @@ export function validateSchedule(input: ScheduleInput): void {
 export function validateScheduledAction(action: ScheduledAction): void {
   if (!action || typeof action.provider !== "string" || !action.provider || !["prompt", "workflow"].includes(action.type)) throw new CoreError("INVALID_REQUEST", "Choose a schedule action and provider");
   if (action.type === "prompt" && (typeof action.prompt !== "string" || !action.prompt.trim())) throw new CoreError("INVALID_REQUEST", "Enter a prompt");
+  if (action.type === "prompt" && [action.model, action.reasoning].some((value) => value !== undefined && (typeof value !== "string" || !value || value.length > 200))) throw new CoreError("INVALID_REQUEST", "Choose a valid model and reasoning effort");
   if (action.type === "prompt" && action.agent && (typeof action.agent.name !== "string" || !["global", "local", "workspace"].includes(action.agent.scope))) throw new CoreError("INVALID_REQUEST", "Choose a valid agent preset");
   if (action.type === "workflow" && (typeof action.harnessId !== "string" || !action.harnessId || typeof action.input !== "string")) throw new CoreError("INVALID_REQUEST", "Choose a workflow and its input");
 }

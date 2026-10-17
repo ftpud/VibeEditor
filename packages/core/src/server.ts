@@ -388,7 +388,7 @@ export async function createServer(host: string, port: number, workspacePath: st
       if (action.agent && !preset) throw new CoreError("FILE_NOT_FOUND", "Scheduled agent preset no longer exists");
       const tools = withAppTools(root.path, target, undefined, preset?.agent, action.provider, rootWorkspace);
       if (!active()) return {};
-      await provider.send(target, { prompt: action.prompt + note, configuration: session.configuration ?? { model: session.model, reasoning: session.reasoning }, mcpServers: tools.servers, agent: tools.agent, agentPreset: action.agent });
+      await provider.send(target, { prompt: action.prompt + note, configuration: { ...(session.configuration ?? { model: session.model, reasoning: session.reasoning }), ...(action.model ? { model: action.model } : {}), ...(action.reasoning ? { reasoning: action.reasoning } : {}) }, mcpServers: tools.servers, agent: tools.agent, agentPreset: action.agent });
       return {};
     } finally { scheduledPromptTargets.delete(targetKey); }
   };

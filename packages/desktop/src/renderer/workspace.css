@@ -749,3 +749,5 @@ button.danger:hover:not(:disabled) { background: var(--danger-soft); border-colo
 .ai-composer-actions .skill-chat-controls .skill-chat-trigger { flex: 0 0 auto; width: auto; height: 31px; padding: 0 9px; background: var(--surface-hover); color: var(--text-primary); border: 0; }
 .ai-composer-actions .skill-chat-controls .skill-chat-picker button:last-child { width: auto; height: auto; background: var(--surface-panel); color: var(--text-primary); border: 1px solid var(--border-strong); }
 .ai-composer-actions .skill-chat-picker { top: auto; bottom: calc(100% + 5px); left: 0; right: auto; }
+.action-model-fields { display: flex; flex-direction: column; gap: 6px; }
+.action-model-fields .ai-model-picker { flex: none; }
