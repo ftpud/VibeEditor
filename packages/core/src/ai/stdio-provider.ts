@@ -953,7 +953,7 @@ export abstract class StdioAcpProvider extends AcpProvider {
    */
   private async applyAcpConfiguration(runtime: Runtime, options: SessionConfigOption[], modes: ModeState): Promise<string[]> {
     const session = runtime.session;
-    const desired = session.configuration ?? {};
+    const desired: AiConfiguration = { ...session.configuration, model: session.model, reasoning: session.reasoning };
     const warnings: string[] = [];
     let current = options;
     const attempt = async (option: SessionConfigOption, value: string | number | boolean | undefined): Promise<void> => {
@@ -975,10 +975,10 @@ export abstract class StdioAcpProvider extends AcpProvider {
     else if (modes && typeof desired.mode === "string" && modes.currentModeId !== desired.mode && modes.availableModes.some((mode) => mode.id === desired.mode)) await runtime.connection.setSessionMode({ sessionId: runtime.sessionId, modeId: desired.mode }).catch((error: unknown) => { warnings.push(`• Agent mode: ${error instanceof Error ? error.message : String(error)}`); });
 
     const modelOption = current.find((option) => option.category === "model");
-    if (modelOption) await attempt(modelOption, session.model);
+    if (modelOption) await attempt(modelOption, desired.model);
 
     const thoughtOption = current.find((option) => option.category === "thought_level");
-    if (thoughtOption) await attempt(thoughtOption, session.reasoning);
+    if (thoughtOption) await attempt(thoughtOption, desired.reasoning);
     else if (!this.supportsUnlistedModel(session.model)) session.reasoning = "";
 
     for (const option of current) {
@@ -1053,8 +1053,10 @@ export abstract class StdioAcpProvider extends AcpProvider {
       case "current_mode_update": session.configuration = { ...session.configuration, mode: update.currentModeId }; break;
       case "config_option_update": {
         runtime.configOptions = update.configOptions ?? [];
-        const warnings = await this.applyAcpConfiguration(runtime, runtime.configOptions, runtime.modes);
-        if (warnings.length > 0) session.messages.push(this.message("activity", `Session configuration\n${warnings.join("\n")}`));
+        // These are authoritative notifications, including acknowledgements of
+        // our own writes. Reapplying settings here can replay stale snapshots
+        // and endlessly retry a reasoning value the agent has just rejected.
+        this.syncFromOptions(session, runtime.configOptions, runtime.modes);
         break;
       }
       case "available_commands_update": session.availableCommands = update.availableCommands.map((command) => ({ name: command.name, description: command.description, inputHint: command.input?.hint })); break;

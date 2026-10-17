@@ -2,7 +2,10 @@
 import readline from "node:readline";
 const send = (message) => process.stdout.write(`${JSON.stringify({ jsonrpc: "2.0", ...message })}\n`);
 const update = (sessionId, value) => send({ method: "session/update", params: { sessionId, update: value } });
-const options = (model = "model-a") => [{ configId: "model", category: "model", type: "select", name: "Model", currentValue: model, options: [{ value: "model-a", name: "Model A" }, { value: "model-b", name: "Model B" }] }];
+const configFeedback = process.env.FAKE_CONFIG_FEEDBACK === "on";
+let configWrites = 0;
+let selectedModel = "model-a";
+const options = (model = selectedModel) => [{ configId: "model", category: "model", type: "select", name: "Model", currentValue: model, options: [{ value: "model-a", name: "Model A" }, { value: "model-b", name: "Model B" }] }, ...(configFeedback ? [{ configId: "reasoning_effort", category: "thought_level", type: "select", name: "Reasoning", currentValue: "medium", options: [{ value: "medium", name: "Medium" }, { value: "high", name: "High" }] }] : [])];
 let turn = 0;
 let active = false;
 const steering = process.env.FAKE_V2_STEERING === "on";
@@ -27,7 +30,15 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
   if ((message.method === "session/new" || message.method === "session/resume") && (message.params.mcpServers ?? []).some((server) => !server.type)) return send({ id: message.id, error: { code: -32602, message: "Invalid params" } });
   if (message.method === "session/new") { if (process.env.FAKE_V2_REQUIRE_MCP === "1" && !(message.params.mcpServers ?? []).length) return send({ id: message.id, error: { code: -32602, message: "Expected Vibe MCP servers" } }); return ok({ sessionId: "v2-session", configOptions: options() }); }
   if (message.method === "session/resume") return ok({ configOptions: options() });
-  if (message.method === "session/set_config_option") return ok({ configOptions: options(message.params.value) });
+  if (message.method === "session/set_config_option") {
+    if (!configFeedback) return ok({ configOptions: options(message.params.value) });
+    configWrites++;
+    if (configWrites > 8) return send({ id: message.id, error: { code: -32602, message: "Configuration feedback loop" } });
+    if (message.params.configId === "model") selectedModel = message.params.value;
+    update(message.params.sessionId, { sessionUpdate: "config_option_update", configOptions: options() });
+    if (message.params.configId === "reasoning_effort") return send({ id: message.id, error: { code: -32602, message: "Invalid reasoning parameter" } });
+    return ok({ configOptions: options() });
+  }
   if (message.method === "_session/steering" && steering && active) {
     ok({ outcome: "injected" });
     update(message.params.sessionId, { sessionUpdate: "agent_message_chunk", messageId: `m${turn}`, content: { type: "text", text: `[steered: ${message.params.prompt[0].text}]` } });
@@ -42,6 +53,7 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
       setTimeout(() => { active = false; update(message.params.sessionId, { sessionUpdate: "state_update", state: "idle", stopReason: "end_turn" }); }, 20);
       return;
     }
+    if (configFeedback) update(message.params.sessionId, { sessionUpdate: "agent_message_chunk", messageId: `config-writes-${turn}`, content: { type: "text", text: `Configuration writes: ${configWrites}` } });
     active = true;
     const sessionId = message.params.sessionId; const text = message.params.prompt.map((block) => block.text ?? "").join(""); const id = `m${++turn}`;
     ok({ messageId: `u${turn}` });

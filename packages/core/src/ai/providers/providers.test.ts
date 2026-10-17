@@ -208,6 +208,25 @@ describe("ACP integration", () => {
     await expect(v1Only.send(workspace, { prompt: "ping", configuration: {} })).rejects.toThrow("does not support ACP v2");
   });
 
+  it("does not replay configuration notifications after an ACP v2 reasoning rejection", async () => {
+    class FeedbackV2Provider extends FakeProvider {
+      protected command(_configuration: AiConfiguration) { return { command: process.execPath, args: [FAKE_V2_AGENT], env: { FAKE_CONFIG_FEEDBACK: "on" } }; }
+      protected async protocol() { return "v2" as const; }
+    }
+    const provider = new FeedbackV2Provider(() => undefined, await mkdtemp(path.join(os.tmpdir(), "remote-ide-v2-config-feedback-")));
+    const workspace = process.cwd();
+    await provider.send(workspace, { prompt: "hello", configuration: { model: "model-b", reasoning: "high" } });
+    const session = await settle(provider, workspace);
+    expect(session).toMatchObject({ status: "done", model: "model-b", reasoning: "medium" });
+    expect(session.messages.filter((message) => message.text.startsWith("Session configuration"))).toHaveLength(1);
+    expect(session.messages.some((message) => message.text.includes("Invalid reasoning parameter"))).toBe(true);
+    expect(session.messages.some((message) => message.text === "Configuration writes: 2")).toBe(true);
+    await provider.send(workspace, { prompt: "continue", configuration: {} });
+    const continued = await settle(provider, workspace);
+    expect(continued.messages.filter((message) => message.text.startsWith("Session configuration"))).toHaveLength(1);
+    expect(continued.messages.filter((message) => message.text === "Configuration writes: 2")).toHaveLength(2);
+  });
+
   it.each(["on", "prompt"])("steers an active ACP v2 turn using the advertised extension or prompt fallback: %s", async (steering) => {
     class SteeringV2Provider extends FakeProvider {
       protected command(_configuration: AiConfiguration) { return { command: process.execPath, args: [FAKE_V2_AGENT], env: { FAKE_V2_STEERING: steering } }; }
