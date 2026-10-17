@@ -89,7 +89,7 @@ export function AiProvidersPanel({ client, onClose, onChanged }: { client: CoreC
           const disabled = busy(item) || pending === item.provider;
           return <article className={`install-item-card ${usable(item) ? "installed" : ""}`} key={item.provider} aria-label={item.name}>
             <div className="install-item-main">
-              <div className="install-item-title"><strong>{item.name}</strong><ProviderStatus item={item} update={update} /></div>
+              <div className="install-item-title"><strong>{item.name}</strong>{item.origin && item.origin !== "built-in" && <span className="install-item-origin">{item.origin === "plugin" ? "Plugin" : "Definition"}</span>}<ProviderStatus item={item} update={update} /></div>
               <p>{item.description}</p>
               <small className="install-item-meta">{external ? <><Server size={12} />Configured on the Core host: <code>{item.location}</code></> : <>{item.package && <code>{item.package}</code>}{item.version && <span>Installed {item.version}</span>}{item.latestVersion && <span>Latest {item.latestVersion}</span>}</>}</small>
               {item.error && <div className="install-panel-error" role="alert"><CircleAlert size={14} />{item.error}</div>}

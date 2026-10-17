@@ -3,6 +3,7 @@ import { CodexSessionManager } from "./providers/codex.js";
 import { CopilotSessionManager } from "./providers/copilot.js";
 import { ClaudeSessionManager } from "./providers/claude.js";
 import { definitionFactory, loadProviderDefinitions } from "./provider-definitions.js";
+import type { AiProviderOrigin } from "@remote-ide/acp";
 import type { AcpTurnObserver, ProviderContext, ProviderFactory } from "./stdio-provider.js";
 
 /** Built-in providers use the same factory signature as any external one; the first is the registry default. */
@@ -20,9 +21,16 @@ function isolated(create: ProviderFactory): ProviderFactory {
 }
 
 /** Application composition root for built-in and externally supplied providers. */
-export function createAcpRegistry(onChanged: (workspace: string) => void, turns?: AcpTurnObserver, projectRoot?: (workspace: string) => Promise<string>, bridgeWorkspace?: string, additional: ProviderFactory[] = [], factories: ProviderFactory[] = [...BUILT_IN_PROVIDERS, ...loadProviderDefinitions().map(definitionFactory), ...additional.map(isolated)]): AcpRegistry {
+export function createAcpRegistry(onChanged: (workspace: string) => void, turns?: AcpTurnObserver, projectRoot?: (workspace: string) => Promise<string>, bridgeWorkspace?: string, plugins: ProviderFactory[] = [], builtIns: ProviderFactory[] = BUILT_IN_PROVIDERS): AcpRegistry {
   const ctx: ProviderContext = { onChanged, turns, projectRoot, bridgeWorkspace };
-  return factories.reduce((registry, create) => { const provider = create(ctx); return provider ? registry.register(provider) : registry; }, new AcpRegistry());
+  const sources: { origin: AiProviderOrigin; factories: ProviderFactory[] }[] = [
+    { origin: "built-in", factories: builtIns },
+    { origin: "definition", factories: loadProviderDefinitions().map(definitionFactory) },
+    { origin: "plugin", factories: plugins.map(isolated) }
+  ];
+  const registry = new AcpRegistry();
+  for (const { origin, factories } of sources) for (const create of factories) { const provider = create(ctx); if (provider) registry.register(provider, origin); }
+  return registry;
 }
 
 export { AcpProvider, AcpRegistry } from "./acp.js";

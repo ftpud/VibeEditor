@@ -36,10 +36,10 @@ the composition root `createAcpRegistry` (`packages/core/src/ai/index.ts`).
 - [x] Make `createAcpRegistry` iterate a list of factories instead of hard-coded `.register(...)` calls.
 
 ### 1.4 Code plugins (only if declarative is not enough)
-- [ ] Decide trust model: opt-in, directory configured on the Core host, never loaded from a workspace.
-- [ ] Load ES modules exporting `{ apiVersion, createProvider }`; reject mismatched `apiVersion`.
-- [ ] Isolate failures: a throwing plugin must not break startup or other providers.
-- [ ] Surface plugin source (`built-in` / `definition` / `plugin`) in `AiProviderInstallation.source` so the UI can show it.
+- [x] Decide trust model: opt-in, directory configured on the Core host, never loaded from a workspace.
+- [x] Load ES modules exporting `{ apiVersion, createProvider }`; reject mismatched `apiVersion`.
+- [x] Isolate failures: a throwing plugin must not break startup or other providers.
+- [x] Surface plugin source (`built-in` / `definition` / `plugin`) in `AiProviderInstallation.origin` (new field; `source` keeps its managed/external meaning) so the UI can show it.
 
 ## Part 2: Language support (Java first)
 

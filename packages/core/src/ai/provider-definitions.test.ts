@@ -52,6 +52,8 @@ describe("provider definitions", () => {
     try {
       expect(registry.list().map((descriptor) => descriptor.id)).toEqual(["codex", "copilot", "claude", "custom-agent"]);
       expect(registry.defaultId).toBe("codex");
+      const origins = Object.fromEntries((await registry.installations()).map((item) => [item.provider, item.origin]));
+      expect(origins).toMatchObject({ codex: "built-in", "custom-agent": "definition" });
       const provider = registry.get("custom-agent");
       expect(await provider.installation()).toMatchObject({ provider: "custom-agent", status: "installed", source: "external" });
       expect((await provider.models()).map((model) => model.id)).toContain("model-a");

@@ -1,13 +1,15 @@
-import { AcpProvider, type AiProviderDescriptor, type AiProviderInstallation } from "@remote-ide/acp";
+import { AcpProvider, type AiProviderDescriptor, type AiProviderInstallation, type AiProviderOrigin } from "@remote-ide/acp";
 import { CoreError } from "../errors.js";
 
 /** Runtime registry: new providers are added by registering one AcpProvider plugin. */
 export class AcpRegistry {
   private readonly providers = new Map<string, AcpProvider>();
+  private readonly origins = new Map<string, AiProviderOrigin>();
 
-  register(provider: AcpProvider): this {
+  register(provider: AcpProvider, origin: AiProviderOrigin = "built-in"): this {
     if (this.providers.has(provider.descriptor.id)) throw new Error(`ACP provider '${provider.descriptor.id}' is already registered`);
     this.providers.set(provider.descriptor.id, provider);
+    this.origins.set(provider.descriptor.id, origin);
     return this;
   }
 
@@ -20,7 +22,7 @@ export class AcpRegistry {
     return states.filter(({ state }) => state?.status === "installed" || !!state?.version).map(({ provider }) => provider.descriptor);
   }
 
-  installations(checkLatest = false): Promise<AiProviderInstallation[]> { return Promise.all([...this.providers.values()].map((provider) => provider.installation(checkLatest))); }
+  installations(checkLatest = false): Promise<AiProviderInstallation[]> { return Promise.all([...this.providers.values()].map(async (provider) => ({ ...await provider.installation(checkLatest), origin: this.origins.get(provider.descriptor.id) }))); }
 
   async shutdown(): Promise<void> {
     const results = await Promise.allSettled([...this.providers.values()].map((provider) => provider.shutdown()));
