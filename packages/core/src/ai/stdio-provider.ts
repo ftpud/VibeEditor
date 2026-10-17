@@ -106,6 +106,20 @@ export type AcpTurnObserver = {
   begin(workspace: string, provider: string, prompt: string, sessionId?: string, provenance?: TaskCheckpointProvenance): Promise<string>;
   complete(workspace: string, ids: string[], status: "completed" | "interrupted" | "error", provenance?: Pick<TaskCheckpointProvenance, "usage">): Promise<void>;
 };
+/** Version of the provider factory contract (`createProvider(ctx)`); bump on breaking changes to `ProviderContext`. */
+export const PROVIDER_API_VERSION = 1;
+
+/** Everything Core hands a provider factory; providers must not reach for other Core internals. */
+export interface ProviderContext {
+  onChanged: (workspace: string) => void;
+  turns?: AcpTurnObserver;
+  projectRoot?: (workspace: string) => Promise<string>;
+  bridgeWorkspace?: string;
+}
+
+/** Builds one provider from the Core-supplied context. */
+export type ProviderFactory = (ctx: ProviderContext) => AcpProvider;
+
 export abstract class StdioAcpProvider extends AcpProvider {
   abstract readonly descriptor: AiProviderDescriptor;
   private authenticationController?: AcpAuthentication;

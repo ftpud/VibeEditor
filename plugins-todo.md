@@ -15,10 +15,10 @@ Already in place: `AcpProvider` (`packages/acp/src/index.ts`), `AcpRegistry`
 the composition root `createAcpRegistry` (`packages/core/src/ai/index.ts`).
 
 ### 1.1 Remove provider-ID branches
-- [ ] `rg '"codex"|"claude"|"copilot"' packages/{protocol,core,desktop}/src` and list every hit outside `core/src/ai/providers/`.
-- [ ] Replace each branch with descriptor metadata (capabilities, options, settings layout) or a new optional descriptor field.
-- [ ] Move provider-specific helpers (e.g. `codex-usage.ts`) behind the provider's own `usage()` so shared code never imports them.
-- [ ] Keep `providers.test.ts` green; add a test that fails if shared code mentions a built-in provider ID.
+- [x] Audited provider-ID hits; remaining mentions are test fixtures, starter config, and the legacy Codex cache migration.
+- [x] Replace each branch with descriptor metadata (capabilities, options, settings layout) or a new optional descriptor field.
+- [x] Move provider-specific helpers (e.g. `codex-usage.ts`) behind the provider's own `usage()` so shared code never imports them.
+- [x] Keep `providers.test.ts` green; add a test that fails if shared code mentions a built-in provider ID.
 
 ### 1.2 Declarative providers (no code loading)
 - [ ] Define a provider definition file format (JSON/TOML): `id`, `name`, `description`, `command`, `args`, `env`, credential variable names, fallback models, `options`, `capabilities`, protocol versions.
@@ -30,10 +30,10 @@ the composition root `createAcpRegistry` (`packages/core/src/ai/index.ts`).
 - [ ] Document the format in `docs/ACP.md`.
 
 ### 1.3 Public provider context and built-ins on the same path
-- [ ] Replace the internal constructor arguments (`onChanged`, `turns`, `projectRoot`, `bridgeWorkspace`) with a single `ProviderContext` object.
-- [ ] Export `StdioAcpProvider` and `ProviderContext` as a versioned, documented API (`PROVIDER_API_VERSION`).
-- [ ] Define `createProvider(ctx)` as the factory signature; convert Codex, Copilot and Claude to it.
-- [ ] Make `createAcpRegistry` iterate a list of factories instead of hard-coded `.register(...)` calls.
+- [ ] (ProviderContext type exists and factories use it; constructors still positional) Replace the internal constructor arguments (`onChanged`, `turns`, `projectRoot`, `bridgeWorkspace`) with a single `ProviderContext` object.
+- [x] Export `StdioAcpProvider` and `ProviderContext` as a versioned, documented API (`PROVIDER_API_VERSION`).
+- [x] Define `createProvider(ctx)` as the factory signature; convert Codex, Copilot and Claude to it.
+- [x] Make `createAcpRegistry` iterate a list of factories instead of hard-coded `.register(...)` calls.
 
 ### 1.4 Code plugins (only if declarative is not enough)
 - [ ] Decide trust model: opt-in, directory configured on the Core host, never loaded from a workspace.

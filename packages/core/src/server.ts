@@ -321,13 +321,13 @@ export async function createServer(host: string, port: number, workspacePath: st
       if (block.type === "script") return executeFlowScript(block, prompt, workspace, runtime.assertActive, { rootWorkspace, workflowRunId: runtime.runId, workflowBlockId: runtime.blockId });
       if (block.type === "terminal_control") return executeTerminalControlAsync(prompt, workspace, workflowApps.terminals, runtime.assertActive);
       if (block.type === "run_app") return workflowApps.execute(block, prompt, workspace, runtime.assertActive, { rootWorkspace, workflowRunId: runtime.runId, workflowBlockId: runtime.blockId });
-      if (block.type === "task_controls") return executeTaskControls(block, prompt, { acp, tasks, agents, harnessRunner: recoveryRunner, aiTimers, rootWorkspace, bridgeWorkspace: recoveryBridgeWorkspace, workspacePath: workspace, defaultProvider: "codex" }, runtime);
+      if (block.type === "task_controls") return executeTaskControls(block, prompt, { acp, tasks, agents, harnessRunner: recoveryRunner, aiTimers, rootWorkspace, bridgeWorkspace: recoveryBridgeWorkspace, workspacePath: workspace, defaultProvider: acp.defaultId }, runtime);
       if (block.type === "verification") return runWorkflowVerification(block, workspace, recoveryRunner, runtime);
       if (block.type === "review") {
         const evidence = await collectWorkflowReviewEvidence(block, workspace, recoveryRunner, runtime);
         prompt += `\n\nCore-recorded review evidence:\nCommit: ${evidence.revision}\nBase: ${evidence.baseRevision}\nChanged files: ${evidence.files.join(", ")}\n\nDiff:\n${evidence.diff}`;
       }
-      const provider = acp.get(block.provider ?? "codex");
+      const provider = acp.get(block.provider);
       await assertWorkflowModelAvailable(provider, block.model, block.reasoning);
       if (block.watchdog) return recoveryRunner.watch(runtime.runId, runtime.blockId, () => provider.usage());
       const sessionWorkspace = await workflowSessionWorkspace(workspace, runtime.runId, runtime.blockId); await runtime.started(sessionWorkspace);
@@ -348,14 +348,14 @@ export async function createServer(host: string, port: number, workspacePath: st
       if (!recovered) throw new CoreError("FILE_NOT_FOUND", "Workflow run does not exist");
       const binding = await resolveWorkflowBinding(recovered, undefined, { tasks, rootWorkspace, workspacePath: rootWorkspace });
       if (await availableWorkflowWorkspace(runtime.workspace) !== binding.workspace) throw new CoreError("INVALID_REQUEST", "Workflow recovery session worktree changed");
-      const provider = acp.get(block.provider ?? "codex"); if (!recoveryRunner.isActive(runtime.runId)) throw new Error("Workflow is no longer active"); const current = await provider.get(runtime.workspace);
+      const provider = acp.get(block.provider); if (!recoveryRunner.isActive(runtime.runId)) throw new Error("Workflow is no longer active"); const current = await provider.get(runtime.workspace);
       const workflowTools = appToolServer(rootWorkspace, runtime.workspace, provider.descriptor.id, recoveryBridgeWorkspace, { runId: runtime.runId, blockId: runtime.blockId, flow: ["ai", "chatbox"].includes(block.type) });
       if (current.status === "in_progress" || current.status === "user_prompt") await provider.steer(runtime.workspace, prompt);
       else await provider.send(runtime.workspace, { prompt, configuration: { ...current.configuration ?? { model: current.model, reasoning: current.reasoning }, ...workflowFeatureOptions(provider.descriptor.options, block) }, mcpServers: [workflowTools], captureSnapshots: workflowCapturesSnapshots(recovered, block.id) });
       if (!recoveryRunner.isActive(runtime.runId)) throw new Error("Workflow is no longer active");
       return settleWorkflowSession(provider, runtime.workspace, aiTimers, undefined, () => recoveryRunner.isActive(runtime.runId), runtime.activity);
     });
-    await recoveryRunner.recover(recoveryDispatch, "codex", recoveryAppend, {
+    await recoveryRunner.recover(recoveryDispatch, acp.defaultId, recoveryAppend, {
       binding: async (run) => { run.binding ??= await resolveWorkflowBinding(run, undefined, { tasks, rootWorkspace, workspacePath: rootWorkspace }); run.workspace = run.binding.workspace; await validateWorkflowBinding(run.binding, tasks, rootWorkspace); },
       session: async (provider, target) => acp.get(provider).get(target).catch(() => undefined),
       timer: async (runId, blockId, provider, target) => { const timer = await aiTimers.next(target, provider); return timer?.workflowRunId === runId && timer.workflowBlockId === blockId; },
@@ -1395,7 +1395,7 @@ export async function startWorkflow(input: ProtocolOperations["harnesses.run"]["
       if (block.type === "script") return executeFlowScript(block, prompt, workspacePath, runtime.assertActive, { rootWorkspace, workflowRunId: runtime.runId, workflowBlockId: runtime.blockId });
       if (block.type === "terminal_control") return executeTerminalControlAsync(prompt, workspacePath, workflowApps.terminals, runtime.assertActive);
       if (block.type === "run_app") return workflowApps.execute(block, prompt, workspacePath, runtime.assertActive, { rootWorkspace, workflowRunId: runtime.runId, workflowBlockId: runtime.blockId });
-      if (block.type === "task_controls") return executeTaskControls(block, prompt, { ...context, workspacePath, defaultProvider: input.provider ?? "codex" }, runtime);
+      if (block.type === "task_controls") return executeTaskControls(block, prompt, { ...context, workspacePath, defaultProvider: input.provider ?? acp.defaultId }, runtime);
       if (block.type === "verification") return runWorkflowVerification(block, workspacePath, harnessRunner, runtime);
       if (block.type === "review") {
         const evidence = await collectWorkflowReviewEvidence(block, workspacePath, harnessRunner, runtime);
@@ -1453,8 +1453,8 @@ export async function startWorkflow(input: ProtocolOperations["harnesses.run"]["
       return settleWorkflowSession(provider, runtime.workspace, aiTimers, block.watchdog ? runtime : undefined, () => harnessRunner.isActive(runtime.runId), runtime.activity);
     });
   return input.chatRunId
-    ? harnessRunner.continueChat(input.chatRunId, input.startBlockId!, input.input, dispatch, input.provider ?? "codex", append, binding, input.chatSettings)
-    : harnessRunner.start(input.harnessId, input.input, dispatch, input.provider, append, input.startBlockId, input.rerunRunId, input.testDefinition, workspacePath, (definition) => prepareWorkflowSkills(definition, new SkillsStore(undefined, rootWorkspace), workspacePath), binding, input.chatSettings && input.startBlockId ? { blockId: input.startBlockId, settings: input.chatSettings } : undefined);
+    ? harnessRunner.continueChat(input.chatRunId, input.startBlockId!, input.input, dispatch, input.provider ?? acp.defaultId, append, binding, input.chatSettings)
+    : harnessRunner.start(input.harnessId, input.input, dispatch, input.provider ?? acp.defaultId, append, input.startBlockId, input.rerunRunId, input.testDefinition, workspacePath, (definition) => prepareWorkflowSkills(definition, new SkillsStore(undefined, rootWorkspace), workspacePath), binding, input.chatSettings && input.startBlockId ? { blockId: input.startBlockId, settings: input.chatSettings } : undefined);
 }
 
 /**

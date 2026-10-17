@@ -28,7 +28,14 @@ export class AcpRegistry {
     if (failures.length) throw new AggregateError(failures.map((result) => result.reason), "Could not shut down AI providers");
   }
 
-  get(id = "codex"): AcpProvider {
+  /** The provider used when a request names none: the first one registered. */
+  get defaultId(): string {
+    const first = this.providers.keys().next();
+    if (first.done) throw new CoreError("INVALID_REQUEST", "No AI provider is registered");
+    return first.value;
+  }
+
+  get(id: string = this.defaultId): AcpProvider {
     const provider = this.providers.get(id);
     if (!provider) throw new CoreError("INVALID_REQUEST", `Unknown AI provider '${id}'`);
     return provider;
