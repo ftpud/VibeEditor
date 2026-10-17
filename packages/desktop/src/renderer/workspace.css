@@ -744,3 +744,8 @@ button.danger:hover:not(:disabled) { background: var(--danger-soft); border-colo
 .install-panel .install-item-protocol .segmented-control button:hover:not([aria-pressed="true"]):not(:disabled) { border-color: transparent; background: var(--surface-hover); color: var(--text-primary); }
 .install-item-protocol > small.install-item-warning { color: var(--warning); }
 .harness-workflow-settings .harness-settings-fields label small.harness-setting-description, .harness-settings-fields label small.harness-setting-description { display: block; grid-column: auto; margin-top: 2px; color: var(--text-muted); font-size: .7692rem; line-height: 1.4; font-weight: 400; }
+.ai-composer-actions.with-skills > button:first-of-type { margin-right: 0; }
+.ai-composer-actions.with-skills > .skill-chat-controls { margin-right: auto; }
+.ai-composer-actions .skill-chat-controls .skill-chat-trigger { flex: 0 0 auto; width: auto; height: 31px; padding: 0 9px; background: var(--surface-hover); color: var(--text-primary); border: 0; }
+.ai-composer-actions .skill-chat-controls .skill-chat-picker button:last-child { width: auto; height: auto; background: var(--surface-panel); color: var(--text-primary); border: 1px solid var(--border-strong); }
+.ai-composer-actions .skill-chat-picker { top: auto; bottom: calc(100% + 5px); left: 0; right: auto; }
