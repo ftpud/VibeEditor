@@ -951,12 +951,14 @@ export function App() {
         markUnreadTerminalOutput(event.payload.terminalId);
         return;
       }
-      if (event.type === "java.semantic.changed") { refreshJavaSemanticRef.current?.(); return; }
-      if (event.type === "java.output") {
+      if (event.type === "language.semantic.changed") { if (event.payload.language === "java") refreshJavaSemanticRef.current?.(); return; }
+      if (event.type === "language.output") {
+        if (event.payload.language !== "java") return;
         setJavaLog((current) => (current + event.payload.data).slice(-1_000_000));
         return;
       }
-      if (event.type === "java.exit") {
+      if (event.type === "language.exit") {
+        if (event.payload.language !== "java") return;
         setJavaRunning(false);
         setJavaLog((current) => `${current}\nProcess exited${event.payload.exitCode === null ? "" : ` with code ${event.payload.exitCode}`}${event.payload.signal ? ` (${event.payload.signal})` : ""}.\n`);
         return;

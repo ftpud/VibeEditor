@@ -557,10 +557,9 @@ export async function createServer(host: string, port: number, workspacePath: st
         debugState: (state) => send({ type: "language.debug.state", payload: { ...state, rootId: ownerRootId, language: "java" } }),
         semanticChanged: () => send({ type: "language.semantic.changed", payload: { rootId: ownerRootId, language: "java" } })
       }, undefined, {
-        process: (event) => send(event.type === "output" ? { type: "java.output", payload: { rootId: ownerRootId, data: event.data } }
-          : event.type === "debug" ? { type: "java.debug.state", payload: { ...event.state, rootId: ownerRootId } }
-          : { type: "java.exit", payload: { rootId: ownerRootId, exitCode: event.exitCode, signal: event.signal } }),
-        semanticChanged: () => send({ type: "java.semantic.changed", payload: { rootId: ownerRootId } })
+        // Debug state is the only legacy event Desktop still consumes: it needs Java's class and method fields.
+        process: (event) => { if (event.type === "debug") send({ type: "java.debug.state", payload: { ...event.state, rootId: ownerRootId } }); },
+        semanticChanged: () => undefined
       }));
       languageRegistry.register(NODE_DESCRIPTOR, (workspace) => new NodeLanguageService(workspace, {
         output: (data, stream) => send({ type: "language.output", payload: { rootId: ownerRootId, language: "node", data, stream } }),
