@@ -152,6 +152,16 @@ Legacy stack execution also supplies {{iteration}}; prefer {{input}} for new flo
 Shell command fields are shell source, not prompt templates. Scripts receive input
 on stdin and in VIBE_WORKFLOW_INPUT; Run App receives VIBE_WORKFLOW_INPUT.
 
+## Incremental reads (fetch)
+
+workflow_use_block action:"fetch" returns only data the calling block has not yet
+fetched, without starting or changing the target. It works for meeting (same as diff),
+ai/chatbox (new messages and activity), run_app (new log text; requires the tail action),
+terminal_control (new terminal text; requires terminal_id), task_controls (status only
+when changed) and blocks with retained output (text, script, markdown, prompts, timer).
+Results may carry hasMore (fetch again), gap (older unread data rolled off) or unchanged.
+Skill blocks do not support fetch; load them normally.
+
 ## Block catalogue
 
 ### ai — AI Agent
@@ -214,6 +224,7 @@ starting new agent turns. Participants use workflow_use_block:
 - action:"diff", lines:20: read messages after this participant's last read.
   Optional after is an explicit nonnegative sequence number for replay/pagination.
   Omitted action defaults to diff. lines is 1–50, default 20.
+- action:"fetch": alias of diff, the common incremental read for every data block.
 - action:"wait": return unread messages immediately, or wait for the next publish
   without polling. Uses the same lines/after options and saved cursor as diff.
   timeout_seconds overrides the connection timeout (default 300 seconds, maximum

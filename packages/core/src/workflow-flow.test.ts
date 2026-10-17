@@ -54,6 +54,21 @@ describe("typed workflows", () => {
     expect(result.operations?.some((operation) => (operation.input as { args?: { action?: string } })?.args?.action === "wait")).toBe(false);
   });
 
+  it("fetch returns only retained output and meeting messages the caller has not yet fetched", async () => {
+    const { runner, definition, finished } = await setup([block("chat", "chatbox"), block("note", "text", { prompt: "first" }), block("room", "meeting", { prompt: "" })], [edge("chat", "note", "use"), edge("chat", "room", "use")]);
+    const run = await runner.start(definition.id, "go", async (current, _input, runtime) => {
+      const use = (id: string, args: Record<string, unknown> = {}) => runner.flowTool(runtime.runId, current.id, "workflow_use_block", { block_id: id, action: "fetch", ...args });
+      await runner.flowTool(runtime.runId, current.id, "workflow_use_block", { block_id: "room", action: "publish", message: "Hello" });
+      expect(await use("room")).toMatchObject({ meeting: { messages: [{ text: "Hello" }] } });
+      expect(await use("room")).toMatchObject({ meeting: { messages: [] } });
+      await expect(use("note", { lines: 3 })).rejects.toThrow("fetch accepts only");
+      await expect(use("note", { input: "x" })).rejects.toThrow("fetch accepts only");
+      return session("Done");
+    });
+    expect((await finished()).error).toBeUndefined();
+    expect(run.id).toBeTruthy();
+  });
+
   it("waits for meeting updates without holding an execution slot or losing unread messages", async () => {
     const { runner, definition, finished } = await setup([
       block("lead", "ai"), block("reader", "ai"), block("publisher", "chatbox"), block("room", "meeting", { prompt: "" })

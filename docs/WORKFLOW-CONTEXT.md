@@ -107,3 +107,31 @@ characters and 16,000 serialized characters including author metadata.
 The Meeting run panel shows the transcript with author, model and timestamps.
 The latest 1,000 messages are retained; `historyTruncated` indicates expired unread
 history. Meetings and read positions are isolated between workflow runs.
+
+## Blocks and their actions
+
+Actions available to a calling AI Agent or Chatbox through `workflow_use_block`.
+`fetch` is the incremental read: it returns only data that caller has not yet
+fetched from the block, never starts or changes the block, and is not recorded in
+the operation journal. Each caller keeps its own position, so one caller's fetch
+does not consume another's. Positions are kept in Core memory for the caller's
+session; after a Core restart or a new session the data may be delivered once more.
+Fetch accepts only `block_id` (plus `terminal_id` for Terminal Control). A result
+with `hasMore: true` has further unfetched data (fetch again); `gap: true` means
+older unfetched data has already rolled off the retained buffer; `unchanged: true`
+means nothing new.
+
+| Block | Actions | `fetch` returns |
+| --- | --- | --- |
+| AI Agent (`ai`), Chatbox (`chatbox`) | omitted (run and wait), `start`, `status`, `tail`, `steer`, `fetch` | messages and activity not yet delivered to this caller (changed messages are re-sent) |
+| Meeting (`meeting`) | `publish`, `tail`, `diff` (default), `wait`, `fetch` | unread messages from the caller's saved cursor (same as `diff`) |
+| Run App (`run_app`) | `start`, `status`, `kill`, `tail` (only those configured), `fetch` | log text since the last fetch (needs `tail` allowed) |
+| Terminal Control (`terminal_control`) | `list`, `open`, `open_and_run`, `read`, `write`, `fetch` | terminal text since the last fetch (needs `terminal_id`) |
+| Task controls (`task_controls`) | `create`, `create_and_start`, `status`, `prompt`, `set_status`, `set_commit_message`, `update_commit_message`, `fetch` | task status, only when changed since the last fetch (optional `task_id`) |
+| Text, Markdown, Script, Timer, User Prompt, Yes/No Prompt | run (omit action); `fetch` | retained output not yet fetched; Timer and prompts run when used without `fetch` |
+| Skill (`skill`) | load (omit action) | not supported; skills load through policy checks |
+
+Not callable by agents: Start button/input, and the legacy Prompt, Task, Review
+and Verification blocks. The read-only companions `workflow_block_output` (paged
+retained output of any non-skill block), `workflow_block_messages` (AI/Chatbox
+snapshot) and `workflow_connections` (list tools) are unchanged.

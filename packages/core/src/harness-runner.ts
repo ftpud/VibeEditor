@@ -6,6 +6,7 @@ import { CoreError } from "./errors.js";
 import { harnessExecutionEdges, isHarnessFlow, HarnessSchemaError, parseHarnessData, validateHarness, renderHarnessPrompt } from "./harness-graph.js";
 import type { HarnessStore } from "./harnesses.js";
 import type { AiUsage } from "@remote-ide/acp";
+import { takeUnfetchedText, rememberFetch, type FetchCursors } from "./workflow-fetch.js";
 import { contextHash, contextPreview, contextResult, contextOutputs, WORKFLOW_CONTEXT_CHARS } from "./workflow-context.js";
 
 type Dispatch = (block: HarnessBlock, prompt: string, context: { runId: string; blockId: string; attemptId: string; iteration: number; instructions?: string; skillAgent?: HarnessBlock["agent"] | null; started(workspace: string): Promise<void>; activity(session: AiSession, waitingUntil?: string): Promise<void>; assertActive(): void }) => Promise<AiSession>;
@@ -28,7 +29,7 @@ export class HarnessRunner {
   private readonly meetingUpdates = new MeetingUpdates();
   private readonly flowInvocations = new Map<string, (id: string, input: string, ancestors?: string[]) => Promise<string>>();
   private readonly appToolCalls = new Map<string, Promise<unknown>>();
-  private readonly contextReads = new Map<string, { sessionId?: string; outputs: Map<string, string>; reads: Map<string, string> }>();
+  private readonly contextReads = new Map<string, { sessionId?: string; outputs: Map<string, string>; reads: Map<string, string>; fetched: FetchCursors }>();
   private readonly agentStarts = new Set<string>();
   private readonly resumingChats = new Set<string>();
   // Steering adds user messages inside a turn; it must not move the transcript boundary.
@@ -781,8 +782,8 @@ export class HarnessRunner {
       await this.update(execution.run);
       return result;
     };
-    const meetingRead = name === "workflow_use_block" && execution.blocks.some((block) => block.id === args.block_id && block.type === "meeting") && ["tail", "diff", "wait"].includes(String(args.action ?? "diff"));
-    if (meetingRead || name === "workflow_connections" || name === "workflow_block_output" || name === "workflow_block_messages" || (name === "workflow_use_block" && ["status", "tail"].includes(String(args.action)) && ["ai", "chatbox"].includes(execution.blocks.find((item) => item.id === args.block_id)?.type ?? ""))) return project(await this.callFlowTool(runId, blockId, name, args));
+    const meetingRead = name === "workflow_use_block" && execution.blocks.some((block) => block.id === args.block_id && block.type === "meeting") && ["tail", "diff", "fetch", "wait"].includes(String(args.action ?? "diff"));
+    if (meetingRead || (name === "workflow_use_block" && args.action === "fetch") || name === "workflow_connections" || name === "workflow_block_output" || name === "workflow_block_messages" || (name === "workflow_use_block" && ["status", "tail"].includes(String(args.action)) && ["ai", "chatbox"].includes(execution.blocks.find((item) => item.id === args.block_id)?.type ?? ""))) return project(await this.callFlowTool(runId, blockId, name, args));
     const { run } = this.activeExecution(runId);
     const operation = await this.beginOperation(run, "tool_command", `flow-tool:${crypto.randomUUID()}`, blockId, { name, args });
     try {
@@ -797,7 +798,7 @@ export class HarnessRunner {
     const key = `${runId}:${blockId}`;
     let context = this.contextReads.get(key);
     if (!context || context.sessionId !== state.sessionId) {
-      context = { sessionId: state.sessionId, outputs: new Map(), reads: new Map() };
+      context = { sessionId: state.sessionId, outputs: new Map(), reads: new Map(), fetched: new Map() };
       if (this.contextReads.size >= 512) this.contextReads.delete(this.contextReads.keys().next().value!);
       this.contextReads.set(key, context);
     }
@@ -807,6 +808,8 @@ export class HarnessRunner {
   private projectFlowResult(runId: string, blockId: string, name: string, args: Record<string, unknown>, value: unknown): unknown {
     const target = this.activeExecution(runId).blocks.find((item) => item.id === args.block_id);
     if (target?.type === "meeting") return contextResult(value);
+    // Fetch results are already limited to data this caller has not received.
+    if (args.action === "fetch") return contextResult(value);
     const context = this.callerContext(runId, blockId);
     const key = JSON.stringify([name, args.block_id, args.action, args.count, args.lines, args.offset, args.limit]);
     const hash = contextHash(value);
@@ -844,6 +847,11 @@ export class HarnessRunner {
     }
     if (name !== "workflow_use_block" && name !== "workflow_block_output" && name !== "workflow_block_messages") throw new Error("Unknown flow tool");
     const edge = edges.find((edge) => (edge.type === "use" || execution.blocks.find((block) => block.id === blockId)?.type === "chatbox") && edge.to === args.block_id);
+    if (name === "workflow_use_block" && args.action === "fetch" && edge) {
+      const fetchTarget = execution.blocks.find((block) => block.id === edge.to);
+      if (fetchTarget?.type === "meeting") args = { ...args, action: "diff" };
+      else if (fetchTarget) return this.fetchUnread(runId, blockId, fetchTarget, args);
+    }
     const textInput = args.input ?? "";
     if (!edge || typeof textInput !== "string" || textInput.length > 100_000) throw new Error("Use a connected block ID and a text input of at most 100000 characters");
     const target = execution.blocks.find((block) => block.id === edge.to)!;
@@ -1000,6 +1008,72 @@ export class HarnessRunner {
     return waitForResult(result);
   }
 
+  /** Fetch returns only data this caller has not yet received; it never starts or changes a block. */
+  private async fetchUnread(runId: string, blockId: string, target: HarnessBlock, args: Record<string, unknown>): Promise<unknown> {
+    const execution = this.activeExecution(runId);
+    if (args.lines !== undefined || args.after !== undefined || args.input !== undefined && args.input !== "") throw new Error("fetch accepts only block_id and, for Terminal Control, terminal_id; it returns data not yet fetched");
+    const context = this.callerContext(runId, blockId);
+    const cursors = context.fetched;
+    const unfetchedText = (key: string, text: string) => {
+      const part = takeUnfetchedText(cursors, `${target.id}:${key}`, text);
+      return { output: part.text, ...(part.hasMore ? { hasMore: true } : {}), ...(part.gap ? { gap: true } : {}), ...(!part.text ? { unchanged: true } : {}) };
+    };
+    const forward = (action: string, extra: Record<string, unknown> = {}) => this.callFlowTool(runId, blockId, "workflow_use_block", { ...args, action, ...extra });
+    if (["ai", "chatbox"].includes(target.type)) {
+      this.assertActive(runId);
+      const edge = execution.edges.find((item) => item.from === blockId && item.to === target.id && (item.type === "use" || execution.blocks.find((block) => block.id === blockId)?.type === "chatbox"));
+      if (!edge) throw new Error("Use a connected block ID");
+      await this.traceConnection(execution.run, edge, "forward", "succeeded", 0);
+      const state = execution.run.blocks.find((block) => block.blockId === target.id)!;
+      const messages = state.chatMessages ?? (state.output ? [{ id: "output", role: "assistant", text: state.output, timestamp: state.completedAt ?? state.startedAt ?? "" }] : []);
+      let size = 0;
+      let hasMore = false;
+      const fresh: { id: string; hash: string; item: Record<string, unknown> }[] = [];
+      const take = (kind: string, items: readonly { id: string; text: string }[]) => {
+        for (const item of items) {
+          const hash = contextHash(item);
+          if (cursors.get(`${target.id}:${kind}:${item.id}`) === hash) continue;
+          const shown = kind === "message" ? { ...item, text: item.text.slice(-8000), ...(item.text.length > 8000 ? { truncated: true } : {}) } : item;
+          const length = JSON.stringify(shown).length;
+          if (size + length > 16000 && size > 0) { hasMore = true; return false; }
+          size += length;
+          fresh.push({ id: `${kind}:${item.id}`, hash, item: shown });
+        }
+        return true;
+      };
+      take("message", messages) && take("activity", state.agentActivity ?? []);
+      for (const entry of fresh) rememberFetch(cursors, `${target.id}:${entry.id}`, entry.hash);
+      const result = { blockId: target.id, block_status: state.status, messages: fresh.filter((entry) => entry.id.startsWith("message:")).map((entry) => entry.item), activity: fresh.filter((entry) => entry.id.startsWith("activity:")).map((entry) => entry.item), ...(hasMore ? { hasMore: true } : {}), ...(state.error ? { error: state.error } : {}) };
+      await this.traceConnection(execution.run, edge, "return", "succeeded", JSON.stringify(result).length);
+      return result;
+    }
+    if (target.type === "run_app") {
+      const result = await forward("tail", { lines: 10_000 }) as { blockId: string; app: { output?: string } & Record<string, unknown> };
+      return { ...result, app: { ...result.app, ...unfetchedText("app", result.app.output ?? "") } };
+    }
+    if (target.type === "terminal_control") {
+      if (typeof args.terminal_id !== "string") throw new Error("terminal_id is required to fetch Terminal Control output; use action list to find it");
+      const result = await forward("read", { lines: 10_000 }) as { blockId: string; terminal: { output?: string } & Record<string, unknown> };
+      return { ...result, terminal: { ...result.terminal, ...unfetchedText(`terminal:${args.terminal_id}`, result.terminal.output ?? ""), truncated: undefined } };
+    }
+    if (target.type === "task_controls") {
+      const result = await forward("status") as { blockId: string; task_controls: unknown };
+      const hash = contextHash(result.task_controls);
+      const key = `${target.id}:task_controls:${typeof args.task_id === "string" ? args.task_id : ""}`;
+      if (cursors.get(key) === hash) return { blockId: target.id, unchanged: true };
+      rememberFetch(cursors, key, hash);
+      return result;
+    }
+    if (target.type === "skill") throw new Error("Load skills through workflow_use_block so current policy is checked");
+    this.assertActive(runId);
+    const edge = execution.edges.find((item) => item.from === blockId && item.to === target.id && (item.type === "use" || execution.blocks.find((block) => block.id === blockId)?.type === "chatbox"));
+    if (!edge) throw new Error("Use a connected block ID");
+    const output = execution.run.blocks.find((item) => item.blockId === target.id)?.output ?? "";
+    await this.traceConnection(execution.run, edge, "forward", "succeeded", 0);
+    await this.traceConnection(execution.run, edge, "return", "succeeded", output.length);
+    return { blockId: target.id, ...unfetchedText("output", output) };
+  }
+
   private flowBlockMessages(run: HarnessRun, blockId: string, count: number): Record<string, unknown> {
     const state = run.blocks.find((block) => block.blockId === blockId)!;
     const messages = state.chatMessages ?? (state.output ? [{ role: "assistant", text: state.output }] : []);
@@ -1060,7 +1134,7 @@ export class HarnessRunner {
           const tools = edges.filter((edge) => edge.from === id && (edge.type === "use" || block.type === "chatbox")).map((edge) => ({ block_id: edge.to, name: blocks.find((item) => item.id === edge.to)?.label, type: blocks.find((item) => item.id === edge.to)?.type, description: workflowBlockDescription(blocks.find((item) => item.id === edge.to)), seconds: blocks.find((item) => item.id === edge.to)?.seconds, app: blocks.find((item) => item.id === edge.to)?.app, task_controls: taskControlsMetadata(blocks.find((item) => item.id === edge.to), execution.defaultProvider), timeout_seconds: (edge.timeoutMs ?? 300_000) / 1000 }));
           const paths = block.type === "chatbox" ? [] : edges.filter((edge) => edge.from === id && edge.type === "path").map((edge) => edge.label);
           const inputTemplate = /\{\{\s*input\s*\}\}/.test(block.prompt) ? block.prompt : `${block.prompt}\n\nInput:\n{{input}}`;
-          const instructions = `Workflow context transfers are bounded and unchanged results may be omitted. Keep delegation requests and reports concise; send new facts rather than forwarding earlier reports. Use workflow_block_output with block_id, offset, and limit (at most 8000) to inspect retained output in pages when a preview is truncated. Connected tools: ${JSON.stringify(tools)}. For connected AI Agents and Chatboxes, action start launches input in the background immediately, status checks state, tail reads recent messages (lines 1–50), and steer sends input to the running session without waiting for completion. Start different connected blocks independently; do not start an already running block. Call workflow_use_block with block_id and input to use one; timeout_seconds optionally overrides its connection timeout. On a timed_out result the child keeps working. Read the returned messages and activity, then call workflow_block_messages with block_id and optional count (default 6, maximum 50) to check progress without starting another turn. For Run App blocks, pass action (start, status, kill, or tail) from the configured allowed actions. Status and tail do not need input; tail optionally accepts lines (1–10000). Read the structured app result: app.status is process status and app.output is log text for tail. For example: workflow_use_block({"block_id":"APP_BLOCK_ID","action":"status"}) or workflow_use_block({"block_id":"APP_BLOCK_ID","action":"tail","lines":100}). Terminal Control blocks are only for long-running apps and services. Do not spawn agents in terminals. List terminals first and reuse an existing terminal whenever possible; avoid spawning new terminals unnecessarily. They list, open, open_and_run, read, and write terminals in the bound task workspace. Pass action, terminal_id for read/write, name for open/open_and_run, command for open_and_run (or input; a newline is appended automatically), data for write (raw text; include a newline to execute a command), and optional lines for read. open_and_run starts a named terminal and runs the command in one call, returning immediately with its terminalId. Read structured results in terminal. Task controls blocks manage task worktrees using their designed provider/model/reasoning. Call workflow_use_block with action create (branch required), create_and_start (input is the prompt; branch optional), status (task_id optional), prompt (task_id and input required), set_status (task_id and status active or finished required), set_commit_message (task_id and message or input; sets the commit-message draft), or update_commit_message (task_id and message or input; rewrites the latest unpushed commit message without changing contents). Pass idempotency_key for create and prompt operations and reuse it only when retrying the same operation. Read structured results in task_controls. Skill blocks provide reusable instructions. Choose skills by their descriptions; call workflow_use_block with the skill block_id to load its instructions before applying them in your own session. For linked skills, read the returned skill.content and resolve supporting files relative to skill.baseDirectory. Reuse loaded instructions for this workflow run. User Prompt and Yes/No Prompt blocks wait for a human answer in the workflow UI and return that answer to you. Their wait does not expire with the connection timeout. Timer blocks arm immediately and return without waiting, so you can continue your work. When a Timer fires, its follow connections receive the input you supplied to it. Reusing a waiting Timer replaces its countdown. Each AI block keeps its own context. Available paths: ${JSON.stringify(paths)}. ${paths.length ? "Call workflow_choose_path before finishing to choose one path." : ""}`;
+          const instructions = `Workflow context transfers are bounded and unchanged results may be omitted. Keep delegation requests and reports concise; send new facts rather than forwarding earlier reports. Use workflow_block_output with block_id, offset, and limit (at most 8000) to inspect retained output in pages when a preview is truncated. Connected tools: ${JSON.stringify(tools)}. For connected AI Agents and Chatboxes, action start launches input in the background immediately, status checks state, tail reads recent messages (lines 1–50), and steer sends input to the running session without waiting for completion. To read only what you have not yet seen from any connected data block, call workflow_use_block with action "fetch" (Terminal Control also needs terminal_id); repeat while hasMore is true. Start different connected blocks independently; do not start an already running block. Call workflow_use_block with block_id and input to use one; timeout_seconds optionally overrides its connection timeout. On a timed_out result the child keeps working. Read the returned messages and activity, then call workflow_block_messages with block_id and optional count (default 6, maximum 50) to check progress without starting another turn. For Run App blocks, pass action (start, status, kill, or tail) from the configured allowed actions. Status and tail do not need input; tail optionally accepts lines (1–10000). Read the structured app result: app.status is process status and app.output is log text for tail. For example: workflow_use_block({"block_id":"APP_BLOCK_ID","action":"status"}) or workflow_use_block({"block_id":"APP_BLOCK_ID","action":"tail","lines":100}). Terminal Control blocks are only for long-running apps and services. Do not spawn agents in terminals. List terminals first and reuse an existing terminal whenever possible; avoid spawning new terminals unnecessarily. They list, open, open_and_run, read, and write terminals in the bound task workspace. Pass action, terminal_id for read/write, name for open/open_and_run, command for open_and_run (or input; a newline is appended automatically), data for write (raw text; include a newline to execute a command), and optional lines for read. open_and_run starts a named terminal and runs the command in one call, returning immediately with its terminalId. Read structured results in terminal. Task controls blocks manage task worktrees using their designed provider/model/reasoning. Call workflow_use_block with action create (branch required), create_and_start (input is the prompt; branch optional), status (task_id optional), prompt (task_id and input required), set_status (task_id and status active or finished required), set_commit_message (task_id and message or input; sets the commit-message draft), or update_commit_message (task_id and message or input; rewrites the latest unpushed commit message without changing contents). Pass idempotency_key for create and prompt operations and reuse it only when retrying the same operation. Read structured results in task_controls. Skill blocks provide reusable instructions. Choose skills by their descriptions; call workflow_use_block with the skill block_id to load its instructions before applying them in your own session. For linked skills, read the returned skill.content and resolve supporting files relative to skill.baseDirectory. Reuse loaded instructions for this workflow run. User Prompt and Yes/No Prompt blocks wait for a human answer in the workflow UI and return that answer to you. Their wait does not expire with the connection timeout. Timer blocks arm immediately and return without waiting, so you can continue your work. When a Timer fires, its follow connections receive the input you supplied to it. Reusing a waiting Timer replaces its countdown. Each AI block keeps its own context. Available paths: ${JSON.stringify(paths)}. ${paths.length ? "Call workflow_choose_path before finishing to choose one path." : ""}`;
           const reuseSession = Boolean(state.workspace && state.sessionId && block.type !== "review");
           // A Chatbox's configured prompt is durable session guidance, including
           // templates. User turns must never reinsert that guidance as a message.
