@@ -49,8 +49,8 @@ requests in `protocol/src/index.ts` (~96 lines), `server.ts` (~52 refs),
 `command-registry.ts`, `debug-editor.tsx`, `DebugVariable.tsx`.
 
 ### 2.1 Map the coupling
-- [ ] List every Java reference in `server.ts`, `workspace-state.ts`, `tools.ts`, `websocket-output.ts` and the renderer; classify each as: language-specific, generic-but-named-Java, or genuinely shared.
-- [ ] Write the result into a short design note (`docs/LANGUAGES.md`) with a sizing estimate.
+- [x] List every Java reference in `server.ts`, `workspace-state.ts`, `tools.ts`, `websocket-output.ts` and the renderer; classify each as: language-specific, generic-but-named-Java, or genuinely shared.
+- [x] Write the result into a short design note (`docs/LANGUAGES.md`) with a sizing estimate.
 
 ### 2.2 Define the language-service contract
 - [ ] Core interface `LanguageService` covering: project detection/loading, project tree, source roots, workspace symbols, tool checks, configuration read/save.
