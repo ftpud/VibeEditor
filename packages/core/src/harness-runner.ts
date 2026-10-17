@@ -850,8 +850,8 @@ export class HarnessRunner {
     // Calls that answer immediately never reach the traced invocation below;
     // pulse the connection both ways so every use of it is visible.
     if (name !== "workflow_use_block" || target.type === "meeting" || (["ai", "chatbox"].includes(target.type) && ["status", "tail", "steer"].includes(String(args.action)))) {
-      await this.traceConnection(execution.run, edge, "forward", "succeeded");
-      await this.traceConnection(execution.run, edge, "return", "succeeded");
+      await this.traceConnection(execution.run, edge, "forward", "succeeded", textInput.length);
+      await this.traceConnection(execution.run, edge, "return", "succeeded", (execution.run.blocks.find((item) => item.blockId === target.id)?.output ?? "").length);
     }
     if (name === "workflow_block_output") {
       if (target.type === "skill") throw new Error("Load skills through workflow_use_block so current policy is checked");
@@ -949,13 +949,13 @@ export class HarnessRunner {
     const invoke = this.flowInvocations.get(runId);
     if (!invoke) throw new Error("Flow is unavailable");
     const call = () => execution.scheduler.suspend(blockId, async () => {
-      const transfer = await this.traceConnection(execution.run, edge, "forward", "active");
+      const transfer = await this.traceConnection(execution.run, edge, "forward", "active", textInput.length);
       try {
         const appTarget = execution.blocks.find((block) => block.id === edge.to);
         const input = appTarget?.type === "terminal_control" && args.action !== undefined ? JSON.stringify({ action: args.action, terminal_id: args.terminal_id, name: args.name, command: args.command ?? (args.action === "open_and_run" ? textInput : undefined), data: args.data ?? textInput, lines: args.lines }) : appTarget?.type === "task_controls" && (args.action !== undefined || ["task_id", "branch", "status", "message", "idempotency_key"].some((key) => args[key] !== undefined)) ? JSON.stringify({ action: args.action, prompt: textInput, task_id: args.task_id, branch: args.branch, status: args.status, message: args.message === undefined ? textInput : args.message, idempotency_key: args.idempotency_key }) : appTarget?.type === "run_app" && args.action !== undefined ? JSON.stringify({ action: args.action, input: textInput, ...(args.lines !== undefined ? { lines: args.lines } : {}) }) : textInput;
         const output = await invoke(edge.to, input, [blockId]);
         transfer.status = "succeeded"; transfer.completedAt = new Date().toISOString();
-        await this.traceConnection(execution.run, edge, "return", "succeeded");
+        await this.traceConnection(execution.run, edge, "return", "succeeded", output.length);
         const target = execution.blocks.find((block) => block.id === edge.to);
         const timer = execution.run.blocks.find((block) => block.blockId === edge.to);
         const app = target?.type === "run_app" ? JSON.parse(output) : undefined;
@@ -1013,10 +1013,10 @@ export class HarnessRunner {
     };
   }
 
-  private async traceConnection(run: HarnessRun, edge: HarnessEdge, direction: HarnessConnectionTrace["direction"], status: HarnessConnectionTrace["status"]): Promise<HarnessConnectionTrace> {
+  private async traceConnection(run: HarnessRun, edge: HarnessEdge, direction: HarnessConnectionTrace["direction"], status: HarnessConnectionTrace["status"], chars?: number): Promise<HarnessConnectionTrace> {
     this.assertActive(run.id);
     const now = new Date().toISOString();
-    const trace: HarnessConnectionTrace = { id: crypto.randomUUID(), edgeId: edge.id, direction, status, startedAt: now, ...(status !== "active" ? { completedAt: now } : {}) };
+    const trace: HarnessConnectionTrace = { id: crypto.randomUUID(), edgeId: edge.id, direction, status, startedAt: now, ...(chars !== undefined ? { chars } : {}), ...(status !== "active" ? { completedAt: now } : {}) };
     run.connectionTraces = [...(run.connectionTraces ?? []), trace].filter((trace, index, traces) => trace.status === "active" || index >= traces.length - 128);
     await this.update(run); return trace;
   }
@@ -1114,7 +1114,7 @@ export class HarnessRunner {
         // A question used as a tool returns its answer to the waiting caller.
         // A drawn return connection must not start a second turn in that active session.
         if ((block.type === "user_prompt" || block.type === "yes_no_prompt") && edge.to === ancestors.at(-1) && busy.has(edge.to)) {
-          await this.traceConnection(run, edge, "forward", "succeeded");
+          await this.traceConnection(run, edge, "forward", "succeeded", output.length);
           continue;
         }
         if (ancestors.includes(edge.to) || edge.to === id) {
@@ -1123,7 +1123,7 @@ export class HarnessRunner {
           if (count > limit) throw new CoreError("INVALID_REQUEST", `Workflow loop '${edge.label ?? edge.id}' reached its limit of ${limit} iterations`);
           execution.loopInvocations.set(edge.id, count);
         }
-        await this.traceConnection(run, edge, "forward", "succeeded");
+        await this.traceConnection(run, edge, "forward", "succeeded", output.length);
         await invoke(edge.to, output, [...ancestors, id]);
       }
       return output;
@@ -1152,7 +1152,7 @@ export class HarnessRunner {
       state.structuredOutput = parseHarnessData(input, block.outputSchema, `${block.label} output`);
       state.output = input.slice(-200_000); execution.outputs.set(id, input); state.status = "succeeded"; state.completedAt = new Date().toISOString(); state.waitingUntil = undefined; state.pauseId = undefined;
       this.log(state, "response", input); this.log(state, "lifecycle", "Timer fired; starting followers"); run.status = this.runActivityStatus(run); await this.update(run);
-      for (const edge of edges.filter((edge) => edge.from === id && (edge.type === "follow" || !edge.type))) { await this.traceConnection(run, edge, "forward", "succeeded"); await invoke(edge.to, input); }
+      for (const edge of edges.filter((edge) => edge.from === id && (edge.type === "follow" || !edge.type))) { await this.traceConnection(run, edge, "forward", "succeeded", input.length); await invoke(edge.to, input); }
     }
     // Close admission synchronously with the drain, before execute records the
     // terminal outcome on its next microtask. No late turn may revive this flow.

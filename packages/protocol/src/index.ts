@@ -240,7 +240,7 @@ export type HarnessBlockRun = { blockId: string; activeToolCalls?: HarnessActive
 export type HarnessChildTask = { taskId: string; blockId: string; provider: AiProvider; workspace: string; recoveryAttempts: number; recoveryError?: string; failureReason?: HarnessFailureReason; retryAt?: string; retryStartedAt?: string };
 export type HarnessFeatureStatus = "planned" | "dispatched" | "completed" | "blocked";
 export type HarnessFeature = { id: string; prompt: string; prerequisites: string[]; status: HarnessFeatureStatus; taskId?: string; commit?: string; blockedReason?: string };
-export type HarnessConnectionTrace = { id: string; edgeId: string; direction: "forward" | "return"; status: "active" | "succeeded" | "failed"; startedAt: string; completedAt?: string };
+export type HarnessConnectionTrace = { id: string; edgeId: string; direction: "forward" | "return"; status: "active" | "succeeded" | "failed"; startedAt: string; completedAt?: string; chars?: number };
 /** The request envelope supplies rootId; an empty target explicitly selects that root. */
 export type HarnessTaskTarget = { taskId?: string };
 /** Core resolves this once. Continuations and reruns retain it regardless of selection. */

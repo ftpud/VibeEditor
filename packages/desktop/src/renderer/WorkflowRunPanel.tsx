@@ -3,7 +3,7 @@ import { forwardRef, useImperativeHandle, useEffect, useId, useMemo, useRef, use
 import { ArrowLeftRight, ArrowUpDown, Play, Square, Workflow, RotateCcw, ChevronDown, ChevronUp, Maximize2, PanelTop, Minimize2 } from "lucide-react";
 import type { HarnessAppState, HarnessBlock, HarnessDefinition, HarnessRun } from "@remote-ide/protocol";
 import { BlockRunDetails, PauseResolution, WorkflowMessage, type HarnessPanelProps } from "./HarnessPanel";
-import { useWorkflowTraces } from "./workflow-tracing";
+import { transferDashStyle, useWorkflowTraces } from "./workflow-tracing";
 
 type Props = { onOpenWorkflow?(workflow: HarnessDefinition): void; editorView?: boolean } & Partial<Pick<HarnessPanelProps, "providers">> & Pick<HarnessPanelProps, "defaultProvider" | "onLoadModels" | "harnesses" | "runs" | "diagnostics" | "onReadRun" | "onRun" | "onChat" | "onValidate" | "onCancelRun" | "onKillApp" | "onOpenAppTerminal" | "onSteerChat" | "onAutopilot" | "onReadApp" | "onResolvePermission" | "onAnswerQuestion" | "onResumePause" | "onRetryPause" | "onCancelPause" | "onError">;
 const activeStatuses = new Set(["queued", "running", "waiting", "awaiting_permission", "awaiting_user_input", "waiting_timer", "retry_scheduled"]);
@@ -210,7 +210,7 @@ const CompactWorkflowPreview = forwardRef<WorkflowPreviewHandle, { definition: H
       if (!from || !to) return null;
       const x = from.position.x + 120, y = from.position.y + 12, tx = to.position.x, ty = to.position.y + 12;
       const path = edge.loop || tx <= x ? `M ${x} ${y} C ${x + 24} ${y + 32}, ${tx - 24} ${ty + 32}, ${tx} ${ty}` : `M ${x} ${y} C ${(x + tx) / 2} ${y}, ${(x + tx) / 2} ${ty}, ${tx} ${ty}`;
-      return <g key={edge.id}><path className={`workflow-compact-edge ${edge.type ?? "follow"}`} d={path}><title>{from.label} → {to.label} · {edge.type ?? "follow"}{edge.label ? `: ${edge.label}` : ""}</title></path>{traces.filter((trace) => trace.edgeId === edge.id).map((trace) => <path key={trace.id} className={`harness-transfer ${edge.type ?? "follow"} ${trace.direction} ${trace.status}`} d={path} pathLength={100} style={{ animationDelay: `${trace.delayMs}ms` }} />)}</g>;
+      return <g key={edge.id}><path className={`workflow-compact-edge ${edge.type ?? "follow"}`} d={path}><title>{from.label} → {to.label} · {edge.type ?? "follow"}{edge.label ? `: ${edge.label}` : ""}</title></path>{traces.filter((trace) => trace.edgeId === edge.id).map((trace) => <path key={trace.id} className={`harness-transfer ${edge.type ?? "follow"} ${trace.direction} ${trace.status}`} d={path} pathLength={100} style={transferDashStyle(trace, trace.delayMs)} />)}</g>;
     })}
     {blocks.map((block) => {
       const state = run?.blocks.find((item) => item.blockId === block.id);

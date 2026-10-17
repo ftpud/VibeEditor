@@ -1352,7 +1352,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 @keyframes harness-transfer-forward { 0% { stroke-dashoffset: 0; opacity: 0; } 12%, 85% { opacity: 1; } 100% { stroke-dashoffset: -100; opacity: 0; } }
 @keyframes harness-transfer-return { 0% { stroke-dashoffset: -100; opacity: 0; } 12%, 85% { opacity: 1; } 100% { stroke-dashoffset: 0; opacity: 0; } }
 @keyframes harness-port-pulse { 0%, 100% { box-shadow: 0 0 0 2px rgba(139,194,255,.15); } 50% { box-shadow: 0 0 0 5px rgba(139,194,255,.4); } }
-@media (prefers-reduced-motion: reduce) { .harness-transfer { animation: none; opacity: .8; stroke-dasharray: none; } .harness-port.flowing { animation: none; box-shadow: 0 0 0 3px rgba(139,194,255,.3); } }
+@media (prefers-reduced-motion: reduce) { .harness-transfer { animation: none; opacity: .8; stroke-dasharray: none !important; } .harness-port.flowing { animation: none; box-shadow: 0 0 0 3px rgba(139,194,255,.3); } }
 
 .harness-block.working { --working-tint: rgba(87,157,255,.18); --working-glow: rgba(87,157,255,.35); --working-outline: transparent; background-image: linear-gradient(var(--working-tint), var(--working-tint)); border-color: var(--accent); animation: harness-working-glow 1.8s ease-in-out infinite; }
 .harness-block.working.selected { --working-outline: var(--accent); }

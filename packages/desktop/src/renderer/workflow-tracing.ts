@@ -45,3 +45,10 @@ export function useWorkflowTraces(run?: HarnessRun): AnimatedWorkflowTrace[] {
   }, [traces, active]);
   return traces;
 }
+
+// Pulse length grows with the logarithm of the real payload: a few characters
+// stay a short spark, and very large transfers fill about half the connection.
+export function transferDashStyle(trace: Pick<HarnessConnectionTrace, "chars">, delayMs: number): { animationDelay: string; strokeDasharray: string } {
+  const length = trace.chars === undefined ? 8 : Math.min(50, 5 + 7 * Math.log10(1 + Math.max(0, trace.chars)));
+  return { animationDelay: `${delayMs}ms`, strokeDasharray: `${length.toFixed(1)} ${(100 - length).toFixed(1)}` };
+}

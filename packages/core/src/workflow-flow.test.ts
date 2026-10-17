@@ -311,7 +311,8 @@ describe("typed workflows", () => {
     const run = await finished();
     expect(run.status).toBe("succeeded");
     expect(run.blocks.find((item) => item.blockId === "child")?.output).toBe("Completed child");
-    expect(run.connectionTraces?.map((trace) => trace.status)).toEqual(["succeeded", "succeeded"]);
+    // Two immediate monitor calls each pulse the connection both ways, in addition to the Use call.
+    expect(run.connectionTraces?.map((trace) => trace.status)).toEqual(Array(6).fill("succeeded"));
     expect((await store.list()).find((item) => item.id === definition.id)?.edges[0]?.timeoutMs).toBe(100);
   });
 
