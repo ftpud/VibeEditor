@@ -208,6 +208,26 @@ describe("ACP integration", () => {
     await expect(v1Only.send(workspace, { prompt: "ping", configuration: {} })).rejects.toThrow("does not support ACP v2");
   });
 
+  it.each(["on", "prompt"])("steers an active ACP v2 turn using the advertised extension or prompt fallback: %s", async (steering) => {
+    class SteeringV2Provider extends FakeProvider {
+      protected command(_configuration: AiConfiguration) { return { command: process.execPath, args: [FAKE_V2_AGENT], env: { FAKE_V2_STEERING: steering } }; }
+      protected async protocol() { return "v2" as const; }
+    }
+    const workspace = process.cwd();
+    const provider = new SteeringV2Provider(() => undefined, await mkdtemp(path.join(os.tmpdir(), "remote-ide-v2-steer-")));
+    await provider.send(workspace, { prompt: "first", configuration: {} });
+    const working = await until(provider, workspace, (session) => session.messages.some((message) => message.text.includes("Hello from v2:")));
+    expect(working.steering).toBe(true);
+    expect(working.status).toBe("in_progress");
+    await provider.steer(workspace, "second");
+    const session = await settle(provider, workspace);
+    expect(session.failure).toBeUndefined();
+    expect(session.status).toBe("done");
+    expect(session.messages.some((message) => message.text.includes("[steered: second]"))).toBe(true);
+    expect(session.messages.some((message) => message.text.includes("Steering message failed"))).toBe(false);
+    expect(session.messages.filter((message) => message.text.includes("Hello from v2:"))).toHaveLength(1);
+  });
+
   it("withholds credential variables from the agent when the provider uses its own sign-in", async () => {
     class CredentialProvider extends FakeProvider {
       withheld: string[] = [];

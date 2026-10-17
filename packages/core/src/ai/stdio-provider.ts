@@ -840,9 +840,10 @@ export abstract class StdioAcpProvider extends AcpProvider {
       authHint = initialized.authMethods?.map((method) => method.description ?? method.name).join("; ") ?? "";
       // `_session/steering` is advertised in the response `_meta`; agents built on the Claude Agent SDK
       // instead advertise that a `session/prompt` sent during a turn is queued into it.
-      // ACP v2 inserts a prompt sent during a turn into that turn.
-      const steering: SteeringMode | undefined = protocol === "v2" ? "prompt" : (initialized._meta as { steering?: { supported?: boolean } } | undefined)?.steering?.supported === true ? "extension"
-        : (initialized.agentCapabilities?._meta as { claudeCode?: { promptQueueing?: boolean } } | undefined)?.claudeCode?.promptQueueing === true ? "prompt" : undefined;
+      // Prefer the advertised extension on both protocols. A v2 session/prompt
+      // may queue behind the active turn rather than steer it (for example Codex).
+      const steering: SteeringMode | undefined = (initialized._meta as { steering?: { supported?: boolean } } | undefined)?.steering?.supported === true ? "extension"
+        : protocol === "v2" || (initialized.agentCapabilities?._meta as { claudeCode?: { promptQueueing?: boolean } } | undefined)?.claudeCode?.promptQueueing === true ? "prompt" : undefined;
       const meta = sessionMeta ? { _meta: sessionMeta } : {};
       let created: CreatedSession;
       let resumed = false;
