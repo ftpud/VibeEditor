@@ -1,15 +1,17 @@
 import { AlertCircle, AlertTriangle, RefreshCw, Search, X } from "lucide-react";
 import { useEffect, useId, useMemo, useRef, useState } from "react";
-import type { RootedJavaDiagnostic } from "@remote-ide/protocol";
+import type { LanguageDiagnostic, WorkspaceRootId } from "@remote-ide/protocol";
 
-type Props = { height: number; diagnostics: RootedJavaDiagnostic[]; checking: boolean; onRefresh(): void; onOpen(diagnostic: RootedJavaDiagnostic): void; onResizeStart(event: React.PointerEvent): void; };
+export type ProblemDiagnostic = LanguageDiagnostic & { rootId: WorkspaceRootId; language?: string };
 
-function sourceOf(diagnostic: RootedJavaDiagnostic): string {
-  const source = (diagnostic as RootedJavaDiagnostic & { source?: unknown }).source;
+type Props = { language?: string; height: number; diagnostics: ProblemDiagnostic[]; checking: boolean; onRefresh(): void; onOpen(diagnostic: ProblemDiagnostic): void; onResizeStart(event: React.PointerEvent): void; };
+
+function sourceOf(diagnostic: ProblemDiagnostic): string {
+  const source = (diagnostic as ProblemDiagnostic & { source?: unknown }).source;
   return typeof source === "string" ? source : "";
 }
 
-export function ProblemsPanel({ height, diagnostics, checking, onRefresh, onOpen, onResizeStart }: Props) {
+export function ProblemsPanel({ language, height, diagnostics, checking, onRefresh, onOpen, onResizeStart }: Props) {
   const [query, setQuery] = useState("");
   const [showErrors, setShowErrors] = useState(true);
   const [showWarnings, setShowWarnings] = useState(true);
@@ -41,17 +43,17 @@ export function ProblemsPanel({ height, diagnostics, checking, onRefresh, onOpen
     if (event.key === "Enter") { const diagnostic = visible[selected]; if (diagnostic) { event.preventDefault(); onOpen(diagnostic); } }
   };
 
-  return <section className="problems-panel" style={{ height }}>
+  return <section data-language={language} className="problems-panel" style={{ height }}>
     <div className="terminal-resize-handle" onPointerDown={onResizeStart} />
     <header><span>Problems</span><div>
       <button type="button" className={`problem-toggle error${showErrors ? " active" : ""}`} aria-label={`Errors (${errors})`} aria-pressed={showErrors} onClick={() => { setShowErrors((value) => !value); setSelected(0); }}><AlertCircle size={13} /><span>{errors}</span></button>
       <button type="button" className={`problem-toggle warning${showWarnings ? " active" : ""}`} aria-label={`Warnings (${warnings})`} aria-pressed={showWarnings} onClick={() => { setShowWarnings((value) => !value); setSelected(0); }}><AlertTriangle size={13} /><span>{warnings}</span></button>
-      <button type="button" title="Check Java project" aria-label="Check Java project" disabled={checking} onClick={onRefresh}><RefreshCw size={14} /></button>
+      <button type="button" title="Check project" aria-label="Check project" disabled={checking} onClick={onRefresh}><RefreshCw size={14} /></button>
     </div></header>
     <div className="problems-filter"><Search size={13} aria-hidden="true" /><input aria-label="Filter problems" placeholder="Filter problems" value={query} onChange={(event) => { setQuery(event.target.value); setSelected(0); }} onKeyDown={escapeFilter} />{query && <button type="button" aria-label="Clear problems filter" onClick={clearFilter}><X size={12} /></button>}</div>
     <div ref={listRef} className="problems-list" role="listbox" aria-label="Problems" aria-activedescendant={visible.length ? `${listId}-${selected}` : undefined} tabIndex={0} onKeyDown={navigate}>
-      {checking && diagnostics.length === 0 ? <div className="problems-empty">Checking Java project...</div>
-        : diagnostics.length === 0 ? <div className="problems-empty">No Java problems found</div>
+      {checking && diagnostics.length === 0 ? <div className="problems-empty">Checking project...</div>
+        : diagnostics.length === 0 ? <div className="problems-empty">No problems found</div>
           : visible.length === 0 ? <div className="problems-empty">No problems match the current filters</div>
             : visible.map((diagnostic, index) => {
               const source = sourceOf(diagnostic);

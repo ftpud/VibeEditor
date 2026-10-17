@@ -2,10 +2,10 @@ import { act } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
 import type { Monaco } from "@monaco-editor/react";
 import type { editor } from "monaco-editor";
-import type { JavaDebugState } from "@remote-ide/protocol";
+import type { LanguageDebugState } from "@remote-ide/protocol";
 import { attachDebugEditor, debugHoverExpression, resolveDebugHover } from "./debug-editor";
 
-const paused: JavaDebugState = { status: "paused", path: "App.java", line: 7, variables: [{ name: "node", value: "Node", reference: "node" }] };
+const paused: LanguageDebugState = { status: "paused", path: "App.java", line: 7, variables: [{ name: "node", value: "Node", reference: "node" }] };
 afterEach(() => vi.useRealTimers());
 
 it("resolves nested fields and indexed elements without evaluating methods", async () => {
@@ -50,4 +50,10 @@ it("highlights only the paused source, shows an expandable hover, and clears it 
   expect(decorations.set).toHaveBeenLastCalledWith([]);
   await act(async () => controller.dispose());
   widgetNode.remove();
+});
+
+it("does not inspect a paused frame while the language service is busy applying changes", async () => {
+  const inspect = vi.fn();
+  expect(await resolveDebugHover("node.child", { ...paused, busy: true }, inspect)).toBeUndefined();
+  expect(inspect).not.toHaveBeenCalled();
 });

@@ -1,7 +1,7 @@
 import type { Monaco } from "@monaco-editor/react";
 import type { editor, IPosition } from "monaco-editor";
 import { createRoot } from "react-dom/client";
-import type { JavaDebugState, JavaDebugVariable } from "@remote-ide/protocol";
+import type { LanguageDebugState, LanguageDebugVariable } from "@remote-ide/protocol";
 import { DebugVariable, type DebugInspect } from "./DebugVariable";
 
 /** Only read identifiers, fields, and array elements; never execute hovered code. */
@@ -10,8 +10,8 @@ export function debugHoverExpression(line: string, column: number): string | und
   return line.slice(0, end).match(/(?:\b[A-Za-z_$][\w$]*)(?:(?:\.[A-Za-z_$][\w$]*)|(?:\[\d+\]))*$/)?.[0];
 }
 
-export async function resolveDebugHover(expression: string, state: JavaDebugState, inspect: DebugInspect): Promise<JavaDebugVariable | undefined> {
-  if (state.status !== "paused" || state.applyingChanges) return;
+export async function resolveDebugHover(expression: string, state: LanguageDebugState, inspect: DebugInspect): Promise<LanguageDebugVariable | undefined> {
+  if (state.status !== "paused" || state.busy) return;
   const parts = expression.match(/[A-Za-z_$][\w$]*|\[\d+\]/g) ?? [];
   if (!parts.length || parts.length > 12) return;
   let variable = state.variables.find((item) => item.name === parts[0]);
@@ -45,7 +45,7 @@ export function attachDebugEditor(instance: editor.IStandaloneCodeEditor, api: M
     getPosition: () => position ? { position, preference: [api.editor.ContentWidgetPositionPreference.BELOW, api.editor.ContentWidgetPositionPreference.ABOVE] } : null
   };
   instance.addContentWidget(widget);
-  let state: JavaDebugState = { status: "stopped", variables: [] };
+  let state: LanguageDebugState = { status: "stopped", variables: [] };
   let expression: string | undefined;
   let generation = 0;
   let disposed = false;
@@ -63,7 +63,7 @@ export function attachDebugEditor(instance: editor.IStandaloneCodeEditor, api: M
     if ((event.target.element as HTMLElement | null)?.closest(".debug-editor-hover")) { clearTimeout(hideTimer); return; }
     const model = instance.getModel();
     const hovered = event.target.position;
-    if (state.status !== "paused" || state.applyingChanges || state.path !== filePath || !model || !hovered || !model.getWordAtPosition(hovered)) { scheduleHide(); return; }
+    if (state.status !== "paused" || state.busy || state.path !== filePath || !model || !hovered || !model.getWordAtPosition(hovered)) { scheduleHide(); return; }
     const next = debugHoverExpression(model.getLineContent(hovered.lineNumber), hovered.column);
     if (!next) { scheduleHide(); return; }
     clearTimeout(hideTimer);
@@ -83,7 +83,7 @@ export function attachDebugEditor(instance: editor.IStandaloneCodeEditor, api: M
   const leave = instance.onMouseLeave(scheduleHide);
   const edit = instance.onDidChangeModelContent(hide);
   const controller = {
-    update(next: JavaDebugState) {
+    update(next: LanguageDebugState) {
       if (disposed) return;
       state = next; hide();
       const line = next.status === "paused" && next.path === filePath ? next.line : undefined;

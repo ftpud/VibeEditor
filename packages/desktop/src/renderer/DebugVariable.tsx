@@ -1,11 +1,11 @@
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import type { JavaDebugVariable, ProtocolOperations } from "@remote-ide/protocol";
-export type DebugInspect = (reference: string, start?: number) => Promise<ProtocolOperations["java.debug.variables"]["result"]>;
+import type { LanguageDebugVariable, ProtocolOperations } from "@remote-ide/protocol";
+export type DebugInspect = (reference: string, start?: number) => Promise<ProtocolOperations["language.debug.variables"]["result"]>;
 
-export function DebugVariable({ variable, onInspect, depth = 0, disabled = false, initialExpanded = false }: { variable: JavaDebugVariable; onInspect: DebugInspect; depth?: number; disabled?: boolean; initialExpanded?: boolean }) {
+export function DebugVariable({ variable, onInspect, depth = 0, disabled = false, initialExpanded = false }: { variable: LanguageDebugVariable; onInspect: DebugInspect; depth?: number; disabled?: boolean; initialExpanded?: boolean }) {
   const [expanded, setExpanded] = useState(initialExpanded);
-  const [children, setChildren] = useState<JavaDebugVariable[] | undefined>();
+  const [children, setChildren] = useState<LanguageDebugVariable[] | undefined>();
   const [nextStart, setNextStart] = useState<number>();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string>();
