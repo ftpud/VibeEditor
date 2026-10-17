@@ -22,6 +22,15 @@ describe("provider definitions", () => {
     expect(() => validateProviderDefinition({ ...base, options: [{ id: "a", name: "A", description: "", type: "boolean", defaultValue: false }, { id: "a", name: "A", description: "", type: "boolean", defaultValue: false }] })).toThrow("duplicate option");
   });
 
+  it("validates options strictly", () => {
+    const option = { id: "mode", name: "Mode", description: "d", type: "select", defaultValue: "a", choices: [{ value: "a", name: "A" }] };
+    expect(validateProviderDefinition({ ...base, options: [option] }).options).toHaveLength(1);
+    for (const bad of [{ ...option, extra: 1 }, { ...option, choices: "a" }, { ...option, choices: undefined }, { ...option, type: "boolean", choices: undefined }, { ...option, permissionApproval: "yes" }]) {
+      expect(() => validateProviderDefinition({ ...base, options: [bad] })).toThrow();
+    }
+    expect(() => validateProviderDefinition({ ...base, credentialEnv: ["X"] })).toThrow("unknown field credentialEnv");
+  });
+
   it("skips invalid and duplicate files without failing", async () => {
     const directory = await mkdtemp(path.join(os.tmpdir(), "provider-defs-"));
     await writeFile(path.join(directory, "a.json"), JSON.stringify(base));

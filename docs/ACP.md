@@ -80,7 +80,6 @@ are never loaded from a workspace. Invalid files, unknown fields, reserved
   "command": "/usr/local/bin/my-agent",
   "args": ["--acp"],
   "env": { "MY_AGENT_MODE": "ci" },
-  "credentialEnv": ["MY_AGENT_TOKEN"],
   "models": [{ "id": "fast", "name": "Fast", "reasoningLevels": ["low", "high"], "defaultReasoning": "low" }],
   "options": [],
   "capabilities": { "usage": false }

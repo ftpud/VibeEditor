@@ -8,15 +8,14 @@ import { StdioAcpProvider, type ProviderContext, type ProviderFactory } from "./
 export interface ProviderDefinition {
   id: string; name: string; description: string;
   command: string; args?: string[]; env?: Record<string, string>;
-  /** Variables the agent reads credentials from; documented to the user, never stored. */
-  credentialEnv?: string[];
   models?: { id: string; name: string; defaultReasoning?: string; reasoningLevels?: string[] }[];
   options?: AiOption[];
   capabilities?: Partial<AiProviderDescriptor["capabilities"]>;
 }
 
-const KEYS = new Set(["id", "name", "description", "command", "args", "env", "credentialEnv", "models", "options", "capabilities"]);
+const KEYS = new Set(["id", "name", "description", "command", "args", "env", "models", "options", "capabilities"]);
 const MODEL_KEYS = new Set(["id", "name", "defaultReasoning", "reasoningLevels"]);
+const OPTION_KEYS = new Set(["id", "name", "description", "section", "type", "defaultValue", "choices", "min", "max", "permissionApproval", "client", "interactive", "modelDependent"]);
 const CAPABILITY_KEYS = ["models", "usage", "mcp", "agents", "contextWindow", "skills"] as const;
 const OPTION_TYPES = new Set(["select", "number", "boolean", "text"]);
 /** IDs a definition may not claim; they belong to built-in providers or are reserved. */
@@ -41,7 +40,6 @@ export function validateProviderDefinition(input: unknown, reserved: ReadonlySet
   if (value.args !== undefined && !Array.isArray(value.args)) throw new Error("args must be an array of strings");
   if (Array.isArray(value.args) && !value.args.every((arg) => typeof arg === "string")) throw new Error("args must be an array of strings");
   if (value.env !== undefined && (!value.env || typeof value.env !== "object" || Array.isArray(value.env) || !Object.values(value.env).every((item) => typeof item === "string"))) throw new Error("env must map names to strings");
-  if (value.credentialEnv !== undefined && !isStringArray(value.credentialEnv)) throw new Error("credentialEnv must be an array of variable names");
   if (value.models !== undefined) {
     if (!Array.isArray(value.models)) throw new Error("models must be an array");
     for (const model of value.models) {
@@ -58,10 +56,22 @@ export function validateProviderDefinition(input: unknown, reserved: ReadonlySet
     const seen = new Set<string>();
     for (const option of value.options) {
       const entry = option as Record<string, unknown> | null;
-      if (!entry || typeof entry !== "object" || !isString(entry.id) || !isString(entry.name) || typeof entry.description !== "string" || !OPTION_TYPES.has(entry.type as string)) throw new Error("each option needs id, name, description and a valid type");
+      if (!entry || typeof entry !== "object" || Array.isArray(entry)) throw new Error("each option must be an object");
+      unknownKeys(entry, OPTION_KEYS, "option");
+      if (!isString(entry.id) || !isString(entry.name) || typeof entry.description !== "string" || !OPTION_TYPES.has(entry.type as string)) throw new Error("each option needs id, name, description and a valid type");
       if (seen.has(entry.id)) throw new Error(`duplicate option '${entry.id}'`);
       seen.add(entry.id);
-      if (!["string", "number", "boolean"].includes(typeof entry.defaultValue)) throw new Error(`option '${entry.id}' needs a defaultValue`);
+      const expected = entry.type === "boolean" ? "boolean" : entry.type === "number" ? "number" : "string";
+      if (typeof entry.defaultValue !== expected) throw new Error(`option '${entry.id}' defaultValue must be a ${expected}`);
+      if (entry.type === "select") {
+        if (!Array.isArray(entry.choices) || entry.choices.length === 0) throw new Error(`select option '${entry.id}' needs choices`);
+        for (const choice of entry.choices) {
+          if (!choice || typeof choice !== "object" || !isString((choice as Record<string, unknown>).value) || !isString((choice as Record<string, unknown>).name)) throw new Error(`option '${entry.id}' choices need a value and name`);
+        }
+      } else if (entry.choices !== undefined) throw new Error(`only select option '${entry.id}' may have choices`);
+      for (const flag of ["permissionApproval", "client", "interactive", "modelDependent"]) if (entry[flag] !== undefined && typeof entry[flag] !== "boolean") throw new Error(`option '${entry.id}' ${flag} must be a boolean`);
+      for (const bound of ["min", "max"]) if (entry[bound] !== undefined && typeof entry[bound] !== "number") throw new Error(`option '${entry.id}' ${bound} must be a number`);
+      if (entry.section !== undefined && typeof entry.section !== "string") throw new Error(`option '${entry.id}' section must be a string`);
     }
   }
   if (value.capabilities !== undefined) {
