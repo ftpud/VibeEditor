@@ -53,12 +53,12 @@ requests in `protocol/src/index.ts` (~96 lines), `server.ts` (~52 refs),
 - [x] Write the result into a short design note (`docs/LANGUAGES.md`) with a sizing estimate.
 
 ### 2.2 Define the language-service contract
-- [ ] Core interface `LanguageService` covering: project detection/loading, project tree, source roots, workspace symbols, tool checks, configuration read/save.
-- [ ] Run/build side: `listRunTargets`, `build`, `run`, `stop`, run-configuration add/select (reuse `run-configs.ts` / `project-processes.ts` rather than adding a parallel path).
-- [ ] Debug side: breakpoints, start, variables, apply changes, step commands, expressed over DAP-shaped types where possible.
-- [ ] LSP side: launch spec for the language server (command, args, init options) so Core owns one generic LSP host instead of `jdtls.ts` being special.
-- [ ] Capability flags per service (`build`, `run`, `debug`, `lsp`, `projectTree`) so the UI hides what is unsupported.
-- [ ] A `LanguageRegistry` with file-type/project detection (generalise `java-file-type.ts`).
+- [x] Core interface `LanguageService` covering: project detection/loading, project tree, source roots, workspace symbols, tool checks, configuration read/save.
+- [x] Run/build side: `listRunTargets`, `build`, `run`, `stop`, run-configuration add/select (reuse `run-configs.ts` / `project-processes.ts` rather than adding a parallel path).
+- [x] Debug side: breakpoints, start, variables, apply changes, step commands, expressed over DAP-shaped types where possible.
+- [x] LSP side: launch spec for the language server (command, args, init options) so Core owns one generic LSP host instead of `jdtls.ts` being special.
+- [x] Capability flags per service (`build`, `run`, `debug`, `lsp`, `projectTree`) so the UI hides what is unsupported.
+- [x] A `LanguageRegistry` with file-type/project detection (generalise `java-file-type.ts`).
 
 ### 2.3 Generic protocol surface
 - [ ] Add language-neutral requests/events to `packages/protocol/src/index.ts` (e.g. `language.projectTree`, `language.build`, `language.run`, `language.debug.*`), carrying a `language` id.
