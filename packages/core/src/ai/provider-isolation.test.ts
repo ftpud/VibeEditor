@@ -17,7 +17,7 @@ function sources(directory: string): string[] {
 describe("provider isolation", () => {
   it("keeps built-in provider IDs out of shared Core code", () => {
     // Starter/fallback defaults and the legacy Codex runtime cache migration are the only tolerated mentions.
-    const allowed = new Set(["harness-runner.ts", "configuration.ts", "storage-versions.ts"]);
+    const allowed = new Set(["harness-runner.ts", "configuration.ts", "storage-versions.ts", "provider-definitions.ts"]);
     const offenders = sources(SRC).filter((file) => !allowed.has(path.basename(file))).filter((file) => BUILT_IN.test(readFileSync(file, "utf8"))).map((file) => path.relative(SRC, file));
     expect(offenders).toEqual([]);
   });

@@ -64,6 +64,40 @@ An ACP plugin supplies:
 
 To add a provider, subclass `AcpProvider`, implement its required session/model/configuration operations under `ai/providers`, and register one instance in `ai/index.ts`. `AiProvider` is an open string, and the desktop builds its provider selector and extra controls from `ai.providers`, so no protocol or UI enum needs editing.
 
+## Declarative providers
+
+Any ACP agent that speaks stdio can be added without code. Put one `*.json`
+file per provider in `~/.remote-ide/providers/` on the Core host (override with
+`REMOTE_IDE_PROVIDER_DEFINITIONS_DIR`); Core reads it at startup. Definitions
+are never loaded from a workspace. Invalid files, unknown fields, reserved
+(`codex`, `claude`, `copilot`) or duplicate IDs are logged and skipped.
+
+```json
+{
+  "id": "my-agent",
+  "name": "My Agent",
+  "description": "Internal ACP agent",
+  "command": "/usr/local/bin/my-agent",
+  "args": ["--acp"],
+  "env": { "MY_AGENT_MODE": "ci" },
+  "credentialEnv": ["MY_AGENT_TOKEN"],
+  "models": [{ "id": "fast", "name": "Fast", "reasoningLevels": ["low", "high"], "defaultReasoning": "low" }],
+  "options": [],
+  "capabilities": { "usage": false }
+}
+```
+
+`models` are the fallback used when the agent cannot list its own. The agent is
+user-supplied (`source: external`): Core does not install, update or remove it.
+`id`, `name`, `description` and `command` are required.
+
+## Provider factories
+
+Built-in providers are created by `ProviderFactory` functions that receive a
+`ProviderContext` (`onChanged`, `turns`, `projectRoot`, `bridgeWorkspace`).
+`createAcpRegistry` registers them in order; the first is the default provider.
+`PROVIDER_API_VERSION` identifies this contract.
+
 ## Current adapters
 
 Codex discovers model and reasoning metadata from its local model cache, which also supplies context window sizes, input modalities, and retirement notices for the models advertised over ACP. Its ACP options expose sandbox and web search. Saved session ids are loaded when the agent advertises `loadSession`; loaded history replaces the local transcript. MCP definitions are supplied during session setup and selected custom-agent presets can restrict the enabled MCP set.

@@ -21,13 +21,13 @@ the composition root `createAcpRegistry` (`packages/core/src/ai/index.ts`).
 - [x] Keep `providers.test.ts` green; add a test that fails if shared code mentions a built-in provider ID.
 
 ### 1.2 Declarative providers (no code loading)
-- [ ] Define a provider definition file format (JSON/TOML): `id`, `name`, `description`, `command`, `args`, `env`, credential variable names, fallback models, `options`, `capabilities`, protocol versions.
-- [ ] Validate definitions with a strict schema; reject unknown fields and duplicate/reserved IDs.
-- [ ] Implement `ConfiguredStdioProvider extends StdioAcpProvider` built from a definition (generic `command()`, `fallbackModels()`, `installationSpec`).
-- [ ] Extend `InstallationSpec` (`provider-installations.ts`) beyond npm packages: user-supplied binary path, and "external" source with no managed install.
-- [ ] Load definitions from a Core-host directory (e.g. `<core-config>/providers/*.json`) in `createAcpRegistry`; log and skip invalid files instead of failing startup.
-- [ ] Add a fixture definition pointing at `fake-acp-agent.mjs` and cover: registration, model listing, send, permission, usage fallback.
-- [ ] Document the format in `docs/ACP.md`.
+- [x] Define a provider definition file format (JSON/TOML): `id`, `name`, `description`, `command`, `args`, `env`, credential variable names, fallback models, `options`, `capabilities`, protocol versions.
+- [x] Validate definitions with a strict schema; reject unknown fields and duplicate/reserved IDs.
+- [x] Implement `ConfiguredStdioProvider extends StdioAcpProvider` built from a definition (generic `command()`, `fallbackModels()`, `installationSpec`).
+- [x] Extend `InstallationSpec` (`provider-installations.ts`) beyond npm packages: covered by providers without an `installationSpec` (source `external`, user-supplied command).
+- [x] Load definitions from a Core-host directory (e.g. `<core-config>/providers/*.json`) in `createAcpRegistry`; log and skip invalid files instead of failing startup.
+- [x] Add a fixture definition pointing at `fake-acp-agent.mjs` and cover: registration, model listing, send, permission, usage fallback.
+- [x] Document the format in `docs/ACP.md`.
 
 ### 1.3 Public provider context and built-ins on the same path
 - [ ] (ProviderContext type exists and factories use it; constructors still positional) Replace the internal constructor arguments (`onChanged`, `turns`, `projectRoot`, `bridgeWorkspace`) with a single `ProviderContext` object.
