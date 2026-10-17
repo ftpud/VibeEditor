@@ -4,7 +4,7 @@ import { mkdtemp, readFile, realpath, rm } from "node:fs/promises";
 import { expect, it, vi } from "vitest";
 import type { HarnessBlock } from "@remote-ide/protocol";
 import { TerminalSessionHost } from "./process-manager.js";
-import { executeTerminalControl } from "./workflow-terminal.js";
+import { executeTerminalControl, executeTerminalControlAsync } from "./workflow-terminal.js";
 import { WorkflowAppService } from "./workflow-app.js";
 
 it("starts a named terminal and executes its command in one call", async () => {
@@ -80,3 +80,22 @@ it("runs apps in a writable PTY in the task workspace and exposes their named te
     expect(host.list("/another")).toEqual([]);
   } finally { await apps.closeAll(); host.closeAll(); await rm(workspace, { recursive: true, force: true }); }
 });
+
+it("run_and_wait holds the call until the command finishes and reports its exit code", async () => {
+  const workspace = await realpath(await mkdtemp(path.join(os.tmpdir(), "terminal-wait-")));
+  const host = new TerminalSessionHost(() => {});
+  const run = async (request: Record<string, unknown>) => JSON.parse((await executeTerminalControlAsync(JSON.stringify({ action: "run_and_wait", ...request }), workspace, host, () => {})).messages[0]!.text);
+  try {
+    const first = await run({ name: "Wait", command: "sleep 0.5; echo finished-output; false", timeout_ms: 20_000 });
+    expect(first).toMatchObject({ status: "completed", exitCode: 1, output: expect.stringContaining("finished-output") });
+    // The same terminal can be reused and the earlier command's output is not repeated.
+    const second = await run({ terminal_id: first.terminalId, command: "echo again", timeout_ms: 20_000 });
+    expect(second).toMatchObject({ status: "completed", exitCode: 0, terminalId: first.terminalId, output: expect.stringContaining("again") });
+    expect(second.output).not.toContain("finished-output");
+    const slow = await run({ name: "Slow", command: "sleep 30", timeout_ms: 600 });
+    expect(slow).toMatchObject({ status: "timed_out" });
+    expect(host.attach(workspace, slow.terminalId)?.status).toBe("running");
+    await expect(run({ name: "x" })).rejects.toThrow("command");
+    await expect(run({ command: "true" })).rejects.toThrow("name");
+  } finally { host.closeAll(); await rm(workspace, { recursive: true, force: true }); }
+}, 30_000);

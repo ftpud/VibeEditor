@@ -253,6 +253,11 @@ Direct input is a JSON string object:
 - {"action":"open","name":"Interactive console"}: create a named terminal.
 - {"action":"open_and_run","name":"Console","command":"node"}: open and execute;
   a newline is appended automatically; returns terminalId immediately.
+- {"action":"run_and_wait","name":"Build","command":"npm run build","timeout_ms":300000}:
+  run the command and wait until it finishes, returning status "completed" with
+  exitCode and output (including terminal echo), "exited" if the terminal ended, or
+  "timed_out" with output so far while the command keeps running. Pass terminal_id
+  instead of name to reuse an open terminal. With workflow_use_block use timeout_seconds.
 - {"action":"read","terminal_id":"ID","lines":100}: last 1–10000 lines (default
   100), bounded to 30000 output characters.
 - {"action":"write","terminal_id":"ID","data":"help\n"}: raw input; include

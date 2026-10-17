@@ -1,6 +1,6 @@
 import { validateRequestPayload } from "./request-validation.js";
 import { coreAccessPolicy, type CoreAccessOptions } from "./access-policy.js";
-import { executeTerminalControl } from "./workflow-terminal.js";
+import { executeTerminalControlAsync } from "./workflow-terminal.js";
 import { RequestAdmission, requestAdmissionLimit, type RequestAdmissionOptions } from "./request-admission.js";
 import { configureWebSocketOutput, sendWebSocketData, sendWebSocketPong, websocketOutboundLimits, type WebSocketOutboundOptions } from "./websocket-output.js";
 export { sendWebSocketData } from "./websocket-output.js";
@@ -318,7 +318,7 @@ export async function createServer(host: string, port: number, workspacePath: st
       const workspace = (await resolveWorkflowBinding(run, undefined, { tasks, rootWorkspace, workspacePath: rootWorkspace })).workspace;
       if (block.type === "skill" && block.skillId) return executeWorkflowSkill(block, new SkillsStore(undefined, rootWorkspace), workspace, runtime);
       if (block.type === "script") return executeFlowScript(block, prompt, workspace, runtime.assertActive, { rootWorkspace, workflowRunId: runtime.runId, workflowBlockId: runtime.blockId });
-      if (block.type === "terminal_control") return executeTerminalControl(prompt, workspace, workflowApps.terminals, runtime.assertActive);
+      if (block.type === "terminal_control") return executeTerminalControlAsync(prompt, workspace, workflowApps.terminals, runtime.assertActive);
       if (block.type === "run_app") return workflowApps.execute(block, prompt, workspace, runtime.assertActive, { rootWorkspace, workflowRunId: runtime.runId, workflowBlockId: runtime.blockId });
       if (block.type === "task_controls") return executeTaskControls(block, prompt, { acp, tasks, agents, harnessRunner: recoveryRunner, aiTimers, rootWorkspace, bridgeWorkspace: recoveryBridgeWorkspace, workspacePath: workspace, defaultProvider: "codex" }, runtime);
       if (block.type === "verification") return runWorkflowVerification(block, workspace, recoveryRunner, runtime);
@@ -1365,7 +1365,7 @@ export async function startWorkflow(input: ProtocolOperations["harnesses.run"]["
       await validateWorkflowBinding(binding, tasks, rootWorkspace);
       if (block.type === "skill" && block.skillId) return executeWorkflowSkill(block, new SkillsStore(undefined, rootWorkspace), workspacePath, runtime);
       if (block.type === "script") return executeFlowScript(block, prompt, workspacePath, runtime.assertActive, { rootWorkspace, workflowRunId: runtime.runId, workflowBlockId: runtime.blockId });
-      if (block.type === "terminal_control") return executeTerminalControl(prompt, workspacePath, workflowApps.terminals, runtime.assertActive);
+      if (block.type === "terminal_control") return executeTerminalControlAsync(prompt, workspacePath, workflowApps.terminals, runtime.assertActive);
       if (block.type === "run_app") return workflowApps.execute(block, prompt, workspacePath, runtime.assertActive, { rootWorkspace, workflowRunId: runtime.runId, workflowBlockId: runtime.blockId });
       if (block.type === "task_controls") return executeTaskControls(block, prompt, { ...context, workspacePath, defaultProvider: input.provider ?? "codex" }, runtime);
       if (block.type === "verification") return runWorkflowVerification(block, workspacePath, harnessRunner, runtime);

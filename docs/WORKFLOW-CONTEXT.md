@@ -126,7 +126,7 @@ means nothing new.
 | AI Agent (`ai`), Chatbox (`chatbox`) | omitted (run and wait), `start`, `status`, `tail`, `steer`, `fetch` | messages and activity not yet delivered to this caller (changed messages are re-sent) |
 | Meeting (`meeting`) | `publish`, `tail`, `diff` (default), `wait`, `fetch` | unread messages from the caller's saved cursor (same as `diff`) |
 | Run App (`run_app`) | `start`, `status`, `kill`, `tail` (only those configured), `fetch` | log text since the last fetch (needs `tail` allowed) |
-| Terminal Control (`terminal_control`) | `list`, `open`, `open_and_run`, `read`, `write`, `fetch` | terminal text since the last fetch (needs `terminal_id`) |
+| Terminal Control (`terminal_control`) | `list`, `open`, `open_and_run`, `run_and_wait`, `read`, `write`, `fetch` | terminal text since the last fetch (needs `terminal_id`) |
 | Task controls (`task_controls`) | `create`, `create_and_start`, `status`, `prompt`, `set_status`, `set_commit_message`, `update_commit_message`, `fetch` | task status, only when changed since the last fetch (optional `task_id`) |
 | Text, Markdown, Script, Timer, User Prompt, Yes/No Prompt | run (omit action); `fetch` | retained output not yet fetched; Timer and prompts run when used without `fetch` |
 | Skill (`skill`) | load (omit action) | not supported; skills load through policy checks |
@@ -135,3 +135,11 @@ Not callable by agents: Start button/input, and the legacy Prompt, Task, Review
 and Verification blocks. The read-only companions `workflow_block_output` (paged
 retained output of any non-skill block), `workflow_block_messages` (AI/Chatbox
 snapshot) and `workflow_connections` (list tools) are unchanged.
+
+`run_and_wait` on Terminal Control (`name` and `command`, or `input` as the command,
+or `terminal_id` to reuse an open terminal) runs the command and holds the call until
+it finishes. It returns `status: "completed"` with `exitCode` and `output` (including
+the terminal echo, last 30,000 characters), `"exited"` if the terminal ended first, or
+`"timed_out"` with the output so far while the command keeps running. `timeout_seconds`
+sets the wait (default 300). Completion is detected with a marker printed after the
+command, so it needs a POSIX-style shell.
