@@ -17,12 +17,13 @@ it("runs npm interactively in a real PTY with arguments, environment and exit re
   try {
     await mkdir(path.join(workspace, "web"));
     await writeFile(path.join(workspace, "web/package.json"), JSON.stringify({ scripts: { start: "node app.cjs" } }));
-    await writeFile(path.join(workspace, "web/app.cjs"), `console.log('READY',process.stdin.isTTY,process.stdout.isTTY,process.env.MODE,process.env.FILE_VALUE,JSON.stringify(process.argv.slice(2)));require('node:readline').createInterface({input:process.stdin}).once('line',line=>{console.log('INPUT',line);process.exit(7)});`);
+    await writeFile(path.join(workspace, "web/app.cjs"), `const input=require('node:readline').createInterface({input:process.stdin});input.once('line',line=>{console.log('INPUT '+line);process.exitCode=7;input.close()});console.log('READY '+JSON.stringify({stdin:process.stdin.isTTY,stdout:process.stdout.isTTY,mode:process.env.MODE,fileValue:process.env.FILE_VALUE,args:process.argv.slice(2)}));`);
     await writeFile(path.join(workspace, "run.env"), "MODE=file\nFILE_VALUE=from-file\n");
-    await service.saveConfiguration(JSON.stringify({ type: "npm", packageJsonPath: "web/package.json", packageManager: "npm", runConfigurations: [{ id: "dev", name: "Development", script: "start", arguments: ["hello world", "$(literal)"], nodeOptions: ["--enable-source-maps"], environmentFile: "run.env", environment: { MODE: "override" } }], selectedRunConfigurationId: "dev" }));
+    await service.saveConfiguration(JSON.stringify({ type: "npm", packageJsonPath: "web/package.json", packageManager: "npm", runConfigurations: [{ id: "dev", name: "Development", script: "start", arguments: ["hello world", "$(literal)"], nodeOptions: ["--enable-source-maps"], environmentFile: "run.env", environment: { MODE: "override", FORCE_COLOR: "1" } }], selectedRunConfigurationId: "dev" }));
     const { terminal } = await runLanguageInTerminal(service, terminals, workspace);
     expect(terminal.displayName).toBe("Development");
-    await vi.waitFor(() => expect(terminals.attach(workspace, terminal.terminalId)?.output).toContain('READY true true override from-file ["hello world","$(literal)"]'), { timeout: 5000 });
+    const ready = `READY ${JSON.stringify({ stdin: true, stdout: true, mode: "override", fileValue: "from-file", args: ["hello world", "$(literal)"] })}`;
+    await vi.waitFor(() => expect(terminals.attach(workspace, terminal.terminalId)?.output).toContain(ready), { timeout: 5000 });
     await expect(runLanguageInTerminal(service, terminals, workspace)).rejects.toThrow("already running");
     await service.dispose(); // Renderer sessions may disconnect; Core keeps the PTY alive.
     expect(hasLanguageTerminalRun(terminals, workspace, "node")).toBe(true);
@@ -30,7 +31,8 @@ it("runs npm interactively in a real PTY with arguments, environment and exit re
     await vi.waitFor(() => expect(exit).toHaveBeenCalledWith(7), { timeout: 5000 });
     expect(terminals.attach(workspace, terminal.terminalId)).toMatchObject({ status: "exited", exitCode: 7, output: expect.stringContaining("INPUT hello terminal") });
   } finally { await service.dispose(); terminals.closeAll(); await rm(workspace, { recursive: true, force: true }); }
-});
+  // Leave time for both bounded stage waits to report their actual assertion failure.
+}, 15_000);
 
 it("stops the run and releases its lifecycle when its terminal tab is closed", async () => {
   const workspace = await mkdtemp(path.join(os.tmpdir(), "vibe-terminal-stop-"));

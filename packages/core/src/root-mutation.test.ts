@@ -37,8 +37,10 @@ describe("repository mutation locking", () => {
   });
 
   it("recovers a lock left by a terminated process", async () => {
-    const { stdout } = await exec(process.execPath, ["-e", "console.log(process.pid)"]);
-    await owner(Number(stdout.trim()));
+    // Machine-readable output must not acquire ANSI colors from CI's environment.
+    const { stdout } = await exec(process.execPath, ["-e", "process.stdout.write(String(process.pid))"], { env: { ...process.env, FORCE_COLOR: "1" } });
+    expect(stdout).toMatch(/^\d+$/);
+    await owner(Number(stdout));
     await expect(serializedRootMutation(workspace, async () => "recovered")).resolves.toBe("recovered");
   });
 

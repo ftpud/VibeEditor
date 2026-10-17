@@ -1,4 +1,4 @@
-import { chmod, mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, mkdir, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -10,10 +10,16 @@ import { javaLaunchEnvironment, javaToolEnvironment, javaToolExecutable, parseJa
 
 const directories: string[] = [];
 afterEach(async () => { await Promise.all(directories.splice(0).map((directory) => rm(directory, { recursive: true, force: true }))); });
-async function workspace(wrapper = false) {
-  const root = await mkdtemp(path.join(os.tmpdir(), "vibe-java-settings-"));
+async function workspace(wrapper = false, linked = false) {
+  let root = await mkdtemp(path.join(os.tmpdir(), "vibe-java-settings-"));
   const stateDirectory = await mkdtemp(path.join(os.tmpdir(), "vibe-java-settings-state-"));
   directories.push(root, stateDirectory);
+  if (linked) {
+    const alias = `${root}-link`;
+    await symlink(root, alias, process.platform === "win32" ? "junction" : "dir");
+    directories.push(alias);
+    root = alias;
+  }
   await mkdir(path.join(root, "src/main/java"), { recursive: true });
   await writeFile(path.join(root, "pom.xml"), "<project><modelVersion>4.0.0</modelVersion><artifactId>app</artifactId></project>");
   if (wrapper) await writeFile(path.join(root, "mvnw"), "#!/bin/sh\nexit 0\n");
@@ -102,8 +108,8 @@ describe("Java configuration", () => {
     expect(() => parseJavaConfiguration(JSON.stringify({ ...base, runConfigurations: [{ ...base.runConfigurations[0], environment: { PORT: 8080 } }] }))).toThrow("environment must be a JSON object");
   });
 
-  it("launches the selected Java profile in a terminal and tracks stop/exit", async () => {
-    const { service, options, root, waitForExit } = await workspace();
+  it.each([false, true])("launches the selected Java profile in a terminal and tracks stop/exit (linked workspace: %s)", async (linked) => {
+    const { service, options, root, waitForExit } = await workspace(false, linked);
     const executable = path.join(root, "fake-maven");
     await writeFile(executable, `#!${process.execPath}\nconst fs = require('node:fs'); fs.mkdirSync('target/classes', {recursive:true}); const file = process.argv.find(arg => arg.startsWith('-Dmdep.outputFile=')); if (file) fs.writeFileSync(file.slice('-Dmdep.outputFile='.length), '');\n`);
     await chmod(executable, 0o755);
@@ -112,7 +118,7 @@ describe("Java configuration", () => {
     const stop = vi.fn(() => finish(130));
     const launch = vi.fn(() => ({ completion: new Promise<number>((resolve) => { finish = resolve; }), stop }));
     await service.run(launch);
-    expect(launch).toHaveBeenCalledWith(expect.objectContaining({ command: "/opt/test-jdk/bin/java", args: ["-ea", "-classpath", expect.any(String), "demo.App", "hello world"], cwd: root, env: expect.objectContaining({ MODE: "terminal", JAVA_HOME: "/opt/test-jdk" }), name: "Application" }));
+    expect(launch).toHaveBeenCalledWith(expect.objectContaining({ command: "/opt/test-jdk/bin/java", args: ["-ea", "-classpath", expect.any(String), "demo.App", "hello world"], cwd: await realpath(root), env: expect.objectContaining({ MODE: "terminal", JAVA_HOME: "/opt/test-jdk" }), name: "Application" }));
     await expect(service.run(launch)).rejects.toThrow("already active");
     const document = await service.readConfiguration();
     await expect(service.saveConfiguration(document.content, document.revision)).rejects.toThrow("Stop the Java process");
