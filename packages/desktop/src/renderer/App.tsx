@@ -1102,7 +1102,7 @@ export function App() {
         if (savedModel && modelResult.models.some((model) => model.id === savedModel)) {
           const model = modelResult.models.find((item) => item.id === savedModel)!;
           const reasoning = savedReasoning && model.reasoningLevels.includes(savedReasoning) ? savedReasoning : model.defaultReasoning;
-          if (session.model !== savedModel || session.reasoning !== reasoning) session = (await client.request("ai.configure", { provider, model: savedModel, reasoning })).session;
+          if (session.status !== "in_progress" && (session.model !== savedModel || session.reasoning !== reasoning)) session = (await client.request("ai.configure", { provider, model: savedModel, reasoning })).session;
         }
         setAiModels(modelResult.models); setAiSession(session); setAiSessions([session]); setAiUsage(undefined);
         setTree(result.tree); connectionReady = true; setStatus("connected"); setStatusMessage("");
@@ -1653,7 +1653,7 @@ export function App() {
       if (savedModel && models.models.some((model) => model.id === savedModel)) {
         const model = models.models.find((item) => item.id === savedModel)!;
         const reasoning = savedReasoning && model.reasoningLevels.includes(savedReasoning) ? savedReasoning : model.defaultReasoning;
-        if (session.model !== savedModel || session.reasoning !== reasoning) session = (await clientRef.current.request("ai.configure", { provider, model: savedModel, reasoning })).session;
+        if (session.status !== "in_progress" && (session.model !== savedModel || session.reasoning !== reasoning)) session = (await clientRef.current.request("ai.configure", { provider, model: savedModel, reasoning })).session;
       }
       if (!applyAiSession(session, { ...token, provider })) return;
       setAiModels(models.models);
