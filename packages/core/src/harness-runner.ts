@@ -1184,6 +1184,8 @@ export class HarnessRunner {
         state.status = this.isActive(run.id) ? "failed" : "cancelled"; state.error = error instanceof Error ? error.message : String(error); state.completedAt = new Date().toISOString(); this.log(state, "error", state.error); if (this.isActive(run.id)) run.status = this.runActivityStatus(run); await this.update(run); throw error;
       } finally { finishing.delete(id); busy.delete(id); published(); }
       if (block.type === "markdown") this.openDocument?.({ runId: run.id, blockId: id, title: block.label.endsWith(".md") ? block.label : `${block.label}.md`, content: output });
+      // Every outgoing connection starts at once; a block connected to several followers does not run them one after another.
+      const followers: Promise<unknown>[] = [];
       for (const edge of edges.filter((edge) => block.type !== "chatbox" && edge.from === id && (edge.type === "follow" || !edge.type || (edge.type === "path" && edge.label === state.selectedRoute)))) {
         // A question used as a tool returns its answer to the waiting caller.
         // A drawn return connection must not start a second turn in that active session.
@@ -1197,9 +1199,11 @@ export class HarnessRunner {
           if (count > limit) throw new CoreError("INVALID_REQUEST", `Workflow loop '${edge.label ?? edge.id}' reached its limit of ${limit} iterations`);
           execution.loopInvocations.set(edge.id, count);
         }
-        await this.traceConnection(run, edge, "forward", "succeeded", output.length);
-        await invoke(edge.to, output, [...ancestors, id]);
+        followers.push((async () => { await this.traceConnection(run, edge, "forward", "succeeded", output.length); await invoke(edge.to, output, [...ancestors, id]); })());
       }
+      const settled = await Promise.allSettled(followers);
+      const failed = settled.find((item): item is PromiseRejectedResult => item.status === "rejected");
+      if (failed) throw failed.reason;
       return output;
     };
     this.flowInvocations.set(run.id, invoke);
@@ -1226,7 +1230,9 @@ export class HarnessRunner {
       state.structuredOutput = parseHarnessData(input, block.outputSchema, `${block.label} output`);
       state.output = input.slice(-200_000); execution.outputs.set(id, input); state.status = "succeeded"; state.completedAt = new Date().toISOString(); state.waitingUntil = undefined; state.pauseId = undefined;
       this.log(state, "response", input); this.log(state, "lifecycle", "Timer fired; starting followers"); run.status = this.runActivityStatus(run); await this.update(run);
-      for (const edge of edges.filter((edge) => edge.from === id && (edge.type === "follow" || !edge.type))) { await this.traceConnection(run, edge, "forward", "succeeded", input.length); await invoke(edge.to, input); }
+      const settled = await Promise.allSettled(edges.filter((edge) => edge.from === id && (edge.type === "follow" || !edge.type)).map(async (edge) => { await this.traceConnection(run, edge, "forward", "succeeded", input.length); await invoke(edge.to, input); }));
+      const failed = settled.find((item): item is PromiseRejectedResult => item.status === "rejected");
+      if (failed) throw failed.reason;
     }
     // Close admission synchronously with the drain, before execute records the
     // terminal outcome on its next microtask. No late turn may revive this flow.
