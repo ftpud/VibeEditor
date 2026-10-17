@@ -681,8 +681,8 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .ai-composer textarea { min-width: 0; min-height: 0; height: 100%; resize: none; padding: 7px; border: 1px solid var(--border-strong); border-radius: var(--radius-control); outline: none; background: var(--surface-base); color: var(--text-primary); font: inherit; }
 .ai-composer textarea:focus { border-color: var(--accent); }
 .ai-composer-actions { align-self: end; display: flex; flex-direction: column; gap: 4px; }
-.ai-context-usage { width: 18px; height: 18px; flex: 0 0 18px; box-sizing: border-box; display: block; border: 2px solid var(--border-subtle); border-radius: 50%; background: conic-gradient(var(--success-soft) var(--context-usage), transparent 0); }
-.ai-context-usage.near-full { background-image: conic-gradient(var(--warning-soft) var(--context-usage), transparent 0); }
+.ai-context-usage { width: 18px; height: 18px; flex: 0 0 18px; box-sizing: border-box; display: block; border: 2px solid var(--border-strong); border-radius: 50%; background: conic-gradient(var(--success) var(--context-usage), transparent 0); }
+.ai-context-usage.near-full { background-image: conic-gradient(var(--warning) var(--context-usage), transparent 0); }
 .ai-composer-actions input { display: none; }
 .ai-composer-actions button { width: 28px; height: 28px; display: grid; place-items: center; border: 0; border-radius: var(--radius-control); background: var(--surface-hover); color: var(--text-primary); cursor: pointer; }
 .ai-composer-actions button:last-child { background: var(--accent); color: var(--on-accent); }
