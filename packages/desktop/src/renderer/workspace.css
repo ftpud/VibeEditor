@@ -743,3 +743,4 @@ button.danger:hover:not(:disabled) { background: var(--danger-soft); border-colo
 .install-panel .install-item-protocol .segmented-control button[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-soft); color: var(--text-primary); box-shadow: none; }
 .install-panel .install-item-protocol .segmented-control button:hover:not([aria-pressed="true"]):not(:disabled) { border-color: transparent; background: var(--surface-hover); color: var(--text-primary); }
 .install-item-protocol > small.install-item-warning { color: var(--warning); }
+.harness-workflow-settings .harness-settings-fields label small.harness-setting-description, .harness-settings-fields label small.harness-setting-description { display: block; grid-column: auto; margin-top: 2px; color: var(--text-muted); font-size: .7692rem; line-height: 1.4; font-weight: 400; }
