@@ -54,7 +54,7 @@ import { TaskCheckpointStore } from "./task-checkpoints.js";
 import { RemoteTransferService } from "./remote-transfer.js";
 import { WorkspaceRootRegistry } from "./workspace-roots.js";
 import type { AiProvider, AiSession, HarnessBlock, HarnessDefinition } from "@remote-ide/protocol";
-import { AiProviderError, findAutopilotOption, normalizeAiFailure, type AiConfiguration, type AiOption } from "@remote-ide/acp";
+import { AiProviderError, findAutopilotOption, normalizeAiFailure, type AiConfiguration, type AiOption, type AiProtocolVersion } from "@remote-ide/acp";
 
 const execFileAsync = promisify(execFile);
 const delay = (milliseconds: number) => new Promise<void>((resolve) => setTimeout(resolve, milliseconds));
@@ -1397,10 +1397,12 @@ export async function startWorkflow(input: ProtocolOperations["harnesses.run"]["
       const workflowTools = appToolServer(rootWorkspace, sessionWorkspace, provider.descriptor.id, bridgeWorkspace, { ...runtime, flow: ["ai", "chatbox"].includes(block.type) });
       const mcpServers = [...appTools.servers.filter((server) => server.name !== workflowTools.name), workflowTools];
       const workflowAgent = appTools.agent ? { ...appTools.agent, mcpServers: [...new Set([...(appTools.agent.mcpServers ?? []), workflowTools.name])] } : undefined;
-      const sessionAgent = runtime.instructions ? {
+      // The protocol only adds guidance; failing to read it must not block the step.
+      const turnInstructions = workflowTurnInstructions(await Promise.resolve().then(() => provider.installation()).then((item) => item.protocol, () => undefined));
+      const sessionAgent = runtime.instructions || turnInstructions ? {
         ...workflowAgent,
         name: workflowAgent?.name ?? block.label,
-        instructions: [workflowAgent?.instructions, runtime.instructions].filter(Boolean).join("\n\n"),
+        instructions: [workflowAgent?.instructions, runtime.instructions, turnInstructions].filter(Boolean).join("\n\n"),
       } : workflowAgent;
       const configuration = workflowConfiguration(provider.descriptor.options, block);
       const run = await harnessRunner.readRun(runtime.runId);
@@ -1425,6 +1427,16 @@ export async function startWorkflow(input: ProtocolOperations["harnesses.run"]["
   return input.chatRunId
     ? harnessRunner.continueChat(input.chatRunId, input.startBlockId!, input.input, dispatch, input.provider ?? "codex", append, binding, input.chatSettings)
     : harnessRunner.start(input.harnessId, input.input, dispatch, input.provider, append, input.startBlockId, input.rerunRunId, input.testDefinition, workspacePath, (definition) => prepareWorkflowSkills(definition, new SkillsStore(undefined, rootWorkspace), workspacePath), binding, input.chatSettings && input.startBlockId ? { blockId: input.startBlockId, settings: input.chatSettings } : undefined);
+}
+
+/**
+ * ACP v2 agents may end a turn while background work they started still runs and
+ * resume on their own later. A workflow step ends with the turn, so the step would
+ * pass on an unfinished answer; v2 agents are told to wait inside the turn instead.
+ */
+export function workflowTurnInstructions(protocol: AiProtocolVersion | undefined): string | undefined {
+  if (protocol !== "v2") return undefined;
+  return "Workflow turns: this workflow step ends as soon as your turn ends, and its output is passed on immediately. Do not end your turn or go idle while you are waiting for something, such as a background command, build, test, subagent, or connected block. Work you resume after the turn ends is not seen by the workflow. Wait inside the turn instead: run commands in the foreground until they finish, or poll their status and output with short sleeps between checks; for connected blocks, call workflow_use_block without an action to wait for completion, use the Meeting wait action, or poll workflow_block_messages. End your turn only when your final answer for this step is ready.";
 }
 
 /** Helpers connected through use edges share the lead's workspace snapshot coverage. */

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { assertWorkflowModelAvailable, settleWorkflowSession, workflowCapturesSnapshots, workflowConfiguration } from "./server.js";
+import { assertWorkflowModelAvailable, settleWorkflowSession, workflowCapturesSnapshots, workflowConfiguration, workflowTurnInstructions } from "./server.js";
 import { ClaudeSessionManager } from "./ai/providers/claude.js";
 import { WebSocket } from "ws";
 import { assertRequestRoot, assertRootRemovalAllowed, assertSessionChangeAllowed, LiveRootSelections, permissionTargetWorkspace, protocolHandshake, renameWorkspacePaths, rootRemovalBlocker, selectRootWorkspace, sendWebSocketData, transactionalRootSelection, WorkspaceWatchBatcher } from "./server.js";
@@ -22,6 +22,10 @@ describe("workflow provider configuration", () => {
     const options = new ClaudeSessionManager(() => undefined).descriptor.options;
     expect(workflowConfiguration(options, { model: "opus", options: { askQuestions: true, liveSteering: false, autopilot: false, unknown: true } })).toEqual({ model: "opus", liveSteering: false, askQuestions: false, autopilot: true });
     expect(workflowConfiguration(options, { autopilot: false })).toEqual({ askQuestions: false, autopilot: false });
+    // Only ACP v2 agents can end a turn and resume on their own, so only they are told to wait inside the turn.
+    expect(workflowTurnInstructions("v2")).toContain("Do not end your turn or go idle while you are waiting");
+    expect(workflowTurnInstructions("v1")).toBeUndefined();
+    expect(workflowTurnInstructions(undefined)).toBeUndefined();
   });
 });
 
