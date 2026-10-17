@@ -34,7 +34,7 @@ import { editorTabLabel, initialLayout, type EditorTab, type LayoutModel, type P
 import { TerminalPanel } from "./TerminalPanel";
 import { clearViewedTerminalActivity, markTerminalActivity } from "./terminal-activity";
 import { JavaConfigurationDialog } from "./JavaConfigurationDialog";
-import { languageClient } from "./language-client";
+import { languageClient, loadJavaProjectTree } from "./language-client";
 import { attachDebugEditor } from "./debug-editor";
 import { JavaPanel } from "./JavaPanel";
 import { ProblemsPanel } from "./ProblemsPanel";
@@ -1019,7 +1019,7 @@ export function App() {
       if (javaOptionsRef.current && changedPaths.some((changedPath) => changedPath.endsWith(".java"))) {
         if (javaRefreshTimer.current) clearTimeout(javaRefreshTimer.current);
         javaRefreshTimer.current = setTimeout(() => {
-          void client.request("java.getProjectTree", {}).then((result) => setJavaTree(result.tree)).catch(() => undefined);
+          void loadJavaProjectTree(client).then(setJavaTree).catch(() => undefined);
         }, 200);
       }
       if (event.payload.health === "degraded") showStatus(event.payload.message ?? "Filesystem watcher degraded; synchronization may be incomplete.", "error");
@@ -1092,7 +1092,7 @@ export function App() {
         setJavaOptions(result.options.javaProject);
         if (result.options.javaProject) {
           setStatusMessage("Loading Java project…");
-          try { setJavaTree((await client.request("java.getProjectTree", {})).tree); } catch { setJavaTree([]); }
+          try { setJavaTree(await loadJavaProjectTree(client)); } catch { setJavaTree([]); }
         } else setJavaTree([]);
         setStatusMessage("Restoring editors and terminals…");
         await restoreWorkspaceOptions(result.options, client);
@@ -1731,7 +1731,7 @@ export function App() {
       cursorPositions.setWorkspace(result.workspace);
       setProjectName(result.projectName);
       setJavaOptions(result.options.javaProject); setJavaTree([]); setJavaRunning(false); setJavaDebugState({ status: "stopped", variables: [] }); setJavaLog(""); setJavaDiagnostics([]);
-      if (result.options.javaProject) setJavaTree((await client.request("java.getProjectTree", {})).tree);
+      if (result.options.javaProject) setJavaTree(await loadJavaProjectTree(client));
       if (!isCurrent()) return;
       await restoreWorkspaceOptions(result.options, client);
       if (!isCurrent()) return;
@@ -2258,7 +2258,7 @@ export function App() {
   };
 
   const refreshJavaTree = async () => {
-    try { setJavaTree((await clientRef.current!.request("java.getProjectTree", {})).tree); }
+    try { setJavaTree(await loadJavaProjectTree(clientRef.current!)); }
     catch (error) { setStatusMessage(error instanceof Error ? error.message : "Could not refresh Java project"); }
   };
 

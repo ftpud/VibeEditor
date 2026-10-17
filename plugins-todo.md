@@ -73,8 +73,8 @@ requests in `protocol/src/index.ts` (~96 lines), `server.ts` (~52 refs),
 - [ ] Keep `java.test.ts`, `jdtls.test.ts`, `java-debug.integration.test.ts` passing unchanged as the regression suite.
 
 ### 2.5 Renderer side
-- [ ] Switch Desktop callers in `client.ts` to the `language.*` requests.
-- [ ] Make debug UI (`debug-editor.tsx`, `DebugVariable.tsx`) driven by capability flags and generic debug types, not Java names.
+- [x] Switch Desktop callers in `client.ts` to the `language.*` requests. (Done for build/run/stop/check/symbols/LSP/debug/project tree/output/exit/semantic events. Still `java.*` by design: Maven load, configuration dialog, run-config select, options, main classes, `java.debug.state`.)
+- [x] Make debug UI (`debug-editor.tsx`, `DebugVariable.tsx`) driven by generic debug types (capability-flag gating of the toolbar is still open).
 - [ ] Drive project tree, run configurations and commands (`command-registry.ts`) from the language descriptor.
 - [ ] Rename Java-named generic UI (Git dialogs, `model.ts` fields) where they are not Java-specific.
 
