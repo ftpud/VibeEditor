@@ -15,17 +15,14 @@ Once the **Bundle Release** workflow is on the default branch:
 1. Open a successful **Bundle Create** run and copy its numeric run ID from the
    Actions URL (`.../actions/runs/123456789`). Existing builds can be promoted.
 2. Open **Actions → Bundle Release → Run workflow**. Enter that run ID and a
-   new tag in the form `v<BUNDLE_VERSION>-early-access.<N>`, for example
-   `v0.1.0-early-access.1`, then run the workflow.
+   new tag matching the bundle version, for example `v0.1.0`, then run the workflow.
 
-All releases from this action are mandatory **prereleases** and are never marked
-as the latest stable release. The tag's base version must match the version in
-both Gateway bundle manifests (taken from the root `package.json` when built).
-Increment the Early Access number for each promotion: `v0.1.0-early-access.1`,
-`v0.1.0-early-access.2`, and so on. For a new application version, bump the root
-`package.json` version (for example to `0.1.1`), build again, and start with
-`v0.1.1-early-access.1`. Promoting an existing build preserves its embedded
-version and filenames; the Early Access number identifies the release.
+The action publishes full GitHub releases and marks them **Latest**. The tag must
+match the version in both Gateway bundle manifests (taken from the root
+`package.json` when built). For each new release, bump the root `package.json`
+version (for example from `0.1.0` to `0.1.1`), build again, and publish `v0.1.1`.
+The applications remain Early Access; release notes retain that label and the
+signing information. Promoting a build preserves its embedded version and filenames.
 
 The action verifies the macOS Gateway DMG and Windows Gateway setup EXE against their manifests
 and source commit, creates the tag at the build's commit, and publishes only

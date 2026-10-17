@@ -8,7 +8,7 @@ on:
         required: true
         type: string
       tag:
-        description: Versioned prerelease tag (v<BUNDLE_VERSION>-early-access.<N>, e.g. v0.1.0-early-access.1)
+        description: Release tag matching the bundle version (for example v0.1.0)
         required: true
         type: string
 
@@ -36,8 +36,8 @@ jobs:
         run: |
           set -euo pipefail
           [[ "$RUN_ID" =~ ^[0-9]+$ ]] || { echo 'Expected a numeric run ID'; exit 1; }
-          [[ "$TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-early-access\.([1-9][0-9]*)$ ]] || {
-            echo 'Expected v<major>.<minor>.<patch>-early-access.<positive number>, e.g. v0.1.0-early-access.1'
+          [[ "$TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || {
+            echo 'Expected v<major>.<minor>.<patch>, e.g. v0.1.0'
             exit 1
           }
           git check-ref-format "refs/tags/$TAG"
@@ -84,7 +84,7 @@ jobs:
           assert len(versions) == 1, 'Bundle versions differ'
           version = versions.pop()
           assert re.fullmatch(r'(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)', version), 'Expected a major.minor.patch bundle version'
-          assert re.fullmatch(r'v' + re.escape(version) + r'-early-access\.[1-9][0-9]*', os.environ['TAG']), 'Release tag must match the bundle version: v' + version + '-early-access.<N>'
+          assert os.environ['TAG'] == 'v' + version, 'Release tag must match the bundle version: v' + version
           for suffix in ('darwin-arm64.dmg', 'win32-x64-setup.exe'):
               assert f'vibe-gateway-{version}-{suffix}' in expected
           assets = Path('assets')
@@ -101,9 +101,9 @@ jobs:
           set -euo pipefail
           printf 'Bundles promoted from [Bundle Create run %s](https://github.com/%s/actions/runs/%s).\n\nSource commit: `%s`.\n' \
             "$RUN_ID" "$GH_REPO" "$RUN_ID" "$SOURCE_SHA" > notes.md
-          printf '\nVery early Early Access prerelease. Applications are unsigned; macOS uses ad-hoc signing.\n' >> notes.md
+          printf '\nEarly Access release. Applications are unsigned; macOS uses ad-hoc signing.\n' >> notes.md
           # Upload everything while still a draft, then make the complete release visible.
           gh release create "$TAG" assets/* --target "$SOURCE_SHA" \
-            --title "Vibe $TAG (Early Access)" --notes-file notes.md --draft --prerelease --latest=false
-          gh release edit "$TAG" --draft=false --prerelease --latest=false
+            --title "Vibe $TAG (Early Access)" --notes-file notes.md --draft
+          gh release edit "$TAG" --draft=false --prerelease=false --latest
           gh release view "$TAG" --json url --jq .url >> "$GITHUB_STEP_SUMMARY"
