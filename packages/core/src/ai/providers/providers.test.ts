@@ -17,7 +17,7 @@ const FAKE_V2_AGENT = fileURLToPath(new URL("./fake-acp-agent-v2.mjs", import.me
 const fakeProviders = new Set<StdioAcpProvider>();
 
 class FakeProvider extends StdioAcpProvider {
-  constructor(onChanged: (workspace: string) => void, state: string, private readonly env: NodeJS.ProcessEnv = {}, projectRoot?: (workspace: string) => Promise<string>, turns?: AcpTurnObserver) { super(onChanged, state, turns, projectRoot); fakeProviders.add(this); }
+  constructor(onChanged: (workspace: string) => void, state: string, private readonly env: NodeJS.ProcessEnv = {}, projectRoot?: (workspace: string) => Promise<string>, turns?: AcpTurnObserver) { super({ onChanged, stateDirectory: state, turns, projectRoot }); fakeProviders.add(this); }
   readonly descriptor: AiProviderDescriptor = { id: "fake", name: "Fake ACP", description: "test", settings: { title: "t", description: "d", sections: [] }, options: [], capabilities: { models: true, usage: true, mcp: true, agents: true, contextWindow: true, skills: true } };
   protected command(_configuration: AiConfiguration) { return { command: "python3", args: [FAKE_AGENT], env: this.env }; }
   protected async fallbackModels(): Promise<AiModel[]> { return [{ id: "fallback", name: "Fallback", defaultReasoning: "medium", reasoningLevels: ["medium"] }]; }
@@ -104,24 +104,24 @@ describe("ACP integration", () => {
     class InspectClaude extends ClaudeSessionManager { launch(configuration: AiConfiguration) { return this.command(configuration); } }
     class InspectCopilot extends CopilotSessionManager { launch(configuration: AiConfiguration) { return this.command(configuration); } }
     try {
-      const codex = new InspectCodex(() => undefined);
+      const codex = new InspectCodex({ onChanged: () => undefined });
       await expect(codex.prepare()).rejects.toThrow("Codex ACP is not installed");
       expect(() => codex.launch({})).toThrow("not installed");
       expect(await codex.installation()).toMatchObject({ provider: "codex", status: "not_installed", package: "@agentclientprotocol/codex-acp" });
-      expect(installed(new InspectCodex(() => undefined)).launch({})).toMatchObject({ command: process.execPath, args: [INSTALLED_ENTRY] });
-      expect(installed(new InspectCodex(() => undefined)).launch({}).env).not.toHaveProperty("CODEX_PATH");
-      expect(installed(new InspectClaude(() => undefined)).launch({})).toEqual({ command: process.execPath, args: [INSTALLED_ENTRY] });
-      expect(installed(new InspectCopilot(() => undefined)).launch({})).toEqual({ command: process.execPath, args: [INSTALLED_ENTRY, "--acp", "--stdio"] });
+      expect(installed(new InspectCodex({ onChanged: () => undefined })).launch({})).toMatchObject({ command: process.execPath, args: [INSTALLED_ENTRY] });
+      expect(installed(new InspectCodex({ onChanged: () => undefined })).launch({}).env).not.toHaveProperty("CODEX_PATH");
+      expect(installed(new InspectClaude({ onChanged: () => undefined })).launch({})).toEqual({ command: process.execPath, args: [INSTALLED_ENTRY] });
+      expect(installed(new InspectCopilot({ onChanged: () => undefined })).launch({})).toEqual({ command: process.execPath, args: [INSTALLED_ENTRY, "--acp", "--stdio"] });
       vi.stubEnv("CODEX_ACP_COMMAND", "/server/codex-acp");
       vi.stubEnv("CLAUDE_ACP_COMMAND", "/server/claude-acp");
       vi.stubEnv("COPILOT_CLI_PATH", "/server/copilot");
-      expect(new InspectCodex(() => undefined).launch({})).toMatchObject({ command: "/server/codex-acp", env: { CODEX_PATH: "codex" } });
-      expect(new InspectClaude(() => undefined).launch({}).command).toBe("/server/claude-acp");
-      expect(new InspectCopilot(() => undefined).launch({}).command).toBe("/server/copilot");
-      expect(await new InspectCodex(() => undefined).installation()).toMatchObject({ status: "installed", source: "external", location: "/server/codex-acp" });
-      expect(await new AcpRegistry().register(new InspectCodex(() => undefined)).available()).toHaveLength(1);
+      expect(new InspectCodex({ onChanged: () => undefined }).launch({})).toMatchObject({ command: "/server/codex-acp", env: { CODEX_PATH: "codex" } });
+      expect(new InspectClaude({ onChanged: () => undefined }).launch({}).command).toBe("/server/claude-acp");
+      expect(new InspectCopilot({ onChanged: () => undefined }).launch({}).command).toBe("/server/copilot");
+      expect(await new InspectCodex({ onChanged: () => undefined }).installation()).toMatchObject({ status: "installed", source: "external", location: "/server/codex-acp" });
+      expect(await new AcpRegistry().register(new InspectCodex({ onChanged: () => undefined })).available()).toHaveLength(1);
       vi.stubEnv("CODEX_ACP_COMMAND", undefined);
-      expect(await new AcpRegistry().register(new InspectCodex(() => undefined)).available()).toEqual([]);
+      expect(await new AcpRegistry().register(new InspectCodex({ onChanged: () => undefined })).available()).toEqual([]);
     } finally { vi.unstubAllEnvs(); }
   });
 
@@ -130,7 +130,7 @@ describe("ACP integration", () => {
       describeCatalogue(models: AiModel[]) { return this.describeModels(models); }
       launch(configuration: AiConfiguration) { return this.command(configuration); }
     }
-    const provider = installed(new InspectCodex(() => undefined));
+    const provider = installed(new InspectCodex({ onChanged: () => undefined }));
     const models = await provider.describeCatalogue([{ id: "gpt-5.6-sol", name: "GPT-5.6-Sol", defaultReasoning: "low", reasoningLevels: ["low"] }]);
     expect(models.find((model) => model.id === "gpt-6-sol")).toMatchObject({ defaultReasoning: "medium", reasoningLevels: ["none", "low", "medium", "high", "xhigh", "max"] });
     expect(models.filter((model) => model.id === "gpt-6-sol")).toHaveLength(1);
@@ -138,7 +138,7 @@ describe("ACP integration", () => {
   });
 
   it("falls back without crashing when an optional provider executable is missing", async () => {
-    const provider = new MissingProvider(() => undefined);
+    const provider = new MissingProvider({ onChanged: () => undefined });
     await expect(provider.models()).resolves.toEqual([{ id: "fallback", name: "Fallback", defaultReasoning: "", reasoningLevels: [] }]);
   });
 
@@ -162,8 +162,8 @@ describe("ACP integration", () => {
   it("persists model settings independently by provider and workspace", async () => {
     const state = await mkdtemp(path.join(os.tmpdir(), "remote-ide-ai-settings-"));
     const workspace = "/workspace/one";
-    const codex = new CodexSessionManager(() => undefined, state);
-    const copilot = new CopilotSessionManager(() => undefined, state);
+    const codex = new CodexSessionManager({ onChanged: () => undefined, stateDirectory: state });
+    const copilot = new CopilotSessionManager({ onChanged: () => undefined, stateDirectory: state });
     await codex.configure(workspace, "gpt-test", "high");
     await copilot.configure(workspace, "claude-test", "low");
     expect(await codex.get(workspace)).toMatchObject({ model: "gpt-test", reasoning: "high" });
@@ -173,13 +173,13 @@ describe("ACP integration", () => {
 
   it("serializes concurrent ACP session saves", async () => {
     const state = await mkdtemp(path.join(os.tmpdir(), "remote-ide-ai-concurrent-"));
-    const provider = new CodexSessionManager(() => undefined, state);
+    const provider = new CodexSessionManager({ onChanged: () => undefined, stateDirectory: state });
     await Promise.all(Array.from({ length: 20 }, (_, index) => provider.configure("/workspace/concurrent", { model: `model-${index}`, reasoning: "medium" })));
     expect((await provider.get("/workspace/concurrent")).model).toMatch(/^model-\d+$/);
   });
 
   it("discovers providers through the ACP registry and rejects unknown plugins", () => {
-    const registry = new AcpRegistry().register(new CodexSessionManager(() => undefined));
+    const registry = new AcpRegistry().register(new CodexSessionManager({ onChanged: () => undefined }));
     expect(registry.list().map((provider) => provider.id)).toEqual(["codex"]);
     expect(() => registry.get("missing")).toThrow("Unknown AI provider");
   });
@@ -537,12 +537,12 @@ describe("ACP integration", () => {
   });
 
   it("passes server-scoped Copilot model and reasoning configuration at launch", () => {
-    const command = installed(new CopilotSessionManager(() => undefined))["command"]({ model: "claude-haiku-4.5", reasoning: "medium", maxAiCredits: 5 });
+    const command = installed(new CopilotSessionManager({ onChanged: () => undefined }))["command"]({ model: "claude-haiku-4.5", reasoning: "medium", maxAiCredits: 5 });
     expect(command.args).toEqual([INSTALLED_ENTRY, "--acp", "--stdio", "--model=claude-haiku-4.5", "--reasoning-effort=medium", "--max-ai-credits=5"]);
   });
 
   it("launches the installed Claude ACP adapter with session-scoped permission modes", () => {
-    const claude = installed(new ClaudeSessionManager(() => undefined));
+    const claude = installed(new ClaudeSessionManager({ onChanged: () => undefined }));
     const command = claude["command"]({ mode: "plan" });
     expect(command.command).toBe(process.execPath);
     expect(command.args[0]).toBe(INSTALLED_ENTRY);
@@ -550,7 +550,7 @@ describe("ACP integration", () => {
   });
 
   it("configures Codex web search with the supported top-level key", () => {
-    const codex = installed(new CodexSessionManager(() => undefined));
+    const codex = installed(new CodexSessionManager({ onChanged: () => undefined }));
     expect(JSON.parse(codex["command"]({ webSearch: "disabled" }).env.CODEX_CONFIG as string)).toEqual({ web_search: "disabled" });
     expect(JSON.parse(codex["command"]({ webSearch: "default" }).env.CODEX_CONFIG as string)).toEqual({});
     expect(codex["command"]({ mode: "read-only" }).env.INITIAL_AGENT_MODE).toBe("read-only");
@@ -716,7 +716,7 @@ describe("ACP integration", () => {
 
   it("supports Copilot Autopilot for new turns and a pending permission without restarting", async () => {
     class FakeCopilot extends CopilotSessionManager {
-      constructor(onChanged: (workspace: string) => void, state: string) { super(onChanged, state); fakeProviders.add(this); }
+      constructor(onChanged: (workspace: string) => void, state: string) { super({ onChanged, stateDirectory: state }); fakeProviders.add(this); }
       protected async prepareLaunch() {}
       protected command() { return { command: "python3", args: [FAKE_AGENT], env: { FAKE_PERMISSION: "on" } }; }
     }
@@ -998,7 +998,7 @@ describe("ACP session features", () => {
 
   it("reports Claude subscription windows from rate limit metadata", async () => {
     const state = await mkdtemp(path.join(os.tmpdir(), "claude-limits-"));
-    const claude = new ClaudeSessionManager(() => undefined, state);
+    const claude = new ClaudeSessionManager({ onChanged: () => undefined, stateDirectory: state });
     expect((await claude.usage("/no/session")).accountQuota).toBeUndefined();
     claude["observeUsage"]({ "_claude/rateLimit": { status: "allowed", rateLimitType: "five_hour", utilization: 0.42, resetsAt: 4102444800 } });
     claude["observeUsage"]({ "_claude/rateLimit": { status: "rejected", rateLimitType: "seven_day_opus", resetsAt: 4102444800 } });

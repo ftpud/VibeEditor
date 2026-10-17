@@ -30,7 +30,7 @@ the composition root `createAcpRegistry` (`packages/core/src/ai/index.ts`).
 - [x] Document the format in `docs/ACP.md`.
 
 ### 1.3 Public provider context and built-ins on the same path
-- [ ] (ProviderContext type exists and factories use it; constructors still positional) Replace the internal constructor arguments (`onChanged`, `turns`, `projectRoot`, `bridgeWorkspace`) with a single `ProviderContext` object.
+- [x] Replace the internal constructor arguments (`onChanged`, `turns`, `projectRoot`, `bridgeWorkspace`) with a single `ProviderContext` object.
 - [x] Export `StdioAcpProvider` and `ProviderContext` as a versioned, documented API (`PROVIDER_API_VERSION`).
 - [x] Define `createProvider(ctx)` as the factory signature; convert Codex, Copilot and Claude to it.
 - [x] Make `createAcpRegistry` iterate a list of factories instead of hard-coded `.register(...)` calls.

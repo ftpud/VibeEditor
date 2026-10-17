@@ -12,7 +12,7 @@ import { killProjectApp, listProjectApps, killProjectProcess, listProjectProcess
 
 class TestProvider extends StdioAcpProvider {
   readonly descriptor: AiProviderDescriptor = { id: "test-neutral", name: "Test", description: "test", settings: { title: "Test", description: "test", sections: [] }, options: [], capabilities: { models: true, usage: false, mcp: false, agents: false, contextWindow: false } };
-  constructor(state: string, root: string) { super(() => {}, state, undefined, async () => root); }
+  constructor(state: string, root: string) { super({ onChanged: () => {}, stateDirectory: state, projectRoot: async () => root }); }
   protected command(_configuration: AiConfiguration) { return { command: "python3", args: [fileURLToPath(new URL("./ai/providers/fake-acp-agent.py", import.meta.url))] }; }
   protected async fallbackModels(): Promise<AiModel[]> { return []; }
 }

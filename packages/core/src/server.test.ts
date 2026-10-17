@@ -19,7 +19,7 @@ describe("workflow snapshot policy", () => {
 
 describe("workflow provider configuration", () => {
   it("forces interactive features off and keeps only non-blocking switches from the block", () => {
-    const options = new ClaudeSessionManager(() => undefined).descriptor.options;
+    const options = new ClaudeSessionManager({ onChanged: () => undefined }).descriptor.options;
     expect(workflowConfiguration(options, { model: "opus", options: { askQuestions: true, liveSteering: false, autopilot: false, unknown: true } })).toEqual({ model: "opus", liveSteering: false, askQuestions: false, autopilot: true });
     expect(workflowConfiguration(options, { autopilot: false })).toEqual({ askQuestions: false, autopilot: false });
     // Only ACP v2 agents can end a turn and resume on their own, so only they are told to wait inside the turn.

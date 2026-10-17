@@ -88,7 +88,7 @@ export class ConfiguredStdioProvider extends StdioAcpProvider {
   readonly descriptor: AiProviderDescriptor;
 
   constructor(private readonly definition: ProviderDefinition, ctx: ProviderContext) {
-    super(ctx.onChanged, undefined, ctx.turns, ctx.projectRoot, ctx.bridgeWorkspace);
+    super(ctx);
     const capabilities = { models: true, usage: false, mcp: true, agents: true, contextWindow: true, skills: true, ...definition.capabilities };
     this.descriptor = {
       id: definition.id, name: definition.name, description: definition.description,

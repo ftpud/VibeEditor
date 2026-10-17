@@ -115,6 +115,8 @@ export interface ProviderContext {
   turns?: AcpTurnObserver;
   projectRoot?: (workspace: string) => Promise<string>;
   bridgeWorkspace?: string;
+  /** Where sessions are persisted; defaults to `REMOTE_IDE_STATE_DIR` or `~/.remote-ide/workspaces`. */
+  stateDirectory?: string;
 }
 
 /** Builds one provider from the Core-supplied context. */
@@ -243,7 +245,19 @@ export abstract class StdioAcpProvider extends AcpProvider {
   private readonly blankSessions = new Map<string, AiSession>();
   private readonly archiveIndex = new Map<string, { at: number; sessions: AiSession[] }>();
 
-  constructor(private readonly onChanged: (workspace: string) => void, private readonly stateDirectory = process.env.REMOTE_IDE_STATE_DIR ?? path.join(os.homedir(), ".remote-ide", "workspaces"), private readonly turns?: AcpTurnObserver, private readonly projectRoot: (workspace: string) => Promise<string> = async (workspace) => workspace, private readonly bridgeWorkspace?: string) { super(); }
+  private readonly onChanged: (workspace: string) => void;
+  private readonly stateDirectory: string;
+  private readonly turns?: AcpTurnObserver;
+  private readonly projectRoot: (workspace: string) => Promise<string>;
+  private readonly bridgeWorkspace?: string;
+  constructor(ctx: ProviderContext) {
+    super();
+    this.onChanged = ctx.onChanged;
+    this.stateDirectory = ctx.stateDirectory ?? process.env.REMOTE_IDE_STATE_DIR ?? path.join(os.homedir(), ".remote-ide", "workspaces");
+    this.turns = ctx.turns;
+    this.projectRoot = ctx.projectRoot ?? (async (workspace) => workspace);
+    this.bridgeWorkspace = ctx.bridgeWorkspace;
+  }
 
   private async skillsFor(workspace: string): Promise<SkillsStore> { return new SkillsStore(this.stateDirectory, await this.projectRoot(workspace)); }
 
