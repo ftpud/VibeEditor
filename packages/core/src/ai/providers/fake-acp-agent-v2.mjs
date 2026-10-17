@@ -67,6 +67,12 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
     update(sessionId, { sessionUpdate: "agent_message", messageId: id, content: [{ type: "text", text: `Hello from v2${process.env.FAKE_SECRET ? " (secret visible)" : ""}: ${text}` }] });
     update(sessionId, { sessionUpdate: "usage_update", used: 120, size: 1000 });
     if (!steering && !promptQueueing) setTimeout(() => { active = false; update(sessionId, { sessionUpdate: "state_update", state: "idle", stopReason: "end_turn", usage: { totalTokens: 30, inputTokens: 10, outputTokens: 20 } }); }, 20);
+    // FAKE_V2_AGENT_TURN=1: after the first turn goes idle, resume by itself as if background work finished.
+    if (process.env.FAKE_V2_AGENT_TURN === "1" && turn === 1) setTimeout(() => {
+      update(sessionId, { sessionUpdate: "state_update", state: "running" });
+      update(sessionId, { sessionUpdate: "agent_message_chunk", messageId: "background", content: { type: "text", text: "Background build finished" } });
+      setTimeout(() => update(sessionId, { sessionUpdate: "state_update", state: "idle", stopReason: "end_turn" }), 20);
+    }, 100);
     return;
   }
   send({ id: message.id, error: { code: -32601, message: `Method not found: ${message.method}` } });

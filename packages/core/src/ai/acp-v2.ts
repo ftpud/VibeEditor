@@ -9,14 +9,22 @@ import type {
 export const ACP_V2_PROTOCOL_VERSION = 2;
 type Json = Record<string, any>;
 type Waiter = { resolve(result: PromptResponse): void; reject(error: Error): void };
-type SessionState = { idle: Waiter[]; tools: Map<string, unknown[]>; text: Map<string, string>; configOptions: Json[]; nextCommand: number };
+type SessionState = { idle: Waiter[]; agentTurn: boolean; tools: Map<string, unknown[]>; text: Map<string, string>; configOptions: Json[]; nextCommand: number };
+/**
+ * Turns the agent starts without a `session/prompt`, for example once background
+ * work it ended its previous turn waiting on has finished. v1 has no counterpart.
+ * Both are called in order with the session's translated updates.
+ */
+export type AcpV2AgentTurns = { started(sessionId: string): void; ended(sessionId: string, result: PromptResponse | Error): void };
 
 /**
  * Experimental draft ACP v2 client with the subset of `ClientSideConnection`'s
  * v1 API that Vibe uses, so the provider runtime is shared by both protocols.
  *
  * v2 differs mainly in its turn lifecycle: `session/prompt` only acknowledges
- * the prompt, and a turn ends with an `idle` `state_update`. Tool calls are
+ * the prompt, and a turn ends with an `idle` `state_update`. An agent may also
+ * start a turn of its own while idle (`running` with no prompt waiting), which
+ * is reported through `AcpV2AgentTurns`. Tool calls are
  * upserts, messages may be sent whole, modes are config options, and config
  * options use `configId`. Incoming v2 messages are translated to their v1
  * equivalents for the existing `Client` handlers.
@@ -33,7 +41,7 @@ export class AcpV2Connection {
   private buffer = "";
   private closed?: Error;
 
-  constructor(private readonly client: Client, private readonly output: Writable, input: Readable) {
+  constructor(private readonly client: Client, private readonly output: Writable, input: Readable, private readonly agentTurns?: AcpV2AgentTurns) {
     input.setEncoding("utf8");
     input.on("data", (chunk: string) => this.receive(chunk));
     const close = () => this.close(new Error("The ACP v2 agent closed the connection"));
@@ -97,7 +105,7 @@ export class AcpV2Connection {
 
   private session(sessionId: string): SessionState {
     let state = this.sessions.get(sessionId);
-    if (!state) { state = { idle: [], tools: new Map(), text: new Map(), configOptions: [], nextCommand: 0 }; this.sessions.set(sessionId, state); }
+    if (!state) { state = { idle: [], agentTurn: false, tools: new Map(), text: new Map(), configOptions: [], nextCommand: 0 }; this.sessions.set(sessionId, state); }
     return state;
   }
   private rememberOptions(sessionId: string, options: unknown): Json[] {
@@ -118,11 +126,18 @@ export class AcpV2Connection {
     const out = (sessionUpdate: Json) => ({ sessionId, update: sessionUpdate, ...(params._meta ? { _meta: params._meta } : {}) });
     switch (update.sessionUpdate) {
       case "state_update": {
+        if (update.state === "running" || update.state === "requires_action") {
+          // Work no prompt is waiting on is a turn the agent started by itself.
+          if (!state.idle.length && !state.agentTurn) { state.agentTurn = true; this.agentTurns?.started(sessionId); }
+          return [];
+        }
         if (update.state !== "idle") return [];
         const waiters = state.idle.splice(0);
+        const agentTurn = state.agentTurn; state.agentTurn = false;
         const stopReason = typeof update.stopReason === "string" ? update.stopReason : update.stopReason?.type ?? update.stopReason?.reason ?? "end_turn";
-        if (stopReason === "error") { const error = new Error(update.error?.message ?? update.stopReason?.error?.message ?? "The agent ended the turn with an error"); for (const waiter of waiters) waiter.reject(error); return []; }
-        for (const waiter of waiters) waiter.resolve({ stopReason, ...(update.usage ? { usage: update.usage } : {}) } as PromptResponse);
+        const result = stopReason === "error" ? new Error(update.error?.message ?? update.stopReason?.error?.message ?? "The agent ended the turn with an error") : { stopReason, ...(update.usage ? { usage: update.usage } : {}) } as PromptResponse;
+        for (const waiter of waiters) { if (result instanceof Error) waiter.reject(result); else waiter.resolve(result); }
+        if (agentTurn) this.agentTurns?.ended(sessionId, result);
         return [];
       }
       case "agent_message_chunk": case "agent_thought_chunk": case "user_message_chunk": {

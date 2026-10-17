@@ -66,6 +66,29 @@ it("negotiates v2, maps config options and modes, and ends a prompt on the idle 
   ]);
 });
 
+it("reports turns the agent starts on its own while idle and still settles prompts first", async () => {
+  const handlers = client(); const events: string[] = [];
+  let emit!: (value: Message) => void;
+  const agent = fakeAgent(async (message, peer) => {
+    emit = (value) => peer.emit("session/update", { sessionId: "s1", update: value });
+    if (message.method === "initialize") return { protocolVersion: 2, capabilities: {}, authMethods: [] };
+    if (message.method === "session/new") return { sessionId: "s1" };
+    if (message.method === "session/prompt") { setTimeout(() => { emit({ sessionUpdate: "state_update", state: "running" }); emit({ sessionUpdate: "state_update", state: "idle", stopReason: "end_turn" }); }, 5); return { messageId: "u1" }; }
+  });
+  const connection = new AcpV2Connection(handlers as never, agent.toAgent, agent.toClient, { started: (sessionId) => events.push(`started:${sessionId}`), ended: (sessionId, result) => events.push(`ended:${sessionId}:${result instanceof Error ? result.message : result.stopReason}`) });
+  await connection.initialize(initialize); await connection.newSession({ cwd: "/workspace", mcpServers: [] });
+  await expect(connection.prompt({ sessionId: "s1", prompt: [{ type: "text", text: "start a build" }] })).resolves.toMatchObject({ stopReason: "end_turn" });
+  expect(events).toEqual([]);
+  emit({ sessionUpdate: "state_update", state: "running" });
+  emit({ sessionUpdate: "agent_message_chunk", messageId: "m2", content: { type: "text", text: "Build finished" } });
+  emit({ sessionUpdate: "state_update", state: "requires_action" });
+  emit({ sessionUpdate: "state_update", state: "idle", stopReason: "end_turn" });
+  emit({ sessionUpdate: "state_update", state: "running" });
+  emit({ sessionUpdate: "state_update", state: "idle", stopReason: "error", error: { message: "boom" } });
+  await vi.waitFor(() => expect(events).toEqual(["started:s1", "ended:s1:end_turn", "started:s1", "ended:s1:boom"]));
+  expect(updates(handlers)).toEqual([{ sessionUpdate: "agent_message_chunk", messageId: "m2", content: { type: "text", text: "Build finished" } }]);
+});
+
 it("translates permission subjects and rejects turns that end with an error", async () => {
   const handlers = client();
   const agent = fakeAgent(async (message, peer) => {

@@ -208,6 +208,24 @@ describe("ACP integration", () => {
     await expect(v1Only.send(workspace, { prompt: "ping", configuration: {} })).rejects.toThrow("does not support ACP v2");
   });
 
+  it("shows and tracks a turn an ACP v2 agent starts on its own after going idle", async () => {
+    class AgentTurnV2Provider extends FakeProvider {
+      protected command(_configuration: AiConfiguration) { return { command: process.execPath, args: [FAKE_V2_AGENT], env: { FAKE_V2_AGENT_TURN: "1" } }; }
+      protected async protocol() { return "v2" as const; }
+    }
+    const provider = new AgentTurnV2Provider(() => undefined, await mkdtemp(path.join(os.tmpdir(), "remote-ide-v2-agent-turn-")));
+    const workspace = process.cwd();
+    await provider.send(workspace, { prompt: "start a build", configuration: {} });
+    await until(provider, workspace, (session) => session.status === "done");
+    const resumed = await until(provider, workspace, (session) => session.messages.some((message) => message.text === "Background build finished"));
+    expect(resumed.messages.some((message) => message.role === "activity" && message.text.includes("resumed work on its own"))).toBe(true);
+    const session = await until(provider, workspace, (current) => current.status === "done" && current.messages.some((message) => message.text === "Background build finished"));
+    expect(session.failure).toBeUndefined();
+    await provider.send(workspace, { prompt: "next", configuration: {} });
+    expect((await settle(provider, workspace)).status).toBe("done");
+    await provider.shutdown();
+  });
+
   it("does not replay configuration notifications after an ACP v2 reasoning rejection", async () => {
     class FeedbackV2Provider extends FakeProvider {
       protected command(_configuration: AiConfiguration) { return { command: process.execPath, args: [FAKE_V2_AGENT], env: { FAKE_CONFIG_FEEDBACK: "on" } }; }

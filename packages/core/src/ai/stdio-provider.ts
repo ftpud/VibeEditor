@@ -1,7 +1,7 @@
 import { acpErrorText, cleanAcpDiagnostics, isOAuthRefreshContention, retryOAuthRefresh } from "./acp-errors.js";
 import { AcpAuthentication, isAuthenticationError, withoutEnv } from "./authentication.js";
 import { providerInstallations, type CredentialSource, type InstallationSpec, type ProviderProtocol } from "./provider-installations.js";
-import { AcpV2Connection } from "./acp-v2.js";
+import { AcpV2Connection, type AcpV2AgentTurns } from "./acp-v2.js";
 import type { AiAuthentication, AiAuthInput, AiProviderInstallation } from "@remote-ide/acp";
 import type { AuthMethod } from "@agentclientprotocol/sdk";
 import { captureContextInstructions, refreshContext } from "./context.js";
@@ -37,6 +37,8 @@ type Runtime = {
   anchors: { assistant?: string; thought?: string };
   /** Bumped for every turn so a superseded turn cannot write a stale status. */
   generation: number;
+  /** Generation of the running turn when the agent started it without a prompt (ACP v2). */
+  agentTurn?: number;
   /** True when the agent can fold input into a running turn. */
   steering: boolean;
   steeringMode?: SteeringMode;
@@ -425,40 +427,7 @@ export abstract class StdioAcpProvider extends AcpProvider {
     runtime.session.failure = undefined;
     // The completion handlers go through the same queue as `session/update` so a
     // final status never overtakes text the agent streamed just before it.
-    const finish = (result: PromptResponse): Promise<void> => this.queue(workspace, async () => {
-      if (runtime.generation !== generation) return;
-      // Prompts steered into this turn settle with it; the latest outcome describes the turn.
-      if (runtime.queuedTurns.length > 0) {
-        const steered = runtime.queuedTurns.splice(0);
-        void Promise.all(steered).then((results) => finish(results.reduce<PromptResponse>((latest, item) => item ?? latest, result)));
-        return;
-      }
-      runtime.running = false; runtime.anchors = {};
-      const usage = result.usage;
-      if (usage) runtime.session.tokens = { total: usage.totalTokens, input: usage.inputTokens, output: usage.outputTokens, ...(usage.thoughtTokens != null ? { thought: usage.thoughtTokens } : {}), ...(usage.cachedReadTokens != null ? { cachedRead: usage.cachedReadTokens } : {}), ...(usage.cachedWriteTokens != null ? { cachedWrite: usage.cachedWriteTokens } : {}) };
-      const fresh = result.stopReason === "cancelled" ? undefined : this.freshSessions.get(workspace);
-      if (fresh) this.freshSessions.delete(workspace);
-      const queued = fresh || result.stopReason === "cancelled" ? undefined : runtime.pending.shift();
-      if (queued !== undefined) {
-        const nextConfiguration = runtime.session.nextConfiguration;
-        if (nextConfiguration) {
-          applyConfiguration(runtime.session, nextConfiguration);
-          runtime.session.nextConfiguration = undefined;
-          const warnings = await this.applyAcpConfiguration(runtime, runtime.configOptions, runtime.modes);
-          if (warnings.length > 0) runtime.session.messages.push(this.message("activity", `Session configuration\n${warnings.join("\n")}`));
-        }
-        this.runPrompt(workspace, runtime, await this.withSkillCatalogue(workspace, runtime.session, [{ type: "text", text: queued.prompt }]));
-      }
-      else {
-        runtime.session.status = result.stopReason === "cancelled" ? "idle" : result.stopReason === "end_turn" ? "done" : result.stopReason === "refusal" ? "error" : "user_prompt";
-        runtime.session.failure = result.stopReason === "refusal" ? { kind: "permanent", message: "The agent refused to continue this turn." } : undefined;
-        if (result.stopReason === "max_tokens" || result.stopReason === "max_turn_requests") runtime.session.messages.push(this.message("activity", `Turn stopped early: ${result.stopReason}`));
-        if (result.stopReason === "refusal") runtime.session.messages.push(this.message("error", "The agent refused to continue this turn."));
-      }
-      if (queued === undefined) await this.completeCheckpoints(workspace, runtime, result.stopReason === "cancelled" ? "interrupted" : result.stopReason === "refusal" ? "error" : "completed");
-      await this.save(workspace, runtime.session); this.onChanged(workspace);
-      if (fresh) { await this.clear(workspace); await this.send(workspace, fresh); }
-    });
+    const finish = (result: PromptResponse): Promise<void> => this.queue(workspace, () => this.finishTurn(workspace, runtime, generation, result));
     void retryOAuthRefresh(() => { runtime.retrying = false; return runtime.connection.prompt({ sessionId: runtime.sessionId, prompt }); }, {
       signal: retryAbort.signal, delays: this.oauthRefreshRetryDelays,
       canRetry: () => runtime.generation === generation && runtime.running && runtime.progress === progress && !runtime.queuedTurns.length && !runtime.session.pendingPermission && !runtime.session.pendingQuestion && this.runtimes.get(workspace) === runtime,
@@ -478,6 +447,70 @@ export abstract class StdioAcpProvider extends AcpProvider {
       await this.completeCheckpoints(workspace, runtime, "error");
       await this.save(workspace, runtime.session); this.onChanged(workspace);
     }));
+  }
+
+  /** Settles a turn unless a later turn or an interrupt has superseded it. Runs on the workspace queue. */
+  private async finishTurn(workspace: string, runtime: Runtime, generation: number, result: PromptResponse): Promise<void> {
+    if (runtime.generation !== generation) return;
+    if (runtime.agentTurn === generation) runtime.agentTurn = undefined;
+    // Prompts steered into this turn settle with it; the latest outcome describes the turn.
+    if (runtime.queuedTurns.length > 0) {
+      const steered = runtime.queuedTurns.splice(0);
+      void Promise.all(steered).then((results) => this.queue(workspace, () => this.finishTurn(workspace, runtime, generation, results.reduce<PromptResponse>((latest, item) => item ?? latest, result))));
+      return;
+    }
+    runtime.running = false; runtime.anchors = {};
+    const usage = result.usage;
+    if (usage) runtime.session.tokens = { total: usage.totalTokens, input: usage.inputTokens, output: usage.outputTokens, ...(usage.thoughtTokens != null ? { thought: usage.thoughtTokens } : {}), ...(usage.cachedReadTokens != null ? { cachedRead: usage.cachedReadTokens } : {}), ...(usage.cachedWriteTokens != null ? { cachedWrite: usage.cachedWriteTokens } : {}) };
+    const fresh = result.stopReason === "cancelled" ? undefined : this.freshSessions.get(workspace);
+    if (fresh) this.freshSessions.delete(workspace);
+    const queued = fresh || result.stopReason === "cancelled" ? undefined : runtime.pending.shift();
+    if (queued !== undefined) {
+      const nextConfiguration = runtime.session.nextConfiguration;
+      if (nextConfiguration) {
+        applyConfiguration(runtime.session, nextConfiguration);
+        runtime.session.nextConfiguration = undefined;
+        const warnings = await this.applyAcpConfiguration(runtime, runtime.configOptions, runtime.modes);
+        if (warnings.length > 0) runtime.session.messages.push(this.message("activity", `Session configuration\n${warnings.join("\n")}`));
+      }
+      this.runPrompt(workspace, runtime, await this.withSkillCatalogue(workspace, runtime.session, [{ type: "text", text: queued.prompt }]));
+    }
+    else {
+      runtime.session.status = result.stopReason === "cancelled" ? "idle" : result.stopReason === "end_turn" ? "done" : result.stopReason === "refusal" ? "error" : "user_prompt";
+      runtime.session.failure = result.stopReason === "refusal" ? { kind: "permanent", message: "The agent refused to continue this turn." } : undefined;
+      if (result.stopReason === "max_tokens" || result.stopReason === "max_turn_requests") runtime.session.messages.push(this.message("activity", `Turn stopped early: ${result.stopReason}`));
+      if (result.stopReason === "refusal") runtime.session.messages.push(this.message("error", "The agent refused to continue this turn."));
+    }
+    if (queued === undefined) await this.completeCheckpoints(workspace, runtime, result.stopReason === "cancelled" ? "interrupted" : result.stopReason === "refusal" ? "error" : "completed");
+    await this.save(workspace, runtime.session); this.onChanged(workspace);
+    if (fresh) { await this.clear(workspace); await this.send(workspace, fresh); }
+  }
+
+  /**
+   * An ACP v2 agent can go idle while it waits on background work and later
+   * resume by itself. That work runs as a live turn, so its output is shown
+   * instead of being dropped as the trailing output of a finished turn, and the
+   * session reports it as working until the agent goes idle again.
+   */
+  private async agentTurnStarted(workspace: string, runtime: Runtime): Promise<void> {
+    if (runtime.running || this.runtimes.get(workspace) !== runtime) return;
+    runtime.retryAbort?.abort(); runtime.retryAbort = undefined; runtime.retrying = false;
+    runtime.agentTurn = (runtime.generation += 1);
+    runtime.running = true; runtime.anchors = {};
+    runtime.session.status = "in_progress"; runtime.session.failure = undefined;
+    runtime.session.messages.push(this.message("activity", `${this.descriptor.name} resumed work on its own after its previous turn ended, for example because background work it was waiting for finished.`));
+    await this.save(workspace, runtime.session); this.onChanged(workspace);
+  }
+
+  private async agentTurnEnded(workspace: string, runtime: Runtime, result: PromptResponse | Error): Promise<void> {
+    const generation = runtime.agentTurn;
+    if (generation === undefined || runtime.generation !== generation || this.runtimes.get(workspace) !== runtime) return;
+    if (!(result instanceof Error)) { await this.finishTurn(workspace, runtime, generation, result); return; }
+    runtime.agentTurn = undefined; runtime.running = false; runtime.anchors = {}; runtime.pending = []; runtime.queuedTurns = [];
+    const message = this.describe(result, runtime);
+    runtime.session.status = "error"; runtime.session.failure = normalizeAiFailure(result); runtime.session.failure.message = message; runtime.session.messages.push(this.message("error", message));
+    await this.completeCheckpoints(workspace, runtime, "error");
+    await this.save(workspace, runtime.session); this.onChanged(workspace);
   }
 
   private validate(prompt: string): string {
@@ -853,13 +886,14 @@ export abstract class StdioAcpProvider extends AcpProvider {
     let bound: ((params: SessionNotification) => Promise<void> | void) | undefined;
     let permissionBound: ((params: RequestPermissionRequest) => Promise<RequestPermissionResponse>) | undefined;
     let questionBound: ((params: CreateElicitationRequest) => Promise<CreateElicitationResponse>) | undefined;
+    let agentTurnsBound: AcpV2AgentTurns | undefined;
     const buffered: SessionNotification[] = [];
     const client: Client = {
       requestPermission: (params) => permissionBound ? permissionBound(params) : { outcome: { outcome: "cancelled" } },
       createElicitation: (params) => questionBound ? questionBound(params) : { action: "cancel" },
       sessionUpdate: (params) => { if (bound) return bound(params); buffered.push(params); }
     };
-    const connection: AcpConnection = protocol === "v2" ? new AcpV2Connection(client, child.stdin, child.stdout) : new ClientSideConnection(() => client, ndJsonStream(Writable.toWeb(child.stdin) as WritableStream<Uint8Array>, Readable.toWeb(child.stdout) as ReadableStream<Uint8Array>));
+    const connection: AcpConnection = protocol === "v2" ? new AcpV2Connection(client, child.stdin, child.stdout, { started: (sessionId) => agentTurnsBound?.started(sessionId), ended: (sessionId, result) => agentTurnsBound?.ended(sessionId, result) }) : new ClientSideConnection(() => client, ndJsonStream(Writable.toWeb(child.stdin) as WritableStream<Uint8Array>, Readable.toWeb(child.stdout) as ReadableStream<Uint8Array>));
     let authHint = "";
     let authMethods: AuthMethod[] = [];
     try {
@@ -903,6 +937,10 @@ export abstract class StdioAcpProvider extends AcpProvider {
           bound = (params) => this.queue(workspace, () => this.consumeUpdate(workspace, runtime, params));
           permissionBound = (params) => this.requestPermission(workspace, runtime, params);
           questionBound = (params) => this.requestQuestion(workspace, runtime, params);
+          agentTurnsBound = {
+            started: (sessionId) => { if (sessionId === runtime.sessionId) void this.queue(workspace, () => this.agentTurnStarted(workspace, runtime)).catch(() => undefined); },
+            ended: (sessionId, result) => { if (sessionId === runtime.sessionId) void this.queue(workspace, () => this.agentTurnEnded(workspace, runtime, result)).catch(() => undefined); }
+          };
           for (const params of buffered.splice(0)) {
             // Resuming replays the whole conversation. Those updates land after the freshly typed
             // prompt was already appended, which would push it to the top of the transcript, so the
