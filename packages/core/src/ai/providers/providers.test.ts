@@ -228,6 +228,49 @@ describe("ACP integration", () => {
     expect(session.messages.filter((message) => message.text.includes("Hello from v2:"))).toHaveLength(1);
   });
 
+  it.each([
+    { stage: "prompt", failures: "2", output: "", expected: "done" },
+    { stage: "new", failures: "2", output: "", expected: "done" },
+    { stage: "prompt", failures: "99", output: "", expected: "error" },
+    { stage: "prompt", failures: "1", output: "on", expected: "error" }
+  ])("retries OAuth contention with clean errors and no work replay: $stage/$failures/$output", async ({ stage, failures, output, expected }) => {
+    class OAuthProvider extends FakeProvider {
+      protected readonly oauthRefreshRetryDelays = [1, 1];
+      protected command(_configuration: AiConfiguration) { return { command: process.execPath, args: [FAKE_V2_AGENT], env: { FAKE_OAUTH_STAGE: stage, FAKE_OAUTH_FAILURES: failures, FAKE_OAUTH_OUTPUT: output } }; }
+      protected async protocol() { return "v2" as const; }
+    }
+    const provider = new OAuthProvider(() => undefined, await mkdtemp(path.join(os.tmpdir(), "acp-oauth-")));
+    const workspace = process.cwd();
+    await provider.send(workspace, { prompt: "hello", configuration: {} });
+    const session = await settle(provider, workspace);
+    expect(session.status).toBe(expected);
+    const retries = session.messages.filter((message) => message.text.startsWith("OAuth token refresh is busy"));
+    if (stage === "prompt" && output !== "on") expect(retries).toHaveLength(2);
+    if (expected === "error") {
+      const message = session.messages.filter((item) => item.role === "error").at(-1)?.text;
+      expect(message).toContain("Failed to refresh OAuth token");
+      expect(message).not.toMatch(/\[session\/create\]|\[session\/query\]|\[authStatus\]/);
+    } else expect(session.failure).toBeUndefined();
+    if (output === "on") expect(session.messages.filter((message) => message.text === "Work already started")).toHaveLength(1);
+  });
+
+  it("cancels a pending OAuth retry when the user interrupts", async () => {
+    class OAuthProvider extends FakeProvider {
+      protected readonly oauthRefreshRetryDelays = [60000];
+      protected command(_configuration: AiConfiguration) { return { command: process.execPath, args: [FAKE_V2_AGENT], env: { FAKE_OAUTH_STAGE: "prompt", FAKE_OAUTH_FAILURES: "99" } }; }
+      protected async protocol() { return "v2" as const; }
+    }
+    const provider = new OAuthProvider(() => undefined, await mkdtemp(path.join(os.tmpdir(), "acp-oauth-cancel-")));
+    const workspace = process.cwd();
+    await provider.send(workspace, { prompt: "hello", configuration: {} });
+    await until(provider, workspace, (session) => session.messages.some((message) => message.text.startsWith("OAuth token refresh is busy")));
+    await provider.interrupt(workspace);
+    await provider.shutdown();
+    const session = await provider.get(workspace);
+    expect(session.status).toBe("idle");
+    expect(session.messages.filter((message) => message.role === "error")).toHaveLength(0);
+  });
+
   it("withholds credential variables from the agent when the provider uses its own sign-in", async () => {
     class CredentialProvider extends FakeProvider {
       withheld: string[] = [];

@@ -28,6 +28,14 @@ Codex and Claude can use the experimental **draft ACP v2** instead of v1. Choose
 
 Core's v2 client (`core/src/ai/acp-v2.ts`) exposes the same calls as the v1 SDK connection, so the provider runtime, transcripts, permissions and questions are shared. It translates the v2 lifecycle: `session/prompt` only acknowledges a prompt and the turn ends on an `idle` `state_update` (an `error` stop reason fails the turn); tool calls are upserts plus content chunks; whole `agent_message` upserts are forwarded as the text they add; modes are the config option in the `mode` category; config options use `configId`; `session/load` becomes `session/resume` with replay from the start; live steering prefers the advertised `_session/steering` extension on either protocol, falling back to `session/prompt` for v2 agents without it. Ordinary v2 prompts can queue behind the active turn. Agent-owned terminal updates and subagent updates are not shown yet. The draft still changes between SDK releases, and agents ship different snapshots, so messages are parsed leniently rather than validated against one snapshot.
 
+Transient OAuth refresh contention (another process refreshing the token or exiting
+mid-refresh) is retried up to three times, after 5, 15 and 40 seconds, when opening
+or resuming a session and when a prompt fails before producing output or starting
+tools. Other authentication errors still require sign-in. Retry notices appear in
+the conversation; interrupting or stopping the session cancels the backoff. Routine
+adapter startup traces such as `[session/create]`, `[session/query]` and `[authStatus]`
+are filtered from displayed errors while actionable stderr is retained.
+
 ## Signing in
 
 The provider account control sits in **Settings → AI providers** and in the settings (cog) section of the AI panel and workflow Chatboxes. It discovers the agent's `initialize.authMethods`; the UI uses the advertised names and descriptions rather than provider-specific login commands. Account setup runs on the selected Core host, so local and remote workspaces use the credentials belonging to that host.

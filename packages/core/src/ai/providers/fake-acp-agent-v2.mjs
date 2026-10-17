@@ -7,11 +7,22 @@ let turn = 0;
 let active = false;
 const steering = process.env.FAKE_V2_STEERING === "on";
 const promptQueueing = process.env.FAKE_V2_STEERING === "prompt";
+let oauthAttempts = 0;
+const failOAuth = (message) => {
+  if (process.env.FAKE_OAUTH_STAGE !== (message.method === "session/new" ? "new" : "prompt")) return false;
+  if (++oauthAttempts > Number(process.env.FAKE_OAUTH_FAILURES ?? 0)) return false;
+  process.stderr.write("[session/create] sessionId=fake phase=settings durationMs=12\n[session/query] sessionId=fake resume=none\n[authStatus] discarding a probe that predates the latest auth change\n");
+  if (process.env.FAKE_OAUTH_OUTPUT === "on") update(message.params.sessionId, { sessionUpdate: "agent_message_chunk", messageId: "partial", content: { type: "text", text: "Work already started" } });
+  const text = "Failed to refresh OAuth token: another Claude Code process is refreshing it or exited mid-refresh. Retry in a minute.";
+  send({ id: message.id, error: { code: -32603, message: text } });
+  return true;
+};
 readline.createInterface({ input: process.stdin }).on("line", (line) => {
   const message = JSON.parse(line);
   if (!message.method || message.id === undefined) return;
   const ok = (result) => send({ id: message.id, result });
   if (message.method === "initialize") return ok({ protocolVersion: process.env.FAKE_V2_ONLY_V1 === "1" ? 1 : 2, info: { name: "fake-v2", version: "1" }, capabilities: { session: {} }, authMethods: [], ...(steering ? { _meta: { steering: { supported: true } } } : {}) });
+  if (["session/new", "session/prompt"].includes(message.method) && failOAuth(message)) return;
   // Like real v2 agents, reject MCP servers without a transport `type` (v1 leaves stdio untyped).
   if ((message.method === "session/new" || message.method === "session/resume") && (message.params.mcpServers ?? []).some((server) => !server.type)) return send({ id: message.id, error: { code: -32602, message: "Invalid params" } });
   if (message.method === "session/new") { if (process.env.FAKE_V2_REQUIRE_MCP === "1" && !(message.params.mcpServers ?? []).length) return send({ id: message.id, error: { code: -32602, message: "Expected Vibe MCP servers" } }); return ok({ sessionId: "v2-session", configOptions: options() }); }

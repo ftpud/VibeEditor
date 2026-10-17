@@ -1,3 +1,4 @@
+import { acpErrorText, cleanAcpDiagnostics, isOAuthRefreshContention, retryOAuthRefresh } from "./acp-errors.js";
 import { AcpAuthentication, isAuthenticationError, withoutEnv } from "./authentication.js";
 import { providerInstallations, type CredentialSource, type InstallationSpec, type ProviderProtocol } from "./provider-installations.js";
 import { AcpV2Connection } from "./acp-v2.js";
@@ -27,6 +28,9 @@ type Runtime = {
   connection: AcpConnection;
   sessionId: string;
   running: boolean;
+  progress: number;
+  retryAbort?: AbortController;
+  retrying?: boolean;
   stderr: string;
   session: AiSession;
   tools: Map<string, ToolState>;
@@ -157,6 +161,7 @@ export abstract class StdioAcpProvider extends AcpProvider {
 
   protected abstract command(configuration: AiConfiguration): { command: string; args: string[]; env?: NodeJS.ProcessEnv };
   protected abstract fallbackModels(): Promise<AiModel[]>;
+  protected readonly oauthRefreshRetryDelays: readonly number[] = [5000, 15000, 40000];
   protected supportsUnlistedModel(_model: string): boolean { return false; }
   private shuttingDown = false;
   private shutdownPromise?: Promise<void>;
@@ -169,6 +174,7 @@ export abstract class StdioAcpProvider extends AcpProvider {
     await this.authenticationController?.shutdown();
     const runtimes = [...this.runtimes];
     for (const [workspace, runtime] of runtimes) {
+      runtime.retryAbort?.abort();
       runtime.generation += 1; runtime.running = false; runtime.pending = [];
       this.freshSessions.delete(workspace); this.cancelPermissionWaiters(workspace);
       runtime.session.pendingPermission = undefined; runtime.session.pendingQuestion = undefined;
@@ -353,7 +359,7 @@ export abstract class StdioAcpProvider extends AcpProvider {
     runtime.session.messages.push({ ...this.message("user", prompt), ...(options?.senderModel ? { senderModel: options.senderModel } : {}) });
     if (this.turns && runtime.captureSnapshots) try { runtime.checkpointIds.push(await this.turns.begin(workspace, this.descriptor.id, prompt, runtime.session.id, checkpointProvenance(runtime.session))); } catch (error) { runtime.session.messages.push(this.message("activity", `Prompt checkpoint could not be created: ${error instanceof Error ? error.message : String(error)}`)); }
     runtime.anchors = {};
-    const live = !options?.queue && this.steersLive(runtime);
+    const live = !options?.queue && !runtime.retrying && this.steersLive(runtime);
     if (live && runtime.steeringMode === "extension") {
       try { await runtime.connection.extMethod(STEERING_METHOD, { sessionId: runtime.sessionId, prompt: [{ type: "text", text: prompt }] }); }
       catch (error) { runtime.session.messages.push(this.message("activity", `Could not steer the running turn, queued instead: ${error instanceof Error ? error.message : String(error)}`)); runtime.pending.push({ prompt, senderModel: options?.senderModel }); }
@@ -384,6 +390,7 @@ export abstract class StdioAcpProvider extends AcpProvider {
     if (!runtime?.running) throw new CoreError("INVALID_REQUEST", `${this.descriptor.name} is not currently working`);
     // Retire the turn before cancelling so neither its late output nor its
     // completion status (agents may still report `end_turn`) lands afterwards.
+    runtime.retryAbort?.abort();
     runtime.generation += 1;
     this.freshSessions.delete(workspace);
     runtime.running = false; runtime.anchors = {}; runtime.pending = []; runtime.queuedTurns = [];
@@ -397,7 +404,11 @@ export abstract class StdioAcpProvider extends AcpProvider {
 
   /** Starts a turn and wires its completion back onto the session. */
   private runPrompt(workspace: string, runtime: Runtime, prompt: ContentBlock[]): void {
+    runtime.retryAbort?.abort();
+    const retryAbort = new AbortController(); runtime.retryAbort = retryAbort;
     const generation = (runtime.generation += 1);
+    const progress = runtime.progress;
+    runtime.retrying = false;
     runtime.running = true;
     runtime.anchors = {};
     runtime.session.status = "in_progress";
@@ -438,8 +449,17 @@ export abstract class StdioAcpProvider extends AcpProvider {
       await this.save(workspace, runtime.session); this.onChanged(workspace);
       if (fresh) { await this.clear(workspace); await this.send(workspace, fresh); }
     });
-    void runtime.connection.prompt({ sessionId: runtime.sessionId, prompt }).then(finish).catch((error: unknown) => this.queue(workspace, async () => {
-      if (runtime.generation !== generation) return;
+    void retryOAuthRefresh(() => { runtime.retrying = false; return runtime.connection.prompt({ sessionId: runtime.sessionId, prompt }); }, {
+      signal: retryAbort.signal, delays: this.oauthRefreshRetryDelays,
+      canRetry: () => runtime.generation === generation && runtime.running && runtime.progress === progress && !runtime.queuedTurns.length && !runtime.session.pendingPermission && !runtime.session.pendingQuestion && this.runtimes.get(workspace) === runtime,
+      onRetry: (milliseconds, attempt) => this.queue(workspace, async () => {
+        if (runtime.generation !== generation || runtime.progress !== progress) return;
+        runtime.retrying = true;
+        runtime.session.messages.push(this.message("activity", `OAuth token refresh is busy. Retrying in ${milliseconds / 1000} seconds (${attempt}/${this.oauthRefreshRetryDelays.length}).`));
+        await this.save(workspace, runtime.session); this.onChanged(workspace);
+      })
+    }).then(finish).catch((error: unknown) => this.queue(workspace, async () => {
+      if (runtime.generation !== generation || this.runtimes.get(workspace) !== runtime) return;
       runtime.running = false; runtime.anchors = {}; runtime.pending = []; runtime.queuedTurns = [];
       runtime.session.skillCatalogue = undefined;
       this.freshSessions.delete(workspace);
@@ -776,7 +796,7 @@ export abstract class StdioAcpProvider extends AcpProvider {
     // transcript still records which preset the previous session received.
     if (!connected.resumed) { session.agent = undefined; session.skillCatalogue = undefined; session.context = undefined; session.contextUsed = undefined; session.contextLimit = undefined; }
     if (connected.resumeFailed) session.messages.push(this.message("activity", "The saved ACP session could not be resumed; a new agent session was started."));
-    const runtime: Runtime = { child: connected.child, connection: connected.connection, sessionId: connected.sessionId, running: false, stderr: connected.stderr(), session, tools: new Map(), anchors: {}, generation: 0, steering: connected.steering !== undefined, steeringMode: connected.steering, queuedTurns: [], sessionMetaKey, pending: [], checkpointIds: [], captureSnapshots: true, configOptions: connected.configOptions, modes: connected.modes, mcpKey };
+    const runtime: Runtime = { child: connected.child, connection: connected.connection, sessionId: connected.sessionId, running: false, progress: 0, stderr: connected.stderr(), session, tools: new Map(), anchors: {}, generation: 0, steering: connected.steering !== undefined, steeringMode: connected.steering, queuedTurns: [], sessionMetaKey, pending: [], checkpointIds: [], captureSnapshots: true, configOptions: connected.configOptions, modes: connected.modes, mcpKey };
     connected.bind(runtime);
     session.threadId = connected.sessionId;
     session.steering = this.steersLive(runtime);
@@ -814,6 +834,9 @@ export abstract class StdioAcpProvider extends AcpProvider {
     // Spawn failures (most commonly an optional provider CLI missing from PATH)
     // are emitted asynchronously. Listen before constructing the ACP transport so
     // ENOENT rejects discovery instead of becoming an unhandled process error.
+    const connectionAbort = new AbortController();
+    child.once("close", () => connectionAbort.abort());
+    const retryOpening = <T>(operation: () => Promise<T>) => retryOAuthRefresh(operation, { signal: connectionAbort.signal, delays: this.oauthRefreshRetryDelays, canRetry: () => !this.shuttingDown && !child.killed && child.exitCode === null });
     const spawnFailure = new Promise<never>((_resolve, reject) => { child.once("error", reject); });
     let stderr = "";
     child.stderr.on("data", (chunk: Buffer) => { stderr = (stderr + chunk.toString()).slice(-20_000); });
@@ -850,14 +873,15 @@ export abstract class StdioAcpProvider extends AcpProvider {
       let resumeFailed = false;
       if (savedSessionId && initialized.agentCapabilities?.loadSession) {
         try {
-          const loaded = await connection.loadSession({ cwd: workspace, mcpServers: this.mcpServers(servers), sessionId: savedSessionId, ...meta });
+          const loaded = await retryOpening(() => connection.loadSession({ cwd: workspace, mcpServers: this.mcpServers(servers), sessionId: savedSessionId, ...meta }));
           created = { sessionId: savedSessionId, configOptions: loaded.configOptions, modes: loaded.modes };
           resumed = true;
-        } catch {
+        } catch (error) {
+          if (isOAuthRefreshContention(error) || connectionAbort.signal.aborted || this.shuttingDown) throw error;
           resumeFailed = true;
-          created = await connection.newSession({ cwd: workspace, mcpServers: this.mcpServers(servers), ...meta }) as CreatedSession;
+          created = await retryOpening(() => connection.newSession({ cwd: workspace, mcpServers: this.mcpServers(servers), ...meta })) as CreatedSession;
         }
-      } else created = await connection.newSession({ cwd: workspace, mcpServers: this.mcpServers(servers), ...meta }) as CreatedSession;
+      } else created = await retryOpening(() => connection.newSession({ cwd: workspace, mcpServers: this.mcpServers(servers), ...meta })) as CreatedSession;
       this.auth.observe(workspace, authMethods, "authenticated");
       managedProcesses.setSession(child.pid, created.sessionId);
       const configOptions = created.configOptions ?? [];
@@ -878,14 +902,14 @@ export abstract class StdioAcpProvider extends AcpProvider {
             void bound(params);
           }
           child.on("error", (error) => { void this.runtimeFailed(workspace, error.message); });
-          child.on("close", (code) => { if (this.runtimes.get(workspace) === runtime) { this.runtimes.delete(workspace); this.cancelPermissionWaiters(workspace); void this.runtimeFailed(workspace, stderr.trim() || `${this.descriptor.name} ACP server exited with code ${code ?? 1}`); } });
+          child.on("close", (code) => { if (this.runtimes.get(workspace) === runtime) { runtime.retryAbort?.abort(); this.runtimes.delete(workspace); this.cancelPermissionWaiters(workspace); void this.runtimeFailed(workspace, cleanAcpDiagnostics(stderr) || `${this.descriptor.name} ACP server exited with code ${code ?? 1}`); } });
         }
       };
     } catch (error) {
       child.kill("SIGTERM");
-      const message = error instanceof Error ? error.message : String(error);
+      const message = cleanAcpDiagnostics(acpErrorText(error));
       if (isAuthenticationError(error)) this.auth.observe(workspace, authMethods, "required");
-      throw new CoreError("TERMINAL_FAILED", `Could not start ${this.descriptor.name} ACP server: ${message}${/auth/i.test(message) && authHint ? `. ${authHint}` : ""}${stderr ? ` (${stderr.trim()})` : ""}`);
+      throw new CoreError("TERMINAL_FAILED", `Could not start ${this.descriptor.name} ACP server: ${message}${/auth/i.test(message) && authHint ? `. ${authHint}` : ""}${cleanAcpDiagnostics(stderr) ? ` (${cleanAcpDiagnostics(stderr)})` : ""}`);
     }
   }
 
@@ -963,6 +987,7 @@ export abstract class StdioAcpProvider extends AcpProvider {
     // Agents keep emitting output for a short while after a cancel; that trailing
     // text belongs to a turn the user already retired, so it is dropped.
     if (!runtime.running && runtime.generation > 0 && CONVERSATION_UPDATES.has(update.sessionUpdate)) return;
+    if (CONVERSATION_UPDATES.has(update.sessionUpdate)) runtime.progress += 1;
     switch (update.sessionUpdate) {
       case "agent_message_chunk": {
         const text = textOf(update.content);
@@ -1126,13 +1151,13 @@ export abstract class StdioAcpProvider extends AcpProvider {
     const data = (error as { data?: unknown } | null)?.data;
     if (typeof data === "string" && data.trim() && !message.includes(data.trim())) parts.push(data.trim());
     else if (data && typeof data === "object") { const detail = (data as { details?: unknown; message?: unknown }).details ?? (data as { message?: unknown }).message; if (typeof detail === "string" && detail.trim() && !message.includes(detail.trim())) parts.push(detail.trim()); }
-    const stderr = runtime.stderr.trim();
+    const stderr = cleanAcpDiagnostics(runtime.stderr);
     if (stderr && !parts.some((part) => part.includes(stderr))) parts.push(stderr.slice(-2000));
     // Agents frequently stream the reason as normal output and then fail the
     // request with the same text; do not show the user the same wall twice.
     const recent = runtime.session.messages.slice(-3).map((item) => item.text).join("\n");
     const unseen = parts.filter((part) => part.length > 0 && !recent.includes(part));
-    return (unseen.length > 0 ? unseen : parts.slice(0, 1)).join("\n");
+    return cleanAcpDiagnostics((unseen.length > 0 ? unseen : parts.slice(0, 1)).join("\n"));
   }
 
   private mcpServers(servers?: AcpSendRequest["mcpServers"]): McpServer[] {
@@ -1163,6 +1188,7 @@ export abstract class StdioAcpProvider extends AcpProvider {
   private queue(workspace: string, operation: () => Promise<void>): Promise<void> { const next = (this.queues.get(workspace) ?? Promise.resolve()).catch(() => undefined).then(operation); this.queues.set(workspace, next); return next.finally(() => { if (this.queues.get(workspace) === next) this.queues.delete(workspace); }); }
   private async closeRuntime(workspace: string): Promise<void> {
     const runtime = this.runtimes.get(workspace); if (!runtime) return;
+    runtime.retryAbort?.abort();
     this.runtimes.delete(workspace);
     this.cancelPermissionWaiters(workspace);
     runtime.session.pendingPermission = undefined; runtime.session.pendingQuestion = undefined;
