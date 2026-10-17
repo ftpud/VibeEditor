@@ -507,7 +507,7 @@ export function App() {
     const requestedRoot = clientRef.current.getRoot();
     setJavaChecking(true);
     try {
-      const diagnostics = (await clientRef.current.request("java.check", {})).diagnostics;
+      const diagnostics = (await clientRef.current.request("language.check", { language: "java" })).diagnostics;
       if (requestedRoot === selectedRootIdRef.current) setJavaDiagnostics(diagnostics);
     }
     catch (error) { setStatusMessage(error instanceof Error ? error.message : "Java checks failed"); }
@@ -2368,15 +2368,15 @@ export function App() {
     return client;
   };
 
-  const runJavaAction = async (action: "java.build" | "java.run") => {
+  const runJavaAction = async (action: "language.build" | "language.run") => {
     setLayout((current) => ({ ...current, panels: [...current.panels.filter((panel) => !["terminal", "java", "problems", "gitlog"].includes(panel.type)), { id: "java", type: "java" }] }));
     setJavaRunning(true);
-    try { const client = await saveJavaLaunchFiles(); await client.request(action, {}, { timeoutMs: 10 * 60_000 }); }
+    try { const client = await saveJavaLaunchFiles(); await client.request(action, { language: "java" }, { timeoutMs: 10 * 60_000 }); }
     catch (error) { setJavaRunning(false); setJavaLog((current) => `${current}${error instanceof Error ? error.message : "Java process failed"}\n`); if (error instanceof Error && error.message.includes("Java configuration")) setShowRunConfigurationDialog(true); }
   };
 
   const stopJava = async () => {
-    try { await clientRef.current!.request("java.stop", {}); } catch { /* Process may have already exited. */ }
+    try { await clientRef.current!.request("language.stop", { language: "java" }); } catch { /* Process may have already exited. */ }
   };
 
   const debugJava = async () => {
@@ -2516,7 +2516,8 @@ export function App() {
 
   const searchWorkspaceSymbols = useCallback(async (query: string) => {
     const client = clientRef.current; if (!client) return { symbols: [], truncated: false };
-    return client.request("java.workspaceSymbols", { query, limit: 100 });
+    const result = await client.request("language.symbols", { language: "java", query, limit: 100 });
+    return { symbols: result.symbols, truncated: result.truncated ?? false };
   }, []);
 
   const openWorkspaceSymbol = async (symbol: RootedWorkspaceSymbol) => {
@@ -2663,7 +2664,7 @@ export function App() {
       const generation = ++semanticGeneration;
       const version = instance.getModel()?.getVersionId();
       try {
-        const result = await clientRef.current.request("java.semanticTokens", { path: filePath, content: instance.getValue() });
+        const result = await clientRef.current.request("language.lsp.semanticTokens", { language: "java", path: filePath, content: instance.getValue() });
         if (semanticDisposed || generation !== semanticGeneration || version !== instance.getModel()?.getVersionId()) return;
         functionMarkers.set(functionStartDecorations(result.tokens.filter((token) => ["function", "method", "constructor"].includes(token.type) && (token.modifiers.includes("declaration") || token.modifiers.includes("definition"))).map((token) => ({ line: token.startLine, name: instance.getModel()?.getValueInRange({ startLineNumber: token.startLine, startColumn: token.startColumn, endLineNumber: token.endLine, endColumn: token.endColumn }) ?? "" }))));
         if (highlightTheme !== "ftpud") { semanticDecorations = instance.deltaDecorations(semanticDecorations, []); return; }
@@ -2682,7 +2683,7 @@ export function App() {
       triggerCharacters: ["."],
       provideCompletionItems: async (model, position) => {
         if (!clientRef.current || model !== instance.getModel()) return { suggestions: [] };
-        const result = await clientRef.current.request("java.completion", { path: filePath, content: model.getValue(), line: position.lineNumber, column: position.column });
+        const result = await clientRef.current.request("language.lsp.completion", { language: "java", path: filePath, content: model.getValue(), line: position.lineNumber, column: position.column });
         const word = model.getWordUntilPosition(position);
         return { suggestions: result.items.map((item) => ({
           label: item.label, detail: item.detail, kind: api.languages.CompletionItemKind.Text, insertText: item.insertText,
@@ -2701,11 +2702,11 @@ export function App() {
       event.event.preventDefault();
       const content = instance.getValue();
       const navigationRoot = clientRef.current.getRoot();
-      void clientRef.current.request("java.definition", { path: filePath, content, line: position.lineNumber, column: position.column }).then(async ({ locations }) => {
+      void clientRef.current.request("language.lsp.definition", { language: "java", path: filePath, content, line: position.lineNumber, column: position.column }).then(async ({ locations }) => {
         if (navigationRoot !== selectedRootIdRef.current) return;
         const declaration = locations.find((location) => location.path === filePath && position.lineNumber >= location.startLine && position.lineNumber <= location.endLine && position.column >= location.startColumn && position.column <= location.endColumn);
         if (declaration) {
-          const references = await clientRef.current!.request("java.references", { path: filePath, content, line: position.lineNumber, column: position.column });
+          const references = await clientRef.current!.request("language.lsp.references", { language: "java", path: filePath, content, line: position.lineNumber, column: position.column });
           if (navigationRoot === selectedRootIdRef.current) setJavaUsages(references.locations);
         } else if (locations[0]) void openJavaLocation(locations[0]);
       }).catch((error: unknown) => setStatusMessage(error instanceof Error ? error.message : "Java navigation failed"));
@@ -3014,7 +3015,7 @@ export function App() {
       <BranchPicker current={gitBranch} menu={branchMenu} onToggle={() => void toggleBranchMenu()} onClose={() => setBranchMenu(undefined)} onRefresh={() => void loadBranchMenu()} onCreate={() => void createBranch()} onCheckout={checkoutBranch} onRename={renameBranch} onDelete={deleteBranch} onPublish={publishBranch} onSetUpstream={setBranchUpstream} />
       <div className="titlebar-spacer" />
       {javaOptions && <div className="top-java-run" role="toolbar" aria-label="Java run controls">
-        <button aria-label="Run selected Java configuration" title="Run selected Java configuration" disabled={javaRunning || !javaOptions.selectedRunConfigurationId} onClick={() => void runJavaAction("java.run")}><Play size={14} /></button>
+        <button aria-label="Run selected Java configuration" title="Run selected Java configuration" disabled={javaRunning || !javaOptions.selectedRunConfigurationId} onClick={() => void runJavaAction("language.run")}><Play size={14} /></button>
         <button aria-label="Debug selected Java configuration" title="Debug selected Java configuration" disabled={javaRunning || !javaOptions.selectedRunConfigurationId} onClick={() => void debugJava()}><Bug size={14} /></button>
         <button aria-label="Stop Java process" title="Stop Java process" disabled={!javaRunning} onClick={() => void stopJava()}><Square size={13} /></button>
         <button aria-label="Edit Java run/debug configuration" title="Edit Java run/debug configuration" onClick={() => setShowRunConfigurationDialog(true)}><Settings size={14} /></button>
@@ -3163,7 +3164,7 @@ export function App() {
       </div>
       <div className="workspace-bottom-panels">
     {layout.terminalGroup.tabs.length > 0 && <TerminalPanel visible={terminalPanelOpen} onActivity={markUnreadTerminalOutput} theme={theme} fontFamily={terminalFontFamily} fontSize={uiFontSize} lineHeight={uiLineHeight} client={clientRef.current!} group={layout.terminalGroup} height={terminalHeight} highlightedTerminalIds={new Set(runConfigs.filter((config) => ["starting", "running", "stopping"].includes(config.status)).flatMap((config) => config.terminalId ? [config.terminalId] : []))} onActivate={activateTerminalTab} onCreate={() => void createTerminal()} onClose={closeTerminal} onRename={renameTerminal} onDuplicate={(tab) => void duplicateTerminal(tab)} onMove={moveTerminal} onRecoveryShown={(tabId) => updateTerminalGroup((group) => ({ ...group, tabs: group.tabs.map((tab) => tab.id === tabId ? { ...tab, recovery: undefined } : tab) }))} onResizeStart={beginTerminalResize} registerWriter={registerTerminalWriter} />}
-    {layout.panels.some((panel) => panel.type === "java") && javaOptions && <JavaPanel key={`java-panel:${selectedRootId}`} height={javaPanelHeight} log={javaLog} running={javaRunning} options={javaOptions} debugState={javaDebugState} onConfigure={() => setShowRunConfigurationDialog(true)} onApplyChanges={applyJavaChanges} onInspect={(reference, start) => clientRef.current!.request("java.debug.variables", { reference, start })} onBuild={() => void runJavaAction("java.build")} onRun={() => void runJavaAction("java.run")} onDebug={() => void debugJava()} onStop={() => void stopJava()} onDebugCommand={(command) => void commandJavaDebugger(command)} onClear={() => setJavaLog("")} onResizeStart={beginJavaResize} onHeightChange={setJavaPanelHeight} />}
+    {layout.panels.some((panel) => panel.type === "java") && javaOptions && <JavaPanel key={`java-panel:${selectedRootId}`} height={javaPanelHeight} log={javaLog} running={javaRunning} options={javaOptions} debugState={javaDebugState} onConfigure={() => setShowRunConfigurationDialog(true)} onApplyChanges={applyJavaChanges} onInspect={(reference, start) => clientRef.current!.request("java.debug.variables", { reference, start })} onBuild={() => void runJavaAction("language.build")} onRun={() => void runJavaAction("language.run")} onDebug={() => void debugJava()} onStop={() => void stopJava()} onDebugCommand={(command) => void commandJavaDebugger(command)} onClear={() => setJavaLog("")} onResizeStart={beginJavaResize} onHeightChange={setJavaPanelHeight} />}
     {layout.panels.some((panel) => panel.type === "problems") && javaOptions && <ProblemsPanel height={problemsHeight} diagnostics={javaDiagnostics} checking={javaChecking} onRefresh={() => void checkJava()} onOpen={(diagnostic) => void openDiagnostic(diagnostic)} onResizeStart={beginProblemsResize} />}
     {layout.panels.some((panel) => panel.type === "gitlog") && <GitLogPanel client={clientRef.current!} height={gitLogHeight} revision={gitRevision} onResizeStart={beginGitLogResize} onRepositoryChanged={() => { void Promise.all([refreshGit(), refreshTree()]); }} onMergeConflict={() => { void clientRef.current?.request("git.conflicts", {}).then((conflicts) => setGitConflictPath(conflicts.files[0]?.path ?? "")); }} />}
       </div>
